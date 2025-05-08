@@ -5,19 +5,13 @@ from typing import Any, Dict, List, Union
 
 def parse_django_file_ast(file_path: Union[str, Path]) -> Dict[str, Any]:
     path = file_path if isinstance(file_path, Path) else Path(file_path)
-    if not path.exists():
-        return {"error": f"File not found: {path}", "ast": None}
-
-    try:
-        source_code = path.read_text(encoding="utf-8")
-        tree = ast.parse(source_code, filename=str(path))
-        # Convert the AST to dict and extract just the body list
-        ast_dict = _ast_to_dict(tree, source_code)
-        # Since we know tree is a Module node, ast_dict must be a dictionary with a 'body' key
-        declarations = ast_dict["body"] if isinstance(ast_dict, dict) else []
-        return {"file_path": str(path), "ast_declarations": declarations}
-    except Exception as e:
-        return {"error": f"Failed to parse {path}: {e}", "ast": None}
+    source_code = path.read_text(encoding="utf-8")
+    tree = ast.parse(source_code, filename=str(path))
+    # Convert the AST to dict and extract just the body list
+    ast_dict = _ast_to_dict(tree, source_code)
+    # Since we know tree is a Module node, ast_dict must be a dictionary with a 'body' key
+    declarations = ast_dict["body"] if isinstance(ast_dict, dict) else []
+    return {"file_path": str(path), "ast_declarations": declarations}
 
 
 def _ast_to_dict(
@@ -33,10 +27,11 @@ def _ast_to_dict(
         result: Dict[str, Any] = {"_nodetype": node.__class__.__name__}
 
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            # Process most fields, but customize 'body'
+            # Process all fields except 'body', which will be represented by body_source
             for field, value in ast.iter_fields(node):
                 if field == "body":
                     body_source_str = ""  # Default to empty string
+                    docstring = None
                     if node.body:  # If there are statements in the body
                         first_stmt = node.body[0]
                         last_stmt = node.body[-1]
@@ -66,15 +61,39 @@ def _ast_to_dict(
                                 ]
                                 body_source_str = "".join(body_lines_extracted)
 
+                                # Extract docstring if present
+                                body_source_str = body_source_str.strip()
+                                if body_source_str.startswith(
+                                    '"""'
+                                ) or body_source_str.startswith("'''"):
+                                    quote_type = (
+                                        '"""'
+                                        if body_source_str.startswith('"""')
+                                        else "'''"
+                                    )
+                                    docstring_end = body_source_str[3:].find(quote_type)
+                                    if docstring_end != -1:
+                                        # Extract docstring
+                                        docstring = body_source_str[
+                                            3 : docstring_end + 3
+                                        ].strip()
+                                        # Remove docstring from body_source (including the quotes)
+                                        full_docstring_end = (
+                                            docstring_end + 6
+                                        )  # 3 for opening quotes + docstring + 3 for closing quotes
+                                        body_source_str = body_source_str[
+                                            full_docstring_end:
+                                        ].strip()
+
                     result["body_source"] = body_source_str
-                    result[
-                        field
-                    ] = []  # Original 'body' (AST list) is now represented by 'body_source'
+                    if docstring is not None:
+                        result["docstring"] = docstring
+                    # Don't include the 'body' field at all since we have body_source
                 else:  # Other fields of FunctionDef (name, args, decorators, type_comment, returns, etc.)
                     result[field] = _ast_to_dict(value, source_code)
         else:  # Not a FunctionDef, process all fields normally for other AST types
             for field, value in ast.iter_fields(node):
-                # Skip location-related fields
+                # Skip location-related fields and ctx
                 if field not in (
                     "lineno",
                     "col_offset",

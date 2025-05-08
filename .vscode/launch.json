@@ -16,6 +16,7 @@
                 "DJANGO_PROJECT_BASE_DIR": "/Users/gabemontague/Dropbox/Mac/Documents/Documents/Projects/haven/code/haven/haven-api/haven_api/"
             },
             "jinja": true,
+            "cwd": "${workspaceFolder}/server",
             "justMyCode": true,
             "console": "integratedTerminal"
         }
