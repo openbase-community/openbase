@@ -7,6 +7,7 @@ from transformation.transform_models import transform_models_py
 from transformation.transform_serializers import transform_serializers_py
 from transformation.transform_tasks import transform_tasks_py
 from transformation.transform_urls_py import transform_urls_py
+from transformation.transform_views_py import transform_views_py
 
 app = Flask(__name__)
 
@@ -108,7 +109,8 @@ def get_serializers(appname):
 @app.route("/apps/<appname>/views/")
 def get_views(appname):
     views_file_path = DJANGO_PROJECT_BASE_DIR / appname / "views.py"
-    return parse_django_file_ast(views_file_path)
+    raw_ast = parse_django_file_ast(views_file_path)
+    return transform_views_py(raw_ast)
 
 
 if __name__ == "__main__":
