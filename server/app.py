@@ -5,6 +5,7 @@ from settings import DJANGO_PROJECT_BASE_DIR
 from transformation.transform_commands import transform_commands_py
 from transformation.transform_models import transform_models_py
 from transformation.transform_tasks import transform_tasks_py
+from transformation.transform_urls_py import transform_urls_py
 
 app = Flask(__name__)
 
@@ -92,7 +93,8 @@ def get_command_details(appname, commandname):
 @app.route("/apps/<appname>/endpoints/")
 def get_endpoints(appname):
     urls_file_path = DJANGO_PROJECT_BASE_DIR / appname / "urls.py"
-    return parse_django_file_ast(urls_file_path)
+    raw_ast = parse_django_file_ast(urls_file_path)
+    return transform_urls_py(raw_ast)
 
 
 @app.route("/apps/<appname>/serializers/")
@@ -108,4 +110,4 @@ def get_views(appname):
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, host="0.0.0.0")
