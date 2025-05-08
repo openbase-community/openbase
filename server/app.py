@@ -1,7 +1,8 @@
 from flask import Flask
-
 from parsing import parse_django_file_ast
 from settings import DJANGO_PROJECT_BASE_DIR
+
+from transformation.transform_commands import transform_commands_py
 from transformation.transform_models import transform_models_py
 from transformation.transform_tasks import transform_tasks_py
 
@@ -23,8 +24,12 @@ def get_django_apps():
 
 @app.route("/debug/")
 def debug():
-    file_path = DJANGO_PROJECT_BASE_DIR / "finance" / "models.py"
-    raw_ast = parse_django_file_ast(file_path)
+    file_path = (
+        DJANGO_PROJECT_BASE_DIR / "finance/management/commands/fill_initial_form.py"
+    )
+    # Example of using preserve_body_for_functions for debugging if needed
+    # raw_ast = parse_django_file_ast(file_path, preserve_body_for_functions=["add_arguments", "handle"])
+    raw_ast = parse_django_file_ast(file_path)  # Default behavior for general debug
     return raw_ast
 
 
@@ -44,9 +49,10 @@ def get_models(appname):
 def get_tasks(appname):
     tasks_dir = DJANGO_PROJECT_BASE_DIR / appname / "tasks"
     task_files = []
-    for f_path in tasks_dir.iterdir():
-        if f_path.suffix == ".py" and not f_path.name.startswith("_"):
-            task_files.append(f_path.stem)
+    if tasks_dir.is_dir():
+        for f_path in tasks_dir.iterdir():
+            if f_path.suffix == ".py" and not f_path.name.startswith("_"):
+                task_files.append(f_path.stem)
     return {"tasks": task_files}
 
 
@@ -60,14 +66,27 @@ def get_task_details(appname, taskname):
 @app.route("/apps/<appname>/commands/")
 def get_commands(appname):
     commands_dir = DJANGO_PROJECT_BASE_DIR / appname / "management" / "commands"
-    if not commands_dir.is_dir():
-        return {"error": f"Commands directory not found: {commands_dir}"}, 404
-
     command_files = []
-    for f_path in commands_dir.iterdir():
-        if f_path.suffix == ".py" and not f_path.name.startswith("_"):
-            command_files.append(f_path.stem)
+    if commands_dir.is_dir():
+        for f_path in commands_dir.iterdir():
+            if f_path.suffix == ".py" and not f_path.name.startswith("_"):
+                command_files.append(f_path.stem)
     return {"commands": command_files}
+
+
+@app.route("/apps/<appname>/commands/<commandname>/")
+def get_command_details(appname, commandname):
+    command_file_path = (
+        DJANGO_PROJECT_BASE_DIR
+        / appname
+        / "management"
+        / "commands"
+        / f"{commandname}.py"
+    )
+    raw_ast = parse_django_file_ast(
+        command_file_path, preserve_body_for_functions=["add_arguments"]
+    )
+    return transform_commands_py(raw_ast)
 
 
 @app.route("/apps/<appname>/endpoints/")
