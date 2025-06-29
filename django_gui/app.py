@@ -4,14 +4,15 @@ import subprocess
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from parsing import parse_django_file_ast
-from settings import DJANGO_PROJECT_APPS_DIR, DJANGO_PROJECT_DIR
-from transformation.transform_commands import transform_commands_py
-from transformation.transform_models import transform_models_py
-from transformation.transform_serializers import transform_serializers_py
-from transformation.transform_tasks import transform_tasks_py
-from transformation.transform_urls_py import transform_urls_py
-from transformation.transform_views_py import transform_views_py
+
+from django_gui.parsing import parse_django_file_ast
+from django_gui.settings import DJANGO_PROJECT_APPS_DIR, DJANGO_PROJECT_DIR
+from django_gui.transformation.transform_commands import transform_commands_py
+from django_gui.transformation.transform_models import transform_models_py
+from django_gui.transformation.transform_serializers import transform_serializers_py
+from django_gui.transformation.transform_tasks import transform_tasks_py
+from django_gui.transformation.transform_urls_py import transform_urls_py
+from django_gui.transformation.transform_views_py import transform_views_py
 
 app = Flask(__name__)
 CORS(app)
@@ -320,7 +321,7 @@ def serve_dist():
 
     # Get the dist directory path (relative to the project root)
     project_root = Path(__file__).parent.parent
-    dist_dir = project_root / "django-code-inspector-view" / "dist"
+    dist_dir = project_root / "dist"
 
     if not dist_dir.exists():
         print(f"Error: dist directory not found at {dist_dir}")
