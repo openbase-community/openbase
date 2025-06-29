@@ -19,7 +19,7 @@
                 "DJANGO_PROJECT_DIR": "/Users/gabemontague/Dropbox/Mac/Documents/Documents/Projects/haven/code/haven/web/"
             },
             "jinja": true,
-            "cwd": "${workspaceFolder}/server",
+            "cwd": "${workspaceFolder}/django_gui",
             "justMyCode": true,
             "console": "integratedTerminal"
         }

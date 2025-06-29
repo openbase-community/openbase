@@ -298,6 +298,100 @@ def get_serializers(appname):
     return transform_serializers_py(raw_ast)
 
 
+@app.route("/settings/create-superuser/", methods=["POST"])
+def create_superuser():
+    """
+    Create a Django superuser programmatically.
+    Expected JSON payload: {"email": "test@example.com", "password": "test"}
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "JSON payload required"}), 400
+
+        email = data.get("email")
+        password = data.get("password")
+
+        if not email or not password:
+            return jsonify({"error": "Both email and password are required"}), 400
+
+        # Validate email format (basic validation)
+        if "@" not in email or "." not in email:
+            return jsonify({"error": "Invalid email format"}), 400
+
+        # Load environment variables from .env file in Django project directory
+        env_file = DJANGO_PROJECT_DIR / ".env"
+        if env_file.exists():
+            load_dotenv(env_file)
+
+        # Determine the Python executable from the virtual environment
+        venv_python_unix = DJANGO_PROJECT_DIR / "venv" / "bin" / "python"
+        venv_python_windows = DJANGO_PROJECT_DIR / "venv" / "Scripts" / "python.exe"
+
+        if venv_python_unix.exists():
+            python_executable = str(venv_python_unix)
+        elif venv_python_windows.exists():
+            python_executable = str(venv_python_windows)
+        else:
+            python_executable = "python"
+
+        # Create superuser using Django management command with environment variables
+        env = os.environ.copy()
+        env.update(
+            {
+                "DJANGO_SUPERUSER_EMAIL": email,
+                "DJANGO_SUPERUSER_PASSWORD": password,
+            }
+        )
+
+        cmd_list = [python_executable, "manage.py", "createsuperuser", "--noinput"]
+
+        result = subprocess.run(
+            cmd_list,
+            cwd=DJANGO_PROJECT_DIR,
+            capture_output=True,
+            text=True,
+            timeout=60,  # 1 minute timeout
+            env=env,
+        )
+
+        if result.returncode == 0:
+            return jsonify(
+                {
+                    "success": True,
+                    "message": f"Superuser created successfully with email: {email}",
+                    "stdout": result.stdout,
+                }
+            )
+        else:
+            # Check if user already exists
+            if (
+                "already exists" in result.stderr.lower()
+                or "already exists" in result.stdout.lower()
+            ):
+                return jsonify(
+                    {
+                        "success": False,
+                        "message": f"Superuser with email {email} already exists",
+                        "error": result.stderr,
+                    }
+                ), 409
+            else:
+                return jsonify(
+                    {
+                        "success": False,
+                        "message": "Failed to create superuser",
+                        "error": result.stderr,
+                        "stdout": result.stdout,
+                    }
+                ), 500
+
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Command timed out after 1 minute"}), 408
+    except Exception as e:
+        return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+
+
 @app.route("/apps/<appname>/views/")
 def get_views(appname):
     views_file_path = DJANGO_PROJECT_APPS_DIR / appname / "views.py"
