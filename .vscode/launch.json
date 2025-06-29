@@ -10,10 +10,13 @@
                 "--app",
                 "app.py",
                 "--debug",
-                "run"
+                "run",
+                "--port",
+                "5050"
             ],
             "env": {
-                "DJANGO_PROJECT_BASE_DIR": "/Users/gabemontague/Dropbox/Mac/Documents/Documents/Projects/haven/code/haven/haven-api/haven_api/"
+                "DJANGO_PROJECT_APPS_DIR": "/Users/gabemontague/Dropbox/Mac/Documents/Documents/Projects/haven/code/haven/haven-api/haven_api/",
+                "DJANGO_PROJECT_DIR": "/Users/gabemontague/Dropbox/Mac/Documents/Documents/Projects/haven/code/haven/web/"
             },
             "jinja": true,
             "cwd": "${workspaceFolder}/server",

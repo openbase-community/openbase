@@ -12,20 +12,8 @@ def get_field_arg_name(field_type, arg_index):
     Returns:
         The name of the kwarg this positional arg maps to
     """
-    # Common first argument for most fields is 'verbose_name'
-    if arg_index == 0:
-        return "verbose_name"
-
-    # Special cases for different field types
-    if field_type == "models.CharField" or field_type == "models.TextField":
-        if arg_index == 1:
-            return "max_length"
-    elif field_type == "models.DecimalField":
-        if arg_index == 1:
-            return "max_digits"
-        elif arg_index == 2:
-            return "decimal_places"
-    elif field_type == "models.ForeignKey" or field_type == "models.OneToOneField":
+    # Special cases for different field types - check these first
+    if field_type == "models.ForeignKey" or field_type == "models.OneToOneField":
         if arg_index == 0:
             return "to"
         elif arg_index == 1:
@@ -33,6 +21,22 @@ def get_field_arg_name(field_type, arg_index):
     elif field_type == "models.ManyToManyField":
         if arg_index == 0:
             return "to"
+    elif field_type == "models.CharField" or field_type == "models.TextField":
+        if arg_index == 0:
+            return "verbose_name"
+        elif arg_index == 1:
+            return "max_length"
+    elif field_type == "models.DecimalField":
+        if arg_index == 0:
+            return "verbose_name"
+        elif arg_index == 1:
+            return "max_digits"
+        elif arg_index == 2:
+            return "decimal_places"
+    else:
+        # Common first argument for most other fields is 'verbose_name'
+        if arg_index == 0:
+            return "verbose_name"
 
     # For unknown field types or positions, use a generic name
     return f"arg_{arg_index}"
@@ -209,6 +213,8 @@ def transform_models_py(models_py_ast):
 
         model_info = {
             "name": dec.get("name"),
+            "lineno": dec.get("lineno"),
+            "end_lineno": dec.get("end_lineno"),
             "docstring": None,
             "fields": [],
             "methods": [],

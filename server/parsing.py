@@ -123,6 +123,11 @@ def _ast_to_dict(
                         value, source_code, preserve_body_for_functions
                     )
         else:  # Not a FunctionDef, process all fields normally
+            # For ClassDef nodes, preserve line number information
+            if isinstance(node, ast.ClassDef):
+                result["lineno"] = getattr(node, "lineno", None)
+                result["end_lineno"] = getattr(node, "end_lineno", None)
+
             for field, value in ast.iter_fields(node):
                 if field not in (
                     "lineno",

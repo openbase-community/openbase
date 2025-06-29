@@ -1,0 +1,1893 @@
+[
+    { "endpoint": "apps/",
+    "example_response": [
+  "finance"
+]
+    },
+    { "endpoint": "apps/<appname>/models/",
+    "example_response": {
+  "models": [
+    {
+      "docstring": "Represents a form template that is filled out through LLM-guided conversation.\n    This is the template definition, not user-specific answers.",
+      "fields": [
+        {
+          "kwargs": {
+            "max_length": 100,
+            "unique": true
+          },
+          "name": "name",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "blank": true
+          },
+          "name": "description",
+          "type": "models.TextField"
+        },
+        {
+          "kwargs": {
+            "default": true
+          },
+          "name": "is_active",
+          "type": "models.BooleanField"
+        },
+        {
+          "kwargs": {
+            "auto_now_add": true
+          },
+          "name": "created_at",
+          "type": "models.DateTimeField"
+        },
+        {
+          "kwargs": {
+            "auto_now": true
+          },
+          "name": "updated_at",
+          "type": "models.DateTimeField"
+        }
+      ],
+      "meta": {},
+      "methods": [],
+      "name": "LLMForm",
+      "properties": [],
+      "save_method": null,
+      "str_method": {
+        "body": "return self.name"
+      }
+    },
+    {
+      "docstring": "Represents a field definition in a form template.\n    This defines the structure of data to be collected, not the actual values.\n    Everything is treated as text for simplicity.",
+      "fields": [
+        {
+          "kwargs": {
+            "on_delete": "models.CASCADE",
+            "related_name": "fields",
+            "verbose_name": "LLMForm"
+          },
+          "name": "form",
+          "type": "models.ForeignKey"
+        },
+        {
+          "kwargs": {
+            "max_length": 100
+          },
+          "name": "name",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "blank": true
+          },
+          "name": "description",
+          "type": "models.TextField"
+        },
+        {
+          "choices": [
+            [
+              "text",
+              "Text"
+            ],
+            [
+              "number",
+              "Number"
+            ],
+            [
+              "enum",
+              "Enum"
+            ]
+          ],
+          "kwargs": {
+            "default": "FIELD_TYPE_TEXT",
+            "max_length": 10
+          },
+          "name": "field_type",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "auto_now_add": true
+          },
+          "name": "created_at",
+          "type": "models.DateTimeField"
+        },
+        {
+          "kwargs": {
+            "auto_now": true
+          },
+          "name": "updated_at",
+          "type": "models.DateTimeField"
+        }
+      ],
+      "meta": {},
+      "methods": [],
+      "name": "Field",
+      "properties": [],
+      "save_method": null,
+      "str_method": {
+        "body": "return f\"{self.form.name} - {self.name}\""
+      }
+    },
+    {
+      "docstring": "Represents a user's instance of filling out a form.",
+      "fields": [
+        {
+          "kwargs": {
+            "on_delete": "models.CASCADE",
+            "related_name": "user_form_responses",
+            "verbose_name": "User"
+          },
+          "name": "user",
+          "type": "models.ForeignKey"
+        },
+        {
+          "kwargs": {
+            "on_delete": "models.CASCADE",
+            "verbose_name": "LLMForm"
+          },
+          "name": "form",
+          "type": "models.ForeignKey"
+        },
+        {
+          "kwargs": {
+            "default": "in_progress",
+            "max_length": 20
+          },
+          "name": "status",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "auto_now_add": true
+          },
+          "name": "created_at",
+          "type": "models.DateTimeField"
+        },
+        {
+          "kwargs": {
+            "auto_now": true
+          },
+          "name": "updated_at",
+          "type": "models.DateTimeField"
+        }
+      ],
+      "meta": {},
+      "methods": [],
+      "name": "UserFormResponse",
+      "properties": [
+        {
+          "body": "if self.form:\n            return self.form.fields.count()\n        return 0",
+          "docstring": "Returns the total number of fields defined for the associated form template.",
+          "name": "total_questions"
+        },
+        {
+          "body": "return self.field_responses.exclude(value=\"\").count()",
+          "docstring": "Returns the number of fields that have a non-empty response.",
+          "name": "questions_answered"
+        }
+      ],
+      "save_method": null,
+      "str_method": {
+        "body": "return f\"Response by {self.user} for {self.form.name} ({self.status})\""
+      }
+    },
+    {
+      "docstring": "Represents a user's answer to a specific field in a form.\n    Value is stored as text.",
+      "fields": [
+        {
+          "kwargs": {
+            "on_delete": "models.CASCADE",
+            "related_name": "field_responses",
+            "verbose_name": "UserFormResponse"
+          },
+          "name": "user_form_response",
+          "type": "models.ForeignKey"
+        },
+        {
+          "kwargs": {
+            "max_length": 100
+          },
+          "name": "name",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {},
+          "name": "value",
+          "type": "models.TextField"
+        },
+        {
+          "kwargs": {
+            "auto_now_add": true
+          },
+          "name": "created_at",
+          "type": "models.DateTimeField"
+        },
+        {
+          "kwargs": {
+            "auto_now": true
+          },
+          "name": "updated_at",
+          "type": "models.DateTimeField"
+        }
+      ],
+      "meta": {},
+      "methods": [],
+      "name": "FieldResponse",
+      "properties": [],
+      "save_method": null,
+      "str_method": {
+        "body": "return f\"FieldResponse: {self.name} for {self.user_form_response.user}\""
+      }
+    },
+    {
+      "docstring": "Stores messages exchanged during conversations with users.",
+      "fields": [
+        {
+          "kwargs": {
+            "on_delete": "models.CASCADE",
+            "related_name": "messages",
+            "verbose_name": "User"
+          },
+          "name": "user",
+          "type": "models.ForeignKey"
+        },
+        {
+          "kwargs": {
+            "blank": true,
+            "null": true,
+            "on_delete": "models.CASCADE",
+            "related_name": "messages",
+            "verbose_name": "UserFormResponse"
+          },
+          "name": "user_form_response",
+          "type": "models.ForeignKey"
+        },
+        {
+          "choices": [
+            [
+              "assistant",
+              "Assistant"
+            ],
+            [
+              "user",
+              "User"
+            ]
+          ],
+          "kwargs": {
+            "max_length": 20
+          },
+          "name": "role",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {},
+          "name": "content",
+          "type": "models.TextField"
+        },
+        {
+          "kwargs": {
+            "auto_now_add": true
+          },
+          "name": "created_at",
+          "type": "models.DateTimeField"
+        },
+        {
+          "kwargs": {
+            "blank": true,
+            "null": true,
+            "on_delete": "models.SET_NULL",
+            "related_name": "messages",
+            "verbose_name": "Document"
+          },
+          "name": "document",
+          "type": "models.ForeignKey"
+        },
+        {
+          "kwargs": {
+            "default": 0,
+            "help_text": "Number of embedding chunks created for this message"
+          },
+          "name": "embedding_chunk_count",
+          "type": "models.PositiveIntegerField"
+        }
+      ],
+      "meta": {
+        "ordering": [
+          "created_at"
+        ]
+      },
+      "methods": [
+        {
+          "args": {
+            "args": [],
+            "defaults": {},
+            "kwarg": "kwargs",
+            "vararg": "args"
+          },
+          "body": "self._delete_message_embeddings()\n        super().delete(*args, **kwargs)",
+          "docstring": "",
+          "name": "delete"
+        },
+        {
+          "args": {
+            "args": [],
+            "defaults": {},
+            "kwarg": null,
+            "vararg": null
+          },
+          "body": "from vector_store import delete_document_embedding  # type: ignore\n\n        if not self.content.strip() or self.embedding_chunk_count == 0:\n            return\n\n        # Delete each chunk embedding\n        for i in range(self.embedding_chunk_count):\n            chunk_id = f\"message_{self.pk}_chunk_{i}\"\n            delete_document_embedding(chunk_id)",
+          "docstring": "",
+          "name": "_delete_message_embeddings"
+        }
+      ],
+      "name": "ChatMessage",
+      "properties": [
+        {
+          "body": "if self.document and self.document.file:\n            return self.document.file.name.removeprefix(\"documents/\")\n        return None",
+          "docstring": "",
+          "name": "document_name"
+        }
+      ],
+      "save_method": {
+        "body": "is_new = self.pk is None\n        super().save(*args, **kwargs)\n\n        # Only trigger tasks for new messages\n        if is_new:\n            # Create embeddings for the message content\n            # If there's no document or the document already has content, create embeddings immediately\n            # Otherwise, embeddings will be created when the document is parsed\n\n            # Only trigger AI response tasks for new user messages\n            if self.role == self.ROLE_USER:\n                # Import tasks locally to avoid circular imports\n                from haven_api.finance.tasks import generate_ai_response\n                from haven_api.finance.tasks.create_embeddings import (\n                    create_document_embeddings,\n                    create_message_embeddings,\n                )\n                from haven_api.finance.tasks.update_housing_preferences import (\n                    update_housing_preferences,\n                )\n                from haven_api.finance.tasks.update_medical_report import (\n                    update_medical_report,\n                )\n                from haven_api.finance.tasks.update_state_from_conversation import (\n                    update_state_from_conversation,\n                )\n\n                # Launch tasks asynchronously in parallel\n                async_to_sync(generate_ai_response.kiq)(self.pk)\n                async_to_sync(update_state_from_conversation.kiq)(self.pk)\n                async_to_sync(update_medical_report.kiq)(self.pk)\n                async_to_sync(update_housing_preferences.kiq)(self.pk)\n                async_to_sync(create_message_embeddings.kiq)(self.pk)\n                if self.document:\n                    async_to_sync(create_document_embeddings.kiq)(self.document.pk)",
+        "docstring": ""
+      },
+      "str_method": {
+        "body": "return f\"{self.role} message For {self.user} at {self.created_at}\""
+      }
+    },
+    {
+      "docstring": "Represents a document belonging to a user, such as an IEP.",
+      "fields": [
+        {
+          "kwargs": {
+            "on_delete": "models.CASCADE",
+            "related_name": "documents",
+            "verbose_name": "User"
+          },
+          "name": "user",
+          "type": "models.ForeignKey"
+        },
+        {
+          "choices": [
+            [
+              "iep",
+              "IEP"
+            ],
+            [
+              "trust",
+              "Trust"
+            ],
+            [
+              "isp",
+              "ISP"
+            ],
+            [
+              "medicaid_docs",
+              "Medicaid Documents"
+            ],
+            [
+              "misc",
+              "Miscellaneous"
+            ]
+          ],
+          "kwargs": {
+            "blank": true,
+            "max_length": 20
+          },
+          "name": "type",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "blank": true,
+            "null": true
+          },
+          "name": "content",
+          "type": "models.TextField"
+        },
+        {
+          "kwargs": {
+            "blank": true,
+            "max_length": 255,
+            "null": true
+          },
+          "name": "name",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "auto_now_add": true
+          },
+          "name": "created_at",
+          "type": "models.DateTimeField"
+        },
+        {
+          "kwargs": {
+            "auto_now": true
+          },
+          "name": "updated_at",
+          "type": "models.DateTimeField"
+        },
+        {
+          "kwargs": {
+            "null": true,
+            "upload_to": "scrambled_document_upload_path"
+          },
+          "name": "file",
+          "type": "models.FileField"
+        },
+        {
+          "kwargs": {
+            "default": 0,
+            "help_text": "Number of embedding chunks created for this document"
+          },
+          "name": "embedding_chunk_count",
+          "type": "models.PositiveIntegerField"
+        }
+      ],
+      "meta": {},
+      "methods": [
+        {
+          "args": {
+            "args": [],
+            "defaults": {},
+            "kwarg": "kwargs",
+            "vararg": "args"
+          },
+          "body": "self._delete_document_embeddings()\n        super().delete(*args, **kwargs)",
+          "docstring": "",
+          "name": "delete"
+        },
+        {
+          "args": {
+            "args": [],
+            "defaults": {},
+            "kwarg": null,
+            "vararg": null
+          },
+          "body": "from vector_store import delete_document_embedding  # type: ignore\n\n        if (\n            not self.content\n            or not self.content.strip()\n            or self.embedding_chunk_count == 0\n        ):\n            return\n\n        # Delete each chunk embedding\n        for i in range(self.embedding_chunk_count):\n            chunk_id = f\"document_{self.pk}_chunk_{i}\"\n            delete_document_embedding(chunk_id)",
+          "docstring": "",
+          "name": "_delete_document_embeddings"
+        }
+      ],
+      "name": "Document",
+      "properties": [
+        {
+          "body": "return bool(self.content and self.content.strip())",
+          "docstring": "True when the document has content ready to use",
+          "name": "has_content"
+        },
+        {
+          "body": "if self.content:\n            return self.content[:255]\n        return \"\"",
+          "docstring": "Returns the first 255 characters of content, or empty string if no content",
+          "name": "content_preview"
+        }
+      ],
+      "save_method": {
+        "body": "is_new = self.pk is None\n\n        # Store the original filename if a file is being uploaded and we don't already have it\n        if self.file and not self.name:\n            self.name = self.file.name\n\n        super().save(*args, **kwargs)\n\n        # If this is a new document with a file but no content, trigger parsing\n        if is_new and self.file and not self.content:\n            from haven_api.finance.tasks.parse_document import parse_document\n\n            async_to_sync(parse_document.kiq)(self.pk)",
+        "docstring": ""
+      },
+      "str_method": {
+        "body": "return f\"{self.type} Document for {self.user} ({self.created_at.date()})\""
+      }
+    },
+    {
+      "docstring": "Stores family information for a user, including the child's name.",
+      "fields": [
+        {
+          "kwargs": {
+            "on_delete": "models.CASCADE",
+            "related_name": "family_info",
+            "verbose_name": "User"
+          },
+          "name": "user",
+          "type": "models.OneToOneField"
+        },
+        {
+          "kwargs": {
+            "blank": true,
+            "default": "Child",
+            "max_length": 255
+          },
+          "name": "child_name",
+          "type": "models.CharField"
+        },
+        {
+          "choices": [
+            [
+              "standard",
+              "Standard Account"
+            ],
+            [
+              "data_partner",
+              "Data Partner"
+            ]
+          ],
+          "kwargs": {
+            "default": "ACCOUNT_TYPE_STANDARD",
+            "max_length": 20
+          },
+          "name": "account_type",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "blank": true,
+            "max_length": 255,
+            "null": true
+          },
+          "name": "plaid_access_token",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "blank": true,
+            "max_length": 255,
+            "null": true
+          },
+          "name": "plaid_item_id",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "blank": true,
+            "max_length": 255,
+            "null": true
+          },
+          "name": "plaid_transactions_cursor",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "blank": true,
+            "help_text": "Markdown-formatted medical report compiled from conversations about the child's medical state",
+            "null": true
+          },
+          "name": "medical_report",
+          "type": "models.TextField"
+        },
+        {
+          "kwargs": {
+            "blank": true,
+            "help_text": "Markdown-formatted document about the child's housing and daily living preferences compiled from conversations",
+            "null": true
+          },
+          "name": "housing_preferences",
+          "type": "models.TextField"
+        }
+      ],
+      "meta": {},
+      "methods": [],
+      "name": "FamilyInfo",
+      "properties": [
+        {
+          "body": "return bool(self.plaid_access_token and self.plaid_item_id)",
+          "docstring": "",
+          "name": "has_linked_plaid"
+        },
+        {
+          "body": "return self.account_type == self.ACCOUNT_TYPE_DATA_PARTNER",
+          "docstring": "",
+          "name": "is_data_partner"
+        }
+      ],
+      "save_method": null,
+      "str_method": {
+        "body": "return f\"FamilyInfo for {self.user}\""
+      }
+    },
+    {
+      "docstring": "A to-do item for a user.",
+      "fields": [
+        {
+          "kwargs": {
+            "on_delete": "models.CASCADE",
+            "related_name": "todo_items",
+            "verbose_name": "User"
+          },
+          "name": "user",
+          "type": "models.ForeignKey"
+        },
+        {
+          "kwargs": {},
+          "name": "text",
+          "type": "models.TextField"
+        },
+        {
+          "kwargs": {
+            "default": false
+          },
+          "name": "completed",
+          "type": "models.BooleanField"
+        },
+        {
+          "kwargs": {
+            "auto_now_add": true
+          },
+          "name": "created_at",
+          "type": "models.DateTimeField"
+        },
+        {
+          "kwargs": {
+            "auto_now": true
+          },
+          "name": "updated_at",
+          "type": "models.DateTimeField"
+        }
+      ],
+      "meta": {},
+      "methods": [],
+      "name": "TodoItem",
+      "properties": [],
+      "save_method": null,
+      "str_method": {
+        "body": "return f\"Todo for {self.user}: {self.text[:30]}{'...' if len(self.text) > 30 else ''}\""
+      }
+    },
+    {
+      "docstring": "A generated form file belonging to a user.",
+      "fields": [
+        {
+          "kwargs": {
+            "on_delete": "models.CASCADE",
+            "related_name": "generated_forms",
+            "verbose_name": "User"
+          },
+          "name": "user",
+          "type": "models.ForeignKey"
+        },
+        {
+          "kwargs": {
+            "max_length": 255
+          },
+          "name": "name",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "upload_to": "generated_forms/"
+          },
+          "name": "file",
+          "type": "models.FileField"
+        },
+        {
+          "kwargs": {
+            "auto_now_add": true
+          },
+          "name": "created_at",
+          "type": "models.DateTimeField"
+        },
+        {
+          "kwargs": {
+            "auto_now": true
+          },
+          "name": "updated_at",
+          "type": "models.DateTimeField"
+        }
+      ],
+      "meta": {},
+      "methods": [],
+      "name": "GeneratedForm",
+      "properties": [],
+      "save_method": null,
+      "str_method": {
+        "body": "return f\"GeneratedForm: {self.name} for {self.user}\""
+      }
+    },
+    {
+      "docstring": "Represents a private asset account for a user, including normal accounts (Plaid-linked), ABLE accounts, and special needs trusts.",
+      "fields": [
+        {
+          "kwargs": {
+            "on_delete": "models.CASCADE",
+            "related_name": "private_asset_accounts",
+            "verbose_name": "User"
+          },
+          "name": "user",
+          "type": "models.ForeignKey"
+        },
+        {
+          "choices": [
+            [
+              "normal",
+              "Normal Account (Plaid-linked)"
+            ],
+            [
+              "able",
+              "ABLE Account"
+            ],
+            [
+              "special_needs_trust",
+              "Special Needs Trust"
+            ]
+          ],
+          "kwargs": {
+            "max_length": 32
+          },
+          "name": "account_type",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "max_length": 255
+          },
+          "name": "name",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "blank": true
+          },
+          "name": "description",
+          "type": "models.TextField"
+        },
+        {
+          "kwargs": {
+            "blank": true,
+            "max_length": 128,
+            "null": true
+          },
+          "name": "plaid_account_id",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "blank": true,
+            "max_length": 255,
+            "null": true
+          },
+          "name": "institution_name",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "auto_now_add": true
+          },
+          "name": "created_at",
+          "type": "models.DateTimeField"
+        },
+        {
+          "kwargs": {
+            "auto_now": true
+          },
+          "name": "updated_at",
+          "type": "models.DateTimeField"
+        }
+      ],
+      "meta": {},
+      "methods": [],
+      "name": "PrivateAssetAccount",
+      "properties": [],
+      "save_method": null,
+      "str_method": {
+        "body": "return f\"{self.account_type} for {self.user}: {self.name}\""
+      }
+    },
+    {
+      "docstring": "Represents a public benefit a user is receiving or has applied for.",
+      "fields": [
+        {
+          "kwargs": {
+            "on_delete": "models.CASCADE",
+            "related_name": "user_benefits",
+            "verbose_name": "User"
+          },
+          "name": "user",
+          "type": "models.ForeignKey"
+        },
+        {
+          "choices": [
+            [
+              "ssi",
+              "SSI (Supplemental Security Income)"
+            ],
+            [
+              "ssdi",
+              "SSDI (Social Security Disability Insurance)"
+            ],
+            [
+              "medicaid",
+              "Medicaid and Medicaid Waivers"
+            ],
+            [
+              "snap",
+              "SNAP (food assistance)"
+            ],
+            [
+              "section8",
+              "Section 8 housing"
+            ]
+          ],
+          "kwargs": {
+            "max_length": 32
+          },
+          "name": "benefit_type",
+          "type": "models.CharField"
+        },
+        {
+          "choices": [
+            [
+              "active",
+              "Active"
+            ],
+            [
+              "applied",
+              "Applied"
+            ],
+            [
+              "denied",
+              "Denied"
+            ],
+            [
+              "unknown",
+              "Unknown"
+            ]
+          ],
+          "kwargs": {
+            "default": "STATUS_UNKNOWN",
+            "max_length": 16
+          },
+          "name": "status",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "auto_now_add": true
+          },
+          "name": "created_at",
+          "type": "models.DateTimeField"
+        },
+        {
+          "kwargs": {
+            "auto_now": true
+          },
+          "name": "updated_at",
+          "type": "models.DateTimeField"
+        }
+      ],
+      "meta": {},
+      "methods": [],
+      "name": "UserBenefit",
+      "properties": [],
+      "save_method": null,
+      "str_method": {
+        "body": "return f\"{self.benefit_type} for {self.user} ({self.status})\""
+      }
+    },
+    {
+      "docstring": "Represents a notification for a user.",
+      "fields": [
+        {
+          "kwargs": {
+            "on_delete": "models.CASCADE",
+            "related_name": "notifications",
+            "verbose_name": "User"
+          },
+          "name": "user",
+          "type": "models.ForeignKey"
+        },
+        {
+          "kwargs": {
+            "max_length": 255
+          },
+          "name": "title",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {},
+          "name": "description",
+          "type": "models.TextField"
+        },
+        {
+          "kwargs": {
+            "blank": true,
+            "max_length": 1024,
+            "null": true
+          },
+          "name": "click_url",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "default": false
+          },
+          "name": "read",
+          "type": "models.BooleanField"
+        },
+        {
+          "kwargs": {
+            "auto_now_add": true
+          },
+          "name": "created_at",
+          "type": "models.DateTimeField"
+        },
+        {
+          "kwargs": {
+            "auto_now": true
+          },
+          "name": "updated_at",
+          "type": "models.DateTimeField"
+        }
+      ],
+      "meta": {
+        "ordering": [
+          "-created_at"
+        ]
+      },
+      "methods": [],
+      "name": "Notification",
+      "properties": [],
+      "save_method": null,
+      "str_method": {
+        "body": "return f\"Notification for {self.user}: {self.title}\""
+      }
+    },
+    {
+      "docstring": "Container for multiple medical trajectories generated for a user.\n    This kicks off parallel generation of multiple trajectory scenarios.",
+      "fields": [
+        {
+          "kwargs": {
+            "on_delete": "models.CASCADE",
+            "related_name": "medical_trajectories_container",
+            "verbose_name": "User"
+          },
+          "name": "user",
+          "type": "models.OneToOneField"
+        },
+        {
+          "kwargs": {
+            "blank": true,
+            "help_text": "Generated Python code for simulating transitions between consolidated disease states",
+            "null": true
+          },
+          "name": "simulation_code",
+          "type": "models.TextField"
+        },
+        {
+          "kwargs": {
+            "default": "list",
+            "help_text": "Consolidated disease states from all trajectory scenarios"
+          },
+          "name": "consolidated_states",
+          "type": "models.JSONField"
+        },
+        {
+          "kwargs": {
+            "auto_now_add": true
+          },
+          "name": "created_at",
+          "type": "models.DateTimeField"
+        },
+        {
+          "kwargs": {
+            "auto_now": true
+          },
+          "name": "updated_at",
+          "type": "models.DateTimeField"
+        }
+      ],
+      "meta": {
+        "ordering": [
+          "-created_at"
+        ],
+        "verbose_name_plural": "Medical Trajectories Containers"
+      },
+      "methods": [],
+      "name": "MedicalTrajectoriesContainer",
+      "properties": [],
+      "save_method": {
+        "body": "is_new = self.pk is None\n        super().save(*args, **kwargs)\n\n        # Generate 10 trajectories in parallel when this container is first created\n        if is_new:\n            from haven_api.finance.tasks.generate_medical_trajectories import (\n                generate_medical_trajectories_parallel,\n            )\n\n            async_to_sync(generate_medical_trajectories_parallel.kiq)(self.user.pk)",
+        "docstring": ""
+      },
+      "str_method": {
+        "body": "return f\"Medical Trajectories Container for {self.user}\""
+      }
+    },
+    {
+      "docstring": "Represents a single generated medical trajectory scenario for a user.\n    Multiple trajectories belong to one MedicalTrajectoriesContainer.",
+      "fields": [
+        {
+          "kwargs": {
+            "on_delete": "models.CASCADE",
+            "related_name": "trajectory_scenarios",
+            "verbose_name": "MedicalTrajectoriesContainer"
+          },
+          "name": "trajectories_container",
+          "type": "models.ForeignKey"
+        },
+        {
+          "kwargs": {
+            "help_text": "Generated Continuity of Care Document text"
+          },
+          "name": "text",
+          "type": "models.TextField"
+        },
+        {
+          "kwargs": {
+            "default": "list",
+            "help_text": "Extracted disease states for Markov modeling"
+          },
+          "name": "disease_states",
+          "type": "models.JSONField"
+        },
+        {
+          "kwargs": {
+            "help_text": "Sequential number of this trajectory scenario (1-10)"
+          },
+          "name": "scenario_number",
+          "type": "models.PositiveIntegerField"
+        },
+        {
+          "kwargs": {
+            "auto_now_add": true
+          },
+          "name": "created_at",
+          "type": "models.DateTimeField"
+        },
+        {
+          "kwargs": {
+            "auto_now": true
+          },
+          "name": "updated_at",
+          "type": "models.DateTimeField"
+        }
+      ],
+      "meta": {
+        "ordering": [
+          "scenario_number",
+          "-created_at"
+        ],
+        "unique_together": [],
+        "verbose_name_plural": "Medical Trajectories"
+      },
+      "methods": [],
+      "name": "MedicalTrajectory",
+      "properties": [],
+      "save_method": null,
+      "str_method": {
+        "body": "return f\"Medical Trajectory #{self.scenario_number} for {self.trajectories_container.user}\""
+      }
+    },
+    {
+      "docstring": "Represents a financial transaction, typically sourced from Plaid.",
+      "fields": [
+        {
+          "kwargs": {
+            "on_delete": "models.CASCADE",
+            "related_name": "transactions",
+            "verbose_name": "FamilyInfo"
+          },
+          "name": "family_info",
+          "type": "models.ForeignKey"
+        },
+        {
+          "kwargs": {
+            "db_index": true,
+            "max_length": 255
+          },
+          "name": "transaction_id",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "db_index": true,
+            "max_length": 255
+          },
+          "name": "account_id",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "decimal_places": 10,
+            "max_digits": 28
+          },
+          "name": "amount",
+          "type": "models.DecimalField"
+        },
+        {
+          "kwargs": {
+            "max_length": 3
+          },
+          "name": "iso_currency_code",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "db_index": true
+          },
+          "name": "transaction_date",
+          "type": "models.DateField"
+        },
+        {
+          "kwargs": {
+            "blank": true,
+            "null": true
+          },
+          "name": "transaction_datetime",
+          "type": "models.DateTimeField"
+        },
+        {
+          "kwargs": {
+            "blank": true,
+            "null": true
+          },
+          "name": "authorized_date",
+          "type": "models.DateField"
+        },
+        {
+          "kwargs": {},
+          "name": "name",
+          "type": "models.TextField"
+        },
+        {
+          "kwargs": {
+            "blank": true,
+            "max_length": 255,
+            "null": true
+          },
+          "name": "merchant_name",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "max_length": 50
+          },
+          "name": "payment_channel",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "default": false
+          },
+          "name": "pending",
+          "type": "models.BooleanField"
+        },
+        {
+          "kwargs": {
+            "blank": true,
+            "db_index": true,
+            "max_length": 255,
+            "null": true
+          },
+          "name": "personal_finance_category_primary",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "blank": true,
+            "max_length": 255,
+            "null": true
+          },
+          "name": "personal_finance_category_detailed",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {
+            "db_index": true,
+            "max_length": 50
+          },
+          "name": "transaction_type",
+          "type": "models.CharField"
+        },
+        {
+          "kwargs": {},
+          "name": "raw_plaid_data",
+          "type": "models.JSONField"
+        },
+        {
+          "kwargs": {
+            "auto_now_add": true,
+            "db_index": true
+          },
+          "name": "created_at",
+          "type": "models.DateTimeField"
+        },
+        {
+          "kwargs": {
+            "auto_now": true
+          },
+          "name": "updated_at",
+          "type": "models.DateTimeField"
+        }
+      ],
+      "meta": {
+        "ordering": [
+          "-transaction_date",
+          "-created_at"
+        ],
+        "unique_together": []
+      },
+      "methods": [
+        {
+          "args": {
+            "args": [],
+            "defaults": {},
+            "kwarg": null,
+            "vararg": null
+          },
+          "body": "return {\n            \"transaction_id\": self.transaction_id,\n            \"account_id\": self.account_id,\n            \"amount\": str(self.amount),  # Ensure decimal is serialized as string\n            \"iso_currency_code\": self.iso_currency_code,\n            \"transaction_date\": self.transaction_date.isoformat()\n            if self.transaction_date\n            else None,\n            \"transaction_datetime\": self.transaction_datetime.isoformat()\n            if self.transaction_datetime\n            else None,\n            \"authorized_date\": self.authorized_date.isoformat()\n            if self.authorized_date\n            else None,\n            \"name\": self.name,\n            \"merchant_name\": self.merchant_name,\n            \"payment_channel\": self.payment_channel,\n            \"pending\": self.pending,\n            \"personal_finance_category_primary\": self.personal_finance_category_primary,\n            \"personal_finance_category_detailed\": self.personal_finance_category_detailed,\n            \"transaction_type\": self.transaction_type,\n            # \"raw_plaid_data\": self.raw_plaid_data, # Optionally include raw data - ensure it's serializable if uncommented\n            \"created_at_db\": self.created_at.isoformat(),  # auto_now_add=True, so never None\n            \"updated_at_db\": self.updated_at.isoformat(),  # auto_now=True, so never None\n        }",
+          "docstring": "",
+          "name": "get_display_dict"
+        }
+      ],
+      "name": "Transaction",
+      "properties": [],
+      "save_method": null,
+      "str_method": {
+        "body": "return f\"{self.name} ({self.amount} {self.iso_currency_code}) on {self.transaction_date} for {self.family_info.user.username}\""
+      }
+    }
+  ]
+}
+
+apps/finance/tasks/
+e.g.:
+{
+  "tasks": [
+    "consolidate_trajectories",
+    "create_embeddings",
+    "generate_ai_response",
+    "update_medical_report",
+    "parse_document",
+    "update_state_from_conversation",
+    "update_housing_preferences",
+    "generate_medical_trajectories"
+  ]
+}
+
+apps/finance/tasks/generate_ai_response/
+e.g.:
+{
+  "tasks": [
+    {
+      "args": {
+        "defaults": {},
+        "keyword_only": [],
+        "kwarg": null,
+        "positional_only": [],
+        "regular_args": [
+          "message_id"
+        ],
+        "vararg": null
+      },
+      "body_source": "try:\n        # Import locally to avoid circular imports\n        from ..models import ChatMessage, Field, FieldResponse\n\n        # Get the original message, user, and form response\n        user_message = await ChatMessage.objects.select_related(\n            \"user\",\n            \"user_form_response__form\",\n            \"document\",\n        ).aget(id=message_id)\n\n        user = user_message.user\n        user_form_response = user_message.user_form_response\n\n        if not user_form_response or not user_form_response.form:\n            raise ValueError(\n                f\"Message {message_id} has no associated UserFormResponse or Form.\"\n            )\n\n        form = user_form_response.form\n\n        # Fetch existing field responses for this user\n        existing_responses = {}\n        async for response in FieldResponse.objects.filter(\n            user_form_response=user_form_response\n        ).values(\"name\", \"value\"):\n            existing_responses[response[\"name\"]] = response[\"value\"]\n\n        # Build form fields description\n        answered_fields = []\n        unanswered_fields = []\n\n        async for field_data in Field.objects.filter(form=form).values(\n            \"name\", \"description\", \"field_type\", \"enum_choices\"\n        ):\n            field_description = f\"- Field: {field_data['name']}\\n\"\n            field_description += f\"  Description: {field_data['description']}\\n\"\n            field_description += f\"  Type: {field_data['field_type']}\\n\"\n\n            if (\n                field_data[\"field_type\"] == Field.FIELD_TYPE_ENUM\n                and field_data[\"enum_choices\"]\n            ):\n                choices_str = \", \".join(field_data[\"enum_choices\"])\n                field_description += f\"  Allowed Choices: [{choices_str}]\\n\"\n\n            # Check if field has a value and categorize\n            current_value = existing_responses.get(field_data[\"name\"])\n            if current_value:\n                field_description += f\"  Current Value: {current_value}\\n\"\n                answered_fields.append(field_description)\n            else:\n                unanswered_fields.append(field_description)\n\n        # Build the form fields description with sections\n        form_fields_description = \"\\n\"\n        if answered_fields:\n            form_fields_description += \"ANSWERED FIELDS:\\n\"\n            form_fields_description += \"\".join(answered_fields)\n\n        if unanswered_fields:\n            if answered_fields:\n                form_fields_description += \"\\n\"\n            form_fields_description += (\n                \"UNANSWERED FIELDS (these still need to be collected):\\n\"\n            )\n            form_fields_description += \"\".join(unanswered_fields)\n\n        # Create the agent\n        agent = create_haven_agent(form_fields_description)\n\n        # Build conversation history\n        # Get the last 20 messages in chronological order\n        history_messages_qs = (\n            ChatMessage.objects.filter(\n                user=user,\n                user_form_response=user_form_response,\n                created_at__lt=user_message.created_at,\n            )\n            .order_by(\"-created_at\")[:20]\n            .values_list(\"role\", \"content\")\n        )\n\n        history_messages = [msg async for msg in history_messages_qs][::-1]\n\n        # Build conversation string\n        conversation_history = \"\"\n        for role, content in history_messages:\n            if role == ChatMessage.ROLE_USER:\n                conversation_history += f\"User: {content}\\n\"\n            elif role == ChatMessage.ROLE_ASSISTANT:\n                conversation_history += f\"Assistant: {content}\\n\"\n\n        # Prepare current message content\n        current_content = user_message.content\n        if user_message.document:\n            document = user_message.document\n            current_content = (\n                f\"{current_content}\\n\\nAttached Document:\\n{document.content}\"\n            )\n\n        # Combine conversation history with current message\n        full_conversation = f\"{conversation_history}User: {current_content}\"\n\n        # Create context object\n        context = HavenContext(\n            user=user, user_form_response=user_form_response, form=form\n        )\n\n        # Run the agent\n        result = await Runner.run(\n            starting_agent=agent, input=full_conversation, context=context\n        )\n\n        # Save the assistant's response\n        if result.final_output:\n            await ChatMessage.objects.acreate(\n                user=user,\n                user_form_response=user_form_response,\n                role=ChatMessage.ROLE_ASSISTANT,\n                content=result.final_output,\n            )\n\n    except Exception as e:\n        logger.error(f\"Error in generate_ai_response: {str(e)}\")\n        # Save an error message for the user\n        if \"user_message\" in locals():\n            await ChatMessage.objects.acreate(\n                user=user_message.user,\n                user_form_response=user_message.user_form_response,\n                role=ChatMessage.ROLE_ASSISTANT,\n                content=\"I'm sorry, I encountered an error processing your message. Please try again or contact support if the issue persists.\",\n            )\n        raise",
+      "docstring": "",
+      "is_async": true,
+      "name": "generate_ai_response"
+    }
+  ]
+}
+
+apps/finance/commands/
+e.g.:
+{
+  "commands": [
+    "fill_initial_form",
+    "create_initial_form"
+  ]
+}
+
+e.g.:
+apps/finance/commands/fill_initial_form/
+{
+  "command": {
+    "arguments": [
+      {
+        "kwargs": {
+          "default": 1,
+          "help": "User ID to create the form for (defaults to 1)",
+          "type": "int"
+        },
+        "names": [
+          "--user-id"
+        ]
+      }
+    ],
+    "handle_body_source": "try:\n            test_user = User.objects.get(id=options[\"user_id\"])\n            self.stdout.write(f\"Found user: {test_user.email}\")\n        except User.DoesNotExist:\n            raise CommandError(f\"User with ID {options['user_id']} does not exist\")\n\n        # 2. Ensure the \"initial_intake\" LLMForm template exists\n        try:\n            llm_form = LLMForm.objects.get(name=\"initial_intake\")\n            self.stdout.write(f\"Found LLMForm template: '{llm_form.name}'\")\n        except LLMForm.DoesNotExist:\n            self.stdout.write(\n                self.style.ERROR(\n                    \"Error: LLMForm with name 'initial_intake' does not exist.\"\n                )\n            )\n            self.stdout.write(\n                \"Please run 'python manage.py create_initial_form' first.\"\n            )\n            return\n\n        # 3. Get or create a UserFormResponse for this user and form\n        user_form_response, ufr_created = (\n            UserFormResponse.objects.get_or_create_for_user(\n                user=test_user, form_name=\"initial_intake\"\n            )\n        )\n        if ufr_created:\n            self.stdout.write(\n                f\"Created UserFormResponse for user '{test_user.email}' and form '{llm_form.name}'.\"\n            )\n        else:\n            self.stdout.write(\n                f\"Found existing UserFormResponse for user '{test_user.email}' and form '{llm_form.name}'.\"\n            )\n\n        # 4. Define realistic answers based on get_initial_state_example()\n        answers = {\n            # Child Information\n            \"child_age\": \"10\",\n            \"child_disability_type\": \"Autism Spectrum Disorder\",\n            \"child_permanently_disabled_for_benefits\": \"Yes\",\n            \"child_work_capability\": \"part_time_sheltered\",\n            \"child_caregiving_hours_daily\": \"4\",\n            \"child_education_status\": \"public_school_special_ed\",\n            \"child_able_account_balance\": \"5050\",\n            # Parent Information (Primary)\n            \"parent_age\": \"40\",\n            \"parent_annual_income\": \"150000\",\n            \"parent_ss_retirement_benefit\": \"3000\",\n            \"parent_ss_survivor_benefit\": \"2200\",\n            \"family_savings_investments_description\": \"Brokerage Account value: $1,500,000\",\n            \"family_retirement_accounts_description\": \"401k value: $150,000\",\n            \"parent_life_insurance_payout\": \"250000\",\n            \"parent_planned_annual_snt_contribution\": \"85000\",\n            # Family & Household Information\n            \"family_zip_code\": \"02139\",\n            \"family_child_living_arrangement\": \"living_with_parents\",\n            \"family_general_expenses_description\": \"Housing: $24000/year, Food: $12000/year, Transportation: $5050/year\",\n            \"family_child_specific_expenses_description\": \"Therapy (ABA): $6000/year, Adaptive Equipment: $500/year, Respite Care: $1500/year\",\n            \"family_snt_balance\": \"20000\",\n            \"family_planned_large_expenses_description\": \"Home modification in 5 years: $15,000; Specialized vehicle in 10 years: $25,000\",\n        }\n\n        # 5. Create or update FieldResponse objects for each answer\n        self.stdout.write(\"\\nPopulating field responses...\")\n        for field_name, field_value in answers.items():\n            if not llm_form.fields.filter(name=field_name).exists():\n                self.stdout.write(\n                    self.style.WARNING(\n                        f\"Warning: Field template '{field_name}' not found in form '{llm_form.name}'. Skipping this answer.\"\n                    )\n                )\n                continue\n\n            field_response, fr_created = FieldResponse.objects.update_or_create(\n                user_form_response=user_form_response,\n                name=field_name,\n                defaults={\"value\": field_value},\n            )\n            action = \"Created\" if fr_created else \"Updated\"\n            self.stdout.write(f\"  {action} FieldResponse for '{field_name}'\")\n\n        self.stdout.write(\n            self.style.SUCCESS(\n                \"\\nScenario data population complete for 'initial_intake' form.\"\n            )\n        )\n        self.stdout.write(f\"User: {test_user.email}\")\n        self.stdout.write(f\"UserFormResponse ID: {user_form_response.id}\")",
+    "help": "Fills the initial_intake form with realistic answers for a family with a 16-year-old child with autism living in Massachusetts.",
+    "name": "Command"
+  }
+}
+
+apps/finance/endpoints/
+e.g.
+{
+  "router_registrations": [
+    {
+      "prefix": "messages",
+      "viewset": "ChatMessageViewSet"
+    },
+    {
+      "prefix": "notifications",
+      "viewset": "NotificationViewSet"
+    },
+    {
+      "prefix": "form-responses",
+      "viewset": "UserFormResponseViewSet"
+    },
+    {
+      "prefix": "forms",
+      "viewset": "LLMFormViewSet"
+    },
+    {
+      "prefix": "documents",
+      "viewset": "DocumentViewSet"
+    },
+    {
+      "prefix": "family-info",
+      "viewset": "FamilyInfoViewSet"
+    },
+    {
+      "prefix": "medical-trajectories-container",
+      "viewset": "MedicalTrajectoriesContainerViewSet"
+    },
+    {
+      "prefix": "medical-trajectories",
+      "viewset": "MedicalTrajectoryViewSet"
+    }
+  ],
+  "urlpatterns": [
+    {
+      "name": "clear-user-data",
+      "route": "clear-user-data/",
+      "view_name": "ClearUserDataView",
+      "view_type": "class_based_view"
+    },
+    {
+      "name": "search",
+      "route": "search/",
+      "view_name": "SearchView",
+      "view_type": "class_based_view"
+    },
+    {
+      "name": "plaid-info",
+      "route": "plaid/info/",
+      "view_name": "PlaidInfoView",
+      "view_type": "class_based_view"
+    },
+    {
+      "name": "plaid-create-link-token",
+      "route": "plaid/create-link-token/",
+      "view_name": "CreateLinkTokenView",
+      "view_type": "class_based_view"
+    },
+    {
+      "name": "plaid-set-access-token",
+      "route": "plaid/set-access-token/",
+      "view_name": "SetAccessTokenView",
+      "view_type": "class_based_view"
+    },
+    {
+      "name": "plaid-auth",
+      "route": "plaid/auth/",
+      "view_name": "AuthDataView",
+      "view_type": "class_based_view"
+    },
+    {
+      "name": "plaid-transactions",
+      "route": "plaid/transactions/",
+      "view_name": "TransactionsView",
+      "view_type": "class_based_view"
+    },
+    {
+      "name": "plaid-identity",
+      "route": "plaid/identity/",
+      "view_name": "IdentityView",
+      "view_type": "class_based_view"
+    },
+    {
+      "name": "plaid-balance",
+      "route": "plaid/balance/",
+      "view_name": "BalanceView",
+      "view_type": "class_based_view"
+    },
+    {
+      "name": "plaid-accounts",
+      "route": "plaid/accounts/",
+      "view_name": "AccountsView",
+      "view_type": "class_based_view"
+    },
+    {
+      "name": "plaid-holdings",
+      "route": "plaid/holdings/",
+      "view_name": "HoldingsView",
+      "view_type": "class_based_view"
+    },
+    {
+      "name": "plaid-investment-transactions",
+      "route": "plaid/investment-transactions/",
+      "view_name": "InvestmentTransactionsView",
+      "view_type": "class_based_view"
+    },
+    {
+      "name": "plaid-item",
+      "route": "plaid/item/",
+      "view_name": "ItemView",
+      "view_type": "class_based_view"
+    }
+  ]
+}
+
+apps/finance/serializers/
+e.g. {
+  "serializers": [
+    {
+      "create_method": null,
+      "custom_fields": [],
+      "fields": [
+        "name",
+        "value",
+        "created_at",
+        "updated_at",
+        "source_message_ids"
+      ],
+      "model": "FieldResponse",
+      "name": "FieldResponseSerializer",
+      "read_only_fields": []
+    },
+    {
+      "create_method": null,
+      "custom_fields": [
+        {
+          "arguments": {
+            "many": true,
+            "read_only": true
+          },
+          "name": "field_responses",
+          "serializer_class": "FieldResponseSerializer"
+        },
+        {
+          "arguments": {
+            "read_only": true,
+            "source": "form.name"
+          },
+          "name": "form_name",
+          "serializer_class": "serializers.CharField"
+        }
+      ],
+      "fields": [
+        "id",
+        "form_name",
+        "status",
+        "created_at",
+        "updated_at",
+        "questions_answered",
+        "total_questions",
+        "field_responses"
+      ],
+      "model": "UserFormResponse",
+      "name": "UserFormResponseSerializer",
+      "read_only_fields": []
+    },
+    {
+      "create_method": null,
+      "custom_fields": [],
+      "fields": [
+        "id",
+        "title",
+        "description",
+        "click_url",
+        "read",
+        "created_at",
+        "updated_at"
+      ],
+      "model": "Notification",
+      "name": "NotificationSerializer",
+      "read_only_fields": [
+        "id",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    {
+      "create_method": {
+        "body": "form_name = validated_data.pop(\"form_name\", None)\n        user = self.context[\"request\"].user\n\n        # If form_name is provided, get or create the UserFormResponse\n        user_form_response = None\n        if form_name:\n            user_form_response, _ = UserFormResponse.objects.get_or_create_for_user(\n                user=user, form_name=form_name\n            )\n\n        # Create the message with the optional user_form_response\n        validated_data[\"user\"] = user\n        validated_data[\"user_form_response\"] = user_form_response\n        return super().create(validated_data)",
+        "docstring": null
+      },
+      "custom_fields": [
+        {
+          "arguments": {
+            "required": false,
+            "write_only": true
+          },
+          "name": "form_name",
+          "serializer_class": "serializers.CharField"
+        },
+        {
+          "arguments": {
+            "allow_null": true,
+            "queryset": null,
+            "required": false
+          },
+          "name": "document",
+          "serializer_class": "serializers.PrimaryKeyRelatedField"
+        }
+      ],
+      "fields": [
+        "id",
+        "role",
+        "content",
+        "created_at",
+        "form_name",
+        "document",
+        "document_name"
+      ],
+      "model": "ChatMessage",
+      "name": "ChatMessageSerializer",
+      "read_only_fields": [
+        "id",
+        "created_at",
+        "document_name"
+      ]
+    },
+    {
+      "create_method": null,
+      "custom_fields": [],
+      "fields": [
+        "id",
+        "name",
+        "description"
+      ],
+      "model": "Field",
+      "name": "FieldSerializer",
+      "read_only_fields": []
+    },
+    {
+      "create_method": null,
+      "custom_fields": [
+        {
+          "arguments": {
+            "many": true,
+            "read_only": true
+          },
+          "name": "fields",
+          "serializer_class": "FieldSerializer"
+        }
+      ],
+      "fields": [
+        "id",
+        "name",
+        "description",
+        "is_active",
+        "fields"
+      ],
+      "model": "LLMForm",
+      "name": "LLMFormSerializer",
+      "read_only_fields": []
+    },
+    {
+      "create_method": null,
+      "custom_fields": [],
+      "fields": [
+        "id",
+        "type",
+        "name",
+        "file",
+        "has_content",
+        "content_preview",
+        "created_at",
+        "updated_at"
+      ],
+      "model": "Document",
+      "name": "DocumentSerializer",
+      "read_only_fields": [
+        "id",
+        "has_content",
+        "content_preview",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    {
+      "create_method": null,
+      "custom_fields": [
+        {
+          "arguments": {
+            "read_only": true
+          },
+          "name": "has_linked_plaid",
+          "serializer_class": "serializers.BooleanField"
+        },
+        {
+          "arguments": {
+            "read_only": true
+          },
+          "name": "is_data_partner",
+          "serializer_class": "serializers.BooleanField"
+        }
+      ],
+      "fields": [
+        "id",
+        "user",
+        "child_name",
+        "account_type",
+        "has_linked_plaid",
+        "is_data_partner",
+        "housing_preferences",
+        "medical_report"
+      ],
+      "model": "FamilyInfo",
+      "name": "FamilyInfoSerializer",
+      "read_only_fields": [
+        "user",
+        "created_at",
+        "updated_at",
+        "has_linked_plaid",
+        "is_data_partner"
+      ]
+    },
+    {
+      "create_method": null,
+      "custom_fields": [],
+      "fields": [
+        "id",
+        "text",
+        "disease_states",
+        "scenario_number",
+        "created_at",
+        "updated_at"
+      ],
+      "model": "MedicalTrajectory",
+      "name": "MedicalTrajectorySerializer",
+      "read_only_fields": [
+        "id",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    {
+      "create_method": null,
+      "custom_fields": [
+        {
+          "arguments": {
+            "many": true,
+            "read_only": true
+          },
+          "name": "trajectory_scenarios",
+          "serializer_class": "MedicalTrajectorySerializer"
+        },
+        {
+          "arguments": {},
+          "name": "scenario_count",
+          "serializer_class": "serializers.SerializerMethodField"
+        }
+      ],
+      "fields": [
+        "id",
+        "trajectory_scenarios",
+        "scenario_count",
+        "simulation_code",
+        "consolidated_states",
+        "created_at",
+        "updated_at"
+      ],
+      "model": "MedicalTrajectoriesContainer",
+      "name": "MedicalTrajectoriesContainerSerializer",
+      "read_only_fields": [
+        "id",
+        "created_at",
+        "updated_at",
+        "trajectory_scenarios",
+        "scenario_count",
+        "simulation_code",
+        "consolidated_states"
+      ]
+    }
+  ]
+}
+
+apps/finance/views/
+e.g.
+{
+  "viewsets": [
+    {
+      "actions": [],
+      "docstring": "\n    ViewSet for viewing and creating chat messages.\n    ",
+      "lookup_field": null,
+      "lookup_url_kwarg": null,
+      "methods": [
+        {
+          "body": "return ChatMessage.objects.filter(user=self.request.user).order_by(\"created_at\")",
+          "docstring": null,
+          "name": "get_queryset"
+        },
+        {
+          "body": "serializer.save(user=self.request.user)",
+          "docstring": null,
+          "name": "perform_create"
+        }
+      ],
+      "name": "ChatMessageViewSet",
+      "permission_classes": [
+        "permissions.IsAuthenticated"
+      ],
+      "queryset_definition": null,
+      "serializer_class": "ChatMessageSerializer"
+    },
+    {
+      "actions": [],
+      "docstring": "\n    ViewSet for viewing user form responses.\n    The lookup_field is 'form_name' - so you can get a specific form response by its form name.\n    ",
+      "lookup_field": "form_name",
+      "lookup_url_kwarg": "pk",
+      "methods": [
+        {
+          "body": "return UserFormResponse.objects.filter(user=self.request.user)",
+          "docstring": null,
+          "name": "get_queryset"
+        },
+        {
+          "body": "form_name = self.kwargs[self.lookup_url_kwarg]\n        response, created = UserFormResponse.objects.get_or_create_for_user(\n            user=self.request.user, form_name=form_name\n        )\n        return response",
+          "docstring": null,
+          "name": "get_object"
+        }
+      ],
+      "name": "UserFormResponseViewSet",
+      "permission_classes": [
+        "permissions.IsAuthenticated"
+      ],
+      "queryset_definition": null,
+      "serializer_class": "UserFormResponseSerializer"
+    },
+    {
+      "actions": [
+        {
+          "body": "notification = self.get_object()\n        notification.read = True\n        notification.save()\n        return Response({\"status\": \"notification marked as read\"})",
+          "decorator_args": {
+            "detail": true,
+            "methods": [
+              "post"
+            ]
+          },
+          "docstring": "Mark a notification as read.",
+          "name": "mark_as_read"
+        }
+      ],
+      "docstring": "\n    ViewSet for managing notifications.\n    Provides CRUD operations for notifications and a mark_as_read action.\n    ",
+      "lookup_field": null,
+      "lookup_url_kwarg": null,
+      "methods": [
+        {
+          "body": "return Notification.objects.filter(user=self.request.user).order_by(\n            \"-created_at\"\n        )",
+          "docstring": null,
+          "name": "get_queryset"
+        },
+        {
+          "body": "serializer.save(user=self.request.user)",
+          "docstring": null,
+          "name": "perform_create"
+        }
+      ],
+      "name": "NotificationViewSet",
+      "permission_classes": [
+        "permissions.IsAuthenticated"
+      ],
+      "queryset_definition": null,
+      "serializer_class": "NotificationSerializer"
+    },
+    {
+      "actions": [],
+      "docstring": "\n    ViewSet for viewing LLM-based form templates and their fields.\n    Forms are looked up by their 'name'.\n    ",
+      "lookup_field": "name",
+      "lookup_url_kwarg": null,
+      "methods": [],
+      "name": "LLMFormViewSet",
+      "permission_classes": [
+        "permissions.IsAuthenticated"
+      ],
+      "queryset_definition": "LLMForm.objects.filter(is_active=True)",
+      "serializer_class": "LLMFormSerializer"
+    },
+    {
+      "actions": [],
+      "docstring": null,
+      "lookup_field": null,
+      "lookup_url_kwarg": null,
+      "methods": [
+        {
+          "body": "return self.queryset.filter(user=self.request.user)",
+          "docstring": null,
+          "name": "get_queryset"
+        },
+        {
+          "body": "serializer.save(user=self.request.user)",
+          "docstring": null,
+          "name": "perform_create"
+        }
+      ],
+      "name": "FamilyInfoViewSet",
+      "permission_classes": [
+        "permissions.IsAuthenticated"
+      ],
+      "queryset_definition": "FamilyInfo.objects.all()",
+      "serializer_class": "FamilyInfoSerializer"
+    },
+    {
+      "actions": [],
+      "docstring": "\n    ViewSet for managing user documents.\n    Provides CRUD operations for documents including file uploads.\n    Query parameters:\n    - with_messages: If 'true', only returns documents that have associated chat messages\n    ",
+      "lookup_field": null,
+      "lookup_url_kwarg": null,
+      "methods": [
+        {
+          "body": "queryset = Document.objects.filter(user=self.request.user).order_by(\n            \"-created_at\"\n        )\n\n        # Filter by documents with messages if requested\n        with_messages = self.request.query_params.get(\"with_messages\", None)\n        if with_messages and with_messages.lower() == \"true\":\n            queryset = queryset.filter(messages__isnull=False).distinct()\n\n        return queryset",
+          "docstring": null,
+          "name": "get_queryset"
+        },
+        {
+          "body": "serializer.save(user=self.request.user)",
+          "docstring": null,
+          "name": "perform_create"
+        }
+      ],
+      "name": "DocumentViewSet",
+      "permission_classes": [
+        "permissions.IsAuthenticated"
+      ],
+      "queryset_definition": null,
+      "serializer_class": "DocumentSerializer"
+    },
+    {
+      "actions": [],
+      "docstring": "\n    ViewSet for MedicalTrajectoriesContainer.\n    Creating a new container triggers generation of 10 trajectory scenarios.\n    ",
+      "lookup_field": null,
+      "lookup_url_kwarg": null,
+      "methods": [
+        {
+          "body": "return MedicalTrajectoriesContainer.objects.filter(user=self.request.user)",
+          "docstring": null,
+          "name": "get_queryset"
+        },
+        {
+          "body": "serializer.save(user=self.request.user)",
+          "docstring": null,
+          "name": "perform_create"
+        }
+      ],
+      "name": "MedicalTrajectoriesContainerViewSet",
+      "permission_classes": [
+        "permissions.IsAuthenticated"
+      ],
+      "queryset_definition": null,
+      "serializer_class": "MedicalTrajectoriesContainerSerializer"
+    },
+    {
+      "actions": [],
+      "docstring": "\n    ViewSet for viewing individual medical trajectory scenarios.\n    Read-only since trajectories are generated automatically.\n    ",
+      "lookup_field": null,
+      "lookup_url_kwarg": null,
+      "methods": [
+        {
+          "body": "return MedicalTrajectory.objects.filter(\n            trajectories_container__user=self.request.user\n        ).select_related(\"trajectories_container\")",
+          "docstring": null,
+          "name": "get_queryset"
+        }
+      ],
+      "name": "MedicalTrajectoryViewSet",
+      "permission_classes": [
+        "permissions.IsAuthenticated"
+      ],
+      "queryset_definition": null,
+      "serializer_class": "MedicalTrajectorySerializer"
+    }
+  ]
+}
