@@ -321,7 +321,7 @@ def serve_dist():
 
     # Get the dist directory path (relative to the project root)
     project_root = Path(__file__).parent.parent
-    dist_dir = project_root / "dist"
+    dist_dir = project_root / "frontend"
 
     if not dist_dir.exists():
         print(f"Error: dist directory not found at {dist_dir}")
