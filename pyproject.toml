@@ -1,0 +1,14 @@
+[project]
+name = "django-gui"
+version = "0.1.0"
+description = "Django GUI"
+authors = [{ name = "Gabe Montague", email = "gabemontague@outlook.com" }]
+dependencies = ["Flask>=2.0.0", "flask-cors>=6.0.1", "python-dotenv>=1.0.0"]
+
+[project.scripts]
+django-gui-server = "server.app:main"
+django-gui-serve-dist = "server.app:serve_dist"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -304,5 +304,45 @@ def get_views(appname):
     return transform_views_py(raw_ast)
 
 
-if __name__ == "__main__":
+def main():
+    """Entry point for the django-gui-server command."""
     app.run(debug=True, host="0.0.0.0", port=5050)
+
+
+def serve_dist():
+    """Entry point for serving the built React dist folder."""
+    from pathlib import Path
+
+    from flask import Flask, send_file, send_from_directory
+
+    # Create a new Flask app for serving static files
+    static_app = Flask(__name__)
+
+    # Get the dist directory path (relative to the project root)
+    project_root = Path(__file__).parent.parent
+    dist_dir = project_root / "django-code-inspector-view" / "dist"
+
+    if not dist_dir.exists():
+        print(f"Error: dist directory not found at {dist_dir}")
+        print("Make sure to build the React app first with: npm run build")
+        return
+
+    @static_app.route("/")
+    def serve_index():
+        return send_file(dist_dir / "index.html")
+
+    @static_app.route("/<path:path>")
+    def serve_static(path):
+        try:
+            return send_from_directory(dist_dir, path)
+        except:
+            # For React Router, fallback to index.html for client-side routing
+            return send_file(dist_dir / "index.html")
+
+    print(f"Serving React app from: {dist_dir}")
+    print("Server running at: http://localhost:8081")
+    static_app.run(debug=False, host="0.0.0.0", port=8081)
+
+
+if __name__ == "__main__":
+    main()
