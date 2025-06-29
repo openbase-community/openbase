@@ -7,7 +7,7 @@ dependencies = ["Flask>=2.0.0", "flask-cors>=6.0.1", "python-dotenv>=1.0.0"]
 
 [project.scripts]
 django-gui-server = "django_gui.app:main"
-django-gui-serve-dist = "django_gui.app:serve_dist"
+django-gui-frontend = "django_gui.app:serve_frontend"
 
 [tool.hatch.build.targets.wheel]
 packages = ["django_gui"]

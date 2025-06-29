@@ -310,7 +310,7 @@ def main():
     app.run(debug=True, host="0.0.0.0", port=5050)
 
 
-def serve_dist():
+def serve_frontend():
     """Entry point for serving the built React dist folder."""
     from pathlib import Path
 
