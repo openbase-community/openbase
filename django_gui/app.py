@@ -1,8 +1,9 @@
 import os
 import subprocess
+from pathlib import Path
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
 
 from django_gui.parsing import parse_django_file_ast
@@ -16,6 +17,12 @@ from django_gui.transformation.transform_views_py import transform_views_py
 
 app = Flask(__name__)
 CORS(app)
+
+# Load environment variables
+load_dotenv()
+
+# Get API prefix from environment variable, default to '/api'
+API_PREFIX = os.getenv("DJANGO_API_PREFIX", "/api").strip("/")
 
 # Security: Whitelist of allowed Django management commands
 ALLOWED_DJANGO_COMMANDS = {
@@ -396,7 +403,71 @@ def create_superuser():
 def get_views(appname):
     views_file_path = DJANGO_PROJECT_APPS_DIR / appname / "views.py"
     raw_ast = parse_django_file_ast(views_file_path)
-    return transform_views_py(raw_ast)
+    views_data = transform_views_py(raw_ast)
+    # Return as dictionary with Django root path
+    return {
+        "viewsets": views_data.get("viewsets", [])
+        if isinstance(views_data, dict)
+        else views_data,
+        "django_root": str(DJANGO_PROJECT_APPS_DIR),
+    }
+
+
+@app.route("/apps/<appname>/api-prefix/")
+def get_api_prefix(appname):
+    """
+    Get the API prefix for the given app.
+    This allows the frontend to construct proper API URLs.
+    """
+    # For now, return the same prefix for all apps
+    # In the future, this could be app-specific if needed
+    return {
+        "prefix": API_PREFIX,
+        "base_url": f"http://localhost:8000/{API_PREFIX}",
+        "app_name": appname,
+    }
+
+
+# Frontend serving routes (catch-all routes should be last)
+@app.route("/")
+def serve_index():
+    """Serve the React app's index.html at the root."""
+    project_root = Path(__file__).parent.parent
+    frontend_dir = project_root / "frontend"
+
+    if not frontend_dir.exists():
+        return jsonify(
+            {
+                "error": "Frontend directory not found. Make sure to build the React app first."
+            }
+        ), 404
+
+    index_path = frontend_dir / "index.html"
+    if not index_path.exists():
+        return jsonify({"error": "index.html not found in frontend directory."}), 404
+
+    return send_file(index_path)
+
+
+@app.route("/<path:path>")
+def serve_static_or_fallback(path):
+    """Serve static files from frontend directory or fallback to index.html for React Router."""
+    project_root = Path(__file__).parent.parent
+    frontend_dir = project_root / "frontend"
+
+    if not frontend_dir.exists():
+        return jsonify({"error": "Frontend directory not found."}), 404
+
+    try:
+        # Try to serve the requested file
+        return send_from_directory(frontend_dir, path)
+    except:
+        # Fallback to index.html for React Router (client-side routing)
+        index_path = frontend_dir / "index.html"
+        if index_path.exists():
+            return send_file(index_path)
+        else:
+            return jsonify({"error": "Frontend files not found."}), 404
 
 
 def main():
@@ -406,9 +477,8 @@ def main():
 
 def serve_frontend():
     """Entry point for serving the built React dist folder."""
-    from pathlib import Path
 
-    from flask import Flask, send_file, send_from_directory
+    from flask import Flask
 
     # Create a new Flask app for serving static files
     static_app = Flask(__name__)

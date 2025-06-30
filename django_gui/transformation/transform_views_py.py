@@ -83,6 +83,8 @@ def transform_views_py(views_py_ast):
 
             viewset_info = {
                 "name": class_name,
+                "lineno": declaration.get("lineno"),
+                "end_lineno": declaration.get("end_lineno"),
                 "docstring": None,
                 "serializer_class": None,
                 "permission_classes": [],
@@ -132,6 +134,8 @@ def transform_views_py(views_py_ast):
                     func_body_source = item.get("body_source", "")
                     method_data = {
                         "name": func_name,
+                        "lineno": item.get("lineno"),
+                        "end_lineno": item.get("end_lineno"),
                         "docstring": func_docstring,
                         "body": func_body_source,
                     }
