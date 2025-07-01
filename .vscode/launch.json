@@ -15,7 +15,7 @@
                 "5050"
             ],
             "env": {
-                "DJANGO_PROJECT_APPS_DIR": "/Users/gabemontague/Dropbox/Mac/Documents/Documents/Projects/haven/code/haven/haven-api/haven_api/",
+                "DJANGO_PROJECT_APPS_DIR": "/Users/gabemontague/Dropbox/Mac/Documents/Documents/Projects/haven/code/haven/haven-api/haven_api/,/Users/gabemontague/Dropbox/Mac/Documents/Documents/Projects/haven/code/haven/sim-api/sim_api/",
                 "DJANGO_PROJECT_DIR": "/Users/gabemontague/Dropbox/Mac/Documents/Documents/Projects/haven/code/haven/web/",
                 "DJANGO_API_PREFIX": "/api/haven"
             },
