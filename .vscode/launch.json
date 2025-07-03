@@ -2,27 +2,17 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Flask Server",
+            "name": "Django: Uvicorn",
+            "consoleName": "Django: Uvicorn",
             "type": "debugpy",
             "request": "launch",
-            "module": "flask",
-            "args": [
-                "--app",
-                "app.py",
-                "--debug",
-                "run",
-                "--port",
-                "5050"
-            ],
+            "module": "uvicorn",
+            "args": "openbase.config.asgi:application --host 0.0.0.0 --reload",
+            "django": true,
+            "justMyCode": false,
             "env": {
-                "DJANGO_PROJECT_APPS_DIR": "/Users/gabemontague/Dropbox/Mac/Documents/Documents/Projects/haven/code/haven/haven-api/haven_api/,/Users/gabemontague/Dropbox/Mac/Documents/Documents/Projects/haven/code/haven/sim-api/sim_api/",
                 "DJANGO_PROJECT_DIR": "/Users/gabemontague/Dropbox/Mac/Documents/Documents/Projects/haven/code/haven/web/",
-                "DJANGO_API_PREFIX": "/api/haven"
-            },
-            "jinja": true,
-            "cwd": "${workspaceFolder}/django_gui",
-            "justMyCode": true,
-            "console": "integratedTerminal"
-        }
-    ]
-}
+                "DJANGO_PROJECT_APPS_DIR": "/Users/gabemontague/Dropbox/Mac/Documents/Documents/Projects/haven/code/haven/haven-api/haven_api/"
+            }
+        ]
+    }
