@@ -2,8 +2,8 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Django: Uvicorn",
-            "consoleName": "Django: Uvicorn",
+            "name": "Metaserver: Uvicorn",
+            "consoleName": "Metaserver: Uvicorn",
             "type": "debugpy",
             "request": "launch",
             "module": "uvicorn",
@@ -14,5 +14,6 @@
                 "DJANGO_PROJECT_DIR": "/Users/gabemontague/Dropbox/Mac/Documents/Documents/Projects/haven/code/haven/web/",
                 "DJANGO_PROJECT_APPS_DIR": "/Users/gabemontague/Dropbox/Mac/Documents/Documents/Projects/haven/code/haven/haven-api/haven_api/"
             }
-        ]
-    }
+        }
+    ]
+}
