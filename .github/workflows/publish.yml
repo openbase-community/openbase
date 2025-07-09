@@ -20,6 +20,31 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: "22"
+
+      - name: Clone and build React app
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          # Clone the React app repository using GitHub token for private repo access
+          git clone --depth 1 --branch master https://x-access-token:${GH_TOKEN}@github.com/big-help-ai/openbase-react.git temp-react
+
+          # Install dependencies and build
+          cd temp-react
+          npm ci
+          npm run build
+
+          # Copy built files to the static directory
+          cd ..
+          rm -rf openbase/static/*
+          cp -r temp-react/dist/* openbase/static/
+
+          # Clean up
+          rm -rf temp-react
+
       - name: Install build tools
         run: pip install build twine hatch
 

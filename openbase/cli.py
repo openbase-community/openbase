@@ -23,7 +23,7 @@ def main():
 
 @main.command()
 @click.option("--host", default="127.0.0.1", help="Host to bind to")
-@click.option("--port", default="8081", help="Port to bind to")
+@click.option("--port", default="8001", help="Port to bind to")
 def server(host, port):
     """Start the Openbase development server."""
     openbase_dir = get_openbase_directory()

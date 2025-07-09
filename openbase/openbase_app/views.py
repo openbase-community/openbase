@@ -1,23 +1,27 @@
 import os
 import subprocess
+from pathlib import Path
+from typing import Optional, overload
 
 from django.conf import settings
-from django.http import Http404, HttpResponse
 from dotenv import load_dotenv
-from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.decorators import api_view
+from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
 
-from ..parsing import parse_django_file_ast
+from openbase.parsing import parse_django_file_ast
+from openbase.transformation.transform_commands import transform_commands_py
+from openbase.transformation.transform_models import transform_models_py
+from openbase.transformation.transform_serializers import transform_serializers_py
+from openbase.transformation.transform_tasks import transform_tasks_py
+from openbase.transformation.transform_urls_py import transform_urls_py
+from openbase.transformation.transform_views_py import transform_views_py
 
-# Import boilersync functionality
-try:
-    from boilersync.commands.pull import pull as boilersync_pull
-
-    BOILERSYNC_AVAILABLE = True
-except ImportError:
-    BOILERSYNC_AVAILABLE = False
+from .serializers import (
+    CreateAppSerializer,
+    CreateSuperuserSerializer,
+    RunManagementCommandSerializer,
+)
 
 
 def get_django_apps():
@@ -61,7 +65,21 @@ def find_app_directory(app_name):
     return None
 
 
-def find_app_file(app_name, file_path):
+@overload
+def find_app_file(
+    app_name: str, file_path: str, raise_if_not_found: bool = False
+) -> Optional[Path]: ...
+
+
+@overload
+def find_app_file(
+    app_name: str, file_path: str, raise_if_not_found: bool = True
+) -> Path: ...
+
+
+def find_app_file(
+    app_name: str, file_path: str, raise_if_not_found: bool = False
+) -> Optional[Path]:
     """
     Find a specific file within an app across all configured directories.
     Returns the Path object for the file, or None if not found.
@@ -69,135 +87,82 @@ def find_app_file(app_name, file_path):
     Args:
         app_name: Name of the Django app
         file_path: Relative path within the app (e.g., "models.py", "tasks/my_task.py")
+        raise_if_not_found: If True, raise NotFound exception instead of returning None
     """
     app_dir = find_app_directory(app_name)
     if app_dir:
         target_file = app_dir / file_path
         if target_file.exists():
             return target_file
+
+    if raise_if_not_found:
+        raise NotFound(f"{file_path} not found for app {app_name}")
     return None
 
 
 @api_view(["POST"])
-@permission_classes([AllowAny])
 def run_management_command(request):
     """
     Securely execute Django management commands.
-    Expected JSON payload: {"command": "migrate", "args": ["--noinput"], "app_name": "myapp"}
+    Expected JSON payload: {"command": "migrate", "args": ["--noinput"]}
     """
-    try:
-        data = request.data
-        if not data:
-            return Response(
-                {"error": "JSON payload required"}, status=status.HTTP_400_BAD_REQUEST
-            )
+    serializer = RunManagementCommandSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
 
-        command = data.get("command")
-        args = data.get("args", [])
-        app_name = data.get("app_name")  # Optional, for app-specific commands
+    validated_data = serializer.validated_data
+    command: str = validated_data["command"]
+    args: list = validated_data["args"]
 
-        if not command:
-            return Response(
-                {"error": "Command is required"}, status=status.HTTP_400_BAD_REQUEST
-            )
+    # Load environment variables from .env file in Django project directory
+    env_file = settings.DJANGO_PROJECT_DIR / ".env"
+    if env_file.exists():
+        load_dotenv(env_file)
 
-        # Security: Validate command is in whitelist
-        if command not in settings.ALLOWED_DJANGO_COMMANDS:
-            return Response(
-                {
-                    "error": f"Command '{command}' not allowed. Allowed commands: {sorted(settings.ALLOWED_DJANGO_COMMANDS)}"
-                },
-                status=status.HTTP_403_FORBIDDEN,
-            )
+    # Determine the Python executable from the virtual environment
+    # Check for both Unix (bin/python) and Windows (Scripts/python.exe) paths
+    venv_python_unix = settings.DJANGO_PROJECT_DIR / "venv" / "bin" / "python"
+    venv_python_windows = (
+        settings.DJANGO_PROJECT_DIR / "venv" / "Scripts" / "python.exe"
+    )
 
-        # Security: Validate arguments are strings and don't contain dangerous characters
-        if not isinstance(args, list):
-            return Response(
-                {"error": "Args must be a list"}, status=status.HTTP_400_BAD_REQUEST
-            )
+    if venv_python_unix.exists():
+        python_executable = str(venv_python_unix)
+    elif venv_python_windows.exists():
+        python_executable = str(venv_python_windows)
+    else:
+        # Fall back to system Python if virtual environment not found
+        python_executable = "python"
 
-        for arg in args:
-            if not isinstance(arg, str):
-                return Response(
-                    {"error": "All arguments must be strings"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            # Prevent command injection by checking for dangerous characters
-            if any(char in arg for char in [";", "&&", "||", "|", "`", "$", ">", "<"]):
-                return Response(
-                    {"error": f"Argument '{arg}' contains invalid characters"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+    # Build the command
+    cmd = [
+        python_executable,
+        str(settings.DJANGO_PROJECT_DIR / "manage.py"),
+        command,
+    ] + args
 
-        # Load environment variables from .env file in Django project directory
-        env_file = settings.DJANGO_PROJECT_DIR / ".env"
-        if env_file.exists():
-            load_dotenv(env_file)
+    # Execute the command
+    result = subprocess.run(
+        cmd,
+        cwd=str(settings.DJANGO_PROJECT_DIR),
+        capture_output=True,
+        text=True,
+        timeout=300,  # 5 minutes timeout
+    )
 
-        # Determine the Python executable from the virtual environment
-        # Check for both Unix (bin/python) and Windows (Scripts/python.exe) paths
-        venv_python_unix = settings.DJANGO_PROJECT_DIR / "venv" / "bin" / "python"
-        venv_python_windows = (
-            settings.DJANGO_PROJECT_DIR / "venv" / "Scripts" / "python.exe"
-        )
-
-        if venv_python_unix.exists():
-            python_executable = str(venv_python_unix)
-        elif venv_python_windows.exists():
-            python_executable = str(venv_python_windows)
-        else:
-            # Fall back to system Python if virtual environment not found
-            python_executable = "python"
-
-        # Build the command
-        cmd = [
-            python_executable,
-            str(settings.DJANGO_PROJECT_DIR / "manage.py"),
-            command,
-        ] + args
-
-        # Execute the command
-        result = subprocess.run(
-            cmd,
-            cwd=str(settings.DJANGO_PROJECT_DIR),
-            capture_output=True,
-            text=True,
-            timeout=300,  # 5 minutes timeout
-        )
-
-        return Response(
-            {
-                "command": " ".join(cmd),
-                "returncode": result.returncode,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-                "success": result.returncode == 0,
-            }
-        )
-
-    except subprocess.TimeoutExpired:
-        return Response(
-            {"error": "Command timed out after 5 minutes"},
-            status=status.HTTP_408_REQUEST_TIMEOUT,
-        )
-    except Exception as e:
-        return Response(
-            {"error": f"Failed to execute command: {str(e)}"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+    return Response(
+        {
+            "command": " ".join(cmd),
+            "returncode": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "success": result.returncode == 0,
+        }
+    )
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
-def list_management_commands(request):
-    """List all allowed Django management commands."""
-    return Response({"commands": sorted(settings.ALLOWED_DJANGO_COMMANDS)})
-
-
-@api_view(["GET"])
-@permission_classes([AllowAny])
-def debug(request):
-    """Debug endpoint to check configuration."""
+def env_info(request):
+    """Environment info endpoint."""
     return Response(
         {
             "django_project_dir": str(settings.DJANGO_PROJECT_DIR),
@@ -210,7 +175,6 @@ def debug(request):
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
 def list_apps(request):
     """List all Django apps."""
     apps = get_django_apps()
@@ -218,35 +182,19 @@ def list_apps(request):
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
 def get_models(request, appname):
     """Get models for a specific Django app."""
-    app_file = find_app_file(appname, "models.py")
-    if not app_file:
-        return Response(
-            {"error": f"models.py not found for app {appname}"},
-            status=status.HTTP_404_NOT_FOUND,
-        )
-
-    try:
-        models_data = parse_django_file_ast(app_file)
-        return Response(models_data)
-    except Exception as e:
-        return Response(
-            {"error": f"Failed to parse models.py: {str(e)}"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+    app_file = find_app_file(appname, "models.py", raise_if_not_found=True)
+    models_data = parse_django_file_ast(app_file)
+    return Response(transform_models_py(models_data))
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
 def get_tasks(request, appname):
     """Get tasks for a specific Django app."""
     app_dir = find_app_directory(appname)
     if not app_dir:
-        return Response(
-            {"error": f"App {appname} not found"}, status=status.HTTP_404_NOT_FOUND
-        )
+        raise NotFound(f"App {appname} not found")
 
     tasks_dir = app_dir / "tasks"
     if not tasks_dir.exists():
@@ -262,35 +210,19 @@ def get_tasks(request, appname):
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
 def get_task_details(request, appname, taskname):
     """Get details for a specific task."""
-    task_file = find_app_file(appname, f"tasks/{taskname}.py")
-    if not task_file:
-        return Response(
-            {"error": f"Task {taskname} not found for app {appname}"},
-            status=status.HTTP_404_NOT_FOUND,
-        )
-
-    try:
-        task_data = parse_django_file_ast(task_file)
-        return Response(task_data)
-    except Exception as e:
-        return Response(
-            {"error": f"Failed to parse task file: {str(e)}"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+    task_file = find_app_file(appname, f"tasks/{taskname}.py", raise_if_not_found=True)
+    task_data = parse_django_file_ast(task_file)
+    return Response(transform_tasks_py(task_data))
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
 def get_commands(request, appname):
     """Get management commands for a specific Django app."""
     app_dir = find_app_directory(appname)
     if not app_dir:
-        return Response(
-            {"error": f"App {appname} not found"}, status=status.HTTP_404_NOT_FOUND
-        )
+        raise NotFound(f"App {appname} not found")
 
     commands_dir = app_dir / "management" / "commands"
     if not commands_dir.exists():
@@ -306,191 +238,115 @@ def get_commands(request, appname):
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
 def get_command_details(request, appname, commandname):
     """Get details for a specific management command."""
-    command_file = find_app_file(appname, f"management/commands/{commandname}.py")
-    if not command_file:
-        return Response(
-            {"error": f"Command {commandname} not found for app {appname}"},
-            status=status.HTTP_404_NOT_FOUND,
-        )
-
-    try:
-        command_data = parse_django_file_ast(command_file)
-        return Response(command_data)
-    except Exception as e:
-        return Response(
-            {"error": f"Failed to parse command file: {str(e)}"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+    command_file = find_app_file(
+        appname, f"management/commands/{commandname}.py", raise_if_not_found=True
+    )
+    command_data = parse_django_file_ast(command_file)
+    return Response(transform_commands_py(command_data))
 
 
 @api_view(["DELETE"])
-@permission_classes([AllowAny])
 def delete_command(request, appname, commandname):
     """Delete a management command."""
-    command_file = find_app_file(appname, f"management/commands/{commandname}.py")
-    if not command_file:
-        return Response(
-            {"error": f"Command {commandname} not found for app {appname}"},
-            status=status.HTTP_404_NOT_FOUND,
-        )
-
-    try:
-        command_file.unlink()
-        return Response({"message": f"Command {commandname} deleted successfully"})
-    except Exception as e:
-        return Response(
-            {"error": f"Failed to delete command: {str(e)}"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+    command_file = find_app_file(
+        appname, f"management/commands/{commandname}.py", raise_if_not_found=True
+    )
+    command_file.unlink()
+    return Response({"message": f"Command {commandname} deleted successfully"})
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
 def get_endpoints(request, appname):
     """Get URL endpoints for a specific Django app."""
-    urls_file = find_app_file(appname, "urls.py")
-    if not urls_file:
-        return Response(
-            {"error": f"urls.py not found for app {appname}"},
-            status=status.HTTP_404_NOT_FOUND,
-        )
-
-    try:
-        urls_data = parse_django_file_ast(urls_file)
-        return Response(urls_data)
-    except Exception as e:
-        return Response(
-            {"error": f"Failed to parse urls.py: {str(e)}"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+    urls_file = find_app_file(appname, "urls.py", raise_if_not_found=True)
+    urls_data = parse_django_file_ast(urls_file)
+    return Response(transform_urls_py(urls_data))
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
 def get_serializers(request, appname):
     """Get serializers for a specific Django app."""
-    serializers_file = find_app_file(appname, "serializers.py")
-    if not serializers_file:
-        return Response(
-            {"error": f"serializers.py not found for app {appname}"},
-            status=status.HTTP_404_NOT_FOUND,
-        )
-
-    try:
-        serializers_data = parse_django_file_ast(serializers_file)
-        return Response(serializers_data)
-    except Exception as e:
-        return Response(
-            {"error": f"Failed to parse serializers.py: {str(e)}"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+    serializers_file = find_app_file(appname, "serializers.py", raise_if_not_found=True)
+    serializers_data = parse_django_file_ast(serializers_file)
+    return Response(transform_serializers_py(serializers_data))
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
 def get_views(request, appname):
     """Get views for a specific Django app."""
-    views_file = find_app_file(appname, "views.py")
-    if not views_file:
-        return Response(
-            {"error": f"views.py not found for app {appname}"},
-            status=status.HTTP_404_NOT_FOUND,
-        )
-
-    try:
-        views_data = parse_django_file_ast(views_file)
-        return Response(views_data)
-    except Exception as e:
-        return Response(
-            {"error": f"Failed to parse views.py: {str(e)}"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+    views_file = find_app_file(appname, "views.py", raise_if_not_found=True)
+    views_data = parse_django_file_ast(views_file)
+    return Response(transform_views_py(views_data))
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
 def get_api_prefix(request, appname):
     """Get API prefix for a specific Django app."""
     return Response({"api_prefix": settings.API_PREFIX})
 
 
 @api_view(["POST"])
-@permission_classes([AllowAny])
 def create_superuser(request):
     """Create a Django superuser."""
-    data = request.data
-    username = data.get("username")
-    email = data.get("email")
-    password = data.get("password")
+    serializer = CreateSuperuserSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
 
-    if not all([username, email, password]):
-        return Response(
-            {"error": "Username, email, and password are required"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+    validated_data = serializer.validated_data
+    username: str = validated_data["username"]
+    email: str = validated_data["email"]
+    password: str = validated_data["password"]
 
-    try:
-        # Load environment variables from .env file in Django project directory
-        env_file = settings.DJANGO_PROJECT_DIR / ".env"
-        if env_file.exists():
-            load_dotenv(env_file)
+    # Load environment variables from .env file in Django project directory
+    env_file = settings.DJANGO_PROJECT_DIR / ".env"
+    if env_file.exists():
+        load_dotenv(env_file)
 
-        # Determine the Python executable from the virtual environment
-        venv_python_unix = settings.DJANGO_PROJECT_DIR / "venv" / "bin" / "python"
-        venv_python_windows = (
-            settings.DJANGO_PROJECT_DIR / "venv" / "Scripts" / "python.exe"
-        )
+    # Determine the Python executable from the virtual environment
+    venv_python_unix = settings.DJANGO_PROJECT_DIR / "venv" / "bin" / "python"
+    venv_python_windows = (
+        settings.DJANGO_PROJECT_DIR / "venv" / "Scripts" / "python.exe"
+    )
 
-        if venv_python_unix.exists():
-            python_executable = str(venv_python_unix)
-        elif venv_python_windows.exists():
-            python_executable = str(venv_python_windows)
-        else:
-            python_executable = "python"
+    if venv_python_unix.exists():
+        python_executable = str(venv_python_unix)
+    elif venv_python_windows.exists():
+        python_executable = str(venv_python_windows)
+    else:
+        python_executable = "python"
 
-        # Set password environment variable
-        env = os.environ.copy()
-        env["DJANGO_SUPERUSER_PASSWORD"] = password
+    # Set password environment variable
+    env = os.environ.copy()
+    env["DJANGO_SUPERUSER_PASSWORD"] = password
 
-        cmd = [
-            python_executable,
-            str(settings.DJANGO_PROJECT_DIR / "manage.py"),
-            "createsuperuser",
-            "--noinput",
-            "--username",
-            username,
-            "--email",
-            email,
-        ]
+    cmd = [
+        python_executable,
+        str(settings.DJANGO_PROJECT_DIR / "manage.py"),
+        "createsuperuser",
+        "--noinput",
+        "--username",
+        username,
+        "--email",
+        email,
+    ]
 
-        result = subprocess.run(
-            cmd,
-            cwd=str(settings.DJANGO_PROJECT_DIR),
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env=env,
-        )
+    result = subprocess.run(
+        cmd,
+        cwd=str(settings.DJANGO_PROJECT_DIR),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
 
-        if result.returncode == 0:
-            return Response({"message": "Superuser created successfully"})
-        else:
-            return Response(
-                {"error": result.stderr}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-    except Exception as e:
-        return Response(
-            {"error": f"Failed to create superuser: {str(e)}"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
+    if result.returncode == 0:
+        return Response({"message": "Superuser created successfully"})
+    else:
+        raise ValidationError(result.stderr)
 
 
 @api_view(["POST", "GET"])
-@permission_classes([AllowAny])
 def create_app(request):
     """Create a new Django app."""
     if request.method == "GET":
@@ -501,30 +357,24 @@ def create_app(request):
             }
         )
 
-    data = request.data
-    app_name = data.get("app_name")
-    app_type = data.get("app_type")
-    boilerplate_data = data.get("boilerplate_data", {})
+    serializer = CreateAppSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
 
-    if not app_name:
-        return Response(
-            {"error": "app_name is required"}, status=status.HTTP_400_BAD_REQUEST
-        )
+    validated_data = serializer.validated_data
+    app_name: str = validated_data["app_name"]
+    app_type: str = validated_data["app_type"]
+    boilerplate_data: dict = validated_data["boilerplate_data"]
 
     # Create the app directory
     app_dir = settings.DJANGO_PROJECT_APPS_DIRS[0] / app_name
     if app_dir.exists():
-        return Response(
-            {"error": f"App {app_name} already exists"},
-            status=status.HTTP_400_BAD_REQUEST,
-        )
+        raise ValidationError(f"App {app_name} already exists")
 
-    try:
-        app_dir.mkdir(parents=True)
+    app_dir.mkdir(parents=True)
 
-        # Create basic app structure
-        (app_dir / "__init__.py").touch()
-        (app_dir / "apps.py").write_text(f"""from django.apps import AppConfig
+    # Create basic app structure
+    (app_dir / "__init__.py").touch()
+    (app_dir / "apps.py").write_text(f"""from django.apps import AppConfig
 
 
 class {app_name.capitalize()}Config(AppConfig):
@@ -532,44 +382,27 @@ class {app_name.capitalize()}Config(AppConfig):
     name = '{app_name}'
 """)
 
-        # Create other files based on app_type and boilerplate_data
-        if app_type == "full":
-            (app_dir / "models.py").write_text(
-                "from django.db import models\n\n# Create your models here.\n"
-            )
-            (app_dir / "views.py").write_text(
-                "from django.shortcuts import render\n\n# Create your views here.\n"
-            )
-            (app_dir / "urls.py").write_text(
-                "from django.urls import path\n\nurlpatterns = [\n    # Add your URL patterns here\n]\n"
-            )
-            (app_dir / "serializers.py").write_text(
-                "from rest_framework import serializers\n\n# Create your serializers here.\n"
-            )
-            (app_dir / "admin.py").write_text(
-                "from django.contrib import admin\n\n# Register your models here.\n"
-            )
-            (app_dir / "tests.py").write_text(
-                "from django.test import TestCase\n\n# Create your tests here.\n"
-            )
-
-        return Response(
-            {"message": f"App {app_name} created successfully", "app_dir": str(app_dir)}
+    # Create other files based on app_type and boilerplate_data
+    if app_type == "full":
+        (app_dir / "models.py").write_text(
+            "from django.db import models\n\n# Create your models here.\n"
+        )
+        (app_dir / "views.py").write_text(
+            "from django.shortcuts import render\n\n# Create your views here.\n"
+        )
+        (app_dir / "urls.py").write_text(
+            "from django.urls import path\n\nurlpatterns = [\n    # Add your URL patterns here\n]\n"
+        )
+        (app_dir / "serializers.py").write_text(
+            "from rest_framework import serializers\n\n# Create your serializers here.\n"
+        )
+        (app_dir / "admin.py").write_text(
+            "from django.contrib import admin\n\n# Register your models here.\n"
+        )
+        (app_dir / "tests.py").write_text(
+            "from django.test import TestCase\n\n# Create your tests here.\n"
         )
 
-    except Exception as e:
-        return Response(
-            {"error": f"Failed to create app: {str(e)}"},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        )
-
-
-def serve_index(request):
-    """Serve the index.html file."""
-    # For now, return a simple response
-    return HttpResponse("Openbase Django Meta-Server")
-
-
-def serve_static_or_fallback(request, path):
-    """Serve static files or return 404."""
-    raise Http404("File not found")
+    return Response(
+        {"message": f"App {app_name} created successfully", "app_dir": str(app_dir)}
+    )

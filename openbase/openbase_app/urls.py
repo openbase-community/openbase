@@ -7,10 +7,10 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
+    # Environment info endpoint
+    path("env-info/", views.env_info, name="env_info"),
     # Management commands
     path("manage/", views.run_management_command, name="run_management_command"),
-    # Debug endpoint
-    path("debug/", views.debug, name="debug"),
     # Apps endpoints
     path("apps/", views.list_apps, name="list_apps"),
     path("apps/create/", views.create_app, name="create_app"),
@@ -35,9 +35,4 @@ urlpatterns = [
     path("apps/<str:appname>/api-prefix/", views.get_api_prefix, name="get_api_prefix"),
     # Settings endpoints
     path("settings/create-superuser/", views.create_superuser, name="create_superuser"),
-    # Static file serving and fallback
-    path("", views.serve_index, name="serve_index"),
-    path(
-        "<path:path>", views.serve_static_or_fallback, name="serve_static_or_fallback"
-    ),
 ]
