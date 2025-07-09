@@ -4,6 +4,8 @@ URL configuration for openbase app.
 
 from django.urls import path
 
+from openbase.coder_app.views import send_message_to_claude_code
+
 from . import views
 
 urlpatterns = [
@@ -35,4 +37,6 @@ urlpatterns = [
     path("apps/<str:appname>/api-prefix/", views.get_api_prefix, name="get_api_prefix"),
     # Settings endpoints
     path("settings/create-superuser/", views.create_superuser, name="create_superuser"),
+    # Coder endpoints
+    path("coder/message/", send_message_to_claude_code, name="claude_code_message"),
 ]

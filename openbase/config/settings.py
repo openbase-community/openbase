@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "rest_framework",
     "openbase.openbase_app",
+    "openbase.coder_app",
 ]
 
 MIDDLEWARE = [
