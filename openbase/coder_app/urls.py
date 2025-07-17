@@ -1,11 +1,16 @@
-from django.urls import path
+"""
+URL configuration for coder app using DRF ViewSets.
+"""
 
-from . import views
+from django.urls import include, path
+from rest_framework.routers import DefaultRouter
+
+from .views import ClaudeCodeViewSet
+
+# Create router for coder app
+router = DefaultRouter()
+router.register(r'claude', ClaudeCodeViewSet, basename='claude')
 
 urlpatterns = [
-    path(
-        "claude-code/message/",
-        views.send_message_to_claude_code,
-        name="claude_code_message",
-    ),
+    path('', include(router.urls)),
 ]

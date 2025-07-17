@@ -1,10 +1,15 @@
 import json
 import logging
 
-from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
-from rest_framework.decorators import api_view
+from rest_framework import viewsets
+from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
+from rest_framework.response import Response
+
+from openbase.openbase_app.serializers import (
+    ClaudeCodeMessageSerializer,
+    ClaudeCodeResponseSerializer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,89 +24,60 @@ except ImportError:
     CLAUDE_CODE_AVAILABLE = False
 
 
-@api_view(["POST"])
-@csrf_exempt
-async def send_message_to_claude_code(request):
-    """
-    Send a message to Claude Code and return the response.
+class ClaudeCodeViewSet(viewsets.ViewSet):
+    """ViewSet for Claude Code AI interactions."""
 
-    Expected JSON payload:
-    {
-        "message": "Your message to Claude Code",
-        "system_prompt": "Optional system prompt",
-        "max_turns": 1
-    }
-    """
-    if not CLAUDE_CODE_AVAILABLE:
-        raise ValidationError(
-            "Claude Code SDK not available. Please install claude-code-sdk package."
-        )
+    @action(detail=False, methods=['post'])
+    def message(self, request):
+        """
+        Send a message to Claude Code and return the response.
 
-    # Parse request data
-    data = json.loads(request.body)
-    message = data.get("message", "")
-    system_prompt = data.get("system_prompt", "You are a helpful assistant.")
-    max_turns = data.get("max_turns", 1)
-
-    if not message:
-        raise ValidationError("Message is required")
-
-    # Set up Claude Code options
-    options = ClaudeCodeOptions(system_prompt=system_prompt, max_turns=max_turns)
-
-    # Collect responses from Claude Code
-    responses = []
-    costs = []
-
-    async for response_message in query(prompt=message, options=options):
-        # Handle different message types defensively
-        message_type = type(response_message).__name__
-
-        if message_type == "AssistantMessage":
-            # Extract text content from the assistant message
-            text_content = []
-            if hasattr(response_message, "content") and response_message.content:
-                for block in response_message.content:
-                    if hasattr(block, "text"):
-                        text_content.append(str(block.text))
-                    elif hasattr(block, "type") and block.type == "text":
-                        text_content.append(str(block))
-
-            if not text_content:
-                text_content = [str(response_message)]
-
-            responses.append(
-                {
-                    "type": "assistant",
-                    "content": "\n".join(text_content),
-                    "message_id": getattr(response_message, "id", None),
-                }
-            )
-
-        elif message_type == "ResultMessage":
-            # Handle cost/result information
-            costs.append(
-                {
-                    "type": "result",
-                    "content": str(response_message),
-                    "cost_info": getattr(response_message, "cost", None),
-                }
-            )
-        else:
-            # Handle other message types
-            responses.append(
-                {
-                    "type": "other",
-                    "content": str(response_message),
-                    "message_type": message_type,
-                }
-            )
-
-    return JsonResponse(
+        Expected JSON payload:
         {
-            "success": True,
-            "responses": responses,
-            "costs": costs,
-            "message_count": len(responses),
+            "message": "Your message to Claude Code",
+            "system_prompt": "Optional system prompt",
+            "max_turns": 1
         }
-    )
+        """
+        if not CLAUDE_CODE_AVAILABLE:
+            raise ValidationError(
+                "Claude Code SDK not available. Please install claude-code-sdk package."
+            )
+
+        serializer = ClaudeCodeMessageSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        validated_data = serializer.validated_data
+        message = validated_data["message"]
+        system_prompt = validated_data["system_prompt"]
+        max_turns = validated_data["max_turns"]
+
+        # Set up Claude Code options
+        options = ClaudeCodeOptions(system_prompt=system_prompt, max_turns=max_turns)
+
+        try:
+            # Call Claude Code
+            response = query(message, options)
+            
+            # Format response based on the actual response structure
+            if isinstance(response, str):
+                response_data = {"response": response}
+            else:
+                response_data = {
+                    "response": response.get("message", str(response)),
+                    "conversation_id": response.get("conversation_id"),
+                    "turn_count": response.get("turn_count", 1)
+                }
+            
+            serializer = ClaudeCodeResponseSerializer(response_data)
+            return Response(serializer.data)
+        except Exception as e:
+            logger.error(f"Error calling Claude Code: {str(e)}")
+            raise ValidationError(f"Error calling Claude Code: {str(e)}")
+
+
+# Keep the original function for backward compatibility if needed
+async def send_message_to_claude_code(request):
+    """Legacy function - deprecated, use ClaudeCodeViewSet instead."""
+    viewset = ClaudeCodeViewSet()
+    return viewset.message(request)

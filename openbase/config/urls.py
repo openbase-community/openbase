@@ -23,6 +23,7 @@ from . import views
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("api/openbase/projects/local/", include("openbase.openbase_app.urls")),
+    path("api/openbase/projects/local/coder/", include("openbase.coder_app.urls")),
     # Proxy all other paths to localhost:8081 in DEBUG mode
     path("<path:path>", views.proxy_or_fallback, name="proxy_or_fallback"),
     path("", views.proxy_or_fallback, name="proxy_or_fallback_root"),
