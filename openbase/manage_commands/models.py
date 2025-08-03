@@ -1,7 +1,7 @@
 from dataclasses import dataclass
-from pathlib import Path
 
-from openbase.manage_commands.parsing import parse_manage_command_file
+from openbase.core.parsing import SourceMappedString
+from openbase.core.sourcemapped_dataclass import SourceMappedDataclass
 from openbase.openbase_app.models import DjangoApp
 
 
@@ -16,7 +16,7 @@ class ManageCommandManager:
                     ManageCommand(
                         name=file.stem,
                         path=file,
-                        description="",
+                        help="",
                         arguments=[],
                         handle_body_source="",
                     )
@@ -30,6 +30,8 @@ class ManageCommandManager:
             if command.name == name
         )
 
+        from openbase.manage_commands.parsing import parse_manage_command_file
+
         return parse_manage_command_file(
             name=unfilled_command.name,
             path=unfilled_command.path,
@@ -37,12 +39,10 @@ class ManageCommandManager:
 
 
 @dataclass
-class ManageCommand:
+class ManageCommand(SourceMappedDataclass):
     name: str
-    path: Path
     arguments: list[str]
     handle_body_source: str
-    description: str = ""
-    help: str = ""
+    help: SourceMappedString = ""
 
     objects: ManageCommandManager = ManageCommandManager()

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from openbase.core.parsing import parse_django_file_ast
+from openbase.core.parsing import parse_python_file_ast
 from openbase.manage_commands.models import ManageCommand
 
 
@@ -53,7 +53,7 @@ def parse_manage_command_file(*, name: str, path: Path) -> "ManageCommand | None
     """
     Parse a manage command file into a ManageCommand instance.
     """
-    declarations = parse_django_file_ast(path)
+    declarations = parse_python_file_ast(path)
     for dec in declarations:
         if dec.get("_nodetype") == "ClassDef":
             is_command_class = False
@@ -93,7 +93,7 @@ def parse_manage_command_file(*, name: str, path: Path) -> "ManageCommand | None
                                 ):
                                     command_info["help"] = value_node.get(
                                         "value", ""
-                                    ).strip()
+                                    )  # TODO: Strip
                                 break
 
                     # Extract arguments from add_arguments method
@@ -147,10 +147,8 @@ def parse_manage_command_file(*, name: str, path: Path) -> "ManageCommand | None
                     path=path,
                     arguments=command_info["arguments"],
                     handle_body_source=command_info["handle_body_source"],
-                    description="",
                     help=command_info["help"],
                 )
-                break  # Assuming one Command class per file
 
     # Return a basic ManageCommand if no command class found
     return None

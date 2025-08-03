@@ -3,7 +3,24 @@ from pathlib import Path
 from typing import Any
 
 
-def parse_django_file_ast(
+class SourceMappedDict(dict):
+    """A dictionary that keeps track of the AST node it was created from."""
+
+    def __init__(self, *args, ast_node=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.ast_node = ast_node
+
+
+class SourceMappedString(str):
+    """A string that keeps track of the AST node it was created from."""
+
+    def __new__(cls, value, ast_node=None):
+        instance = str.__new__(cls, value)
+        instance.ast_node = ast_node
+        return instance
+
+
+def parse_python_file_ast(
     file_path: str | Path, functions_to_stringify: list[str] | None = None
 ) -> dict[str, Any]:
     path = file_path if isinstance(file_path, Path) else Path(file_path)
@@ -11,7 +28,12 @@ def parse_django_file_ast(
     tree = ast.parse(source_code, filename=str(path))
 
     # Convert the AST to dict and extract just the body list
-    ast_dict = _ast_to_dict(tree, source_code, functions_to_stringify)
+    ast_dict = _ast_to_dict(
+        tree,
+        source_code,
+        parent_node=None,
+        functions_to_stringify=functions_to_stringify,
+    )
 
     # Since tree is a Module node, ast_dict must be a dictionary with a 'body' key
     declarations = ast_dict["body"] if isinstance(ast_dict, dict) else []
@@ -20,7 +42,10 @@ def parse_django_file_ast(
 
 
 def _ast_to_dict(
-    node: Any, source_code: str, functions_to_stringify: list[str] | None = None
+    node: Any,
+    source_code: str,
+    parent_node: ast.AST | None = None,
+    functions_to_stringify: list[str] | None = None,
 ) -> dict[str, Any] | list[Any] | None | str | int | float | bool:
     """
     Recursively converts an AST node to a nested dictionary structure.
@@ -31,13 +56,13 @@ def _ast_to_dict(
     Docstrings are extracted for all functions.
     """
     if isinstance(node, ast.AST):
-        result: dict[str, Any] = {"_nodetype": node.__class__.__name__}
+        result = SourceMappedDict({"_nodetype": node.__class__.__name__}, ast_node=node)
 
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             # Always try to extract docstring first, as it's part of the body
             docstring = ast.get_docstring(node, clean=True)
             if docstring is not None:
-                result["docstring"] = docstring
+                result["docstring"] = SourceMappedString(docstring, ast_node=node)
 
             # Process other fields (name, args, decorators, etc.)
             for field, value in ast.iter_fields(node):
@@ -55,7 +80,7 @@ def _ast_to_dict(
                         ):
                             body_nodes = body_nodes[1:]  # Skip the docstring node
                         result[field] = _ast_to_dict(
-                            body_nodes, source_code, functions_to_stringify
+                            body_nodes, source_code, node, functions_to_stringify
                         )
                     else:
                         # Convert body to source string for other functions
@@ -104,7 +129,9 @@ def _ast_to_dict(
                                         body_source_str = "".join(
                                             body_lines_extracted
                                         ).strip()
-                        result["body_source"] = body_source_str
+                        result["body_source"] = SourceMappedString(
+                            body_source_str, ast_node=node
+                        )
                 elif (
                     field == "type_comment"
                 ):  # avoid processing type_comment twice, it's part of args for python < 3.8
@@ -116,11 +143,11 @@ def _ast_to_dict(
                         pass  # Will be handled when processing node.args
                     else:
                         result[field] = _ast_to_dict(
-                            value, source_code, functions_to_stringify
+                            value, source_code, node, functions_to_stringify
                         )
                 else:  # Other fields (name, args, decorators, type_comment, returns, etc.)
                     result[field] = _ast_to_dict(
-                        value, source_code, functions_to_stringify
+                        value, source_code, node, functions_to_stringify
                     )
         else:  # Not a FunctionDef, process all fields normally
             # For ClassDef nodes, preserve line number information
@@ -137,15 +164,18 @@ def _ast_to_dict(
                     "ctx",
                 ):
                     result[field] = _ast_to_dict(
-                        value, source_code, functions_to_stringify
+                        value, source_code, node, functions_to_stringify
                     )
 
         return result
     elif isinstance(node, list):
         return [
-            _ast_to_dict(item, source_code, functions_to_stringify) for item in node
+            _ast_to_dict(item, source_code, parent_node, functions_to_stringify)
+            for item in node
         ]
+    elif isinstance(node, str):
+        return SourceMappedString(node, ast_node=parent_node)
     elif isinstance(node, (str, int, float, bool)) or node is None:
         return node
     else:
-        return str(node)
+        return SourceMappedString(str(node), ast_node=parent_node)
