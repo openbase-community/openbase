@@ -1,0 +1,6 @@
+---
+globs: **/tasks.py
+alwaysApply: false
+---
+
+When defining DRF model serializers, inherit from `config.serializers.BaseModelSerializer` rather than `rest_framework.serializers.ModelSerializer`. This will automatically define the `"id"` correlating to the `public_id` field on the serialized model. You must still explicitly name `"id"` among `Meta.fields` to include it.

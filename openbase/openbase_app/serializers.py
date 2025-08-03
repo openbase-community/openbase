@@ -1,46 +1,26 @@
-from django.conf import settings
 from rest_framework import serializers
 
-
-class RunManagementCommandSerializer(serializers.Serializer):
-    command = serializers.CharField(required=True)
-    args = serializers.ListField(
-        child=serializers.CharField(), required=False, default=list, allow_empty=True
-    )
-
-    def validate_command(self, value):
-        if value not in settings.ALLOWED_DJANGO_COMMANDS:
-            raise serializers.ValidationError(
-                f"Command '{value}' not allowed. Allowed commands: {sorted(settings.ALLOWED_DJANGO_COMMANDS)}"
-            )
-        return value
-
-    def validate_args(self, value):
-        for arg in value:
-            # Prevent command injection by checking for dangerous characters
-            if any(char in arg for char in [";", "&&", "||", "|", "`", "$", ">", "<"]):
-                raise serializers.ValidationError(
-                    f"Argument '{arg}' contains invalid characters"
-                )
-        return value
+from openbase.config.serializers import BaseDataclassSerializer
+from openbase.openbase_app.models import AppPackage, DjangoApp, Project
 
 
-class CreateSuperuserSerializer(serializers.Serializer):
-    username = serializers.CharField(required=True)
-    email = serializers.EmailField(required=True)
-    password = serializers.CharField(required=True)
+class DjangoAppSerializer(BaseDataclassSerializer):
+    class Meta:
+        dataclass = DjangoApp
+        fields = ["path", "package_name", "name"]
 
 
-class CreateAppSerializer(serializers.Serializer):
-    app_name = serializers.CharField(required=True)
-    app_type = serializers.CharField(required=False, default="basic")
-    boilerplate_data = serializers.DictField(required=False, default=dict)
+class AppPackageSerializer(BaseDataclassSerializer):
+    django_apps = DjangoAppSerializer(many=True)
 
-    def validate_app_name(self, value):
-        # Basic validation for app name
-        if not value.isidentifier():
-            raise serializers.ValidationError(
-                "App name must be a valid Python identifier"
-            )
-        return value
+    class Meta:
+        dataclass = AppPackage
+        fields = ["path", "name", "django_apps"]
 
+
+class ProjectSerializer(serializers.ModelSerializer):
+    app_packages = AppPackageSerializer(many=True)
+
+    class Meta:
+        model = Project
+        fields = ["id", "path_str", "name", "app_packages"]

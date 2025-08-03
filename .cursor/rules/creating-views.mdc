@@ -1,0 +1,17 @@
+---
+globs: **/views.py
+alwaysApply: false
+---
+
+Prefer using viewsets wherever possible, with custom actions on the viewsets. Inherit from `BaseModelViewSet` or `BaseReadyOnlyModelViewSet` (from `config.viewsets`), which sets the `lookup_field` to `"public_id"`
+
+Don't ever manually return `Response` objects indicating errors; Instead you should raise a DRF `ValidationError`.
+
+If you define a custom viewset action, have it return a `Response` with JSON with a key `"message"` with a generic user-friendly message of what the action did, without interpolating specific values. The same goes for one-off non-viewset POST views that perform an action.
+
+For viewset actions with multiple words in the name, remember to use `url_path` to convert the underscores to dashes, e.g.:
+
+```python
+@action(detail=False, methods=["post"], url_path="evaluate-preferences")
+def evaluate_preferences(self, request):
+```

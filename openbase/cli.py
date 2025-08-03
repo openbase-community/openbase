@@ -37,7 +37,6 @@ def server(host, port):
     env_defaults = {
         "SECRET_KEY": secrets.token_hex(64),
         "DJANGO_PROJECT_DIR": str(Path.cwd()),
-        "DJANGO_PROJECT_APPS_DIR": str(Path.cwd()),
     }
 
     # Only set defaults if not already set
