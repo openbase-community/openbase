@@ -7,6 +7,7 @@ from openbase.config import views
 urlpatterns = [
     path("api/openbase/", include("openbase.openbase_app.urls")),
     path("api/openbase/", include("openbase.manage_commands.urls")),
+    path("api/openbase/", include("openbase.models.urls")),
 ]
 
 if settings.DEBUG or True:

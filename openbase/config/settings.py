@@ -30,6 +30,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "openbase.openbase_app",
     "openbase.manage_commands",
+    "openbase.models",
 ]
 
 MIDDLEWARE = [
@@ -183,6 +184,7 @@ LOGGING = {
             for app_name in [
                 "openbase_app",
                 "manage_commands",
+                "models",
             ]
         },
     },
