@@ -4,17 +4,17 @@ from .views import ManageCommandViewSet
 
 router = DefaultRouter()
 router.register(
-    r"projects/current/packages/(?P<package_name>[^/.]+)/apps/(?P<app_name>[^/.]+)/commands",
+    r"projects/local/packages/(?P<package_name>[^/.]+)/apps/(?P<app_name>[^/.]+)/commands",
     ManageCommandViewSet,
     basename="manage-command",
 )
 router.register(
-    r"projects/current/packages/(?P<package_name>[^/.]+)/commands",
+    r"projects/local/packages/(?P<package_name>[^/.]+)/commands",
     ManageCommandViewSet,
     basename="manage-command",
 )
 router.register(
-    r"projects/current/commands",
+    r"projects/local/commands",
     ManageCommandViewSet,
     basename="manage-command",
 )

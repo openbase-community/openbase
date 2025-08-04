@@ -4,17 +4,17 @@ from .views import TaskiqTaskViewSet
 
 router = DefaultRouter()
 router.register(
-    r"projects/current/packages/(?P<package_name>[^/.]+)/apps/(?P<app_name>[^/.]+)/tasks",
+    r"projects/local/packages/(?P<package_name>[^/.]+)/apps/(?P<app_name>[^/.]+)/tasks",
     TaskiqTaskViewSet,
     basename="task",
 )
 router.register(
-    r"projects/current/packages/(?P<package_name>[^/.]+)/tasks",
+    r"projects/local/packages/(?P<package_name>[^/.]+)/tasks",
     TaskiqTaskViewSet,
     basename="task",
 )
 router.register(
-    r"projects/current/tasks",
+    r"projects/local/tasks",
     TaskiqTaskViewSet,
     basename="task",
 )
