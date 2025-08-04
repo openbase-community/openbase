@@ -1,4 +1,7 @@
-from .utils import extract_function_info
+from pathlib import Path
+
+from openbase.core.parsing import parse_python_file_ast
+from openbase.core.parsing_utils import extract_function_info
 
 
 def get_field_arg_name(field_type, arg_index):
@@ -188,10 +191,10 @@ def parse_meta_class(item):
     return meta_info
 
 
-def transform_models_py(models_py_ast):
-    """Transform Django models.py AST into a structured format."""
-    output = {"models": []}
-    declarations = models_py_ast.get("ast_declarations", [])
+def parse_models_file(path: Path):
+    declarations = parse_python_file_ast(path)
+
+    models = []
 
     for dec in declarations:
         if dec.get("_nodetype") != "ClassDef":
@@ -307,6 +310,6 @@ def transform_models_py(models_py_ast):
             elif item.get("_nodetype") == "ClassDef" and item.get("name") == "Meta":
                 model_info["meta"] = parse_meta_class(item)
 
-        output["models"].append(model_info)
+        models.append(model_info)
 
-    return output
+    return models
