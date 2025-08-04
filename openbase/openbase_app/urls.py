@@ -4,6 +4,11 @@ from .views import AppPackageViewSet, DjangoAppViewSet, ProjectViewSet
 
 router = DefaultRouter()
 router.register(
+    r"projects/current/apps",
+    DjangoAppViewSet,
+    basename="django-app",
+)
+router.register(
     r"projects/current/app-packages/(?P<app_package_name>[^/.]+)/apps",
     DjangoAppViewSet,
     basename="django-app",

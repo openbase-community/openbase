@@ -206,3 +206,6 @@ class SourceMappedDataclass:
                 print("  File renamed successfully")
         else:
             print(f"No changes detected in {self.__class__.__name__}")
+
+    def load_full(self):
+        return self

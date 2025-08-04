@@ -5,6 +5,7 @@ from django.conf import settings
 from django.db import models
 
 from openbase.config.managers import ListQuerySet, MemoryManager
+from openbase.core.sourcemapped_dataclass import SourceMappedDataclass
 
 
 class DjangoAppManager(MemoryManager):
@@ -17,14 +18,17 @@ class DjangoAppManager(MemoryManager):
             ]
         )
 
-    def filter(self, *, app_package_name: str):
-        app_package = AppPackage.objects.get(name=app_package_name)
-        return ListQuerySet(app_package.django_apps)
+    def filter(self, **kwargs):
+        app_package_name = kwargs.pop("app_package_name", None)
+        if app_package_name is not None:
+            app_package = AppPackage.objects.get(name=app_package_name)
+            return ListQuerySet(app_package.django_apps)
+        else:
+            return self.all()
 
 
 @dataclass
-class DjangoApp:
-    path: Path
+class DjangoApp(SourceMappedDataclass):
     package_name: str
 
     objects: DjangoAppManager = DjangoAppManager()
@@ -43,9 +47,7 @@ class AppPackageManager(MemoryManager):
 
 
 @dataclass
-class AppPackage:
-    path: Path
-
+class AppPackage(SourceMappedDataclass):
     objects: AppPackageManager = AppPackageManager()
 
     @property

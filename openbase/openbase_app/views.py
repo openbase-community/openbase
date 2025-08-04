@@ -1,5 +1,6 @@
 from rest_framework import viewsets
 
+from openbase.config.viewsets import BaseMemoryViewSet
 from openbase.openbase_app.models import AppPackage, DjangoApp, Project
 from openbase.openbase_app.serializers import (
     AppPackageSerializer,
@@ -8,16 +9,14 @@ from openbase.openbase_app.serializers import (
 )
 
 
-class DjangoAppViewSet(viewsets.ModelViewSet):
+class DjangoAppViewSet(BaseMemoryViewSet):
     serializer_class = DjangoAppSerializer
 
     def get_queryset(self):
-        return DjangoApp.objects.filter(
-            app_package_name=self.kwargs["app_package_name"]
-        )
+        return DjangoApp.objects.filter(**self.kwargs)
 
 
-class AppPackageViewSet(viewsets.ModelViewSet):
+class AppPackageViewSet(BaseMemoryViewSet):
     serializer_class = AppPackageSerializer
 
     def get_queryset(self):
