@@ -23,7 +23,7 @@ openbase = "openbase.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["openbase"]
-include = ["openbase/static/**/*"]
+include = ["openbase/static/**/*", "openbase/entrypoint/manage.py"]
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]

@@ -181,3 +181,5 @@ Thumbs.db
 staticfiles
 static/**
 !static/.gitkeep
+
+_version.py

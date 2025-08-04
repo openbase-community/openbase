@@ -13,8 +13,8 @@ def get_openbase_directory():
     """Get the directory where the openbase package is installed."""
     # Get the directory where this cli.py file is located
     cli_dir = Path(__file__).parent
-    # Go up one level to get the openbase project directory (where manage.py is)
-    return cli_dir.parent
+    # Return the openbase package directory (where entrypoint/manage.py is)
+    return cli_dir
 
 
 @click.group()
@@ -30,7 +30,7 @@ def main():
 def server(host, port, no_open):
     """Start the Openbase development server."""
     openbase_dir = get_openbase_directory()
-    manage_py = openbase_dir / "manage.py"
+    manage_py = openbase_dir / "entrypoint" / "manage.py"
 
     if not manage_py.exists():
         click.echo(f"Error: manage.py not found at {manage_py}")
