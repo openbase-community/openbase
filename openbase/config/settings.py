@@ -19,6 +19,8 @@ ALLOWED_HOSTS = os.environ.get("OPENBASE_ALLOWED_HOSTS", "").split(",")
 
 CLOUD_RUN = os.environ.get("OPENBASE_CLOUD_RUN", "0") == "1"
 
+OPENBASE_PROJECT_PATH = Path(os.environ.get("OPENBASE_PROJECT_DIR", ".")).resolve()
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -149,7 +151,6 @@ CORS_ALLOWED_ORIGINS = [
 ]
 CORS_ALLOW_CREDENTIALS = True
 
-OPENBASE_PROJECT_PATH = Path(os.environ.get("OPENBASE_PROJECT_DIR", ".")).resolve()
 
 # Logging configuration
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO" if not DEBUG else "DEBUG")

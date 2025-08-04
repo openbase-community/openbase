@@ -13,7 +13,9 @@ dependencies = [
     "uvicorn==0.23.0",
     "requests==2.32.4",
     "djangorestframework-dataclasses==1.4.0",
-    "whitenoise==6.9.0"
+    "whitenoise==6.9.0",
+    "channels==4.2.2",
+    "channels-redis==4.3.0",
 ]
 
 [project.scripts]
