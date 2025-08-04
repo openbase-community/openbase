@@ -4,19 +4,22 @@ from pathlib import Path
 from django.conf import settings
 from django.db import models
 
+from openbase.config.managers import ListQuerySet, MemoryManager
 
-class DjangoAppManager:
-    def filter(self, *, app_package_name: str) -> "DjangoApp":
-        app_package = AppPackage.objects.get(name=app_package_name)
-        return app_package.django_apps
 
-    def get(self, *, app_package_name: str, app_name: str) -> "DjangoApp":
-        app_package = AppPackage.objects.get(name=app_package_name)
-        return next(
-            django_app
-            for django_app in app_package.django_apps
-            if django_app.name == app_name
+class DjangoAppManager(MemoryManager):
+    def all(self):
+        return ListQuerySet(
+            [
+                django_app
+                for app_package in AppPackage.objects.all()
+                for django_app in app_package.django_apps
+            ]
         )
+
+    def filter(self, *, app_package_name: str):
+        app_package = AppPackage.objects.get(name=app_package_name)
+        return ListQuerySet(app_package.django_apps)
 
 
 @dataclass
@@ -31,15 +34,12 @@ class DjangoApp:
         return self.path.name
 
 
-class AppPackageManager:
-    def all(self) -> list["AppPackage"]:
-        return Project.objects.get_or_create_current().app_packages
+class AppPackageManager(MemoryManager):
+    def all(self):
+        return ListQuerySet(Project.objects.get_or_create_current().app_packages)
 
-    def get(self, *, name: str) -> "AppPackage":
-        app_packages = Project.objects.get_or_create_current().app_packages
-        return next(
-            app_package for app_package in app_packages if app_package.name == name
-        )
+    def filter(self):
+        return self.all()
 
 
 @dataclass

@@ -1,4 +1,6 @@
-from openbase.config.serializers import BaseDataclassSerializer
+from openbase.config.serializers import (
+    BaseDataclassSerializer,
+)
 from openbase.manage_commands.models import ManageCommand
 
 

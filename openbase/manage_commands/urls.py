@@ -8,5 +8,10 @@ router.register(
     ManageCommandViewSet,
     basename="manage-command",
 )
+router.register(
+    r"projects/current/app-packages/(?P<app_package_name>[^/.]+)/manage-commands",
+    ManageCommandViewSet,
+    basename="manage-command",
+)
 
 urlpatterns = router.urls

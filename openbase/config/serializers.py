@@ -5,8 +5,14 @@ from pathlib import Path
 from typing import Iterable, Mapping, Type
 
 import rest_framework
+from rest_framework import serializers
 from rest_framework_dataclasses import fields
 from rest_framework_dataclasses.serializers import DataclassSerializer, SerializerField
+
+
+class BasicSourceFileSerializer(serializers.Serializer):
+    path = rest_framework.fields.CharField()
+    name = rest_framework.fields.CharField()
 
 
 class BaseDataclassSerializer(DataclassSerializer):
@@ -30,7 +36,7 @@ class BaseDataclassSerializer(DataclassSerializer):
         super_fields = list(super().get_field_names())
         if "objects" in super_fields:
             super_fields.remove("objects")
-        return super_fields
+        return ["name", *super_fields]
 
     def update(self, instance, validated_data):
         super().update(instance, validated_data)

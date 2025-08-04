@@ -93,6 +93,23 @@ class SourceMappedDataclass:
                     }
                 )
 
+        # Check if path field has changed and validate
+        path_change = None
+        for change in changed_fields:
+            if change["field"] == "path":
+                old_path = Path(change["initial"])
+                new_path = Path(change["current"])
+
+                # Validate that only basename is different, not parent directory
+                if old_path.parent != new_path.parent:
+                    raise ValidationError(
+                        f"Cannot change path from '{old_path}' to '{new_path}': "
+                        "only basename changes are supported, not parent directory changes."
+                    )
+
+                path_change = change
+                break
+
         if changed_fields:
             print(f"Changes detected in {self.__class__.__name__}:")
 
@@ -100,6 +117,10 @@ class SourceMappedDataclass:
             changes_to_apply = []
 
             for change in changed_fields:
+                # Skip path field - we'll handle it separately at the end
+                if change["field"] == "path":
+                    continue
+
                 # If the initial value is a SourceMappedString, verify and modify the file
                 if (
                     isinstance(change["initial"], SourceMappedString)
@@ -175,5 +196,13 @@ class SourceMappedDataclass:
                 )
 
             print(f"All changes written to {self.path}")
+
+            # Handle path renaming at the very end, after all other changes
+            if path_change:
+                old_path = Path(path_change["initial"])
+                new_path = Path(path_change["current"])
+                print(f"  Renaming file from '{old_path}' to '{new_path}'")
+                old_path.rename(new_path)
+                print("  File renamed successfully")
         else:
             print(f"No changes detected in {self.__class__.__name__}")

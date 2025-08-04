@@ -16,21 +16,12 @@ class DjangoAppViewSet(viewsets.ModelViewSet):
             app_package_name=self.kwargs["app_package_name"]
         )
 
-    def get_object(self):
-        return DjangoApp.objects.get(
-            app_package_name=self.kwargs["app_package_name"],
-            app_name=self.kwargs["pk"],
-        )
-
 
 class AppPackageViewSet(viewsets.ModelViewSet):
     serializer_class = AppPackageSerializer
 
     def get_queryset(self):
         return AppPackage.objects.all()
-
-    def get_object(self):
-        return AppPackage.objects.get(name=self.kwargs["pk"])
 
 
 class ProjectViewSet(viewsets.ModelViewSet):
