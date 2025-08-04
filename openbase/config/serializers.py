@@ -13,6 +13,8 @@ from rest_framework_dataclasses.serializers import DataclassSerializer, Serializ
 class BasicSourceFileSerializer(serializers.Serializer):
     path = rest_framework.fields.CharField()
     name = rest_framework.fields.CharField()
+    app_name = rest_framework.fields.CharField()
+    package_name = rest_framework.fields.CharField()
 
 
 class BaseDataclassSerializer(DataclassSerializer):

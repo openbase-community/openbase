@@ -19,9 +19,9 @@ class DjangoAppManager(MemoryManager):
         )
 
     def filter(self, **kwargs):
-        app_package_name = kwargs.pop("app_package_name", None)
-        if app_package_name is not None:
-            app_package = AppPackage.objects.get(name=app_package_name)
+        package_name = kwargs.pop("package_name", None)
+        if package_name is not None:
+            app_package = AppPackage.objects.get(name=package_name)
             return ListQuerySet(app_package.django_apps)
         else:
             return self.all()

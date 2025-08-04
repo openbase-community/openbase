@@ -209,3 +209,9 @@ class SourceMappedDataclass:
 
     def load_full(self):
         return self
+
+
+@dataclass
+class SourceMappedAppDataclass(SourceMappedDataclass):
+    app_name: str
+    package_name: str

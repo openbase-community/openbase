@@ -2,9 +2,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from openbase.config.managers import ListQuerySet
-from openbase.core.sourcemapped_dataclass import SourceMappedDataclass
-from openbase.openbase_app.models import DjangoApp
+from openbase.core.sourcemapped_dataclass import SourceMappedAppDataclass
+from openbase.openbase_app.managers import AppSpecificManager
 
 
 @dataclass
@@ -36,38 +35,23 @@ class DjangoModelSpecialMethod:
     docstring: str = ""
 
 
-class DjangoModelManager:
-    def list_for_app_path(self, app_path: Path) -> list["DjangoModel"]:
+class DjangoModelManager(AppSpecificManager):
+    def list_for_app_path(
+        self, app_path: Path, app_name: str, package_name: str
+    ) -> list["DjangoModel"]:
         from .parsing import parse_models_file
 
         models_path = app_path / "models.py"
         if not models_path.exists():
             return []
 
-        return parse_models_file(models_path)
-
-    def filter(self, **kwargs) -> list["DjangoModel"]:
-        app_name = kwargs.pop("app_name", None)
-        if app_name is not None:
-            django_apps = [DjangoApp.objects.get(name=app_name, **kwargs)]
-        elif "app_package_name" in kwargs:
-            django_apps = [
-                django_app for django_app in DjangoApp.objects.filter(**kwargs)
-            ]
-        else:
-            django_apps = DjangoApp.objects.all()
-
-        return ListQuerySet(
-            [
-                model
-                for django_app in django_apps
-                for model in self.list_for_app_path(django_app.path)
-            ]
+        return parse_models_file(
+            models_path, app_name=app_name, package_name=package_name
         )
 
 
 @dataclass
-class DjangoModel(SourceMappedDataclass):
+class DjangoModel(SourceMappedAppDataclass):
     name: str
     docstring: Optional[str]
     fields: list[DjangoModelField]
@@ -76,6 +60,5 @@ class DjangoModel(SourceMappedDataclass):
     meta: dict
     save_method: Optional[DjangoModelSpecialMethod]
     str_method: Optional[DjangoModelSpecialMethod]
-    app_name: Optional[str] = None
 
     objects = DjangoModelManager()

@@ -1,14 +1,15 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from openbase.config.managers import ListQuerySet
 from openbase.core.parsing import SourceMappedString
-from openbase.core.sourcemapped_dataclass import SourceMappedDataclass
-from openbase.openbase_app.models import DjangoApp
+from openbase.core.sourcemapped_dataclass import SourceMappedAppDataclass
+from openbase.openbase_app.managers import AppSpecificManager
 
 
-class ManageCommandManager:
-    def list_for_app_path(self, app_path: Path) -> list["ManageCommand"]:
+class ManageCommandManager(AppSpecificManager):
+    def list_for_app_path(
+        self, app_path: Path, app_name: str, package_name: str
+    ) -> list["ManageCommand"]:
         manage_commands_path = app_path / "management" / "commands"
         manage_commands = []
         for file in manage_commands_path.glob("*.py"):
@@ -16,37 +17,17 @@ class ManageCommandManager:
                 manage_commands.append(
                     ManageCommand(
                         path=file,
-                        help="",
-                        arguments=[],
-                        handle_body_source="",
+                        app_name=app_name,
+                        package_name=package_name,
                     )
                 )
         return manage_commands
 
-    def filter(self, **kwargs) -> list["ManageCommand"]:
-        app_name = kwargs.pop("app_name", None)
-        if app_name is not None:
-            django_apps = [DjangoApp.objects.get(name=app_name, **kwargs)]
-        elif "app_package_name" in kwargs:
-            django_apps = [
-                django_app for django_app in DjangoApp.objects.filter(**kwargs)
-            ]
-        else:
-            django_apps = DjangoApp.objects.all()
-
-        return ListQuerySet(
-            [
-                command
-                for django_app in django_apps
-                for command in self.list_for_app_path(django_app.path)
-            ]
-        )
-
 
 @dataclass
-class ManageCommand(SourceMappedDataclass):
-    arguments: list[str]
-    handle_body_source: str
+class ManageCommand(SourceMappedAppDataclass):
+    arguments: list[str] = field(default_factory=list)
+    handle_body_source: str = ""
     help: SourceMappedString = ""
 
     objects: ManageCommandManager = ManageCommandManager()
@@ -58,4 +39,6 @@ class ManageCommand(SourceMappedDataclass):
     def load_full(self):
         from .parsing import parse_manage_command_file
 
-        return parse_manage_command_file(self.path)
+        return parse_manage_command_file(
+            self.path, app_name=self.app_name, package_name=self.package_name
+        )

@@ -49,7 +49,7 @@ def parse_add_argument_call(call_node):
     return arg_details
 
 
-def parse_manage_command_file(path: Path) -> "ManageCommand":
+def parse_manage_command_file(path: Path, **kwargs) -> "ManageCommand":
     """
     Parse a manage command file into a ManageCommand instance.
     """
@@ -147,6 +147,7 @@ def parse_manage_command_file(path: Path) -> "ManageCommand":
                     arguments=command_info["arguments"],
                     handle_body_source=command_info["handle_body_source"],
                     help=command_info["help"],
+                    **kwargs,
                 )
 
     # Return a basic ManageCommand if no command class found

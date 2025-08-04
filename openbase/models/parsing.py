@@ -196,7 +196,7 @@ def parse_meta_class(item):
     return meta_info
 
 
-def parse_models_file(path: Path):
+def parse_models_file(path: Path, **kwargs):
     declarations = parse_python_file_ast(path)
 
     models = []
@@ -320,6 +320,7 @@ def parse_models_file(path: Path):
             meta=meta,
             save_method=save_method,
             str_method=str_method,
+            **kwargs,
         )
         models.append(model)
 

@@ -16,7 +16,7 @@ class DjangoAppViewSet(BaseMemoryViewSet):
         return DjangoApp.objects.filter(**self.kwargs)
 
 
-class AppPackageViewSet(BaseMemoryViewSet):
+class AppPackageViewSet(viewsets.ModelViewSet):
     serializer_class = AppPackageSerializer
 
     def get_queryset(self):
