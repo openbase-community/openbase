@@ -31,6 +31,10 @@ INSTALLED_APPS = [
     "openbase.openbase_app",
     "openbase.manage_commands",
     "openbase.models",
+    "openbase.serializers",
+    "openbase.tasks",
+    "openbase.urls",
+    "openbase.views",
 ]
 
 MIDDLEWARE = [
@@ -185,6 +189,10 @@ LOGGING = {
                 "openbase_app",
                 "manage_commands",
                 "models",
+                "serializers",
+                "tasks",
+                "urls",
+                "views",
             ]
         },
     },

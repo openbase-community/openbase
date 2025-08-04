@@ -8,6 +8,10 @@ urlpatterns = [
     path("api/openbase/", include("openbase.openbase_app.urls")),
     path("api/openbase/", include("openbase.manage_commands.urls")),
     path("api/openbase/", include("openbase.models.urls")),
+    path("api/openbase/", include("openbase.serializers.urls")),
+    path("api/openbase/", include("openbase.tasks.urls")),
+    path("api/openbase/", include("openbase.urls.urls")),
+    path("api/openbase/", include("openbase.views.urls")),
 ]
 
 if settings.DEBUG or True:
