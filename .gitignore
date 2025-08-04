@@ -179,7 +179,7 @@ ENV/
 Thumbs.db
 
 staticfiles
-static/**
-!static/.gitkeep
+openbase/static/**
+openbase/!static/.gitkeep
 
 _version.py

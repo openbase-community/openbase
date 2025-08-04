@@ -16,6 +16,8 @@ dependencies = [
     "whitenoise==6.9.0",
     "channels==4.2.2",
     "channels-redis==4.3.0",
+    "boilersync==0.1.1",
+    "watchdog==6.0.0",
 ]
 
 [project.scripts]

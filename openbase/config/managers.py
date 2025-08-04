@@ -1,5 +1,7 @@
 from rest_framework.exceptions import NotFound
 
+from openbase.openbase_app.cache import OpenbaseCache
+
 
 class ListQuerySet:
     def __init__(self, items):
@@ -35,4 +37,16 @@ class MemoryManager:
         assert isinstance(candidates, ListQuerySet), (
             "`filter` must return a ListQuerySet"
         )
-        return candidates.get(self.lookup_key, lookup_value)
+        result = candidates.get(self.lookup_key, lookup_value)
+
+        # Update cache with the single result
+        OpenbaseCache.update([result])
+
+        return result
+
+    def filter(self, **kwargs):
+        # This method should be overridden by subclasses
+        raise NotImplementedError("Subclasses must implement filter method")
+
+    def all(self):
+        return ListQuerySet(self.filter())

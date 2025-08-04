@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from openbase.config.managers import ListQuerySet, MemoryManager
+from openbase.openbase_app.cache import OpenbaseCache
 from openbase.openbase_app.models import DjangoApp
 
 
@@ -29,4 +30,12 @@ class AppSpecificManager(MemoryManager):
                 )
             )
 
+        # Update cache with the filter results
+        OpenbaseCache.update(results)
+
         return ListQuerySet(results)
+
+    def all(self):
+        result = super().all()
+        OpenbaseCache.update(result)
+        return result
