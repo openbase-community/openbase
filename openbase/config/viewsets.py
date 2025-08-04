@@ -7,4 +7,4 @@ class BaseMemoryViewSet(viewsets.ModelViewSet):
 
     def get_object(self):
         lookup_value = self.kwargs.pop(self.lookup_url_kwarg)
-        return self.get_queryset().get(self.lookup_field, lookup_value)
+        return self.get_queryset().get(self.lookup_field, lookup_value).load_full()

@@ -49,7 +49,7 @@ def parse_add_argument_call(call_node):
     return arg_details
 
 
-def parse_manage_command_file(*, path: Path) -> "ManageCommand | None":
+def parse_manage_command_file(path: Path) -> "ManageCommand":
     """
     Parse a manage command file into a ManageCommand instance.
     """

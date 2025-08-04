@@ -13,5 +13,11 @@ router.register(
     ManageCommandViewSet,
     basename="manage-command",
 )
+router.register(
+    r"projects/current/manage-commands",
+    ManageCommandViewSet,
+    basename="manage-command",
+)
+
 
 urlpatterns = router.urls

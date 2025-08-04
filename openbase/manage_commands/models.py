@@ -42,15 +42,6 @@ class ManageCommandManager:
             ]
         )
 
-    # def get(self, *, name: str, **kwargs) -> "ManageCommand":
-    #     unfilled_command = super().get(name=name, **kwargs)
-
-    #     from openbase.manage_commands.parsing import parse_manage_command_file
-
-    #     return parse_manage_command_file(
-    #         path=unfilled_command.path,
-    #     )
-
 
 @dataclass
 class ManageCommand(SourceMappedDataclass):
@@ -63,3 +54,8 @@ class ManageCommand(SourceMappedDataclass):
     @property
     def name(self) -> str:
         return self.path.stem
+
+    def load_full(self):
+        from .parsing import parse_manage_command_file
+
+        return parse_manage_command_file(self.path)
