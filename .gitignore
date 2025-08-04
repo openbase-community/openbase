@@ -179,4 +179,5 @@ ENV/
 Thumbs.db
 
 staticfiles
-static/
+static/**
+!static/.gitkeep
