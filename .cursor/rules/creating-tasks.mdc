@@ -1,0 +1,39 @@
+---
+globs: **/tasks/*.py
+alwaysApply: false
+---
+
+We use TaskIQ instead of celery. You do NOT have to register tasks in `__init__.py`. Each TaskIQ task must be in its own file in this module. Define tasks as in the following example:
+
+```python
+broker = import_module("config.taskiq_config").broker
+
+@broker.task
+async def process_document(
+    document_pk: int,
+) -> None:
+    document = await Document.objects.aget(pk=document_pk)
+
+    # Do something with document, e.g. call an LLM
+```
+
+Remember to use Django async ORM when defining async tasks like above, leveraging `select_related` to avoid issues while accessing related objects.
+
+When calling any AI client libraries, define the client at the top of the file, e.g.:
+
+```python
+
+broker = import_module("config.taskiq_config").broker
+
+client = AsyncOpenAI()
+
+# ...task definition below
+```
+
+Finally, to invoke the task, import it locally to avoid circular dependencies, and call the async `.kiq` method:
+
+```python
+# Assuming a sync context:
+from haven_api.family.tasks.process_document import process_document
+async_to_sync(process_document.kiq)(self.pk)
+```

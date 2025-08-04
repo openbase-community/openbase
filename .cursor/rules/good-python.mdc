@@ -1,0 +1,29 @@
+---
+globs: *.py
+alwaysApply: false
+---
+
+Do NOT use try/except UNLESS you are implementing genuine fallback behavior (printing/logging doesn't count!). No needlessly swallowing errors! Let them propogate! Don't take things the other direction unneccesary checking either. Let the code blow up if it needs to.
+
+Prefer `class MyNamedTuple(NamedTuple)` definitions over dictionaries for return types of internal functions.
+
+When using multi-line triple-quoted strings, place them inline and wrap them with `dedent_strip_format`, which combines the functions with those names, or else simply use `detent_strip` if no interpolation is required. Do not use f-strings for multi-line triple-quoted strings. Example:
+
+```python
+def my_func(a, b, c):
+    system_prompt = dedent_strip_format(
+        """\
+        This is a long multi-line triple quoted string.
+        We need to interpolate some values:
+        {a}
+        {b}, {c}
+        """,
+        a=a,
+        b=b,
+        c=c
+    )
+```
+
+Only include function docstrings if you feel it is not clear from the function name what the function does. Only document the return value and arguments in the docstring if you think they are complicated enough to warrant additional explanation.
+
+Avoid defining simple same-file helper functions that would only ever be invoked once per parent function, and have no/minimal control structure of their own. In this case, for readibility it is better to inline and have a longer parent function body.

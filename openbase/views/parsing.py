@@ -4,6 +4,12 @@ into a structured format, identifying ViewSet classes, their attributes,
 standard methods, and custom actions.
 """
 
+from pathlib import Path
+
+from openbase.core.parsing import parse_python_file_ast
+
+from .models import DjangoViewSet, ViewSetAction, ViewSetMethod
+
 
 def _get_node_value(node):
     """
@@ -57,10 +63,17 @@ def _parse_action_decorator(decorator_node):
     return args
 
 
-def transform_views_py(views_py_ast):
-    """Transforms a views.py AST (focused on ViewSets) into a structured dictionary."""
+def parse_views_file(
+    file_path: Path, app_name: str, package_name: str
+) -> list[DjangoViewSet]:
+    """
+    Parse a Django views.py file and extract ViewSet information.
+    """
+    ast_declarations = parse_python_file_ast(file_path)
+    if not ast_declarations:
+        return []
+
     output_viewsets = []
-    ast_declarations = views_py_ast.get("ast_declarations", [])
 
     for declaration in ast_declarations:
         if declaration.get("_nodetype") == "ClassDef":
@@ -74,6 +87,9 @@ def transform_views_py(views_py_ast):
                 and (
                     "viewsets.ModelViewSet" in bc
                     or "viewsets.ReadOnlyModelViewSet" in bc
+                    or "BaseModelViewSet" in bc
+                    or "BaseReadOnlyModelViewSet" in bc
+                    or "BaseMemoryViewSet" in bc
                 )
                 for bc in base_classes
             )
@@ -83,8 +99,6 @@ def transform_views_py(views_py_ast):
 
             viewset_info = {
                 "name": class_name,
-                "lineno": declaration.get("lineno"),
-                "end_lineno": declaration.get("end_lineno"),
                 "docstring": None,
                 "serializer_class": None,
                 "permission_classes": [],
@@ -93,6 +107,9 @@ def transform_views_py(views_py_ast):
                 "queryset_definition": None,
                 "methods": [],
                 "actions": [],
+                "path": file_path,
+                "app_name": app_name,
+                "package_name": package_name,
             }
 
             # Attempt to get class docstring (first Expr node if it's a Constant string)
@@ -118,7 +135,13 @@ def transform_views_py(views_py_ast):
                     if target_name == "serializer_class":
                         viewset_info["serializer_class"] = _get_node_value(value_node)
                     elif target_name == "permission_classes":
-                        viewset_info["permission_classes"] = _get_node_value(value_node)
+                        perm_classes = _get_node_value(value_node)
+                        if isinstance(perm_classes, list):
+                            viewset_info["permission_classes"] = perm_classes
+                        else:
+                            viewset_info["permission_classes"] = (
+                                [perm_classes] if perm_classes else []
+                            )
                     elif target_name == "lookup_field":
                         viewset_info["lookup_field"] = _get_node_value(value_node)
                     elif target_name == "lookup_url_kwarg":
@@ -132,13 +155,12 @@ def transform_views_py(views_py_ast):
                     func_name = item.get("name")
                     func_docstring = item.get("docstring")
                     func_body_source = item.get("body_source", "")
-                    method_data = {
-                        "name": func_name,
-                        "lineno": item.get("lineno"),
-                        "end_lineno": item.get("end_lineno"),
-                        "docstring": func_docstring,
-                        "body": func_body_source,
-                    }
+
+                    method_data = ViewSetMethod(
+                        name=func_name,
+                        docstring=func_docstring,
+                        body=func_body_source,
+                    )
 
                     is_action = False
                     if item.get("decorator_list"):
@@ -167,8 +189,14 @@ def transform_views_py(views_py_ast):
                                     if decorator_call_node
                                     else {}
                                 )
-                                method_data["decorator_args"] = action_args
-                                viewset_info["actions"].append(method_data)
+
+                                action_data = ViewSetAction(
+                                    name=func_name,
+                                    docstring=func_docstring,
+                                    body=func_body_source,
+                                    decorator_args=action_args,
+                                )
+                                viewset_info["actions"].append(action_data)
                                 is_action = True
                                 break
 
@@ -179,6 +207,6 @@ def transform_views_py(views_py_ast):
                     ]:
                         viewset_info["methods"].append(method_data)
 
-            output_viewsets.append(viewset_info)
+            output_viewsets.append(DjangoViewSet(**viewset_info))
 
-    return {"viewsets": output_viewsets}
+    return output_viewsets

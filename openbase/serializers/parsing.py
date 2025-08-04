@@ -3,6 +3,16 @@ Transforms the AST of a Django serializers.py file into a structured format,
 identifying serializer classes, their associated models, fields, and custom field definitions.
 """
 
+from pathlib import Path
+
+from openbase.core.parsing import parse_python_file_ast
+
+from .models import (
+    DjangoSerializer,
+    DjangoSerializerCreateMethod,
+    DjangoSerializerField,
+)
+
 
 def _get_node_value(node):
     """
@@ -50,13 +60,17 @@ def _parse_fields_attribute(value_node):
     return []
 
 
-def transform_serializers_py(serializers_py_ast):
+def parse_serializers_file(
+    file_path: Path, app_name: str, package_name: str
+) -> list[DjangoSerializer]:
     """
-    Transforms a serializers.py AST into a structured dictionary.
+    Parse a Django serializers.py file and extract serializer information.
     """
-    # return serializers_py_ast
+    ast_declarations = parse_python_file_ast(file_path)
+    if not ast_declarations:
+        return []
+
     output_serializers = []
-    ast_declarations = serializers_py_ast.get("ast_declarations", [])
 
     for declaration in ast_declarations:
         if declaration.get("_nodetype") == "ClassDef":
@@ -71,6 +85,7 @@ def transform_serializers_py(serializers_py_ast):
                 and (
                     "serializers.ModelSerializer" in bc
                     or "serializers.Serializer" in bc
+                    or "BaseModelSerializer" in bc
                 )
                 for bc in base_classes
             )
@@ -85,6 +100,9 @@ def transform_serializers_py(serializers_py_ast):
                 "read_only_fields": [],
                 "custom_fields": [],
                 "create_method": None,
+                "path": file_path,
+                "app_name": app_name,
+                "package_name": package_name,
             }
 
             # Process serializer class body for Meta class and custom fields
@@ -99,9 +117,11 @@ def transform_serializers_py(serializers_py_ast):
                             if target_name == "model":
                                 serializer_info["model"] = _get_node_value(value_node)
                             elif target_name == "fields":
-                                serializer_info["fields"] = _parse_fields_attribute(
-                                    value_node
-                                )
+                                fields_value = _parse_fields_attribute(value_node)
+                                if isinstance(fields_value, str):
+                                    serializer_info["fields"] = [fields_value]
+                                else:
+                                    serializer_info["fields"] = fields_value
                             elif target_name == "read_only_fields":
                                 serializer_info["read_only_fields"] = (
                                     _parse_fields_attribute(value_node)
@@ -130,11 +150,11 @@ def transform_serializers_py(serializers_py_ast):
                                     arguments[arg_name] = arg_value
 
                             serializer_info["custom_fields"].append(
-                                {
-                                    "name": field_name,
-                                    "serializer_class": field_serializer_class,
-                                    "arguments": arguments,
-                                }
+                                DjangoSerializerField(
+                                    name=field_name,
+                                    serializer_class=field_serializer_class,
+                                    arguments=arguments,
+                                )
                             )
 
                 elif (
@@ -142,12 +162,11 @@ def transform_serializers_py(serializers_py_ast):
                     and item.get("name") == "create"
                 ):
                     # Extract both body source and docstring for create method
-                    create_info = {
-                        "body": item.get("body_source", ""),
-                        "docstring": item.get("docstring"),
-                    }
-                    serializer_info["create_method"] = create_info
+                    serializer_info["create_method"] = DjangoSerializerCreateMethod(
+                        body=item.get("body_source", ""),
+                        docstring=item.get("docstring"),
+                    )
 
-            output_serializers.append(serializer_info)
+            output_serializers.append(DjangoSerializer(**serializer_info))
 
-    return {"serializers": output_serializers}
+    return output_serializers

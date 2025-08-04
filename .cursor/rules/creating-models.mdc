@@ -1,0 +1,11 @@
+---
+description: 
+globs: **/models.py
+alwaysApply: false
+---
+
+When defining Django models, never make a stored property where a computed property will suffice. If there are invariants that should be maintained regarding the field values, add assertions or fill in defaults in the model's `save` method, remembering to call the superclass `save`.
+
+If you believe created/updated fields are appropriate for a given model, call them `created_at` and `updated_at`.
+
+Always define a `public_id` field on the model. You can choose whether to make this a slug or else use `config.fields.OpaquePublicIdField` (more common).

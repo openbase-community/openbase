@@ -1,0 +1,7 @@
+---
+description: 
+globs: **/models.py
+alwaysApply: false
+---
+
+When defining a Django model, always include a docstring with the first character being an emoji representing the model.

@@ -1,3 +1,9 @@
+from pathlib import Path
+
+from openbase.core.parsing import parse_python_file_ast
+from openbase.manage_commands.models import ManageCommand
+
+
 def parse_add_argument_call(call_node):
     """
     Parses an ast.Call node representing a call to parser.add_argument().
@@ -43,14 +49,11 @@ def parse_add_argument_call(call_node):
     return arg_details
 
 
-def transform_commands_py(command_py_ast):
+def parse_manage_command_file(path: Path, **kwargs) -> "ManageCommand":
     """
-    Transform a command .py AST into a structured format.
-    Focuses on the Command class inheriting from BaseCommand.
+    Parse a manage command file into a ManageCommand instance.
     """
-    output = {"command": None}
-    declarations = command_py_ast.get("ast_declarations", [])
-
+    declarations = parse_python_file_ast(path)
     for dec in declarations:
         if dec.get("_nodetype") == "ClassDef":
             is_command_class = False
@@ -70,7 +73,6 @@ def transform_commands_py(command_py_ast):
 
             if is_command_class:
                 command_info = {
-                    "name": dec.get("name"),  # Usually "Command"
                     "help": "",
                     "arguments": [],
                     "handle_body_source": "",  # New field for handle method's body
@@ -91,7 +93,7 @@ def transform_commands_py(command_py_ast):
                                 ):
                                     command_info["help"] = value_node.get(
                                         "value", ""
-                                    ).strip()
+                                    )  # TODO: Strip
                                 break
 
                     # Extract arguments from add_arguments method
@@ -140,7 +142,13 @@ def transform_commands_py(command_py_ast):
                             "body_source", ""
                         ).strip()
 
-                output["command"] = command_info
-                break  # Assuming one Command class per file
+                return ManageCommand(
+                    path=path,
+                    arguments=command_info["arguments"],
+                    handle_body_source=command_info["handle_body_source"],
+                    help=command_info["help"],
+                    **kwargs,
+                )
 
-    return output
+    # Return a basic ManageCommand if no command class found
+    return None

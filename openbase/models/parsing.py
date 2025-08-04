@@ -1,4 +1,15 @@
-from .utils import extract_function_info
+from pathlib import Path
+
+from openbase.core.parsing import parse_python_file_ast
+from openbase.core.parsing_utils import extract_function_info
+
+from .models import (
+    DjangoModel,
+    DjangoModelField,
+    DjangoModelMethod,
+    DjangoModelProperty,
+    DjangoModelSpecialMethod,
+)
 
 
 def get_field_arg_name(field_type, arg_index):
@@ -90,15 +101,12 @@ def parse_model_field(
             if kwarg_name and kwarg_value is not None:
                 field_kwargs[kwarg_name] = kwarg_value
 
-    field_data = {
-        "name": target_name,
-        "type": field_type,
-        "kwargs": field_kwargs,
-    }
-    if processed_choices is not None:
-        field_data["choices"] = processed_choices
-
-    return field_data
+    return DjangoModelField(
+        name=target_name,
+        type=field_type,
+        kwargs=field_kwargs,
+        choices=processed_choices,
+    )
 
 
 def parse_class_level_variable(
@@ -188,10 +196,10 @@ def parse_meta_class(item):
     return meta_info
 
 
-def transform_models_py(models_py_ast):
-    """Transform Django models.py AST into a structured format."""
-    output = {"models": []}
-    declarations = models_py_ast.get("ast_declarations", [])
+def parse_models_file(path: Path, **kwargs):
+    declarations = parse_python_file_ast(path)
+
+    models = []
 
     for dec in declarations:
         if dec.get("_nodetype") != "ClassDef":
@@ -211,18 +219,14 @@ def transform_models_py(models_py_ast):
         if not is_django_model:
             continue
 
-        model_info = {
-            "name": dec.get("name"),
-            "lineno": dec.get("lineno"),
-            "end_lineno": dec.get("end_lineno"),
-            "docstring": None,
-            "fields": [],
-            "methods": [],
-            "properties": [],
-            "meta": {},
-            "save_method": None,
-            "str_method": None,
-        }
+        # Initialize collections
+        fields = []
+        methods = []
+        properties = []
+        meta = {}
+        save_method = None
+        str_method = None
+        docstring = None
 
         class_level_vars = {}
         class_level_choices_vars = {}
@@ -231,7 +235,7 @@ def transform_models_py(models_py_ast):
         if dec.get("body") and dec["body"][0].get("_nodetype") == "Expr":
             docstring_node = dec["body"][0].get("value")
             if docstring_node and docstring_node.get("_nodetype") == "Constant":
-                model_info["docstring"] = docstring_node.get("value", "").strip()
+                docstring = docstring_node.get("value", "").strip()
 
         for item in dec.get("body", []):
             if item.get("_nodetype") == "Assign":
@@ -250,13 +254,13 @@ def transform_models_py(models_py_ast):
                     )
 
                     if is_model_field:
-                        field_data = parse_model_field(
+                        field = parse_model_field(
                             value_node,
                             target_name,
                             class_level_vars,
                             class_level_choices_vars,
                         )
-                        model_info["fields"].append(field_data)
+                        fields.append(field)
                     else:
                         parse_class_level_variable(
                             target_name,
@@ -270,14 +274,14 @@ def transform_models_py(models_py_ast):
 
                 # Handle special methods
                 if method_name == "save":
-                    model_info["save_method"] = {
-                        "body": item.get("body_source", "").strip(),
-                        "docstring": item.get("docstring", "").strip(),
-                    }
+                    save_method = DjangoModelSpecialMethod(
+                        body=item.get("body_source", "").strip(),
+                        docstring=item.get("docstring", "").strip(),
+                    )
                 elif method_name == "__str__":
-                    model_info["str_method"] = {
-                        "body": item.get("body_source", "").strip(),
-                    }
+                    str_method = DjangoModelSpecialMethod(
+                        body=item.get("body_source", "").strip(),
+                    )
                 else:
                     # Handle regular methods and properties
                     (
@@ -288,25 +292,36 @@ def transform_models_py(models_py_ast):
                         method_docstring,
                     ) = parse_method_or_property(item)
                     if is_property:
-                        model_info["properties"].append(
-                            {
-                                "name": method_name,
-                                "body": method_body,
-                                "docstring": method_docstring,
-                            }
+                        property_obj = DjangoModelProperty(
+                            name=method_name,
+                            body=method_body,
+                            docstring=method_docstring,
                         )
+                        properties.append(property_obj)
                     else:
-                        method_info = {
-                            "name": method_name,
-                            "body": method_body,
-                            "docstring": method_docstring,
-                            "args": method_args,
-                        }
-                        model_info["methods"].append(method_info)
+                        method_obj = DjangoModelMethod(
+                            name=method_name,
+                            body=method_body,
+                            docstring=method_docstring,
+                            args=method_args,
+                        )
+                        methods.append(method_obj)
 
             elif item.get("_nodetype") == "ClassDef" and item.get("name") == "Meta":
-                model_info["meta"] = parse_meta_class(item)
+                meta = parse_meta_class(item)
 
-        output["models"].append(model_info)
+        model = DjangoModel(
+            path=path,
+            name=dec.get("name"),
+            docstring=docstring,
+            fields=fields,
+            methods=methods,
+            properties=properties,
+            meta=meta,
+            save_method=save_method,
+            str_method=str_method,
+            **kwargs,
+        )
+        models.append(model)
 
-    return output
+    return models

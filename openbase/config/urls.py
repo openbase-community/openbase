@@ -1,24 +1,21 @@
-"""
-URL configuration for openbase project.
-
-The `urlpatterns` list routes URLs to views. For more information please see:
-    https://docs.djangoproject.com/en/4.2/topics/http/urls/
-Examples:
-Function views
-    1. Add an import:  from my_app import views
-    2. Add a URL to urlpatterns:  path('', views.home, name='home')
-Class-based views
-    1. Add an import:  from other_app.views import Home
-    2. Add a URL to urlpatterns:  path('', Home.as_view(), name='home')
-Including another URLconf
-    1. Import the include() function: from django.urls import include, path
-    2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
-"""
-
+from django.conf import settings
 from django.contrib import admin
 from django.urls import include, path
 
+from openbase.config import views
+
 urlpatterns = [
-    path("admin/", admin.site.urls),
-    path("", include("openbase.openbase_app.urls")),
+    path("api/openbase/", include("openbase.openbase_app.urls")),
+    path("api/openbase/", include("openbase.manage_commands.urls")),
+    path("api/openbase/", include("openbase.models.urls")),
+    path("api/openbase/", include("openbase.serializers.urls")),
+    path("api/openbase/", include("openbase.tasks.urls")),
+    path("api/openbase/", include("openbase.urls.urls")),
+    path("api/openbase/", include("openbase.views.urls")),
 ]
+
+if settings.DEBUG or True:
+    urlpatterns.append(path("admin/", admin.site.urls))
+
+urlpatterns.append(path("", views.proxy_or_fallback, name="proxy_or_fallback_root"))
+urlpatterns.append(path("<path:path>", views.proxy_or_fallback, name="proxy_or_fallback"))

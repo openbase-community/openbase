@@ -1,0 +1,39 @@
+---
+description: Calling GPT/OpenAI with structured outputs
+globs:
+alwaysApply: false
+---
+
+To use structured outputs with OpenAI, follow this example:
+
+```python
+from pydantic import BaseModel
+from langfuse.openai import OpenAI
+
+client = OpenAI()
+
+class CalendarEvent(BaseModel):
+    name: str
+    date: str
+    participants: list[str]
+
+completion = client.responses.parse(
+    model="gpt-4.1",
+    messages=[
+        {"role": "system", "content": "Extract the event information."},
+        {"role": "user", "content": "Alice and Bob are going to a science fair on Friday."},
+    ],
+    text_format=CalendarEvent,
+)
+
+event = completion.choices[0].message.parsed
+print(event.name)
+print(event.date)
+print(event.participants)
+```
+
+Use model `gpt-4.1` unless otherwise instructed.
+
+Don't make docstrings for the pydantic `BaseModel` subclasses you define.
+
+Remember: if using triple quoted strings for the prompts, always use `dedent_strip` or `dedent_strip_format` to fix the spacing.

@@ -3,6 +3,13 @@ Transforms the AST of a Django urls.py file into a structured format,
 identifying router registrations and urlpatterns details.
 """
 
+from pathlib import Path
+from typing import Optional
+
+from openbase.core.parsing import parse_python_file_ast
+
+from .models import DjangoUrls, RouterRegistration, UrlPattern
+
 
 def get_node_value(node):
     """Helper to extract a simple value from an AST node."""
@@ -32,14 +39,18 @@ def get_keyword_arg_value(keywords_list, arg_name):
     return None
 
 
-def transform_urls_py(urls_py_ast):
-    """Transforms a urls.py AST into a structured dictionary."""
-    output = {
-        "router_registrations": [],
-        "urlpatterns": [],
-    }
+def parse_urls_file(
+    file_path: Path, app_name: str, package_name: str
+) -> Optional[DjangoUrls]:
+    """
+    Parse a Django urls.py file and extract URL pattern information.
+    """
+    declarations = parse_python_file_ast(file_path)
+    if not declarations:
+        return None
 
-    declarations = urls_py_ast.get("ast_declarations", [])
+    router_registrations = []
+    urlpatterns = []
 
     for dec in declarations:
         # Handle urlpatterns assignment
@@ -74,12 +85,13 @@ def transform_urls_py(urls_py_ast):
                                 item_node.get("keywords", []), "name"
                             )
 
-                            path_detail = {
-                                "route": route_pattern,
-                                "name": name_kwarg,
-                                "view_type": "unknown",
-                                "view_name": None,
-                            }
+                            path_detail = UrlPattern(
+                                route=route_pattern,
+                                name=name_kwarg,
+                                view_type="unknown",
+                                view_name=None,
+                                include_target=None,
+                            )
 
                             if view_or_include_node:
                                 func_call_name = get_node_value(
@@ -100,25 +112,25 @@ def transform_urls_py(urls_py_ast):
                                     if include_target == "router.urls":
                                         continue
 
-                                    path_detail["view_type"] = "module_include"
-                                    path_detail["include_target"] = include_target
+                                    path_detail.view_type = "module_include"
+                                    path_detail.include_target = include_target
                                 elif (
                                     view_or_include_node.get("_nodetype") == "Call"
                                     and isinstance(func_call_name, str)
                                     and func_call_name.endswith(".as_view")
                                 ):
-                                    path_detail["view_type"] = "class_based_view"
+                                    path_detail.view_type = "class_based_view"
                                     view_class_full_name = get_node_value(
                                         view_or_include_node.get("func").get("value")
                                     )
-                                    path_detail["view_name"] = view_class_full_name
+                                    path_detail.view_name = view_class_full_name
                                 elif view_or_include_node.get("_nodetype") == "Name":
-                                    path_detail["view_type"] = "function_based_view"
-                                    path_detail["view_name"] = get_node_value(
+                                    path_detail.view_type = "function_based_view"
+                                    path_detail.view_name = get_node_value(
                                         view_or_include_node
                                     )
 
-                            output["urlpatterns"].append(path_detail)
+                            urlpatterns.append(path_detail)
 
         # Handle Router Registrations
         if dec.get("_nodetype") == "Expr":
@@ -142,8 +154,14 @@ def transform_urls_py(urls_py_ast):
                             if len(call_node.get("args", [])) > 1
                             else None
                         )
-                        output["router_registrations"].append(
-                            {"prefix": prefix, "viewset": viewset}
+                        router_registrations.append(
+                            RouterRegistration(prefix=prefix, viewset=viewset)
                         )
 
-    return output
+    return DjangoUrls(
+        router_registrations=router_registrations,
+        urlpatterns=urlpatterns,
+        path=file_path,
+        app_name=app_name,
+        package_name=package_name,
+    )

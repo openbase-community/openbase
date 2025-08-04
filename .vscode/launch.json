@@ -2,17 +2,19 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Django: Uvicorn",
-            "consoleName": "Django: Uvicorn",
+            "name": "Metaserver: Uvicorn",
+            "consoleName": "Metaserver: Uvicorn",
             "type": "debugpy",
             "request": "launch",
             "module": "uvicorn",
-            "args": "openbase.config.asgi:application --host 0.0.0.0 --reload",
+            "args": "openbase.config.asgi:application --host 0.0.0.0 --port 8001 --reload",
             "django": true,
             "justMyCode": false,
             "env": {
                 "DJANGO_PROJECT_DIR": "/Users/gabemontague/Dropbox/Mac/Documents/Documents/Projects/haven/code/haven/web/",
-                "DJANGO_PROJECT_APPS_DIR": "/Users/gabemontague/Dropbox/Mac/Documents/Documents/Projects/haven/code/haven/haven-api/haven_api/"
+                "DJANGO_PROJECT_APPS_DIR": "/Users/gabemontague/Dropbox/Mac/Documents/Documents/Projects/haven/code/haven/haven-api/haven_api/",
+                "DEBUG": "1"
             }
-        ]
-    }
+        }
+    ]
+}

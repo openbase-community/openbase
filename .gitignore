@@ -179,3 +179,4 @@ ENV/
 Thumbs.db
 
 staticfiles
+static/
