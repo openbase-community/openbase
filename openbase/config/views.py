@@ -10,11 +10,10 @@ from django.views.decorators.csrf import csrf_exempt
 
 @csrf_exempt
 def proxy_or_fallback(request, path=""):
-    """Proxy to localhost:8081 in DEBUG mode, otherwise serve static React app."""
+    """Proxy to localhost in DEBUG mode, otherwise serve static React app."""
     if settings.DEBUG:
         try:
-            # Proxy the request to localhost:8081
-            target_url = f"http://localhost:8081/{path}"
+            target_url = f"http://localhost:8080/{path}"
 
             # Forward query parameters if any
             if request.GET:

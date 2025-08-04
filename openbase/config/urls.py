@@ -18,3 +18,4 @@ if settings.DEBUG or True:
     urlpatterns.append(path("admin/", admin.site.urls))
 
 urlpatterns.append(path("", views.proxy_or_fallback, name="proxy_or_fallback_root"))
+urlpatterns.append(path("<path:path>", views.proxy_or_fallback, name="proxy_or_fallback"))
