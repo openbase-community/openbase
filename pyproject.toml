@@ -1,6 +1,6 @@
 [project]
 name = "openbase"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Openbase Django Meta-Server"
 authors = [{ name = "Gabe Montague", email = "gabemontague@outlook.com" }]
 dependencies = [
@@ -26,5 +26,11 @@ packages = ["openbase"]
 include = ["openbase/static/**/*"]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "${{name_snake}}/_version.py"
