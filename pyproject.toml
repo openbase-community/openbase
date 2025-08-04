@@ -33,4 +33,4 @@ build-backend = "hatchling.build"
 source = "vcs"
 
 [tool.hatch.build.hooks.vcs]
-version-file = "${{name_snake}}/_version.py"
+version-file = "openbase/_version.py"
