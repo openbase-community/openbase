@@ -119,5 +119,11 @@ class Project(models.Model):
 
         return app_packages
 
+    @property
+    def dev_server(self):
+        return {
+            "preview_url": "http://localhost",
+        }
+
     def __str__(self):
         return self.path

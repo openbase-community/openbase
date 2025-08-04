@@ -13,7 +13,7 @@ def proxy_or_fallback(request, path=""):
     """Proxy to localhost in DEBUG mode, otherwise serve static React app."""
     if settings.DEBUG:
         try:
-            target_url = f"http://localhost:8080/{path}"
+            target_url = f"http://localhost:8091/{path}"
 
             # Forward query parameters if any
             if request.GET:

@@ -16,28 +16,28 @@ def setup_environment():
     # Get the openbase entrypoint directory
     entrypoint_dir = Path(__file__).parent
     manage_py = entrypoint_dir / "entrypoint" / "manage.py"
-    
+
     if not manage_py.exists():
         click.echo(f"Error: manage.py not found at {manage_py}")
         sys.exit(1)
-    
+
     # Set default environment variables for development
     env_defaults = {
         "OPENBASE_SECRET_KEY": secrets.token_hex(64),
         "OPENBASE_PROJECT_DIR": str(Path.cwd()),
     }
-    
+
     # Only set defaults if not already set
     for key, value in env_defaults.items():
         if not os.environ.get(key):
             os.environ[key] = value
-    
+
     # Save current directory to restore later
     original_cwd = Path.cwd()
-    
+
     # Change to the entrypoint directory for running migrations
     os.chdir(entrypoint_dir)
-    
+
     # Run migrations first
     click.echo("Running migrations...")
     migrate_cmd = [sys.executable, str(manage_py), "migrate"]
@@ -46,21 +46,21 @@ def setup_environment():
     except subprocess.CalledProcessError as e:
         click.echo(f"Error running migrations: {e}")
         sys.exit(1)
-    
+
     # Restore original working directory
     os.chdir(original_cwd)
-    
+
     return manage_py
 
 
 def start_server_process(host, port):
     """Start the gunicorn server process."""
     click.echo(f"Starting server on {host}:{port}")
-    
+
     # Set environment variables for gunicorn
     env_for_gunicorn = os.environ.copy()
     env_for_gunicorn["OPENBASE_ALLOWED_HOSTS"] = host
-    
+
     cmd = [
         sys.executable,
         "-m",
@@ -73,7 +73,7 @@ def start_server_process(host, port):
         "--bind",
         f"{host}:{port}",
     ]
-    
+
     return subprocess.Popen(cmd, env=env_for_gunicorn)
 
 
@@ -86,7 +86,7 @@ def check_and_get_ttyd_setup():
         click.echo("Error: ttyd is not installed or not in PATH")
         click.echo("Install ttyd with: brew install ttyd")
         sys.exit(1)
-    
+
     # Check for zsh and get its path
     try:
         result = subprocess.run(
@@ -101,16 +101,16 @@ def check_and_get_ttyd_setup():
             if Path(path).exists():
                 zsh_path = path
                 break
-        
+
         if not zsh_path:
             click.echo("Error: zsh is not found in PATH or common locations")
             click.echo("Make sure zsh is installed")
             sys.exit(1)
-    
+
     # Expand home directory for claude path
     home_dir = Path.home()
     claude_path = home_dir / ".claude" / "local" / "claude"
-    
+
     # Check if claude exists
     if not claude_path.exists():
         click.echo(f"Error: Claude not found at {claude_path}")
@@ -118,23 +118,46 @@ def check_and_get_ttyd_setup():
             "Make sure Claude is installed and available at ~/.claude/local/claude"
         )
         sys.exit(1)
-    
+
     return zsh_path, claude_path
+
+
+def build_ttyd_command(zsh_path, claude_path, include_theme=False):
+    """Build the ttyd command array."""
+    cmd = ["ttyd"]
+
+    if include_theme:
+        cmd.extend(["-t", '\'theme={"background": "green"}\''])
+
+    cmd.extend(
+        [
+            "-t",
+            'theme={"background": "black"}',
+            "--interface",
+            "127.0.0.1",
+            "--writable",
+            zsh_path,
+            "-c",
+            f"cd {Path.cwd()}; {claude_path} --dangerously-skip-permissions; exec {zsh_path}",
+        ]
+    )
+
+    return cmd
 
 
 def start_ttyd_process(zsh_path, claude_path):
     """Start the ttyd process from the current working directory."""
-    cmd = [
-        "ttyd",
-        "--interface",
-        "127.0.0.1",
-        "--writable",
-        zsh_path,
-        "-c",
-        f"cd {Path.cwd()}; {claude_path} --dangerously-skip-permissions; exec {zsh_path}",
-    ]
-    
+    cmd = build_ttyd_command(zsh_path, claude_path, include_theme=True)
+    print(cmd)
     return subprocess.Popen(cmd)
+
+
+def open_browser_if_requested(host, port, no_open):
+    """Open browser at the given host:port unless no_open is True."""
+    if not no_open:
+        url = f"http://{host}:{port}"
+        click.echo(f"Opening browser at {url}")
+        webbrowser.open(url)
 
 
 @click.group(invoke_without_command=True)
@@ -154,20 +177,17 @@ def main(ctx):
 def server(host, port, no_open):
     """Start the Openbase development server."""
     setup_environment()
-    
+
     try:
         # Start the server process
         process = start_server_process(host, port)
-        
+
         # Give the server a moment to start up
         time.sleep(2)
-        
+
         # Open browser unless --no-open flag is specified
-        if not no_open:
-            url = f"http://{host}:{port}"
-            click.echo(f"Opening browser at {url}")
-            webbrowser.open(url)
-        
+        open_browser_if_requested(host, port, no_open)
+
         # Wait for the process to complete
         process.wait()
     except subprocess.CalledProcessError as e:
@@ -184,19 +204,11 @@ def server(host, port, no_open):
 def ttyd():
     """Start ttyd terminal server with Claude integration."""
     click.echo("Starting ttyd terminal server...")
-    
+
     zsh_path, claude_path = check_and_get_ttyd_setup()
-    
+
     try:
-        cmd = [
-            "ttyd",
-            "--interface",
-            "127.0.0.1",
-            "--writable",
-            zsh_path,
-            "-c",
-            f"cd {Path.cwd()}; {claude_path} --dangerously-skip-permissions; exec {zsh_path}",
-        ]
+        cmd = build_ttyd_command(zsh_path, claude_path, include_theme=False)
         subprocess.run(cmd, check=True)
     except subprocess.CalledProcessError as e:
         click.echo(f"Error running ttyd: {e}")
@@ -211,12 +223,12 @@ def ttyd():
 def watcher(host, port):
     """Run only the directory watcher."""
     click.echo("Starting directory watcher...")
-    
+
     # Create watcher with server URL
     server_url = f"http://{host}:{port}"
     watcher = DirectoryWatcher(server_url=server_url)
     watcher.start()
-    
+
     try:
         # Keep the watcher running
         while True:
@@ -234,51 +246,48 @@ def watcher(host, port):
 def default(host, port, no_open):
     """Default command that runs both server and ttyd with directory watcher."""
     click.echo("Starting Openbase with server, ttyd, and directory watcher...")
-    
+
     # Start the directory watcher
     server_url = f"http://{host}:{port}"
     watcher = DirectoryWatcher(server_url=server_url)
     watcher.start()
-    
+
     # Setup environment
     setup_environment()
-    
+
     # Get ttyd setup
     zsh_path, claude_path = check_and_get_ttyd_setup()
-    
+
     try:
         # Start both processes
         server_process = start_server_process(host, port)
         ttyd_process = start_ttyd_process(zsh_path, claude_path)
-        
+
         # Give the server a moment to start up
         time.sleep(2)
-        
+
         # Open browser unless --no-open flag is specified
-        if not no_open:
-            url = f"http://{host}:{port}"
-            click.echo(f"Opening browser at {url}")
-            webbrowser.open(url)
-        
+        open_browser_if_requested(host, port, no_open)
+
         # Wait for either process to exit
         while True:
             server_poll = server_process.poll()
             ttyd_poll = ttyd_process.poll()
-            
+
             if server_poll is not None:
                 click.echo("\nServer process exited.")
                 if ttyd_poll is None:
                     ttyd_process.terminate()
                 break
-            
+
             if ttyd_poll is not None:
                 click.echo("\nTTYD process exited.")
                 if server_poll is None:
                     server_process.terminate()
                 break
-            
+
             time.sleep(1)
-            
+
     except KeyboardInterrupt:
         click.echo("\nStopping all processes...")
         watcher.stop()
@@ -292,9 +301,9 @@ def default(host, port, no_open):
     except Exception as e:
         click.echo(f"Error: {e}")
         watcher.stop()
-        if 'server_process' in locals() and server_process.poll() is None:
+        if "server_process" in locals() and server_process.poll() is None:
             server_process.terminate()
-        if 'ttyd_process' in locals() and ttyd_process.poll() is None:
+        if "ttyd_process" in locals() and ttyd_process.poll() is None:
             ttyd_process.terminate()
         sys.exit(1)
 
