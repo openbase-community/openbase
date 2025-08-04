@@ -4,17 +4,17 @@ from .views import DjangoViewSetViewSet
 
 router = DefaultRouter()
 router.register(
-    r"projects/local/packages/(?P<package_name>[^/.]+)/apps/(?P<app_name>[^/.]+)/viewsets",
+    r"projects/local/packages/(?P<package_name>[^/.]+)/apps/(?P<app_name>[^/.]+)/views",
     DjangoViewSetViewSet,
     basename="viewset",
 )
 router.register(
-    r"projects/local/packages/(?P<package_name>[^/.]+)/viewsets",
+    r"projects/local/packages/(?P<package_name>[^/.]+)/views",
     DjangoViewSetViewSet,
     basename="viewset",
 )
 router.register(
-    r"projects/local/viewsets",
+    r"projects/local/views",
     DjangoViewSetViewSet,
     basename="viewset",
 )

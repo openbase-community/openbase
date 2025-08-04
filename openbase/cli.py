@@ -84,5 +84,69 @@ def server(host, port):
         click.echo("\nServer stopped.")
 
 
+@main.command()
+def ttyd():
+    """Start ttyd terminal server with Claude integration."""
+    click.echo("Starting ttyd terminal server...")
+
+    # Check if ttyd is installed
+    try:
+        subprocess.run(["which", "ttyd"], check=True, capture_output=True)
+    except subprocess.CalledProcessError:
+        click.echo("Error: ttyd is not installed or not in PATH")
+        click.echo("Install ttyd with: brew install ttyd")
+        sys.exit(1)
+
+    # Check for zsh and get its path
+    try:
+        result = subprocess.run(
+            ["which", "zsh"], check=True, capture_output=True, text=True
+        )
+        zsh_path = result.stdout.strip()
+    except subprocess.CalledProcessError:
+        # Fallback to common zsh locations
+        common_zsh_paths = ["/bin/zsh", "/usr/bin/zsh", "/usr/local/bin/zsh"]
+        zsh_path = None
+        for path in common_zsh_paths:
+            if Path(path).exists():
+                zsh_path = path
+                break
+
+        if not zsh_path:
+            click.echo("Error: zsh is not found in PATH or common locations")
+            click.echo("Make sure zsh is installed")
+            sys.exit(1)
+
+    # Expand home directory for claude path
+    home_dir = Path.home()
+    claude_path = home_dir / ".claude" / "local" / "claude"
+
+    # Check if claude exists
+    if not claude_path.exists():
+        click.echo(f"Error: Claude not found at {claude_path}")
+        click.echo(
+            "Make sure Claude is installed and available at ~/.claude/local/claude"
+        )
+        sys.exit(1)
+
+    cmd = [
+        "ttyd",
+        "--interface",
+        "127.0.0.1",
+        "--writable",
+        zsh_path,
+        "-c",
+        f"{claude_path} --dangerously-skip-permissions; exec {zsh_path}",
+    ]
+
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        click.echo(f"Error running ttyd: {e}")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        click.echo("\nTerminal server stopped.")
+
+
 if __name__ == "__main__":
     main()
