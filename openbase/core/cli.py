@@ -132,7 +132,9 @@ def build_ttyd_command(zsh_path, claude_path, include_theme=False):
     cmd.extend(
         [
             "-t",
-            'theme={"background": "black"}',
+            'theme={"background": "white", "foreground": "black"}',
+            "-t",
+            'fontFamily="Menlo","Consolas"',
             "--interface",
             "127.0.0.1",
             "--writable",
