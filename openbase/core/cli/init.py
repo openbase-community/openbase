@@ -164,6 +164,18 @@ def init():
     click.echo("Syncing multi-repository workspace...")
     sync(ensure_on_same_branch=False)
 
+    # Initialize git repository
+    click.echo("Initializing git repository...")
+    init_result = subprocess.run(
+        ["git", "init"],
+        cwd=str(current_dir),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if init_result.returncode != 0:
+        click.echo(f"Warning: git init failed with: {init_result.stderr}")
+
     # Create an initial git commit after syncing
     click.echo("Creating initial git commit...")
     add_result = subprocess.run(
