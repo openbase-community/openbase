@@ -17,11 +17,12 @@ dependencies = [
     "channels==4.2.2",
     "channels-redis==4.3.0",
     "boilersync==0.1.1",
+    "vscode-multi==2.0.0",
     "watchdog==6.0.0",
 ]
 
 [project.scripts]
-openbase = "openbase.core.cli:main"
+openbase = "openbase.core.cli.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["openbase"]
