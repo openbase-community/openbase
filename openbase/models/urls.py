@@ -11,12 +11,12 @@ router.register(
 router.register(
     r"projects/local/packages/(?P<package_name>[^/.]+)/models",
     DjangoModelViewSet,
-    basename="model",
+    basename="model2",
 )
 router.register(
     r"projects/local/models",
     DjangoModelViewSet,
-    basename="model",
+    basename="model3",
 )
 
 

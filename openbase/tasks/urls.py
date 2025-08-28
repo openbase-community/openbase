@@ -11,12 +11,12 @@ router.register(
 router.register(
     r"projects/local/packages/(?P<package_name>[^/.]+)/tasks",
     TaskiqTaskViewSet,
-    basename="task",
+    basename="task2",
 )
 router.register(
     r"projects/local/tasks",
     TaskiqTaskViewSet,
-    basename="task",
+    basename="task3",
 )
 
 

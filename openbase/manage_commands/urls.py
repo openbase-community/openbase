@@ -11,12 +11,12 @@ router.register(
 router.register(
     r"projects/local/packages/(?P<package_name>[^/.]+)/commands",
     ManageCommandViewSet,
-    basename="manage-command",
+    basename="manage-command2",
 )
 router.register(
     r"projects/local/commands",
     ManageCommandViewSet,
-    basename="manage-command",
+    basename="manage-command3",
 )
 
 
