@@ -146,16 +146,17 @@ class MessageViewSet(viewsets.ModelViewSet):
 
 
 class GitDiffView(APIView):
-    """Get git diff from last commit with minimal context (-U1)"""
+    """Get git diff from main repo and all git subrepositories (depth 1)"""
     
-    def get(self, request):
+    def _get_repo_diff(self, repo_path, repo_name):
+        """Get diff for a single git repository"""
         try:
             # Get diff of tracked files (modified and staged)
             tracked_diff = subprocess.run(
                 ["git", "diff", "-U1", "HEAD"],
                 capture_output=True,
                 text=True,
-                cwd=settings.OPENBASE_PROJECT_PATH,
+                cwd=repo_path,
                 timeout=30,
             )
 
@@ -164,7 +165,7 @@ class GitDiffView(APIView):
                 ["git", "ls-files", "--others", "--exclude-standard"],
                 capture_output=True,
                 text=True,
-                cwd=settings.OPENBASE_PROJECT_PATH,
+                cwd=repo_path,
                 timeout=30,
             )
 
@@ -179,15 +180,48 @@ class GitDiffView(APIView):
                             ["git", "diff", "--no-index", "-U1", "/dev/null", file_path],
                             capture_output=True,
                             text=True,
-                            cwd=settings.OPENBASE_PROJECT_PATH,
+                            cwd=repo_path,
                             timeout=30,
                         )
                         # git diff --no-index returns exit code 1 when files differ, which is expected
                         if untracked_diff.returncode in [0, 1]:
                             combined_diff += untracked_diff.stdout
 
-            return Response({
+            return {
+                "repository": repo_name,
+                "path": str(repo_path),
                 "diff": combined_diff,
+            }
+            
+        except Exception as e:
+            return {
+                "repository": repo_name,
+                "path": str(repo_path),
+                "diff": "",
+                "error": str(e),
+            }
+    
+    def get(self, request):
+        try:
+            diffs = []
+            base_path = settings.OPENBASE_PROJECT_PATH
+            
+            # Get diff from main repository
+            main_diff = self._get_repo_diff(base_path, "main")
+            diffs.append(main_diff)
+            
+            # Find git repositories in immediate subdirectories
+            for item in os.listdir(base_path):
+                item_path = os.path.join(base_path, item)
+                if os.path.isdir(item_path):
+                    git_dir = os.path.join(item_path, ".git")
+                    if os.path.exists(git_dir):
+                        # This is a git repository
+                        repo_diff = self._get_repo_diff(item_path, item)
+                        diffs.append(repo_diff)
+
+            return Response({
+                "repositories": diffs,
             })
 
         except subprocess.TimeoutExpired:
