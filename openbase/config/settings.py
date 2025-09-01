@@ -15,6 +15,8 @@ DEBUG = os.environ.get("OPENBASE_DEBUG", "0") == "1"
 
 SECRET_KEY = os.environ["OPENBASE_SECRET_KEY"]
 
+OPENBASE_API_TOKEN = os.environ["OPENBASE_API_TOKEN"]
+
 ALLOWED_HOSTS = os.environ.get("OPENBASE_ALLOWED_HOSTS", "").split(",")
 
 CLOUD_RUN = os.environ.get("OPENBASE_CLOUD_RUN", "0") == "1"
@@ -127,6 +129,10 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # REST Framework configuration
 REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "openbase.config.authentication.OpenbaseTokenAuthentication",
+        "rest_framework.authentication.SessionAuthentication",
+    ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
