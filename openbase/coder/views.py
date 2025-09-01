@@ -1,5 +1,4 @@
 import os
-import re
 import subprocess
 
 from django.shortcuts import get_object_or_404
@@ -147,7 +146,7 @@ class MessageViewSet(viewsets.ModelViewSet):
 
 class GitDiffView(APIView):
     """Get git diff from main repo and all git subrepositories (depth 1)"""
-    
+
     def _get_repo_diff(self, repo_path, repo_name):
         """Get diff for a single git repository"""
         try:
@@ -173,11 +172,18 @@ class GitDiffView(APIView):
 
             # Add diffs for untracked files
             if untracked_files.stdout:
-                for file_path in untracked_files.stdout.strip().split('\n'):
+                for file_path in untracked_files.stdout.strip().split("\n"):
                     if file_path:
                         # Get diff of untracked file against /dev/null
                         untracked_diff = subprocess.run(
-                            ["git", "diff", "--no-index", "-U1", "/dev/null", file_path],
+                            [
+                                "git",
+                                "diff",
+                                "--no-index",
+                                "-U1",
+                                "/dev/null",
+                                file_path,
+                            ],
                             capture_output=True,
                             text=True,
                             cwd=repo_path,
@@ -192,7 +198,7 @@ class GitDiffView(APIView):
                 "path": str(repo_path),
                 "diff": combined_diff,
             }
-            
+
         except Exception as e:
             return {
                 "repository": repo_name,
@@ -200,16 +206,16 @@ class GitDiffView(APIView):
                 "diff": "",
                 "error": str(e),
             }
-    
+
     def get(self, request):
         try:
             diffs = []
             base_path = settings.OPENBASE_PROJECT_PATH
-            
+
             # Get diff from main repository
-            main_diff = self._get_repo_diff(base_path, "main")
+            main_diff = self._get_repo_diff(base_path, ".")
             diffs.append(main_diff)
-            
+
             # Find git repositories in immediate subdirectories
             for item in os.listdir(base_path):
                 item_path = os.path.join(base_path, item)
@@ -220,9 +226,11 @@ class GitDiffView(APIView):
                         repo_diff = self._get_repo_diff(item_path, item)
                         diffs.append(repo_diff)
 
-            return Response({
-                "repositories": diffs,
-            })
+            return Response(
+                {
+                    "repositories": diffs,
+                }
+            )
 
         except subprocess.TimeoutExpired:
             raise ValidationError("Git diff command timed out")
@@ -232,7 +240,7 @@ class GitDiffView(APIView):
 
 class GitRecentCommitsView(APIView):
     """Get recent commits parsed into structured format"""
-    
+
     def get(self, request):
         try:
             # Get the last 10 commits with detailed format for parsing
@@ -249,22 +257,26 @@ class GitRecentCommitsView(APIView):
 
             # Parse the output into structured data
             commits = []
-            for line in result.stdout.strip().split('\n'):
+            for line in result.stdout.strip().split("\n"):
                 if line:
-                    parts = line.split('|', 5)
+                    parts = line.split("|", 5)
                     if len(parts) == 6:
-                        commits.append({
-                            "hash": parts[0],
-                            "short_hash": parts[1],
-                            "author_name": parts[2],
-                            "author_email": parts[3],
-                            "date": parts[4],
-                            "message": parts[5],
-                        })
+                        commits.append(
+                            {
+                                "hash": parts[0],
+                                "short_hash": parts[1],
+                                "author_name": parts[2],
+                                "author_email": parts[3],
+                                "date": parts[4],
+                                "message": parts[5],
+                            }
+                        )
 
-            return Response({
-                "commits": commits,
-            })
+            return Response(
+                {
+                    "commits": commits,
+                }
+            )
 
         except subprocess.TimeoutExpired:
             raise ValidationError("Git log command timed out")
