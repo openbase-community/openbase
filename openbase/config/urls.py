@@ -12,7 +12,7 @@ urlpatterns = [
     path("api/openbase/", include("openbase.tasks.urls")),
     path("api/openbase/", include("openbase.urls.urls")),
     path("api/openbase/", include("openbase.views.urls")),
-    path("api/code-chat/", include("openbase.code_chat.urls")),
+    path("api/coder/", include("openbase.coder.urls")),
 ]
 
 if settings.DEBUG or True:

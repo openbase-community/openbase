@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     "openbase.tasks",
     "openbase.urls",
     "openbase.views",
+    "openbase.coder",
 ]
 
 MIDDLEWARE = [
@@ -194,6 +195,7 @@ LOGGING = {
                 "tasks",
                 "urls",
                 "views",
+                "coder",
             ]
         },
     },

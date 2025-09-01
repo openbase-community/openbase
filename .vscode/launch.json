@@ -11,8 +11,7 @@
             "django": true,
             "justMyCode": false,
             "env": {
-                "DJANGO_PROJECT_DIR": "/Users/gabemontague/Dropbox/Mac/Documents/Documents/Projects/haven/code/haven/web/",
-                "DJANGO_PROJECT_APPS_DIR": "/Users/gabemontague/Dropbox/Mac/Documents/Documents/Projects/haven/code/haven/haven-api/haven_api/",
+                "OPENBASE_PROJECT_DIR": "/Users/gabemontague/Projects/haven/code/haven/",
                 "DEBUG": "1"
             }
         }
