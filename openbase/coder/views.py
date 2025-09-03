@@ -193,10 +193,28 @@ class GitDiffView(APIView):
                         if untracked_diff.returncode in [0, 1]:
                             combined_diff += untracked_diff.stdout
 
+            # Modify diff to include repo name in file paths
+            if repo_name != ".":
+                modified_diff = combined_diff.replace(
+                    "diff --git a/",
+                    f"diff --git a/{repo_name}/"
+                ).replace(
+                    "diff --git b/",
+                    f"diff --git b/{repo_name}/"
+                ).replace(
+                    "\n--- a/",
+                    f"\n--- a/{repo_name}/"
+                ).replace(
+                    "\n+++ b/",
+                    f"\n+++ b/{repo_name}/"
+                )
+            else:
+                modified_diff = combined_diff
+
             return {
                 "repository": repo_name,
                 "path": str(repo_path),
-                "diff": combined_diff,
+                "diff": modified_diff,
             }
 
         except Exception as e:
@@ -282,3 +300,53 @@ class GitRecentCommitsView(APIView):
             raise ValidationError("Git log command timed out")
         except Exception as e:
             raise ValidationError(f"Failed to get recent commits: {str(e)}")
+
+
+class AbortClaudeCommandsView(APIView):
+    """Kill all claude processes running on the machine"""
+
+    def post(self, request):
+        try:
+            # Find all claude processes using pgrep
+            find_result = subprocess.run(
+                ["pgrep", "-f", "claude"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            if find_result.returncode != 0 or not find_result.stdout.strip():
+                return Response(
+                    {
+                        "message": "No claude processes found to kill",
+                    }
+                )
+
+            # Get the process IDs
+            process_ids = find_result.stdout.strip().split('\n')
+            killed_count = 0
+
+            # Kill each process
+            for pid in process_ids:
+                if pid.strip():
+                    try:
+                        subprocess.run(
+                            ["kill", "-TERM", pid.strip()],
+                            timeout=5,
+                            check=True,
+                        )
+                        killed_count += 1
+                    except subprocess.CalledProcessError:
+                        # Process might have already exited, continue with others
+                        pass
+
+            return Response(
+                {
+                    "message": "Claude processes terminated successfully",
+                }
+            )
+
+        except subprocess.TimeoutExpired:
+            raise ValidationError("Command timed out while trying to kill claude processes")
+        except Exception as e:
+            raise ValidationError(f"Failed to kill claude processes: {str(e)}")

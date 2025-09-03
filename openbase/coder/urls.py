@@ -11,4 +11,5 @@ urlpatterns = [
     path('', include(router.urls)),
     path('git/diff/', views.GitDiffView.as_view(), name='git-diff'),
     path('git/recent-commits/', views.GitRecentCommitsView.as_view(), name='git-recent-commits'),
+    path('abort-claude-commands/', views.AbortClaudeCommandsView.as_view(), name='abort-claude-commands'),
 ]
