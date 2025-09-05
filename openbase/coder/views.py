@@ -1,9 +1,15 @@
+import asyncio
+import json
 import os
 import subprocess
 
+from asgiref.sync import sync_to_async
+from django.http import JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
-from rest_framework import status, viewsets
-from rest_framework.decorators import action
+from django.utils.decorators import method_decorator
+from django.views import View
+from django.views.decorators.csrf import csrf_exempt
+from rest_framework import viewsets
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -40,108 +46,178 @@ class MessageViewSet(viewsets.ModelViewSet):
             return MessageCreateSerializer
         return MessageSerializer
 
-    @action(detail=False, methods=["post"], url_path="send-to-claude")
-    def send_to_claude(self, request):
-        """Send a message to Claude Code CLI and get response"""
-        serializer = MessageCreateSerializer(data=request.data)
+
+@method_decorator(csrf_exempt, name="dispatch")
+class SendToClaudeView(View):
+    """Send a message to Claude Code CLI and get streaming response"""
+
+    async def post(self, request):
+        # Manual authentication check
+        auth_header = request.META.get("HTTP_AUTHORIZATION")
+        if not auth_header:
+            return JsonResponse({"error": "Authentication required"}, status=401)
+
+        try:
+            token_type, token = auth_header.split()
+            if token_type.lower() != "bearer" or token != settings.OPENBASE_API_TOKEN:
+                return JsonResponse({"error": "Invalid token"}, status=401)
+        except ValueError:
+            return JsonResponse({"error": "Invalid authorization header"}, status=401)
+
+        # Parse JSON manually
+        try:
+            data = json.loads(request.body)
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+        # Validate data using DRF serializer
+        serializer = MessageCreateSerializer(data=data)
         if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return JsonResponse({"errors": serializer.errors}, status=400)
 
         # Create the user message
-        message = serializer.save()
+        message = await sync_to_async(serializer.save)()
 
         session = message.session
         session_id = str(session.public_id)
 
         # Check if this is the first message for this session
-        previous_messages = list(
+        previous_messages = await sync_to_async(list)(
             Message.objects.filter(session=session).order_by("created_at")
         )
         is_first_message = (
             len(previous_messages) == 1
         )  # Only the message we just created
 
-        try:
-            # Prepare Claude Code CLI command
-            claude_path = os.path.expanduser("~/.claude/local/claude")
-            if is_first_message:
-                # New conversation
-                cmd = [
-                    claude_path,
-                    "-p",
-                    "--dangerously-skip-permissions",
-                    f"--session-id={session_id}",
-                    message.content,
-                ]
-            else:
-                # Resume existing conversation
-                cmd = [
-                    claude_path,
-                    "-p",
-                    "--dangerously-skip-permissions",
-                    f"--resume={session_id}",
-                    message.content,
-                ]
+        async def stream_claude_response():
+            try:
+                # Prepare Claude Code CLI command
+                claude_path = os.path.expanduser("~/.claude/local/claude")
+                if is_first_message:
+                    # New conversation
+                    cmd = [
+                        claude_path,
+                        "-p",
+                        "--dangerously-skip-permissions",
+                        "--mcp-config",
+                        os.path.expanduser("~/.openbase/mcp.json"),
+                        f"--session-id={session_id}",
+                        message.content,
+                    ]
+                else:
+                    # Resume existing conversation
+                    cmd = [
+                        claude_path,
+                        "-p",
+                        "--dangerously-skip-permissions",
+                        "--mcp-config",
+                        os.path.expanduser("~/.openbase/mcp.json"),
+                        f"--resume={session_id}",
+                        message.content,
+                    ]
 
-            # Execute Claude Code CLI
-            print(cmd)
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                cwd=settings.OPENBASE_PROJECT_PATH,
-                timeout=300,  # 5 minute timeout
-            )
+                # Send initial response with user message
+                message_serializer = MessageSerializer(message)
+                initial_data = {"type": "user_message", "data": message_serializer.data}
+                yield f"data: {json.dumps(initial_data)}\n\n"
 
-            # Create assistant response message
-            response_content = result.stdout if result.stdout else ""
-            if result.stderr:
-                response_content += f"\n[stderr]: {result.stderr}"
+                # Execute Claude Code CLI with streaming
+                print(cmd)
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=settings.OPENBASE_PROJECT_PATH,
+                )
 
-            assistant_message = Message.objects.create(
-                session=session,
-                content=response_content,
-                role="assistant",
-                claude_response={
-                    "return_code": result.returncode,
-                    "stdout": result.stdout,
-                    "stderr": result.stderr,
-                },
-            )
+                response_content = ""
+                stderr_content = ""
 
-            # Serialize the response
-            response_serializer = MessageSerializer(assistant_message)
+                # Stream stdout
+                async for line in process.stdout:
+                    line_text = line.decode("utf-8")
+                    response_content += line_text
 
-            return Response(
-                {
-                    "message": "Message sent to Claude Code successfully",
-                    "user_message": MessageSerializer(message).data,
-                    "assistant_response": response_serializer.data,
+                    # Send each line as SSE event
+                    chunk_data = {"type": "response_chunk", "data": line_text}
+                    yield f"data: {json.dumps(chunk_data)}\n\n"
+
+                # Wait for process completion and capture stderr
+                await process.wait()
+                if process.stderr:
+                    stderr_data = await process.stderr.read()
+                    stderr_content = stderr_data.decode("utf-8")
+                    if stderr_content:
+                        response_content += f"\n[stderr]: {stderr_content}"
+                        error_data = {
+                            "type": "error_chunk",
+                            "data": f"\n[stderr]: {stderr_content}",
+                        }
+                        yield f"data: {json.dumps(error_data)}\n\n"
+
+                # Create assistant response message
+                assistant_message = await sync_to_async(Message.objects.create)(
+                    session=session,
+                    content=response_content,
+                    role="assistant",
+                    claude_response={
+                        "return_code": process.returncode,
+                        "stdout": response_content.replace(
+                            f"\n[stderr]: {stderr_content}", ""
+                        )
+                        if stderr_content
+                        else response_content,
+                        "stderr": stderr_content,
+                    },
+                )
+
+                # Send final completion event
+                final_data = {
+                    "type": "completion",
+                    "data": {
+                        "message": "Message sent to Claude Code successfully",
+                        "assistant_response": MessageSerializer(assistant_message).data,
+                    },
                 }
-            )
+                yield f"data: {json.dumps(final_data)}\n\n"
 
-        except subprocess.TimeoutExpired:
-            # Update user message with timeout error
-            message.metadata = {
-                **message.metadata,
-                "error": "Claude Code CLI timed out after 5 minutes",
-            }
-            message.save()
+            except asyncio.TimeoutError:
+                # Update user message with timeout error
+                message.metadata = {
+                    **message.metadata,
+                    "error": "Claude Code CLI timed out",
+                }
+                await sync_to_async(message.save)()
 
-            return Response(
-                {"error": "Claude Code CLI timed out after 5 minutes"},
-                status=status.HTTP_408_REQUEST_TIMEOUT,
-            )
+                error_data = {
+                    "type": "error",
+                    "data": {"error": "Claude Code CLI timed out"},
+                }
+                yield f"data: {json.dumps(error_data)}\n\n"
 
-        except Exception as e:
-            # Update user message with error
-            message.metadata = {**message.metadata, "error": str(e)}
-            message.save()
+            except Exception as e:
+                # Update user message with error
+                message.metadata = {**message.metadata, "error": str(e)}
+                await sync_to_async(message.save)()
 
-            return Response(
-                {"error": f"Failed to communicate with Claude Code: {str(e)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+                error_data = {
+                    "type": "error",
+                    "data": {
+                        "error": f"Failed to communicate with Claude Code: {str(e)}"
+                    },
+                }
+                yield f"data: {json.dumps(error_data)}\n\n"
+
+        return StreamingHttpResponse(
+            stream_claude_response(),
+            content_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "Cache-Control",
+            },
+        )
 
 
 class GitDiffView(APIView):
@@ -195,18 +271,11 @@ class GitDiffView(APIView):
 
             # Modify diff to include repo name in file paths
             if repo_name != ".":
-                modified_diff = combined_diff.replace(
-                    "diff --git a/",
-                    f"diff --git a/{repo_name}/"
-                ).replace(
-                    "diff --git b/",
-                    f"diff --git b/{repo_name}/"
-                ).replace(
-                    "\n--- a/",
-                    f"\n--- a/{repo_name}/"
-                ).replace(
-                    "\n+++ b/",
-                    f"\n+++ b/{repo_name}/"
+                modified_diff = (
+                    combined_diff.replace("diff --git a/", f"diff --git a/{repo_name}/")
+                    .replace("diff --git b/", f"diff --git b/{repo_name}/")
+                    .replace("\n--- a/", f"\n--- a/{repo_name}/")
+                    .replace("\n+++ b/", f"\n+++ b/{repo_name}/")
                 )
             else:
                 modified_diff = combined_diff
@@ -323,7 +392,7 @@ class AbortClaudeCommandsView(APIView):
                 )
 
             # Get the process IDs
-            process_ids = find_result.stdout.strip().split('\n')
+            process_ids = find_result.stdout.strip().split("\n")
             killed_count = 0
 
             # Kill each process
@@ -347,6 +416,8 @@ class AbortClaudeCommandsView(APIView):
             )
 
         except subprocess.TimeoutExpired:
-            raise ValidationError("Command timed out while trying to kill claude processes")
+            raise ValidationError(
+                "Command timed out while trying to kill claude processes"
+            )
         except Exception as e:
             raise ValidationError(f"Failed to kill claude processes: {str(e)}")

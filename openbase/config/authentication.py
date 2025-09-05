@@ -2,6 +2,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
+from asgiref.sync import sync_to_async
 
 User = get_user_model()
 
@@ -41,7 +42,7 @@ class OpenbaseTokenAuthentication(BaseAuthentication):
 
         user = User.objects.first()
 
-        # Return a tuple of (user, auth) - using AnonymousUser since we don't need a real user
+        # Return a tuple of (user, auth) - using the first user since there's only one
         return (user, key)
 
     def authenticate_header(self, request):
