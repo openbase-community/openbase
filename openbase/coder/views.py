@@ -133,7 +133,10 @@ class SendToClaudeView(View):
                 response_content = ""
                 stderr_content = ""
 
-                # Stream stdout
+                # Stream stdout with keep-alive
+                import time
+                last_keepalive = time.time()
+                
                 async for line in process.stdout:
                     line_text = line.decode("utf-8")
                     response_content += line_text
@@ -141,6 +144,20 @@ class SendToClaudeView(View):
                     # Send each line as SSE event
                     chunk_data = {"type": "response_chunk", "data": line_text}
                     yield f"data: {json.dumps(chunk_data)}\n\n"
+                    
+                    # Update last activity time
+                    last_keepalive = time.time()
+                
+                # Monitor for keep-alive while waiting for process completion
+                while process.returncode is None:
+                    await asyncio.sleep(0.1)
+                    current_time = time.time()
+                    
+                    # Send keep-alive every 2 seconds if no activity
+                    if current_time - last_keepalive > 2:
+                        keepalive_data = {"type": "keepalive", "data": {"timestamp": current_time}}
+                        yield f"data: {json.dumps(keepalive_data)}\n\n"
+                        last_keepalive = current_time
 
                 # Wait for process completion and capture stderr
                 await process.wait()
