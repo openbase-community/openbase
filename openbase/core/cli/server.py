@@ -7,7 +7,7 @@ import time
 
 import click
 
-from .utils import setup_environment, open_browser
+from .utils import setup_environment
 
 
 def start_server_process(host, port):
@@ -16,7 +16,13 @@ def start_server_process(host, port):
 
     # Set environment variables for gunicorn
     env_for_gunicorn = os.environ.copy()
-    env_for_gunicorn["OPENBASE_ALLOWED_HOSTS"] = host
+    env_for_gunicorn["OPENBASE_ALLOWED_HOSTS"] = (
+        "hot-zebra-freely.ngrok-free.app"  # host
+    )
+    print("SETTING OPENBASE_API_TOKEN")
+    env_for_gunicorn["OPENBASE_API_TOKEN"] = (
+        "a77623c7eead5ec690e122275462bd813493b50483c627e60ac977bdbd4508a9"
+    )
 
     cmd = [
         sys.executable,
@@ -28,14 +34,18 @@ def start_server_process(host, port):
         "-k",
         "uvicorn.workers.UvicornWorker",
         "--bind",
-        f"{host}:{port}",
+        f"0.0.0.0:{port}",
     ]
 
     return subprocess.Popen(cmd, env=env_for_gunicorn)
 
 
 @click.command()
-@click.option("--host", default="localhost", help="Host to bind to")
+@click.option(
+    "--host",
+    default="hot-zebra-freely.ngrok-free.app",
+    help="Host to bind to",
+)
 @click.option("--port", default="8001", help="Port to bind to")
 @click.option("--no-open", is_flag=True, help="Don't open browser automatically")
 def server(host, port, no_open):
@@ -51,7 +61,8 @@ def server(host, port, no_open):
 
         # Open browser unless --no-open flag is specified
         if not no_open:
-            open_browser(host, port)
+            # open_browser(host, port)
+            pass
 
         # Wait for the process to complete
         process.wait()

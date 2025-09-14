@@ -34,6 +34,6 @@ Finally, to invoke the task, import it locally to avoid circular dependencies, a
 
 ```python
 # Assuming a sync context:
-from haven_api.family.tasks.process_document import process_document
+from my_api.my_app.tasks.process_document import process_document
 async_to_sync(process_document.kiq)(self.pk)
 ```

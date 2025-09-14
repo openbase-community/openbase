@@ -13,7 +13,7 @@ import click
 def setup_environment():
     """Set up environment variables and run migrations."""
     # Get the openbase entrypoint directory
-    entrypoint_dir = Path(__file__).parent.parent
+    entrypoint_dir = Path(__file__).parent.parent.parent
     manage_py = entrypoint_dir / "entrypoint" / "manage.py"
 
     if not manage_py.exists():
@@ -21,9 +21,11 @@ def setup_environment():
         sys.exit(1)
 
     # Set default environment variables for development
+    # TODO: Combine with server stuff
     env_defaults = {
         "OPENBASE_SECRET_KEY": secrets.token_hex(64),
         "OPENBASE_PROJECT_DIR": str(Path.cwd()),
+        "OPENBASE_API_TOKEN": "a77623c7eead5ec690e122275462bd813493b50483c627e60ac977bdbd4508a9",
     }
 
     # Only set defaults if not already set
@@ -44,6 +46,15 @@ def setup_environment():
         subprocess.run(migrate_cmd, check=True)
     except subprocess.CalledProcessError as e:
         click.echo(f"Error running migrations: {e}")
+        sys.exit(1)
+
+    # Run collectstatic
+    click.echo("Running collectstatic...")
+    collectstatic_cmd = [sys.executable, str(manage_py), "collectstatic", "--noinput"]
+    try:
+        subprocess.run(collectstatic_cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        click.echo(f"Error running collectstatic: {e}")
         sys.exit(1)
 
     # Restore original working directory

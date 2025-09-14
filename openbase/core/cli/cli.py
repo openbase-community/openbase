@@ -5,7 +5,6 @@ import click
 from .default import default
 from .init import init
 from .server import server
-from .ttyd import ttyd
 from .ungit import ungit
 from .watcher import watcher
 
@@ -23,7 +22,6 @@ def main(ctx):
 # Register all commands
 main.add_command(init)
 main.add_command(server)
-main.add_command(ttyd)
 main.add_command(ungit)
 main.add_command(watcher)
 main.add_command(default)

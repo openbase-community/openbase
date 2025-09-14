@@ -96,9 +96,9 @@ class Project(models.Model):
     def app_packages(self) -> list[AppPackage]:
         """
         Open the path/web/workspace_requirements.txt.  It will have contents like:
-        -e ../haven-api
-        -e ../sim-api
-        -e ../haven-sim
+        -e ../my-api
+        -e ../my-api-ml
+        -e ../other-pip-package
 
         For each line, cut out the -e ../ and create an AppPackage object.
         Return a list of AppPackage objects.
