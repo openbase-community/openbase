@@ -72,6 +72,7 @@ def init_boilersync_app_package(
     boilersync_init(
         "app-package",
         app_package_dir,
+        no_input=True,
         collected_variables={
             "apps": apps,
             "name_snake": project_name_snake,
@@ -92,6 +93,7 @@ def init_boilersync_django_app(
     boilersync_init(
         "django-app",
         app_dir,
+        no_input=True,
         collected_variables={"apps": apps},
     )
 
@@ -105,4 +107,12 @@ def init_boilersync_react_app(
     react_dir = app_package_dir / project_name_kebab / "react"
     react_dir.mkdir(parents=True, exist_ok=True)
 
-    boilersync_init("react-app", react_dir)
+    boilersync_init(
+        "react-app",
+        react_dir,
+        no_input=True,
+        collected_variables={
+            "name_kebab": project_name_kebab,
+            "name_snake": project_name_snake,
+        },
+    )

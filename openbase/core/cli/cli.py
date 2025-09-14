@@ -3,9 +3,8 @@
 import click
 
 from .default import default
-from .init import init
+from .init import init_cli
 from .server import server
-from .ungit import ungit
 from .watcher import watcher
 
 
@@ -20,9 +19,8 @@ def main(ctx):
 
 
 # Register all commands
-main.add_command(init)
+main.add_command(init_cli, name="init")
 main.add_command(server)
-main.add_command(ungit)
 main.add_command(watcher)
 main.add_command(default)
 

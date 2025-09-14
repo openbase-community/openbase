@@ -1,6 +1,7 @@
 """Init command for Openbase CLI."""
 
 import json
+import logging
 from pathlib import Path
 
 import click
@@ -18,6 +19,8 @@ from ..git_helpers import (
     get_github_user,
     init_git_repo,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def create_multi_json(current_dir, project_name_kebab, with_frontend):
@@ -40,7 +43,80 @@ def create_multi_json(current_dir, project_name_kebab, with_frontend):
     with open(multi_json_path, "w") as f:
         json.dump(multi_config, f, indent=2)
 
-    click.echo(f"Created multi.json at {multi_json_path}")
+    logger.info(f"Created multi.json at {multi_json_path}")
+
+
+def init(
+    project_dir,
+    *,
+    with_frontend: bool = True,
+    with_github: bool = False,
+    no_input: bool = False,
+):
+    """Initialize a new Openbase project in the specified directory.
+
+    Args:
+        project_dir: The directory where the project should be initialized
+        with_frontend: Whether to initialize a frontend (React) app
+        with_github: Whether to create a GitHub repository
+    """
+    # Set up the boilerplate directory
+    logger.info("Setting up boilerplate directory...")
+    boilerplate_dir = setup_boilerplate_dir()
+    logger.info(f"Using boilerplate directory: {boilerplate_dir}")
+
+    logger.info("Initializing Openbase project...")
+    project_name_kebab = project_dir.name
+    project_name_snake = project_name_kebab.replace("-", "_")
+    app_name = f"{project_name_snake}_app"
+
+    # Initialize app package
+    app_package_dir, apps = init_boilersync_app_package(
+        boilerplate_dir,
+        project_dir,
+        project_name_kebab,
+        project_name_snake,
+        app_name,
+    )
+
+    # Initialize Django app
+    logger.info("Initializing app repository with template...")
+    _ = init_boilersync_django_app(
+        app_package_dir,
+        project_name_snake,
+        app_name,
+        apps,
+    )
+
+    # Initialize React app
+    logger.info("Initializing React app...")
+    _ = init_boilersync_react_app(
+        app_package_dir,
+        project_name_kebab,
+        project_name_snake,
+    )
+
+    # Create multi.json file
+    create_multi_json(project_dir, project_name_kebab, with_frontend)
+
+    # Create the GitHub repo if it doesn't exist
+    if with_github:
+        logger.info(f"Creating GitHub repository {project_name_kebab} if not exists...")
+        create_github_repo(project_name_kebab)
+
+    # Run vscode_multi sync
+    logger.info("Syncing multi-repository workspace...")
+    sync(ensure_on_same_branch=False)
+
+    # Initialize root git repository
+    logger.info("Initializing git repository...")
+    init_git_repo(project_dir)
+
+    # Create an initial git commit after syncing
+    logger.info("Creating initial git commit...")
+    create_initial_commit(project_dir)
+
+    logger.info("Openbase project initialized successfully!")
 
 
 @click.command()
@@ -54,68 +130,10 @@ def create_multi_json(current_dir, project_name_kebab, with_frontend):
     default=False,
     help="Initialize a GitHub repository as well.",
 )
-def init(with_frontend, with_github):
+def init_cli(with_frontend, with_github):
     """Initialize a new Openbase project in the current directory.
 
     By default, this will also initialize a frontend (React) app. Use --no-frontend to skip frontend initialization.
     """
-    # Set up the boilerplate directory
-    click.echo("Setting up boilerplate directory...")
-    boilerplate_dir = setup_boilerplate_dir()
-    click.echo(f"Using boilerplate directory: {boilerplate_dir}")
-
-    # Run boilersync init with the app-package template
     current_dir = Path.cwd()
-
-    click.echo("Initializing Openbase project...")
-    project_name_kebab = current_dir.name
-    project_name_snake = project_name_kebab.replace("-", "_")
-    app_name = f"{project_name_snake}_app"
-
-    # Initialize app package
-    app_package_dir, apps = init_boilersync_app_package(
-        boilerplate_dir,
-        current_dir,
-        project_name_kebab,
-        project_name_snake,
-        app_name,
-    )
-
-    # Initialize Django app
-    click.echo("Initializing app repository with template...")
-    _ = init_boilersync_django_app(
-        app_package_dir,
-        project_name_snake,
-        app_name,
-        apps,
-    )
-
-    # Initialize React app
-    click.echo("Initializing React app...")
-    _ = init_boilersync_react_app(
-        app_package_dir,
-        project_name_kebab,
-        project_name_snake,
-    )
-
-    # Create multi.json file
-    create_multi_json(current_dir, project_name_kebab, with_frontend)
-
-    # Create the GitHub repo if it doesn't exist
-    if with_github:
-        click.echo(f"Creating GitHub repository {project_name_kebab} if not exists...")
-        create_github_repo(project_name_kebab)
-
-    # Run vscode_multi sync
-    click.echo("Syncing multi-repository workspace...")
-    sync(ensure_on_same_branch=False)
-
-    # Initialize root git repository
-    click.echo("Initializing git repository...")
-    init_git_repo(current_dir)
-
-    # Create an initial git commit after syncing
-    click.echo("Creating initial git commit...")
-    create_initial_commit(current_dir)
-
-    click.echo("Openbase project initialized successfully!")
+    init(current_dir, with_frontend, with_github)

@@ -29,6 +29,11 @@ openbase = "openbase.core.cli.cli:main"
 packages = ["openbase"]
 include = ["openbase/static/**/*", "openbase/entrypoint/manage.py"]
 
+[project.optional-dependencies]
+dev = [
+    "pytest==8.4.2",
+]
+
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
