@@ -141,6 +141,13 @@ class ProjectScaffolder:
         with settings_shared_json_path.open("w") as f:
             json.dump(settings_shared_json_contents, f, indent=2)
 
+    def create_gitignore(self):
+        gitignore_path = self.root_dir / ".gitignore"
+        with gitignore_path.open("w") as f:
+            f.write(gitignore_contents)
+
+        logger.info(f"Created .gitignore at {gitignore_path}")
+
     def init_with_boilersync_and_git(self):
         logger.info("Initializing Openbase project...")
 
@@ -174,8 +181,9 @@ class ProjectScaffolder:
             dot_env_symlink_target = self.root_dir / "web" / ".env"
             dot_env_symlink_target.symlink_to(dot_env_symlink_source)
 
-        # Create a settings.shared.json file
+        # Create various root files
         self.create_settings_shared_json()
+        self.create_gitignore()
 
         # Initialize root git repository
         logger.info("Initializing git repository...")
