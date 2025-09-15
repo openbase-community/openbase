@@ -1,5 +1,10 @@
 """Tests for the init CLI command."""
 
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
 from openbase.core.cli.init import init
 
 
@@ -8,6 +13,8 @@ def test_init_command_full_flow(artifacts_dir):
     # Set up the hackathon-infra directory
     project_dir = artifacts_dir / "hackathon-infra"
     project_dir.mkdir(exist_ok=True)
+
+    os.environ["DOT_ENV_SYMLINK_SOURCE"] = str(Path.home() / "Developer" / ".env")
 
     # Run the init function directly without github (to avoid needing auth)
     init(project_dir, with_frontend=True, with_github=False)

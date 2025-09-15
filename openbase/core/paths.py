@@ -3,11 +3,14 @@
 from pathlib import Path
 
 
-def get_openbase_dir() -> Path:
+def get_openbase_settings_dir() -> Path:
     """Get the Openbase home directory."""
-    return Path.home() / ".openbase"
+    path = Path.home() / ".openbase"
+    path.mkdir(exist_ok=True)
+    return path
 
 
 def get_boilerplate_dir() -> Path:
     """Get the boilerplate directory for templates."""
-    return get_openbase_dir() / "boilerplate"
+    path = get_openbase_settings_dir() / "boilerplate"
+    return path

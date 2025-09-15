@@ -13,7 +13,7 @@ For viewset actions with multiple words in the name, remember to use `url_path` 
 def evaluate_preferences(self, request):
 ```
 
-Do NOT use try/except UNLESS you are implementing genuine fallback behavior (printing/logging doesn't count!). No needlessly swallowing errors! Let them propogate!
+Do NOT use try/except UNLESS you are implementing genuine fallback behavior (printing/logging doesn't count!). No needlessly swallowing errors! Let them propogate! Don't take things the other direction unneccesary checking either. Let the code blow up if it needs to.
 
 Prefer `class MyNamedTuple(NamedTuple)` definitions over dictionaries for return types of internal functions.
 
@@ -69,7 +69,7 @@ Finally, to invoke the task, import it locally to avoid circular dependencies, a
 
 ```python
 # Assuming a sync context:
-from haven_api.family.tasks.process_document import process_document
+from my_api.my_app.tasks.process_document import process_document
 async_to_sync(process_document.kiq)(self.pk)
 ```
 

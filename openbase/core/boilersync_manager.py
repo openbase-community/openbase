@@ -1,118 +1,144 @@
 """Boilersync management functions for Openbase CLI."""
 
+from __future__ import annotations
+
+import logging
 import os
 import subprocess
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from boilersync.commands.init import init as boilersync_init
 
-from openbase.core.paths import get_boilerplate_dir, get_openbase_dir
+from openbase.core.paths import get_boilerplate_dir
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
-def setup_boilerplate_dir():
-    """Set up the boilerplate directory, cloning from repo if needed.
-
-    Returns:
-        Path: The boilerplate directory path
-
-    Raises:
-        subprocess.CalledProcessError: If git clone fails
-    """
-    openbase_dir = get_openbase_dir()
-    boilerplate_dir = get_boilerplate_dir()
-
-    # Create ~/.openbase if it doesn't exist
-    openbase_dir.mkdir(parents=True, exist_ok=True)
-
-    # If boilerplate directory doesn't exist, clone it
-    if not boilerplate_dir.exists():
-        subprocess.run(
+class BoilersyncManager:
+    def __init__(
+        self,
+        root_dir: Path,
+        *,
+        project_name_snake: str,
+        project_name_kebab: str,
+        django_app_name: str | None = None,
+    ):
+        # Names and variables
+        self.project_name_snake = project_name_snake
+        self.project_name_kebab = project_name_kebab
+        self.api_package_name = f"{project_name_snake}_api"
+        self.django_app_name = django_app_name or project_name_snake
+        assert all(
             [
-                "git",
-                "clone",
-                "https://github.com/openbase-community/openbase-boilerplate.git",
-                str(boilerplate_dir),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
+                self.project_name_snake is not None,
+                self.project_name_kebab is not None,
+                self.api_package_name is not None,
+                self.django_app_name is not None,
+            ]
         )
-    else:
-        # Pull latest changes from origin
-        result = subprocess.run(
-            ["git", "pull", "origin"],
-            cwd=str(boilerplate_dir),
-            capture_output=True,
-            text=True,
-            check=False,  # Don't raise exception on non-zero exit
+
+        # Paths
+        self.root_dir = root_dir
+        self.boilerplate_dir = None
+        self.api_package_dir = self.root_dir / f"{self.project_name_kebab}-api"
+        self.api_package_src_dir = (
+            self.api_package_dir / f"{self.project_name_snake}_api"
         )
-        if result.returncode != 0:
-            # Non-fatal, just continue with existing boilerplate
-            pass
+        self.api_django_app_dir = self.api_package_src_dir / self.django_app_name
+        self.api_package_dir.mkdir(parents=True, exist_ok=True)
+        self.react_dir = self.root_dir / f"{self.project_name_kebab}-react"
 
-    return boilerplate_dir
+    def clone_or_pull_boilerplate_dir(self):
+        """Set up the boilerplate directory, cloning from repo if needed.
 
+        Returns:
+            Path: The boilerplate directory path
 
-def init_boilersync_app_package(
-    boilerplate_dir: Path,
-    current_dir: Path,
-    project_name_kebab: str,
-    project_name_snake: str,
-    app_name: str,
-):
-    """Initialize boilersync app-package template."""
-    # Set the BOILERSYNC_TEMPLATE_DIR environment variable
-    os.environ["BOILERSYNC_TEMPLATE_DIR"] = str(boilerplate_dir)
+        Raises:
+            subprocess.CalledProcessError: If git clone fails
+        """
 
-    package_name_snake = project_name_snake
-    apps = f'"{package_name_snake}.{app_name}"'
-    app_package_dir = current_dir / project_name_kebab
-    app_package_dir.mkdir(parents=True, exist_ok=True)
+        # Set up the boilerplate directory
+        logger.info("Setting up boilerplate directory...")
 
-    boilersync_init(
-        "app-package",
-        app_package_dir,
-        no_input=True,
-        collected_variables={
-            "apps": apps,
-            "name_snake": project_name_snake,
-            "name_kebab": project_name_kebab,
-        },
-    )
+        self.boilerplate_dir = get_boilerplate_dir()
 
-    return app_package_dir, apps
+        # If boilerplate directory doesn't exist, clone it
+        if not self.boilerplate_dir.exists():
+            subprocess.run(  # noqa: S603
+                [
+                    "git",
+                    "clone",
+                    "https://github.com/openbase-community/openbase-boilerplate.git",
+                    str(self.boilerplate_dir),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        else:
+            # Pull latest changes from origin
+            result = subprocess.run(
+                ["git", "pull", "origin"],
+                cwd=str(self.boilerplate_dir),
+                capture_output=True,
+                text=True,
+                check=False,  # Don't raise exception on non-zero exit
+            )
+            if result.returncode != 0:
+                logger.warning(
+                    f"Failed to pull latest changes from origin: {result.stderr}"
+                )
 
+        logger.info(f"Using boilerplate directory: {self.boilerplate_dir}")
 
-def init_boilersync_django_app(
-    app_package_dir: Path, project_name_snake: str, app_name: str, apps: str
-):
-    """Initialize boilersync django-app template."""
-    app_dir = app_package_dir / project_name_snake / app_name
-    app_dir.mkdir(parents=True, exist_ok=True)
+    def init_boilersync_api_package(
+        self,
+    ):
+        """Initialize boilersync app-package template."""
+        os.environ["BOILERSYNC_TEMPLATE_DIR"] = str(self.boilerplate_dir)
 
-    boilersync_init(
-        "django-app",
-        app_dir,
-        no_input=True,
-        collected_variables={"apps": apps},
-    )
+        apps = f'"{self.api_package_name}.{self.django_app_name}"'
 
-    return app_dir
+        boilersync_init(
+            template_name="app-package",
+            target_dir=self.api_package_dir,
+            no_input=True,
+            collected_variables={
+                "apps": apps,
+                "name_snake": self.api_package_name,
+            },
+        )
 
+    def init_boilersync_django_app(self):
+        """Initialize boilersync django-app template."""
+        self.api_django_app_dir.mkdir(parents=True, exist_ok=True)
 
-def init_boilersync_react_app(
-    app_package_dir: Path, project_name_kebab: str, project_name_snake: str
-):
-    """Initialize boilersync react-app template."""
-    react_dir = app_package_dir / project_name_kebab / "react"
-    react_dir.mkdir(parents=True, exist_ok=True)
+        boilersync_init(
+            template_name="django-app",
+            target_dir=self.api_django_app_dir,
+            no_input=True,
+        )
 
-    boilersync_init(
-        "react-app",
-        react_dir,
-        no_input=True,
-        collected_variables={
-            "name_kebab": project_name_kebab,
-            "name_snake": project_name_snake,
-        },
-    )
+    def init_boilersync_react_app(self):
+        """Initialize boilersync react-app template."""
+        self.react_dir.mkdir(parents=True, exist_ok=True)
+
+        boilersync_init(
+            template_name="react-app",
+            target_dir=self.react_dir,
+            no_input=True,
+            collected_variables={
+                "name_snake": self.project_name_snake,
+            },
+        )
+
+    def update_and_init_all(self):
+        """Update and initialize all templates."""
+        self.clone_or_pull_boilerplate_dir()
+        self.init_boilersync_api_package()
+        self.init_boilersync_django_app()
+        self.init_boilersync_react_app()
