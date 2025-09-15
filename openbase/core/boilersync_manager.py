@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from boilersync.commands.init import init as boilersync_init
 
+from openbase.core.git_helpers import get_github_user
 from openbase.core.paths import get_boilerplate_dir
 
 if TYPE_CHECKING:
@@ -25,18 +26,21 @@ class BoilersyncManager:
         project_name_snake: str,
         project_name_kebab: str,
         django_app_name: str | None = None,
+        marketing_description: str = "Built with Openbase",
     ):
         # Names and variables
         self.project_name_snake = project_name_snake
         self.project_name_kebab = project_name_kebab
         self.api_package_name = f"{project_name_snake}_api"
         self.django_app_name = django_app_name or project_name_snake
+        self.marketing_description = marketing_description
         assert all(
             [
-                self.project_name_snake is not None,
-                self.project_name_kebab is not None,
-                self.api_package_name is not None,
-                self.django_app_name is not None,
+                self.project_name_snake,
+                self.project_name_kebab,
+                self.marketing_description,
+                self.api_package_name,
+                self.django_app_name,
             ]
         )
 
@@ -137,6 +141,8 @@ class BoilersyncManager:
             no_input=True,
             collected_variables={
                 "name_snake": self.project_name_snake,
+                "github_user": get_github_user(),
+                "marketing_description": self.marketing_description,
             },
         )
 

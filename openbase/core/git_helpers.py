@@ -1,7 +1,12 @@
 """Git helper functions for Openbase CLI."""
 
+from __future__ import annotations
+
 import subprocess
-from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def create_github_repo(project_name_kebab: str):
