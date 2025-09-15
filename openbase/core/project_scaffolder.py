@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 setup_script_contents = """
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -euo pipefail
 
@@ -47,6 +47,14 @@ popd
 # Call the React setup script
 pushd ${{ROOT_DIR}}/{project_name_kebab}-react
 npm install
+popd
+
+# Link the react-shared package
+pushd ${{ROOT_DIR}}/react-shared
+npm link
+popd
+pushd ${{ROOT_DIR}}/{project_name_kebab}-react
+npm link openbase-react-shared
 popd
 
 echo "Setup complete! You can now run your project with the VS Code run button."
@@ -171,6 +179,10 @@ class ProjectScaffolder:
             )
             create_github_repo(self.project_name_kebab)
 
+        # Create various root files
+        self.create_settings_shared_json()
+        self.create_gitignore()
+
         # Run multi sync
         logger.info("Syncing multi-repository workspace...")
         sync(root_dir=self.root_dir, ensure_on_same_branch=False)
@@ -180,10 +192,6 @@ class ProjectScaffolder:
         if dot_env_symlink_source:
             dot_env_symlink_target = self.root_dir / "web" / ".env"
             dot_env_symlink_target.symlink_to(dot_env_symlink_source)
-
-        # Create various root files
-        self.create_settings_shared_json()
-        self.create_gitignore()
 
         # Initialize root git repository
         logger.info("Initializing git repository...")
