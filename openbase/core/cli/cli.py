@@ -3,6 +3,7 @@
 import click
 
 from .default import default
+from .generate_schema import generate_schema_cli
 from .init import init_cli
 from .server import server
 from .watcher import watcher
@@ -20,6 +21,7 @@ def main(ctx):
 
 # Register all commands
 main.add_command(init_cli, name="init")
+main.add_command(generate_schema_cli, name="generate-schema")
 main.add_command(server)
 main.add_command(watcher)
 main.add_command(default)
