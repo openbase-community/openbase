@@ -48,7 +48,24 @@ popd
 pushd ${{ROOT_DIR}}/{project_name_kebab}-react
 npm install
 popd
+
+echo "Setup complete! You can now run your project with the VS Code run button."
 """.strip()
+
+gitignore_contents = """
+.env
+data/
+.claude/settings.local.json
+.DS_Store
+
+# Generated files
+.vscode/launch.json
+.vscode/settings.json
+.vscode/tasks.json
+.vscode/extensions.json
+ruff.toml
+CLAUDE.md
+"""
 
 
 class ProjectScaffolder:
@@ -113,6 +130,17 @@ class ProjectScaffolder:
         # chmod +x
         setup_script_path.chmod(0o755)
 
+    def create_settings_shared_json(self):
+        settings_shared_json_path = self.root_dir / ".vscode" / "settings.shared.json"
+        settings_shared_json_path.parent.mkdir(exist_ok=True)
+
+        settings_shared_json_contents = {
+            "reloadFlags": f"--reload-dir ${{workspaceFolder}}/{self.project_name_kebab}-api"
+        }
+
+        with settings_shared_json_path.open("w") as f:
+            json.dump(settings_shared_json_contents, f, indent=2)
+
     def init_with_boilersync_and_git(self):
         logger.info("Initializing Openbase project...")
 
@@ -145,6 +173,9 @@ class ProjectScaffolder:
         if dot_env_symlink_source:
             dot_env_symlink_target = self.root_dir / "web" / ".env"
             dot_env_symlink_target.symlink_to(dot_env_symlink_source)
+
+        # Create a settings.shared.json file
+        self.create_settings_shared_json()
 
         # Initialize root git repository
         logger.info("Initializing git repository...")

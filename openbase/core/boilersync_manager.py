@@ -120,6 +120,10 @@ class BoilersyncManager:
         boilersync_init(
             template_name="django-app",
             target_dir=self.api_django_app_dir,
+            collected_variables={
+                "name_snake": self.django_app_name,
+                "parent_package_name": self.api_package_name,
+            },
             no_input=True,
         )
 
