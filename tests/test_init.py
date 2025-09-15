@@ -11,7 +11,7 @@ from openbase.core.cli.init import init
 def test_init_command_full_flow(artifacts_dir):
     """Test the init command with full flow - no mocking."""
     # Set up the hackathon-infra directory
-    project_dir = artifacts_dir / "hackathon-infra"
+    project_dir = artifacts_dir / "dreamlink"
     project_dir.mkdir(exist_ok=True)
 
     os.environ["DOT_ENV_SYMLINK_SOURCE"] = str(Path.home() / "Developer" / ".env")
