@@ -44,8 +44,11 @@ pushd ${{ROOT_DIR}}/web
 ./scripts/setup
 popd
 
-# Call the React setup script
+# Call the React install scripts
 pushd ${{ROOT_DIR}}/{project_name_kebab}-react
+npm install
+popd
+pushd ${{ROOT_DIR}}/react-shared
 npm install
 popd
 

@@ -8,6 +8,7 @@ import subprocess
 from typing import TYPE_CHECKING
 
 from boilersync.commands.init import init as boilersync_init
+from boilersync.names import snake_to_pretty
 
 from openbase.core.git_helpers import get_github_user
 from openbase.core.paths import get_boilerplate_dir
@@ -141,6 +142,7 @@ class BoilersyncManager:
             no_input=True,
             collected_variables={
                 "name_snake": self.project_name_snake,
+                "name_pretty": snake_to_pretty(self.project_name_snake),
                 "github_user": get_github_user(),
                 "marketing_description": self.marketing_description,
             },
