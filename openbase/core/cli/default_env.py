@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 
 
@@ -21,7 +23,7 @@ def make_default_env(package_name_snake: str, package_name_url_prefix: str) -> s
         "STRIPE_WEBHOOK_SECRET": "whsec_mywebhooksecret",
         "URL_PREFIXES": f"'{json.dumps(url_prefixes)}'",
         "OPENBASE_SECRET_KEY": "'insecure-secret-key'",
-        "OPENBASE_ALLOWED_HOSTS": "hot-zebra-freely.ngrok-free.app",
+        "OPENBASE_ALLOWED_HOSTS": "hot-zebra-freely.ngrok-free.app,localhost",
         "OPENBASE_DEBUG": "1",
     }
 

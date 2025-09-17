@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -8,8 +9,8 @@ import pytest
 @pytest.fixture
 def artifacts_dir() -> Path:
     path = Path(__file__).parent / "artifacts"
-    # if path.exists():
-    #     shutil.rmtree(path)
+    if path.exists():
+        shutil.rmtree(path)
     path.mkdir(exist_ok=True)
     return path
 

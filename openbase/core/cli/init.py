@@ -6,7 +6,10 @@ import logging
 from pathlib import Path
 
 import click
+from boilersync.names import snake_to_kebab
 
+from openbase.core.paths import ProjectPaths, get_config_file_path
+from openbase.core.project_config import ProjectConfig
 from openbase.core.project_scaffolder import ProjectScaffolder
 
 logger = logging.getLogger(__name__)
@@ -26,13 +29,27 @@ def init(
         with_github: Whether to create a GitHub repository
     """
 
-    project_name_kebab = root_dir.name
-    project_name_snake = project_name_kebab.replace("-", "_")
+    config_file_path = get_config_file_path(root_dir)
+    if config_file_path.exists():
+        config = ProjectConfig.from_file(config_file_path)
+    else:
+        project_name_kebab = root_dir.name
+        project_name_snake = snake_to_kebab(project_name_kebab)
+        api_package_name = f"{project_name_snake}_api"
 
+        config = ProjectConfig(
+            project_name_snake=project_name_snake,
+            project_name_kebab=project_name_kebab,
+            api_package_name=api_package_name,
+            django_app_name=project_name_snake,
+            marketing_description="Built with Openbase",
+        )
+        config.to_file(config_file_path)
+
+    paths = ProjectPaths(root_dir, config)
     project_scaffolder = ProjectScaffolder(
-        root_dir,
-        project_name_snake=project_name_snake,
-        project_name_kebab=project_name_kebab,
+        paths=paths,
+        config=config,
         with_frontend=with_frontend,
         with_github=with_github,
     )

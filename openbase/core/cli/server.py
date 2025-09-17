@@ -1,5 +1,7 @@
 """Server command for Openbase CLI."""
 
+from __future__ import annotations
+
 import os
 import subprocess
 import sys
@@ -17,7 +19,7 @@ def start_server_process(host, port):
     # Set environment variables for gunicorn
     env_for_gunicorn = os.environ.copy()
     env_for_gunicorn["OPENBASE_ALLOWED_HOSTS"] = (
-        "hot-zebra-freely.ngrok-free.app"  # host
+        "hot-zebra-freely.ngrok-free.app,localhost"  # host
     )
     print("SETTING OPENBASE_API_TOKEN")
     env_for_gunicorn["OPENBASE_API_TOKEN"] = (

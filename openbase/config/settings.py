@@ -2,6 +2,8 @@
 Django settings for Openbase meta-server.
 """
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
 
@@ -135,7 +137,7 @@ REST_FRAMEWORK = {
         "rest_framework.authentication.SessionAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
-        "rest_framework.permissions.IsAuthenticated",
+        "rest_framework.permissions.AllowAny",
     ],
     "DEFAULT_RENDERER_CLASSES": [
         "rest_framework.renderers.JSONRenderer",
