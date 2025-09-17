@@ -17,11 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 async def generate_schema_async(paths: ProjectPaths, config: ProjectConfig):
-    """Generate Django schema (models.py and urls.py) based on DESCRIPTION.md.
-
-    Args:
-        root_dir: The root directory of the Django app
-    """
+    """Generate Django schema (models.py and urls.py) based on DESCRIPTION.md."""
     description_file_path = paths.description_file_path
 
     # Check if DESCRIPTION.md exists

@@ -17,6 +17,7 @@ class ProjectConfig:
     api_package_name: str
     django_app_name: str
     marketing_description: str
+    api_prefix: str
 
     @property
     def api_package_name_snake(self) -> str:

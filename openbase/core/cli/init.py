@@ -36,6 +36,7 @@ def init(
         project_name_kebab = root_dir.name
         project_name_snake = snake_to_kebab(project_name_kebab)
         api_package_name = f"{project_name_snake}_api"
+        api_prefix = "api/" + project_name_snake
 
         config = ProjectConfig(
             project_name_snake=project_name_snake,
@@ -43,6 +44,7 @@ def init(
             api_package_name=api_package_name,
             django_app_name=project_name_snake,
             marketing_description="Built with Openbase",
+            api_prefix=api_prefix,
         )
         config.to_file(config_file_path)
 

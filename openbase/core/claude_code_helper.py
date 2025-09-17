@@ -45,6 +45,7 @@ class ClaudeCodeHelper:
         self,
         prompt: str,
         session_id: str | None = None,
+        *,
         resume_session: bool = False,
     ) -> AsyncGenerator[dict]:
         """Execute a Claude Code command and yield response chunks.
@@ -153,7 +154,7 @@ class ClaudeCodeHelper:
         return_code = 0
 
         async for chunk in self.execute_claude_command(
-            prompt, session_id, resume_session
+            prompt, session_id, resume_session=resume_session
         ):
             if chunk["type"] == "response_chunk":
                 stdout += chunk["data"]
