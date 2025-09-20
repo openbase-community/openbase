@@ -39,6 +39,7 @@ async def generate_schema_async(paths: ProjectPaths, config: ProjectConfig):
         - Do NOT include any other methods on the models besides __str__.  The only exception to this is if invariants need to be maintained on a model's fields, in which case you can add clean and save methods that are limited to performing the necessary validation and/or providing of default values.
         - Do NOT implement any views or serializers - just implement bare-bones models.py and urls.py files.  We will do the rest later after I check the schema.
         - Do NOT modify any other files.
+        - Keep in mind when implementing __str__ that a user has an email but no username (but better yet, you can just use {{user}} in your formatting to defer to the user object's __str__ method)
 
         Please generate {relative_path_to_models_py} and {relative_path_to_urls_py} now.
         """,

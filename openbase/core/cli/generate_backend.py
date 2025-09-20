@@ -36,11 +36,16 @@ async def generate_backend_async(paths: ProjectPaths, config: ProjectConfig):
         """
         I am creating the following app:
         {description}
-        
 
         Please complete the backend/API for this app, written in Django and Django REST Framework.  I've already defined a schema for the database in {relative_path_to_basic_models_py} and some endpoints in {relative_path_to_urls_py}.
         
-        Please generate the rest of the API code for the app, including serializers.py and views.py.  If necessary, you can also define TaskIQ tasks in the `tasks` module.  I haven't implemented any properties in models.py, or other methods on the models besides __str__, so feel free to do that too, especially if it means keeping code out of views.py.  Please complete the implementation of the API.
+        Please generate the rest of the API code for the app, including serializers.py and views.py.  If necessary, you can also define TaskIQ tasks in the `tasks` module.  I haven't implemented any properties in models.py, or other methods on the models besides __str__, so feel free to do that too, especially if it means keeping code out of views.py.
+
+        Keep in mind:
+        - The custom user model has an email but no username
+        - Feel free to trigger TaskIQ tasks from the save method of models to trigger tasks when an instance is first created. Alternatively, you can do this from the views.py file.
+        
+        Please complete the implementation of the API.
         """,
         description=description,
         relative_path_to_basic_models_py=relative_path_to_basic_models_py,

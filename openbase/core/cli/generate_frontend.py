@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 async def generate_frontend_async(paths: ProjectPaths, config: ProjectConfig):
     """Generate frontend code for the project."""
     description = paths.description_file_path.read_text()
-    relative_path_to_frontend_dir = paths.frontend_dir.relative_to(paths.root_dir)
+    relative_path_to_frontend_dir = paths.react_dir.relative_to(paths.root_dir)
 
     models_py_content = paths.models_file_path.read_text()
     urls_py_content = paths.urls_file_path.read_text()
