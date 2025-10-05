@@ -16,7 +16,7 @@ dependencies = [
     "whitenoise==6.10.0",
     "channels==4.3.1",
     "channels-redis==4.3.0",
-    "boilersync==1.1.1",
+    "boilersync==1.2.1",
     "vscode-multi==2.0.0",
     "watchdog==6.0.0",
     # "asgiref==3.7.0",

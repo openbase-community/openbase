@@ -1,13 +1,20 @@
+from __future__ import annotations
+
 import datetime
 import decimal
 import uuid
 from pathlib import Path
-from typing import Iterable, Mapping, Type
+from typing import TYPE_CHECKING
 
 import rest_framework
 from rest_framework import serializers
 from rest_framework_dataclasses import fields
-from rest_framework_dataclasses.serializers import DataclassSerializer, SerializerField
+from rest_framework_dataclasses.serializers import DataclassSerializer
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
+
+    from rest_framework_dataclasses.serializers import SerializerField
 
 
 class BasicSourceFileSerializer(serializers.Serializer):
@@ -18,7 +25,7 @@ class BasicSourceFileSerializer(serializers.Serializer):
 
 
 class BaseDataclassSerializer(DataclassSerializer):
-    serializer_field_mapping: Mapping[type, Type[SerializerField]] = {
+    serializer_field_mapping: Mapping[type, type[SerializerField]] = {
         int: rest_framework.fields.IntegerField,
         float: rest_framework.fields.FloatField,
         bool: rest_framework.fields.BooleanField,

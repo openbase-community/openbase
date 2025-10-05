@@ -1,11 +1,13 @@
-from rest_framework.exceptions import NotFound
+from __future__ import annotations
 
-from openbase.openbase_app.cache import OpenbaseCache
+from rest_framework.exceptions import NotFound
 
 
 class ListQuerySet:
     def __init__(self, items):
-        assert isinstance(items, list), "items must be a list"
+        if not isinstance(items, list):
+            msg = "items must be a list"
+            raise TypeError(msg)
         self.items = items
 
     def __iter__(self):
@@ -18,10 +20,9 @@ class ListQuerySet:
                 for candidate in self.items
                 if getattr(candidate, lookup_key) == lookup_value
             )
-        except StopIteration:
-            raise NotFound(
-                f"No {self.model.__name__} found with {lookup_key} == {lookup_value}"
-            )
+        except StopIteration as e:
+            msg = f"No object found with {lookup_key} == {lookup_value}"
+            raise NotFound(msg) from e
 
 
 class MemoryManager:
@@ -34,19 +35,17 @@ class MemoryManager:
     def get(self, **kwargs):
         lookup_value = kwargs.pop(self.lookup_key)
         candidates = self.filter(**kwargs)
-        assert isinstance(candidates, ListQuerySet), (
-            "`filter` must return a ListQuerySet"
-        )
+        if not isinstance(candidates, ListQuerySet):
+            msg = "`filter` must return a ListQuerySet"
+            raise TypeError(msg)
         result = candidates.get(self.lookup_key, lookup_value)
-
-        # Update cache with the single result
-        OpenbaseCache.update([result])
 
         return result
 
     def filter(self, **kwargs):
         # This method should be overridden by subclasses
-        raise NotImplementedError("Subclasses must implement filter method")
+        msg = "Subclasses must implement filter method"
+        raise NotImplementedError(msg)
 
     def all(self):
         return ListQuerySet(self.filter())

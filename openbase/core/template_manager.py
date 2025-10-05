@@ -102,6 +102,7 @@ class TemplateManager:
             collected_variables={
                 "name_snake": self.config.django_app_name,
                 "parent_package_name": self.config.api_package_name,
+                "api_prefix": self.config.api_prefix,
             },
             no_input=True,
         )
