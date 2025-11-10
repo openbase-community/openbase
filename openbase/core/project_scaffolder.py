@@ -61,7 +61,7 @@ pushd ${{ROOT_DIR}}/{project_name_kebab}-react
 npm link openbase-react-shared
 popd
 
-echo "Setup complete! You can now run your project with the VS Code run button."
+echo "Setup complete! Please restart your IDE, then you can run your project with the VS Code run button."
 """.strip()
 
 gitignore_contents = """
