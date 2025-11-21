@@ -14,6 +14,16 @@
                 "OPENBASE_PROJECT_DIR": "/Users/gabemontague/Projects/haven/code/haven/",
                 "DEBUG": "1"
             }
+        },
+        {
+            "name": "Openbase: Init",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "openbase",
+            "args": "init",
+            "cwd": "/Users/gabemontague/Projects/openbase/code/mind-ai",
+            "python": "${workspaceFolder}/../web/venv/bin/python",
+            "justMyCode": false
         }
     ]
 }

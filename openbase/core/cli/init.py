@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 import click
-from boilersync.names import snake_to_kebab
+from boilersync.names import normalize_to_snake
 
 from openbase.core.paths import ProjectPaths, get_config_file_path
 from openbase.core.project_config import ProjectConfig
@@ -34,7 +34,7 @@ def init(
         config = ProjectConfig.from_file(config_file_path)
     else:
         project_name_kebab = root_dir.name
-        project_name_snake = snake_to_kebab(project_name_kebab)
+        project_name_snake = normalize_to_snake(project_name_kebab)
         api_package_name = f"{project_name_snake}_api"
         api_prefix = "api/" + project_name_snake
 
