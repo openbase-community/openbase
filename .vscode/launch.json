@@ -23,7 +23,8 @@
             "args": "init",
             "cwd": "/Users/gabemontague/Projects/openbase/code/mind-ai",
             "python": "${workspaceFolder}/../web/venv/bin/python",
-            "justMyCode": false
+            "justMyCode": false,
+            "preLaunchTask": "Clean Openbase Init Directory"
         }
     ]
 }

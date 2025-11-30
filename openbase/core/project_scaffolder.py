@@ -15,6 +15,7 @@ from openbase.core.git_helpers import (
     get_github_user,
     init_git_repo,
 )
+from openbase.core.pyright_settings import pyright_settings
 from openbase.core.template_manager import TemplateManager
 
 if TYPE_CHECKING:
@@ -161,6 +162,14 @@ class ProjectScaffolder:
 
         logger.info(f"Created .gitignore at {gitignore_path}")
 
+    def create_pyrightconfig_json(self):
+        pyrightconfig_json_path = self.paths.root_dir / "pyrightconfig.json"
+        pyrightconfig_settings = pyright_settings
+        with pyrightconfig_json_path.open("w") as f:
+            json.dump(pyrightconfig_settings, f, indent=4)
+
+        logger.info(f"Created .pyrightconfig.json at {pyrightconfig_json_path}")
+
     def init_with_boilersync_and_git(self):
         logger.info("Initializing Openbase project...")
 
@@ -182,6 +191,7 @@ class ProjectScaffolder:
         # Create various root files
         self.create_settings_shared_json()
         self.create_gitignore()
+        self.create_pyrightconfig_json()
 
         # Run multi sync
         logger.info("Syncing multi-repository workspace...")
@@ -195,12 +205,14 @@ class ProjectScaffolder:
         else:
             openbase_secret_key = secrets.token_hex(64)
             openbase_api_token = secrets.token_hex(64)
+            django_secret_key = secrets.token_hex(64)
 
             dot_env_contents = make_default_env(
                 package_name_snake=self.config.project_name_snake,
                 package_name_url_prefix=self.config.api_prefix,
                 openbase_secret_key=openbase_secret_key,
                 openbase_api_token=openbase_api_token,
+                django_secret_key=django_secret_key,
             )
             dot_env_target = self.paths.root_dir / "web" / ".env"
             dot_env_target.write_text(dot_env_contents)

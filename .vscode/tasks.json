@@ -1,0 +1,17 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Clean Openbase Init Directory",
+            "type": "shell",
+            "command": "rm -rf /Users/gabemontague/Projects/openbase/code/mind-ai && mkdir -p /Users/gabemontague/Projects/openbase/code/mind-ai",
+            "presentation": {
+                "reveal": "always",
+                "panel": "new",
+                "close": true
+            },
+            "problemMatcher": []
+        }
+    ]
+}
+

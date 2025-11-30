@@ -11,7 +11,7 @@ def make_default_env(**kwargs) -> str:
     env_vars = {
         "DATABASE_URL": "postgresql://postgres:postgres@localhost:5432/appdata",
         "DJANGO_DEBUG": "1",
-        "DJANGO_SECRET_KEY": f"'{kwargs['DJANGO_SECRET_KEY']}'",
+        "DJANGO_SECRET_KEY": f"'{kwargs['django_secret_key']}'",
         "LANGFUSE_HOST": '"https://us.cloud.langfuse.com"',
         "LANGFUSE_PUBLIC_KEY": "pk-lf-mykeyhere",
         "LANGFUSE_SECRET_KEY": "sk-lf-mykeyhere",
@@ -23,8 +23,8 @@ def make_default_env(**kwargs) -> str:
         "STRIPE_SECRET_KEY": "sk_test_mysecretkey",
         "STRIPE_WEBHOOK_SECRET": "whsec_mywebhooksecret",
         "URL_PREFIXES": f"'{json.dumps(url_prefixes)}'",
-        "OPENBASE_SECRET_KEY": f"'{kwargs['OPENBASE_SECRET_KEY']}'",
-        "OPENBASE_API_TOKEN": f"'{kwargs['OPENBASE_API_TOKEN']}'",
+        "OPENBASE_SECRET_KEY": f"'{kwargs['openbase_secret_key']}'",
+        "OPENBASE_API_TOKEN": f"'{kwargs['openbase_api_token']}'",
         "OPENBASE_ALLOWED_HOSTS": "localhost",
         "OPENBASE_DEBUG": "1",
     }
