@@ -12,6 +12,7 @@ def make_default_env(**kwargs) -> str:
         "DATABASE_URL": "postgresql://postgres:postgres@localhost:5432/appdata",
         "DJANGO_DEBUG": "1",
         "DJANGO_SECRET_KEY": f"'{kwargs['django_secret_key']}'",
+        "DJANGO_ADMIN_SUFFIX": "fill me in in production to hide the admin page",
         "LANGFUSE_HOST": '"https://us.cloud.langfuse.com"',
         "LANGFUSE_PUBLIC_KEY": "pk-lf-mykeyhere",
         "LANGFUSE_SECRET_KEY": "sk-lf-mykeyhere",

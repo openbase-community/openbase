@@ -203,9 +203,9 @@ class ProjectScaffolder:
             dot_env_symlink_target = self.paths.root_dir / "web" / ".env"
             dot_env_symlink_target.symlink_to(dot_env_symlink_source)
         else:
-            openbase_secret_key = secrets.token_hex(64)
-            openbase_api_token = secrets.token_hex(64)
-            django_secret_key = secrets.token_hex(64)
+            openbase_secret_key = secrets.token_hex(32)
+            openbase_api_token = secrets.token_hex(32)
+            django_secret_key = secrets.token_hex(32)
 
             dot_env_contents = make_default_env(
                 package_name_snake=self.config.project_name_snake,
