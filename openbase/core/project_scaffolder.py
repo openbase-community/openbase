@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 from typing import TYPE_CHECKING
 
 from vscode_multi.sync import sync
 
+from openbase.core.default_env import make_default_env
 from openbase.core.git_helpers import (
     create_github_repo,
     create_initial_commit,
@@ -190,6 +192,18 @@ class ProjectScaffolder:
         if dot_env_symlink_source:
             dot_env_symlink_target = self.paths.root_dir / "web" / ".env"
             dot_env_symlink_target.symlink_to(dot_env_symlink_source)
+        else:
+            openbase_secret_key = secrets.token_hex(64)
+            openbase_api_token = secrets.token_hex(64)
+
+            dot_env_contents = make_default_env(
+                package_name_snake=self.config.project_name_snake,
+                package_name_url_prefix=self.config.api_prefix,
+                openbase_secret_key=openbase_secret_key,
+                openbase_api_token=openbase_api_token,
+            )
+            dot_env_target = self.paths.root_dir / "web" / ".env"
+            dot_env_target.write_text(dot_env_contents)
 
         # Initialize root git repository
         logger.info("Initializing git repository...")

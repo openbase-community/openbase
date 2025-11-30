@@ -16,8 +16,8 @@ dependencies = [
     "whitenoise==6.10.0",
     "channels==4.3.1",
     "channels-redis==4.3.0",
-    "boilersync",
-    "vscode-multi",
+    "boilersync @ git+https://github.com/montaguegabe/boilersync-cli.git@main",
+    "vscode-multi @ git+https://github.com/montaguegabe/vscode-multi-cli.git@main",
     "watchdog==6.0.0",
     # "asgiref==3.7.0",
 ]
@@ -43,3 +43,6 @@ source = "vcs"
 
 [tool.hatch.build.hooks.vcs]
 version-file = "openbase/_version.py"
+
+[tool.hatch.metadata]
+allow-direct-references = true
