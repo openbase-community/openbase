@@ -1,5 +1,14 @@
-# Openbase Django Meta-Server
+# Openbase
+- `pipx install openbase`
+- Make a new directory and `cd` into it
+- Run `openbase init`
+- Run `./scripts/setup.sh`
+- Open in Cursor
+- Press the run button
+- Coming soon: easy deployment
 
+
+## Details
 A Django-based meta-server that analyzes Django projects and exposes information about Django apps, models, views, tasks, commands, and more through a REST API.
 
 ## Features
