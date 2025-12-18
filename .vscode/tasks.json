@@ -4,7 +4,7 @@
         {
             "label": "CLI: Clean Test Project Directory",
             "type": "shell",
-            "command": "rm -rf ${workspaceFolder}/../test-projects/test-project && mkdir -p ${workspaceFolder}/../test-projects/test-project",
+            "command": "rm -rf ${workspaceFolder}/../test-projects/${config:openbase.testProjectName} && mkdir -p ${workspaceFolder}/../test-projects/${config:openbase.testProjectName}",
             "presentation": {
                 "reveal": "always",
                 "panel": "new",

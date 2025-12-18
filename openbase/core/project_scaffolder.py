@@ -225,4 +225,12 @@ class ProjectScaffolder:
         logger.info("Creating initial git commit...")
         create_initial_commit(self.paths.root_dir)
 
-        logger.info("Openbase project initialized successfully!")
+        logger.info(
+            "Openbase project initialized successfully!  You should now:\n"
+            "1) Make sure Docker is running and clean\n"
+            "2) Run ./scripts/setup\n"
+            "3) Create a DESCRIPTION.md file\n"
+            "4) Run openbase generate-schema\n"
+            "5) Open in cursor (with `cursor .`)\n"
+            "6) Run the `openbase server` and see your code-as-GUI on port 8001"
+        )

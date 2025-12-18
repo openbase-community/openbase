@@ -13,7 +13,7 @@
             "preLaunchTask": "CLI: React Dev",
             "env": {
                 "DEBUG": "1",
-                "OPENBASE_PROJECT_DIR": "${workspaceFolder}/../test-projects/test-project"
+                "OPENBASE_PROJECT_DIR": "${workspaceFolder}/../test-projects/${config:openbase.testProjectName}"
             }
         },
         {
@@ -22,7 +22,7 @@
             "request": "launch",
             "module": "openbase",
             "args": "init",
-            "cwd": "${workspaceFolder}/../test-projects/test-project",
+            "cwd": "${workspaceFolder}/../test-projects/${config:openbase.testProjectName}",
             "python": "${workspaceFolder}/../web/venv/bin/python",
             "justMyCode": false,
             "preLaunchTask": "CLI: Clean Test Project Directory"
