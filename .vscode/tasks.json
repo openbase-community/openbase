@@ -2,9 +2,9 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Clean Openbase Init Directory",
+            "label": "CLI: Clean Test Project Directory",
             "type": "shell",
-            "command": "rm -rf /Users/gabemontague/Projects/openbase/code/mind-ai && mkdir -p /Users/gabemontague/Projects/openbase/code/mind-ai",
+            "command": "rm -rf ${workspaceFolder}/test-projects/test-project && mkdir -p ${workspaceFolder}/test-projects/test-project",
             "presentation": {
                 "reveal": "always",
                 "panel": "new",
@@ -13,7 +13,7 @@
             "problemMatcher": []
         },
         {
-            "label": "CLI React: Dev",
+            "label": "CLI: React Dev",
             "type": "npm",
             "script": "dev",
             "problemMatcher": {
@@ -30,7 +30,6 @@
                 }
             },
             "isBackground": true,
-            "required": true,
             "presentation": {
                 "focus": false,
                 "panel": "dedicated",

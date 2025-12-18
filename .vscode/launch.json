@@ -11,20 +11,19 @@
             "django": true,
             "justMyCode": false,
             "env": {
-                "OPENBASE_PROJECT_DIR": "/Users/gabemontague/Projects/haven/code/haven/",
                 "DEBUG": "1"
             }
         },
         {
-            "name": "Openbase: Init",
+            "name": "CLI: Init",
             "type": "debugpy",
             "request": "launch",
             "module": "openbase",
             "args": "init",
-            "cwd": "/Users/gabemontague/Projects/openbase/code/mind-ai",
+            "cwd": "${workspaceFolder}/test-projects/test-project",
             "python": "${workspaceFolder}/../web/venv/bin/python",
             "justMyCode": false,
-            "preLaunchTask": "Clean Openbase Init Directory"
+            "preLaunchTask": "CLI: Clean Test Project Directory"
         }
     ]
 }
