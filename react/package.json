@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build:dev": "vite build --mode development && cp -r dist/* ../openbase/openbase/static/",
-    "build": "vite build && cp -r dist/* ../openbase/openbase/static/",
+    "build": "vite build && cp -r dist/* ../openbase/static/",
     "lint": "eslint .",
     "preview": "vite preview"
   },

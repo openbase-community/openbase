@@ -19,6 +19,7 @@
             "options": {
                 "cwd": "${workspaceFolder}/react/"
             },
+            "dependsOn": "React UI: Dev",
             "problemMatcher": {
                 "pattern": {
                     "regexp": "^$",
@@ -48,6 +49,7 @@
             "label": "CLI: React Build",
             "type": "shell",
             "command": "cd ${workspaceFolder}/openbase/static && find . -mindepth 1 ! -name '.gitkeep' -exec rm -rf {} + 2>/dev/null || true && cd ${workspaceFolder}/react && npm run build",
+            "dependsOn": "React UI: Build",
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always",
