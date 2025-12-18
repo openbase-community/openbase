@@ -1,11 +1,13 @@
 # Openbase
 - `pipx install openbase`
 - `pipx install vscode-multi` (CLI dependency)
+- `pipx install boilersync` (CLI dependency)
 - Make a new directory and `cd` into it
 - Run `openbase init`
 - Run `./scripts/setup.sh`
 - Open in Cursor
 - Press the run button
+- Bootstrapping a new project
 - Coming soon: easy deployment
 
 
