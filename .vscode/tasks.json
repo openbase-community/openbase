@@ -4,7 +4,7 @@
         {
             "label": "CLI: Clean Test Project Directory",
             "type": "shell",
-            "command": "rm -rf ${workspaceFolder}/test-projects/test-project && mkdir -p ${workspaceFolder}/test-projects/test-project",
+            "command": "rm -rf ${workspaceFolder}/../test-projects/test-project && mkdir -p ${workspaceFolder}/../test-projects/test-project",
             "presentation": {
                 "reveal": "always",
                 "panel": "new",
@@ -16,6 +16,9 @@
             "label": "CLI: React Dev",
             "type": "npm",
             "script": "dev",
+            "options": {
+                "cwd": "${workspaceFolder}/react/"
+            },
             "problemMatcher": {
                 "pattern": {
                     "regexp": "^$",
@@ -39,6 +42,18 @@
             "group": {
                 "kind": "build",
                 "isDefault": true
+            }
+        },
+        {
+            "label": "CLI: React Build",
+            "type": "shell",
+            "command": "cd ${workspaceFolder}/openbase/static && find . -mindepth 1 ! -name '.gitkeep' -exec rm -rf {} + 2>/dev/null || true && cd ${workspaceFolder}/react && npm run build",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated",
+                "showReuseMessage": true,
+                "clear": false
             }
         }
         // {

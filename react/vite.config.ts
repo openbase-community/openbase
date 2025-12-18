@@ -15,8 +15,4 @@ export default defineConfig(({ mode }) => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
-  define: {
-    // Make VITE_IS_CLOUD available as a boolean in the frontend
-    __IS_CLOUD__: JSON.stringify(process.env.VITE_IS_CLOUD === "true"),
-  },
 }));

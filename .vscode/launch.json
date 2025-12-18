@@ -10,8 +10,10 @@
             "args": "openbase.config.asgi:application --host 0.0.0.0 --port 8001 --reload",
             "django": true,
             "justMyCode": false,
+            "preLaunchTask": "CLI: React Dev",
             "env": {
-                "DEBUG": "1"
+                "DEBUG": "1",
+                "OPENBASE_PROJECT_PATH": "${workspaceFolder}/../test-projects/test-project"
             }
         },
         {
@@ -20,7 +22,7 @@
             "request": "launch",
             "module": "openbase",
             "args": "init",
-            "cwd": "${workspaceFolder}/test-projects/test-project",
+            "cwd": "${workspaceFolder}/../test-projects/test-project",
             "python": "${workspaceFolder}/../web/venv/bin/python",
             "justMyCode": false,
             "preLaunchTask": "CLI: Clean Test Project Directory"

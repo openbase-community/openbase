@@ -1,13 +1,12 @@
-import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Toaster as Sonner } from "openbase-react-ui";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { ProjectRoutesWithChat } from "./components/ProjectRoutesWithChat";
 import { AgentChatProvider } from "./contexts/AgentChatContext";
 import { ProjectProvider } from "./contexts/ProjectContext";
-import { ProjectRoutesWithChat } from "./components/ProjectRoutesWithChat";
 import AdminPage from "./pages/AdminPage";
-import CloudHome from "./pages/CloudHome";
 import CommandsPage from "./pages/CommandsPage";
 import EndpointPage from "./pages/EndpointPage";
 import EndpointsPage from "./pages/EndpointsPage";
@@ -30,13 +29,7 @@ const App = () => (
         <Routes>
           <Route
             path="/"
-            element={
-              __IS_CLOUD__ ? (
-                <Navigate to="/projects/local/" replace />
-              ) : (
-                <CloudHome />
-              )
-            }
+            element={<Navigate to="/projects/local/" replace />}
           />
           <Route path="/open-project/:projectId/*" element={<OpenProject />} />
           <Route
@@ -56,13 +49,19 @@ const App = () => (
                       path=":appName/endpoints"
                       element={<EndpointsPage />}
                     />
-                    <Route path=":appName/endpoint" element={<EndpointPage />} />
+                    <Route
+                      path=":appName/endpoint"
+                      element={<EndpointPage />}
+                    />
                     <Route
                       path=":appName/serializers"
                       element={<SerializersPage />}
                     />
                     <Route path=":appName/tasks" element={<TasksPage />} />
-                    <Route path=":appName/commands" element={<CommandsPage />} />
+                    <Route
+                      path=":appName/commands"
+                      element={<CommandsPage />}
+                    />
                     <Route
                       path="admin/:appName/:modelName"
                       element={<AdminPage />}

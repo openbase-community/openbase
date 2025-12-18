@@ -4,13 +4,11 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "VITE_IS_CLOUD=false vite",
+    "dev": "vite",
     "build:dev": "vite build --mode development && cp -r dist/* ../openbase/openbase/static/",
-    "build": "VITE_IS_CLOUD=false vite build && cp -r dist/* ../openbase/openbase/static/",
-    "build:cloud": "VITE_IS_CLOUD=true vite build && cp -r dist/* ../openbase/openbase/static/",
+    "build": "vite build && cp -r dist/* ../openbase/openbase/static/",
     "lint": "eslint .",
-    "preview": "vite preview",
-    "deploy": "rm -rf ../frontend && cp -r dist ../frontend"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",
