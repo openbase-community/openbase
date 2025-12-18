@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import mimetypes
 import os
+import pathlib
 
 import requests
 from django.conf import settings
@@ -12,80 +15,85 @@ from django.views.decorators.csrf import csrf_exempt
 def proxy_or_fallback(request, path=""):
     """Proxy to localhost in DEBUG mode, otherwise serve static React app."""
     if settings.DEBUG:
-        try:
-            target_url = f"http://localhost:8091/{path}"
-
-            # Forward query parameters if any
-            if request.GET:
-                target_url += "?" + request.GET.urlencode()
-
-            # Prepare headers (excluding problematic ones)
-            headers = {}
-            for key, value in request.META.items():
-                if key.startswith("HTTP_"):
-                    # Convert HTTP_HEADER_NAME to Header-Name format
-                    header_name = key[5:].replace("_", "-").title()
-                    # Skip problematic headers
-                    if header_name.lower() not in ["host", "content-length"]:
-                        headers[header_name] = value
-
-            # Forward the request based on method
-            if request.method == "GET":
-                response = requests.get(target_url, headers=headers, timeout=30)
-            elif request.method == "POST":
-                response = requests.post(
-                    target_url, data=request.body, headers=headers, timeout=30
-                )
-            elif request.method == "PUT":
-                response = requests.put(
-                    target_url, data=request.body, headers=headers, timeout=30
-                )
-            elif request.method == "DELETE":
-                response = requests.delete(target_url, headers=headers, timeout=30)
-            elif request.method == "PATCH":
-                response = requests.patch(
-                    target_url, data=request.body, headers=headers, timeout=30
-                )
-            else:
-                # For other methods, fall back to generic request
-                response = requests.request(
-                    request.method,
-                    target_url,
-                    data=request.body,
-                    headers=headers,
-                    timeout=30,
-                )
-
-            # Create Django response with the proxied content
-            django_response = HttpResponse(
-                content=response.content,
-                status=response.status_code,
-                content_type=response.headers.get("content-type", "text/html"),
-            )
-
-            # Forward important response headers
-            for key, value in response.headers.items():
-                if key.lower() not in [
-                    "content-encoding",
-                    "content-length",
-                    "transfer-encoding",
-                ]:
-                    django_response[key] = value
-
-            return django_response
-
-        except requests.exceptions.RequestException:
-            # If proxy fails, fall back to 404
-            raise Http404("File not found")
+        return serve_development_react_app(request, path)
     else:
         # In production, serve the built React app
-        return serve_react_app(request, path)
+        return serve_production_react_app(request, path)
 
 
-def serve_react_app(request, path=""):
+def serve_development_react_app(request, path=""):
+    try:
+        target_url = f"http://localhost:8092/{path}"
+
+        # Forward query parameters if any
+        if request.GET:
+            target_url += "?" + request.GET.urlencode()
+
+        # Prepare headers (excluding problematic ones)
+        headers = {}
+        for key, value in request.META.items():
+            if key.startswith("HTTP_"):
+                # Convert HTTP_HEADER_NAME to Header-Name format
+                header_name = key[5:].replace("_", "-").title()
+                # Skip problematic headers
+                if header_name.lower() not in ["host", "content-length"]:
+                    headers[header_name] = value
+
+        # Forward the request based on method
+        if request.method == "GET":
+            response = requests.get(target_url, headers=headers, timeout=30)
+        elif request.method == "POST":
+            response = requests.post(
+                target_url, data=request.body, headers=headers, timeout=30
+            )
+        elif request.method == "PUT":
+            response = requests.put(
+                target_url, data=request.body, headers=headers, timeout=30
+            )
+        elif request.method == "DELETE":
+            response = requests.delete(target_url, headers=headers, timeout=30)
+        elif request.method == "PATCH":
+            response = requests.patch(
+                target_url, data=request.body, headers=headers, timeout=30
+            )
+        else:
+            # For other methods, fall back to generic request
+            response = requests.request(
+                request.method,
+                target_url,
+                data=request.body,
+                headers=headers,
+                timeout=30,
+            )
+
+        # Create Django response with the proxied content
+        django_response = HttpResponse(
+            content=response.content,
+            status=response.status_code,
+            content_type=response.headers.get("content-type", "text/html"),
+        )
+
+        # Forward important response headers
+        for key, value in response.headers.items():
+            if key.lower() not in [
+                "content-encoding",
+                "content-length",
+                "transfer-encoding",
+            ]:
+                django_response[key] = value
+
+        return django_response
+
+    except requests.exceptions.RequestException:
+        # If proxy fails, fall back to 404
+        msg = "File not found"
+        raise Http404(msg)
+
+
+def serve_production_react_app(request, path=""):
     """Serve the built React app from the static directory."""
     # Get the directory where this module is located
-    current_dir = os.path.dirname(os.path.abspath(__file__))
+    current_dir = pathlib.Path(pathlib.Path(__file__).resolve()).parent
     static_dir = os.path.join(current_dir, "..", "static")
     static_dir = os.path.normpath(static_dir)
 
@@ -97,7 +105,7 @@ def serve_react_app(request, path=""):
         file_path = safe_join(static_dir, path)
 
         # If the file doesn't exist, serve index.html (for SPA routing)
-        if not os.path.exists(file_path):
+        if not pathlib.Path(file_path).exists():
             file_path = os.path.join(static_dir, "index.html")
 
     try:
@@ -110,5 +118,6 @@ def serve_react_app(request, path=""):
             content_type = "text/html"
 
         return HttpResponse(content, content_type=content_type)
-    except (IOError, OSError):
-        raise Http404("File not found")
+    except OSError:
+        msg = "File not found"
+        raise Http404(msg)

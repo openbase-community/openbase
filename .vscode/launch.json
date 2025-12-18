@@ -13,7 +13,7 @@
             "preLaunchTask": "CLI: React Dev",
             "env": {
                 "DEBUG": "1",
-                "OPENBASE_PROJECT_PATH": "${workspaceFolder}/../test-projects/test-project"
+                "OPENBASE_PROJECT_DIR": "${workspaceFolder}/../test-projects/test-project"
             }
         },
         {
