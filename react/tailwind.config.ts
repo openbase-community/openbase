@@ -7,6 +7,7 @@ export default {
 		"./components/**/*.{ts,tsx}",
 		"./app/**/*.{ts,tsx}",
 		"./src/**/*.{ts,tsx}",
+		"./node_modules/openbase-react-ui/dist/**/*.js",
 	],
 	prefix: "",
 	theme: {
