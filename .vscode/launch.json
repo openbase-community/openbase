@@ -2,8 +2,8 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Metaserver: Uvicorn",
-            "consoleName": "Metaserver: Uvicorn",
+            "name": "CLI: Uvicorn",
+            "consoleName": "CLI: Uvicorn",
             "type": "debugpy",
             "request": "launch",
             "module": "uvicorn",

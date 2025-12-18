@@ -11,7 +11,48 @@
                 "close": true
             },
             "problemMatcher": []
+        },
+        {
+            "label": "CLI React: Dev",
+            "type": "npm",
+            "script": "dev",
+            "problemMatcher": {
+                "pattern": {
+                    "regexp": "^$",
+                    "file": 1,
+                    "location": 2,
+                    "message": 3
+                },
+                "background": {
+                    "activeOnStart": true,
+                    "beginsPattern": "^.*VITE.*$",
+                    "endsPattern": "^\\s*➜\\s+Local:\\s+http://.*$"
+                }
+            },
+            "isBackground": true,
+            "required": true,
+            "presentation": {
+                "focus": false,
+                "panel": "dedicated",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
         }
+        // {
+        //     "label": "React: Generate Types",
+        //     "type": "npm",
+        //     "script": "generate-types",
+        //     "problemMatcher": [],
+        //     "presentation": {
+        //         "focus": false,
+        //         "panel": "dedicated",
+        //         "showReuseMessage": true,
+        //         "clear": false
+        //     }
+        // }
     ]
 }
-
