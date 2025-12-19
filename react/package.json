@@ -54,6 +54,8 @@
     "input-otp": "^1.2.4",
     "lucide-react": "^0.462.0",
     "next-themes": "^0.3.0",
+    "openbase-react-shared": "github:openbase-community/react-shared#main",
+    "openbase-react-ui": "latest",
     "react": "^18.3.1",
     "react-day-picker": "^8.10.1",
     "react-dom": "^18.3.1",
@@ -66,9 +68,7 @@
     "tailwind-merge": "^2.5.2",
     "tailwindcss-animate": "^1.0.7",
     "vaul": "^0.9.3",
-    "zod": "^3.23.8",
-    "openbase-react-shared": "github:openbase-community/react-shared#main",
-    "openbase-react-ui": "github:openbase-community/openbase-react-ui#main"
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.0",
