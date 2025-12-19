@@ -25,18 +25,13 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Clone and build React app
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      - name: Build React app
         run: |
-          # Clone the React app repository using GitHub token for private repo access
-          git clone --depth 1 --branch main https://x-access-token:${GH_TOKEN}@github.com/big-help-ai/openbase-react.git ../openbase-react
-
           # Install dependencies and build
-          cd ../openbase-react
+          cd ./react
           npm install
           npm run build
-          cd ../openbase
+          cd ..
 
       - name: Install build tools
         run: pip install build twine hatch
