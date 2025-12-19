@@ -6,6 +6,8 @@
 - Run `./scripts/setup.sh`
 - Open in Cursor
 - Press the run button
+- Create ./.openbase/DESCRIPTION.md
+- Run `openbase generate` to bootstrap a new idea.
 - Coming soon: easy deployment
 
 
