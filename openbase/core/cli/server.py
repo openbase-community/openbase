@@ -18,13 +18,7 @@ def start_server_process(host, port):
 
     # Set environment variables for gunicorn
     env_for_gunicorn = os.environ.copy()
-    env_for_gunicorn["OPENBASE_ALLOWED_HOSTS"] = (
-        "hot-zebra-freely.ngrok-free.app,localhost"  # host
-    )
-    print("SETTING OPENBASE_API_TOKEN")
-    env_for_gunicorn["OPENBASE_API_TOKEN"] = (
-        "a77623c7eead5ec690e122275462bd813493b50483c627e60ac977bdbd4508a9"
-    )
+    env_for_gunicorn["OPENBASE_ALLOWED_HOSTS"] = host
 
     cmd = [
         sys.executable,
@@ -45,7 +39,7 @@ def start_server_process(host, port):
 @click.command()
 @click.option(
     "--host",
-    default="hot-zebra-freely.ngrok-free.app",
+    default="localhost",
     help="Host to bind to",
 )
 @click.option("--port", default="8001", help="Port to bind to")

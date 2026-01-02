@@ -1,5 +1,7 @@
 """Shared utilities for Openbase CLI commands."""
 
+from __future__ import annotations
+
 import os
 import secrets
 import subprocess
@@ -25,13 +27,15 @@ def setup_environment():
     env_defaults = {
         "OPENBASE_SECRET_KEY": secrets.token_hex(64),
         "OPENBASE_PROJECT_DIR": str(Path.cwd()),
-        "OPENBASE_API_TOKEN": "a77623c7eead5ec690e122275462bd813493b50483c627e60ac977bdbd4508a9",
+        "OPENBASE_API_TOKEN": secrets.token_hex(32),
     }
 
     # Only set defaults if not already set
     for key, value in env_defaults.items():
         if not os.environ.get(key):
             os.environ[key] = value
+
+    print("OPENBASE_API_TOKEN", os.environ["OPENBASE_API_TOKEN"])
 
     # Save current directory to restore later
     original_cwd = Path.cwd()

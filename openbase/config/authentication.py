@@ -1,8 +1,9 @@
+from __future__ import annotations
+
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
-from asgiref.sync import sync_to_async
 
 User = get_user_model()
 
@@ -14,7 +15,7 @@ class OpenbaseTokenAuthentication(BaseAuthentication):
     Clients should authenticate by passing the token key in the "Authorization"
     HTTP header, prepended with the string "Bearer ".  For example:
 
-        Authorization: Bearer 401f7ac837da42b97f613d789819ff93537bee6a
+        Authorization: Bearer 1234567890
     """
 
     keyword = "Bearer"
@@ -38,7 +39,8 @@ class OpenbaseTokenAuthentication(BaseAuthentication):
         expected_token = settings.OPENBASE_API_TOKEN
 
         if key != expected_token:
-            raise AuthenticationFailed("Invalid token")
+            msg = "Invalid token"
+            raise AuthenticationFailed(msg)
 
         user = User.objects.first()
 
