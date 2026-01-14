@@ -6,7 +6,7 @@ import os
 import secrets
 from typing import TYPE_CHECKING
 
-from vscode_multi.sync import sync
+from multi.sync import sync
 
 from openbase.core.default_env import make_default_env
 from openbase.core.git_helpers import (

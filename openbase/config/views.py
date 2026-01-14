@@ -23,7 +23,7 @@ def proxy_or_fallback(request, path=""):
 
 def serve_development_react_app(request, path=""):
     try:
-        target_url = f"http://localhost:8092/{path}"
+        target_url = f"http://localhost:8081/{path}"
 
         # Forward query parameters if any
         if request.GET:
