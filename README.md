@@ -1,8 +1,8 @@
 # Openbase
 
 - `pipx install openbase`
-- `pipx install vscode-multi` (CLI dependency)
-- Make a new directory and `cd` into it
+- `pipx install multi-workspace` (CLI dependency)
+- Make a new directory named after the project you want to create (e.g. `my-project`) and `cd` into it
 - Run `openbase init`
 - Run `./scripts/setup.sh`
 - Open in Cursor
