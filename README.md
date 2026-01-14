@@ -46,7 +46,7 @@ git+https://github.com/my-github/project3-api.git@main
 ./scripts/gha_deploy openbase
 ```
 -   `scripts/gha_deploy my-heroku-server-name` to deploy your project to Heroku.
-- Make sure your domain is in ALLOWED_HOSTS environment variable.
-- Run `heroku run bash -a my-heroku-server-name` and create a new Site object with your host name.
+- Make sure your domain is in `ALLOWED_HOSTS` environment variable.
+- Run `heroku run bash -a my-heroku-server-name` and via the `manage.py shell` command create a new `Site` object with your host name.
 - Log into Django Admin and finish filling out your site's details.
 - As of now, you will need to deploy the frontend React app to an S3 bucket yourself, and specify the bucket name via env variable and prefix name via Django admin. Automation of this is coming soon.
