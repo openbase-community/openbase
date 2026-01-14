@@ -37,9 +37,9 @@ While the above steps produce a Django/React empty project, you can take it a st
 ## Deployment
 - Create a Heroku account and install the Heroku CLI.
 - Run `scripts/new_deployment my-heroku-server-name existing-app-to-copy` to create a new Heroku app with mini Postgres and Redis attachments.  Env variables will be copied from `existing-app-to-copy`.
-- Run `scripts/gha_build my-heroku-server-name ghp_XYZ <app package list>` to build Docker images for deployment, where ghp_XYZ is a Github access token with clone access to the backend/API repos you want to deploy, and `<app package list>` is a list of the backend/API repoos.  Here is where you decide which projects you want to live on the server. For example:
-- ```
-  ./scripts/gha_build openbase ghp_XYZ \
+- Run `scripts/gha_build my-heroku-server-name ghp_XYZ <app package list>` to build Docker images for deployment, where ghp_XYZ is a Github access token with clone access to the backend/API repos you want to deploy, and `<app package list>` is a list of the backend/API repoos.  Here is where you decide which projects you want to live on the server. For example to deploy `project1-api`, `project2-api`, and `project3-api` on server `my-heroku-server-name`:
+```
+./scripts/gha_build my-heroku-server-name ghp_XYZ \
 "git+https://github.com/my-github/project1-api.git@main
 git+https://github.com/my-github/project2-api.git@main
 git+https://github.com/my-github/project3-api.git@main
