@@ -42,8 +42,7 @@ While the above steps produce a Django/React empty project, you can take it a st
 ./scripts/gha_build my-heroku-server-name ghp_XYZ \
 "git+https://github.com/my-github/project1-api.git@main
 git+https://github.com/my-github/project2-api.git@main
-git+https://github.com/my-github/project3-api.git@main
-./scripts/gha_deploy my-heroku-server-name
+git+https://github.com/my-github/project3-api.git@main"
 ```
 -   `scripts/gha_deploy my-heroku-server-name` to deploy your project to Heroku.
 - Make sure your domain is in `ALLOWED_HOSTS` environment variable.
