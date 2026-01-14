@@ -7,7 +7,8 @@ import { defineConfig } from "vite";
 export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
-    port: 8092,
+    port: 8081,
+    strictPort: true,
   },
   plugins: [react()].filter(Boolean),
   resolve: {
