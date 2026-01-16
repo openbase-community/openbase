@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -75,7 +77,7 @@ class AppPackage(SourceMappedDataclass):
 
 
 class ProjectManager(models.Manager):
-    def get_or_create_current(self) -> "Project":
+    def get_or_create_current(self) -> Project:
         return self.get_or_create(path_str=settings.OPENBASE_PROJECT_PATH)[0]
 
 
@@ -95,7 +97,7 @@ class Project(models.Model):
     @property
     def app_packages(self) -> list[AppPackage]:
         """
-        Open the path/web/workspace_requirements.txt.  It will have contents like:
+        Open the path/web/app_requirements.txt.  It will have contents like:
         -e ../my-api
         -e ../my-api-ml
         -e ../other-pip-package
@@ -103,10 +105,10 @@ class Project(models.Model):
         For each line, cut out the -e ../ and create an AppPackage object.
         Return a list of AppPackage objects.
         """
-        workspace_requirements_path = self.path / "web" / "workspace_requirements.txt"
+        app_requirements_path = self.path / "web" / "app_requirements.txt"
         app_packages = []
 
-        with open(workspace_requirements_path) as f:
+        with open(app_requirements_path) as f:
             for line in f:
                 line = line.strip()
                 common_prefix = "-e ../"

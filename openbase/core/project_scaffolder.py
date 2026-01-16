@@ -39,7 +39,7 @@ multi sync
 popd
 
 # Set up Python workspace dependencies
-cat > ${{ROOT_DIR}}/web/workspace_requirements.txt << EOF
+cat > ${{ROOT_DIR}}/web/app_requirements.txt << EOF
 -e ../{project_name_kebab}-api
 EOF
 
