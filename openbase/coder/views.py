@@ -6,11 +6,8 @@ import pathlib
 import subprocess
 
 from asgiref.sync import sync_to_async
-from django.http import JsonResponse, StreamingHttpResponse
+from django.http import StreamingHttpResponse
 from django.shortcuts import get_object_or_404
-from django.utils.decorators import method_decorator
-from django.views import View
-from django.views.decorators.csrf import csrf_exempt
 from rest_framework import viewsets
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
@@ -50,47 +47,19 @@ class MessageViewSet(viewsets.ModelViewSet):
         return MessageSerializer
 
 
-@method_decorator(csrf_exempt, name="dispatch")
-class SendToClaudeView(View):
-    """Send a message to Claude Code CLI and get streaming response"""
+class SendToClaudeView(APIView):
+    """Send a message to Claude Code CLI and get streaming response."""
 
     async def post(self, request):
-        # Authentication check - optional for same-origin requests in local CLI mode
-        # Check if we have a valid bearer token or session auth
-        auth_header = request.META.get("HTTP_AUTHORIZATION")
-        is_authenticated = False
+        # DRF handles authentication via DEFAULT_AUTHENTICATION_CLASSES
+        # and permissions via DEFAULT_PERMISSION_CLASSES in settings.py
 
-        if auth_header:
-            try:
-                token_type, token = auth_header.split()
-                if (
-                    token_type.lower() == "bearer"
-                    and token == settings.OPENBASE_API_TOKEN
-                ):
-                    is_authenticated = True
-            except ValueError:
-                pass
-
-        # Also accept session-based authentication
-        if hasattr(request, "user") and request.user.is_authenticated:
-            is_authenticated = True
-
-        # For local CLI, we allow unauthenticated requests from same-origin
-        # This is safe because the CLI only runs locally
-        # In production (CLOUD_RUN), require authentication
-        if settings.CLOUD_RUN and not is_authenticated:
-            return JsonResponse({"error": "Authentication required"}, status=401)
-
-        # Parse JSON manually
-        try:
-            data = json.loads(request.body)
-        except json.JSONDecodeError:
-            return JsonResponse({"error": "Invalid JSON"}, status=400)
+        data = request.data
 
         # Validate data using DRF serializer
         serializer = MessageCreateSerializer(data=data)
         if not serializer.is_valid():
-            return JsonResponse({"errors": serializer.errors}, status=400)
+            return Response({"errors": serializer.errors}, status=400)
 
         # Create the user message
         message = await sync_to_async(serializer.save)()

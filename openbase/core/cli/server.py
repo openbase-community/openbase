@@ -30,7 +30,7 @@ def start_server_process(host, port):
         "-k",
         "uvicorn.workers.UvicornWorker",
         "--bind",
-        f"0.0.0.0:{port}",
+        f"{host}:{port}",
     ]
 
     return subprocess.Popen(cmd, env=env_for_gunicorn)
