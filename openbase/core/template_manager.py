@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-from boilersync.commands.init import init as boilersync_init
+from boilersync.commands.pull import pull as boilersync_pull
 from boilersync.names import snake_to_pretty
+from boilersync.paths import paths as boilersync_paths
 
 from openbase.core.git_helpers import get_github_user
 from openbase.core.paths import get_boilerplate_dir
@@ -72,6 +74,44 @@ class TemplateManager:
 
         logger.info(f"Using boilerplate directory: {self.boilerplate_dir}")
 
+    def _find_parent_boilersync_file(self, start_dir: Path) -> Path | None:
+        """Find the nearest parent directory with a BoilerSync metadata file."""
+        current = start_dir.parent
+
+        while True:
+            candidate = current / ".boilersync"
+            if candidate.is_file():
+                return current
+
+            if current.parent == current:
+                return None
+
+            current = current.parent
+
+    def _init_boilersync_template(
+        self,
+        *,
+        template_name: str,
+        target_dir: Path,
+        collected_variables: dict[str, Any],
+    ) -> None:
+        """Initialize a BoilerSync template while ignoring invalid directory sentinels."""
+        target_dir.mkdir(parents=True, exist_ok=True)
+        parent_dir = self._find_parent_boilersync_file(target_dir)
+
+        boilersync_pull(
+            template_name=template_name,
+            allow_non_empty=False,
+            include_starter=True,
+            _recursive=False,
+            collected_variables=collected_variables,
+            target_dir=target_dir,
+            no_input=True,
+        )
+
+        if parent_dir is not None:
+            boilersync_paths.add_child_to_parent(target_dir, parent_dir / ".boilersync")
+
     def init_boilersync_api_package(
         self,
     ):
@@ -81,11 +121,9 @@ class TemplateManager:
         apps = f'"{self.config.api_package_name}.{self.config.django_app_name}"'
 
         api_package_dir = self.paths.api_package_dir
-        api_package_dir.mkdir(parents=True, exist_ok=True)
-        boilersync_init(
+        self._init_boilersync_template(
             template_name="app-package",
             target_dir=api_package_dir,
-            no_input=True,
             collected_variables={
                 "apps": apps,
                 "name_snake": self.config.api_package_name,
@@ -94,9 +132,7 @@ class TemplateManager:
 
     def init_boilersync_django_app(self):
         """Initialize boilersync django-app template."""
-        self.paths.api_django_app_dir.mkdir(parents=True, exist_ok=True)
-
-        boilersync_init(
+        self._init_boilersync_template(
             template_name="django-app",
             target_dir=self.paths.api_django_app_dir,
             collected_variables={
@@ -104,17 +140,13 @@ class TemplateManager:
                 "parent_package_name": self.config.api_package_name,
                 "api_prefix": self.config.api_prefix,
             },
-            no_input=True,
         )
 
     def init_boilersync_react_app(self):
         """Initialize boilersync react-app template."""
-        self.paths.react_dir.mkdir(parents=True, exist_ok=True)
-
-        boilersync_init(
+        self._init_boilersync_template(
             template_name="react-app",
             target_dir=self.paths.react_dir,
-            no_input=True,
             collected_variables={
                 "name_snake": self.config.project_name_snake,
                 "name_pretty": snake_to_pretty(self.config.project_name_snake),
