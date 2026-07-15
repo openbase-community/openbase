@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import threading
 from typing import Any
 
 from click.testing import CliRunner
@@ -8,15 +9,24 @@ from click.testing import CliRunner
 routines_cli = importlib.import_module("openbase_coder_cli.cli.routines")
 
 
-class FakeRoutinesClient:
-    instances: list["FakeRoutinesClient"] = []
+class FakeExecutionClient:
+    instances: list["FakeExecutionClient"] = []
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
-        FakeRoutinesClient.instances.append(self)
+        FakeExecutionClient.instances.append(self)
 
     async def close(self) -> None:
         self.calls.append(("close", {}))
+
+
+class FakeRoutineManager:
+    instances: list["FakeRoutineManager"] = []
+
+    def __init__(self, client: FakeExecutionClient) -> None:
+        self.client = client
+        self.calls: list[tuple[str, Any]] = []
+        FakeRoutineManager.instances.append(self)
 
     async def save_routine(self, input_data: dict[str, Any]) -> dict[str, Any]:
         self.calls.append(("save_routine", input_data))
@@ -35,9 +45,37 @@ class FakeRoutinesClient:
         return {"count": 1, "results": [{"name": name or "daily"}]}
 
 
-def test_create_routine_calls_super_agents_library(monkeypatch) -> None:
-    FakeRoutinesClient.instances = []
-    monkeypatch.setattr(routines_cli, "CodexAppServerClient", FakeRoutinesClient)
+def test_background_tick_does_not_start_duplicate_work() -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    def target() -> dict[str, Any]:
+        started.set()
+        assert release.wait(timeout=1)
+        return {"repos": []}
+
+    tick = routines_cli._BackgroundTick(target)
+
+    assert tick.start() is True
+    assert started.wait(timeout=1)
+    assert tick.start() is False
+    assert tick.poll() is None
+
+    release.set()
+    result = None
+    for _ in range(100):
+        result = tick.poll()
+        if result is not None:
+            break
+        threading.Event().wait(0.01)
+    assert result == ({"repos": []}, None)
+
+
+def test_create_routine_calls_openbase_manager(monkeypatch) -> None:
+    FakeExecutionClient.instances = []
+    FakeRoutineManager.instances = []
+    monkeypatch.setattr(routines_cli, "CodexAppServerClient", FakeExecutionClient)
+    monkeypatch.setattr(routines_cli, "RoutineManager", FakeRoutineManager)
 
     result = CliRunner().invoke(
         routines_cli.routines,
@@ -56,8 +94,8 @@ def test_create_routine_calls_super_agents_library(monkeypatch) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    client = FakeRoutinesClient.instances[0]
-    assert client.calls[0] == (
+    manager = FakeRoutineManager.instances[0]
+    assert manager.calls[0] == (
         "save_routine",
         {
             "name": "daily",
@@ -73,12 +111,13 @@ def test_create_routine_calls_super_agents_library(monkeypatch) -> None:
             "mode": "default",
         },
     )
-    assert client.calls[-1] == ("close", {})
+    assert FakeExecutionClient.instances[0].calls[-1] == ("close", {})
 
 
 def test_create_routine_can_request_fresh_thread_per_run(monkeypatch) -> None:
-    FakeRoutinesClient.instances = []
-    monkeypatch.setattr(routines_cli, "CodexAppServerClient", FakeRoutinesClient)
+    FakeRoutineManager.instances = []
+    monkeypatch.setattr(routines_cli, "CodexAppServerClient", FakeExecutionClient)
+    monkeypatch.setattr(routines_cli, "RoutineManager", FakeRoutineManager)
 
     result = CliRunner().invoke(
         routines_cli.routines,
@@ -94,12 +133,13 @@ def test_create_routine_can_request_fresh_thread_per_run(monkeypatch) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    assert FakeRoutinesClient.instances[0].calls[0][1]["freshThreadPerRun"] is True
+    assert FakeRoutineManager.instances[0].calls[0][1]["freshThreadPerRun"] is True
 
 
-def test_create_interval_routine_calls_super_agents_library(monkeypatch) -> None:
-    FakeRoutinesClient.instances = []
-    monkeypatch.setattr(routines_cli, "CodexAppServerClient", FakeRoutinesClient)
+def test_create_interval_routine_calls_openbase_manager(monkeypatch) -> None:
+    FakeRoutineManager.instances = []
+    monkeypatch.setattr(routines_cli, "CodexAppServerClient", FakeExecutionClient)
+    monkeypatch.setattr(routines_cli, "RoutineManager", FakeRoutineManager)
 
     result = CliRunner().invoke(
         routines_cli.routines,
@@ -116,8 +156,8 @@ def test_create_interval_routine_calls_super_agents_library(monkeypatch) -> None
     )
 
     assert result.exit_code == 0, result.output
-    client = FakeRoutinesClient.instances[0]
-    assert client.calls[0] == (
+    manager = FakeRoutineManager.instances[0]
+    assert manager.calls[0] == (
         "save_routine",
         {
             "name": "poll-prioritized",
@@ -135,9 +175,10 @@ def test_create_interval_routine_calls_super_agents_library(monkeypatch) -> None
     )
 
 
-def test_create_command_routine_calls_super_agents_library(monkeypatch) -> None:
-    FakeRoutinesClient.instances = []
-    monkeypatch.setattr(routines_cli, "CodexAppServerClient", FakeRoutinesClient)
+def test_create_command_routine_calls_openbase_manager(monkeypatch) -> None:
+    FakeRoutineManager.instances = []
+    monkeypatch.setattr(routines_cli, "CodexAppServerClient", FakeExecutionClient)
+    monkeypatch.setattr(routines_cli, "RoutineManager", FakeRoutineManager)
 
     result = CliRunner().invoke(
         routines_cli.routines,
@@ -147,7 +188,7 @@ def test_create_command_routine_calls_super_agents_library(monkeypatch) -> None:
             "--kind",
             "command",
             "--command",
-            "super-agents-open-pr-review-discover --workspace .",
+            "openbase-coder-open-pr-review-discover --workspace .",
             "--command-timeout-seconds",
             "120",
             "--interval-seconds",
@@ -156,13 +197,13 @@ def test_create_command_routine_calls_super_agents_library(monkeypatch) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    assert FakeRoutinesClient.instances[0].calls[0] == (
+    assert FakeRoutineManager.instances[0].calls[0] == (
         "save_routine",
         {
             "name": "discover-prs",
             "prompt": "",
             "kind": "command",
-            "command": "super-agents-open-pr-review-discover --workspace .",
+            "command": "openbase-coder-open-pr-review-discover --workspace .",
             "commandTimeoutSeconds": 120,
             "scheduleType": "interval",
             "intervalSeconds": 60,
@@ -176,8 +217,9 @@ def test_create_command_routine_calls_super_agents_library(monkeypatch) -> None:
 
 
 def test_run_due_routines_command_supports_force(monkeypatch) -> None:
-    FakeRoutinesClient.instances = []
-    monkeypatch.setattr(routines_cli, "CodexAppServerClient", FakeRoutinesClient)
+    FakeRoutineManager.instances = []
+    monkeypatch.setattr(routines_cli, "CodexAppServerClient", FakeExecutionClient)
+    monkeypatch.setattr(routines_cli, "RoutineManager", FakeRoutineManager)
 
     result = CliRunner().invoke(
         routines_cli.routines,
@@ -185,15 +227,16 @@ def test_run_due_routines_command_supports_force(monkeypatch) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    assert FakeRoutinesClient.instances[0].calls[0] == (
+    assert FakeRoutineManager.instances[0].calls[0] == (
         "run_due_routines",
         {"name": "daily", "force": True},
     )
 
 
 def test_update_routine_can_toggle_fresh_thread_per_run(monkeypatch) -> None:
-    FakeRoutinesClient.instances = []
-    monkeypatch.setattr(routines_cli, "CodexAppServerClient", FakeRoutinesClient)
+    FakeRoutineManager.instances = []
+    monkeypatch.setattr(routines_cli, "CodexAppServerClient", FakeExecutionClient)
+    monkeypatch.setattr(routines_cli, "RoutineManager", FakeRoutineManager)
 
     result = CliRunner().invoke(
         routines_cli.routines,
@@ -201,23 +244,31 @@ def test_update_routine_can_toggle_fresh_thread_per_run(monkeypatch) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    assert FakeRoutinesClient.instances[0].calls[0] == (
+    assert FakeRoutineManager.instances[0].calls[0] == (
         "save_routine",
         {"name": "daily", "freshThreadPerRun": False},
     )
 
 
 def test_update_routine_can_switch_to_command(monkeypatch) -> None:
-    FakeRoutinesClient.instances = []
-    monkeypatch.setattr(routines_cli, "CodexAppServerClient", FakeRoutinesClient)
+    FakeRoutineManager.instances = []
+    monkeypatch.setattr(routines_cli, "CodexAppServerClient", FakeExecutionClient)
+    monkeypatch.setattr(routines_cli, "RoutineManager", FakeRoutineManager)
 
     result = CliRunner().invoke(
         routines_cli.routines,
-        ["update", "open-pr-review-routine", "--kind", "command", "--command", "discover"],
+        [
+            "update",
+            "open-pr-review-routine",
+            "--kind",
+            "command",
+            "--command",
+            "discover",
+        ],
     )
 
     assert result.exit_code == 0, result.output
-    assert FakeRoutinesClient.instances[0].calls[0] == (
+    assert FakeRoutineManager.instances[0].calls[0] == (
         "save_routine",
         {"name": "open-pr-review-routine", "kind": "command", "command": "discover"},
     )

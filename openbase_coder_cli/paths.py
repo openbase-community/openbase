@@ -46,6 +46,7 @@ SYNC_VERSIONS_DIR = OPENBASE_BASE_DIR / "sync-versions"
 MACHINE_TOKEN_JSON_PATH = OPENBASE_BASE_DIR / "machine-token.json"
 CONSOLE_SETTINGS_JSON_PATH = OPENBASE_BASE_DIR / "console-settings.json"
 ONBOARDING_JSON_PATH = OPENBASE_BASE_DIR / "onboarding.json"
+ROUTINES_JSON_PATH = OPENBASE_BASE_DIR / "routines.json"
 # Created by the bundled openbase-onboarding skill once an agent has read it.
 ONBOARDING_SKILL_READ_MARKER_PATH = OPENBASE_BASE_DIR / "onboarding-skill-read"
 DESKTOP_CONTROL_JSON_PATH = OPENBASE_BASE_DIR / "desktop-control.json"

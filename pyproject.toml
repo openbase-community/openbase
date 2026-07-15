@@ -64,6 +64,7 @@ Issues = "https://github.com/openbase-community/openbase-coder/issues"
 
 [project.scripts]
 openbase-coder = "openbase_coder_cli.cli:main"
+openbase-coder-open-pr-review-discover = "openbase_coder_cli.routines.open_pr_reviews:main"
 
 [project.optional-dependencies]
 dev = [

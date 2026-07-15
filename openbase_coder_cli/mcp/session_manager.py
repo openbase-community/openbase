@@ -38,6 +38,7 @@ from openbase_coder_cli.livekit_voice_route import (
 )
 from openbase_coder_cli.onboarding_reminder import append_onboarding_reminder
 from openbase_coder_cli.paths import CODEX_SUPER_AGENT_INSTRUCTIONS_PATH
+from openbase_coder_cli.routines import RoutineManager
 
 from .models import QueuedTurnInfo
 from .models import ThreadInfo as SessionInfo
@@ -116,15 +117,13 @@ class _SuperAgentsClient(Protocol):
         request_id: str | int,
         result: dict[str, Any],
     ) -> dict[str, Any]: ...
-    async def save_routine(self, input_data: dict[str, Any]) -> dict[str, Any]: ...
-    async def list_routines(self) -> dict[str, Any]: ...
-    async def read_routine(self, name: str) -> dict[str, Any]: ...
-    async def delete_routine(self, name: str) -> dict[str, Any]: ...
-    async def run_due_routines(
+    async def resolve_queue_target(self, input_data: LabelQueryInput) -> Any: ...
+    async def start_or_queue_turn(
         self,
-        name: str | None = None,
-        force: bool = False,
+        target: Any,
+        turn_input: dict[str, Any],
     ) -> dict[str, Any]: ...
+    async def get_session(self, thread_id: str) -> Any | None: ...
     async def request(
         self,
         method: str,
@@ -138,7 +137,6 @@ class _SuperAgentsClient(Protocol):
         *,
         clear_fields: list[str] | None = None,
     ) -> None: ...
-    async def get_session(self, thread_id: str) -> Any: ...
 
 
 async def _broadcast(session_id: str, event: dict[str, Any]) -> None:
@@ -300,12 +298,14 @@ class CodexAppServerSessionManager:
         self,
         ws_url: str | None = None,
         client: _SuperAgentsClient | None = None,
+        routine_manager: RoutineManager | None = None,
     ) -> None:
         self._ws_url = ws_url or os.environ.get(
             "CODEX_APP_SERVER_URL", "ws://127.0.0.1:4500"
         )
         self._uses_external_client = client is not None
         self._client: _SuperAgentsClient = client or self._default_client()
+        self._routine_manager = routine_manager or RoutineManager(self._client)
         self._turn_to_session: dict[str, str] = {}
         self._delivered_text: dict[str, str] = {}
         self._turn_current_item: dict[str, str] = {}
@@ -468,28 +468,28 @@ class CodexAppServerSessionManager:
         return None
 
     async def list_routines(self) -> dict[str, Any]:
-        """List persisted Super Agents routines."""
-        return await self._client.list_routines()
+        """List persisted Openbase routines."""
+        return await self._routine_manager.list_routines()
 
     async def read_routine(self, name: str) -> dict[str, Any]:
-        """Read one persisted Super Agents routine."""
-        return await self._client.read_routine(name)
+        """Read one persisted Openbase routine."""
+        return await self._routine_manager.read_routine(name)
 
     async def save_routine(self, input_data: dict[str, Any]) -> dict[str, Any]:
-        """Create or update a persisted Super Agents routine."""
-        return await self._client.save_routine(input_data)
+        """Create or update a persisted Openbase routine."""
+        return await self._routine_manager.save_routine(input_data)
 
     async def delete_routine(self, name: str) -> dict[str, Any]:
-        """Delete one persisted Super Agents routine."""
-        return await self._client.delete_routine(name)
+        """Delete one persisted Openbase routine."""
+        return await self._routine_manager.delete_routine(name)
 
     async def run_due_routines(
         self,
         name: str | None = None,
         force: bool = False,
     ) -> dict[str, Any]:
-        """Run due routines through the Super Agents client library."""
-        return await self._client.run_due_routines(name=name, force=force)
+        """Run due Openbase routines through generic agent primitives."""
+        return await self._routine_manager.run_due_routines(name=name, force=force)
 
     async def resume_thread_with_developer_instructions(
         self,

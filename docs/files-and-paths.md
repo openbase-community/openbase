@@ -45,6 +45,7 @@ resets onboarding. Remove both when fully uninstalling (see
 | `~/.openbase/instructions/DISPATCHER_INSTRUCTIONS.md` | `openbase-coder setup` | Generated default dispatcher-only instructions |
 | `~/.openbase/instructions/SUPER_AGENT_INSTRUCTIONS.md` | `openbase-coder setup` | Generated default Super Agent thread instructions |
 | `~/.openbase/dispatcher-config.json` | `openbase-coder setup`, `openbase-coder defaults`, settings API | Dispatcher runtime settings, including default reasoning and backend-specific model defaults |
+| `~/.openbase/routines.json` | `openbase-coder routines`, routines API, `openbase-routines` | Schema-versioned Openbase routine definitions and run state; migrated once from the legacy `routines` field in `~/.super-agents/state.json` |
 | `~/.openbase/hooks/inject-session-id.sh` | `openbase-coder setup` | Bundled SessionStart hook script, registered in both Openbase agent homes; injects the session's thread/session ID into the conversation so agents stamp commits with the `Agent-Thread-Id` trailer |
 | `~/.openbase/packages/standalone/previous` | `openbase-coder self-update` | Symlink to the prior release, kept for rollback |
 | `~/.openbase/update-check.json` | `openbase-coder self-update` / update API | Cached result of the last update check (no-network status reads) |

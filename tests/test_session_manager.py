@@ -223,30 +223,6 @@ class FakeSuperAgentsClient:
         )
         return self._pop("answer_request")
 
-    async def save_routine(self, input_data: dict[str, Any]) -> dict[str, Any]:
-        self.calls.append(("save_routine", input_data))
-        return self._pop("save_routine")
-
-    async def list_routines(self) -> dict[str, Any]:
-        self.calls.append(("list_routines", {}))
-        return self._pop("list_routines")
-
-    async def read_routine(self, name: str) -> dict[str, Any]:
-        self.calls.append(("read_routine", {"name": name}))
-        return self._pop("read_routine")
-
-    async def delete_routine(self, name: str) -> dict[str, Any]:
-        self.calls.append(("delete_routine", {"name": name}))
-        return self._pop("delete_routine")
-
-    async def run_due_routines(
-        self,
-        name: str | None = None,
-        force: bool = False,
-    ) -> dict[str, Any]:
-        self.calls.append(("run_due_routines", {"name": name, "force": force}))
-        return self._pop("run_due_routines")
-
     async def request(
         self,
         method: str,
@@ -568,17 +544,39 @@ def test_list_approval_requests_hides_requests_with_queued_decisions(
     assert requests == []
 
 
-def test_routine_methods_delegate_to_super_agents_client() -> None:
-    client = FakeSuperAgentsClient(
-        {
-            "list_routines": [{"routines": []}],
-            "save_routine": [{"routine": {"name": "daily"}}],
-            "read_routine": [{"routine": {"name": "daily"}}],
-            "run_due_routines": [{"count": 1, "results": [{"name": "daily"}]}],
-            "delete_routine": [{"deleted": True}],
-        }
+def test_routine_methods_delegate_to_openbase_routine_manager() -> None:
+    class FakeRoutineManager:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, Any]] = []
+
+        async def list_routines(self) -> dict[str, Any]:
+            self.calls.append(("list_routines", {}))
+            return {"routines": []}
+
+        async def save_routine(self, input_data: dict[str, Any]) -> dict[str, Any]:
+            self.calls.append(("save_routine", input_data))
+            return {"routine": input_data}
+
+        async def read_routine(self, name: str) -> dict[str, Any]:
+            self.calls.append(("read_routine", {"name": name}))
+            return {"routine": {"name": name}}
+
+        async def run_due_routines(
+            self, name: str | None = None, force: bool = False
+        ) -> dict[str, Any]:
+            self.calls.append(("run_due_routines", {"name": name, "force": force}))
+            return {"count": 1, "results": [{"name": name}]}
+
+        async def delete_routine(self, name: str) -> dict[str, Any]:
+            self.calls.append(("delete_routine", {"name": name}))
+            return {"deleted": True}
+
+    client = FakeSuperAgentsClient({})
+    routines = FakeRoutineManager()
+    manager = CodexAppServerSessionManager(
+        client=client,
+        routine_manager=routines,  # type: ignore[arg-type]
     )
-    manager = _manager(client)
 
     assert asyncio.run(manager.list_routines()) == {"routines": []}
     assert asyncio.run(manager.save_routine({"name": "daily"})) == {
@@ -590,7 +588,7 @@ def test_routine_methods_delegate_to_super_agents_client() -> None:
         "results": [{"name": "daily"}],
     }
     assert asyncio.run(manager.delete_routine("daily")) == {"deleted": True}
-    assert client.calls[-5:] == [
+    assert routines.calls == [
         ("list_routines", {}),
         ("save_routine", {"name": "daily"}),
         ("read_routine", {"name": "daily"}),

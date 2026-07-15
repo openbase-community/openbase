@@ -2,8 +2,8 @@
 
 The catalog is hosted anonymously on Openbase Cloud
 (``/api/openbase/marketplace/...``). These views proxy that catalog to the
-local console, add local install-state, and perform installs into the local
-Super Agents state (routines) and the agent-home skill roots (skills).
+local console, add local install-state, and perform installs into Openbase
+Coder local state (routines) and the agent-home skill roots (skills).
 
 Skills are always co-installed for Claude Code and Codex together: a skill is
 cloned into ``~/.agents/skills`` and symlinked into both Openbase agent homes.

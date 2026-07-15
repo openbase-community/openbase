@@ -161,7 +161,7 @@ class RoutinesRunDueSerializer(serializers.Serializer):
 
 @api_view(["GET", "POST"])
 def routines_list(request):
-    """List or create persisted Super Agents routines."""
+    """List or create persisted Openbase routines."""
     manager = get_session_manager()
     if request.method == "POST":
         serializer = RoutineCreateSerializer(data=request.data)
@@ -208,7 +208,7 @@ def routine_detail(request, name):
 
 @api_view(["POST"])
 def routines_run_due(request):
-    """Run currently due routines through the local client library."""
+    """Run currently due Openbase routines."""
     serializer = RoutinesRunDueSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     name = serializer.validated_data.get("name") or None

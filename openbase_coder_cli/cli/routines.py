@@ -3,12 +3,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import queue
+import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import click
 from super_agents.app_server_client import CodexAppServerClient
+
+from openbase_coder_cli.routines import RoutineManager
 
 REASONING_EFFORTS = ("low", "medium", "high", "xhigh")
 SANDBOX_TYPES = ("readOnly", "workspaceWrite", "dangerFullAccess")
@@ -18,15 +22,51 @@ ROUTINE_KINDS = ("agent", "command")
 DEFAULT_INTERVAL_SECONDS = 60
 
 
+class _BackgroundTick:
+    def __init__(self, target: Callable[[], dict[str, Any] | None]) -> None:
+        self._target = target
+        self._thread: threading.Thread | None = None
+        self._results: queue.Queue[tuple[dict[str, Any] | None, Exception | None]] = (
+            queue.Queue(maxsize=1)
+        )
+
+    def start(self) -> bool:
+        if not self._results.empty() or (
+            self._thread is not None and self._thread.is_alive()
+        ):
+            return False
+        self._thread = threading.Thread(
+            target=self._run,
+            name="openbase-code-sync-tick",
+            daemon=True,
+        )
+        self._thread.start()
+        return True
+
+    def poll(self) -> tuple[dict[str, Any] | None, Exception | None] | None:
+        try:
+            result = self._results.get_nowait()
+        except queue.Empty:
+            return None
+        self._thread = None
+        return result
+
+    def _run(self) -> None:
+        try:
+            self._results.put((self._target(), None))
+        except Exception as exc:
+            self._results.put((None, exc))
+
+
 def _json_echo(value: dict[str, Any]) -> None:
     click.echo(json.dumps(value, indent=2, sort_keys=True))
 
 
-def _run_client(coro):
+def _run_manager(coro):
     async def runner():
         client = CodexAppServerClient()
         try:
-            return await coro(client)
+            return await coro(RoutineManager(client))
         finally:
             await client.close()
 
@@ -145,20 +185,20 @@ def _routine_patch(
 
 @click.group()
 def routines() -> None:
-    """Manage Super Agents routines stored outside the MCP tool surface."""
+    """Manage local Openbase Coder routines."""
 
 
 @routines.command("list")
 def list_routines() -> None:
     """List persisted routines."""
-    _json_echo(_run_client(lambda client: client.list_routines()))
+    _json_echo(_run_manager(lambda manager: manager.list_routines()))
 
 
 @routines.command("show")
 @click.argument("name")
 def show_routine(name: str) -> None:
     """Show one persisted routine."""
-    _json_echo(_run_client(lambda client: client.read_routine(name)))
+    _json_echo(_run_manager(lambda manager: manager.read_routine(name)))
 
 
 @routines.command("create")
@@ -264,7 +304,7 @@ def create_routine(
         developer_instructions=developer_instructions,
         include_defaults=True,
     )
-    _json_echo(_run_client(lambda client: client.save_routine(patch)))
+    _json_echo(_run_manager(lambda manager: manager.save_routine(patch)))
 
 
 @routines.command("update")
@@ -349,14 +389,14 @@ def update_routine(
         service_tier=service_tier,
         developer_instructions=developer_instructions,
     )
-    _json_echo(_run_client(lambda client: client.save_routine(patch)))
+    _json_echo(_run_manager(lambda manager: manager.save_routine(patch)))
 
 
 @routines.command("delete")
 @click.argument("name")
 def delete_routine(name: str) -> None:
     """Delete one routine."""
-    _json_echo(_run_client(lambda client: client.delete_routine(name)))
+    _json_echo(_run_manager(lambda manager: manager.delete_routine(name)))
 
 
 @routines.command("run-due")
@@ -367,7 +407,7 @@ def delete_routine(name: str) -> None:
 def run_due_routines(name: str | None, force: bool) -> None:
     """Run routines that are currently due."""
     _json_echo(
-        _run_client(lambda client: client.run_due_routines(name=name, force=force))
+        _run_manager(lambda manager: manager.run_due_routines(name=name, force=force))
     )
 
 
@@ -395,10 +435,13 @@ def run_loop(interval: float, verbose: bool) -> None:
     next_skills_sync = time.monotonic()
     next_update_check = time.monotonic()
     next_code_sync_tick = time.monotonic()
+    from openbase_coder_cli.code_sync.reconciler import run_tick_if_enabled
+
+    code_sync_tick = _BackgroundTick(run_tick_if_enabled)
     while True:
         started = time.monotonic()
         try:
-            result = _run_client(lambda client: client.run_due_routines())
+            result = _run_manager(lambda manager: manager.run_due_routines())
             logger.info(
                 "routine_runner sweep_complete count=%s results=%s",
                 result.get("count"),
@@ -428,26 +471,30 @@ def run_loop(interval: float, verbose: bool) -> None:
 
         # Reconcile git branch pointers and the write lease for code-sync
         # (no-op unless code sync is enabled in sync-config.json).
-        if time.monotonic() >= next_code_sync_tick:
+        code_sync_result = code_sync_tick.poll()
+        if code_sync_result is not None:
+            code_sync_summary, code_sync_error = code_sync_result
             next_code_sync_tick = time.monotonic() + max(
                 CODE_SYNC_TICK_SECONDS, poll_interval
             )
-            try:
-                from openbase_coder_cli.code_sync.reconciler import (
-                    run_tick_if_enabled,
+            if code_sync_error is not None:
+                logger.error(
+                    "code_sync tick_failed",
+                    exc_info=(
+                        type(code_sync_error),
+                        code_sync_error,
+                        code_sync_error.__traceback__,
+                    ),
                 )
-
-                code_sync_summary = run_tick_if_enabled()
-            except Exception:
-                logger.exception("code_sync tick_failed")
-            else:
-                if code_sync_summary is not None:
-                    logger.info(
-                        "code_sync tick_complete repos=%s conflicts=%s lease=%s",
-                        len(code_sync_summary.get("repos", [])),
-                        code_sync_summary.get("conflicts_count"),
-                        code_sync_summary.get("lease", {}).get("action"),
-                    )
+            elif code_sync_summary is not None:
+                logger.info(
+                    "code_sync tick_complete repos=%s conflicts=%s lease=%s",
+                    len(code_sync_summary.get("repos", [])),
+                    code_sync_summary.get("conflicts_count"),
+                    code_sync_summary.get("lease", {}).get("action"),
+                )
+        if time.monotonic() >= next_code_sync_tick:
+            code_sync_tick.start()
 
         # Periodically refresh the update-check cache (standalone installs)
         # so update_available surfaces in status APIs without manual checks.
