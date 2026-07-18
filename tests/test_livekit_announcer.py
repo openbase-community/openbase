@@ -82,11 +82,15 @@ def _room(name: str, created: int, participants: int = 2):
     )
 
 
-def _participant(identity: str, *, kind, state=livekit_api.ParticipantInfo.State.ACTIVE):
+def _participant(
+    identity: str, *, kind, state=livekit_api.ParticipantInfo.State.ACTIVE
+):
     return SimpleNamespace(identity=identity, kind=kind, state=state)
 
 
-def test_publish_announcer_message_selects_latest_active_room(tmp_path, monkeypatch, caplog):
+def test_publish_announcer_message_selects_latest_active_room(
+    tmp_path, monkeypatch, caplog
+):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     older = _room("room-old", 100)
     newer = _room("room-new", 200)
@@ -95,11 +99,15 @@ def test_publish_announcer_message_selects_latest_active_room(tmp_path, monkeypa
         {
             "room-old": [
                 _participant("agent-old", kind=livekit_api.ParticipantInfo.Kind.AGENT),
-                _participant("user-old", kind=livekit_api.ParticipantInfo.Kind.STANDARD),
+                _participant(
+                    "user-old", kind=livekit_api.ParticipantInfo.Kind.STANDARD
+                ),
             ],
             "room-new": [
                 _participant("agent-new", kind=livekit_api.ParticipantInfo.Kind.AGENT),
-                _participant("user-new", kind=livekit_api.ParticipantInfo.Kind.STANDARD),
+                _participant(
+                    "user-new", kind=livekit_api.ParticipantInfo.Kind.STANDARD
+                ),
             ],
         },
     )
@@ -151,7 +159,9 @@ def test_publish_announcer_message_uses_active_target_voice(tmp_path, monkeypatc
     assert payload["voice_id"] == "voice-1"
 
 
-def test_publish_announcer_message_prefers_explicit_voice_over_active_target(tmp_path, monkeypatch):
+def test_publish_announcer_message_prefers_explicit_voice_over_active_target(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     (tmp_path / "livekit-voice-route.json").write_text(
         json.dumps(
@@ -220,17 +230,23 @@ def test_publish_announcer_message_replaces_non_english_kokoro_voice(
     assert payload["voice_id"] == "af_bella"
 
 
-def test_publish_announcer_message_explicit_voice_preserves_room_targeting(tmp_path, monkeypatch):
+def test_publish_announcer_message_explicit_voice_preserves_room_targeting(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     client = FakeLiveKitClient(
         [_room("room-old", 100), _room("room-explicit", 50)],
         {
             "room-old": [
                 _participant("agent-old", kind=livekit_api.ParticipantInfo.Kind.AGENT),
-                _participant("user-old", kind=livekit_api.ParticipantInfo.Kind.STANDARD),
+                _participant(
+                    "user-old", kind=livekit_api.ParticipantInfo.Kind.STANDARD
+                ),
             ],
             "room-explicit": [
-                _participant("agent-explicit", kind=livekit_api.ParticipantInfo.Kind.AGENT),
+                _participant(
+                    "agent-explicit", kind=livekit_api.ParticipantInfo.Kind.AGENT
+                ),
             ],
         },
     )
@@ -335,7 +351,135 @@ def test_user_say_api_returns_accepted(monkeypatch, tmp_path):
     }
 
 
-def test_user_say_api_allows_authenticated_local_post_without_csrf_token(monkeypatch, tmp_path):
+def _use_temp_missed_store(monkeypatch, tmp_path):
+    from openbase_coder_cli import missed_announcements
+
+    store_path = tmp_path / "missed-announcements.json"
+    monkeypatch.setattr(
+        missed_announcements,
+        "MISSED_ANNOUNCEMENTS_JSON_PATH",
+        store_path,
+    )
+    return missed_announcements
+
+
+def test_user_say_records_missed_announcement_when_no_room(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    missed_announcements = _use_temp_missed_store(monkeypatch, tmp_path)
+    record_voice_assignment(
+        thread_id="thread-1",
+        agent_name="Savannah",
+        cwd="/tmp/project",
+        voice_id="voice-savannah",
+        voice_name="Savannah",
+        kind="codex_thread",
+        source="test",
+    )
+
+    async def fake_publish(text, *, room_name=None, voice_id=None):
+        raise NoActiveLiveKitRoomError("No active LiveKit voice room was found.")
+
+    monkeypatch.setattr(views, "publish_announcer_message", fake_publish)
+
+    request = APIRequestFactory().post(
+        "/api/user/say/",
+        {"agent_name": "Savannah", "text": "Done with the report"},
+        format="json",
+    )
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+
+    response = views.user_say(request)
+
+    assert response.status_code == 404
+    stored = missed_announcements.list_missed_announcements()
+    assert len(stored) == 1
+    assert stored[0]["agent_name"] == "Savannah"
+    assert stored[0]["text"] == "Done with the report"
+    assert stored[0]["reason"] == "no_active_room"
+
+
+def test_user_say_records_missed_announcement_on_delivery_error(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    missed_announcements = _use_temp_missed_store(monkeypatch, tmp_path)
+    record_voice_assignment(
+        thread_id="thread-1",
+        agent_name="Savannah",
+        cwd="/tmp/project",
+        voice_id="voice-savannah",
+        voice_name="Savannah",
+        kind="codex_thread",
+        source="test",
+    )
+
+    async def fake_publish(text, *, room_name=None, voice_id=None):
+        raise RuntimeError("livekit exploded")
+
+    monkeypatch.setattr(views, "publish_announcer_message", fake_publish)
+
+    request = APIRequestFactory().post(
+        "/api/user/say/",
+        {"agent_name": "Savannah", "text": "still here"},
+        format="json",
+    )
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+
+    response = views.user_say(request)
+
+    assert response.status_code == 502
+    stored = missed_announcements.list_missed_announcements()
+    assert len(stored) == 1
+    assert stored[0]["reason"] == "delivery_error"
+
+
+def test_missed_announcements_endpoint_lists_entries(monkeypatch, tmp_path):
+    missed_announcements = _use_temp_missed_store(monkeypatch, tmp_path)
+    missed_announcements.record_missed_announcement(
+        "Savannah", "hello there", "no_active_room"
+    )
+
+    request = APIRequestFactory().get("/api/missed-announcements/")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+
+    response = views.missed_announcements(request)
+
+    assert response.status_code == 200
+    assert [a["text"] for a in response.data["announcements"]] == ["hello there"]
+
+
+def test_user_say_success_records_nothing(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    missed_announcements = _use_temp_missed_store(monkeypatch, tmp_path)
+    record_voice_assignment(
+        thread_id="thread-1",
+        agent_name="Dottie",
+        cwd="/tmp/project",
+        voice_id="voice-dottie",
+        voice_name="Dottie",
+        kind="codex_thread",
+        source="test",
+    )
+
+    async def fake_publish(text, *, room_name=None, voice_id=None):
+        return SimpleNamespace(message_id="announcer-1", room_name="room-1")
+
+    monkeypatch.setattr(views, "publish_announcer_message", fake_publish)
+
+    request = APIRequestFactory().post(
+        "/api/user/say/",
+        {"agent_name": "Dottie", "text": "hello"},
+        format="json",
+    )
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+
+    response = views.user_say(request)
+
+    assert response.status_code == 202
+    assert missed_announcements.list_missed_announcements() == []
+
+
+def test_user_say_api_allows_authenticated_local_post_without_csrf_token(
+    monkeypatch, tmp_path
+):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     record_voice_assignment(
         thread_id="thread-1",
@@ -549,7 +693,9 @@ def test_user_say_api_rejects_unknown_agent(tmp_path, monkeypatch):
     assert "Dottie" in response.data["detail"]
 
 
-def test_user_say_api_logs_unknown_agent_lookup_diagnostics(tmp_path, monkeypatch, caplog):
+def test_user_say_api_logs_unknown_agent_lookup_diagnostics(
+    tmp_path, monkeypatch, caplog
+):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("SUPER_AGENTS_STATE_FILE", str(tmp_path / "missing-state.json"))
     caplog.set_level(logging.WARNING)

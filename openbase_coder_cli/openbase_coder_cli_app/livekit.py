@@ -64,6 +64,10 @@ from openbase_coder_cli.livekit_voice_route import (
     super_agent_voice_for_context,
 )
 from openbase_coder_cli.mcp.session_manager import get_session_manager
+from openbase_coder_cli.missed_announcements import (
+    list_missed_announcements,
+    record_missed_announcement,
+)
 from openbase_coder_cli.openbase_coder_cli_app.common import _request_identity
 from openbase_coder_cli.services.cloud_workspace import cloud_workspace_id
 from openbase_coder_cli.stt_providers import (
@@ -217,6 +221,24 @@ class STTSettingsSerializer(serializers.Serializer):
     )
 
 
+def _record_missed_announcement(agent_name: str, text: str, *, reason: str) -> None:
+    """Persist an undeliverable announcement so iOS can still surface it.
+
+    Never raises: the announcer already failed, so a store hiccup must not turn
+    the response into a 500. The stored entry is polled by the iOS app, which
+    raises a local notification for it (see ``missed_announcements``).
+    """
+    try:
+        record_missed_announcement(agent_name, text, reason)
+        logger.info(
+            "dispatch_timing stage=user_say_missed_recorded agent_name=%s reason=%s",
+            agent_name,
+            reason,
+        )
+    except Exception:
+        logger.exception("Unable to record missed announcer message")
+
+
 @api_view(["POST"])
 def user_say(request):
     """Publish an announcer message into the active LiveKit voice room."""
@@ -264,11 +286,26 @@ def user_say(request):
     except AnnouncerValidationError as exc:
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
     except NoActiveLiveKitRoomError as exc:
+        _record_missed_announcement(
+            agent_name,
+            input_serializer.validated_data["text"],
+            reason="no_active_room",
+        )
         return Response({"detail": str(exc)}, status=status.HTTP_404_NOT_FOUND)
     except AnnouncerError as exc:
+        _record_missed_announcement(
+            agent_name,
+            input_serializer.validated_data["text"],
+            reason="delivery_error",
+        )
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
     except Exception:
         logger.exception("Unable to publish LiveKit announcer message")
+        _record_missed_announcement(
+            agent_name,
+            input_serializer.validated_data["text"],
+            reason="delivery_error",
+        )
         return Response(
             {"detail": "Unable to publish announcer message."},
             status=status.HTTP_502_BAD_GATEWAY,
@@ -289,6 +326,19 @@ def user_say(request):
         int((time.monotonic() - started) * 1000),
     )
     return response
+
+
+@api_view(["GET"])
+def missed_announcements(request):
+    """List announcer messages that could not be delivered to a voice room.
+
+    The iOS app polls this and raises a local notification per new entry so the
+    user still learns an agent tried to reach them when no voice room was live.
+    """
+    return Response(
+        {"announcements": list_missed_announcements()},
+        status=status.HTTP_200_OK,
+    )
 
 
 @api_view(["POST"])

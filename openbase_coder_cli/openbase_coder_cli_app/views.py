@@ -197,6 +197,10 @@ def user_play(request):
     return _livekit.user_play(request)
 
 
+def missed_announcements(request):
+    return _livekit.missed_announcements(request)
+
+
 @csrf_exempt
 def cartesia_voice_settings(request):
     _sync_livekit_compat_globals()
@@ -368,6 +372,7 @@ __all__ = [
     "_resolve_target_room",
     "publish_announcer_audio_file",
     "publish_announcer_message",
+    "missed_announcements",
     "user_play",
     "user_say",
     "uv_tool_detail",
