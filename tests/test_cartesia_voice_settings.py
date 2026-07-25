@@ -437,6 +437,7 @@ def test_livekit_room_token_includes_proven_cloud_workspace_identity(
         "cloud_workspace_id",
         lambda: "abc123def456",
     )
+    monkeypatch.setattr(views._livekit, "voice_readiness_preflight", lambda: None)
 
     response = views.livekit_room_token(
         _jwt_authenticated_request(
@@ -454,6 +455,42 @@ def test_livekit_room_token_includes_proven_cloud_workspace_identity(
     assert response.data["workspace"] == {
         "kind": "openbase_cloud",
         "id": "abc123def456",
+    }
+
+
+def test_livekit_room_token_blocks_unready_voice_worker(monkeypatch) -> None:
+    monkeypatch.setattr(
+        views._livekit,
+        "_livekit_client_token_credentials",
+        lambda: ("livekit-client-key", "livekit-client-secret"),
+    )
+    monkeypatch.setattr(
+        views._livekit,
+        "ensure_openbase_cloud_audio_subscription",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        views._livekit,
+        "voice_readiness_preflight",
+        lambda: (_ for _ in ()).throw(
+            views._livekit.VoiceReadinessError(
+                "worker_webrtc_unavailable", "Restart the LiveKit services."
+            )
+        ),
+    )
+
+    response = views.livekit_room_token(
+        _jwt_authenticated_request(
+            "POST",
+            "/api/livekit-room-token/",
+            {"livekit_dispatch_agent_name": "livekit-agent"},
+        )
+    )
+
+    assert response.status_code == 503
+    assert response.data == {
+        "detail": "Restart the LiveKit services.",
+        "code": "worker_webrtc_unavailable",
     }
 
 

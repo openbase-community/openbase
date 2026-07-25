@@ -6,11 +6,13 @@ import json
 import logging
 import os
 import platform
+import socket
 import time
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import livekit.api as livekit_api
 from asgiref.sync import async_to_sync
@@ -65,6 +67,7 @@ from openbase_coder_cli.livekit_voice_route import (
 )
 from openbase_coder_cli.mcp.session_manager import get_session_manager
 from openbase_coder_cli.openbase_coder_cli_app.common import _request_identity
+from openbase_coder_cli.paths import DEFAULT_LOG_DIR
 from openbase_coder_cli.services.cloud_workspace import cloud_workspace_id
 from openbase_coder_cli.stt_providers import (
     LOCAL_MLX_WHISPER_STT_PROVIDER_ID,
@@ -85,6 +88,115 @@ LIVEKIT_COMPANION_NAME = "Openbase Screen Share"
 LIVEKIT_COMPANION_TOKEN_TTL = timedelta(hours=1)
 LIVEKIT_CLIENT_API_KEY_ENV = "LIVEKIT_CLIENT_API_KEY"
 LIVEKIT_CLIENT_API_SECRET_ENV = "LIVEKIT_CLIENT_API_SECRET"
+
+
+class VoiceReadinessError(Exception):
+    """A prerequisite that would otherwise leave a caller waiting for an agent."""
+
+    def __init__(self, code: str, detail: str) -> None:
+        super().__init__(detail)
+        self.code = code
+        self.detail = detail
+
+
+def _local_audio_runtime_ready() -> VoiceReadinessError | None:
+    """Check imports as well as cached assets before dispatching a local agent."""
+    tts_provider = selected_tts_provider_id()
+    stt_provider = selected_stt_provider_id()
+
+    if tts_provider == KOKORO_PROVIDER_ID:
+        readiness = get_tts_provider(KOKORO_PROVIDER_ID).readiness()
+        if not readiness.ready:
+            return VoiceReadinessError(
+                "local_audio_not_ready",
+                "Local Kokoro audio is not ready. On your computer, run Openbase Coder setup or install the local-audio dependencies, then try again.",
+            )
+        try:
+            import kokoro  # noqa: F401
+            import spacy
+
+            spacy.load("en_core_web_sm")
+        except Exception:
+            return VoiceReadinessError(
+                "local_audio_not_ready",
+                "Local Kokoro audio is incomplete. Reinstall the local-audio dependencies and the en_core_web_sm model on your computer, then try again.",
+            )
+
+    if stt_provider == LOCAL_MLX_WHISPER_STT_PROVIDER_ID:
+        readiness = local_mlx_whisper_readiness()
+        if not readiness.ready:
+            return VoiceReadinessError(
+                "local_audio_not_ready",
+                "Local MLX Whisper is not ready. Download its model and install the local-audio dependencies on your computer, then try again.",
+            )
+        try:
+            import mlx_whisper  # noqa: F401
+        except ImportError:
+            return VoiceReadinessError(
+                "local_audio_not_ready",
+                "Local MLX Whisper dependencies are not installed. Reinstall the local-audio dependencies on your computer, then try again.",
+            )
+    return None
+
+
+def _tailscale_livekit_ready() -> VoiceReadinessError | None:
+    """Catch stale Tailscale/ICE bindings before minting a phone-call token."""
+    if os.environ.get("LIVEKIT_NETWORK_MODE", "").strip().lower() != "tailscale":
+        return None
+
+    livekit_url = os.environ.get("LIVEKIT_URL", "").strip()
+    parsed = urlparse(livekit_url)
+    host = parsed.hostname
+    port = parsed.port or 7880
+    if not host:
+        return VoiceReadinessError(
+            "livekit_network_not_ready",
+            "LiveKit is not configured for Tailscale. Restart Openbase Coder services after running setup, then try again.",
+        )
+    try:
+        with socket.create_connection((host, port), timeout=1.5):
+            pass
+    except OSError:
+        return VoiceReadinessError(
+            "livekit_network_not_ready",
+            "LiveKit is not reachable on the computer's Tailscale network. Restart the LiveKit and livekit-agent services, then try again.",
+        )
+    return None
+
+
+def _recent_worker_failure() -> VoiceReadinessError | None:
+    """Surface known pre-join worker failures when the managed-agent log has them."""
+    log_path = DEFAULT_LOG_DIR / "livekit-agent.log"
+    try:
+        tail = log_path.read_text(encoding="utf-8", errors="replace")[-32_000:]
+    except OSError:
+        return None
+
+    last_registered = tail.rfind("registered worker")
+    last_webrtc_timeout = max(
+        tail.rfind("wait_pc_connection timed out"),
+        tail.rfind("ICE connection failed"),
+    )
+    if last_webrtc_timeout > last_registered:
+        return VoiceReadinessError(
+            "worker_webrtc_unavailable",
+            "The voice worker cannot establish its WebRTC connection. Restart the LiveKit and livekit-agent services to refresh their Tailscale network bindings, then try again.",
+        )
+    if "not dispatching agent job since no worker is available" in tail and last_registered < 0:
+        return VoiceReadinessError(
+            "agent_worker_unavailable",
+            "The voice worker is not registered yet. Start or restart the livekit-agent service on your computer, then try again.",
+        )
+    return None
+
+
+def voice_readiness_preflight() -> None:
+    """Raise an actionable error for conditions that make an agent unable to join."""
+    for check in (_local_audio_runtime_ready, _tailscale_livekit_ready, _recent_worker_failure):
+        error = check()
+        if error:
+            logger.warning("voice readiness failed code=%s detail=%s", error.code, error.detail)
+            raise error
 
 
 class LiveKitRoomTokenSerializer(serializers.Serializer):
@@ -770,6 +882,14 @@ def livekit_room_token(request):
     except AuthTransientError as exc:
         return Response(
             {"detail": str(exc), "code": "cloud_unavailable"},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    try:
+        voice_readiness_preflight()
+    except VoiceReadinessError as exc:
+        return Response(
+            {"detail": exc.detail, "code": exc.code},
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
 
