@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +16,7 @@ from openbase_coder_cli.dispatcher_config import (
     STT_PROVIDER_KEY,
     TTS_PROVIDER_KEY,
 )
+from openbase_coder_cli.local_audio_readiness import local_audio_readiness
 from openbase_coder_cli.paths import (
     CODEX_DISPATCHER_CONFIG_PATH,
 )
@@ -52,8 +54,11 @@ LOCAL_AUDIO_REQUIREMENTS = (
     "huggingface-hub>=0.36.0",
     "kokoro>=0.9.4",
     "mlx-whisper>=0.4.3",
+    "numba>=0.65.0",
+    "numpy>=2.3.0,<2.5",
 )
-LOCAL_AUDIO_PYTHON_MAX = (3, 13)
+LOCAL_AUDIO_SPACY_MODEL = "en_core_web_sm"
+MODEL_DOWNLOAD_OFFLINE_ENV_KEYS = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
 
 
 def _ensure_codex_home_dispatcher_config(audio_provider: str | None = None) -> None:
@@ -124,6 +129,14 @@ def _audio_provider_config(audio_provider: str) -> dict[str, str]:
 
 
 def _download_local_audio_models() -> None:
+    removed_offline_flags = [
+        key for key in MODEL_DOWNLOAD_OFFLINE_ENV_KEYS if os.environ.pop(key, None)
+    ]
+    if removed_offline_flags:
+        click.echo(
+            "Ignoring obsolete offline model flags during setup: "
+            + ", ".join(removed_offline_flags)
+        )
     click.echo("Downloading local TTS voices...")
     tts_status = get_tts_provider(KOKORO_PROVIDER_ID).download_all_voices()
     if not tts_status.ready:
@@ -139,38 +152,71 @@ def _download_local_audio_models() -> None:
     click.echo("Downloaded local voice audio models.")
 
 
+def _ensure_local_audio_ready() -> None:
+    readiness = local_audio_readiness(
+        tts_provider_id=KOKORO_PROVIDER_ID,
+        stt_provider_id=LOCAL_MLX_WHISPER_STT_PROVIDER_ID,
+    )
+    if not readiness.ready:
+        raise click.ClickException(
+            "Local audio setup did not complete in the active Openbase runtime: "
+            f"{readiness.detail or 'readiness check failed'}. Retry "
+            "`openbase-coder setup --audio-provider local`."
+        )
+    click.echo("Verified local audio runtime and model readiness.")
+
+
 def _ensure_local_audio_dependencies(runtime_package) -> None:
     python_path = (
         runtime_package.python_path if runtime_package else Path(sys.executable)
     )
-    version = _python_version(python_path)
-    if version >= LOCAL_AUDIO_PYTHON_MAX:
-        raise click.ClickException(
-            "Local audio currently requires a Python 3.12 Openbase Coder runtime "
-            "because Kokoro declares Python <3.13. Reinstall Openbase Coder with "
-            "a Python 3.12 standalone package, or use --audio-provider openbase-cloud."
-        )
-    if _local_audio_dependencies_available(python_path):
-        return
+    runtime_bin = str(python_path.parent)
+    existing_path = os.environ.get("PATH", "")
+    pip_env = {
+        **os.environ,
+        "PATH": os.pathsep.join(part for part in (runtime_bin, existing_path) if part),
+        "PIP_BREAK_SYSTEM_PACKAGES": "1",
+    }
+    if not _local_audio_dependencies_available(python_path):
+        click.echo("Installing local audio Python dependencies...")
+        try:
+            subprocess.run(
+                [
+                    str(python_path),
+                    "-m",
+                    "pip",
+                    "install",
+                    "--upgrade",
+                    *LOCAL_AUDIO_REQUIREMENTS,
+                ],
+                check=True,
+                env=pip_env,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise click.ClickException(
+                "Failed to install local audio dependencies. Retry after checking "
+                "network access, or select another audio provider."
+            ) from exc
 
-    click.echo("Installing local audio Python dependencies...")
-    try:
-        subprocess.run(
-            [
-                str(python_path),
-                "-m",
-                "pip",
-                "install",
-                "--upgrade",
-                *LOCAL_AUDIO_REQUIREMENTS,
-            ],
-            check=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        raise click.ClickException(
-            "Failed to install local audio dependencies. "
-            "Use --audio-provider openbase-cloud or retry after checking network access."
-        ) from exc
+    if not _local_audio_spacy_model_available(python_path):
+        click.echo("Installing Kokoro English language model...")
+        try:
+            subprocess.run(
+                [
+                    str(python_path),
+                    "-m",
+                    "spacy",
+                    "download",
+                    LOCAL_AUDIO_SPACY_MODEL,
+                ],
+                check=True,
+                env=pip_env,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise click.ClickException(
+                "Failed to install the Kokoro English language model. Retry after "
+                "checking network access, or select another audio provider."
+            ) from exc
 
 
 def _local_audio_dependencies_available(python_path: Path) -> bool:
@@ -187,20 +233,14 @@ def _local_audio_dependencies_available(python_path: Path) -> bool:
     return result.returncode == 0
 
 
-def _python_version(python_path: Path) -> tuple[int, int]:
+def _local_audio_spacy_model_available(python_path: Path) -> bool:
     result = subprocess.run(
-        [
-            str(python_path),
-            "-c",
-            "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
+        [str(python_path), "-c", f"import {LOCAL_AUDIO_SPACY_MODEL}"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
-    major, minor = result.stdout.strip().split(".", 1)
-    return int(major), int(minor)
-
+    return result.returncode == 0
 
 
 

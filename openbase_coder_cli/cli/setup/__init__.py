@@ -76,15 +76,16 @@ from openbase_coder_cli.cli.setup.dispatcher import (
     AUDIO_PROVIDER_OPTIONS,
     CODEX_HOME_DEFAULT_DISPATCHER_CONFIG,  # noqa: F401
     DEFAULT_AUDIO_PROVIDER,  # noqa: F401
-    LOCAL_AUDIO_PYTHON_MAX,  # noqa: F401
     LOCAL_AUDIO_REQUIREMENTS,  # noqa: F401
+    LOCAL_AUDIO_SPACY_MODEL,  # noqa: F401
     _audio_provider_config,  # noqa: F401
     _default_dispatcher_config,  # noqa: F401
     _download_local_audio_models,
     _ensure_codex_home_dispatcher_config,
     _ensure_local_audio_dependencies,
+    _ensure_local_audio_ready,
     _local_audio_dependencies_available,  # noqa: F401
-    _python_version,  # noqa: F401
+    _local_audio_spacy_model_available,  # noqa: F401
     _update_dispatcher_audio_provider,  # noqa: F401
 )
 from openbase_coder_cli.cli.setup.env import (
@@ -525,16 +526,21 @@ def _run_setup_phases(
         f"Voice dispatcher service tier: {'fast' if fast_mode else 'standard'} "
         "(Super Agents: standard; both adjustable in console settings)."
     )
-    if audio_provider == AUDIO_PROVIDER_LOCAL:
-        _ensure_local_audio_dependencies(runtime_package)
-        _download_local_audio_models()
     _symlink_codex_home_skills(workspace_dir if use_dev_workspace else "")
 
     # --- Initialize runtime assets ---
     if use_dev_workspace:
-        _init_cli_workspace(workspace_dir)
+        _init_cli_workspace(
+            workspace_dir,
+            include_local_audio=audio_provider == AUDIO_PROVIDER_LOCAL,
+        )
     else:
         _init_standalone_runtime(runtime_package)
+
+    if audio_provider == AUDIO_PROVIDER_LOCAL:
+        _ensure_local_audio_dependencies(runtime_package)
+        _download_local_audio_models()
+        _ensure_local_audio_ready()
 
     # --- Configure the service CODEX_HOME ---
     _ensure_session_id_hook_script()

@@ -80,32 +80,53 @@ Most users should install the Mac app first:
 Openbase Coder is developed as a multi-repo workspace. Clone the workspace repo
 for source development, even if you are mainly changing the CLI:
 
+Prerequisites are Git, `uv`, Node + pnpm, and Tailscale signed in and connected
+on the Mac. Sign in to the coding backend you plan to use (`codex login` or the
+normal Claude Code login) before setup.
+
 ```bash
 uv tool install multi-workspace
 git clone https://github.com/openbase-community/openbase-coder-workspace
 cd openbase-coder-workspace
-./scripts/setup
+./scripts/setup --backend codex
 ```
 
 The workspace setup syncs the public development repos with `multi`, builds the
-console from source, and runs `openbase-coder setup --workspace-dir` against the
-checkout. The CLI source for this repository lives at `cli/` inside the
-workspace.
+console from source, and runs `openbase-coder setup --workspace-dir` against
+the checkout. Development setup defaults to free local audio, installs the
+Kokoro and MLX Whisper dependencies into the same environment used by the
+services, downloads their models, and refuses to report success until that
+voice pipeline is ready. The first download can take several minutes.
+
+To choose another audio path explicitly, pass `--audio-provider
+openbase-cloud` (requires an active audio subscription) or `--audio-provider
+cartesia` (requires Cartesia and AssemblyAI keys).
+
+Finish and verify the install:
+
+```bash
+openbase-coder login
+openbase-coder doctor
+openbase-coder services status
+```
+
+`doctor` must show Tailscale Serve and the required services running before a
+physical phone can start a call. The CLI source for this repository lives at
+`cli/` inside the workspace.
 
 For CLI-only development after workspace setup:
 
 ```bash
 cd cli
-uv sync --extra dev
+uv sync --extra dev --extra local-audio
 uv run openbase-coder --version
 uv run pytest
 ```
 
-If you want a persistent `openbase-coder` command backed by your checkout:
-
-```bash
-uv tool install -e ./cli
-```
+Keep `--extra local-audio` on later `uv sync` commands; omitting it intentionally
+removes the optional local voice packages. The workspace setup installs the
+persistent `openbase-coder` shim for you, backed by the same workspace venv the
+services use. Do not install a second CLI with `uv tool install`.
 
 ### 📘 Documentation
 

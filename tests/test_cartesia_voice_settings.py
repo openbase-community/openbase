@@ -419,6 +419,44 @@ def test_livekit_room_token_blocks_openbase_cloud_audio_without_subscription(
     assert response.data["code"] == "subscription_required"
 
 
+def test_livekit_room_token_blocks_incomplete_local_audio(monkeypatch) -> None:
+    monkeypatch.setattr(
+        views._livekit,
+        "_livekit_client_token_credentials",
+        lambda: ("livekit-client-key", "livekit-client-secret"),
+    )
+    monkeypatch.setattr(
+        views._livekit,
+        "selected_tts_provider_id",
+        lambda: "kokoro",
+    )
+    monkeypatch.setattr(
+        views._livekit,
+        "selected_stt_provider_id",
+        lambda: "local_mlx_whisper",
+    )
+    monkeypatch.setattr(
+        views._livekit,
+        "local_audio_readiness",
+        lambda **_kwargs: SimpleNamespace(
+            ready=False,
+            detail="Missing local audio Python packages: kokoro",
+        ),
+    )
+
+    response = views.livekit_room_token(
+        _jwt_authenticated_request(
+            "POST",
+            "/api/livekit-room-token/",
+            {"livekit_dispatch_agent_name": "livekit-agent"},
+        )
+    )
+
+    assert response.status_code == 503
+    assert response.data["code"] == "local_audio_not_ready"
+    assert "setup --audio-provider local" in response.data["detail"]
+
+
 def test_livekit_room_token_includes_proven_cloud_workspace_identity(
     monkeypatch,
 ) -> None:
@@ -431,6 +469,11 @@ def test_livekit_room_token_includes_proven_cloud_workspace_identity(
         views._livekit,
         "ensure_openbase_cloud_audio_subscription",
         lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        views._livekit,
+        "local_audio_readiness",
+        lambda **_kwargs: SimpleNamespace(ready=True, detail=None),
     )
     monkeypatch.setattr(
         views._livekit,

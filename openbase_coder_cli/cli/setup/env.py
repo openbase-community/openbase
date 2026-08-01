@@ -26,6 +26,7 @@ from openbase_coder_cli.env_file import (
     env_file_values as _env_file_values,
 )
 from openbase_coder_cli.env_file import (
+    remove_env_file_keys,
     selected_backend_from_env_file,
 )
 from openbase_coder_cli.env_file import (
@@ -35,6 +36,8 @@ from openbase_coder_cli.paths import (
     CODEX_DISPATCHER_CONFIG_PATH,
     OPENBASE_CLAUDE_CONFIG_DIR,
 )
+
+MODEL_DOWNLOAD_OFFLINE_ENV_KEYS = {"HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"}
 
 
 def _ensure_env_file(
@@ -48,6 +51,9 @@ def _ensure_env_file(
     if coding_backend:
         coding_backend = normalize_backend(coding_backend)
     if path.is_file():
+        removed_offline_flags = remove_env_file_keys(
+            path, MODEL_DOWNLOAD_OFFLINE_ENV_KEYS
+        )
         updates = _missing_livekit_client_credential_values(path)
         if coding_backend:
             updates[CODING_BACKEND_ENV_KEY] = coding_backend
@@ -59,6 +65,11 @@ def _ensure_env_file(
                 click.echo(
                     f"Updated client-facing LiveKit token credentials in {path}."
                 )
+            if removed_offline_flags:
+                click.echo(f"Removed obsolete offline model flags from {path}.")
+            return
+        if removed_offline_flags:
+            click.echo(f"Removed obsolete offline model flags from {path}.")
             return
         click.echo(f".env already exists at {path}, leaving unchanged.")
         return

@@ -20,8 +20,9 @@ Openbase Coder has exactly two deployment modes:
   console, agent instructions, and skills. It is detected automatically via
   `openbase-coder-package.json`.
 - **Development**: a cloned `openbase-coder-workspace` checkout set up with the
-  workspace's `./scripts/setup` script, with the CLI installed editable
-  (`uv tool install -e ./cli`) or run via `uv run`.
+  workspace's `./scripts/setup` script. The script installs a persistent shim
+  backed by the workspace venv; do not create a second CLI environment with
+  `uv tool install`.
 
 Git, `uv`, and Node/npm are only needed for Openbase Coder development.
 Plugins no longer need Node/npm: plugin console pages ship prebuilt static
@@ -29,7 +30,9 @@ assets rendered in iframes.
 
 Local Kokoro/MLX audio is optional. When setup is run with
 `--audio-provider local`, the CLI installs the local-audio Python packages into
-the bundled runtime and downloads the Kokoro voices and MLX Whisper model.
+the active runtime and downloads the Kokoro voices, English language model,
+and MLX Whisper model. The development workspace wrapper selects this free
+local path by default.
 
 Optional:
 
@@ -67,6 +70,16 @@ cd openbase-coder-workspace
 ./scripts/setup
 ```
 
+The workspace script defaults to local audio and verifies the dependencies and
+models before installing services. Pass `--backend codex` or
+`--backend claude-code` to avoid the interactive backend prompt. After setup,
+keep the voice extra when syncing CLI development dependencies:
+
+```bash
+cd cli
+uv sync --extra dev --extra local-audio
+```
+
 If a standalone desktop/CLI install, or a different development workspace
 install, already exists, the workspace script stops and links to
 [Uninstall](uninstall.md). Uninstall first, then rerun `./scripts/setup`.
@@ -94,7 +107,7 @@ What setup does:
 4. Installs the selected backend's CLI on demand if missing (codex from GitHub release binaries into `~/.openbase/bin`, claude via Anthropic's official installer).
 5. Generates Openbase instruction files from bundled or workspace templates, links Openbase Claude instructions to the generated Openbase AGENTS file, and keeps normal Claude linked to normal Codex AGENTS.
 6. Symlinks bundled or workspace skills into both Openbase Codex and Claude config skill homes.
-7. Downloads LiveKit agent model files (VAD, turn detector) in both modes, and initializes the CLI venv with `uv sync` in development mode.
+7. Downloads LiveKit agent model files (VAD, turn detector) in both modes, initializes the CLI venv with `uv sync` in development mode, and keeps the `local-audio` extra plus its verified model caches when local audio is selected.
 8. Writes Codex app-server defaults such as `CODEX_MODEL=gpt-5.5`, `CODEX_MODEL_REASONING_EFFORT=high`, `CODEX_SERVICE_TIER=standard`, `CODEX_APP_SERVER_URL`, and `LIVEKIT_CODEX_THREAD_CWD`.
 9. Uses the bundled console build, or builds `console` in development mode.
 10. Installs background services — launchd on macOS, systemd user units on Linux (unless `--skip-services`). Backend-specific services such as `codex-app-server` are only installed for the codex/openbase-cloud backends.
