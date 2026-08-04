@@ -1192,7 +1192,11 @@ def test_setup_configures_tailscale_serve(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         setup_cli, "_symlink_codex_home_skills", lambda _workspace_dir: None
     )
-    _patch_setup(monkeypatch, "_init_cli_workspace", lambda _workspace_dir: None)
+    _patch_setup(
+        monkeypatch,
+        "_init_cli_workspace",
+        lambda _workspace_dir, **_kwargs: None,
+    )
     monkeypatch.setattr(
         setup_cli, "_ensure_codex_home_config", lambda *_args, **_kwargs: None
     )
@@ -1321,6 +1325,35 @@ def test_ensure_local_audio_dependencies_installs_kokoro_spacy_model(
         setup_cli.LOCAL_AUDIO_SPACY_MODEL,
     ]
     assert model_kwargs["env"]["PIP_BREAK_SYSTEM_PACKAGES"] == "1"
+
+
+def test_init_cli_workspace_retains_local_audio_extra(tmp_path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    cli_dir = workspace / "cli"
+    cli_dir.mkdir(parents=True)
+    commands = []
+
+    _patch_setup(monkeypatch, "which", lambda name: "/usr/local/bin/uv")
+    _patch_setup(
+        monkeypatch,
+        "_download_livekit_model_files",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def fake_run(command, **kwargs):
+        commands.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0)
+
+    _patch_setup(monkeypatch, "subprocess", SimpleNamespace(run=fake_run))
+
+    setup_cli._init_cli_workspace(str(workspace), include_local_audio=True)
+
+    assert commands == [
+        (
+            ["/usr/local/bin/uv", "sync", "--extra", "local-audio"],
+            {"cwd": str(cli_dir), "check": True},
+        )
+    ]
 
 
 def test_ensure_local_audio_dependencies_supports_python_313(

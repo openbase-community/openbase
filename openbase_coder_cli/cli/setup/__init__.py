@@ -507,16 +507,20 @@ def _run_setup_phases(
         f"Voice dispatcher service tier: {'fast' if fast_mode else 'standard'} "
         "(Super Agents: standard; both adjustable in console settings)."
     )
-    if audio_provider == AUDIO_PROVIDER_LOCAL:
-        _ensure_local_audio_dependencies(runtime_package)
-        _download_local_audio_models()
     _symlink_codex_home_skills(workspace_dir if use_dev_workspace else "")
 
     # --- Initialize runtime assets ---
     if use_dev_workspace:
-        _init_cli_workspace(workspace_dir)
+        _init_cli_workspace(
+            workspace_dir,
+            include_local_audio=audio_provider == AUDIO_PROVIDER_LOCAL,
+        )
     else:
         _init_standalone_runtime(runtime_package)
+
+    if audio_provider == AUDIO_PROVIDER_LOCAL:
+        _ensure_local_audio_dependencies(runtime_package)
+        _download_local_audio_models()
 
     # --- Configure the service CODEX_HOME ---
     if link_codex_config:

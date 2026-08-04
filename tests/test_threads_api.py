@@ -51,6 +51,14 @@ class FakeThreadManager:
         )
 
 
+class IncompatibleThreadManager(FakeThreadManager):
+    async def get_thread_state(self, thread_id: str) -> ThreadInfo | None:
+        raise RuntimeError(
+            '{"code": -32603, "message": "failed to read thread: '
+            'thread-store internal error: rollout does not start with session metadata"}'
+        )
+
+
 def _thread(index: int) -> ThreadInfo:
     now = datetime(2026, 5, 28, 12, tzinfo=timezone.utc)
     updated_at = now - timedelta(minutes=index)
@@ -265,6 +273,21 @@ def test_thread_active_voice_returns_404_without_active_thread(monkeypatch) -> N
     assert response.status_code == 404
     assert manager.page_calls == []
     assert manager.thread_state_calls == []
+
+
+def test_thread_detail_returns_clean_conflict_for_version_skew(monkeypatch) -> None:
+    manager = IncompatibleThreadManager([])
+    monkeypatch.setattr(thread_views, "get_session_manager", lambda: manager)
+    factory = APIRequestFactory()
+    request = factory.get("/api/threads/thread-newer/")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+
+    response = thread_views.thread_detail(request, "thread-newer")
+
+    assert response.status_code == 409
+    assert response.data["code"] == "thread_version_unavailable"
+    assert "newer Codex version" in response.data["error"]
+    assert "thread-store" not in response.data["error"]
 
 
 def test_thread_list_filters_favorites_without_changing_default_order(

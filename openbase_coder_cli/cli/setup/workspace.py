@@ -215,7 +215,11 @@ def _syncthing_global_ignore_path() -> Path:
     return Path.home() / ".config" / "syncthing" / "global.stignore"
 
 
-def _init_cli_workspace(workspace_dir: str) -> None:
+def _init_cli_workspace(
+    workspace_dir: str,
+    *,
+    include_local_audio: bool = False,
+) -> None:
     """Initialize the CLI checkout that now hosts the LiveKit worker."""
     cli_dir = Path(workspace_dir) / "cli"
     if not cli_dir.is_dir():
@@ -231,7 +235,10 @@ def _init_cli_workspace(workspace_dir: str) -> None:
 
     # Create venv and install dependencies
     click.echo("  Running uv sync...")
-    subprocess.run([uv_bin, "sync"], cwd=str(cli_dir), check=True)
+    sync_command = [uv_bin, "sync"]
+    if include_local_audio:
+        sync_command.extend(["--extra", "local-audio"])
+    subprocess.run(sync_command, cwd=str(cli_dir), check=True)
 
     _download_livekit_model_files(
         [uv_bin, "run", "python"],

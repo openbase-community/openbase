@@ -99,6 +99,15 @@ Pending permission requests from running agents, with approve/deny buttons
 and 5-second auto-refresh. Approval push notifications deep-link here, so you
 can unblock an agent without being at your Mac.
 
+If your phone loses connectivity while an agent is waiting for approval, the
+agent stays blocked at the approval checkpoint. The request is stored in the
+local approval queue on the Mac and reappears in the Approvals tab when the
+iPhone reconnects over Tailscale. Openbase does not roll back already completed
+work; the agent can only continue from the last confirmed state after you
+approve. Skill-originated approval prompts may include a timeout (the CLI
+default is 5 minutes), in which case the waiting action is cancelled if no
+answer arrives in time.
+
 ## Reports
 
 Browse agent-written reports across projects: search, tag filter chips, and
