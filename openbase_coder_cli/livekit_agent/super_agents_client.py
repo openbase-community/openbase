@@ -1443,6 +1443,8 @@ def _speech_text_from_progress(progress: dict[str, Any]) -> str:
 
 def _should_ignore_speech_text(text: str, progress: dict[str, Any]) -> bool:
     normalized = _normalize_speech_candidate(text)
+    if _looks_like_schema_label(normalized):
+        return True
     if _looks_like_metadata_identifier(normalized):
         return True
     return normalized in _user_message_texts(progress)
@@ -1492,6 +1494,21 @@ def _looks_like_metadata_identifier(text: str) -> bool:
     if len(compact) >= 16 and re.fullmatch(r"[0-9a-f]+", compact):
         return True
     return bool(re.fullmatch(r"(?:[0-9a-f]{4,}[-\s]+){2,}[0-9a-f]{4,}", text))
+
+
+def _looks_like_schema_label(text: str) -> bool:
+    compact = text.replace(" ", "").replace("_", "").replace("-", "")
+    return compact in {
+        "agentmessage",
+        "assistantmessage",
+        "usermessage",
+        "toolcall",
+        "functioncall",
+        "completed",
+        "running",
+        "waiting",
+        "queued",
+    }
 
 
 def _progress_has_pending_requests(progress: dict[str, Any]) -> bool:

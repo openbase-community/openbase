@@ -1027,6 +1027,38 @@ def test_speech_text_from_progress_uses_agent_message_text() -> None:
     assert _speech_text_from_progress(progress) == "Here is the useful answer."
 
 
+def test_speech_text_from_progress_ignores_agent_message_type_label() -> None:
+    progress = {
+        "summary": {
+            "items": [
+                {
+                    "type": "agentMessage",
+                }
+            ]
+        },
+        "turn": {
+            "items": [
+                {
+                    "type": "agentMessage",
+                    "phase": "final",
+                }
+            ]
+        },
+    }
+
+    assert _speech_text_from_progress(progress) == ""
+
+
+def test_speech_text_from_progress_ignores_spaced_agent_message_label() -> None:
+    progress = {
+        "summary": {
+            "lastUsefulMessage": "agent message.",
+        }
+    }
+
+    assert _speech_text_from_progress(progress) == ""
+
+
 def test_speech_text_from_progress_ignores_turn_ids() -> None:
     progress = {
         "summary": {
