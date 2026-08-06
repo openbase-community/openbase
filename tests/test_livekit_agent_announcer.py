@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from livekit import rtc
 
+from openbase_coder_cli import livekit_voice_route as voice_route
 from openbase_coder_cli.livekit_agent import audio_scoring, config, livekit, voices
 from openbase_coder_cli.livekit_agent.codex_app_client import CodexAppServerClient
 from openbase_coder_cli.livekit_agent.livekit import (
@@ -36,9 +37,12 @@ from openbase_coder_cli.livekit_agent.livekit import (
     parse_voice_route_packet,
     stable_super_agent_voice_id,
 )
+from openbase_coder_cli.livekit_agent.packets import VOICE_LIFECYCLE_PROTOCOL_VERSION
 from openbase_coder_cli.livekit_agent.super_agents_client import (
     SuperAgentsLiveKitClient,
 )
+from openbase_coder_cli.livekit_agent.turn_detection import UserTurnClosureDecision
+from openbase_coder_cli.livekit_agent.voice_delivery import VoiceRouteSnapshot
 from openbase_coder_cli.tts_providers import KOKORO_PROVIDER_ID
 
 
@@ -541,7 +545,7 @@ def test_direct_livekit_instruction_loader_priority(tmp_path):
 
 def test_super_agent_voices_use_builtin_catalog_pool(monkeypatch):
     monkeypatch.setattr(
-        voices,
+        voice_route,
         "selected_tts_provider_id",
         lambda: livekit.CARTESIA_PROVIDER_ID,
     )
@@ -556,7 +560,7 @@ def test_super_agent_voices_use_builtin_catalog_pool(monkeypatch):
 
 def test_kokoro_super_agent_voices_are_english_only(monkeypatch):
     monkeypatch.setattr(
-        voices,
+        voice_route,
         "selected_tts_provider_id",
         lambda: KOKORO_PROVIDER_ID,
     )
@@ -1085,14 +1089,14 @@ async def test_voice_router_transfers_to_prepared_target(monkeypatch, tmp_path):
         tmp_path / "missing-direct-instructions.md",
     )
     monkeypatch.setattr(
-        voices,
+        voice_route,
         "SUPER_AGENT_VOICES",
         (
             livekit.CartesiaVoice("voice-a", "Alice"),
             livekit.CartesiaVoice("voice-b", "Bob"),
         ),
     )
-    monkeypatch.setattr(voices, "SUPER_AGENT_VOICE_IDS", ("voice-a", "voice-b"))
+    monkeypatch.setattr(voice_route, "SUPER_AGENT_VOICE_IDS", ("voice-a", "voice-b"))
 
     async def fake_prepare(self):
         prepared.append(
@@ -1147,6 +1151,11 @@ async def test_voice_router_transfers_to_prepared_target(monkeypatch, tmp_path):
     }
 
 
+def test_livekit_agent_voice_mapping_uses_route_source_of_truth():
+    assert voices.stable_super_agent_voice is voice_route.stable_super_agent_voice
+    assert voices.stable_super_agent_voice_id is voice_route.stable_super_agent_voice_id
+
+
 class _FakeLocalParticipant:
     def __init__(self) -> None:
         self.published: list[tuple[bytes, bool, str]] = []
@@ -1182,6 +1191,156 @@ def test_publish_agent_error_packet_publishes_status_topic():
         "detail": "Subscribe in Openbase Cloud.",
         "message_id": message_id,
     }
+
+
+def test_publish_voice_lifecycle_packet_publishes_delivery_metadata():
+    room = _FakeRoom()
+    ledger = livekit.VoiceDeliveryLedger(
+        route_snapshot=lambda: VoiceRouteSnapshot(
+            route_version=2,
+            active_thread_id="thread-1",
+            active_voice_id="voice-1",
+            active_voice_name="Corey",
+            active_route="codex_thread",
+        ),
+        room_name="room-1",
+        room_id="RM_1",
+    )
+    record = ledger.accept_utterance(message_id="codex-1", prompt="hello")
+    record.status = "audio_delivered"
+    record.turn_id = "turn-1"
+    record.speech_hash = "speech-hash"
+    record.speech_len = 5
+    record.audio_events = 2
+    record.audio_seconds = 0.1
+
+    packet_id = asyncio.run(
+        livekit.publish_voice_lifecycle_packet(
+            room,
+            event="safe_to_unmute",
+            record=record,
+        )
+    )
+
+    assert len(room.local_participant.published) == 1
+    data, reliable, topic = room.local_participant.published[0]
+    assert reliable is True
+    assert topic == config.VOICE_LIFECYCLE_TOPIC
+    payload = json.loads(data.decode("utf-8"))
+    assert payload["type"] == "voice_lifecycle"
+    assert payload["protocol_version"] == VOICE_LIFECYCLE_PROTOCOL_VERSION
+    assert payload["event"] == "safe_to_unmute"
+    assert payload["packet_id"] == packet_id
+    assert payload["delivery_id"] == record.delivery_id
+    assert payload["message_id"] == "codex-1"
+    assert payload["turn_id"] == "turn-1"
+    assert payload["status"] == "audio_delivered"
+    assert payload["route"] == {
+        "version": 2,
+        "thread_id": "thread-1",
+        "kind": "codex_thread",
+        "voice_id": "voice-1",
+        "voice_name": "Corey",
+    }
+    assert payload["prompt_len"] == 5
+    assert payload["speech_hash"] == "speech-hash"
+    assert payload["speech_len"] == 5
+    assert payload["audio_events"] == 2
+    assert payload["audio_seconds"] == 0.1
+
+
+def test_publish_voice_lifecycle_packet_includes_user_turn_metadata():
+    room = _FakeRoom()
+    ledger = livekit.VoiceDeliveryLedger(
+        route_snapshot=lambda: VoiceRouteSnapshot(
+            route_version=2,
+            active_thread_id="thread-1",
+            active_voice_id="voice-1",
+            active_voice_name="Corey",
+            active_route="codex_thread",
+        ),
+        room_name="room-1",
+        room_id="RM_1",
+    )
+    record = ledger.accept_utterance(message_id="codex-1", prompt="hello and")
+    ledger.mark_user_turn_closed(
+        record,
+        decision=UserTurnClosureDecision(
+            confidence=0.35,
+            source="semantic_tail",
+            delay_seconds=3.5,
+            completion_reason="continuation_tail",
+        ),
+    )
+    record.user_turn_eou_probability = 0.21
+    record.user_turn_silence_ms = 3500
+    record.user_turn_transcript_confidence = 0.88
+    record.user_turn_transcription_delay_ms = 120
+
+    asyncio.run(
+        livekit.publish_voice_lifecycle_packet(
+            room,
+            event="safe_to_mute_user",
+            record=record,
+            reason="continuation_tail",
+        )
+    )
+
+    data, _reliable, topic = room.local_participant.published[0]
+    assert topic == config.VOICE_LIFECYCLE_TOPIC
+    payload = json.loads(data.decode("utf-8"))
+    assert payload["event"] == "safe_to_mute_user"
+    assert payload["reason"] == "continuation_tail"
+    assert payload["user_turn"] == {
+        "confidence": 0.35,
+        "source": "semantic_tail",
+        "delay_ms": 3500,
+        "eou_probability": 0.21,
+        "silence_ms": 3500,
+        "transcript_confidence": 0.88,
+        "transcription_delay_ms": 120,
+        "transcript_len": 9,
+        "text_hash": record.prompt_hash,
+        "completion_reason": "continuation_tail",
+    }
+
+
+def test_publish_voice_lifecycle_packet_stringifies_room_id_guardrail():
+    room = _FakeRoom()
+    ledger = livekit.VoiceDeliveryLedger(
+        route_snapshot=lambda: VoiceRouteSnapshot(
+            route_version=2,
+            active_thread_id="thread-1",
+            active_voice_id=None,
+            active_voice_name=None,
+            active_route="dispatcher",
+        ),
+        room_name="room-1",
+        room_id=object(),
+    )
+    record = ledger.accept_utterance(message_id="codex-1", prompt="hello")
+
+    asyncio.run(
+        livekit.publish_voice_lifecycle_packet(
+            room,
+            event="utterance_accepted",
+            record=record,
+        )
+    )
+
+    data, _reliable, topic = room.local_participant.published[0]
+    assert topic == config.VOICE_LIFECYCLE_TOPIC
+    payload = json.loads(data.decode("utf-8"))
+    assert isinstance(payload["room_id"], str)
+
+
+def test_room_sid_resolves_awaitable_livekit_property():
+    class RoomWithAwaitableSid:
+        @property
+        async def sid(self):
+            return "RM_async"
+
+    assert asyncio.run(livekit._room_sid(RoomWithAwaitableSid())) == "RM_async"
 
 
 def test_cloud_audio_handshake_error_is_clear_and_redacted():

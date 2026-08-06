@@ -21,13 +21,22 @@ from openbase_coder_cli.livekit_agent.super_agents_client import (
     SuperAgentsLiveKitClient,
 )
 from openbase_coder_cli.livekit_agent.text_normalization import normalized_text_hash
+from openbase_coder_cli.livekit_agent.voice_delivery import (
+    VoiceDeliveryLedger,
+    VoiceRouteSnapshot,
+)
 from openbase_coder_cli.livekit_agent.voices import stable_super_agent_voice
 
 logger = logging.getLogger(__name__)
 
 
 class LiveKitVoiceRouter:
-    def __init__(self, dispatcher_client) -> None:
+    def __init__(
+        self,
+        dispatcher_client,
+        *,
+        delivery_ledger: VoiceDeliveryLedger | None = None,
+    ) -> None:
         self._dispatcher_client = dispatcher_client
         self._active_client = dispatcher_client
         self._target_clients: dict[str, SuperAgentsLiveKitClient] = {}
@@ -35,6 +44,8 @@ class LiveKitVoiceRouter:
         self._active_target_voice_name: str | None = None
         self._proactive_steer_prompt_hashes: dict[str, float] = {}
         self._orphaned_result_handler = None
+        self._route_version = 0
+        self.delivery_ledger = delivery_ledger
 
     def set_orphaned_result_handler(self, handler) -> None:
         """Deliver completed turn answers that no voice dispatch consumed."""
@@ -60,11 +71,29 @@ class LiveKitVoiceRouter:
     def active_target_voice_name(self) -> str | None:
         return self._active_target_voice_name
 
+    def route_snapshot(self) -> VoiceRouteSnapshot:
+        thread_id = getattr(self._active_client, "_thread_id", "") or ""
+        active_route = "dispatcher" if self.is_dispatcher_active else "codex_thread"
+        return VoiceRouteSnapshot(
+            route_version=self._route_version,
+            active_thread_id=thread_id,
+            active_voice_id=self._active_target_voice_id,
+            active_voice_name=self._active_target_voice_name,
+            active_route=active_route,
+        )
+
     def exit_to_dispatch(self) -> None:
         self._active_client = self._dispatcher_client
         self._active_target_voice_id = None
         self._active_target_voice_name = None
+        self._route_version += 1
         self._dispatcher_client.reset_voice_route_to_dispatcher()
+        logger.info(
+            "dispatch_timing stage=voice_route_changed action=exit_to_dispatch "
+            "route_version=%d active_thread_id=%s",
+            self._route_version,
+            getattr(self._active_client, "_thread_id", "") or "",
+        )
 
     async def transfer_to_thread(
         self,
@@ -104,6 +133,7 @@ class LiveKitVoiceRouter:
         self._active_client = target_client
         self._active_target_voice_id = target_voice_id
         self._active_target_voice_name = target_voice_name
+        self._route_version += 1
         self._dispatcher_client.persist_voice_route(
             active_target_thread_id=thread_id,
             active_target_kind="codex_thread",
@@ -111,9 +141,21 @@ class LiveKitVoiceRouter:
             active_target_voice_id=target_voice_id,
             active_target_voice_name=target_voice_name,
         )
+        logger.info(
+            "dispatch_timing stage=voice_route_changed action=transfer_to_thread "
+            "route_version=%d active_thread_id=%s active_voice_id=%s "
+            "active_voice_name=%s",
+            self._route_version,
+            thread_id,
+            target_voice_id or "",
+            target_voice_name or "",
+        )
 
     def claim_speech(self, client, turn_id: str) -> bool:
         return self._active_client is client and client.claim_speech(turn_id)
+
+    def can_deliver_for_snapshot(self, snapshot: VoiceRouteSnapshot) -> bool:
+        return snapshot.same_route(self.route_snapshot())
 
     def mark_proactive_steer(self, prompt: str) -> None:
         # Normalized hashing so a steered transcript also matches its

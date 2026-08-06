@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import re
@@ -11,7 +12,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from openbase_coder_cli.backend_config import CLAUDE_CODE_BACKEND
+from openbase_coder_cli.backend_config import (
+    CLAUDE_CODE_BACKEND,
+    CODEX_BACKEND,
+    OPENBASE_CLOUD_BACKEND,
+    OPENBASE_CLOUD_CODEX_BACKEND,
+)
 from openbase_coder_cli.claude_auth import (
     heal_claude_auth,
     is_claude_auth_failure_text,
@@ -57,6 +63,11 @@ TURN_POLL_INTERVAL_SECONDS = 0.5
 # failures.
 TURN_POLL_MAX_CONSECUTIVE_FAILURES = 10
 TURN_POLL_FAILURE_BACKOFF_MAX_SECONDS = 5.0
+# Claude Code can mark a turn completed just before the useful assistant text
+# is visible in the compact progress snapshot. Do not fall through to speech
+# extraction on a terminal-but-empty snapshot immediately; give the store a
+# short window to expose the answer.
+TURN_POLL_COMPLETED_EMPTY_SPEECH_GRACE_SECONDS = 2.0
 # How long to wait after a turn finishes before treating its unclaimed answer
 # as orphaned (no voice dispatch consumed it) and handing it to the orphaned
 # result handler to be spoken directly.
@@ -114,6 +125,27 @@ def _model_name_for_role(
 def _is_super_agents_mcp_server(name: str) -> bool:
     normalized = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
     return normalized in {"super-agents", "mcp-super-agents"}
+
+
+def _execution_backend_for_configured_backend(backend: str) -> str:
+    if backend == OPENBASE_CLOUD_BACKEND:
+        return CLAUDE_CODE_BACKEND
+    if backend == OPENBASE_CLOUD_CODEX_BACKEND:
+        return CODEX_BACKEND
+    return backend
+
+
+def _configured_execution_backend(
+    environment_backend: Callable[[], str],
+) -> str:
+    from openbase_coder_cli.cli.backend import read_backend
+    from openbase_coder_cli.paths import DEFAULT_ENV_FILE_PATH
+
+    if DEFAULT_ENV_FILE_PATH.is_file():
+        configured_backend = read_backend(DEFAULT_ENV_FILE_PATH)
+        if not configured_backend.startswith("unsupported:"):
+            return _execution_backend_for_configured_backend(configured_backend)
+    return environment_backend()
 
 
 class SuperAgentsLiveKitClient:
@@ -510,6 +542,7 @@ class SuperAgentsLiveKitClient:
         developer_instructions: str | None,
         dispatch_id: str,
     ) -> str:
+        await self._ensure_claude_auth_ready()
         turn_input = self._turn_input(
             prompt,
             developer_instructions=developer_instructions,
@@ -766,6 +799,7 @@ class SuperAgentsLiveKitClient:
         start_when_inactive: bool = True,
     ) -> str | None:
         assert self._active_turn_id is not None
+        await self._ensure_claude_auth_ready()
         prompt_debug = _prompt_debug_fields(prompt)
         turn_input = {
             key: value
@@ -944,6 +978,7 @@ class SuperAgentsLiveKitClient:
         turn_id: str,
     ) -> dict[str, Any]:
         consecutive_failures = 0
+        empty_answer_started_at: float | None = None
         while True:
             try:
                 progress = await self._backend_client.progress_by_label(
@@ -992,7 +1027,17 @@ class SuperAgentsLiveKitClient:
                 or progress.get("summary", {}).get("status")
                 or ""
             ).lower()
-            if status == "waiting" and not _progress_has_pending_requests(progress):
+            has_pending_requests = _progress_has_pending_requests(progress)
+            if status == "waiting" and not has_pending_requests:
+                should_wait, empty_answer_started_at = _should_wait_for_speech_text(
+                    progress,
+                    turn_id=turn_id,
+                    status=status,
+                    empty_answer_started_at=empty_answer_started_at,
+                )
+                if should_wait:
+                    await asyncio.sleep(TURN_POLL_INTERVAL_SECONDS)
+                    continue
                 return progress
             if status and status not in {
                 "running",
@@ -1001,7 +1046,18 @@ class SuperAgentsLiveKitClient:
                 "inprogress",
                 "in_progress",
             }:
+                if status in {"completed", "complete", "succeeded", "success"}:
+                    should_wait, empty_answer_started_at = _should_wait_for_speech_text(
+                        progress,
+                        turn_id=turn_id,
+                        status=status,
+                        empty_answer_started_at=empty_answer_started_at,
+                    )
+                    if should_wait:
+                        await asyncio.sleep(TURN_POLL_INTERVAL_SECONDS)
+                        continue
                 return progress
+            empty_answer_started_at = None
             await asyncio.sleep(TURN_POLL_INTERVAL_SECONDS)
 
     def _active_turn_has_completed(self) -> bool:
@@ -1093,7 +1149,6 @@ class SuperAgentsLiveKitClient:
             logger.exception("Claude auth pre-flight heal crashed")
 
     async def _start_thread(self) -> str:
-        await self._ensure_claude_auth_ready()
         params: dict[str, Any] = {
             "name": self._super_agent_name or DEFAULT_DISPATCHER_LABEL,
             "label": self._super_agent_name or DEFAULT_DISPATCHER_LABEL,
@@ -1125,7 +1180,6 @@ class SuperAgentsLiveKitClient:
         return thread_id
 
     async def _resume_thread(self, thread_id: str) -> str:
-        await self._ensure_claude_auth_ready()
         if self._backend_is_codex() and hasattr(self._backend_client, "resume_thread"):
             resumed = await self._backend_client.resume_thread(
                 thread_id,
@@ -1161,9 +1215,22 @@ class SuperAgentsLiveKitClient:
         return LabelQueryInput(**values)
 
     def _client_from_environment(self) -> Any:
-        from super_agents.backend_clients import client_from_environment
+        from super_agents.app_server_client import CodexAppServerClient
+        from super_agents.backend_clients import backend_from_environment
 
-        return client_from_environment()
+        try:
+            from openbase_coder_cli.livekit_agent.config import _load_openbase_env
+
+            _load_openbase_env(override=True)
+        except Exception:
+            logger.warning("Unable to refresh Openbase env before backend selection")
+
+        execution_backend = _configured_execution_backend(backend_from_environment)
+        if execution_backend == CLAUDE_CODE_BACKEND:
+            from super_agents.claude_sdk import ClaudeAgentSdkClient
+
+            return ClaudeAgentSdkClient()
+        return CodexAppServerClient()
 
     def _register_backend_callback(self) -> None:
         register = getattr(self._backend_client, "register_permission_callback", None)
@@ -1414,31 +1481,104 @@ def _is_queue_item_id(value: str) -> bool:
 
 
 def _speech_text_from_progress(progress: dict[str, Any]) -> str:
-    from super_agents.app_formatting import find_useful_text
+    from super_agents.app_formatting import find_turn_useful_text, find_useful_text
 
-    candidates: list[Any] = [
-        progress.get("lastUsefulMessage"),
-        progress.get("lastObservedState"),
-        progress.get("summary", {}).get("lastUsefulMessage")
-        if isinstance(progress.get("summary"), dict)
-        else None,
-    ]
     summary = progress.get("summary")
-    if isinstance(summary, dict):
-        candidates.append(summary.get("items"))
+    candidates: list[tuple[str, Any, bool]] = [
+        (
+            "summary.items",
+            find_turn_useful_text(summary.get("items")) if isinstance(summary, dict) else None,
+            True,
+        ),
+        ("progress.turn.lastUsefulMessage", _last_useful_message(progress.get("turn")), True),
+        ("progress.turns.lastUsefulMessage", _last_useful_message(progress.get("turns")), True),
+        (
+            "progress.recentTurns.lastUsefulMessage",
+            _last_useful_message(progress.get("recentTurns")),
+            True,
+        ),
+        ("progress.turn", find_turn_useful_text(progress.get("turn")), True),
+        ("progress.turns", find_turn_useful_text(progress.get("turns")), True),
+        ("progress.recentTurns", find_turn_useful_text(progress.get("recentTurns")), True),
+    ]
     candidates.extend(
         [
-            progress.get("turn"),
-            progress.get("turns"),
-            progress.get("recentTurns"),
-            progress.get("logTail"),
+            ("progress.lastUsefulMessage", progress.get("lastUsefulMessage"), True),
         ]
     )
-    for candidate in candidates:
-        text = find_useful_text(candidate)
-        if text and not _should_ignore_speech_text(text, progress):
-            return _speech_excerpt(text)
+    if isinstance(summary, dict):
+        candidates.extend(
+            [
+                ("summary.lastUsefulMessage", summary.get("lastUsefulMessage"), True),
+            ]
+        )
+    for source, candidate, role_selected in candidates:
+        text = str(candidate).strip() if role_selected and isinstance(candidate, str) else find_useful_text(candidate)
+        if not text:
+            continue
+        text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+        if _should_ignore_speech_text(text, progress):
+            logger.info(
+                "%s stage=speech_candidate_rejected source=%s text_len=%d text_hash=%s",
+                DISPATCH_TIMING_LOG,
+                source,
+                len(text),
+                text_hash,
+            )
+            continue
+        logger.info(
+            "%s stage=speech_candidate_selected source=%s text_len=%d text_hash=%s",
+            DISPATCH_TIMING_LOG,
+            source,
+            len(text),
+            text_hash,
+        )
+        return _speech_excerpt(text)
     return ""
+
+
+def _last_useful_message(value: Any, depth: int = 0) -> str | None:
+    if value is None or depth > 6:
+        return None
+    if isinstance(value, list):
+        for item in reversed(value):
+            if result := _last_useful_message(item, depth + 1):
+                return result
+        return None
+    if not isinstance(value, dict):
+        return None
+    text = value.get("lastUsefulMessage")
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    for key in ("turn", "turns", "recentTurns", "summary"):
+        if result := _last_useful_message(value.get(key), depth + 1):
+            return result
+    return None
+
+
+def _should_wait_for_speech_text(
+    progress: dict[str, Any],
+    *,
+    turn_id: str,
+    status: str,
+    empty_answer_started_at: float | None,
+) -> tuple[bool, float | None]:
+    if _speech_text_from_progress(progress):
+        return False, empty_answer_started_at
+    now = time.monotonic()
+    started_at = empty_answer_started_at if empty_answer_started_at is not None else now
+    should_wait = (
+        now - started_at < TURN_POLL_COMPLETED_EMPTY_SPEECH_GRACE_SECONDS
+    )
+    if should_wait:
+        logger.info(
+            "%s stage=turn_wait_completed_without_speech turn_id=%s "
+            "status=%s retrying=True",
+            DISPATCH_TIMING_LOG,
+            turn_id,
+            status,
+        )
+    return should_wait, started_at
 
 
 def _should_ignore_speech_text(text: str, progress: dict[str, Any]) -> bool:
@@ -1446,6 +1586,8 @@ def _should_ignore_speech_text(text: str, progress: dict[str, Any]) -> bool:
     if _looks_like_schema_label(normalized):
         return True
     if _looks_like_metadata_identifier(normalized):
+        return True
+    if _looks_like_timestamp(normalized):
         return True
     return normalized in _user_message_texts(progress)
 
@@ -1467,7 +1609,12 @@ def _user_message_texts(value: Any, depth: int = 0) -> set[str]:
             return {_normalize_speech_candidate(text)}
 
     texts: set[str] = set()
-    for child in value.values():
+    for key, child in value.items():
+        normalized_key = "".join(char for char in str(key).lower() if char.isalnum())
+        if normalized_key in {"prompt", "promptpreview"}:
+            if text := _text_content(child):
+                texts.add(_normalize_speech_candidate(text))
+            continue
         texts.update(_user_message_texts(child, depth + 1))
     return texts
 
@@ -1494,6 +1641,17 @@ def _looks_like_metadata_identifier(text: str) -> bool:
     if len(compact) >= 16 and re.fullmatch(r"[0-9a-f]+", compact):
         return True
     return bool(re.fullmatch(r"(?:[0-9a-f]{4,}[-\s]+){2,}[0-9a-f]{4,}", text))
+
+
+def _looks_like_timestamp(text: str) -> bool:
+    lowered = text.replace(" dot ", ".").replace(" z", "z")
+    compact = re.sub(r"\s+", "", lowered)
+    return bool(
+        re.fullmatch(
+            r"\d{4}[-/]?\d{2}[-/]?\d{2}t?\d{2}:?\d{2}(?::?\d{2})?(?:\.\d+)?z?",
+            compact,
+        )
+    )
 
 
 def _looks_like_schema_label(text: str) -> bool:

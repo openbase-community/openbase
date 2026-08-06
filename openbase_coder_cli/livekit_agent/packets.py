@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+import time
 import uuid
 from dataclasses import dataclass
 
@@ -12,10 +13,14 @@ from openbase_coder_cli.livekit_agent.config import (
     AGENT_STATUS_TOPIC,
     ANNOUNCER_AUDIO_KIND,
     ANNOUNCER_TOPIC,
+    VOICE_LIFECYCLE_TOPIC,
     VOICE_ROUTE_TOPIC,
 )
+from openbase_coder_cli.livekit_agent.voice_delivery import VoiceDeliveryRecord
 
 logger = logging.getLogger(__name__)
+
+VOICE_LIFECYCLE_PROTOCOL_VERSION = 2
 
 
 async def publish_agent_error_packet(
@@ -51,6 +56,84 @@ async def publish_agent_error_packet(
         detail,
     )
     return message_id
+
+
+async def publish_voice_lifecycle_packet(
+    room: rtc.Room,
+    *,
+    event: str,
+    record: VoiceDeliveryRecord,
+    reason: str = "",
+) -> str:
+    """Publish a voice lifecycle packet for clients with explicit voice UI.
+
+    Client contract (additive; old clients ignore unknown topics): a reliable
+    data packet on topic ``openbase.voice.lifecycle`` whose payload is JSON:
+    ``{"type": "voice_lifecycle", "event": <event>, ...}``.
+    """
+    packet_id = f"voice-lifecycle-{uuid.uuid4().hex}"
+    route = record.route_at_acceptance
+    payload = {
+        "type": "voice_lifecycle",
+        "protocol_version": VOICE_LIFECYCLE_PROTOCOL_VERSION,
+        "event": event,
+        "packet_id": packet_id,
+        "delivery_id": record.delivery_id,
+        "message_id": record.message_id,
+        "turn_id": record.turn_id or "",
+        "status": record.status,
+        "created_at_unix_ms": int(time.time() * 1000),
+        "room": _json_string(record.room_name),
+        "room_id": _json_string(record.room_id),
+        "route": {
+            "version": route.route_version,
+            "thread_id": _json_string(route.active_thread_id),
+            "kind": _json_string(route.active_route),
+            "voice_id": _json_string(route.active_voice_id),
+            "voice_name": _json_string(route.active_voice_name),
+        },
+        "prompt_hash": record.prompt_hash,
+        "prompt_len": record.prompt_len,
+        "speech_hash": record.speech_hash,
+        "speech_len": record.speech_len,
+        "tts_text_hash": record.tts_text_hash,
+        "tts_text_len": record.tts_text_len,
+        "audio_events": record.audio_events,
+        "audio_seconds": record.audio_seconds,
+        "reason": reason,
+    }
+    if record.user_turn_closure_source:
+        payload["user_turn"] = {
+            "confidence": record.user_turn_closure_confidence,
+            "source": record.user_turn_closure_source,
+            "delay_ms": record.user_turn_closure_delay_ms,
+            "eou_probability": record.user_turn_eou_probability,
+            "silence_ms": record.user_turn_silence_ms,
+            "transcript_confidence": record.user_turn_transcript_confidence,
+            "transcription_delay_ms": record.user_turn_transcription_delay_ms,
+            "transcript_len": record.prompt_len,
+            "text_hash": record.prompt_hash,
+            "completion_reason": record.user_turn_completion_reason,
+        }
+    await room.local_participant.publish_data(
+        json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        reliable=True,
+        topic=VOICE_LIFECYCLE_TOPIC,
+    )
+    logger.info(
+        "dispatch_timing stage=voice_lifecycle_packet_published event=%s "
+        "packet_id=%s delivery_id=%s status=%s route_version=%d "
+        "route_thread_id=%s room=%s reason=%s",
+        event,
+        packet_id,
+        record.delivery_id,
+        record.status,
+        route.route_version,
+        route.active_thread_id,
+        record.room_name,
+        reason,
+    )
+    return packet_id
 
 
 @dataclass(frozen=True)
@@ -188,6 +271,10 @@ def _packet_participant_identity(data_packet: rtc.DataPacket) -> str:
 
 def _packet_hash(data_packet: rtc.DataPacket) -> str:
     return hashlib.sha256(data_packet.data).hexdigest()[:12]
+
+
+def _json_string(value) -> str:
+    return value if isinstance(value, str) else str(value or "")
 
 
 def parse_voice_route_packet(data_packet: rtc.DataPacket) -> VoiceRouteCommand | None:

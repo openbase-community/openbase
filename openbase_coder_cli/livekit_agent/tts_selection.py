@@ -21,6 +21,11 @@ from openbase_coder_cli.tts_providers import (
 logger = logging.getLogger(__name__)
 
 
+def text_for_tts(text: str) -> str:
+    spoken_text = format_for_speech(text)
+    return spoken_text or "Technical output omitted, shown on screen."
+
+
 class VoiceSelectingTTS(livekit_tts.TTS):
     def __init__(
         self,
@@ -37,6 +42,7 @@ class VoiceSelectingTTS(livekit_tts.TTS):
         volume: float = DEFAULT_CARTESIA_TTS_VOLUME,
         base_url: str | None = None,
         api_version: str | None = None,
+        delivery_ledger=None,
     ) -> None:
         self._provider = provider or get_tts_provider(CARTESIA_PROVIDER_ID)
         default_tts = self._provider.create_livekit_tts(
@@ -63,6 +69,7 @@ class VoiceSelectingTTS(livekit_tts.TTS):
         self._volume = volume
         self._base_url = base_url
         self._api_version = api_version
+        self._delivery_ledger = delivery_ledger
         self._tts_by_voice_id: dict[str, livekit_tts.TTS] = {
             default_voice_id: default_tts
         }
@@ -108,9 +115,7 @@ class VoiceSelectingTTS(livekit_tts.TTS):
         voice_id: str | None,
         conn_options=DEFAULT_API_CONNECT_OPTIONS,
     ):
-        spoken_text = format_for_speech(text)
-        if not spoken_text:
-            spoken_text = "Technical output omitted, shown on screen."
+        spoken_text = text_for_tts(text)
         self._log_tts(
             stage="tts_synthesize_start",
             voice_id=voice_id,
@@ -144,6 +149,7 @@ class VoiceSelectingTTS(livekit_tts.TTS):
             role=self._role,
             voice_id=resolved_voice_id,
             voice_name=self._voice_name_for_id(resolved_voice_id),
+            delivery_ledger=self._delivery_ledger,
         )
 
     def prewarm(self) -> None:
@@ -276,6 +282,7 @@ class SpeechFormattingSynthesizeStream:
         role: str,
         voice_id: str | None = None,
         voice_name: str | None = None,
+        delivery_ledger=None,
     ) -> None:
         self._stream = stream
         self._buffer = ""
@@ -288,6 +295,8 @@ class SpeechFormattingSynthesizeStream:
         self._non_audio_event_count = 0
         self._flushed_text_monotonic: float | None = None
         self._audio_seconds = 0.0
+        self._delivery_ledger = delivery_ledger
+        self._delivery_record = None
 
     def push_text(self, token: str) -> None:
         self._buffer += token
@@ -308,8 +317,7 @@ class SpeechFormattingSynthesizeStream:
     def flush(self) -> None:
         self._flush_count += 1
         if self._buffer:
-            spoken_text = format_for_speech(self._buffer)
-            final_text = spoken_text or "Technical output omitted, shown on screen."
+            final_text = text_for_tts(self._buffer)
             logger.info(
                 "dispatch_timing stage=tts_stream_flush role=%s voice_id=%s "
                 "voice_name=%s flush_count=%d original_len=%d text_len=%d "
@@ -323,7 +331,19 @@ class SpeechFormattingSynthesizeStream:
                 hashlib.sha256(final_text.encode("utf-8")).hexdigest()[:12],
                 final_text[:160],
             )
-            self._stream.push_text(final_text)
+            if self._delivery_ledger is not None:
+                self._delivery_record = self._delivery_ledger.match_tts_flush(
+                    tts_text=final_text,
+                    role=self._role,
+                    voice_id=self._voice_id,
+                    voice_name=self._voice_name,
+                )
+            suppress_stale = (
+                self._delivery_record is not None
+                and getattr(self._delivery_record, "status", "") == "suppressed_stale"
+            )
+            if not suppress_stale:
+                self._stream.push_text(final_text)
             self._buffer = ""
             if self._flushed_text_monotonic is None:
                 self._flushed_text_monotonic = time.monotonic()
@@ -398,6 +418,15 @@ class SpeechFormattingSynthesizeStream:
                 self._non_audio_event_count,
                 self._audio_seconds,
             )
+            if self._delivery_ledger is not None and self._delivery_record is not None:
+                self._delivery_ledger.mark_tts_completed(
+                    self._delivery_record,
+                    audio_events=self._audio_event_count,
+                    audio_seconds=self._audio_seconds,
+                    role=self._role,
+                    voice_id=self._voice_id,
+                    voice_name=self._voice_name,
+                )
             raise
         frame = getattr(event, "frame", None)
         if frame is not None:
@@ -420,6 +449,17 @@ class SpeechFormattingSynthesizeStream:
                     self._voice_name or "",
                     latency_ms,
                 )
+                if (
+                    self._delivery_ledger is not None
+                    and self._delivery_record is not None
+                ):
+                    self._delivery_ledger.mark_audio_started(
+                        self._delivery_record,
+                        latency_ms=latency_ms,
+                        role=self._role,
+                        voice_id=self._voice_id,
+                        voice_name=self._voice_name,
+                    )
             if LIVEKIT_VERBOSE_LOGGING:
                 logger.info(
                     "dispatch_timing stage=tts_audio_frame role=%s voice_id=%s "

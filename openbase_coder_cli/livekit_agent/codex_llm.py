@@ -19,6 +19,12 @@ from openbase_coder_cli.livekit_agent.config import (
 from openbase_coder_cli.livekit_agent.spoken_commands import (
     _is_exit_to_dispatch_command,
 )
+from openbase_coder_cli.livekit_agent.tts_selection import text_for_tts
+from openbase_coder_cli.livekit_agent.turn_detection import (
+    VoiceTurnSignalTracker,
+    decide_user_turn_closure,
+    latest_user_turn_signals_from_chat_ctx,
+)
 from openbase_coder_cli.onboarding_reminder import append_onboarding_reminder
 
 if TYPE_CHECKING:
@@ -46,6 +52,7 @@ class CodexLLMStream(llm.LLMStream):
         )
         self._message_id = f"codex-{uuid.uuid4()}"
         self._voice_router = livekit_llm.voice_router
+        self._turn_signal_tracker = livekit_llm.turn_signal_tracker
         self._emitted_text = False
 
     def _latest_user_text(self) -> str:
@@ -80,14 +87,55 @@ class CodexLLMStream(llm.LLMStream):
             getattr(self._voice_router.active_client, "_thread_id", "") or "",
             self._voice_router.active_target_voice_id or "",
         )
+        delivery_record = None
+        delivery_ledger = self._voice_router.delivery_ledger
+        turn_signals = latest_user_turn_signals_from_chat_ctx(
+            self._chat_ctx,
+            turn_signal_tracker=self._turn_signal_tracker,
+        )
+        if delivery_ledger is not None:
+            delivery_record = delivery_ledger.accept_utterance(
+                message_id=self._message_id,
+                prompt=prompt,
+            )
+            delivery_ledger.schedule_user_turn_closure(
+                delivery_record,
+                decide_user_turn_closure(prompt, signals=turn_signals),
+                signals=turn_signals,
+            )
 
+        try:
+            await self._run_accepted_prompt(prompt, delivery_record, delivery_ledger)
+        except asyncio.CancelledError:
+            if delivery_record is not None:
+                delivery_ledger.mark_cancelled(
+                    delivery_record,
+                    reason="livekit_llm_stream_cancelled",
+                )
+            raise
+        except Exception:
+            if delivery_record is not None:
+                delivery_ledger.mark_cancelled(
+                    delivery_record,
+                    reason="livekit_llm_stream_failed",
+                )
+            raise
+
+    async def _run_accepted_prompt(
+        self,
+        prompt: str,
+        delivery_record,
+        delivery_ledger,
+    ) -> None:
         # When the dispatcher is already active, "exit to dispatch" is a no-op;
         # treat the utterance as a normal prompt instead of swallowing it.
-        if (
-            _is_exit_to_dispatch_command(prompt)
-            and not self._voice_router.is_dispatcher_active
-        ):
+        if _is_exit_to_dispatch_command(prompt) and not self._voice_router.is_dispatcher_active:
             self._voice_router.exit_to_dispatch()
+            if delivery_record is not None:
+                delivery_ledger.mark_cancelled(
+                    delivery_record,
+                    reason="exit_to_dispatch_command",
+                )
             self._emit_delta("Back to dispatch.")
             return
 
@@ -112,6 +160,12 @@ class CodexLLMStream(llm.LLMStream):
 
         speech_text = result.get("_livekit_speech_text", "")
         turn_id = result.get("_livekit_turn_id", "")
+        if delivery_record is not None and turn_id:
+            delivery_ledger.mark_answer_owed(
+                delivery_record,
+                turn_id=turn_id,
+                client=voice_client,
+            )
         logger.info(
             "dispatch_timing stage=livekit_llm_turn_result message_id=%s "
             "turn_id=%s speech_len=%d speech_hash=%s event_channel_closed=%s",
@@ -124,11 +178,41 @@ class CodexLLMStream(llm.LLMStream):
             self._event_ch.closed,
         )
         if speech_text and turn_id and not self._event_ch.closed:
-            if self._voice_router.claim_speech(voice_client, turn_id):
+            if delivery_record is not None:
+                if not await delivery_ledger.wait_for_user_turn_closed_before_tts(
+                    delivery_record
+                ):
+                    logger.info(
+                        "dispatch_timing stage=livekit_llm_suppressed_before_user_turn_closed "
+                        "message_id=%s turn_id=%s speech_len=%d",
+                        self._message_id,
+                        turn_id,
+                        len(speech_text),
+                    )
+                    return
+                if not delivery_ledger.mark_text_generated(
+                    delivery_record,
+                    speech_text=speech_text,
+                    tts_text=text_for_tts(speech_text),
+                ):
+                    logger.info(
+                        "dispatch_timing stage=livekit_llm_suppressed_terminal_delivery "
+                        "message_id=%s turn_id=%s speech_len=%d",
+                        self._message_id,
+                        turn_id,
+                        len(speech_text),
+                    )
+                    should_emit = False
+                else:
+                    should_emit = delivery_ledger.reserve_for_tts(delivery_record)
+            else:
+                should_emit = self._voice_router.claim_speech(voice_client, turn_id)
+            if should_emit:
                 try:
                     self._emit_delta(speech_text)
                 except Exception:
-                    voice_client.release_speech_claim(turn_id)
+                    if delivery_record is None:
+                        voice_client.release_speech_claim(turn_id)
                     raise
         elif speech_text and turn_id:
             # The generation's event channel closed before the answer could
@@ -144,6 +228,16 @@ class CodexLLMStream(llm.LLMStream):
                     len(speech_text),
                 )
                 orphan_handler(voice_client, turn_id, speech_text)
+            elif delivery_record is not None:
+                delivery_ledger.mark_cancelled(
+                    delivery_record,
+                    reason="event_channel_closed_without_orphan_handler",
+                )
+        elif delivery_record is not None:
+            delivery_ledger.mark_cancelled(
+                delivery_record,
+                reason="turn_completed_without_speech",
+            )
 
     def _emit_delta(self, text: str) -> None:
         self._event_ch.send_nowait(
@@ -178,9 +272,15 @@ class CodexLLMStream(llm.LLMStream):
 class CodexLiveKitLLM(llm.LLM):
     """LiveKit LLM wrapper backed by a shared Codex app-server thread."""
 
-    def __init__(self, voice_router: "LiveKitVoiceRouter") -> None:
+    def __init__(
+        self,
+        voice_router: "LiveKitVoiceRouter",
+        *,
+        turn_signal_tracker: VoiceTurnSignalTracker | None = None,
+    ) -> None:
         super().__init__()
         self.voice_router = voice_router
+        self.turn_signal_tracker = turn_signal_tracker
 
     @property
     def model(self) -> str:

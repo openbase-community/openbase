@@ -8,6 +8,7 @@ public names are re-exported here for backward compatibility.
 """
 
 import asyncio
+import inspect
 import logging
 import os
 import uuid
@@ -29,7 +30,6 @@ from livekit.agents import (
     stt as livekit_stt,
 )
 from livekit.plugins import assemblyai, cartesia, deepgram, silero  # noqa: F401
-from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from openbase_coder_cli.brain_score import (  # noqa: F401
     brain_score_token_configured,
@@ -152,6 +152,7 @@ from openbase_coder_cli.livekit_agent.packets import (  # noqa: F401
     parse_announcer_packet,
     parse_voice_route_packet,
     publish_agent_error_packet,
+    publish_voice_lifecycle_packet,
 )
 from openbase_coder_cli.livekit_agent.proc_pool_patch import (
     install_proc_pool_liveness_patch,
@@ -192,6 +193,11 @@ from openbase_coder_cli.livekit_agent.tts_selection import (  # noqa: F401
     VoiceSelectingCartesiaTTS,
     VoiceSelectingTTS,
 )
+from openbase_coder_cli.livekit_agent.turn_detection import (
+    SafeMultilingualModel,
+    VoiceTurnSignalTracker,
+)
+from openbase_coder_cli.livekit_agent.voice_delivery import VoiceDeliveryLedger
 from openbase_coder_cli.livekit_agent.voice_routing import (
     LiveKitVoiceRouter,
     _transfer_voice_route,
@@ -448,6 +454,42 @@ async def _report_agent_error(room: rtc.Room, exc: Exception) -> None:
         logger.exception("Unable to publish LiveKit agent error packet")
 
 
+async def _room_sid(room: rtc.Room) -> str:
+    sid = getattr(room, "sid", "") or ""
+    if inspect.isawaitable(sid):
+        try:
+            sid = await sid
+        except Exception:
+            logger.debug("Unable to resolve LiveKit room sid", exc_info=True)
+            return ""
+    return str(sid or "")
+
+
+def _schedule_voice_lifecycle_packet(room: rtc.Room, event: str, record, reason: str) -> None:
+    task = asyncio.create_task(
+        publish_voice_lifecycle_packet(
+            room,
+            event=event,
+            record=record,
+            reason=reason,
+        )
+    )
+
+    def _log_publish_result(publish_task: asyncio.Task[str]) -> None:
+        try:
+            publish_task.result()
+        except Exception:
+            logger.warning(
+                "dispatch_timing stage=voice_lifecycle_packet_publish_failed "
+                "event=%s delivery_id=%s",
+                event,
+                getattr(record, "delivery_id", ""),
+                exc_info=True,
+            )
+
+    task.add_done_callback(_log_publish_result)
+
+
 def _is_openbase_cloud_audio_authorization_error(exc: Exception) -> bool:
     status = _exception_status(exc)
     return status in {401, 403} and _exception_mentions_openbase_cloud_audio(exc)
@@ -542,10 +584,33 @@ def _register_answer_owed_state_hold(
     hold = {"active": False}
 
     def _active_client_has_pending_answer() -> bool:
+        if voice_router.delivery_ledger is not None:
+            ledger_pending = (
+                voice_router.delivery_ledger.has_pending_delivery_for_current_route()
+            )
+            legacy_pending = False
+            has_pending = getattr(
+                voice_router.active_client, "has_pending_voice_answer", None
+            )
+            if callable(has_pending):
+                legacy_pending = bool(has_pending())
+            logger.info(
+                "dispatch_timing stage=answer_owed_hold_pending_check "
+                "source=ledger ledger_pending=%s legacy_pending=%s",
+                ledger_pending,
+                legacy_pending,
+            )
+            return ledger_pending
         has_pending = getattr(
             voice_router.active_client, "has_pending_voice_answer", None
         )
-        return callable(has_pending) and has_pending()
+        legacy_pending = callable(has_pending) and bool(has_pending())
+        logger.info(
+            "dispatch_timing stage=answer_owed_hold_pending_check "
+            "source=legacy ledger_pending=false legacy_pending=%s",
+            legacy_pending,
+        )
+        return legacy_pending
 
     async def _monitor_hold() -> None:
         while hold["active"]:
@@ -594,7 +659,35 @@ def _register_orphaned_result_delivery(
     """Speak completed turn answers that no voice dispatch delivered."""
 
     def _deliver(client, turn_id: str, speech_text: str) -> None:
-        if not voice_router.claim_speech(client, turn_id):
+        delivery_ledger = voice_router.delivery_ledger
+        if delivery_ledger is not None:
+            record = delivery_ledger.record_for_turn(turn_id)
+            if record is not None:
+                if not record.tts_text_hash:
+                    from openbase_coder_cli.livekit_agent.tts_selection import (
+                        text_for_tts,
+                    )
+
+                    delivery_ledger.mark_text_generated(
+                        record,
+                        speech_text=speech_text,
+                        tts_text=text_for_tts(speech_text),
+                    )
+                if not delivery_ledger.reserve_for_tts(record):
+                    logger.info(
+                        "dispatch_timing stage=orphaned_result_skipped turn_id=%s "
+                        "reason=delivery_ledger_rejected",
+                        turn_id,
+                    )
+                    return
+            elif not voice_router.claim_speech(client, turn_id):
+                logger.info(
+                    "dispatch_timing stage=orphaned_result_skipped turn_id=%s "
+                    "reason=inactive_client_or_already_spoken",
+                    turn_id,
+                )
+                return
+        elif not voice_router.claim_speech(client, turn_id):
             logger.info(
                 "dispatch_timing stage=orphaned_result_skipped turn_id=%s "
                 "reason=inactive_client_or_already_spoken",
@@ -618,6 +711,7 @@ def _register_orphaned_result_delivery(
 async def _start_voice_session(
     ctx: JobContext,
     voice_router: LiveKitVoiceRouter,
+    delivery_ledger: VoiceDeliveryLedger,
 ) -> tuple[AgentSession, "VoiceSelectingTTS", tuple]:
     """Build the STT/TTS pipeline and start the agent session in the room."""
     dispatcher_voice = dispatcher_voice_config()
@@ -657,6 +751,7 @@ async def _start_voice_session(
         role="direct",
         base_url=cartesia_base_url,
         api_version=cartesia_api_version,
+        delivery_ledger=delivery_ledger,
     )
     announcer_tts = VoiceSelectingTTS(
         default_voice_id=announcer_voice.id,
@@ -672,14 +767,20 @@ async def _start_voice_session(
     )
 
     session_vad = _diagnostic_vad(ctx.proc.userdata["vad"])
+    turn_signal_tracker = VoiceTurnSignalTracker()
 
     # Set up a voice AI pipeline
     session = AgentSession(
         stt=_build_stt(session_vad),
-        llm=CodexLiveKitLLM(voice_router),
+        llm=CodexLiveKitLLM(
+            voice_router,
+            turn_signal_tracker=turn_signal_tracker,
+        ),
         tts=direct_tts,
         turn_handling={
-            "turn_detection": MultilingualModel(),
+            "turn_detection": SafeMultilingualModel(
+                turn_signal_tracker=turn_signal_tracker,
+            ),
             "interruption": {"mode": "vad"},
         },
         vad=session_vad,
@@ -740,13 +841,27 @@ async def livekit_agent(ctx: JobContext):
     room_diagnostic_handlers = (
         _register_room_diagnostics(ctx.room) if LIVEKIT_VERBOSE_LOGGING else ()
     )
+    delivery_ledger = VoiceDeliveryLedger(
+        route_snapshot=voice_router.route_snapshot,
+        room_name=ctx.room.name,
+        room_id=await _room_sid(ctx.room),
+    )
+    delivery_ledger.set_lifecycle_sink(
+        lambda event, record, reason: _schedule_voice_lifecycle_packet(
+            ctx.room,
+            event,
+            record,
+            reason,
+        )
+    )
+    voice_router.delivery_ledger = delivery_ledger
 
     try:
         (
             session,
             announcer_tts,
             session_diagnostic_handlers,
-        ) = await _start_voice_session(ctx, voice_router)
+        ) = await _start_voice_session(ctx, voice_router, delivery_ledger)
     except Exception as exc:
         logger.error(
             "LiveKit agent joined room %s but could not start its voice session: %s",
@@ -755,6 +870,9 @@ async def livekit_agent(ctx: JobContext):
         )
         await _report_agent_error(ctx.room, exc)
         raise
+    delivery_ledger.set_user_speaking_provider(
+        lambda: str(getattr(session, "user_state", "") or "") == "speaking"
+    )
 
     subscription_check_task = (
         asyncio.create_task(_verify_cloud_audio_subscription(ctx.room, session))

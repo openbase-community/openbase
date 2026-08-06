@@ -80,6 +80,7 @@ OPENBASE_CLOUD_AUDIO_CARTESIA_VERSION = os.getenv(
 ANNOUNCER_TOPIC = "openbase.announcer.say"
 VOICE_ROUTE_TOPIC = "openbase.voice.route"
 AGENT_STATUS_TOPIC = "openbase.agent.status"
+VOICE_LIFECYCLE_TOPIC = "openbase.voice.lifecycle"
 ANNOUNCER_AUDIO_KIND = "audio_file"
 SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".aac", ".ogg"}
 ANNOUNCER_MAX_QUEUE_SIZE = int(os.getenv("LIVEKIT_ANNOUNCER_MAX_QUEUE_SIZE", "20"))

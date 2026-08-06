@@ -13,6 +13,7 @@ from openbase_coder_cli.livekit_agent import (
 )
 from openbase_coder_cli.livekit_agent.super_agents_client import (
     SuperAgentsLiveKitClient,
+    _configured_execution_backend,
     _extract_turn_id,
     _response_is_queued,
     _speech_text_from_progress,
@@ -109,6 +110,39 @@ class FakeCodexSuperAgentsBackend(FakeSuperAgentsBackend):
                 ]
             },
         }
+
+
+def test_configured_execution_backend_prefers_installed_env_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from openbase_coder_cli import paths
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENBASE_CODING_BACKEND=openbase_cloud\n", encoding="utf-8")
+    monkeypatch.setattr(paths, "DEFAULT_ENV_FILE_PATH", env_file)
+
+    environment_backend_calls: list[bool] = []
+
+    def environment_backend() -> str:
+        environment_backend_calls.append(True)
+        return "codex"
+
+    assert _configured_execution_backend(environment_backend) == "claude_code"
+    assert environment_backend_calls == []
+
+
+def test_configured_execution_backend_falls_back_for_unsupported_env_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from openbase_coder_cli import paths
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENBASE_CODING_BACKEND=not-a-backend\n", encoding="utf-8")
+    monkeypatch.setattr(paths, "DEFAULT_ENV_FILE_PATH", env_file)
+
+    assert _configured_execution_backend(lambda: "codex") == "codex"
 
 
 class FakeQueuedSuperAgentsBackend(FakeSuperAgentsBackend):
@@ -603,6 +637,33 @@ class FakeFlakyProgressSuperAgentsBackend(FakeSuperAgentsBackend):
         }
 
 
+class FakeDelayedUsefulMessageBackend(FakeSuperAgentsBackend):
+    async def progress_by_label(self, input_data) -> dict[str, Any]:
+        self.progress_calls += 1
+        base = {
+            "status": "completed",
+            "threadId": input_data.thread_id,
+            "turnId": input_data.turn_id,
+            "lastObservedState": "Claude Code response completed.",
+            "turn": {
+                "turnId": input_data.turn_id,
+                "status": "completed",
+                "promptPreview": "What's the capital of Alaska?",
+            },
+            "turns": [
+                {
+                    "turnId": input_data.turn_id,
+                    "status": "completed",
+                    "promptPreview": "What's the capital of Alaska?",
+                }
+            ],
+        }
+        if self.progress_calls >= 2:
+            base["turn"]["lastUsefulMessage"] = "Juneau."
+            base["turns"][0]["lastUsefulMessage"] = "Juneau."
+        return base
+
+
 @pytest.mark.asyncio
 async def test_super_agents_livekit_client_survives_transient_poll_timeouts(
     tmp_path: Path,
@@ -625,6 +686,32 @@ async def test_super_agents_livekit_client_survives_transient_poll_timeouts(
     assert backend.progress_calls == 4
     assert result["_livekit_turn_id"] == "turn-1"
     assert result["_livekit_speech_text"] == "The answer survived the poll timeouts."
+
+
+@pytest.mark.asyncio
+async def test_super_agents_livekit_client_waits_for_completed_turn_speech(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(super_agents_client_module, "TURN_POLL_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(
+        super_agents_client_module,
+        "TURN_POLL_COMPLETED_EMPTY_SPEECH_GRACE_SECONDS",
+        1.0,
+    )
+    backend = FakeDelayedUsefulMessageBackend()
+    state_path = tmp_path / "livekit-voice-route.json"
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(state_path),
+        backend_client=backend,
+    )
+
+    result = await client.run_turn("What's the capital of Alaska?")
+
+    assert backend.progress_calls == 2
+    assert result["_livekit_turn_id"] == "turn-1"
+    assert result["_livekit_speech_text"] == "Juneau."
 
 
 @pytest.mark.asyncio
@@ -1059,6 +1146,56 @@ def test_speech_text_from_progress_ignores_spaced_agent_message_label() -> None:
     assert _speech_text_from_progress(progress) == ""
 
 
+def test_speech_text_from_completed_progress_ignores_metadata_only_items() -> None:
+    progress = {
+        "status": "completed",
+        "threadId": "thread-1",
+        "turnId": "turn-1",
+        "summary": {
+            "id": "turn-1",
+            "status": "completed",
+            "reasoningEffort": "low",
+            "startedAt": "2026-08-05T13:23:30Z",
+            "completedAt": "2026-08-05T13:23:39Z",
+            "eventCount": 4,
+            "pendingRequestCount": 0,
+            "items": [
+                {
+                    "type": "userMessage",
+                    "id": "item-1",
+                    "role": "user",
+                },
+                {
+                    "type": "agentMessage",
+                    "id": "item-2",
+                    "role": "assistant",
+                    "phase": "final",
+                    "status": "completed",
+                },
+            ],
+        },
+        "turn": {
+            "id": "turn-1",
+            "status": "completed",
+            "items": [
+                {
+                    "type": "agentMessage",
+                    "id": "item-2",
+                    "phase": "final",
+                }
+            ],
+        },
+        "recentTurns": [
+            {
+                "id": "turn-1",
+                "status": "completed",
+            }
+        ],
+    }
+
+    assert _speech_text_from_progress(progress) == ""
+
+
 def test_speech_text_from_progress_ignores_turn_ids() -> None:
     progress = {
         "summary": {
@@ -1124,6 +1261,123 @@ def test_speech_text_from_progress_ignores_user_message_text() -> None:
     }
 
     assert _speech_text_from_progress(progress) == ""
+
+
+def test_speech_text_from_progress_uses_short_assistant_answer() -> None:
+    progress = {
+        "summary": {
+            "lastUsefulMessage": "What is the capital of Alaska?",
+        },
+        "turn": {
+            "items": [
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": "What is the capital of Alaska?",
+                            }
+                        ],
+                    },
+                },
+                {
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "Juneau.",
+                            }
+                        ],
+                    },
+                },
+            ]
+        },
+    }
+
+    assert _speech_text_from_progress(progress) == "Juneau."
+
+
+def test_speech_text_from_progress_rejects_prompt_preview_readback() -> None:
+    progress = {
+        "summary": {
+            "lastUsefulMessage": "Your answer was not actually spoken.",
+        },
+        "turn": {
+            "promptPreview": "Your answer was not actually spoken.",
+            "items": [
+                {
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "task_started",
+                    },
+                }
+            ],
+        },
+    }
+
+    assert _speech_text_from_progress(progress) == ""
+
+
+def test_speech_text_from_progress_does_not_speak_observed_state() -> None:
+    progress = {
+        "status": "completed",
+        "lastObservedState": "Claude Code response completed.",
+        "turn": {
+            "turnId": "turn-1",
+            "status": "completed",
+            "promptPreview": "What's the capital of Alaska?",
+        },
+        "turns": [
+            {
+                "turnId": "turn-1",
+                "status": "completed",
+                "promptPreview": "What's the capital of Alaska?",
+            }
+        ],
+    }
+
+    assert _speech_text_from_progress(progress) == ""
+
+
+def test_speech_text_from_progress_ignores_timestamp_artifact() -> None:
+    progress = {
+        "turns": [
+            {
+                "turnId": "turn-1",
+                "status": "cancelled",
+                "createdAt": "2026-08-05T22:55:38.399Z",
+            }
+        ]
+    }
+
+    assert _speech_text_from_progress(progress) == ""
+
+
+def test_speech_text_from_progress_prefers_scoped_turn_over_session_preview() -> None:
+    progress = {
+        "status": "completed",
+        "lastUsefulMessage": "A stale session-level preview.",
+        "turn": {
+            "turnId": "turn-2",
+            "status": "completed",
+            "lastUsefulMessage": "The requested turn answer.",
+        },
+        "turns": [
+            {
+                "turnId": "turn-2",
+                "status": "completed",
+                "lastUsefulMessage": "The requested turn answer.",
+            }
+        ],
+    }
+
+    assert _speech_text_from_progress(progress) == "The requested turn answer."
 
 
 def test_claude_auth_heal_scheduled_on_auth_failure_speech(monkeypatch) -> None:
@@ -1203,9 +1457,9 @@ async def test_preflight_heal_runs_for_logged_out_claude_backend(
         state_path=str(tmp_path / "state.json"),
         backend_client=backend,
     )
-    thread_id = await client.prepare()
+    result = await client.run_turn("hello dispatch")
 
-    assert thread_id == "dispatcher-thread"
+    assert result["_livekit_turn_id"] == "turn-1"
     assert calls == ["status", "heal"]
 
 
@@ -1233,7 +1487,9 @@ async def test_preflight_heal_skipped_when_claude_logged_in(
         state_path=str(tmp_path / "state.json"),
         backend_client=backend,
     )
-    await client.prepare()
+    result = await client.run_turn("hello dispatch")
+
+    assert result["_livekit_turn_id"] == "turn-1"
 
 
 @pytest.mark.asyncio
