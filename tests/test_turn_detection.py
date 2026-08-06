@@ -6,6 +6,8 @@ from livekit.agents import llm
 from livekit.agents.llm.chat_context import ChatMessage
 
 from openbase_coder_cli.livekit_agent.turn_detection import (
+    LOW_CONFIDENCE_USER_TURN_QUIET_GRACE_SECONDS,
+    MIN_USER_TURN_QUIET_GRACE_SECONDS,
     SafeMultilingualModel,
     UserTurnClosureSignals,
     VoiceTurnSignalTracker,
@@ -16,7 +18,9 @@ from openbase_coder_cli.livekit_agent.turn_detection import (
 
 def test_safe_multilingual_model_falls_back_on_assertion(monkeypatch):
     async def fail_prediction(self, chat_ctx, *, timeout=3):
-        raise AssertionError("end_of_utterance prediction should always returns a result")
+        raise AssertionError(
+            "end_of_utterance prediction should always returns a result"
+        )
 
     monkeypatch.setattr(
         "livekit.plugins.turn_detector.multilingual.MultilingualModel.predict_end_of_turn",
@@ -29,46 +33,42 @@ def test_safe_multilingual_model_falls_back_on_assertion(monkeypatch):
     assert result == 1.0
 
 
-def test_user_turn_closure_keeps_incomplete_tail_open_longer():
-    decision = decide_user_turn_closure("I want to update the report and")
+def test_user_turn_closure_uses_minimum_quiet_floor_by_default():
+    decision = decide_user_turn_closure()
 
-    assert decision.source == "semantic_tail"
-    assert decision.completion_reason == "continuation_tail"
-    assert decision.delay_seconds >= 3.0
-
-
-def test_user_turn_closure_closes_complete_question_quickly():
-    decision = decide_user_turn_closure("What is the capital of Alaska?")
-
-    assert decision.source == "semantic_question"
-    assert decision.completion_reason == "complete_question"
-    assert decision.delay_seconds < 1.0
+    assert decision.source == "quiet_floor_default"
+    assert decision.completion_reason == "quiet_floor"
+    assert decision.quiet_grace_seconds == MIN_USER_TURN_QUIET_GRACE_SECONDS
+    assert decision.quiet_grace_seconds >= 2.5
 
 
-def test_user_turn_closure_uses_turn_detector_confidence_when_available():
-    low = decide_user_turn_closure("Tell me more about this", eou_probability=0.2)
-    high = decide_user_turn_closure("Tell me more about this", eou_probability=0.9)
+def test_user_turn_closure_extends_quiet_floor_on_low_confidence():
+    low = decide_user_turn_closure(signals=UserTurnClosureSignals(eou_probability=0.2))
+    high = decide_user_turn_closure(signals=UserTurnClosureSignals(eou_probability=0.9))
 
     assert low.source == "turn_detector"
-    assert low.delay_seconds > high.delay_seconds
-    assert low.delay_seconds >= 6.0
-    assert low.completion_reason == "turn_detector_low_confidence"
-    assert high.completion_reason == "turn_detector_high_confidence"
+    assert low.completion_reason == "low_confidence_quiet_floor"
+    assert low.quiet_grace_seconds == LOW_CONFIDENCE_USER_TURN_QUIET_GRACE_SECONDS
+    assert low.quiet_grace_seconds >= 6.0
+    assert high.source == "turn_detector"
+    assert high.completion_reason == "quiet_floor"
+    assert high.quiet_grace_seconds == MIN_USER_TURN_QUIET_GRACE_SECONDS
+    assert low.quiet_grace_seconds > high.quiet_grace_seconds
 
 
-def test_user_turn_closure_uses_livekit_metrics_for_delay_floor():
-    decision = decide_user_turn_closure(
-        "What is the capital of Alaska?",
-        signals=UserTurnClosureSignals(end_of_turn_delay=0.1),
+def test_user_turn_closure_never_shrinks_below_minimum_floor():
+    confident = decide_user_turn_closure(
+        signals=UserTurnClosureSignals(eou_probability=0.99),
     )
 
-    assert decision.source == "semantic_question+livekit_metrics"
-    assert decision.delay_seconds == 0.6
+    assert confident.quiet_grace_seconds >= MIN_USER_TURN_QUIET_GRACE_SECONDS
 
 
 def test_latest_user_turn_signals_reads_chat_message_metrics_and_detector_signal():
     tracker = VoiceTurnSignalTracker()
-    tracker.record_prediction(transcript="What is the capital of Alaska?", probability=0.92)
+    tracker.record_prediction(
+        transcript="What is the capital of Alaska?", probability=0.92
+    )
     message = ChatMessage(
         role="user",
         content=["What is the capital of Alaska?"],

@@ -1,4 +1,13 @@
-"""LiveKit turn detection wrappers."""
+"""LiveKit turn detection wrappers.
+
+LiveKit endpointing (VAD + the multilingual turn detector) owns end-of-turn
+detection. This module only wraps it: `SafeMultilingualModel` guards against
+inference gaps, `VoiceTurnSignalTracker` correlates detector probabilities
+with accepted voice turns, and `decide_user_turn_closure` maps that
+probability to the mic quiet floor. The floor is a mic-UX policy, not a
+second end-of-turn detector: `safe_to_mute_user` is only emitted after the
+LiveKit session has reported the user quiet for the full floor.
+"""
 
 from __future__ import annotations
 
@@ -17,21 +26,24 @@ logger = logging.getLogger(__name__)
 
 _TURN_SIGNAL_TTL_SECONDS = 30.0
 _MAX_TURN_SIGNALS = 64
-LOW_CONFIDENCE_CONTINUATION_GRACE_SECONDS = 6.0
+
+MIN_USER_TURN_QUIET_GRACE_SECONDS = 2.5
+LOW_CONFIDENCE_USER_TURN_QUIET_GRACE_SECONDS = 6.0
+LOW_EOU_PROBABILITY_THRESHOLD = 0.45
 
 
 @dataclass(frozen=True)
 class UserTurnClosureDecision:
-    """Server-owned decision for when the client may mute the user's mic."""
+    """Server-owned mic policy: how much verified quiet before auto-mute."""
 
-    confidence: float
+    confidence: float | None
     source: str
-    delay_seconds: float
+    quiet_grace_seconds: float
     completion_reason: str
 
     @property
-    def delay_ms(self) -> int:
-        return max(0, int(self.delay_seconds * 1000))
+    def quiet_grace_ms(self) -> int:
+        return max(0, int(self.quiet_grace_seconds * 1000))
 
 
 @dataclass(frozen=True)
@@ -100,167 +112,33 @@ class VoiceTurnSignalTracker:
             self._signals_by_hash.pop(transcript_hash, None)
 
 
-_QUESTION_STARTERS = {
-    "are",
-    "can",
-    "could",
-    "did",
-    "do",
-    "does",
-    "how",
-    "is",
-    "should",
-    "what",
-    "when",
-    "where",
-    "which",
-    "who",
-    "why",
-    "will",
-    "would",
-}
-_COMMAND_STARTERS = {
-    "ask",
-    "check",
-    "continue",
-    "debug",
-    "explain",
-    "find",
-    "fix",
-    "go",
-    "implement",
-    "inspect",
-    "investigate",
-    "look",
-    "open",
-    "please",
-    "read",
-    "restart",
-    "run",
-    "show",
-    "start",
-    "stop",
-    "tell",
-    "test",
-    "update",
-    "write",
-}
-_CONTINUATION_TAIL_WORDS = {
-    "a",
-    "about",
-    "also",
-    "and",
-    "because",
-    "but",
-    "by",
-    "for",
-    "from",
-    "if",
-    "in",
-    "like",
-    "of",
-    "or",
-    "so",
-    "that",
-    "the",
-    "then",
-    "to",
-    "with",
-}
-_CONTINUATION_TAIL_PHRASES = (
-    "and then",
-    "but then",
-    "for example",
-    "i mean",
-    "i think",
-    "i was",
-    "let me",
-    "the thing is",
-    "what i mean",
-)
-
-
 def decide_user_turn_closure(
-    transcript: str,
     *,
-    eou_probability: float | None = None,
     signals: UserTurnClosureSignals | None = None,
 ) -> UserTurnClosureDecision:
-    """Decide when the iOS client may auto-mute after an accepted utterance.
+    """Pick the mic quiet floor for an accepted utterance.
 
-    LiveKit has already accepted the utterance before this runs, so the
-    decision is intentionally conservative: obvious complete commands/questions
-    close quickly, incomplete tails stay open longer, and the turn detector
-    probability can override the transcript heuristic when it is available.
+    LiveKit has already committed the turn before this runs. The only input
+    that matters is the turn detector's end-of-turn probability: a
+    low-confidence end (the user sounded unfinished) gets the long floor,
+    everything else gets the minimum floor.
     """
-    signals = signals or UserTurnClosureSignals(eou_probability=eou_probability)
+    signals = signals or UserTurnClosureSignals()
     eou_probability = signals.eou_probability
-    normalized = _normalized_words(transcript)
-    if not normalized:
+    if eou_probability is not None and eou_probability <= LOW_EOU_PROBABILITY_THRESHOLD:
         return UserTurnClosureDecision(
-            confidence=0.0,
-            source="empty_transcript",
-            delay_seconds=3.5,
-            completion_reason="empty_transcript_timeout",
+            confidence=eou_probability,
+            source="turn_detector",
+            quiet_grace_seconds=LOW_CONFIDENCE_USER_TURN_QUIET_GRACE_SECONDS,
+            completion_reason="low_confidence_quiet_floor",
         )
-
-    tail = _tail_word(normalized)
-    starts_with = normalized.split(" ", 1)[0]
-    if _has_incomplete_tail(normalized, tail):
-        if eou_probability is not None and eou_probability >= 0.9:
-            return UserTurnClosureDecision(
-                confidence=eou_probability,
-                source="turn_detector_semantic_tail",
-                delay_seconds=_delay_with_vad_floor(1.2, signals),
-                completion_reason="turn_detector_high_confidence_with_continuation_tail",
-            )
-        return UserTurnClosureDecision(
-            confidence=0.35,
-            source=_source_with_vad("semantic_tail", signals),
-            delay_seconds=_delay_with_vad_floor(3.5, signals),
-            completion_reason="continuation_tail",
-        )
-
-    if eou_probability is not None:
-        if eou_probability >= 0.75:
-            return UserTurnClosureDecision(
-                confidence=eou_probability,
-                source=_source_with_vad("turn_detector", signals),
-                delay_seconds=_delay_with_vad_floor(0.25, signals),
-                completion_reason="turn_detector_high_confidence",
-            )
-        if eou_probability <= 0.45:
-            return UserTurnClosureDecision(
-                confidence=eou_probability,
-                source=_source_with_vad("turn_detector", signals),
-                delay_seconds=_delay_with_vad_floor(
-                    LOW_CONFIDENCE_CONTINUATION_GRACE_SECONDS,
-                    signals,
-                ),
-                completion_reason="turn_detector_low_confidence",
-            )
-
-    if transcript.rstrip().endswith("?") or starts_with in _QUESTION_STARTERS:
-        return UserTurnClosureDecision(
-            confidence=0.8,
-            source=_source_with_vad("semantic_question", signals),
-            delay_seconds=_delay_with_vad_floor(0.45, signals),
-            completion_reason="complete_question",
-        )
-
-    if starts_with in _COMMAND_STARTERS:
-        return UserTurnClosureDecision(
-            confidence=0.72,
-            source=_source_with_vad("semantic_command", signals),
-            delay_seconds=_delay_with_vad_floor(0.7, signals),
-            completion_reason="complete_command",
-        )
-
     return UserTurnClosureDecision(
-        confidence=0.6,
-        source=_source_with_vad("semantic_default", signals),
-        delay_seconds=_delay_with_vad_floor(1.8, signals),
-        completion_reason="default_continuation_grace",
+        confidence=eou_probability,
+        source="turn_detector"
+        if eou_probability is not None
+        else "quiet_floor_default",
+        quiet_grace_seconds=MIN_USER_TURN_QUIET_GRACE_SECONDS,
+        completion_reason="quiet_floor",
     )
 
 
@@ -275,33 +153,6 @@ def normalized_transcript_hash(transcript: str) -> str:
     if not normalized:
         return ""
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
-
-
-def _tail_word(normalized: str) -> str:
-    words = normalized.split()
-    return words[-1] if words else ""
-
-
-def _has_incomplete_tail(normalized: str, tail: str) -> bool:
-    if tail in _CONTINUATION_TAIL_WORDS:
-        return True
-    return any(normalized.endswith(phrase) for phrase in _CONTINUATION_TAIL_PHRASES)
-
-
-def _source_with_vad(source: str, signals: UserTurnClosureSignals) -> str:
-    if signals.end_of_turn_delay is not None or signals.transcript_confidence is not None:
-        return f"{source}+livekit_metrics"
-    return source
-
-
-def _delay_with_vad_floor(
-    delay_seconds: float,
-    signals: UserTurnClosureSignals,
-) -> float:
-    if signals.end_of_turn_delay is None:
-        return delay_seconds
-    remaining_silence = max(0.0, 0.7 - signals.end_of_turn_delay)
-    return max(delay_seconds, remaining_silence)
 
 
 def latest_user_turn_signals_from_chat_ctx(

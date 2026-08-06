@@ -1267,9 +1267,9 @@ def test_publish_voice_lifecycle_packet_includes_user_turn_metadata():
         record,
         decision=UserTurnClosureDecision(
             confidence=0.35,
-            source="semantic_tail",
-            delay_seconds=3.5,
-            completion_reason="continuation_tail",
+            source="turn_detector",
+            quiet_grace_seconds=6.0,
+            completion_reason="low_confidence_quiet_floor",
         ),
     )
     record.user_turn_eou_probability = 0.21
@@ -1282,7 +1282,7 @@ def test_publish_voice_lifecycle_packet_includes_user_turn_metadata():
             room,
             event="safe_to_mute_user",
             record=record,
-            reason="continuation_tail",
+            reason="low_confidence_quiet_floor",
         )
     )
 
@@ -1290,18 +1290,18 @@ def test_publish_voice_lifecycle_packet_includes_user_turn_metadata():
     assert topic == config.VOICE_LIFECYCLE_TOPIC
     payload = json.loads(data.decode("utf-8"))
     assert payload["event"] == "safe_to_mute_user"
-    assert payload["reason"] == "continuation_tail"
+    assert payload["reason"] == "low_confidence_quiet_floor"
     assert payload["user_turn"] == {
         "confidence": 0.35,
-        "source": "semantic_tail",
-        "delay_ms": 3500,
+        "source": "turn_detector",
+        "delay_ms": 6000,
         "eou_probability": 0.21,
         "silence_ms": 3500,
         "transcript_confidence": 0.88,
         "transcription_delay_ms": 120,
         "transcript_len": 9,
         "text_hash": record.prompt_hash,
-        "completion_reason": "continuation_tail",
+        "completion_reason": "low_confidence_quiet_floor",
     }
 
 

@@ -21,9 +21,6 @@ from openbase_coder_cli.livekit_agent.turn_detection import (
 
 logger = logging.getLogger(__name__)
 
-MIN_USER_TURN_QUIET_GRACE_SECONDS = 2.5
-LOW_CONFIDENCE_USER_TURN_QUIET_GRACE_SECONDS = 6.0
-
 
 def short_text_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
@@ -92,27 +89,22 @@ class VoiceDeliveryLedger:
         route_snapshot: Callable[[], VoiceRouteSnapshot],
         room_name: str = "",
         room_id: str = "",
-        user_quiet_grace_seconds: float = MIN_USER_TURN_QUIET_GRACE_SECONDS,
-        low_confidence_user_quiet_grace_seconds: float = (
-            LOW_CONFIDENCE_USER_TURN_QUIET_GRACE_SECONDS
-        ),
         user_speaking_poll_seconds: float = 0.1,
     ) -> None:
         self._route_snapshot = route_snapshot
         self._room_name = room_name
         self._room_id = room_id
-        self._user_quiet_grace_seconds = user_quiet_grace_seconds
-        self._low_confidence_user_quiet_grace_seconds = (
-            low_confidence_user_quiet_grace_seconds
-        )
         self._user_speaking_poll_seconds = user_speaking_poll_seconds
         self._records: dict[str, VoiceDeliveryRecord] = {}
         self._records_by_turn_id: dict[str, VoiceDeliveryRecord] = {}
         self._pending_by_tts_hash: dict[str, deque[str]] = {}
-        self._lifecycle_sink: Callable[
-            [str, VoiceDeliveryRecord, str],
-            None,
-        ] | None = None
+        self._lifecycle_sink: (
+            Callable[
+                [str, VoiceDeliveryRecord, str],
+                None,
+            ]
+            | None
+        ) = None
         self._user_speaking_provider: Callable[[], bool] | None = None
         self._user_turn_closure_tasks: dict[str, asyncio.Task[None]] = {}
 
@@ -149,11 +141,11 @@ class VoiceDeliveryLedger:
         *,
         signals: UserTurnClosureSignals | None = None,
     ) -> None:
-        """Emit ``safe_to_mute_user`` after the server's closure grace window."""
+        """Emit ``safe_to_mute_user`` once the user stays quiet for the floor."""
         self._cancel_user_turn_closure_task(record.delivery_id)
         record.user_turn_closure_confidence = decision.confidence
         record.user_turn_closure_source = decision.source
-        record.user_turn_closure_delay_ms = decision.delay_ms
+        record.user_turn_closure_delay_ms = decision.quiet_grace_ms
         record.user_turn_completion_reason = decision.completion_reason
         self._apply_user_turn_signals(record, signals)
         self._log_user_turn_closure(record, "user_turn_closure_decision")
@@ -177,21 +169,24 @@ class VoiceDeliveryLedger:
                 )
             finally:
                 current_task = asyncio.current_task()
-                if self._user_turn_closure_tasks.get(record.delivery_id) is current_task:
+                if (
+                    self._user_turn_closure_tasks.get(record.delivery_id)
+                    is current_task
+                ):
                     self._user_turn_closure_tasks.pop(record.delivery_id, None)
 
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            if decision.delay_seconds <= 0:
+            if decision.quiet_grace_seconds <= 0:
                 self.mark_user_turn_closed(record, decision=decision)
             else:
                 logger.warning(
                     "dispatch_timing stage=voice_delivery_user_turn_closure_not_scheduled "
-                    "delivery_id=%s message_id=%s reason=no_running_loop delay_ms=%d",
+                    "delivery_id=%s message_id=%s reason=no_running_loop quiet_grace_ms=%d",
                     record.delivery_id,
                     record.message_id,
-                    decision.delay_ms,
+                    decision.quiet_grace_ms,
                 )
             return
 
@@ -265,7 +260,7 @@ class VoiceDeliveryLedger:
         record.user_turn_closed = True
         record.user_turn_closure_confidence = decision.confidence
         record.user_turn_closure_source = decision.source
-        record.user_turn_closure_delay_ms = decision.delay_ms
+        record.user_turn_closure_delay_ms = decision.quiet_grace_ms
         record.user_turn_completion_reason = decision.completion_reason
         self._log_user_turn_closure(record, "safe_to_mute_user")
         self._emit_lifecycle(
@@ -280,12 +275,17 @@ class VoiceDeliveryLedger:
         *,
         decision: UserTurnClosureDecision,
     ) -> None:
-        required_quiet_seconds = self._required_quiet_seconds(decision)
+        """Wait for the user to stay quiet for the decision's full floor.
+
+        Quiet time counts from utterance acceptance; any resumed speech resets
+        the clock. Without a speaking provider (tests, degraded sessions) the
+        floor degrades to a plain sleep.
+        """
+        required_quiet_seconds = decision.quiet_grace_seconds
         if self._user_speaking_provider is None:
-            await asyncio.sleep(max(decision.delay_seconds, required_quiet_seconds))
+            await asyncio.sleep(required_quiet_seconds)
             return
         quiet_started_at: float | None = time.monotonic()
-        decision_started_at = quiet_started_at
         wait_logged = False
         wait_started = time.monotonic()
         while True:
@@ -294,12 +294,7 @@ class VoiceDeliveryLedger:
             if not self._user_is_speaking():
                 if quiet_started_at is None:
                     quiet_started_at = time.monotonic()
-                quiet_elapsed = time.monotonic() - quiet_started_at
-                decision_elapsed = time.monotonic() - decision_started_at
-                if (
-                    quiet_elapsed >= required_quiet_seconds
-                    and decision_elapsed >= decision.delay_seconds
-                ):
+                if time.monotonic() - quiet_started_at >= required_quiet_seconds:
                     if wait_logged:
                         logger.info(
                             "dispatch_timing stage=voice_delivery_user_speech_wait_done "
@@ -331,17 +326,6 @@ class VoiceDeliveryLedger:
                 exc_info=True,
             )
             return False
-
-    def _required_quiet_seconds(self, decision: UserTurnClosureDecision) -> float:
-        if decision.completion_reason in {
-            "continuation_tail",
-            "turn_detector_low_confidence",
-        }:
-            return max(
-                self._user_quiet_grace_seconds,
-                self._low_confidence_user_quiet_grace_seconds,
-            )
-        return self._user_quiet_grace_seconds
 
     def mark_answer_owed(
         self,
@@ -587,7 +571,9 @@ class VoiceDeliveryLedger:
             reason=record.terminal_reason,
         )
         if not self.has_pending_delivery_for_current_route():
-            self._emit_lifecycle("safe_to_unmute", record, reason=record.terminal_reason)
+            self._emit_lifecycle(
+                "safe_to_unmute", record, reason=record.terminal_reason
+            )
 
     def mark_suppressed_stale(
         self,

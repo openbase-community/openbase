@@ -120,9 +120,7 @@ def test_lifecycle_events_follow_delivery_ledger_transitions():
     events: list[tuple[str, str, str]] = []
     ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
     ledger.set_lifecycle_sink(
-        lambda event, record, reason: events.append(
-            (event, record.delivery_id, reason)
-        )
+        lambda event, record, reason: events.append((event, record.delivery_id, reason))
     )
     client = _FakeClient()
 
@@ -171,16 +169,14 @@ def test_safe_to_mute_user_lifecycle_uses_turn_closure_decision():
     events: list[tuple[str, str, str]] = []
     ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
     ledger.set_lifecycle_sink(
-        lambda event, record, reason: events.append(
-            (event, record.delivery_id, reason)
-        )
+        lambda event, record, reason: events.append((event, record.delivery_id, reason))
     )
     record = ledger.accept_utterance(message_id="m1", prompt="What is the capital?")
     decision = UserTurnClosureDecision(
         confidence=0.8,
-        source="semantic_question",
-        delay_seconds=0,
-        completion_reason="complete_question",
+        source="turn_detector",
+        quiet_grace_seconds=0,
+        completion_reason="quiet_floor",
     )
 
     ledger.schedule_user_turn_closure(
@@ -195,7 +191,7 @@ def test_safe_to_mute_user_lifecycle_uses_turn_closure_decision():
     )
 
     assert record.user_turn_closed
-    assert record.user_turn_closure_source == "semantic_question"
+    assert record.user_turn_closure_source == "turn_detector"
     assert record.user_turn_closure_delay_ms == 0
     assert record.user_turn_eou_probability == 0.8
     assert record.user_turn_silence_ms == 700
@@ -203,7 +199,7 @@ def test_safe_to_mute_user_lifecycle_uses_turn_closure_decision():
     assert record.user_turn_transcription_delay_ms == 200
     assert events == [
         ("utterance_accepted", record.delivery_id, ""),
-        ("safe_to_mute_user", record.delivery_id, "complete_question"),
+        ("safe_to_mute_user", record.delivery_id, "quiet_floor"),
     ]
 
 
@@ -219,9 +215,9 @@ def test_superseded_utterance_cancels_pending_safe_to_mute_user():
             stale_record,
             UserTurnClosureDecision(
                 confidence=0.35,
-                source="semantic_tail",
-                delay_seconds=0.05,
-                completion_reason="continuation_tail",
+                source="turn_detector",
+                quiet_grace_seconds=0.05,
+                completion_reason="low_confidence_quiet_floor",
             ),
         )
         current_record = ledger.accept_utterance(message_id="m2", prompt="continue")
@@ -240,8 +236,6 @@ def test_safe_to_mute_user_waits_while_user_is_still_speaking():
         is_speaking = True
         ledger = VoiceDeliveryLedger(
             route_snapshot=_snapshot,
-            user_quiet_grace_seconds=0.02,
-            low_confidence_user_quiet_grace_seconds=0.02,
             user_speaking_poll_seconds=0.005,
         )
         ledger.set_lifecycle_sink(
@@ -254,8 +248,8 @@ def test_safe_to_mute_user_waits_while_user_is_still_speaking():
             UserTurnClosureDecision(
                 confidence=0.2,
                 source="turn_detector",
-                delay_seconds=0.005,
-                completion_reason="turn_detector_low_confidence",
+                quiet_grace_seconds=0.005,
+                completion_reason="low_confidence_quiet_floor",
             ),
         )
         await asyncio.sleep(0.03)
@@ -279,8 +273,6 @@ def test_tts_waits_for_user_turn_closure():
     async def run() -> tuple[bool, bool]:
         ledger = VoiceDeliveryLedger(
             route_snapshot=_snapshot,
-            user_quiet_grace_seconds=0.02,
-            low_confidence_user_quiet_grace_seconds=0.02,
             user_speaking_poll_seconds=0.005,
         )
         is_speaking = True
@@ -291,8 +283,8 @@ def test_tts_waits_for_user_turn_closure():
             UserTurnClosureDecision(
                 confidence=0.2,
                 source="turn_detector",
-                delay_seconds=0.005,
-                completion_reason="turn_detector_low_confidence",
+                quiet_grace_seconds=0.005,
+                completion_reason="low_confidence_quiet_floor",
             ),
         )
         wait_task = asyncio.create_task(
@@ -316,8 +308,6 @@ def test_user_turn_closure_uses_quiet_floor_not_timer_only():
         events: list[tuple[str, str]] = []
         ledger = VoiceDeliveryLedger(
             route_snapshot=_snapshot,
-            user_quiet_grace_seconds=0.03,
-            low_confidence_user_quiet_grace_seconds=0.06,
             user_speaking_poll_seconds=0.005,
         )
         ledger.set_lifecycle_sink(
@@ -331,8 +321,8 @@ def test_user_turn_closure_uses_quiet_floor_not_timer_only():
             UserTurnClosureDecision(
                 confidence=0.9,
                 source="turn_detector",
-                delay_seconds=0.001,
-                completion_reason="turn_detector_high_confidence",
+                quiet_grace_seconds=0.03,
+                completion_reason="quiet_floor",
             ),
         )
         await asyncio.sleep(0.015)
@@ -345,8 +335,8 @@ def test_user_turn_closure_uses_quiet_floor_not_timer_only():
             UserTurnClosureDecision(
                 confidence=0.2,
                 source="turn_detector",
-                delay_seconds=0.001,
-                completion_reason="turn_detector_low_confidence",
+                quiet_grace_seconds=0.06,
+                completion_reason="low_confidence_quiet_floor",
             ),
         )
         await asyncio.sleep(0.04)
@@ -473,9 +463,7 @@ def test_new_utterance_supersedes_reserved_prior_turn_without_stale_unmute():
     events: list[tuple[str, str, str]] = []
     ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
     ledger.set_lifecycle_sink(
-        lambda event, record, reason: events.append(
-            (event, record.delivery_id, reason)
-        )
+        lambda event, record, reason: events.append((event, record.delivery_id, reason))
     )
     stale_record = ledger.accept_utterance(message_id="m1", prompt="blueberries")
     ledger.mark_answer_owed(stale_record, turn_id="turn-1", client=_FakeClient())
@@ -491,7 +479,11 @@ def test_new_utterance_supersedes_reserved_prior_turn_without_stale_unmute():
     assert stale_record.status == "cancelled"
     assert stale_record.terminal_reason == "superseded_by_new_utterance"
     assert ledger.has_pending_delivery_for_current_route()
-    assert ("safe_to_unmute", stale_record.delivery_id, "superseded_by_new_utterance") not in events
+    assert (
+        "safe_to_unmute",
+        stale_record.delivery_id,
+        "superseded_by_new_utterance",
+    ) not in events
 
     ledger.mark_tts_completed(
         current_record,
@@ -513,9 +505,7 @@ def test_superseded_delivery_record_cannot_be_revived_by_late_completion():
     events: list[tuple[str, str, str]] = []
     ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
     ledger.set_lifecycle_sink(
-        lambda event, record, reason: events.append(
-            (event, record.delivery_id, reason)
-        )
+        lambda event, record, reason: events.append((event, record.delivery_id, reason))
     )
     client = _FakeClient()
 
@@ -567,9 +557,7 @@ def test_stale_route_suppresses_tts_text_push():
     current_route = _snapshot(version=1, thread_id="corey-thread")
     events: list[str] = []
     ledger = VoiceDeliveryLedger(route_snapshot=lambda: current_route)
-    ledger.set_lifecycle_sink(
-        lambda event, _record, _reason: events.append(event)
-    )
+    ledger.set_lifecycle_sink(lambda event, _record, _reason: events.append(event))
     record = ledger.accept_utterance(message_id="m1", prompt="question")
     ledger.mark_answer_owed(record, turn_id="turn-1", client=_FakeClient())
     ledger.mark_text_generated(

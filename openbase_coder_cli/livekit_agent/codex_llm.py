@@ -100,7 +100,7 @@ class CodexLLMStream(llm.LLMStream):
             )
             delivery_ledger.schedule_user_turn_closure(
                 delivery_record,
-                decide_user_turn_closure(prompt, signals=turn_signals),
+                decide_user_turn_closure(signals=turn_signals),
                 signals=turn_signals,
             )
 
@@ -129,7 +129,10 @@ class CodexLLMStream(llm.LLMStream):
     ) -> None:
         # When the dispatcher is already active, "exit to dispatch" is a no-op;
         # treat the utterance as a normal prompt instead of swallowing it.
-        if _is_exit_to_dispatch_command(prompt) and not self._voice_router.is_dispatcher_active:
+        if (
+            _is_exit_to_dispatch_command(prompt)
+            and not self._voice_router.is_dispatcher_active
+        ):
             self._voice_router.exit_to_dispatch()
             if delivery_record is not None:
                 delivery_ledger.mark_cancelled(
