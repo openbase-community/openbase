@@ -703,3 +703,64 @@ def test_tts_flush_fallback_rejects_incompatible_single_candidate():
         is None
     )
     assert record.status == "text_generated"
+
+
+def test_unmatched_direct_tts_emits_lifecycle_audio_events():
+    """Speech with no accepted-utterance record still gates client unmute.
+
+    Regression: a late steer response reached TTS unmatched, produced no
+    lifecycle packets, and iOS unmuted mid-speech on the prior response's
+    schedule.
+    """
+    events: list[tuple[str, str]] = []
+    ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
+    ledger.set_lifecycle_sink(
+        lambda event, record, _reason: events.append((event, record.delivery_id))
+    )
+
+    record = ledger.track_unmatched_tts(tts_text="I'll keep flowing with your thoughts.")
+    ledger.mark_audio_started(
+        record,
+        latency_ms=120,
+        role="direct",
+        voice_id="voice-1",
+        voice_name="Jacqueline",
+    )
+    ledger.mark_tts_completed(
+        record,
+        audio_events=14,
+        audio_seconds=2.0,
+        role="direct",
+        voice_id="voice-1",
+        voice_name="Jacqueline",
+    )
+
+    assert [event[0] for event in events] == [
+        "agent_audio_started",
+        "agent_audio_finished",
+        "safe_to_unmute",
+    ]
+    assert all(delivery_id == record.delivery_id for _event, delivery_id in events)
+    assert record.delivery_id.startswith("voice-direct-")
+    assert record.status == "audio_delivered"
+
+
+def test_unmatched_direct_tts_withholds_safe_to_unmute_while_answer_pending():
+    events: list[tuple[str, str]] = []
+    ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
+    ledger.set_lifecycle_sink(
+        lambda event, record, _reason: events.append((event, record.delivery_id))
+    )
+    pending = ledger.accept_utterance(message_id="m1", prompt="what about feature B?")
+    ledger.mark_answer_owed(pending, turn_id="turn-1", client=_FakeClient())
+
+    record = ledger.track_unmatched_tts(tts_text="One moment.")
+    ledger.mark_audio_started(
+        record, latency_ms=90, role="direct", voice_id=None, voice_name=None
+    )
+    ledger.mark_tts_completed(
+        record, audio_events=5, audio_seconds=0.6, role="direct", voice_id=None, voice_name=None
+    )
+
+    assert ("agent_audio_finished", record.delivery_id) in events
+    assert ("safe_to_unmute", record.delivery_id) not in events

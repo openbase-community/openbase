@@ -438,6 +438,32 @@ class VoiceDeliveryLedger:
         )
         return None
 
+    def track_unmatched_tts(self, *, tts_text: str) -> VoiceDeliveryRecord:
+        """Track direct agent speech that has no accepted-utterance record.
+
+        Late steer responses and control phrases reach TTS without a matched
+        delivery record. Clients still need ``agent_audio_started`` /
+        ``agent_audio_finished`` / ``safe_to_unmute`` around that audio, or
+        their unmute timing goes blind to it and the mic opens mid-speech.
+        """
+        record = VoiceDeliveryRecord(
+            delivery_id=f"voice-direct-{uuid.uuid4().hex[:12]}",
+            message_id="",
+            prompt_hash="",
+            prompt_len=0,
+            room_name=self._room_name,
+            room_id=self._room_id,
+            route_at_acceptance=self._route_snapshot(),
+            status="tts_flushed",
+        )
+        record.tts_text = tts_text
+        record.tts_text_hash = short_text_hash(tts_text)
+        record.tts_text_len = len(tts_text)
+        record.reserved_for_tts = True
+        self._records[record.delivery_id] = record
+        self._log(record, "direct_tts_tracked")
+        return record
+
     def _mark_tts_flushed_or_suppressed(
         self,
         record: VoiceDeliveryRecord,

@@ -338,6 +338,13 @@ class SpeechFormattingSynthesizeStream:
                     voice_id=self._voice_id,
                     voice_name=self._voice_name,
                 )
+                if self._delivery_record is None:
+                    # Unmatched speech (late steer responses, control
+                    # phrases) must still emit lifecycle audio events, or
+                    # clients unmute mid-speech.
+                    self._delivery_record = self._delivery_ledger.track_unmatched_tts(
+                        tts_text=final_text,
+                    )
             suppress_stale = (
                 self._delivery_record is not None
                 and getattr(self._delivery_record, "status", "") == "suppressed_stale"
