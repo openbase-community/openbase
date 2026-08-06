@@ -264,13 +264,20 @@ def ensure_rendered_instruction_file(
                 f"{document_label} already exists at {target_path}; leaving it unchanged.",
             )
             return False
-        if not force and (
-            existing != rendered
-            and existing
-            != _rendered_instruction_file(source_text, source_path, render=False)
-            and not text_matches_instruction_template(
-                _without_generated_instruction_header(existing),
-                source_text,
+        # A file carrying the generated-from header is machine-managed (the
+        # header itself directs edits to the source template), so template
+        # updates must propagate; only unmarked files can be user-authored.
+        if (
+            not force
+            and not existing.startswith(GENERATED_INSTRUCTION_PREFIX)
+            and (
+                existing != rendered
+                and existing
+                != _rendered_instruction_file(source_text, source_path, render=False)
+                and not text_matches_instruction_template(
+                    _without_generated_instruction_header(existing),
+                    source_text,
+                )
             )
         ):
             _report(

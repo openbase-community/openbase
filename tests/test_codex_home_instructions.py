@@ -146,6 +146,52 @@ def test_ensure_rendered_instruction_file_updates_managed_template(
     )
 
 
+def test_ensure_rendered_instruction_file_refreshes_generated_files_on_template_change(
+    tmp_path,
+) -> None:
+    """A generated-from header marks the file machine-managed: template
+    updates must propagate instead of being mistaken for user edits."""
+    source = tmp_path / "instructions" / "DISPATCHER_INSTRUCTIONS.md"
+    target = tmp_path / "openbase" / "instructions" / "DISPATCHER_INSTRUCTIONS.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("New dispatcher rules.\n", encoding="utf-8")
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        "<!-- Generated from /old/path/DISPATCHER_INSTRUCTIONS.md; "
+        "edit the source template instead. -->\n\nOld dispatcher rules.\n",
+        encoding="utf-8",
+    )
+
+    changed = codex_home_instructions.ensure_rendered_instruction_file(
+        source,
+        target,
+        document_label="Dispatcher instructions",
+    )
+
+    assert changed is True
+    assert "New dispatcher rules." in target.read_text(encoding="utf-8")
+
+
+def test_ensure_rendered_instruction_file_preserves_unmarked_user_files(
+    tmp_path,
+) -> None:
+    source = tmp_path / "instructions" / "DISPATCHER_INSTRUCTIONS.md"
+    target = tmp_path / "openbase" / "instructions" / "DISPATCHER_INSTRUCTIONS.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("New dispatcher rules.\n", encoding="utf-8")
+    target.parent.mkdir(parents=True)
+    target.write_text("My hand-written dispatcher rules.\n", encoding="utf-8")
+
+    changed = codex_home_instructions.ensure_rendered_instruction_file(
+        source,
+        target,
+        document_label="Dispatcher instructions",
+    )
+
+    assert changed is False
+    assert "My hand-written" in target.read_text(encoding="utf-8")
+
+
 def test_ensure_rendered_instruction_file_records_template_source(
     tmp_path,
 ) -> None:
@@ -266,9 +312,7 @@ def test_cli_launch_refreshes_openbase_agents_md(monkeypatch) -> None:
 def test_ensure_rendered_instruction_file_standalone_overwrites_user_edits(
     tmp_path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(
-        codex_home_instructions, "is_standalone_runtime", lambda: True
-    )
+    monkeypatch.setattr(codex_home_instructions, "is_standalone_runtime", lambda: True)
     source = tmp_path / "instructions" / "DISPATCHER_INSTRUCTIONS.md"
     source.parent.mkdir(parents=True)
     source.write_text("- Packaged rule\n", encoding="utf-8")
