@@ -81,6 +81,10 @@ ANNOUNCER_TOPIC = "openbase.announcer.say"
 VOICE_ROUTE_TOPIC = "openbase.voice.route"
 AGENT_STATUS_TOPIC = "openbase.agent.status"
 VOICE_LIFECYCLE_TOPIC = "openbase.voice.lifecycle"
+# Participant-attribute mirror of the latest lifecycle event. Data packets can
+# be silently lost in transit; attributes are state-synced by LiveKit, so the
+# client always converges on the latest lifecycle state.
+VOICE_LIFECYCLE_ATTRIBUTE = "openbase.voice.lifecycle"
 ANNOUNCER_AUDIO_KIND = "audio_file"
 SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".aac", ".ogg"}
 ANNOUNCER_MAX_QUEUE_SIZE = int(os.getenv("LIVEKIT_ANNOUNCER_MAX_QUEUE_SIZE", "20"))

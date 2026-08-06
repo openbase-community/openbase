@@ -13,6 +13,7 @@ from openbase_coder_cli.livekit_agent.config import (
     AGENT_STATUS_TOPIC,
     ANNOUNCER_AUDIO_KIND,
     ANNOUNCER_TOPIC,
+    VOICE_LIFECYCLE_ATTRIBUTE,
     VOICE_LIFECYCLE_TOPIC,
     VOICE_ROUTE_TOPIC,
 )
@@ -115,11 +116,43 @@ async def publish_voice_lifecycle_packet(
             "text_hash": record.prompt_hash,
             "completion_reason": record.user_turn_completion_reason,
         }
-    await room.local_participant.publish_data(
-        json.dumps(payload, separators=(",", ":")).encode("utf-8"),
-        reliable=True,
-        topic=VOICE_LIFECYCLE_TOPIC,
-    )
+    encoded_payload = json.dumps(payload, separators=(",", ":"))
+    packet_error: Exception | None = None
+    try:
+        await room.local_participant.publish_data(
+            encoded_payload.encode("utf-8"),
+            reliable=True,
+            topic=VOICE_LIFECYCLE_TOPIC,
+        )
+    except Exception as exc:
+        packet_error = exc
+    # Mirror the latest lifecycle event onto participant attributes. Data
+    # packets can be silently lost in transit even when marked reliable;
+    # attributes are state-synced by LiveKit, so clients converge on the
+    # latest lifecycle state even across drops and reconnects.
+    attribute_error: Exception | None = None
+    try:
+        await room.local_participant.set_attributes(
+            {VOICE_LIFECYCLE_ATTRIBUTE: encoded_payload}
+        )
+    except Exception as exc:
+        attribute_error = exc
+    if packet_error is not None and attribute_error is not None:
+        raise packet_error
+    for transport, error in (
+        ("data_packet", packet_error),
+        ("attribute", attribute_error),
+    ):
+        if error is not None:
+            logger.warning(
+                "dispatch_timing stage=voice_lifecycle_transport_failed "
+                "transport=%s event=%s packet_id=%s delivery_id=%s error=%s",
+                transport,
+                event,
+                packet_id,
+                record.delivery_id,
+                error,
+            )
     logger.info(
         "dispatch_timing stage=voice_lifecycle_packet_published event=%s "
         "packet_id=%s delivery_id=%s status=%s route_version=%d "

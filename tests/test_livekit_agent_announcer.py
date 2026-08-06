@@ -1159,9 +1159,13 @@ def test_livekit_agent_voice_mapping_uses_route_source_of_truth():
 class _FakeLocalParticipant:
     def __init__(self) -> None:
         self.published: list[tuple[bytes, bool, str]] = []
+        self.attributes: dict[str, str] = {}
 
     async def publish_data(self, data, *, reliable, topic):
         self.published.append((data, reliable, topic))
+
+    async def set_attributes(self, attributes):
+        self.attributes.update(attributes)
 
 
 class _FakeRoom:
@@ -1303,6 +1307,74 @@ def test_publish_voice_lifecycle_packet_includes_user_turn_metadata():
         "text_hash": record.prompt_hash,
         "completion_reason": "low_confidence_quiet_floor",
     }
+
+
+def test_publish_voice_lifecycle_packet_mirrors_payload_to_attributes():
+    room = _FakeRoom()
+    ledger = livekit.VoiceDeliveryLedger(
+        route_snapshot=lambda: VoiceRouteSnapshot(
+            route_version=2,
+            active_thread_id="thread-1",
+            active_voice_id="voice-1",
+            active_voice_name="Corey",
+            active_route="codex_thread",
+        ),
+        room_name="room-1",
+        room_id="RM_1",
+    )
+    record = ledger.accept_utterance(message_id="codex-1", prompt="hello")
+
+    asyncio.run(
+        livekit.publish_voice_lifecycle_packet(
+            room,
+            event="safe_to_unmute",
+            record=record,
+        )
+    )
+
+    attribute_value = room.local_participant.attributes[
+        config.VOICE_LIFECYCLE_ATTRIBUTE
+    ]
+    data, _reliable, _topic = room.local_participant.published[0]
+    assert attribute_value == data.decode("utf-8")
+    attribute_payload = json.loads(attribute_value)
+    assert attribute_payload["event"] == "safe_to_unmute"
+    assert attribute_payload["delivery_id"] == record.delivery_id
+    assert attribute_payload["packet_id"]
+
+
+def test_publish_voice_lifecycle_attribute_survives_packet_failure():
+    room = _FakeRoom()
+
+    async def failing_publish_data(data, *, reliable, topic):
+        raise RuntimeError("data channel down")
+
+    room.local_participant.publish_data = failing_publish_data
+    ledger = livekit.VoiceDeliveryLedger(
+        route_snapshot=lambda: VoiceRouteSnapshot(
+            route_version=2,
+            active_thread_id="thread-1",
+            active_voice_id="voice-1",
+            active_voice_name="Corey",
+            active_route="codex_thread",
+        ),
+        room_name="room-1",
+        room_id="RM_1",
+    )
+    record = ledger.accept_utterance(message_id="codex-1", prompt="hello")
+
+    asyncio.run(
+        livekit.publish_voice_lifecycle_packet(
+            room,
+            event="safe_to_unmute",
+            record=record,
+        )
+    )
+
+    attribute_payload = json.loads(
+        room.local_participant.attributes[config.VOICE_LIFECYCLE_ATTRIBUTE]
+    )
+    assert attribute_payload["event"] == "safe_to_unmute"
 
 
 def test_publish_voice_lifecycle_packet_stringifies_room_id_guardrail():
