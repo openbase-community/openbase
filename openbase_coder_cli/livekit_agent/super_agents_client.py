@@ -1188,8 +1188,18 @@ class SuperAgentsLiveKitClient:
                 developer_instructions=self._thread_developer_instructions(),
             )
         else:
+            resume_kwargs: dict[str, Any] = {}
+            if developer_instructions := self._thread_developer_instructions():
+                # The dispatcher instruction file is the single source of
+                # truth; replace on resume so template updates propagate
+                # instead of the session keeping stale instructions forever.
+                resume_kwargs = {
+                    "developer_instructions": developer_instructions,
+                    "replace_developer_instructions": True,
+                }
             resumed = await self._backend_client.resume_by_label(
-                self._query(thread_id=thread_id, prefer="latest_any")
+                self._query(thread_id=thread_id, prefer="latest_any"),
+                **resume_kwargs,
             )
         self._thread_id = _extract_thread_id(resumed) or thread_id
         if self._thread_id != thread_id:
@@ -1487,11 +1497,21 @@ def _speech_text_from_progress(progress: dict[str, Any]) -> str:
     candidates: list[tuple[str, Any, bool]] = [
         (
             "summary.items",
-            find_turn_useful_text(summary.get("items")) if isinstance(summary, dict) else None,
+            find_turn_useful_text(summary.get("items"))
+            if isinstance(summary, dict)
+            else None,
             True,
         ),
-        ("progress.turn.lastUsefulMessage", _last_useful_message(progress.get("turn")), True),
-        ("progress.turns.lastUsefulMessage", _last_useful_message(progress.get("turns")), True),
+        (
+            "progress.turn.lastUsefulMessage",
+            _last_useful_message(progress.get("turn")),
+            True,
+        ),
+        (
+            "progress.turns.lastUsefulMessage",
+            _last_useful_message(progress.get("turns")),
+            True,
+        ),
         (
             "progress.recentTurns.lastUsefulMessage",
             _last_useful_message(progress.get("recentTurns")),
@@ -1499,7 +1519,11 @@ def _speech_text_from_progress(progress: dict[str, Any]) -> str:
         ),
         ("progress.turn", find_turn_useful_text(progress.get("turn")), True),
         ("progress.turns", find_turn_useful_text(progress.get("turns")), True),
-        ("progress.recentTurns", find_turn_useful_text(progress.get("recentTurns")), True),
+        (
+            "progress.recentTurns",
+            find_turn_useful_text(progress.get("recentTurns")),
+            True,
+        ),
     ]
     candidates.extend(
         [
@@ -1513,7 +1537,11 @@ def _speech_text_from_progress(progress: dict[str, Any]) -> str:
             ]
         )
     for source, candidate, role_selected in candidates:
-        text = str(candidate).strip() if role_selected and isinstance(candidate, str) else find_useful_text(candidate)
+        text = (
+            str(candidate).strip()
+            if role_selected and isinstance(candidate, str)
+            else find_useful_text(candidate)
+        )
         if not text:
             continue
         text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
@@ -1567,9 +1595,7 @@ def _should_wait_for_speech_text(
         return False, empty_answer_started_at
     now = time.monotonic()
     started_at = empty_answer_started_at if empty_answer_started_at is not None else now
-    should_wait = (
-        now - started_at < TURN_POLL_COMPLETED_EMPTY_SPEECH_GRACE_SECONDS
-    )
+    should_wait = now - started_at < TURN_POLL_COMPLETED_EMPTY_SPEECH_GRACE_SECONDS
     if should_wait:
         logger.info(
             "%s stage=turn_wait_completed_without_speech turn_id=%s "
