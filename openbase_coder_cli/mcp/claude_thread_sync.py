@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import sqlite3
 import time
@@ -1159,7 +1160,10 @@ def _parse_claude_jsonl(root: Path, session_id: str) -> dict[str, Any] | None:
         )
         text = _message_text(payload.get("message"))
         if role == "user" and text and first_user is None:
-            first_user = text
+            # Claude Code transcripts often open with harness-injected markup
+            # (<local-command-caveat>, <command-name>, <system-reminder>);
+            # skip it so session names come from real user text.
+            first_user = _meaningful_user_text(text)
         elif role == "assistant" and text:
             latest_assistant = text
     if not seen_event:
@@ -1179,6 +1183,30 @@ def _parse_claude_jsonl(root: Path, session_id: str) -> dict[str, Any] | None:
         "created_at_ms": first_timestamp_ms,
         "updated_at_ms": latest_timestamp_ms,
     }
+
+
+_HARNESS_MARKUP_TAGS = (
+    "system-reminder",
+    "local-command-caveat",
+    "command-name",
+    "command-message",
+    "command-args",
+    "command-contents",
+    "local-command-stdout",
+)
+_HARNESS_MARKUP_SPAN_RE = re.compile(
+    r"<(" + "|".join(_HARNESS_MARKUP_TAGS) + r")>.*?</\1>",
+    re.DOTALL,
+)
+_HARNESS_MARKUP_TAG_RE = re.compile(r"</?(" + "|".join(_HARNESS_MARKUP_TAGS) + r")>")
+
+
+def _meaningful_user_text(text: str) -> str | None:
+    """Return user-authored text with harness-injected markup removed."""
+    cleaned = _HARNESS_MARKUP_SPAN_RE.sub(" ", text)
+    cleaned = _HARNESS_MARKUP_TAG_RE.sub(" ", cleaned)
+    cleaned = cleaned.strip()
+    return cleaned or None
 
 
 def _message_text(message: Any) -> str | None:
@@ -1647,7 +1675,9 @@ def _backfill_openbase_session_metadata(
                     name,
                     cwd_override or snapshot.cwd or str(Path.home()),
                     json.dumps(["claude", "--resume", snapshot.session_id]),
-                    "waiting",
+                    # Idle synced sessions are "completed"; "waiting" means
+                    # blocked on user input and counts as active.
+                    "completed",
                     _session_observed_state(snapshot),
                     snapshot.latest_assistant_message,
                     snapshot.session_id,
@@ -1664,6 +1694,14 @@ def _backfill_openbase_session_metadata(
             and existing["last_useful_message"] != snapshot.latest_assistant_message
         ):
             updates["last_useful_message"] = snapshot.latest_assistant_message
+        if (
+            _string(existing["name"])
+            and _string(existing["name"]).startswith("<")
+            and snapshot.name
+            and not snapshot.name.startswith("<")
+        ):
+            # Self-heal names imported before harness markup was stripped.
+            updates["name"] = _unique_session_name(conn, snapshot.name)
         desired_cwd = cwd_override or snapshot.cwd
         if desired_cwd and existing["cwd"] != desired_cwd:
             updates["cwd"] = desired_cwd
