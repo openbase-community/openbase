@@ -68,7 +68,7 @@ def test_backend_use_internal_openbase_cloud_codex_keeps_codex_proxy(tmp_path) -
     config = (tmp_path / "nested" / "codex_home" / "config.toml").read_text(
         encoding="utf-8"
     )
-    assert 'model = "openbase-codex"' in config
+    assert 'model = "gpt-5.5"' in config
     assert 'model_provider = "openbase_cloud"' in config
     assert "[model_providers.openbase_cloud]" in config
     assert 'env_key = "OPENBASE_CLOUD_CODEX_API_KEY"' in config

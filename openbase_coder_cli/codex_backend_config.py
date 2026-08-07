@@ -15,7 +15,9 @@ CODEX_CONFIG_NAME = "config.toml"
 OPENBASE_CLOUD_PROVIDER = "openbase_cloud"
 OPENBASE_CLOUD_PROVIDER_TABLE = f"model_providers.{OPENBASE_CLOUD_PROVIDER}"
 DEFAULT_CODEX_MODEL = "gpt-5.5"
-DEFAULT_OPENBASE_CLOUD_CODEX_MODEL = "openbase-codex"
+# Real public model id on the Cloud OpenAI proxy; the legacy "openbase-codex"
+# alias is still accepted server-side for older installs.
+DEFAULT_OPENBASE_CLOUD_CODEX_MODEL = "gpt-5.5"
 DEFAULT_OPENBASE_CLOUD_BASE_URL = "https://app.openbase.cloud"
 OPENBASE_CLOUD_LLM_PATH = "/api/openbase/llm/openai/v1"
 

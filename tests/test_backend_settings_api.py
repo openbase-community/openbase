@@ -143,8 +143,10 @@ def test_backend_model_settings_lists_openbase_cloud_claude_model(
     assert response.status_code == 200
     assert response.data["backend"] == "openbase_cloud"
     assert [option["id"] for option in response.data["options"]] == [
-        "openbase-claude",
+        "sonnet",
+        "opus",
         "fable",
+        "haiku",
     ]
 
 

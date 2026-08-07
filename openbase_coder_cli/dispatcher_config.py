@@ -71,16 +71,28 @@ CLAUDE_CODE_MODEL_OPTIONS = (
         "description": "Claude Code family alias for the default Haiku model.",
     },
 )
+# Same family aliases as the local Claude Code backend; on the Cloud backend
+# they are pinned to the proxy's public model ids before reaching the SDK.
 OPENBASE_CLOUD_CLAUDE_MODEL_OPTIONS = (
     {
-        "id": "openbase-claude",
-        "label": "Openbase Claude",
-        "description": "Openbase Cloud Claude Code proxy model.",
+        "id": "sonnet",
+        "label": "Claude Sonnet",
+        "description": "Claude Sonnet through the Openbase Cloud proxy (default).",
+    },
+    {
+        "id": "opus",
+        "label": "Claude Opus",
+        "description": "Claude Opus through the Openbase Cloud proxy.",
     },
     {
         "id": "fable",
         "label": "Claude Fable 5",
         "description": "Claude Fable 5 through the Openbase Cloud proxy.",
+    },
+    {
+        "id": "haiku",
+        "label": "Claude Haiku",
+        "description": "Claude Haiku through the Openbase Cloud proxy.",
     },
 )
 BACKEND_MODEL_OPTIONS = {

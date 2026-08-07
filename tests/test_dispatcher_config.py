@@ -42,7 +42,12 @@ def test_openbase_cloud_model_options_include_fable(monkeypatch) -> None:
 
     options = dispatcher_config.model_options_for_backend()
 
-    assert [option["id"] for option in options] == ["openbase-claude", "fable"]
+    assert [option["id"] for option in options] == [
+        "sonnet",
+        "opus",
+        "fable",
+        "haiku",
+    ]
 
 
 def test_backend_model_uses_env_file_backend(tmp_path: Path, monkeypatch) -> None:
