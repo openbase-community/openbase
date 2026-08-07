@@ -1467,3 +1467,51 @@ def test_symlink_codex_home_skills_repoints_version_pinned_links(
     assert target.readlink() == current / "skills" / "sample-skill"
     claude_target = claude_config / "skills" / "sample-skill"
     assert claude_target.readlink() == current / "skills" / "sample-skill"
+
+
+def test_relink_workspace_skills_heals_foreign_home_symlinks(
+    tmp_path, monkeypatch
+) -> None:
+    """Cross-machine file sync can replace skill links with another machine's
+    home paths; the startup relink must re-point them at this checkout."""
+    workspace = tmp_path / "workspace"
+    skill = workspace / "skills" / "skills" / "sample-skill"
+    codex_home, claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("# Sample\n", encoding="utf-8")
+    for target_root in (codex_home / "skills", claude_config / "skills"):
+        target_root.mkdir(parents=True)
+        (target_root / "sample-skill").symlink_to(
+            "/home/ubuntu/.openbase/openbase-coder-workspace/skills/skills/sample-skill"
+        )
+
+    from openbase_coder_cli.cli.setup import codex as codex_setup
+    from openbase_coder_cli.services import installation
+
+    monkeypatch.setattr(
+        installation.InstallationConfig, "exists", classmethod(lambda cls: True)
+    )
+    monkeypatch.setattr(
+        installation.InstallationConfig,
+        "load",
+        classmethod(
+            lambda cls: installation.InstallationConfig(workspace_path=str(workspace))
+        ),
+    )
+
+    assert codex_setup.relink_workspace_skills_from_installation() is True
+    for target_root in (codex_home / "skills", claude_config / "skills"):
+        target = target_root / "sample-skill"
+        assert target.is_symlink()
+        assert target.resolve() == skill.resolve()
+
+
+def test_relink_workspace_skills_noop_without_installation(monkeypatch) -> None:
+    from openbase_coder_cli.cli.setup import codex as codex_setup
+    from openbase_coder_cli.services import installation
+
+    monkeypatch.setattr(
+        installation.InstallationConfig, "exists", classmethod(lambda cls: False)
+    )
+
+    assert codex_setup.relink_workspace_skills_from_installation() is False

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+from collections.abc import Callable
 from pathlib import Path
 from shutil import which
 
@@ -31,6 +33,8 @@ from openbase_coder_cli.runtime import (
     packaged_skills_dir,
     stable_package_path,
 )
+
+logger = logging.getLogger(__name__)
 
 CODEX_HOME_DEFAULT_SOURCE_DIR = "instructions"
 CODEX_HOME_SKILLS_SOURCE_DIR = "skills"
@@ -148,24 +152,59 @@ def _ensure_matching_symlink_or_file(
     return True
 
 
-def _symlink_codex_home_skills(workspace_dir: str) -> None:
+def _symlink_codex_home_skills(
+    workspace_dir: str,
+    *,
+    report: Callable[[str], None] = click.echo,
+) -> None:
     """Symlink workspace-owned skills into Openbase-managed agent homes."""
     source_root = _default_skills_dir(workspace_dir)
     skill_sources = _workspace_skill_sources(source_root)
     if not skill_sources:
-        click.echo(f"No workspace skills found at {source_root}")
+        report(f"No workspace skills found at {source_root}")
         return
 
     _symlink_skills_to_root(
         skill_sources,
         target_root=CODEX_HOME_DIR / "skills",
         label="Codex home",
+        report=report,
     )
     _symlink_skills_to_root(
         skill_sources,
         target_root=OPENBASE_CLAUDE_CONFIG_DIR / "skills",
         label="Claude config",
+        report=report,
     )
+
+
+def relink_workspace_skills_from_installation(
+    *,
+    report: Callable[[str], None] | None = None,
+) -> bool:
+    """Re-point bundled workspace skill links at this machine's checkout.
+
+    Skill links in the agent homes are machine-local symlinks, but the
+    directories that hold them can be replicated between machines by file
+    sync — after which they carry the OTHER machine's home paths and dangle
+    here (skills silently vanish from agents and the dashboard). The linker
+    already replaces wrong-target links, so running it at service startup
+    lets each machine self-heal.
+    """
+    from openbase_coder_cli.services.installation import InstallationConfig
+
+    emit = report or logger.info
+    try:
+        if not InstallationConfig.exists():
+            return False
+        config = InstallationConfig.load()
+        if not config.workspace_path:
+            return False
+        _symlink_codex_home_skills(config.workspace_path, report=emit)
+        return True
+    except Exception:
+        logger.warning("Unable to relink workspace skills", exc_info=True)
+        return False
 
 
 def _symlink_skills_to_root(
@@ -173,6 +212,7 @@ def _symlink_skills_to_root(
     *,
     target_root: Path,
     label: str,
+    report: Callable[[str], None] = click.echo,
 ) -> None:
     target_root.mkdir(parents=True, exist_ok=True)
 
@@ -183,17 +223,17 @@ def _symlink_skills_to_root(
             # link pinned to a versioned release dir resolves identically to
             # the stable current/ alias today but dangles after rotation.
             if target_path.readlink() == source_path:
-                click.echo(f"{label} skill already linked at {target_path}")
+                report(f"{label} skill already linked at {target_path}")
                 continue
             target_path.unlink()
         elif target_path.exists():
-            click.echo(
+            report(
                 f"{label} skill already exists at {target_path}; leaving it unchanged."
             )
             continue
 
         target_path.symlink_to(source_path)
-        click.echo(f"Linked {label} skill {target_path} -> {source_path}")
+        report(f"Linked {label} skill {target_path} -> {source_path}")
 
 
 def _ensure_codex_home_config(
