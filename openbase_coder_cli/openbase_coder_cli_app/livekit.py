@@ -58,6 +58,7 @@ from openbase_coder_cli.livekit_voice_route import (
     VoiceRouteBlockedError,
     VoiceRouteError,
     get_livekit_voice_route_state,
+    is_dispatcher_identity,
     live_target_transfer_blocker,
     publish_exit_to_dispatch,
     publish_transfer_to_thread,
@@ -638,6 +639,7 @@ async def _resolve_voice_transfer_target(
     thread_id: str | None,
     agent_name: str | None,
 ) -> dict:
+    route_state = get_livekit_voice_route_state()
     if thread_id:
         thread = await manager.get_thread_state(thread_id)
         if thread is None:
@@ -645,11 +647,26 @@ async def _resolve_voice_transfer_target(
                 "status": status.HTTP_404_NOT_FOUND,
                 "data": {"detail": f"Thread {thread_id} not found."},
             }
+        if _is_dispatcher_transfer_target(thread, route_state):
+            return {
+                "status": status.HTTP_409_CONFLICT,
+                "data": {
+                    "detail": (
+                        "The dispatcher thread cannot be used as a Super Agent "
+                        "voice transfer target. Use exit-to-dispatch to return "
+                        "to the dispatcher."
+                    )
+                },
+            }
         return {"status": status.HTTP_200_OK, "thread": thread}
 
     assert agent_name is not None
     requested_name = _normalize_agent_name(agent_name)
-    threads = await manager.list_threads()
+    threads = [
+        thread
+        for thread in await manager.list_threads()
+        if not _is_dispatcher_transfer_target(thread, route_state)
+    ]
     exact_matches = [
         thread
         for thread in threads
@@ -682,6 +699,16 @@ async def _resolve_voice_transfer_target(
             ],
         )
     return {"status": status.HTTP_200_OK, "thread": selected}
+
+
+def _is_dispatcher_transfer_target(thread, route_state) -> bool:
+    thread_id = getattr(thread, "session_id", None)
+    return is_dispatcher_identity(
+        thread_id if isinstance(thread_id, str) else None,
+        _thread_label(thread),
+        _thread_agent_name(thread),
+        route_state=route_state,
+    )
 
 
 def _thread_agent_name(thread) -> str | None:

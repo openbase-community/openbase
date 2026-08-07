@@ -11,6 +11,7 @@ from openbase_coder_cli.backend_config import (
     CODEX_BACKEND,
     CODING_BACKEND_ENV_KEY,
     OPENBASE_CLOUD_BACKEND,
+    OPENBASE_CLOUD_CODEX_BACKEND,
     normalize_backend,
 )
 from openbase_coder_cli.paths import CODEX_DISPATCHER_CONFIG_PATH, DEFAULT_ENV_FILE_PATH
@@ -70,8 +71,21 @@ CLAUDE_CODE_MODEL_OPTIONS = (
         "description": "Claude Code family alias for the default Haiku model.",
     },
 )
+OPENBASE_CLOUD_CLAUDE_MODEL_OPTIONS = (
+    {
+        "id": "openbase-claude",
+        "label": "Openbase Claude",
+        "description": "Openbase Cloud Claude Code proxy model.",
+    },
+    {
+        "id": "fable",
+        "label": "Claude Fable 5",
+        "description": "Claude Fable 5 through the Openbase Cloud proxy.",
+    },
+)
 BACKEND_MODEL_OPTIONS = {
     CLAUDE_CODE_BACKEND: CLAUDE_CODE_MODEL_OPTIONS,
+    OPENBASE_CLOUD_BACKEND: OPENBASE_CLOUD_CLAUDE_MODEL_OPTIONS,
 }
 CLAUDE_CODE_MODEL_ALIASES = {option["id"] for option in CLAUDE_CODE_MODEL_OPTIONS}
 TTS_PROVIDER_KEY = "tts_provider"
@@ -206,11 +220,16 @@ def backend_model(
     selected_backend = _execution_backend(
         _normalize_backend(backend or _configured_backend_from_environment())
     )
+    configured_backend = _normalize_backend(
+        backend or _configured_backend_from_environment()
+    )
     payload = read_dispatcher_config(path)
     backend_models = payload.get(BACKEND_MODELS_KEY)
     if not isinstance(backend_models, dict):
         return None
-    model_config = backend_models.get(selected_backend)
+    model_config = backend_models.get(configured_backend) or backend_models.get(
+        selected_backend
+    )
     if not isinstance(model_config, dict):
         return None
     configured = _optional_str(model_config.get(role))
@@ -438,7 +457,11 @@ def _normalize_backend(value: str | None) -> str:
 
 
 def _execution_backend(backend: str) -> str:
-    return CODEX_BACKEND if backend == OPENBASE_CLOUD_BACKEND else backend
+    if backend == OPENBASE_CLOUD_BACKEND:
+        return CLAUDE_CODE_BACKEND
+    if backend == OPENBASE_CLOUD_CODEX_BACKEND:
+        return CODEX_BACKEND
+    return backend
 
 
 def _env_file_values(path: Path) -> dict[str, str]:

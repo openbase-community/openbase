@@ -3,15 +3,16 @@
 This guide sets up Openbase Coder locally using the `openbase-coder` CLI.
 
 Most users do not need this page: [download the desktop app](downloads.md)
-and its guided setup runs everything below for you, including iPhone pairing
-(see [Desktop App](desktop-app.md#install-and-first-run-setup)). Use this
-guide when you prefer the terminal or are setting up a headless machine.
+and its guided setup runs the normal Openbase Cloud path for you, including
+managed Claude Code, managed voice audio, and iPhone pairing (see
+[Desktop App](desktop-app.md#install-and-first-run-setup)). Use this guide
+when you prefer the terminal or are setting up a headless machine.
 
 ## Prerequisites
 
 - macOS (`setup` and `services` use launchd) or Linux (systemd user services). The `computer-use` CLI is Linux-only for Openbase DevSpace Xorg/DCV desktops; macOS agents use native Computer Use tooling.
 - Tailscale, signed in and connected, for iOS app access to the local CLI
-- Codex CLI authenticated in your normal user account when using the `codex` backend
+- Openbase Cloud login for the normal `openbase_cloud` backend
 
 Openbase Coder has exactly two deployment modes:
 
@@ -31,9 +32,9 @@ Local Kokoro/MLX audio is optional. When setup is run with
 `--audio-provider local`, the CLI installs the local-audio Python packages into
 the bundled runtime and downloads the Kokoro voices and MLX Whisper model.
 
-Optional:
+Optional developer backends:
 
-- Openbase Cloud login for the `openbase_cloud` backend
+- Codex CLI authenticated in your normal user account when using the `codex` backend
 - Claude Code login for the `claude-code` backend (on macOS, setup bridges
   your normal Claude Code login into Openbase's managed config automatically
   when it can; `openbase-coder claude login` is the fallback)
@@ -97,7 +98,7 @@ What setup does:
 7. Downloads LiveKit agent model files (VAD, turn detector) in both modes, and initializes the CLI venv with `uv sync` in development mode.
 8. Writes Codex app-server defaults such as `CODEX_MODEL=gpt-5.5`, `CODEX_MODEL_REASONING_EFFORT=high`, `CODEX_SERVICE_TIER=standard`, `CODEX_APP_SERVER_URL`, and `LIVEKIT_CODEX_THREAD_CWD`.
 9. Uses the bundled console build, or builds `console` in development mode.
-10. Installs background services — launchd on macOS, systemd user units on Linux (unless `--skip-services`). Backend-specific services such as `codex-app-server` are only installed for the codex/openbase-cloud backends.
+10. Installs background services — launchd on macOS, systemd user units on Linux (unless `--skip-services`). Backend-specific services such as `codex-app-server` are only installed for the backends that use them; visible Openbase Cloud uses Cloud-proxied Claude Code and does not install `codex-app-server`.
 11. Configures Tailscale Serve routes for iOS access to the local CLI API and LiveKit:
     - `tailscale serve --bg --http=18080 http://127.0.0.1:7999`
     - `tailscale serve --bg --tcp=7880 tcp://127.0.0.1:7880`

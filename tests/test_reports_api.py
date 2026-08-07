@@ -52,6 +52,13 @@ def _get_report_file(project_path: Path, relative_path: str):
     return views.project_reports_file(request)
 
 
+def _get_project_reports(project_path: Path):
+    factory = APIRequestFactory()
+    request = factory.get(f"/api/projects/reports/?{urlencode({'path': str(project_path)})}")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+    return views.project_reports(request)
+
+
 def _download_report(project_path: Path, relative_path: str):
     factory = APIRequestFactory()
     query = urlencode({"path": str(project_path), "file": relative_path})
@@ -451,13 +458,33 @@ def test_project_reports_includes_shared_tags(monkeypatch, tmp_path: Path) -> No
     assert tag_response.status_code == 200
     assert tag_response.data["tags"] == ["Needs Review"]
 
-    factory = APIRequestFactory()
-    request = factory.get(f"/api/projects/reports/?{urlencode({'path': str(project)})}")
-    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
-    response = views.project_reports(request)
+    response = _get_project_reports(project)
 
     assert response.status_code == 200
     assert response.data["files"][0]["tags"] == ["Needs Review"]
+
+
+def test_project_reports_includes_markdown_title(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    reports = project / ".reports"
+    reports.mkdir(parents=True)
+    (reports / "summary.md").write_text(
+        "---\n"
+        "openbase_report:\n"
+        "  thread_id: thread-1\n"
+        "---\n\n"
+        "```md\n"
+        "# Not The Title\n"
+        "```\n\n"
+        "# Human Report Title\n\n"
+        "Body",
+        encoding="utf-8",
+    )
+
+    response = _get_project_reports(project)
+
+    assert response.status_code == 200
+    assert response.data["files"][0]["title"] == "Human Report Title"
 
 
 def test_report_tags_endpoint_reuses_thread_tag_options(

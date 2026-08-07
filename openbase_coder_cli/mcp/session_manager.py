@@ -28,9 +28,14 @@ from super_agents.app_server_client import (
 from super_agents.backend_clients import (
     CLAUDE_CODE_BACKEND,
     backend_from_environment,
-    client_from_environment,
 )
 
+from openbase_coder_cli.backend_config import (
+    CODEX_BACKEND,
+    OPENBASE_CLOUD_BACKEND,
+    OPENBASE_CLOUD_CODEX_BACKEND,
+)
+from openbase_coder_cli.cli.backend import read_backend
 from openbase_coder_cli.codex_session_defaults import codex_permission_defaults
 from openbase_coder_cli.dispatcher_config import (
     DISPATCHER_MODEL_ROLE,
@@ -44,7 +49,10 @@ from openbase_coder_cli.livekit_voice_route import (
     super_agent_voice_for_context,
 )
 from openbase_coder_cli.onboarding_reminder import append_onboarding_reminder
-from openbase_coder_cli.paths import CODEX_SUPER_AGENT_INSTRUCTIONS_PATH
+from openbase_coder_cli.paths import (
+    CODEX_SUPER_AGENT_INSTRUCTIONS_PATH,
+    DEFAULT_ENV_FILE_PATH,
+)
 
 from .models import QueuedTurnInfo
 from .models import ThreadInfo as SessionInfo
@@ -123,15 +131,6 @@ class _SuperAgentsClient(Protocol):
         request_id: str | int,
         result: dict[str, Any],
     ) -> dict[str, Any]: ...
-    async def save_routine(self, input_data: dict[str, Any]) -> dict[str, Any]: ...
-    async def list_routines(self) -> dict[str, Any]: ...
-    async def read_routine(self, name: str) -> dict[str, Any]: ...
-    async def delete_routine(self, name: str) -> dict[str, Any]: ...
-    async def run_due_routines(
-        self,
-        name: str | None = None,
-        force: bool = False,
-    ) -> dict[str, Any]: ...
     async def request(
         self,
         method: str,
@@ -146,6 +145,18 @@ class _SuperAgentsClient(Protocol):
         clear_fields: list[str] | None = None,
     ) -> None: ...
     async def get_session(self, thread_id: str) -> Any: ...
+
+
+class _RoutineClient(Protocol):
+    async def save_routine(self, input_data: dict[str, Any]) -> dict[str, Any]: ...
+    async def list_routines(self) -> dict[str, Any]: ...
+    async def read_routine(self, name: str) -> dict[str, Any]: ...
+    async def delete_routine(self, name: str) -> dict[str, Any]: ...
+    async def run_due_routines(
+        self,
+        name: str | None = None,
+        force: bool = False,
+    ) -> dict[str, Any]: ...
 
 
 async def _broadcast(session_id: str, event: dict[str, Any]) -> None:
@@ -307,13 +318,18 @@ class CodexAppServerSessionManager:
         self,
         ws_url: str | None = None,
         client: _SuperAgentsClient | None = None,
+        routine_client: _RoutineClient | None = None,
         model_for_role: Callable[[str], str | None] | None = None,
     ) -> None:
         self._ws_url = ws_url or os.environ.get(
             "CODEX_APP_SERVER_URL", "ws://127.0.0.1:4500"
         )
         self._uses_external_client = client is not None
-        self._client: _SuperAgentsClient = client or self._default_client()
+        self._execution_backend = _configured_execution_backend()
+        self._client: _SuperAgentsClient = client or self._default_client(
+            self._execution_backend
+        )
+        self._routine_client: _RoutineClient | None = routine_client
         self._model_for_role = model_for_role or _configured_model_for_role
         self._turn_to_session: dict[str, str] = {}
         self._delivered_text: dict[str, str] = {}
@@ -323,10 +339,21 @@ class CodexAppServerSessionManager:
         self._turn_steers: dict[str, list[SteerInfo]] = {}
         self._state_lock = asyncio.Lock()
 
-    def _default_client(self) -> _SuperAgentsClient:
-        if backend_from_environment() == CLAUDE_CODE_BACKEND:
-            return client_from_environment()
-        return _OpenbaseSuperAgentsClient(self, self._ws_url)
+    def _default_client(self, execution_backend: str) -> _SuperAgentsClient:
+        return _default_client_for_execution_backend(
+            manager=self,
+            ws_url=self._ws_url,
+            execution_backend=execution_backend,
+        )
+
+    def _routines_client(self) -> _RoutineClient:
+        if self._routine_client is not None:
+            return self._routine_client
+        if _supports_routine_methods(self._client):
+            self._routine_client = self._client
+        else:
+            self._routine_client = _OpenbaseSuperAgentsClient(self, self._ws_url)
+        return self._routine_client
 
     def _uses_backend_session_api(self) -> bool:
         return not callable(getattr(self._client, "read_thread", None))
@@ -500,19 +527,19 @@ class CodexAppServerSessionManager:
 
     async def list_routines(self) -> dict[str, Any]:
         """List persisted Super Agents routines."""
-        return await self._client.list_routines()
+        return await self._routines_client().list_routines()
 
     async def read_routine(self, name: str) -> dict[str, Any]:
         """Read one persisted Super Agents routine."""
-        return await self._client.read_routine(name)
+        return await self._routines_client().read_routine(name)
 
     async def save_routine(self, input_data: dict[str, Any]) -> dict[str, Any]:
         """Create or update a persisted Super Agents routine."""
-        return await self._client.save_routine(input_data)
+        return await self._routines_client().save_routine(input_data)
 
     async def delete_routine(self, name: str) -> dict[str, Any]:
         """Delete one persisted Super Agents routine."""
-        return await self._client.delete_routine(name)
+        return await self._routines_client().delete_routine(name)
 
     async def run_due_routines(
         self,
@@ -520,7 +547,7 @@ class CodexAppServerSessionManager:
         force: bool = False,
     ) -> dict[str, Any]:
         """Run due routines through the Super Agents client library."""
-        return await self._client.run_due_routines(name=name, force=force)
+        return await self._routines_client().run_due_routines(name=name, force=force)
 
     async def resume_thread_with_developer_instructions(
         self,
@@ -1098,6 +1125,8 @@ class CodexAppServerSessionManager:
                 if _is_thread_unavailable_error(exc):
                     return None
                 raise
+            except ValueError:
+                return None
             thread = _thread_payload(_normalize_backend_thread_payload(result))
             return thread
 
@@ -1353,6 +1382,48 @@ class CodexAppServerSessionManager:
 _session_manager: CodexAppServerSessionManager | None = None
 
 
+def _execution_backend_for_configured_backend(backend: str) -> str:
+    if backend == OPENBASE_CLOUD_BACKEND:
+        return CLAUDE_CODE_BACKEND
+    if backend == OPENBASE_CLOUD_CODEX_BACKEND:
+        return CODEX_BACKEND
+    return backend
+
+
+def _configured_execution_backend() -> str:
+    if DEFAULT_ENV_FILE_PATH.is_file():
+        configured_backend = read_backend(DEFAULT_ENV_FILE_PATH)
+        if not configured_backend.startswith("unsupported:"):
+            return _execution_backend_for_configured_backend(configured_backend)
+    return backend_from_environment()
+
+
+def _default_client_for_execution_backend(
+    *,
+    manager: CodexAppServerSessionManager,
+    ws_url: str,
+    execution_backend: str,
+) -> _SuperAgentsClient:
+    if execution_backend == CLAUDE_CODE_BACKEND:
+        from super_agents.claude_sdk import ClaudeAgentSdkClient
+
+        return ClaudeAgentSdkClient()
+    return _OpenbaseSuperAgentsClient(manager, ws_url)
+
+
+def _supports_routine_methods(client: Any) -> bool:
+    return all(
+        callable(getattr(client, method, None))
+        for method in (
+            "save_routine",
+            "list_routines",
+            "read_routine",
+            "delete_routine",
+            "run_due_routines",
+        )
+    )
+
+
 def _find_shared_permission_request(request_id: str | int) -> dict[str, Any] | None:
     request_ids = {str(request_id)}
     if isinstance(request_id, str) and request_id.isdigit():
@@ -1366,7 +1437,14 @@ def _find_shared_permission_request(request_id: str | int) -> dict[str, Any] | N
 def get_session_manager() -> CodexAppServerSessionManager:
     """Get the singleton thread manager instance."""
     global _session_manager
-    if _session_manager is None:
+    execution_backend = _configured_execution_backend()
+    if (
+        _session_manager is None
+        or (
+            not _session_manager._uses_external_client
+            and _session_manager._execution_backend != execution_backend
+        )
+    ):
         _session_manager = CodexAppServerSessionManager()
     return _session_manager
 

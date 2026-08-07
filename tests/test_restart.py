@@ -3,6 +3,7 @@ import importlib
 from click.testing import CliRunner
 
 from openbase_coder_cli.cli.restart import restart, self_restart
+from openbase_coder_cli.services.definitions import default_services
 from openbase_coder_cli.services.installation import InstallationConfig
 from openbase_coder_cli.services.restart import (
     RestartPlan,
@@ -28,6 +29,13 @@ def test_restart_default_schedules_all_openbase_services(monkeypatch):
         restart_module,
         "warn_before_voice_interruption",
         lambda **kwargs: warnings.append(kwargs),
+    )
+    # The machine's env file selects the coding backend, which gates
+    # codex-app-server; pin it so the expected service set is deterministic.
+    monkeypatch.setattr(
+        restart_module,
+        "configured_default_services",
+        lambda: default_services("codex"),
     )
 
     result = CliRunner().invoke(restart, ["--delay", "0"])

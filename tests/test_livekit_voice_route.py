@@ -18,6 +18,7 @@ from openbase_coder_cli.livekit_voice_route import (
     DIRECT_LIVEKIT_INSTRUCTIONS_PATH_ENV,
     DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV,
     VOICE_ROUTE_TOPIC,
+    VoiceRouteBlockedError,
     clear_livekit_thread_state,
     get_livekit_voice_route_state,
     load_direct_livekit_developer_instructions,
@@ -25,6 +26,7 @@ from openbase_coder_cli.livekit_voice_route import (
     publish_exit_to_dispatch,
     publish_transfer_to_thread,
     stable_super_agent_voice_id,
+    super_agent_voice_for_context,
     super_agent_voice_id_for_context,
     warm_livekit_dispatcher_thread,
 )
@@ -233,6 +235,43 @@ def test_super_agent_voice_context_can_use_catalog_name(monkeypatch):
     )
 
 
+def test_dispatcher_label_uses_configured_dispatcher_voice(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        voice_route,
+        "dispatcher_voice",
+        lambda *args, **kwargs: {
+            "id": "voice-jacqueline",
+            "name": "Jacqueline",
+            "provider": "openbase_cloud",
+        },
+    )
+    monkeypatch.setattr(
+        voice_route,
+        "selected_tts_provider_id",
+        lambda: voice_route.CARTESIA_PROVIDER_ID,
+    )
+    monkeypatch.setattr(
+        voice_route,
+        "SUPER_AGENT_VOICES",
+        (
+            voice_route.CartesiaVoice("voice-carl", "Carl"),
+            voice_route.CartesiaVoice("voice-dottie", "Dottie"),
+        ),
+    )
+    monkeypatch.setattr(
+        voice_route, "SUPER_AGENT_VOICE_IDS", ("voice-carl", "voice-dottie")
+    )
+
+    voice = super_agent_voice_for_context("dispatcher-thread-1", "dispatcher")
+
+    assert voice == voice_route.CartesiaVoice(
+        "voice-jacqueline",
+        "Jacqueline",
+        "openbase_cloud",
+    )
+
+
 def test_route_state_ignores_stale_legacy_thread_id(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     (tmp_path / "livekit-codex-thread.json").write_text(
@@ -428,6 +467,48 @@ def test_transfer_to_thread_prepares_then_publishes(tmp_path: Path, monkeypatch)
     assert history.agent_name == "Dottie"
     assert history.voice_id == state.active_target_voice_id
     assert history.source == "route_transfer"
+
+
+def test_transfer_to_thread_rejects_dispatcher_target(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    (tmp_path / "livekit-voice-route.json").write_text(
+        json.dumps(
+            {
+                "dispatcher_thread_id": "dispatcher-1",
+                "dispatcher_voice_id": "voice-jacqueline",
+                "dispatcher_voice_name": "Jacqueline",
+                "updated_at": 1,
+                "instruction_override_supported": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = FakeSessionManager()
+    monkeypatch.setattr(
+        "openbase_coder_cli.mcp.session_manager.get_session_manager",
+        lambda: manager,
+    )
+    client = FakeLiveKitClient()
+
+    async def check():
+        try:
+            await publish_transfer_to_thread(
+                "dispatcher-1",
+                directory="/tmp/project",
+                label="dispatcher",
+                livekit_client=client,
+            )
+        except VoiceRouteBlockedError as exc:
+            assert "dispatcher thread cannot be used" in str(exc)
+        else:
+            raise AssertionError("Expected VoiceRouteBlockedError")
+
+    asyncio.run(check())
+    assert manager.calls == []
+    assert client.room.sent == []
 
 
 def test_transfer_to_thread_reuses_existing_thread_voice_history(

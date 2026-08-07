@@ -44,6 +44,27 @@ def test_backend_use_creates_env_file(tmp_path) -> None:
         env_file.read_text(encoding="utf-8")
         == "OPENBASE_CODING_BACKEND=openbase_cloud\n"
     )
+    assert not (tmp_path / "nested" / "codex_home" / "config.toml").exists()
+
+
+def test_backend_use_internal_openbase_cloud_codex_keeps_codex_proxy(tmp_path) -> None:
+    env_file = tmp_path / "nested" / ".env"
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backend",
+            "use",
+            "openbase-cloud-codex",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "OPENBASE_CODING_BACKEND=openbase_cloud_codex" in env_file.read_text(
+        encoding="utf-8"
+    )
     config = (tmp_path / "nested" / "codex_home" / "config.toml").read_text(
         encoding="utf-8"
     )
@@ -102,7 +123,7 @@ def test_backend_use_codex_removes_openbase_cloud_provider(tmp_path) -> None:
     assert '[mcp_servers.super-agents]\ncommand = "super-agents-mcp"' in config
 
 
-def test_backend_use_openbase_cloud_uses_configured_web_backend(tmp_path) -> None:
+def test_internal_openbase_cloud_codex_uses_configured_web_backend(tmp_path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
         "OPENBASE_CODER_CLI_WEB_BACKEND_URL=http://localhost:8000\n",
@@ -110,7 +131,8 @@ def test_backend_use_openbase_cloud_uses_configured_web_backend(tmp_path) -> Non
     )
 
     result = CliRunner().invoke(
-        main, ["backend", "use", "openbase-cloud", "--env-file", str(env_file)]
+        main,
+        ["backend", "use", "openbase-cloud-codex", "--env-file", str(env_file)],
     )
 
     assert result.exit_code == 0
@@ -149,6 +171,7 @@ def test_backend_list_shows_supported_values() -> None:
     assert "codex (default)" in result.output
     assert "openbase_cloud" in result.output
     assert "claude_code" in result.output
+    assert "openbase_cloud_codex" not in result.output
     assert "claude-tui" not in result.output
     assert "proxy" not in result.output
 

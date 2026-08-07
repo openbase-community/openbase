@@ -72,7 +72,9 @@ def test_coding_backend_settings_persists_openbase_cloud_selection(
     assert response.status_code == 200
     assert response.data["backend"] == "openbase_cloud"
     assert response.data["configured_backend"] == "openbase_cloud"
-    assert response.data["codex_provider"] == "openbase_cloud"
+    assert response.data["execution_backend"] == "claude_code"
+    assert response.data["codex_provider"] == "direct"
+    assert response.data["claude_provider"] == "openbase_cloud"
     assert "Openbase Cloud model proxy" in response.data["backend_note"]
     assert response.data["changed"] is True
     assert response.data["restart_required"] is True
@@ -81,10 +83,7 @@ def test_coding_backend_settings_persists_openbase_cloud_selection(
     assert "KEEP_ME=1" in content
     assert "OPENBASE_CODEX_BACKEND=codex" in content
     assert "OPENBASE_CODING_BACKEND=openbase_cloud" in content
-    config = (tmp_path / "codex_home" / "config.toml").read_text(encoding="utf-8")
-    assert 'model = "openbase-codex"' in config
-    assert 'model_provider = "openbase_cloud"' in config
-    assert "[model_providers.openbase_cloud]" in config
+    assert not (tmp_path / "codex_home" / "config.toml").exists()
 
 
 def test_backend_model_settings_lists_claude_fable(
@@ -116,6 +115,36 @@ def test_backend_model_settings_lists_claude_fable(
         "opus",
         "sonnet",
         "haiku",
+    ]
+
+
+def test_backend_model_settings_lists_openbase_cloud_claude_model(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENBASE_CODING_BACKEND=openbase_cloud\n", encoding="utf-8")
+    monkeypatch.setattr(model_settings, "DEFAULT_ENV_FILE_PATH", env_file)
+    monkeypatch.setattr(
+        model_settings.dispatcher_config,
+        "DEFAULT_ENV_FILE_PATH",
+        env_file,
+    )
+    monkeypatch.setattr(
+        model_settings.dispatcher_config,
+        "CODEX_DISPATCHER_CONFIG_PATH",
+        tmp_path / "dispatcher-config.json",
+    )
+
+    response = model_settings.backend_model_settings(
+        _authenticated_request("GET", "/api/settings/backend-model/")
+    )
+
+    assert response.status_code == 200
+    assert response.data["backend"] == "openbase_cloud"
+    assert [option["id"] for option in response.data["options"]] == [
+        "openbase-claude",
+        "fable",
     ]
 
 
@@ -191,7 +220,9 @@ def test_coding_backend_settings_persists_claude_code_selection(
     monkeypatch.setattr(
         backend_settings,
         "claude_auth_status",
-        lambda: SimpleNamespace(logged_in=True, raw_output='{"loggedIn": true}', returncode=0),
+        lambda: SimpleNamespace(
+            logged_in=True, raw_output='{"loggedIn": true}', returncode=0
+        ),
     )
 
     response = backend_settings.coding_backend_settings(
@@ -379,13 +410,19 @@ def test_claude_auth_settings_syncs_state_and_reports_status(
     monkeypatch.setattr(
         backend_settings,
         "sync_normal_claude_state",
-        lambda: SimpleNamespace(state_updated=True, message="Synced normal Claude Code state into Openbase."),
+        lambda: SimpleNamespace(
+            state_updated=True, message="Synced normal Claude Code state into Openbase."
+        ),
     )
     monkeypatch.setattr(backend_settings, "copy_normal_claude_keychain", lambda: True)
     statuses = iter(
         [
-            SimpleNamespace(logged_in=False, raw_output='{"loggedIn": false}', returncode=1),
-            SimpleNamespace(logged_in=True, raw_output='{"loggedIn": true}', returncode=0),
+            SimpleNamespace(
+                logged_in=False, raw_output='{"loggedIn": false}', returncode=1
+            ),
+            SimpleNamespace(
+                logged_in=True, raw_output='{"loggedIn": true}', returncode=0
+            ),
         ]
     )
     monkeypatch.setattr(backend_settings, "claude_auth_status", lambda: next(statuses))
@@ -569,8 +606,10 @@ def test_coding_backend_settings_heals_dead_claude_login_on_save(
     monkeypatch.setattr(
         backend_settings,
         "sync_normal_claude_state",
-        lambda: synced.append("state")
-        or SimpleNamespace(state_updated=True, message="synced"),
+        lambda: (
+            synced.append("state")
+            or SimpleNamespace(state_updated=True, message="synced")
+        ),
     )
     monkeypatch.setattr(
         backend_settings,

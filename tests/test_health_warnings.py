@@ -74,7 +74,7 @@ def test_conditional_service_expected_only_when_enabled(monkeypatch) -> None:
 def test_backend_scoped_service_not_expected_on_other_backend(monkeypatch) -> None:
     services = [
         FakeService("django-cli"),
-        FakeService("codex-app-server", backends=("codex", "openbase_cloud")),
+        FakeService("codex-app-server", backends=("codex", "openbase_cloud_codex")),
     ]
     monkeypatch.setattr("openbase_coder_cli.services.definitions.SERVICES", services)
     monkeypatch.setattr(

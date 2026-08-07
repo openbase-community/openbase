@@ -49,6 +49,7 @@ def test_codex_app_server_service_sets_model_defaults():
     assert "exec /usr/local/bin/codex app-server" in command
     assert "CODEX_CLAUDE_" not in command
     assert 'OPENBASE_CODING_BACKEND="${OPENBASE_CODING_BACKEND:-codex}"' in command
+    assert "openbase_cloud_codex" in command
     assert "OPENBASE_CLOUD_CODEX_API_KEY" in command
     assert "auth print-machine-token" in command
     assert "auth print-access-token" not in command

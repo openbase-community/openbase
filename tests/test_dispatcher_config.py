@@ -37,6 +37,14 @@ def test_claude_model_options_include_fable_alias(monkeypatch) -> None:
     assert dispatcher_config.is_known_backend_model("fable")
 
 
+def test_openbase_cloud_model_options_include_fable(monkeypatch) -> None:
+    monkeypatch.setenv("OPENBASE_CODING_BACKEND", "openbase_cloud")
+
+    options = dispatcher_config.model_options_for_backend()
+
+    assert [option["id"] for option in options] == ["openbase-claude", "fable"]
+
+
 def test_backend_model_uses_env_file_backend(tmp_path: Path, monkeypatch) -> None:
     env_file = tmp_path / ".env"
     config_path = tmp_path / "dispatcher-config.json"
@@ -46,7 +54,7 @@ def test_backend_model_uses_env_file_backend(tmp_path: Path, monkeypatch) -> Non
             {
                 "backend_models": {
                     "codex": {"super_agents": "gpt-5.5"},
-                    "openbase_cloud": {"super_agents": "openbase-codex"},
+                    "openbase_cloud": {"super_agents": "openbase-claude"},
                 },
                 "super_agents_model": "legacy-model",
             }
@@ -56,12 +64,10 @@ def test_backend_model_uses_env_file_backend(tmp_path: Path, monkeypatch) -> Non
     monkeypatch.delenv("OPENBASE_CODING_BACKEND", raising=False)
     monkeypatch.setattr(dispatcher_config, "DEFAULT_ENV_FILE_PATH", env_file)
 
-    assert dispatcher_config.super_agents_model(config_path) == "gpt-5.5"
+    assert dispatcher_config.super_agents_model(config_path) == "openbase-claude"
 
 
-def test_super_agents_model_ignores_legacy_key(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_super_agents_model_ignores_legacy_key(tmp_path: Path, monkeypatch) -> None:
     config_path = tmp_path / "dispatcher-config.json"
     config_path.write_text(
         json.dumps({"super_agents_model": "legacy-model"}),

@@ -5,9 +5,12 @@ from pathlib import Path
 import click
 
 from openbase_coder_cli.backend_config import (
+    CLAUDE_CODE_BACKEND,
+    CODEX_BACKEND,
     CODING_BACKEND_ENV_KEY,
     DEFAULT_CODING_BACKEND,
-    SUPPORTED_BACKENDS,
+    OPENBASE_CLOUD_BACKEND,
+    SELECTABLE_BACKENDS,
     normalize_backend,
 )
 from openbase_coder_cli.codex_backend_config import (
@@ -32,7 +35,7 @@ def backend() -> None:
 @backend.command("list")
 def list_backends() -> None:
     """List supported coding backends."""
-    for backend_name in SUPPORTED_BACKENDS:
+    for backend_name in SELECTABLE_BACKENDS:
         marker = " (default)" if backend_name == DEFAULT_CODING_BACKEND else ""
         click.echo(f"{backend_name}{marker}")
 
@@ -70,13 +73,17 @@ def use_backend(backend_name: tuple[str, ...], env_file: Path) -> None:
         raise click.ClickException(str(exc)) from exc
     write_backend(env_file, normalized)
     click.echo(f"Backend set to {normalized} in {env_file}.")
-    if normalized in {"codex", "openbase_cloud"}:
+    if normalized == CODEX_BACKEND:
         click.echo(
             "Restart or recreate the dispatcher/MCP host for Super Agents to pick up the change."
         )
-    else:
+    elif normalized in {OPENBASE_CLOUD_BACKEND, CLAUDE_CODE_BACKEND}:
         click.echo(
             "Restart or recreate the dispatcher/MCP host for Claude Code to pick up the change; keep Openbase services running."
+        )
+    else:
+        click.echo(
+            "Restart or recreate the dispatcher/MCP host for Super Agents to pick up the change."
         )
 
 

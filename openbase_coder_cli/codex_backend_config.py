@@ -5,7 +5,10 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from openbase_coder_cli.backend_config import CODEX_BACKEND, OPENBASE_CLOUD_BACKEND
+from openbase_coder_cli.backend_config import (
+    CODEX_BACKEND,
+    OPENBASE_CLOUD_CODEX_BACKEND,
+)
 from openbase_coder_cli.paths import CODEX_HOME_DIR
 
 CODEX_CONFIG_NAME = "config.toml"
@@ -36,7 +39,7 @@ def apply_backend_to_codex_config(
     path = config_path or CODEX_HOME_DIR / CODEX_CONFIG_NAME
     existing = path.read_text(encoding="utf-8") if path.is_file() else ""
 
-    if backend == OPENBASE_CLOUD_BACKEND:
+    if backend == OPENBASE_CLOUD_CODEX_BACKEND:
         updated = _apply_openbase_cloud_config(existing, web_backend_url)
     elif backend == CODEX_BACKEND:
         updated = _apply_direct_codex_config(existing)

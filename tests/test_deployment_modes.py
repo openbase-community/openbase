@@ -22,10 +22,12 @@ def test_default_services_gates_codex_app_server_by_backend() -> None:
     claude_names = {svc.name for svc in default_services("claude_code")}
     codex_names = {svc.name for svc in default_services("codex")}
     cloud_names = {svc.name for svc in default_services("openbase_cloud")}
+    cloud_codex_names = {svc.name for svc in default_services("openbase_cloud_codex")}
 
     assert "codex-app-server" not in claude_names
     assert "codex-app-server" in codex_names
-    assert "codex-app-server" in cloud_names
+    assert "codex-app-server" not in cloud_names
+    assert "codex-app-server" in cloud_codex_names
     # Backend-agnostic services stay in all sets.
     assert "django-cli" in claude_names
     assert "livekit-agent" in claude_names

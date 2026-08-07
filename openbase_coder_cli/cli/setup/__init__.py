@@ -24,7 +24,7 @@ from openbase_coder_cli.backend_config import (
     CODING_BACKEND_ENV_KEY,  # noqa: F401
     DEFAULT_CODING_BACKEND,  # noqa: F401
     OPENBASE_CLOUD_BACKEND,
-    SUPPORTED_BACKENDS,
+    SELECTABLE_BACKENDS,
     normalize_backend,
 )
 from openbase_coder_cli.claude_auth import (
@@ -183,7 +183,7 @@ from openbase_coder_cli.tts_providers import (
     get_tts_provider,  # noqa: F401
 )
 
-CODING_BACKEND_OPTIONS = SUPPORTED_BACKENDS
+CODING_BACKEND_OPTIONS = SELECTABLE_BACKENDS
 SETUP_PROGRESS_STEPS = (
     "workspace",
     "installation_config",

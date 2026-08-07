@@ -22,11 +22,12 @@ app. On first run it shows a guided setup flow:
 2. **Check prerequisites** — verifies macOS, the bundled CLI (activated
    automatically), and Tailscale. You can download Tailscale from here if it
    is missing.
-3. **Setup backend** — choose a coding backend (Codex, Claude Code, or
-   Openbase Cloud) and an audio provider (Openbase Cloud, Cartesia, or
-   Local), then watch the CLI setup command stream its output live.
-4. **Voice configuration** — if you chose Cartesia, enter AssemblyAI and
-   Cartesia API keys; they are saved to `~/.openbase/.env`.
+3. **Set up Openbase Cloud** — starts the normal managed path: Cloud-proxied
+   Claude Code plus managed speech-to-text and voice output, with a generous
+   Openbase Cloud free trial and no third-party provider keys.
+4. **Voice configuration** — the normal Openbase Cloud path is already
+   configured; developer/provider-key audio remains available later in
+   settings.
 5. **Sign in** — a browser opens for Openbase Cloud OAuth; completion is
    detected when `~/.openbase/auth.json` is written.
 6. **Get Openbase on iPhone** — scan a QR code to install the iOS app and

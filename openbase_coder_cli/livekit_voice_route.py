@@ -45,6 +45,7 @@ CARTESIA_VOICE_ID = os.getenv("CARTESIA_VOICE_ID", DEFAULT_CARTESIA_VOICE_ID)
 CARTESIA_ANNOUNCER_VOICE_ID = os.getenv(
     "CARTESIA_ANNOUNCER_VOICE_ID", DEFAULT_CARTESIA_ANNOUNCER_VOICE_ID
 )
+DISPATCHER_THREAD_LABELS = frozenset({"dispatcher"})
 
 DIRECT_LIVEKIT_INSTRUCTIONS_PATH_ENV = (
     "LIVEKIT_DIRECT_CODEX_DEVELOPER_INSTRUCTIONS_PATH"
@@ -88,6 +89,7 @@ class VoiceRouteBlockedError(VoiceRouteError):
 class CartesiaVoice:
     voice_id: str
     name: str
+    provider: str = CARTESIA_PROVIDER_ID
 
 
 @dataclass(frozen=True)
@@ -147,14 +149,22 @@ def _current_super_agent_voices() -> tuple[CartesiaVoice, ...]:
     provider = get_tts_provider(selected_tts_provider_id())
     if provider.provider_id != CARTESIA_PROVIDER_ID:
         return tuple(
-            CartesiaVoice(voice_id=voice.id, name=voice.name)
+            CartesiaVoice(
+                voice_id=voice.id,
+                name=voice.name,
+                provider=provider.provider_id,
+            )
             for voice in provider.super_agent_voices()
         )
     voice_ids = tuple(voice.voice_id for voice in SUPER_AGENT_VOICES)
     if voice_ids == tuple(SUPER_AGENT_VOICE_IDS):
         return SUPER_AGENT_VOICES
     return tuple(
-        CartesiaVoice(voice_id=voice.id, name=voice.name)
+        CartesiaVoice(
+            voice_id=voice.id,
+            name=voice.name,
+            provider=provider.provider_id,
+        )
         for voice in provider.super_agent_voices()
     )
 
@@ -198,7 +208,11 @@ def super_agent_voice_for_agent_name(agent_name: str | None) -> CartesiaVoice | 
         else provider.voice_for_name(agent_name)
     )
     if provider_voice:
-        return CartesiaVoice(voice_id=provider_voice.id, name=provider_voice.name)
+        return CartesiaVoice(
+            voice_id=provider_voice.id,
+            name=provider_voice.name,
+            provider=provider.provider_id,
+        )
     return None
 
 
@@ -207,6 +221,13 @@ def super_agent_voice_for_context(
     label: str | None = None,
     agent_name: str | None = None,
 ) -> CartesiaVoice | None:
+    if is_dispatcher_identity(thread_id, label, agent_name):
+        voice = dispatcher_voice()
+        return CartesiaVoice(
+            voice_id=voice["id"],
+            name=voice["name"],
+            provider=voice.get("provider", CARTESIA_PROVIDER_ID),
+        )
     return super_agent_voice_for_agent_name(agent_name) or stable_super_agent_voice(
         thread_id,
         label,
@@ -226,6 +247,21 @@ def _normalize_voice_name(value: str | None) -> str:
     if not isinstance(value, str):
         return ""
     return " ".join(value.casefold().split())
+
+
+def is_dispatcher_identity(
+    thread_id: str | None = None,
+    label: str | None = None,
+    agent_name: str | None = None,
+    route_state: VoiceRouteState | None = None,
+) -> bool:
+    route_state = route_state or get_livekit_voice_route_state()
+    if thread_id and route_state.dispatcher_thread_id == thread_id:
+        return True
+    return (
+        _normalize_voice_name(label) in DISPATCHER_THREAD_LABELS
+        or _normalize_voice_name(agent_name) == "dispatcher"
+    )
 
 
 def load_direct_livekit_developer_instructions(
@@ -481,11 +517,17 @@ async def publish_transfer_to_thread(
             "cannot supply direct-LiveKit developer instructions without prompt wrapping."
         )
 
+    route_state = get_livekit_voice_route_state()
+    if is_dispatcher_identity(thread_id, label, route_state=route_state):
+        raise VoiceRouteBlockedError(
+            "The dispatcher thread cannot be used as a Super Agent voice transfer "
+            "target. Use exit-to-dispatch to return to the dispatcher."
+        )
+
     await prepare_target_thread_for_direct_livekit(
         thread_id=thread_id,
         directory=directory,
     )
-    route_state = get_livekit_voice_route_state()
     history_entry = get_voice_history_entry(thread_id)
     resolved_agent_name = (
         _optional_str(agent_name)

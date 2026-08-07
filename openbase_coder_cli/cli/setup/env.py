@@ -105,7 +105,7 @@ def _ensure_env_file(
         "# Coding backend used by Super Agents and the managed service.",
         f"# Set {CODING_BACKEND_ENV_KEY} to codex, openbase_cloud, or claude_code.",
         f"{CODING_BACKEND_ENV_KEY}={coding_backend or DEFAULT_CODING_BACKEND}",
-        "# Claude Code applies to Super Agents UI-driver sessions; Codex-compatible backends use codex-app-server.",
+        "# openbase_cloud runs Cloud-proxied Claude Code; codex uses codex-app-server.",
         f"CLAUDE_CONFIG_DIR={OPENBASE_CLAUDE_CONFIG_DIR}",
         f"SUPER_AGENTS_DEFAULT_CONFIG_PATH={CODEX_DISPATCHER_CONFIG_PATH}",
         "CODEX_MODEL_REASONING_EFFORT=high",

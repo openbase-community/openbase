@@ -980,9 +980,7 @@ def test_symlink_codex_auth_links_before_codex_login(tmp_path, monkeypatch) -> N
     codex_module = importlib.import_module("openbase_coder_cli.cli.setup.codex")
     codex_home = tmp_path / "openbase" / "codex_home"
     monkeypatch.setattr(codex_module, "CODEX_HOME_DIR", codex_home)
-    monkeypatch.setattr(
-        codex_module.Path, "home", classmethod(lambda cls: tmp_path)
-    )
+    monkeypatch.setattr(codex_module.Path, "home", classmethod(lambda cls: tmp_path))
 
     setup_cli._symlink_codex_auth()
 
@@ -1068,7 +1066,7 @@ def test_ensure_env_file_documents_coding_backend_default(tmp_path) -> None:
 
     content = env_file.read_text(encoding="utf-8")
     assert "OPENBASE_CODING_BACKEND=codex" in content
-    assert "# Claude Code applies to Super Agents UI-driver sessions" in content
+    assert "# openbase_cloud runs Cloud-proxied Claude Code" in content
     assert "CODEX_CLAUDE_" not in content
     assert "SUPER_AGENTS_CLAUDE_TUI_CMD" not in content
     assert "CLAUDE_CONFIG_DIR=" in content

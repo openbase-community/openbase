@@ -21,6 +21,7 @@ from openbase_coder_cli.services.cloud_registration import local_device_id
 from openbase_coder_cli.services.onboarding import web_backend_url
 
 ONBOARDING_STATE_PATH = "/api/openbase/onboarding/state/"
+DEVICE_DEREGISTER_PATH = "/api/openbase/devices/deregister/"
 REQUEST_TIMEOUT_SECONDS = 15
 MIN_SYNC_DEVICES = 2
 
@@ -110,6 +111,34 @@ def fetch_cloud_state() -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Onboarding state endpoint returned a non-object.")
     return payload
+
+
+def deregister_cloud_device(device_id: str) -> int:
+    """Forget a device from the signed-in user's cloud registry.
+
+    Removing the device from the registry is the single source of truth for
+    sync peers: on the next reconcile it drops out of the eligibility peer
+    list and the Syncthing configuration, which clears the offline
+    "peer disconnected" warning for a machine the user has shut down.
+
+    Returns the number of registry entries deleted. Raises on failure.
+    """
+    device_id = (device_id or "").strip()
+    if not device_id:
+        raise ValueError("A device_id is required to deregister a sync peer.")
+    backend_url = web_backend_url()
+    token = TokenManager(backend_url).get_access_token()
+    response = httpx.post(
+        f"{backend_url}{DEVICE_DEREGISTER_PATH}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"device_id": device_id},
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise ValueError("Device deregister endpoint returned a non-object.")
+    return int(payload.get("deleted_count") or 0)
 
 
 def current_eligibility() -> EligibilityResult:

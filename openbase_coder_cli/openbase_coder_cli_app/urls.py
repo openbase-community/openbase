@@ -13,6 +13,7 @@ from openbase_coder_cli.openbase_coder_cli_app.sync_settings import (
     sync_conflicts,
     sync_conflicts_ignore_containing_folder,
     sync_conflicts_resolve,
+    sync_peers_remove,
     sync_settings,
     sync_status,
     sync_versions_purge,
@@ -394,6 +395,7 @@ urlpatterns = [
     ),
     path("git/diff/", git_diff, name="git-diff"),
     path("sync/settings/", sync_settings, name="sync-settings"),
+    path("sync/peers/remove/", sync_peers_remove, name="sync-peers-remove"),
     path("sync/status/", sync_status, name="sync-status"),
     path("sync/conflicts/", sync_conflicts, name="sync-conflicts"),
     path(

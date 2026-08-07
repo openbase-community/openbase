@@ -59,6 +59,48 @@ def test_resolve_super_agent_instructions_path_honors_env_override(
     assert resolve_super_agent_instructions_path() == override_path
 
 
+def test_configured_execution_backend_prefers_env_file_over_stale_process_env(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENBASE_CODING_BACKEND=openbase_cloud\n", encoding="utf-8")
+    monkeypatch.setattr(session_manager_module, "DEFAULT_ENV_FILE_PATH", env_file)
+    monkeypatch.setenv("OPENBASE_CODING_BACKEND", "codex")
+
+    assert session_manager_module._configured_execution_backend() == "claude_code"
+
+
+def test_get_session_manager_reloads_when_configured_backend_changes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENBASE_CODING_BACKEND=codex\n", encoding="utf-8")
+    monkeypatch.setattr(session_manager_module, "DEFAULT_ENV_FILE_PATH", env_file)
+    monkeypatch.setenv("OPENBASE_CODING_BACKEND", "codex")
+    monkeypatch.setattr(session_manager_module, "_session_manager", None)
+    created_backends: list[str] = []
+
+    def fake_default_client_for_execution_backend(**kwargs):
+        created_backends.append(kwargs["execution_backend"])
+        return SimpleNamespace()
+
+    monkeypatch.setattr(
+        session_manager_module,
+        "_default_client_for_execution_backend",
+        fake_default_client_for_execution_backend,
+    )
+
+    first = session_manager_module.get_session_manager()
+
+    env_file.write_text("OPENBASE_CODING_BACKEND=openbase_cloud\n", encoding="utf-8")
+    second = session_manager_module.get_session_manager()
+
+    assert first is not second
+    assert created_backends == ["codex", "claude_code"]
+
+
 def _turn(
     turn_id: str,
     *,
@@ -382,9 +424,14 @@ class FakeBackendSessionClient:
         return result
 
 
-def _manager(client: Any) -> CodexAppServerSessionManager:
+def _manager(
+    client: Any,
+    routine_client: Any | None = None,
+) -> CodexAppServerSessionManager:
     return CodexAppServerSessionManager(
-        client=client, model_for_role=lambda _role: None
+        client=client,
+        routine_client=routine_client,
+        model_for_role=lambda _role: None,
     )
 
 
@@ -599,6 +646,19 @@ def test_routine_methods_delegate_to_super_agents_client() -> None:
         ("run_due_routines", {"name": "daily", "force": True}),
         ("delete_routine", {"name": "daily"}),
     ]
+
+
+def test_routine_methods_use_dedicated_client_when_backend_lacks_routines() -> None:
+    backend_client = SimpleNamespace()
+    routine_client = FakeSuperAgentsClient(
+        {
+            "list_routines": [{"routines": []}],
+        }
+    )
+    manager = _manager(backend_client, routine_client=routine_client)
+
+    assert asyncio.run(manager.list_routines()) == {"routines": []}
+    assert routine_client.calls == [("list_routines", {})]
 
 
 def test_list_threads_paginates_super_agents_results(tmp_path: Path) -> None:
@@ -845,6 +905,27 @@ def test_read_thread_treats_invalid_backend_thread_id_as_missing() -> None:
                 )
             ]
         }
+    )
+
+    thread = asyncio.run(_manager(client).get_thread_state("s_stale"))
+
+    assert thread is None
+    assert client.calls == [
+        (
+            "read_by_label",
+            {
+                "thread_id": "s_stale",
+                "cwd": None,
+                "include_turns": True,
+                "max_items": 25,
+            },
+        )
+    ]
+
+
+def test_read_thread_treats_backend_label_resolution_error_as_missing() -> None:
+    client = FakeBackendSessionClient(
+        {"read_by_label": [ValueError("label must be a non-empty string.")]}
     )
 
     thread = asyncio.run(_manager(client).get_thread_state("s_stale"))

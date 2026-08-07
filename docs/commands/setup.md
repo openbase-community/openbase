@@ -64,8 +64,8 @@ openbase-coder setup --backend openbase-cloud
 - `codex`: native Codex app-server with OpenAI models.
 - `claude-code`: Claude Code backend using local Claude auth/billing for Super
   Agents UI-driver sessions.
-- `openbase-cloud`: Codex-compatible sessions through the Openbase Cloud model
-  proxy with Openbase login.
+- `openbase-cloud`: Cloud-proxied Claude Code through Openbase Cloud with
+  Openbase login and no personal Anthropic account requirement.
 
 Codex and Claude Code are peers; there is no silent default. When creating a
 new `~/.openbase/.env` with `--backend` omitted, setup prompts interactively
@@ -110,7 +110,7 @@ declares Python `<3.13`.
 3. Writes `installation.json` with the active runtime paths and `env_file`.
 4. Creates `.env` with generated secrets if missing, recording the selected backend (prompted for when `--backend` is omitted).
 5. Installs the selected backend's CLI binary on demand if missing (codex → `~/.openbase/bin`, claude → Anthropic's installer). This is best-effort: on failure setup prints manual install instructions and continues.
-6. For the codex/openbase-cloud backends, symlinks `~/.openbase/codex_home/auth.json` to `~/.codex/auth.json` so service Codex sessions use the normal Codex login.
+6. For the codex backend, symlinks `~/.openbase/codex_home/auth.json` to `~/.codex/auth.json` so service Codex sessions use the normal Codex login.
 7. Links normal `~/.claude/CLAUDE.md` to `~/.codex/AGENTS.md`, preserving an existing real Claude instructions file by copying it into Codex AGENTS when Codex AGENTS is missing or backing it up when both files differ.
 8. Regenerates `~/.openbase/codex_home/AGENTS.md` from the bundled package or workspace `instructions/AGENTS.md`. The generated file records its source template path and, by default, includes normal `~/.codex/AGENTS.md` content above the Openbase section.
 9. Links `~/.openbase/claude_config/CLAUDE.md` to Openbase's generated `~/.openbase/codex_home/AGENTS.md`.
@@ -121,12 +121,12 @@ declares Python `<3.13`.
 14. Installs the bundled `inject-session-id.sh` SessionStart hook script into `~/.openbase/hooks/` and registers it in both Openbase agent homes: a `hooks.SessionStart` entry in `~/.openbase/claude_config/settings.json` and a trusted `[[hooks.SessionStart]]` hook (with its `[hooks.state]` trust entry) in `~/.openbase/codex_home/config.toml`. The hook feeds each session's thread/session ID back into the conversation together with the instructions for using it, so agents stamp commits with the `Agent-Thread-Id` trailer without needing any standing `AGENTS.md` rule.
 15. Configures `~/.openbase/codex_home/config.toml` with full Codex local access (`sandbox_mode = "danger-full-access"`), disabled permission prompts, and the Super Agents MCP server. With `--link-codex-config`, this path is first linked to `~/.codex/config.toml`. The MCP command prefers the selected workspace's venv executable and falls back to the resolved local `uv` path.
 16. Configures `~/.openbase/claude_config/.claude.json` with the Super Agents MCP server and writes `CLAUDE_CONFIG_DIR=~/.openbase/claude_config` into the shared `.env`.
-17. Merges normal Claude Code state from `~/.claude.json` into `~/.openbase/claude_config/.claude.json` (the file Claude Code reads under Openbase's `CLAUDE_CONFIG_DIR`) when available; existing Openbase values win and `mcpServers` entries are unioned. Claude Code OAuth uses config-dir-scoped credentials, so on macOS setup also copies the normal "Claude Code-credentials" keychain item to Openbase's config-dir-specific keychain service, inheriting the normal Claude login without a second browser OAuth. When `--backend claude-code` is selected and no login could be bridged, setup runs `openbase-coder claude login`.
+17. Merges normal Claude Code state from `~/.claude.json` into `~/.openbase/claude_config/.claude.json` (the file Claude Code reads under Openbase's `CLAUDE_CONFIG_DIR`) when available; existing Openbase values win and `mcpServers` entries are unioned. Claude Code OAuth uses config-dir-scoped credentials, so on macOS setup also copies the normal "Claude Code-credentials" keychain item to Openbase's config-dir-specific keychain service, inheriting the normal Claude login without a second browser OAuth. When `--backend claude-code` is selected and no login could be bridged, setup runs `openbase-coder claude login`. When `--backend openbase-cloud` is selected, setup prepares Claude Code config but relies on Openbase login and a Cloud proxy machine token rather than a personal Claude login.
 18. Registers the Super Agents MCP server in the user's **normal** agent homes — a `[mcp_servers.super-agents]` table in `~/.codex/config.toml` and an `mcpServers.super-agents` entry in `~/.claude.json` — regardless of `--link-codex-config`. Only the MCP entry is written; normal permissions and settings are never touched. You may remove the entry; an explicit setup re-run restores it.
 19. Installs or updates the `~/.local/bin/openbase-coder` shim: never overwrites a `uv tool install`-managed script; in standalone mode it points at the `current/` package launcher so it survives package upgrades; in development mode it execs the workspace `cli/.venv/bin/openbase-coder`.
-20. Writes Codex app-server defaults like `CODEX_MODEL=gpt-5.5`, `CODEX_MODEL_REASONING_EFFORT=high`, `CODEX_SERVICE_TIER=standard`, `CODEX_APP_SERVER_URL`, and `LIVEKIT_CODEX_THREAD_CWD` into the shared `.env`. When `OPENBASE_CODING_BACKEND=openbase_cloud`, the app-server service switches to the Openbase Cloud model proxy at startup.
+20. Writes Codex app-server defaults like `CODEX_MODEL=gpt-5.5`, `CODEX_MODEL_REASONING_EFFORT=high`, `CODEX_SERVICE_TIER=standard`, `CODEX_APP_SERVER_URL`, and `LIVEKIT_CODEX_THREAD_CWD` into the shared `.env` for direct Codex compatibility. The visible `openbase_cloud` backend bypasses `codex-app-server`; the legacy Codex proxy path remains internal as `openbase_cloud_codex`.
 21. Uses the bundled console build, or builds `console` in development mode.
-22. Installs background services (launchd on macOS, systemd user units on Linux) unless skipped. Services gated to other backends (e.g. `codex-app-server` under `claude-code`) are not installed.
+22. Installs background services (launchd on macOS, systemd user units on Linux) unless skipped. Services gated to other backends (e.g. `codex-app-server` under `claude-code` or `openbase-cloud`) are not installed.
 23. Configures Tailscale Serve routes for the iOS app:
     - `tailscale serve --bg --http=18080 http://127.0.0.1:7999`
     - `tailscale serve --bg --tcp=7880 tcp://127.0.0.1:7880`

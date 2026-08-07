@@ -238,6 +238,94 @@ def test_transfer_route_resolves_derived_agent_name_for_named_thread(monkeypatch
     ]
 
 
+def test_transfer_route_does_not_match_dispatcher_by_agent_name(monkeypatch):
+    _setup_django()
+
+    from rest_framework.test import APIRequestFactory, force_authenticate
+
+    from openbase_coder_cli.openbase_coder_cli_app import livekit as views
+
+    class DispatcherCollisionManager:
+        async def list_threads(self):
+            return [
+                SimpleNamespace(
+                    session_id="dispatcher-1",
+                    name="dispatcher",
+                    agent_name="Dottie",
+                    title=None,
+                    preview=None,
+                    directory="/tmp/dispatcher",
+                    updated_at=datetime(2026, 1, 3, tzinfo=UTC),
+                ),
+                SimpleNamespace(
+                    session_id="thread-1",
+                    name="Build Feature",
+                    agent_name=None,
+                    title=None,
+                    preview=None,
+                    directory="/tmp/build",
+                    updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+                ),
+            ]
+
+    calls = []
+
+    async def fake_publish_transfer_to_thread(thread_id, **kwargs):
+        calls.append((thread_id, kwargs))
+        return SimpleNamespace(
+            command_id="route-1",
+            room_name="room-1",
+            state=SimpleNamespace(
+                dispatcher_thread_id="dispatcher-1",
+                dispatcher_voice_id="dispatcher-voice",
+                dispatcher_voice_name="Jacqueline",
+                active_target_thread_id=thread_id,
+                active_target_voice_id="voice-dottie",
+                active_target_voice_name="Dottie",
+                active_route="target",
+            ),
+        )
+
+    monkeypatch.setattr(
+        views, "get_session_manager", lambda: DispatcherCollisionManager()
+    )
+    monkeypatch.setattr(
+        views,
+        "get_livekit_voice_route_state",
+        lambda: SimpleNamespace(dispatcher_thread_id="dispatcher-1"),
+    )
+    monkeypatch.setattr(
+        views,
+        "super_agent_voice_for_context",
+        lambda thread_id, label: SimpleNamespace(name="Dottie"),
+    )
+    monkeypatch.setattr(
+        views, "publish_transfer_to_thread", fake_publish_transfer_to_thread
+    )
+
+    request = APIRequestFactory().post(
+        "/api/livekit-voice-route/transfer/",
+        {"agent_name": "Dottie"},
+        format="json",
+    )
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+
+    response = views.livekit_voice_route_transfer(request)
+
+    assert response.status_code == 202
+    assert calls == [
+        (
+            "thread-1",
+            {
+                "directory": "/tmp/build",
+                "label": "Build Feature",
+                "agent_name": "Dottie",
+                "room_name": None,
+            },
+        )
+    ]
+
+
 def test_transfer_route_passes_thread_agent_name_for_thread_id(monkeypatch):
     _setup_django()
 
@@ -300,6 +388,53 @@ def test_transfer_route_passes_thread_agent_name_for_thread_id(monkeypatch):
             },
         )
     ]
+
+
+def test_transfer_route_rejects_dispatcher_thread_id(monkeypatch):
+    _setup_django()
+
+    from rest_framework.test import APIRequestFactory, force_authenticate
+
+    from openbase_coder_cli.openbase_coder_cli_app import livekit as views
+
+    calls = []
+
+    class ThreadManager:
+        async def get_thread_state(self, thread_id: str):
+            return SimpleNamespace(
+                session_id=thread_id,
+                name="dispatcher",
+                agent_name="Dottie",
+                title=None,
+                preview=None,
+                directory="/tmp/dispatcher",
+            )
+
+    async def fake_publish_transfer_to_thread(thread_id, **kwargs):
+        calls.append((thread_id, kwargs))
+
+    monkeypatch.setattr(views, "get_session_manager", lambda: ThreadManager())
+    monkeypatch.setattr(
+        views,
+        "get_livekit_voice_route_state",
+        lambda: SimpleNamespace(dispatcher_thread_id="dispatcher-1"),
+    )
+    monkeypatch.setattr(
+        views, "publish_transfer_to_thread", fake_publish_transfer_to_thread
+    )
+
+    request = APIRequestFactory().post(
+        "/api/livekit-voice-route/transfer/",
+        {"thread_id": "dispatcher-1"},
+        format="json",
+    )
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+
+    response = views.livekit_voice_route_transfer(request)
+
+    assert response.status_code == 409
+    assert "dispatcher thread cannot be used" in response.data["detail"]
+    assert calls == []
 
 
 def test_transfer_route_derives_agent_name_for_thread_id_without_metadata(monkeypatch):

@@ -22,6 +22,7 @@ REPORTS_IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"}
 REPORTS_MAX_FILES = 200
 REPORTS_MAX_TEXT_BYTES = 1024 * 1024
 REPORTS_MAX_IMAGE_BYTES = 5 * 1024 * 1024
+REPORTS_TITLE_SCAN_BYTES = 64 * 1024
 HOME_REPORTS_PROJECT_DIR = Path.home()
 REPORT_ORIGIN_TIME_WINDOW_SECONDS = 10 * 60
 SUPER_AGENTS_STATE_FILE_ENV = "SUPER_AGENTS_STATE_FILE"
@@ -42,6 +43,7 @@ REPORT_PROVENANCE_JSON_RE = re.compile(
 REPORT_FILENAME_DATE_RE = re.compile(
     r"(?<!\d)(20\d{2})[-_]?([01]\d)[-_]?([0-3]\d)(?!\d)"
 )
+REPORT_MARKDOWN_TITLE_RE = re.compile(r"^(?: {0,3})#(?:\s+|$)(.*?)\s*#*\s*$")
 
 
 @dataclass(frozen=True)
@@ -107,16 +109,43 @@ def _report_filename_date(relative_path: str) -> str | None:
         return None
 
 
+def _report_markdown_title(path: Path) -> str | None:
+    fenced = False
+    try:
+        content = path.read_bytes()[:REPORTS_TITLE_SCAN_BYTES].decode(
+            "utf-8",
+            errors="replace",
+        )
+    except OSError:
+        return None
+
+    for line in content.splitlines():
+        trimmed_start = line.lstrip()
+        if trimmed_start.startswith(("```", "~~~")):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+
+        match = REPORT_MARKDOWN_TITLE_RE.match(line)
+        title = match.group(1).strip() if match else ""
+        if title:
+            return title
+    return None
+
+
 def _reports_file_payload(path: Path, reports_dir: Path) -> dict[str, Any]:
     from openbase_coder_cli.openbase_coder_cli_app.item_tags import report_tags
 
     stat = path.stat()
     relative_path = str(path.relative_to(reports_dir))
     project_path = str(reports_dir.parent)
+    kind = _reports_kind(path)
     return {
         "path": relative_path,
         "name": path.name,
-        "kind": _reports_kind(path),
+        "kind": kind,
+        "title": _report_markdown_title(path) if kind == "markdown" else None,
         "size": stat.st_size,
         "updated_at": stat.st_mtime,
         "filename_date": _report_filename_date(relative_path),

@@ -32,8 +32,8 @@ These docs cover the whole product, not just the CLI:
 
 The easiest path is the desktop app: [download the Mac app](downloads.md),
 open it, and follow the guided setup. It installs the bundled CLI, walks you
-through choosing a coding backend and voice provider, signs you in, and pairs
-your iPhone over Tailscale.
+through the Openbase Cloud managed setup path, signs you in for the free trial,
+and pairs your iPhone over Tailscale.
 
 Prefer to drive the terminal yourself? Install and open the desktop app —
 it activates the bundled CLI runtime automatically — then follow

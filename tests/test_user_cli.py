@@ -416,6 +416,44 @@ def test_user_super_agent_name_json(monkeypatch):
     }
 
 
+def test_user_super_agent_name_dispatcher_uses_dispatcher_voice(tmp_path, monkeypatch):
+    voice_route = importlib.import_module("openbase_coder_cli.livekit_voice_route")
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        voice_route,
+        "dispatcher_voice",
+        lambda *args, **kwargs: {
+            "id": "voice-jacqueline",
+            "name": "Jacqueline",
+            "provider": "openbase_cloud",
+        },
+    )
+    monkeypatch.setattr(
+        voice_route,
+        "selected_tts_provider_id",
+        lambda *args, **kwargs: voice_route.CARTESIA_PROVIDER_ID,
+    )
+    monkeypatch.setattr(
+        voice_route,
+        "SUPER_AGENT_VOICES",
+        (voice_route.CartesiaVoice("voice-dottie", "Dottie"),),
+    )
+    monkeypatch.setattr(voice_route, "SUPER_AGENT_VOICE_IDS", ("voice-dottie",))
+
+    result = CliRunner().invoke(
+        main_cli.main,
+        ["super-agent-name", "dispatcher", "--json"],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {
+        "thread_name": "dispatcher",
+        "agent_name": "Jacqueline",
+        "voice_id": "voice-jacqueline",
+        "voice_name": "Jacqueline",
+    }
+
+
 def test_user_say_reports_server_error(monkeypatch):
     def fake_request(method, url, **kwargs):
         assert method == "POST"

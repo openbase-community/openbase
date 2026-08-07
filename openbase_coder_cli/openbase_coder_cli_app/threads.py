@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -11,7 +12,10 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from openbase_coder_cli.livekit_voice_route import get_livekit_voice_route_state
+from openbase_coder_cli.livekit_voice_route import (
+    get_livekit_voice_route_state,
+    warm_livekit_dispatcher_thread,
+)
 from openbase_coder_cli.mcp.models import ThreadStatus
 from openbase_coder_cli.mcp.projects import (
     refresh_projects_from_thread_directories as _refresh_projects_from_threads,
@@ -43,6 +47,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_THREAD_PAGE_SIZE = 25
 MAX_THREAD_PAGE_SIZE = 100
 RUN_ACTIVITY_FRESHNESS = timedelta(minutes=5)
+DISPATCHER_THREAD_WARM_TIMEOUT_SECONDS = 20.0
 
 
 def _parse_positive_int(
@@ -160,6 +165,38 @@ def _get_cached_livekit_dispatcher_thread(manager):
             livekit_thread_id,
         )
         return None
+
+
+def _ensure_livekit_dispatcher_thread(manager):
+    thread = _get_cached_livekit_dispatcher_thread(manager)
+    if thread is not None:
+        return thread, None
+
+    try:
+        dispatcher_thread_id = async_to_sync(_warm_livekit_dispatcher_thread_for_api)()
+    except (RuntimeError, TimeoutError) as exc:
+        logger.warning("Unable to warm LiveKit dispatcher thread", exc_info=True)
+        return None, str(exc)
+
+    invalidate_thread_list_cache()
+    try:
+        return async_to_sync(manager.get_thread_state)(dispatcher_thread_id), None
+    except RuntimeError as exc:
+        logger.warning(
+            "Unable to read warmed LiveKit dispatcher thread_id=%s",
+            dispatcher_thread_id,
+            exc_info=True,
+        )
+        return None, str(exc)
+
+
+async def _warm_livekit_dispatcher_thread_for_api() -> str:
+    return await asyncio.wait_for(
+        warm_livekit_dispatcher_thread(
+            timeout_seconds=min(15.0, DISPATCHER_THREAD_WARM_TIMEOUT_SECONDS),
+        ),
+        timeout=DISPATCHER_THREAD_WARM_TIMEOUT_SECONDS,
+    )
 
 
 def get_livekit_active_voice_thread_id() -> str | None:
@@ -370,11 +407,11 @@ def thread_list(request):
 def thread_dispatcher(request):
     """Return the LiveKit dispatcher thread without scanning the thread list."""
     manager = get_session_manager()
-    thread = _get_cached_livekit_dispatcher_thread(manager)
+    thread, error = _ensure_livekit_dispatcher_thread(manager)
     if thread is None:
         return Response(
-            {"error": "LiveKit dispatcher thread not found"},
-            status=status.HTTP_404_NOT_FOUND,
+            {"error": error or "Unable to create LiveKit dispatcher thread"},
+            status=status.HTTP_502_BAD_GATEWAY,
         )
     return Response(annotate_thread_payload(thread.model_dump(mode="json")))
 
@@ -385,9 +422,11 @@ def thread_active_voice(request):
     manager = get_session_manager()
     thread = _get_livekit_active_voice_thread(manager)
     if thread is None:
+        thread, _error = _ensure_livekit_dispatcher_thread(manager)
+    if thread is None:
         return Response(
-            {"error": "Active LiveKit voice thread not found"},
-            status=status.HTTP_404_NOT_FOUND,
+            {"error": "Unable to create LiveKit dispatcher thread"},
+            status=status.HTTP_502_BAD_GATEWAY,
         )
     return Response(annotate_thread_payload(thread.model_dump(mode="json")))
 

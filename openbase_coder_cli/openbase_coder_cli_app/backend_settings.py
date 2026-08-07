@@ -17,6 +17,8 @@ from openbase_coder_cli.backend_config import (
     CODEX_BACKEND,
     DEFAULT_CODING_BACKEND,
     OPENBASE_CLOUD_BACKEND,
+    OPENBASE_CLOUD_CODEX_BACKEND,
+    SELECTABLE_BACKENDS,
     normalize_backend,
 )
 from openbase_coder_cli.claude_auth import (
@@ -35,8 +37,8 @@ BACKEND_OPTIONS = {
     },
     "openbase_cloud": {
         "label": "Openbase Cloud",
-        "summary": "Managed Openbase model proxy.",
-        "description": "Uses your Openbase login with the Openbase Cloud model proxy for Codex-compatible sessions.",
+        "summary": "Managed Claude Code through Openbase Cloud.",
+        "description": "Uses your Openbase login with the Openbase Cloud Claude proxy; no personal Anthropic account is required.",
     },
     "claude_code": {
         "label": "Claude Code",
@@ -45,7 +47,6 @@ BACKEND_OPTIONS = {
     },
 }
 
-SELECTABLE_BACKENDS = (CODEX_BACKEND, OPENBASE_CLOUD_BACKEND, CLAUDE_CODE_BACKEND)
 CODEX_PLUGIN_MARKETPLACE = "openai-bundled"
 CODEX_PLUGIN_TOGGLES = {
     "computer-use": {
@@ -114,14 +115,14 @@ class ClaudePluginToggleSerializer(serializers.Serializer):
 
 
 def _restart_hint(backend: str) -> str:
-    if backend in {"codex", "openbase_cloud"}:
+    if backend == CODEX_BACKEND:
         return "Restart or recreate the dispatcher/MCP host for Super Agents to pick up the change."
     return "Restart or recreate the dispatcher/MCP host for Claude Code to pick up the change; keep Openbase services running."
 
 
 def _backend_note(backend: str) -> str | None:
     if backend == OPENBASE_CLOUD_BACKEND:
-        return "Codex is configured to use the Openbase Cloud model proxy."
+        return "Claude Code is configured to use the Openbase Cloud model proxy."
     return None
 
 
@@ -159,7 +160,15 @@ def _backend_payload(*, changed: bool = False, sync_claude_auth: bool = False) -
     payload = {
         "backend": configured_backend,
         "configured_backend": configured_backend,
+        "execution_backend": CLAUDE_CODE_BACKEND
+        if configured_backend == OPENBASE_CLOUD_BACKEND
+        else CODEX_BACKEND
+        if configured_backend == OPENBASE_CLOUD_CODEX_BACKEND
+        else configured_backend,
         "codex_provider": "openbase_cloud"
+        if configured_backend == OPENBASE_CLOUD_CODEX_BACKEND
+        else "direct",
+        "claude_provider": "openbase_cloud"
         if configured_backend == OPENBASE_CLOUD_BACKEND
         else "direct",
         "backend_note": _backend_note(configured_backend),

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+import httpx
 from rest_framework import serializers, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -23,12 +24,19 @@ from openbase_coder_cli.code_sync.conflicts import (
     resolve_conflict,
     unresolved_conflicts,
 )
-from openbase_coder_cli.code_sync.eligibility import current_eligibility
+from openbase_coder_cli.code_sync.eligibility import (
+    current_eligibility,
+    deregister_cloud_device,
+)
 from openbase_coder_cli.code_sync.lease import local_activity_recent
 from openbase_coder_cli.code_sync.reconciler import read_reconcile_state
 from openbase_coder_cli.code_sync.syncthing import (
     SyncthingClient,
     stored_device_id,
+)
+from openbase_coder_cli.config.token_manager import (
+    AuthLoginRequiredError,
+    AuthTransientError,
 )
 
 logger = logging.getLogger(__name__)
@@ -161,6 +169,58 @@ def sync_settings(request):
     except CodeSyncError as exc:
         logger.warning("code_sync apply_settings_failed: %s", exc)
         warning = str(exc)
+
+    return Response(
+        _settings_payload(changed=True, apply_warning=warning),
+        status=status.HTTP_200_OK,
+    )
+
+
+class SyncPeerRemoveSerializer(serializers.Serializer):
+    device_id = serializers.CharField()
+
+
+@api_view(["POST"])
+def sync_peers_remove(request):
+    """Forget a sync peer by deregistering its device from the cloud registry.
+
+    This is how a user dismisses a machine they have shut down: the device is
+    removed from the account registry (single source of truth for peers), then
+    a settings reconcile drops it from the Syncthing configuration so the
+    "peer disconnected" health warning clears.
+    """
+    serializer = SyncPeerRemoveSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    device_id = serializer.validated_data["device_id"].strip()
+    if not device_id:
+        return Response(
+            {"error": "Provide the device_id of the peer to remove."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        deregister_cloud_device(device_id)
+    except ValueError as exc:
+        return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    except AuthLoginRequiredError as exc:
+        return Response(
+            {"error": f"Login required to remove sync peer: {exc}"},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+    except (AuthTransientError, httpx.HTTPError) as exc:
+        logger.warning("sync_peers_remove deregister_failed: %s", exc)
+        return Response(
+            {"error": f"Unable to remove sync peer: {exc}"},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    warning = ""
+    if sync_config.code_sync_enabled():
+        try:
+            sync_manager.apply_settings_change()
+        except CodeSyncError as exc:
+            logger.warning("sync_peers_remove apply_settings_failed: %s", exc)
+            warning = str(exc)
 
     return Response(
         _settings_payload(changed=True, apply_warning=warning),

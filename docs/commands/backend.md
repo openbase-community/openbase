@@ -25,7 +25,7 @@ openbase-coder backend use codex
 ## Supported Backends
 
 - `codex`: default native Codex app-server backend.
-- `openbase_cloud`: Codex-compatible backend through the Openbase Cloud model proxy.
+- `openbase_cloud`: Cloud-proxied Claude Code through Openbase Cloud, authenticated with Openbase login.
 - `claude_code`: Claude Code backend for Super Agents UI-driver sessions using local Claude auth/billing, not `ANTHROPIC_API_KEY`.
 
 The command persists the selection in `~/.openbase/.env` as
@@ -33,10 +33,10 @@ The command persists the selection in `~/.openbase/.env` as
 `openbase-coder setup --backend ...` and read by the local console.
 
 
-The backend setting controls `super-agents-mcp` coding sessions. Codex and
-Openbase Cloud use the local `codex-app-server` service; Claude Code bypasses
-that service for Super Agents UI-driver sessions. In the apps, saving a changed
-backend first asks for confirmation, then automatically restarts Openbase
+The backend setting controls `super-agents-mcp` coding sessions. Codex uses the
+local `codex-app-server` service. Openbase Cloud and direct Claude Code use
+Claude Code for Super Agents UI-driver sessions and bypass `codex-app-server`.
+In the apps, saving a changed backend first asks for confirmation, then automatically restarts Openbase
 services and recreates the dispatcher thread. The restart interrupts active
 voice calls, may interrupt coding turns, and clears the current dispatcher
 conversation context; it does not delete Super Agent threads or project files.
@@ -57,3 +57,9 @@ For Claude Code, Openbase uses its managed `CLAUDE_CONFIG_DIR` at
 openbase-coder claude status
 openbase-coder claude login
 ```
+
+Openbase Cloud does not require a personal Claude or Anthropic login. It uses
+the same managed Claude config plus the Openbase Anthropic proxy, authenticated
+with an Openbase machine token. The legacy Codex-over-Openbase-Cloud proxy path
+remains available internally as `openbase_cloud_codex` for compatibility but is
+not listed as a normal backend choice.

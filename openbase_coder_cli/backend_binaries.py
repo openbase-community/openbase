@@ -27,6 +27,7 @@ from openbase_coder_cli.backend_config import (
     CLAUDE_CODE_BACKEND,
     CODEX_BACKEND,
     OPENBASE_CLOUD_BACKEND,
+    OPENBASE_CLOUD_CODEX_BACKEND,
 )
 from openbase_coder_cli.paths import OPENBASE_BIN_DIR
 
@@ -34,7 +35,8 @@ CODEX_LATEST_RELEASE_URL = "https://api.github.com/repos/openai/codex/releases/l
 CLAUDE_INSTALLER_URL = "https://claude.ai/install.sh"
 BACKEND_BINARY_NAMES = {
     CODEX_BACKEND: "codex",
-    OPENBASE_CLOUD_BACKEND: "codex",
+    OPENBASE_CLOUD_BACKEND: "claude",
+    OPENBASE_CLOUD_CODEX_BACKEND: "codex",
     CLAUDE_CODE_BACKEND: "claude",
 }
 

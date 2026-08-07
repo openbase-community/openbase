@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from openbase_coder_cli.backend_config import CODEX_BACKEND, OPENBASE_CLOUD_BACKEND
+from openbase_coder_cli.backend_config import (
+    CODEX_BACKEND,
+    OPENBASE_CLOUD_CODEX_BACKEND,
+)
 
 
 @dataclass
@@ -114,7 +117,7 @@ SERVICES: list[ServiceDefinition] = [
             'OPENBASE_CODING_BACKEND="${{OPENBASE_CODING_BACKEND:-codex}}"\n'
             'CODEX_MODEL_REASONING_EFFORT="${{CODEX_MODEL_REASONING_EFFORT:-high}}"\n'
             'CODEX_SERVICE_TIER="${{CODEX_SERVICE_TIER:-standard}}"\n'
-            'if [ "$OPENBASE_CODING_BACKEND" = "openbase_cloud" ] || [ "$OPENBASE_CODING_BACKEND" = "openbase-cloud" ]; then\n'
+            'if [ "$OPENBASE_CODING_BACKEND" = "openbase_cloud_codex" ] || [ "$OPENBASE_CODING_BACKEND" = "openbase-cloud-codex" ]; then\n'
             '    if [ -z "${{OPENBASE_CLOUD_CODEX_API_KEY:-}}" ]; then\n'
             '        if ! OPENBASE_CLOUD_CODEX_API_KEY="$({openbase_coder} auth print-machine-token)"; then\n'
             '            echo "Unable to get an Openbase Cloud machine token. Run openbase-coder login, then restart services." >&2\n'
@@ -130,7 +133,7 @@ SERVICES: list[ServiceDefinition] = [
         ),
         workdir_template="{workspace}",
         port=4500,
-        backends=(CODEX_BACKEND, OPENBASE_CLOUD_BACKEND),
+        backends=(CODEX_BACKEND, OPENBASE_CLOUD_CODEX_BACKEND),
     ),
     ServiceDefinition(
         name="codex-thread-sync",
@@ -284,7 +287,7 @@ SERVICES: list[ServiceDefinition] = [
         description="Openbase Cloud idle heartbeat",
         command_template=(
             'OPENBASE_CLOUD_HEARTBEAT_INTERVAL="${{OPENBASE_CLOUD_HEARTBEAT_INTERVAL:-60}}"\n'
-            '{openbase_coder} cloud rehydrate-auth\n'
+            "{openbase_coder} cloud rehydrate-auth\n"
             'exec {openbase_coder} cloud heartbeat --interval "$OPENBASE_CLOUD_HEARTBEAT_INTERVAL"'
         ),
         workdir_template="{data_dir}",

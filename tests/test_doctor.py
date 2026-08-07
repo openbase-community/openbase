@@ -49,8 +49,9 @@ def _collect_auth_check(env, monkeypatch, tmp_path, cloud_login=None):
     monkeypatch.setattr(
         onboarding_module,
         "cloud_login_status",
-        lambda: cloud_login
-        or {"status": "logged_out", "validated": True, "detail": ""},
+        lambda: (
+            cloud_login or {"status": "logged_out", "validated": True, "detail": ""}
+        ),
     )
     monkeypatch.setattr(doctor_cli, "CODEX_HOME_DIR", tmp_path / "codex_home")
     _check_agent_auth(env, ok, warn, fail, action)
@@ -288,7 +289,9 @@ def test_doctor_skips_backend_scoped_services_on_other_backends(monkeypatch, tmp
             SimpleNamespace(
                 name="codex-app-server",
                 install_by_default=True,
-                supports_backend=lambda backend: backend in ("codex", "openbase_cloud"),
+                supports_backend=lambda backend: (
+                    backend in ("codex", "openbase_cloud_codex")
+                ),
             )
         ],
     )

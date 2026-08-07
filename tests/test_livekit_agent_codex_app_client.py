@@ -673,12 +673,16 @@ def test_steer_turn_resyncs_active_turn_id_mismatch():
     asyncio.run(check())
 
 
-def test_thread_params_use_configured_approval_and_sandbox():
+def test_thread_params_use_configured_approval_and_sandbox(monkeypatch):
+    # Isolate from the machine's backend selection and dispatcher config,
+    # which otherwise pick the configured Claude model.
+    monkeypatch.setenv("OPENBASE_CODING_BACKEND", "codex")
     client = CodexAppServerClient(
         ws_url="ws://example.invalid",
         cwd="/tmp",
         approval_policy="on-request",
         sandbox="read-only",
+        dispatcher_config_path="/nonexistent-dispatcher-config.json",
     )
 
     assert client._thread_params() == {
@@ -689,8 +693,13 @@ def test_thread_params_use_configured_approval_and_sandbox():
     }
 
 
-def test_thread_params_default_to_existing_voice_coder_behavior():
-    client = CodexAppServerClient(ws_url="ws://example.invalid", cwd="/tmp")
+def test_thread_params_default_to_existing_voice_coder_behavior(monkeypatch):
+    monkeypatch.setenv("OPENBASE_CODING_BACKEND", "codex")
+    client = CodexAppServerClient(
+        ws_url="ws://example.invalid",
+        cwd="/tmp",
+        dispatcher_config_path="/nonexistent-dispatcher-config.json",
+    )
 
     assert client._thread_params() == {
         "cwd": "/tmp",
@@ -797,7 +806,10 @@ def test_persist_thread_id_writes_configured_dispatcher_voice(tmp_path: Path):
     assert route_payload["dispatcher_voice_name"] == "Thandi"
 
 
-def test_ensure_thread_adopts_canonical_dispatcher_from_disk(tmp_path: Path):
+def test_ensure_thread_adopts_canonical_dispatcher_from_disk(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.setenv("OPENBASE_CODING_BACKEND", "codex")
     state_path = tmp_path / "livekit-voice-route.json"
     state_path.write_text(
         json.dumps({"dispatcher_thread_id": "stale-dispatcher"}), encoding="utf-8"
@@ -809,6 +821,7 @@ def test_ensure_thread_adopts_canonical_dispatcher_from_disk(tmp_path: Path):
                 ws_url="ws://example.invalid",
                 cwd="/tmp",
                 state_path=str(state_path),
+                dispatcher_config_path="/nonexistent-dispatcher-config.json",
             )
             self.requests = []
 
@@ -979,13 +992,15 @@ def test_recreated_dispatcher_resets_route_until_replacement_warms(
     assert replacement_state.active_target_thread_id is None
 
 
-def test_initial_thread_id_is_resumed_with_developer_instructions():
+def test_initial_thread_id_is_resumed_with_developer_instructions(monkeypatch):
+    monkeypatch.setenv("OPENBASE_CODING_BACKEND", "codex")
     client = CodexAppServerClient(
         ws_url="ws://example.invalid",
         cwd="/tmp/project",
         developer_instructions="direct LiveKit instructions",
         persist_thread=False,
         initial_thread_id="target-1",
+        dispatcher_config_path="/nonexistent-dispatcher-config.json",
     )
 
     assert client._thread_id == "target-1"
