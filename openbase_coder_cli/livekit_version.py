@@ -10,4 +10,4 @@ differences can't sail through development testing unnoticed.
 
 from __future__ import annotations
 
-LIVEKIT_SERVER_PINNED_VERSION = "1.13.4"
+LIVEKIT_SERVER_PINNED_VERSION = "1.13.5"
