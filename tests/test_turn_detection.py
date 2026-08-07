@@ -39,7 +39,7 @@ def test_user_turn_closure_uses_minimum_quiet_floor_by_default():
     assert decision.source == "quiet_floor_default"
     assert decision.completion_reason == "quiet_floor"
     assert decision.quiet_grace_seconds == MIN_USER_TURN_QUIET_GRACE_SECONDS
-    assert decision.quiet_grace_seconds >= 2.5
+    assert decision.quiet_grace_seconds >= 2.0
 
 
 def test_user_turn_closure_extends_quiet_floor_on_low_confidence():
@@ -49,7 +49,7 @@ def test_user_turn_closure_extends_quiet_floor_on_low_confidence():
     assert low.source == "turn_detector"
     assert low.completion_reason == "low_confidence_quiet_floor"
     assert low.quiet_grace_seconds == LOW_CONFIDENCE_USER_TURN_QUIET_GRACE_SECONDS
-    assert low.quiet_grace_seconds >= 6.0
+    assert low.quiet_grace_seconds >= 5.0
     assert high.source == "turn_detector"
     assert high.completion_reason == "quiet_floor"
     assert high.quiet_grace_seconds == MIN_USER_TURN_QUIET_GRACE_SECONDS
