@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from openbase_coder_cli.livekit_agent.turn_detection import (
+    MAX_PRE_ACCEPT_QUIET_CREDIT_SECONDS,
     UserTurnClosureDecision,
     UserTurnClosureSignals,
 )
@@ -148,6 +149,15 @@ class VoiceDeliveryLedger:
         record.user_turn_closure_delay_ms = decision.quiet_grace_ms
         record.user_turn_completion_reason = decision.completion_reason
         self._apply_user_turn_signals(record, signals)
+        # LiveKit endpointing already verified this much silence before the
+        # utterance was accepted; the quiet floor counts it so the mute lands
+        # relative to when the user actually stopped speaking.
+        quiet_credit_seconds = 0.0
+        if signals is not None and signals.end_of_turn_delay is not None:
+            quiet_credit_seconds = min(
+                max(signals.end_of_turn_delay, 0.0),
+                MAX_PRE_ACCEPT_QUIET_CREDIT_SECONDS,
+            )
         self._log_user_turn_closure(record, "user_turn_closure_decision")
 
         async def _close_after_delay() -> None:
@@ -155,6 +165,7 @@ class VoiceDeliveryLedger:
                 await self._wait_until_user_turn_closure_allowed(
                     record,
                     decision=decision,
+                    initial_quiet_credit_seconds=quiet_credit_seconds,
                 )
                 self.mark_user_turn_closed(record, decision=decision)
             except asyncio.CancelledError:
@@ -274,18 +285,22 @@ class VoiceDeliveryLedger:
         record: VoiceDeliveryRecord,
         *,
         decision: UserTurnClosureDecision,
+        initial_quiet_credit_seconds: float = 0.0,
     ) -> None:
         """Wait for the user to stay quiet for the decision's full floor.
 
-        Quiet time counts from utterance acceptance; any resumed speech resets
-        the clock. Without a speaking provider (tests, degraded sessions) the
+        Quiet time counts from utterance acceptance, backdated by any silence
+        LiveKit endpointing already verified; resumed speech resets the
+        clock. Without a speaking provider (tests, degraded sessions) the
         floor degrades to a plain sleep.
         """
         required_quiet_seconds = decision.quiet_grace_seconds
         if self._user_speaking_provider is None:
-            await asyncio.sleep(required_quiet_seconds)
+            await asyncio.sleep(
+                max(0.0, required_quiet_seconds - initial_quiet_credit_seconds)
+            )
             return
-        quiet_started_at: float | None = time.monotonic()
+        quiet_started_at: float | None = time.monotonic() - initial_quiet_credit_seconds
         wait_logged = False
         wait_started = time.monotonic()
         while True:

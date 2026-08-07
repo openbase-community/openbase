@@ -764,3 +764,41 @@ def test_unmatched_direct_tts_withholds_safe_to_unmute_while_answer_pending():
 
     assert ("agent_audio_finished", record.delivery_id) in events
     assert ("safe_to_unmute", record.delivery_id) not in events
+
+
+def test_user_turn_closure_credits_pre_accept_silence():
+    """Silence LiveKit already verified before acceptance counts toward the
+    quiet floor, so the mute lands relative to actual end of speech."""
+
+    async def run() -> tuple[float, float]:
+        ledger = VoiceDeliveryLedger(
+            route_snapshot=_snapshot,
+            user_speaking_poll_seconds=0.005,
+        )
+        ledger.set_user_speaking_provider(lambda: False)
+
+        async def timed_closure(prompt: str, credit: float) -> float:
+            record = ledger.accept_utterance(message_id=f"m-{prompt}", prompt=prompt)
+            started = asyncio.get_running_loop().time()
+            ledger.schedule_user_turn_closure(
+                record,
+                UserTurnClosureDecision(
+                    confidence=0.9,
+                    source="turn_detector",
+                    quiet_grace_seconds=0.08,
+                    completion_reason="quiet_floor",
+                ),
+                signals=UserTurnClosureSignals(end_of_turn_delay=credit),
+            )
+            while not record.user_turn_closed:
+                await asyncio.sleep(0.005)
+            return asyncio.get_running_loop().time() - started
+
+        with_credit = await timed_closure("credited", 0.06)
+        without_credit = await timed_closure("uncredited", 0.0)
+        return with_credit, without_credit
+
+    with_credit, without_credit = asyncio.run(run())
+
+    assert with_credit < without_credit
+    assert without_credit >= 0.08

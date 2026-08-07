@@ -28,8 +28,13 @@ _TURN_SIGNAL_TTL_SECONDS = 30.0
 _MAX_TURN_SIGNALS = 64
 
 MIN_USER_TURN_QUIET_GRACE_SECONDS = 2.0
-LOW_CONFIDENCE_USER_TURN_QUIET_GRACE_SECONDS = 5.0
-LOW_EOU_PROBABILITY_THRESHOLD = 0.45
+LOW_CONFIDENCE_USER_TURN_QUIET_GRACE_SECONDS = 4.0
+LOW_EOU_PROBABILITY_THRESHOLD = 0.30
+# The quiet floor measures total verified silence. LiveKit's endpointing has
+# already verified `end_of_turn_delay` seconds of silence before the
+# utterance is even accepted; credit it (bounded, in case the metric is
+# unreliable) so the floor counts from when the user actually stopped.
+MAX_PRE_ACCEPT_QUIET_CREDIT_SECONDS = 1.5
 
 
 @dataclass(frozen=True)
