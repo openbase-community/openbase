@@ -742,10 +742,31 @@ def _normalize_agent_name(value: str | None) -> str:
 
 def _thread_recency_key(thread) -> tuple[float, str]:
     thread_id = getattr(thread, "session_id", "")
+    thread_id_value = thread_id if isinstance(thread_id, str) else ""
     return (
-        _timestamp_value(getattr(thread, "updated_at", None)),
-        thread_id if isinstance(thread_id, str) else "",
+        _thread_recency_timestamp_value(thread, thread_id_value),
+        thread_id_value,
     )
+
+
+def _thread_recency_timestamp_value(thread, thread_id: str) -> float:
+    return max(
+        _timestamp_value(getattr(thread, "updated_at", None)),
+        _timestamp_value(getattr(thread, "created_at", None)),
+        _thread_id_timestamp_value(thread_id),
+    )
+
+
+def _thread_id_timestamp_value(thread_id: str) -> float:
+    if not thread_id:
+        return 0.0
+    try:
+        parsed = uuid.UUID(thread_id)
+    except ValueError:
+        return 0.0
+    if parsed.version != 7:
+        return 0.0
+    return int(parsed.hex[:12], 16) / 1000.0
 
 
 def _timestamp_value(value) -> float:
