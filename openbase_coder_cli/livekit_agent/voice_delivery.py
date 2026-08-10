@@ -22,6 +22,12 @@ from openbase_coder_cli.livekit_agent.turn_detection import (
 
 logger = logging.getLogger(__name__)
 
+# STT finals arriving later than this after end of speech dominate perceived
+# mute latency (the quiet floor cannot start until the turn is accepted).
+# Surface it loudly so slow STT reads as an infrastructure problem, not as
+# "the app feels sluggish".
+SLOW_TRANSCRIPTION_WARN_SECONDS = 2.0
+
 
 def short_text_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
@@ -157,6 +163,21 @@ class VoiceDeliveryLedger:
             quiet_credit_seconds = min(
                 max(signals.end_of_turn_delay, 0.0),
                 MAX_PRE_ACCEPT_QUIET_CREDIT_SECONDS,
+            )
+        if (
+            signals is not None
+            and signals.transcription_delay is not None
+            and signals.transcription_delay >= SLOW_TRANSCRIPTION_WARN_SECONDS
+        ):
+            logger.warning(
+                "dispatch_timing stage=stt_transcription_delayed "
+                "transcription_delay_ms=%d delivery_id=%s message_id=%s "
+                "prompt_len=%d room=%s",
+                int(signals.transcription_delay * 1000),
+                record.delivery_id,
+                record.message_id,
+                record.prompt_len,
+                record.room_name,
             )
         self._log_user_turn_closure(record, "user_turn_closure_decision")
 
