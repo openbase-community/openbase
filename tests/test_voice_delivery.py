@@ -802,3 +802,47 @@ def test_user_turn_closure_credits_pre_accept_silence():
 
     assert with_credit < without_credit
     assert without_credit >= 0.08
+
+
+def test_slow_transcription_final_logs_loud_warning(caplog):
+    import logging
+
+    ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
+    record = ledger.accept_utterance(message_id="m1", prompt="hello")
+
+    with caplog.at_level(logging.WARNING):
+        ledger.schedule_user_turn_closure(
+            record,
+            UserTurnClosureDecision(
+                confidence=0.9,
+                source="turn_detector",
+                quiet_grace_seconds=0,
+                completion_reason="quiet_floor",
+            ),
+            signals=UserTurnClosureSignals(transcription_delay=7.2),
+        )
+
+    warnings = [r.getMessage() for r in caplog.records if "stt_transcription_delayed" in r.getMessage()]
+    assert warnings
+    assert "transcription_delay_ms=7200" in warnings[0]
+
+
+def test_fast_transcription_final_logs_no_warning(caplog):
+    import logging
+
+    ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
+    record = ledger.accept_utterance(message_id="m1", prompt="hello")
+
+    with caplog.at_level(logging.WARNING):
+        ledger.schedule_user_turn_closure(
+            record,
+            UserTurnClosureDecision(
+                confidence=0.9,
+                source="turn_detector",
+                quiet_grace_seconds=0,
+                completion_reason="quiet_floor",
+            ),
+            signals=UserTurnClosureSignals(transcription_delay=0.4),
+        )
+
+    assert not [r for r in caplog.records if "stt_transcription_delayed" in r.getMessage()]
