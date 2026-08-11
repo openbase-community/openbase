@@ -41,7 +41,7 @@ you. To run setup yourself from a terminal instead, follow
 
 For development, run the workspace script from your checkout root; it runs
 `multi sync --install-set default` and then
-`openbase-coder setup --workspace-dir <workspace-root>`:
+`openbase-coder setup --workspace-dir <workspace-root> --audio-provider local`:
 
 ```bash
 ./scripts/setup
@@ -50,6 +50,8 @@ For development, run the workspace script from your checkout root; it runs
 The workspace script is for a clean source-workspace install. If it finds an
 existing standalone install or a different development workspace install, it
 stops and directs you to [Uninstall](../uninstall.md) before making changes.
+The development wrapper defaults to free local audio; pass an explicit
+`--audio-provider` to override it.
 
 ## Backend Selection
 
@@ -81,9 +83,10 @@ Anthropic's official native installer. Backend-specific services (such as
 gated-out services.
 
 With `--audio-provider local`, setup installs the optional Kokoro/MLX local
-audio dependencies and downloads the required models. Standalone packages
-should be built with Python 3.12 for this path because Kokoro currently
-declares Python `<3.13`.
+audio dependencies and downloads the required models. In development it keeps
+the `local-audio` uv extra in the workspace environment, installs Kokoro's
+English language model, and verifies the active service runtime plus both
+model caches before setup succeeds.
 
 ## Options
 
@@ -117,7 +120,7 @@ declares Python `<3.13`.
 10. Renders shared default instruction files from the bundled package or workspace `instructions/` into `~/.openbase/instructions/`.
 11. Creates missing `~/.openbase/dispatcher-config.json` with default dispatcher reasoning effort `low`, default Super Agents reasoning effort `high`, and backend-specific default model settings.
 12. Symlinks bundled or workspace skills into `~/.openbase/codex_home/skills` and `~/.openbase/claude_config/skills`.
-13. Initializes runtime assets: in development mode runs `uv sync` in `cli`; in **both** modes downloads the LiveKit agent model files (VAD, turn detector) so the first voice session does not stall on downloads.
+13. Initializes runtime assets: in development mode runs `uv sync` in `cli` (including the `local-audio` extra when selected); in **both** modes downloads the LiveKit agent model files (VAD, turn detector) so the first voice session does not stall on downloads. Local audio setup then downloads Kokoro voices, the Kokoro English language model, and MLX Whisper, and fails setup if the active runtime is not ready.
 14. Installs the bundled `inject-session-id.sh` SessionStart hook script into `~/.openbase/hooks/` and registers it in both Openbase agent homes: a `hooks.SessionStart` entry in `~/.openbase/claude_config/settings.json` and a trusted `[[hooks.SessionStart]]` hook (with its `[hooks.state]` trust entry) in `~/.openbase/codex_home/config.toml`. The hook feeds each session's thread/session ID back into the conversation together with the instructions for using it, so agents stamp commits with the `Agent-Thread-Id` trailer without needing any standing `AGENTS.md` rule.
 15. Configures `~/.openbase/codex_home/config.toml` with full Codex local access (`sandbox_mode = "danger-full-access"`), disabled permission prompts, and the Super Agents MCP server. With `--link-codex-config`, this path is first linked to `~/.codex/config.toml`. The MCP command prefers the selected workspace's venv executable and falls back to the resolved local `uv` path.
 16. Configures `~/.openbase/claude_config/.claude.json` with the Super Agents MCP server and writes `CLAUDE_CONFIG_DIR=~/.openbase/claude_config` into the shared `.env`.

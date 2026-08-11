@@ -1145,6 +1145,25 @@ def test_ensure_env_file_updates_existing_backend_only_when_requested(tmp_path) 
     assert "OPENBASE_CODING_BACKEND=claude_code" in content
 
 
+def test_ensure_env_file_removes_obsolete_offline_model_flags(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "KEEP_ME=1\nHF_HUB_OFFLINE=1\nTRANSFORMERS_OFFLINE=1\n",
+        encoding="utf-8",
+    )
+
+    setup_cli._ensure_env_file(
+        str(env_file),
+        assembly_ai_api_key="",
+        cartesia_api_key="",
+    )
+
+    content = env_file.read_text(encoding="utf-8")
+    assert "KEEP_ME=1" in content
+    assert "HF_HUB_OFFLINE" not in content
+    assert "TRANSFORMERS_OFFLINE" not in content
+
+
 def test_ensure_thread_sync_exchange_dir_creates_syncthing_files(
     tmp_path, monkeypatch
 ) -> None:
@@ -1229,6 +1248,7 @@ def test_setup_configures_tailscale_serve(tmp_path, monkeypatch) -> None:
     (workspace / "cli").mkdir()
     (workspace / "multi.json").write_text("{}", encoding="utf-8")
     _patch_setup(monkeypatch, "ensure_backend_binary", lambda _backend: None)
+    _patch_setup(monkeypatch, "ensure_pinned_livekit_server", lambda: None)
     _patch_setup(monkeypatch, "_ensure_normal_codex_mcp", lambda _workspace_dir: None)
     _patch_setup(monkeypatch, "_ensure_normal_claude_mcp", lambda _workspace_dir: None)
     _patch_setup(monkeypatch, "_ensure_claude_auth_bridge", lambda **_kwargs: None)
@@ -1255,11 +1275,33 @@ def test_setup_configures_tailscale_serve(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         setup_cli, "_ensure_codex_home_dispatcher_config", lambda **_kwargs: None
     )
-    _patch_setup(monkeypatch, "_download_local_audio_models", lambda: None)
+    _patch_setup(monkeypatch, "set_dispatcher_service_tier", lambda _value: None)
+    _patch_setup(
+        monkeypatch,
+        "_ensure_local_audio_dependencies",
+        lambda _runtime: calls.append("local-dependencies"),
+    )
+    _patch_setup(
+        monkeypatch,
+        "_download_local_audio_models",
+        lambda: calls.append("local-models"),
+    )
+    _patch_setup(
+        monkeypatch,
+        "_ensure_local_audio_ready",
+        lambda: calls.append("local-ready"),
+    )
+    _patch_setup(monkeypatch, "_ensure_session_id_hook_script", lambda: None)
     monkeypatch.setattr(
         setup_cli, "_symlink_codex_home_skills", lambda _workspace_dir: None
     )
-    _patch_setup(monkeypatch, "_init_cli_workspace", lambda _workspace_dir: None)
+    _patch_setup(
+        monkeypatch,
+        "_init_cli_workspace",
+        lambda _workspace_dir, **kwargs: calls.append(
+            f"workspace-local-audio={kwargs['include_local_audio']}"
+        ),
+    )
     monkeypatch.setattr(
         setup_cli, "_ensure_codex_home_config", lambda *_args, **_kwargs: None
     )
@@ -1307,11 +1349,22 @@ def test_setup_configures_tailscale_serve(tmp_path, monkeypatch) -> None:
             str(env_file),
             "--backend",
             "claude-code",
+            "--audio-provider",
+            "local",
         ],
     )
 
     assert result.exit_code == 0, result.output
-    assert calls == ["thread-sync", "sounds", "normal-claude", "configure"]
+    assert calls == [
+        "thread-sync",
+        "sounds",
+        "normal-claude",
+        "workspace-local-audio=True",
+        "local-dependencies",
+        "local-models",
+        "local-ready",
+        "configure",
+    ]
 
 
 def test_ensure_local_audio_dependencies_installs_into_runtime_python(
@@ -1337,7 +1390,12 @@ def test_ensure_local_audio_dependencies_installs_into_runtime_python(
 
     setup_cli._ensure_local_audio_dependencies(runtime_package)
 
-    assert [command for command, _kwargs in commands][-1] == [
+    install_command, install_kwargs = next(
+        (command, kwargs)
+        for command, kwargs in commands
+        if command[1:4] == ["-m", "pip", "install"]
+    )
+    assert install_command == [
         str(python_path),
         "-m",
         "pip",
@@ -1345,21 +1403,87 @@ def test_ensure_local_audio_dependencies_installs_into_runtime_python(
         "--upgrade",
         *setup_cli.LOCAL_AUDIO_REQUIREMENTS,
     ]
+    assert install_kwargs["env"]["PIP_BREAK_SYSTEM_PACKAGES"] == "1"
+    assert install_kwargs["env"]["PATH"].split(os.pathsep)[0] == str(
+        python_path.parent
+    )
 
 
-def test_ensure_local_audio_dependencies_rejects_python_313(
+def test_ensure_local_audio_dependencies_installs_kokoro_spacy_model(
+    tmp_path, monkeypatch
+) -> None:
+    python_path = tmp_path / "python"
+    runtime_package = type("RuntimePackage", (), {"python_path": python_path})()
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append((command, kwargs))
+        if command[1:] == ["-c", f"import {setup_cli.LOCAL_AUDIO_SPACY_MODEL}"]:
+            return subprocess.CompletedProcess(command, 1)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    setup_cli._ensure_local_audio_dependencies(runtime_package)
+
+    model_command, model_kwargs = commands[-1]
+    assert model_command == [
+        str(python_path),
+        "-m",
+        "spacy",
+        "download",
+        setup_cli.LOCAL_AUDIO_SPACY_MODEL,
+    ]
+    assert model_kwargs["env"]["PIP_BREAK_SYSTEM_PACKAGES"] == "1"
+
+
+def test_ensure_local_audio_dependencies_supports_python_313(
     tmp_path, monkeypatch
 ) -> None:
     python_path = tmp_path / "python"
     runtime_package = type("RuntimePackage", (), {"python_path": python_path})()
 
+    commands = []
+
     def fake_run(command, **kwargs):
-        return subprocess.CompletedProcess(command, 0, stdout="3.13\n")
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    with pytest.raises(Exception, match="requires a Python 3.12"):
-        setup_cli._ensure_local_audio_dependencies(runtime_package)
+    setup_cli._ensure_local_audio_dependencies(runtime_package)
+
+    assert all("sys.version_info" not in command[-1] for command in commands)
+    assert "numba>=0.65.0" in setup_cli.LOCAL_AUDIO_REQUIREMENTS
+
+
+def test_init_cli_workspace_retains_local_audio_extra(tmp_path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    cli_dir = workspace / "cli"
+    cli_dir.mkdir(parents=True)
+    commands = []
+
+    _patch_setup(monkeypatch, "which", lambda _name: "/usr/local/bin/uv")
+    _patch_setup(
+        monkeypatch,
+        "_download_livekit_model_files",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def fake_run(command, **kwargs):
+        commands.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0)
+
+    _patch_setup(monkeypatch, "subprocess", SimpleNamespace(run=fake_run))
+
+    setup_cli._init_cli_workspace(str(workspace), include_local_audio=True)
+
+    assert commands == [
+        (
+            ["/usr/local/bin/uv", "sync", "--extra", "local-audio"],
+            {"cwd": str(cli_dir), "check": True},
+        )
+    ]
 
 
 def test_workspace_skill_sources_supports_direct_skill_dirs(tmp_path) -> None:

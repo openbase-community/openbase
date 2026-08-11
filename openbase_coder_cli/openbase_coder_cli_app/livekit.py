@@ -64,6 +64,7 @@ from openbase_coder_cli.livekit_voice_route import (
     publish_transfer_to_thread,
     super_agent_voice_for_context,
 )
+from openbase_coder_cli.local_audio_readiness import local_audio_readiness
 from openbase_coder_cli.mcp.session_manager import get_session_manager
 from openbase_coder_cli.openbase_coder_cli_app.common import _request_identity
 from openbase_coder_cli.services.cloud_workspace import cloud_workspace_id
@@ -797,10 +798,29 @@ def livekit_room_token(request):
             }
         )
 
+    tts_provider_id = selected_tts_provider_id()
+    stt_provider_id = selected_stt_provider_id()
+    readiness = local_audio_readiness(
+        tts_provider_id=tts_provider_id,
+        stt_provider_id=stt_provider_id,
+    )
+    if not readiness.ready:
+        return Response(
+            {
+                "detail": (
+                    "Local voice audio is not ready: "
+                    f"{readiness.detail or 'readiness check failed'}. Run "
+                    "`openbase-coder setup --audio-provider local` and try again."
+                ),
+                "code": "local_audio_not_ready",
+            },
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
     try:
         ensure_openbase_cloud_audio_subscription(
-            tts_provider_id=selected_tts_provider_id(),
-            stt_provider_id=selected_stt_provider_id(),
+            tts_provider_id=tts_provider_id,
+            stt_provider_id=stt_provider_id,
             web_backend_url=(
                 getattr(settings, "WEB_BACKEND_URL", "") or DEFAULT_WEB_BACKEND_URL
             ).rstrip("/"),

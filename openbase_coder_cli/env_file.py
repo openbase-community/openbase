@@ -42,6 +42,18 @@ def upsert_env_file_values(path: Path, values: dict[str, str]) -> None:
     path.write_text("\n".join(updated).rstrip() + "\n", encoding="utf-8")
 
 
+def remove_env_file_keys(path: Path, keys: set[str]) -> bool:
+    """Remove active assignments for ``keys`` while preserving the rest."""
+    if not path.is_file():
+        return False
+    lines = path.read_text(encoding="utf-8").splitlines()
+    filtered = [line for line in lines if active_env_key(line) not in keys]
+    if filtered == lines:
+        return False
+    path.write_text("\n".join(filtered).rstrip() + "\n", encoding="utf-8")
+    return True
+
+
 def selected_backend_from_env_file(path: Path) -> str:
     """The coding backend selected by an env file."""
     values = env_file_values(path)
