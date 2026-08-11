@@ -18,6 +18,7 @@ from openbase_coder_cli.livekit_agent.stt_log_noise import (
     AssemblyAiIdleNoiseFilter,
 )
 from openbase_coder_cli.livekit_agent.worker_watchdog import (
+    WORKER_EXIT_RATE_LIMIT_THRESHOLD,
     WORKER_INIT_FAILURE_THRESHOLD,
     WORKER_INIT_FAILURE_WINDOW_SECONDS,
     WorkerFailureWatchdog,
@@ -190,3 +191,69 @@ def test_worker_watchdog_exits_immediately_when_connection_task_dies(monkeypatch
     # The exit fires once even if the message repeats.
     watchdog.emit(_log_record("Error in _connection_task"))
     assert exits == [True]
+
+
+def test_worker_watchdog_exits_when_agent_session_closes_unrecoverably(monkeypatch):
+    exits: list[bool] = []
+    monkeypatch.setattr(
+        WorkerFailureWatchdog,
+        "_initiate_exit",
+        lambda self: exits.append(True),
+    )
+    watchdog = WorkerFailureWatchdog()
+
+    watchdog.emit(
+        _log_record(
+            "AgentSession is closing due to unrecoverable error",
+            level=logging.CRITICAL,
+        )
+    )
+    assert exits == [True]
+
+    # The exit fires once even if both unrecoverable signatures are logged.
+    watchdog.emit(_log_record("Error in _connection_task"))
+    assert exits == [True]
+
+
+def test_worker_watchdog_rate_limits_agent_session_restart_churn(
+    monkeypatch, tmp_path
+):
+    exits: list[bool] = []
+    monkeypatch.setattr(
+        WorkerFailureWatchdog,
+        "_initiate_exit",
+        lambda self: exits.append(True),
+    )
+    monkeypatch.setattr(
+        watchdog_module,
+        "_EXIT_RATE_LIMIT_STATE_PATH",
+        tmp_path / "livekit-agent-watchdog-exits.json",
+    )
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(watchdog_module.time, "time", lambda: clock["now"])
+
+    for _ in range(WORKER_EXIT_RATE_LIMIT_THRESHOLD):
+        WorkerFailureWatchdog().emit(
+            _log_record(
+                "AgentSession is closing due to unrecoverable error",
+                level=logging.CRITICAL,
+            )
+        )
+    assert len(exits) == WORKER_EXIT_RATE_LIMIT_THRESHOLD
+
+    WorkerFailureWatchdog().emit(
+        _log_record(
+            "AgentSession is closing due to unrecoverable error",
+            level=logging.CRITICAL,
+        )
+    )
+    assert len(exits) == WORKER_EXIT_RATE_LIMIT_THRESHOLD
+
+    clock["now"] += watchdog_module.WORKER_EXIT_RATE_LIMIT_WINDOW_SECONDS + 1
+    WorkerFailureWatchdog().emit(
+        _log_record(
+            "AgentSession is closing due to unrecoverable error",
+            level=logging.CRITICAL,
+        )
+    )
+    assert len(exits) == WORKER_EXIT_RATE_LIMIT_THRESHOLD + 1

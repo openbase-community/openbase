@@ -10,27 +10,41 @@ Two failure modes leave launchd/systemd keeping a useless process alive:
   example when livekit-server stays down for a few minutes): the SDK never
   restarts its connection task, so the agent lingers unregistered forever
   and calls wait for an agent that can never arrive.
+- AgentSession closing after an unrecoverable in-room pipeline error (for
+  example a terminal STT websocket reconnect failure): the room can remain
+  connected while no further speech is transcribed.
 
-Exiting is the recovery in both cases: the service manager restarts the
+Exiting is the recovery in these cases: the service manager restarts the
 agent, which boots against the current environment and re-registers.
 """
 
+import json
 import logging
 import os
 import signal
 import threading
 import time
+from pathlib import Path
+
+from openbase_coder_cli.paths import OPENBASE_BASE_DIR
 
 logger = logging.getLogger(__name__)
 
 WORKER_INIT_FAILURE_THRESHOLD = 3
 WORKER_INIT_FAILURE_WINDOW_SECONDS = 120.0
+WORKER_EXIT_RATE_LIMIT_THRESHOLD = 3
+WORKER_EXIT_RATE_LIMIT_WINDOW_SECONDS = 300.0
 _FORCED_EXIT_GRACE_SECONDS = 15.0
 _INIT_FAILURE_MESSAGE = "error initializing process"
 # livekit-agents logs this (via @log_exceptions) when _connection_task
 # raises — after max_retry failed connect attempts it is terminal: the SDK
 # never restarts the task, so the worker can never reconnect.
 _CONNECTION_FAILURE_MESSAGE = "Error in _connection_task"
+_AGENT_SESSION_UNRECOVERABLE_MESSAGE = (
+    "AgentSession is closing due to unrecoverable error"
+)
+_AGENT_SESSION_UNRECOVERABLE_RATE_LIMIT_KEY = "agent_session_unrecoverable"
+_EXIT_RATE_LIMIT_STATE_PATH = OPENBASE_BASE_DIR / "livekit-agent-watchdog-exits.json"
 
 
 class WorkerFailureWatchdog(logging.Handler):
@@ -51,6 +65,18 @@ class WorkerFailureWatchdog(logging.Handler):
                 "agent"
             )
             return
+        if _AGENT_SESSION_UNRECOVERABLE_MESSAGE in message:
+            # Room-scoped status/lifecycle packets are best-effort from
+            # session_diagnostics when AgentSession emits error/close events.
+            # This process-global log handler has no room handle; its job is
+            # bounded self-heal when the SDK only surfaces the fatal log.
+            self._exit_once(
+                "livekit-agent's AgentSession closed after an unrecoverable "
+                "pipeline error; exiting so the service manager starts a fresh "
+                "voice agent session",
+                rate_limit_key=_AGENT_SESSION_UNRECOVERABLE_RATE_LIMIT_KEY,
+            )
+            return
         if _INIT_FAILURE_MESSAGE not in message:
             return
         now = time.monotonic()
@@ -69,9 +95,19 @@ class WorkerFailureWatchdog(logging.Handler):
             "service manager restarts the agent under the current environment"
         )
 
-    def _exit_once(self, reason: str) -> None:
+    def _exit_once(self, reason: str, *, rate_limit_key: str | None = None) -> None:
         with self._lock:
             if self._exiting:
+                return
+            if rate_limit_key and not _rate_limited_exit_allowed(rate_limit_key):
+                self._exiting = True
+                logger.critical(
+                    "%s; restart rate limit reached (%d exits within %.0fs), "
+                    "leaving process up to avoid restart churn",
+                    reason,
+                    WORKER_EXIT_RATE_LIMIT_THRESHOLD,
+                    WORKER_EXIT_RATE_LIMIT_WINDOW_SECONDS,
+                )
                 return
             self._exiting = True
         logger.critical(reason)
@@ -89,6 +125,63 @@ class WorkerFailureWatchdog(logging.Handler):
 def _force_exit_after_grace() -> None:
     time.sleep(_FORCED_EXIT_GRACE_SECONDS)
     os._exit(1)
+
+
+def _rate_limited_exit_allowed(key: str) -> bool:
+    """Persistently bound process-exit self-heal loops across restarts."""
+    now = time.time()
+    cutoff = now - WORKER_EXIT_RATE_LIMIT_WINDOW_SECONDS
+    try:
+        payload = _read_rate_limit_state(_EXIT_RATE_LIMIT_STATE_PATH)
+    except Exception:
+        logger.warning(
+            "Unable to read LiveKit watchdog restart rate-limit state; "
+            "allowing self-heal exit",
+            exc_info=True,
+        )
+        return True
+
+    recent_exits = [
+        timestamp
+        for timestamp in _timestamps_for_key(payload, key)
+        if timestamp >= cutoff
+    ]
+    if len(recent_exits) >= WORKER_EXIT_RATE_LIMIT_THRESHOLD:
+        payload[key] = recent_exits
+        _write_rate_limit_state(payload)
+        return False
+
+    payload[key] = [*recent_exits, now]
+    _write_rate_limit_state(payload)
+    return True
+
+
+def _read_rate_limit_state(state_path: Path) -> dict[str, list[float]]:
+    if not state_path.is_file():
+        return {}
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, dict) else {}
+
+
+def _timestamps_for_key(payload: dict[str, list[float]], key: str) -> list[float]:
+    values = payload.get(key, [])
+    if not isinstance(values, list):
+        return []
+    return [value for value in values if isinstance(value, int | float)]
+
+
+def _write_rate_limit_state(payload: dict[str, list[float]]) -> None:
+    try:
+        _EXIT_RATE_LIMIT_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _EXIT_RATE_LIMIT_STATE_PATH.write_text(
+            json.dumps(payload, sort_keys=True),
+            encoding="utf-8",
+        )
+    except Exception:
+        logger.warning(
+            "Unable to write LiveKit watchdog restart rate-limit state",
+            exc_info=True,
+        )
 
 
 def install_worker_failure_watchdog() -> WorkerFailureWatchdog:
