@@ -62,10 +62,26 @@ SKIP_DIR_NAMES = {
     "venv",
     "__pycache__",
     "DerivedData",
+    ".local",
+    "companion-build",
+    "dist",
+    "build",
+    "out",
+    "release",
+    "target",
+    ".next",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    ".terraform",
     # Version copies from a (legacy) in-folder Syncthing versioner are
     # archives, not live conflicts.
     ".stversions",
 }
+SKIP_FILE_CONFLICT_PATH_SEGMENTS = (
+    ("logs", "launchd"),
+    ("data", "db"),
+)
 
 ACTION_FAST_FORWARDED = "fast_forwarded"
 ACTION_UP_TO_DATE = "up_to_date"
@@ -329,7 +345,7 @@ def scan_file_conflicts(
             except OSError:
                 pass
             continue
-        if any(part in SKIP_DIR_NAMES or part == ".git" for part in path.parts):
+        if _is_generated_file_conflict_path(path, folder_root):
             continue
         relpath = str(path.relative_to(folder_root))
         record_file_conflict(
@@ -337,6 +353,24 @@ def scan_file_conflicts(
         )
         found.append(relpath)
     return found
+
+
+def _is_generated_file_conflict_path(path: Path, folder_root: Path) -> bool:
+    """Generated/cache conflict copies should not become user-facing records."""
+    try:
+        rel_parts = path.relative_to(folder_root).parts
+    except ValueError:
+        rel_parts = path.parts
+    if any(part in SKIP_DIR_NAMES or part == ".git" for part in rel_parts):
+        return True
+    return any(
+        len(rel_parts) >= len(segment)
+        and any(
+            tuple(rel_parts[index : index + len(segment)]) == segment
+            for index in range(len(rel_parts) - len(segment) + 1)
+        )
+        for segment in SKIP_FILE_CONFLICT_PATH_SEGMENTS
+    )
 
 
 def run_reconcile_once(
