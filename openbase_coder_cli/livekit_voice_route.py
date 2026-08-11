@@ -54,6 +54,7 @@ DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV = "LIVEKIT_DIRECT_CODEX_DEVELOPER_INSTRUCTI
 DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS = """
 You are receiving direct user speech from a LiveKit voice session.
 Keep final spoken responses concise and directly useful.
+If a transcript clearly appears to be background conversation and the user is not addressing Openbase Coder, immediately run `openbase-coder user ios mute` and do not otherwise respond to the transcript. Do not auto-mute ambiguous transcripts.
 Do not read code, logs, stack traces, JSON, diffs, or long file paths aloud unless explicitly asked.
 When code or logs matter, summarize their practical meaning in plain English.
 If transcription is unclear, ask the user to confirm the intended request before acting.

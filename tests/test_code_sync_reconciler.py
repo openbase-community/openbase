@@ -309,6 +309,31 @@ def test_scan_file_conflicts_records_sync_conflict_copies(tmp_path: Path) -> Non
     assert records[0]["kind"] == "file"
 
 
+def test_scan_file_conflicts_skips_generated_artifacts(tmp_path: Path) -> None:
+    from openbase_coder_cli.sync_config import SyncFolder
+
+    home = tmp_path / "home"
+    folder = SyncFolder(relpath="Projects/demo")
+    folder_root = folder.absolute_path(home)
+    generated_conflicts = [
+        folder_root / ".stversions/repo/file.sync-conflict-20260706-101112-ABC.md",
+        folder_root / "repo/.local/logs/app.sync-conflict-20260706-101112-ABC.log",
+        folder_root / "repo/logs/launchd/app.sync-conflict-20260706-101112-ABC.log",
+        folder_root / "repo/data/db/base/123.sync-conflict-20260706-101112-ABC",
+        folder_root / "repo/desktop/companion-build/app.sync-conflict-20260706-101112-ABC",
+        folder_root / "repo/__pycache__/mod.sync-conflict-20260706-101112-ABC.pyc",
+    ]
+    for path in generated_conflicts:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("generated\n", encoding="utf-8")
+
+    conflicts_path = tmp_path / "conflicts.json"
+    found = reconciler.scan_file_conflicts(folder, home, conflicts_path)
+
+    assert found == []
+    assert conflicts_module.unresolved_conflicts(conflicts_path) == []
+
+
 def test_scan_file_conflicts_cleans_internal_repo_manifest_copy(tmp_path: Path) -> None:
     from openbase_coder_cli.sync_config import SyncFolder
 
