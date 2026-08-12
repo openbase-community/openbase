@@ -977,6 +977,66 @@ def test_safe_to_unmute_rearms_vad_mute_for_next_turn():
     assert events.count("safe_to_mute_user") == 2
 
 
+def test_vad_gap_restarts_provisional_quiet_floor():
+    """Dropped VAD backlog may have hidden speech; the provisional mute must
+    re-verify a full quiet floor after the gap."""
+
+    async def run() -> tuple[bool, list[str]]:
+        events: list[str] = []
+        ledger = VoiceDeliveryLedger(
+            route_snapshot=_snapshot,
+            user_speaking_poll_seconds=0.005,
+            vad_quiet_grace_seconds=0.05,
+        )
+        ledger.set_lifecycle_sink(lambda event, _record, _reason: events.append(event))
+        ledger.set_user_speaking_provider(lambda: False)
+
+        ledger.notify_user_state(new_state="speaking")
+        ledger.notify_user_state(new_state="listening", old_state="speaking")
+        await asyncio.sleep(0.03)
+        ledger.notify_vad_gap(4.2)
+        await asyncio.sleep(0.04)
+        # The original 0.05s floor has elapsed, but the gap restarted it.
+        muted_early = "safe_to_mute_user" in events
+        await asyncio.sleep(0.05)
+        return muted_early, events
+
+    muted_early, events = asyncio.run(run())
+
+    assert not muted_early
+    assert events.count("safe_to_mute_user") == 1
+
+
+def test_vad_gap_restarts_transcript_quiet_floor():
+    async def run() -> tuple[bool, bool]:
+        ledger = VoiceDeliveryLedger(
+            route_snapshot=_snapshot,
+            user_speaking_poll_seconds=0.005,
+        )
+        ledger.set_user_speaking_provider(lambda: False)
+        record = ledger.accept_utterance(message_id="m1", prompt="hello")
+        ledger.schedule_user_turn_closure(
+            record,
+            UserTurnClosureDecision(
+                confidence=0.9,
+                source="turn_detector",
+                quiet_grace_seconds=0.05,
+                completion_reason="quiet_floor",
+            ),
+        )
+        await asyncio.sleep(0.03)
+        ledger.notify_vad_gap(2.0)
+        await asyncio.sleep(0.04)
+        closed_early = record.user_turn_closed
+        await asyncio.sleep(0.05)
+        return closed_early, record.user_turn_closed
+
+    closed_early, closed_eventually = asyncio.run(run())
+
+    assert not closed_early
+    assert closed_eventually
+
+
 def test_slow_transcription_final_logs_loud_warning(caplog):
     import logging
 

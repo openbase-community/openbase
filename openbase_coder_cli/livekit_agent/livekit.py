@@ -197,6 +197,10 @@ from openbase_coder_cli.livekit_agent.turn_detection import (
     SafeMultilingualModel,
     VoiceTurnSignalTracker,
 )
+from openbase_coder_cli.livekit_agent.vad_backlog_patch import (
+    install_vad_backlog_patch,
+    set_vad_backlog_listener,
+)
 from openbase_coder_cli.livekit_agent.voice_delivery import VoiceDeliveryLedger
 from openbase_coder_cli.livekit_agent.voice_routing import (
     LiveKitVoiceRouter,
@@ -305,6 +309,7 @@ server = LiveKitAgentServer(
 
 
 def prewarm(proc: JobProcess):
+    install_vad_backlog_patch()
     vad_model = silero.VAD.load()
     proc.userdata["vad"] = (
         LoggingVAD(vad_model) if LIVEKIT_VERBOSE_LOGGING else vad_model
@@ -884,6 +889,7 @@ async def livekit_agent(ctx: JobContext):
         )
 
     session.on("user_state_changed", on_user_state_changed_for_mute)
+    set_vad_backlog_listener(delivery_ledger.notify_vad_gap)
 
     subscription_check_task = (
         asyncio.create_task(_verify_cloud_audio_subscription(ctx.room, session))
@@ -1003,6 +1009,7 @@ async def livekit_agent(ctx: JobContext):
         for event_name, handler in announcer_queue_session_handlers:
             session.off(event_name, handler)
         session.off("user_state_changed", on_user_state_changed_for_mute)
+        set_vad_backlog_listener(None)
         await announcer_queue.close()
         await voice_router.close()
 
@@ -1014,6 +1021,7 @@ def main():
     install_worker_failure_watchdog()
     install_proc_pool_liveness_patch()
     install_assemblyai_idle_noise_filter()
+    install_vad_backlog_patch()
     cli.run_app(server)
 
 
