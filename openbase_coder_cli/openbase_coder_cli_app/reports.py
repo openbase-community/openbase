@@ -13,7 +13,6 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from openbase_coder_cli.thread_sync.session_manager import get_session_manager
 from openbase_coder_cli.openbase_coder_cli_app.item_tags import (
     report_tags_payload,
     set_report_tags,
@@ -34,6 +33,7 @@ from openbase_coder_cli.reports_service import (
     enrich_report_provenance,
     explicit_report_provenance,
 )
+from openbase_coder_cli.thread_sync.session_manager import get_session_manager
 
 REPORT_ACTION_PROMPT_MAX_CHARS = 24000
 ACTION_HEADING_RE = re.compile(

@@ -7,10 +7,10 @@ import logging
 
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
-from openbase_coder_cli.thread_sync.session_manager import get_session_manager
 from openbase_coder_cli.openbase_coder_cli_app.thread_metadata import (
     annotate_thread_payload,
 )
+from openbase_coder_cli.thread_sync.session_manager import get_session_manager
 
 logger = logging.getLogger(__name__)
 

@@ -25,17 +25,11 @@ from super_agents.app_server_client import (
     shared_permission_requests,
     write_shared_permission_decision,
 )
-from super_agents.backend_clients import (
-    CLAUDE_CODE_BACKEND,
-    backend_from_environment,
-)
+from super_agents.backend_clients import CLAUDE_CODE_BACKEND
 
 from openbase_coder_cli.backend_config import (
-    CODEX_BACKEND,
-    OPENBASE_CLOUD_BACKEND,
-    OPENBASE_CLOUD_CODEX_BACKEND,
+    configured_execution_backend as _configured_execution_backend,
 )
-from openbase_coder_cli.cli.backend import read_backend
 from openbase_coder_cli.codex_session_defaults import codex_permission_defaults
 from openbase_coder_cli.dispatcher_config import (
     DISPATCHER_MODEL_ROLE,
@@ -51,7 +45,6 @@ from openbase_coder_cli.livekit_voice_route import (
 from openbase_coder_cli.onboarding_reminder import append_onboarding_reminder
 from openbase_coder_cli.paths import (
     CODEX_SUPER_AGENT_INSTRUCTIONS_PATH,
-    DEFAULT_ENV_FILE_PATH,
 )
 
 from .models import QueuedTurnInfo
@@ -1382,22 +1375,6 @@ class CodexAppServerSessionManager:
 _session_manager: CodexAppServerSessionManager | None = None
 
 
-def _execution_backend_for_configured_backend(backend: str) -> str:
-    if backend == OPENBASE_CLOUD_BACKEND:
-        return CLAUDE_CODE_BACKEND
-    if backend == OPENBASE_CLOUD_CODEX_BACKEND:
-        return CODEX_BACKEND
-    return backend
-
-
-def _configured_execution_backend() -> str:
-    if DEFAULT_ENV_FILE_PATH.is_file():
-        configured_backend = read_backend(DEFAULT_ENV_FILE_PATH)
-        if not configured_backend.startswith("unsupported:"):
-            return _execution_backend_for_configured_backend(configured_backend)
-    return backend_from_environment()
-
-
 def _default_client_for_execution_backend(
     *,
     manager: CodexAppServerSessionManager,
@@ -1438,12 +1415,9 @@ def get_session_manager() -> CodexAppServerSessionManager:
     """Get the singleton thread manager instance."""
     global _session_manager
     execution_backend = _configured_execution_backend()
-    if (
-        _session_manager is None
-        or (
-            not _session_manager._uses_external_client
-            and _session_manager._execution_backend != execution_backend
-        )
+    if _session_manager is None or (
+        not _session_manager._uses_external_client
+        and _session_manager._execution_backend != execution_backend
     ):
         _session_manager = CodexAppServerSessionManager()
     return _session_manager

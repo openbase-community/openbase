@@ -369,7 +369,9 @@ def test_thread_device_sync_conflict_resolve_dispatches_to_claude(monkeypatch) -
 def test_thread_device_sync_conflict_resolve_reports_claude_errors(
     monkeypatch,
 ) -> None:
-    from openbase_coder_cli.thread_sync.claude_thread_sync import ClaudeConflictResolutionError
+    from openbase_coder_cli.thread_sync.claude_thread_sync import (
+        ClaudeConflictResolutionError,
+    )
 
     def fail_resolve(session_id, *, action):
         raise ClaudeConflictResolutionError("conflict_not_found")

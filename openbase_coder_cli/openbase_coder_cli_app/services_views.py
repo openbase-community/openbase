@@ -16,20 +16,6 @@ from rest_framework.response import Response
 from openbase_coder_cli.codex_home_instructions import (
     refresh_openbase_instruction_files_from_installation,
 )
-from openbase_coder_cli.thread_sync.claude_thread_sync import (
-    ClaudeConflictResolutionError,
-    claude_thread_snapshot_conflicts_payload,
-    claude_thread_snapshot_status,
-    claude_thread_sync_conflicts_payload,
-    resolve_claude_snapshot_conflict,
-)
-from openbase_coder_cli.thread_sync.thread_exchange import (
-    ThreadConflictResolutionError,
-    resolve_thread_snapshot_conflict,
-    thread_snapshot_conflicts_payload,
-    thread_snapshot_status,
-    thread_sync_conflicts_payload,
-)
 from openbase_coder_cli.openbase_coder_cli_app.common import _auth_debug_value
 from openbase_coder_cli.services.console_settings import (
     DEFAULT_DANGEROUS_CONFIRMATION_PHRASE,
@@ -62,6 +48,20 @@ from openbase_coder_cli.services.openbase_services import (
 from openbase_coder_cli.services.restart import restart_target_names
 from openbase_coder_cli.services.selection import configured_coding_backend
 from openbase_coder_cli.services.tailscale_serve import tailscale_serve_health
+from openbase_coder_cli.thread_sync.claude_thread_sync import (
+    ClaudeConflictResolutionError,
+    claude_thread_snapshot_conflicts_payload,
+    claude_thread_snapshot_status,
+    claude_thread_sync_conflicts_payload,
+    resolve_claude_snapshot_conflict,
+)
+from openbase_coder_cli.thread_sync.thread_exchange import (
+    ThreadConflictResolutionError,
+    resolve_thread_snapshot_conflict,
+    thread_snapshot_conflicts_payload,
+    thread_snapshot_status,
+    thread_sync_conflicts_payload,
+)
 
 logger = logging.getLogger(__name__)
 

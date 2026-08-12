@@ -63,9 +63,11 @@ def test_configured_execution_backend_prefers_env_file_over_stale_process_env(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    from openbase_coder_cli import paths
+
     env_file = tmp_path / ".env"
     env_file.write_text("OPENBASE_CODING_BACKEND=openbase_cloud\n", encoding="utf-8")
-    monkeypatch.setattr(session_manager_module, "DEFAULT_ENV_FILE_PATH", env_file)
+    monkeypatch.setattr(paths, "DEFAULT_ENV_FILE_PATH", env_file)
     monkeypatch.setenv("OPENBASE_CODING_BACKEND", "codex")
 
     assert session_manager_module._configured_execution_backend() == "claude_code"
@@ -75,9 +77,11 @@ def test_get_session_manager_reloads_when_configured_backend_changes(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    from openbase_coder_cli import paths
+
     env_file = tmp_path / ".env"
     env_file.write_text("OPENBASE_CODING_BACKEND=codex\n", encoding="utf-8")
-    monkeypatch.setattr(session_manager_module, "DEFAULT_ENV_FILE_PATH", env_file)
+    monkeypatch.setattr(paths, "DEFAULT_ENV_FILE_PATH", env_file)
     monkeypatch.setenv("OPENBASE_CODING_BACKEND", "codex")
     monkeypatch.setattr(session_manager_module, "_session_manager", None)
     created_backends: list[str] = []
