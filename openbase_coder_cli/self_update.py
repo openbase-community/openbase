@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 MANIFEST_SCHEMA = 1
 SUPPORTED_LAYOUT_VERSION = 1
 KEEP_RELEASES = 2
-RELEASE_REPO = "openbase-community/openbase-coder"
+RELEASE_REPO = "openbase-community/openbase"
 STABLE_MANIFEST_URL = (
     f"https://github.com/{RELEASE_REPO}/releases/latest/download/update-manifest.json"
 )
