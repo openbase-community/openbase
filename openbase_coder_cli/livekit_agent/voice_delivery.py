@@ -16,6 +16,7 @@ from typing import Any
 
 from openbase_coder_cli.livekit_agent.turn_detection import (
     MAX_PRE_ACCEPT_QUIET_CREDIT_SECONDS,
+    VAD_ONLY_USER_TURN_QUIET_GRACE_SECONDS,
     UserTurnClosureDecision,
     UserTurnClosureSignals,
 )
@@ -97,11 +98,17 @@ class VoiceDeliveryLedger:
         room_name: str = "",
         room_id: str = "",
         user_speaking_poll_seconds: float = 0.1,
+        vad_quiet_grace_seconds: float = VAD_ONLY_USER_TURN_QUIET_GRACE_SECONDS,
     ) -> None:
         self._route_snapshot = route_snapshot
         self._room_name = room_name
         self._room_id = room_id
         self._user_speaking_poll_seconds = user_speaking_poll_seconds
+        self._vad_quiet_grace_seconds = vad_quiet_grace_seconds
+        self._vad_quiet_task: asyncio.Task[None] | None = None
+        # True while a safe_to_mute_user has been emitted and neither renewed
+        # user speech nor a safe_to_unmute has reopened the mic since.
+        self._mute_covers_current_quiet = False
         self._records: dict[str, VoiceDeliveryRecord] = {}
         self._records_by_turn_id: dict[str, VoiceDeliveryRecord] = {}
         self._pending_by_tts_hash: dict[str, deque[str]] = {}
@@ -123,6 +130,73 @@ class VoiceDeliveryLedger:
 
     def set_user_speaking_provider(self, provider: Callable[[], bool] | None) -> None:
         self._user_speaking_provider = provider
+
+    def notify_user_state(self, *, new_state: str, old_state: str = "") -> None:
+        """Drive the STT-independent provisional mute from VAD user state.
+
+        STT finals can arrive many seconds after end of speech on degraded
+        links, and the transcript-informed closure cannot start until then.
+        VAD end-of-speech is local and immediate, so a speaking→quiet
+        transition starts a provisional quiet-floor timer that emits
+        ``safe_to_mute_user`` before any transcript exists. Renewed speech
+        cancels it; a transcript-informed closure supersedes it.
+        """
+        if new_state == "speaking":
+            self._mute_covers_current_quiet = False
+            self._cancel_vad_quiet_task()
+            return
+        if old_state == "speaking":
+            self._start_vad_quiet_closure_task()
+
+    def _start_vad_quiet_closure_task(self) -> None:
+        if self._mute_covers_current_quiet:
+            return
+        self._cancel_vad_quiet_task()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._vad_quiet_task = loop.create_task(
+            self._vad_quiet_closure_after_floor(),
+            name="openbase-voice-vad-quiet-closure",
+        )
+
+    def _cancel_vad_quiet_task(self) -> None:
+        task = self._vad_quiet_task
+        self._vad_quiet_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _vad_quiet_closure_after_floor(self) -> None:
+        deadline = time.monotonic() + self._vad_quiet_grace_seconds
+        while time.monotonic() < deadline:
+            if self._mute_covers_current_quiet or self._user_is_speaking():
+                return
+            await asyncio.sleep(self._user_speaking_poll_seconds)
+        if self._mute_covers_current_quiet or self._user_is_speaking():
+            return
+        self._emit_vad_quiet_mute()
+
+    def _emit_vad_quiet_mute(self) -> None:
+        record = VoiceDeliveryRecord(
+            delivery_id=f"voice-vad-{uuid.uuid4().hex[:12]}",
+            message_id="",
+            prompt_hash="",
+            prompt_len=0,
+            room_name=self._room_name,
+            room_id=self._room_id,
+            route_at_acceptance=self._route_snapshot(),
+            status="vad_quiet_closure",
+        )
+        record.user_turn_closed = True
+        record.user_turn_closure_source = "vad_quiet_floor"
+        record.user_turn_closure_delay_ms = max(
+            0, int(self._vad_quiet_grace_seconds * 1000)
+        )
+        record.user_turn_completion_reason = "vad_quiet_floor"
+        self._records[record.delivery_id] = record
+        self._log_user_turn_closure(record, "safe_to_mute_user")
+        self._emit_lifecycle("safe_to_mute_user", record, reason="vad_quiet_floor")
 
     def accept_utterance(self, *, message_id: str, prompt: str) -> VoiceDeliveryRecord:
         self._cancel_superseded_pending_for_current_route()
@@ -180,6 +254,20 @@ class VoiceDeliveryLedger:
                 record.room_name,
             )
         self._log_user_turn_closure(record, "user_turn_closure_decision")
+
+        # The transcript-informed decision supersedes any pending VAD-only
+        # provisional timer. If a provisional mute already fired during this
+        # same quiet stretch, adopt it: the mic is already muted, so close
+        # the record without re-emitting.
+        self._cancel_vad_quiet_task()
+        if self._mute_covers_current_quiet and not self._user_is_speaking():
+            record.user_turn_closed = True
+            self._log_user_turn_closure(
+                record,
+                "safe_to_mute_user_adopted_vad_mute",
+                reason=decision.completion_reason,
+            )
+            return
 
         async def _close_after_delay() -> None:
             try:
@@ -857,6 +945,10 @@ class VoiceDeliveryLedger:
         *,
         reason: str = "",
     ) -> None:
+        if event == "safe_to_mute_user":
+            self._mute_covers_current_quiet = True
+        elif event == "safe_to_unmute":
+            self._mute_covers_current_quiet = False
         if self._lifecycle_sink is None:
             return
         try:

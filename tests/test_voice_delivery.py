@@ -718,7 +718,9 @@ def test_unmatched_direct_tts_emits_lifecycle_audio_events():
         lambda event, record, _reason: events.append((event, record.delivery_id))
     )
 
-    record = ledger.track_unmatched_tts(tts_text="I'll keep flowing with your thoughts.")
+    record = ledger.track_unmatched_tts(
+        tts_text="I'll keep flowing with your thoughts."
+    )
     ledger.mark_audio_started(
         record,
         latency_ms=120,
@@ -759,7 +761,12 @@ def test_unmatched_direct_tts_withholds_safe_to_unmute_while_answer_pending():
         record, latency_ms=90, role="direct", voice_id=None, voice_name=None
     )
     ledger.mark_tts_completed(
-        record, audio_events=5, audio_seconds=0.6, role="direct", voice_id=None, voice_name=None
+        record,
+        audio_events=5,
+        audio_seconds=0.6,
+        role="direct",
+        voice_id=None,
+        voice_name=None,
     )
 
     assert ("agent_audio_finished", record.delivery_id) in events
@@ -778,6 +785,9 @@ def test_user_turn_closure_credits_pre_accept_silence():
         ledger.set_user_speaking_provider(lambda: False)
 
         async def timed_closure(prompt: str, credit: float) -> float:
+            # A new utterance is always preceded by renewed user speech,
+            # which re-arms the mute (clears the prior turn's coverage).
+            ledger.notify_user_state(new_state="speaking")
             record = ledger.accept_utterance(message_id=f"m-{prompt}", prompt=prompt)
             started = asyncio.get_running_loop().time()
             ledger.schedule_user_turn_closure(
@@ -804,6 +814,169 @@ def test_user_turn_closure_credits_pre_accept_silence():
     assert without_credit >= 0.08
 
 
+def test_vad_quiet_floor_mutes_before_any_transcript_exists():
+    """The provisional mute fires from VAD end-of-speech alone, so slow STT
+    finals no longer hold the mic open for their full delay."""
+
+    async def run() -> list[tuple[str, str, str]]:
+        events: list[tuple[str, str, str]] = []
+        ledger = VoiceDeliveryLedger(
+            route_snapshot=_snapshot,
+            user_speaking_poll_seconds=0.005,
+            vad_quiet_grace_seconds=0.03,
+        )
+        ledger.set_lifecycle_sink(
+            lambda event, record, reason: events.append(
+                (event, record.delivery_id, reason)
+            )
+        )
+        ledger.set_user_speaking_provider(lambda: False)
+
+        ledger.notify_user_state(new_state="speaking")
+        ledger.notify_user_state(new_state="listening", old_state="speaking")
+        await asyncio.sleep(0.06)
+        return events
+
+    events = asyncio.run(run())
+
+    assert len(events) == 1
+    event, delivery_id, reason = events[0]
+    assert event == "safe_to_mute_user"
+    assert delivery_id.startswith("voice-vad-")
+    assert reason == "vad_quiet_floor"
+
+
+def test_vad_quiet_floor_cancelled_when_user_resumes_speaking():
+    async def run() -> list[str]:
+        events: list[str] = []
+        ledger = VoiceDeliveryLedger(
+            route_snapshot=_snapshot,
+            user_speaking_poll_seconds=0.005,
+            vad_quiet_grace_seconds=0.03,
+        )
+        ledger.set_lifecycle_sink(lambda event, _record, _reason: events.append(event))
+        ledger.set_user_speaking_provider(lambda: False)
+
+        ledger.notify_user_state(new_state="speaking")
+        ledger.notify_user_state(new_state="listening", old_state="speaking")
+        await asyncio.sleep(0.01)
+        ledger.notify_user_state(new_state="speaking", old_state="listening")
+        await asyncio.sleep(0.06)
+        return events
+
+    events = asyncio.run(run())
+
+    assert "safe_to_mute_user" not in events
+
+
+def test_transcript_closure_adopts_prior_vad_mute_without_reemitting():
+    async def run() -> tuple[list[str], VoiceDeliveryRecord]:
+        events: list[str] = []
+        ledger = VoiceDeliveryLedger(
+            route_snapshot=_snapshot,
+            user_speaking_poll_seconds=0.005,
+            vad_quiet_grace_seconds=0.01,
+        )
+        ledger.set_lifecycle_sink(lambda event, _record, _reason: events.append(event))
+        ledger.set_user_speaking_provider(lambda: False)
+
+        ledger.notify_user_state(new_state="speaking")
+        ledger.notify_user_state(new_state="listening", old_state="speaking")
+        await asyncio.sleep(0.03)
+        assert events.count("safe_to_mute_user") == 1
+
+        record = ledger.accept_utterance(message_id="m1", prompt="slow transcript")
+        ledger.schedule_user_turn_closure(
+            record,
+            UserTurnClosureDecision(
+                confidence=0.9,
+                source="turn_detector",
+                quiet_grace_seconds=0.05,
+                completion_reason="quiet_floor",
+            ),
+        )
+        await asyncio.sleep(0.08)
+        return events, record
+
+    events, record = asyncio.run(run())
+
+    assert record.user_turn_closed
+    assert events.count("safe_to_mute_user") == 1
+
+
+def test_transcript_closure_supersedes_pending_vad_timer():
+    async def run() -> tuple[list[tuple[str, str]], VoiceDeliveryRecord]:
+        events: list[tuple[str, str]] = []
+        ledger = VoiceDeliveryLedger(
+            route_snapshot=_snapshot,
+            user_speaking_poll_seconds=0.005,
+            vad_quiet_grace_seconds=0.05,
+        )
+        ledger.set_lifecycle_sink(
+            lambda event, record, _reason: events.append((event, record.delivery_id))
+        )
+        ledger.set_user_speaking_provider(lambda: False)
+
+        ledger.notify_user_state(new_state="speaking")
+        ledger.notify_user_state(new_state="listening", old_state="speaking")
+        record = ledger.accept_utterance(message_id="m1", prompt="fast transcript")
+        ledger.schedule_user_turn_closure(
+            record,
+            UserTurnClosureDecision(
+                confidence=0.9,
+                source="turn_detector",
+                quiet_grace_seconds=0.01,
+                completion_reason="quiet_floor",
+            ),
+        )
+        await asyncio.sleep(0.08)
+        return events, record
+
+    events, record = asyncio.run(run())
+
+    mute_events = [event for event in events if event[0] == "safe_to_mute_user"]
+    assert mute_events == [("safe_to_mute_user", record.delivery_id)]
+
+
+def test_safe_to_unmute_rearms_vad_mute_for_next_turn():
+    async def run() -> list[str]:
+        events: list[str] = []
+        ledger = VoiceDeliveryLedger(
+            route_snapshot=_snapshot,
+            user_speaking_poll_seconds=0.005,
+            vad_quiet_grace_seconds=0.01,
+        )
+        ledger.set_lifecycle_sink(lambda event, _record, _reason: events.append(event))
+        ledger.set_user_speaking_provider(lambda: False)
+
+        ledger.notify_user_state(new_state="speaking")
+        ledger.notify_user_state(new_state="listening", old_state="speaking")
+        await asyncio.sleep(0.03)
+
+        direct = ledger.track_unmatched_tts(tts_text="Reply audio.")
+        ledger.mark_audio_started(
+            direct, latency_ms=50, role="direct", voice_id=None, voice_name=None
+        )
+        ledger.mark_tts_completed(
+            direct,
+            audio_events=2,
+            audio_seconds=0.2,
+            role="direct",
+            voice_id=None,
+            voice_name=None,
+        )
+        assert events[-1] == "safe_to_unmute"
+
+        ledger.notify_user_state(new_state="speaking")
+        ledger.notify_user_state(new_state="listening", old_state="speaking")
+        await asyncio.sleep(0.03)
+        return events
+
+    events = asyncio.run(run())
+
+    assert events.count("safe_to_mute_user") == 2
+
+
 def test_slow_transcription_final_logs_loud_warning(caplog):
     import logging
 
@@ -822,7 +995,11 @@ def test_slow_transcription_final_logs_loud_warning(caplog):
             signals=UserTurnClosureSignals(transcription_delay=7.2),
         )
 
-    warnings = [r.getMessage() for r in caplog.records if "stt_transcription_delayed" in r.getMessage()]
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if "stt_transcription_delayed" in r.getMessage()
+    ]
     assert warnings
     assert "transcription_delay_ms=7200" in warnings[0]
 
@@ -845,4 +1022,6 @@ def test_fast_transcription_final_logs_no_warning(caplog):
             signals=UserTurnClosureSignals(transcription_delay=0.4),
         )
 
-    assert not [r for r in caplog.records if "stt_transcription_delayed" in r.getMessage()]
+    assert not [
+        r for r in caplog.records if "stt_transcription_delayed" in r.getMessage()
+    ]

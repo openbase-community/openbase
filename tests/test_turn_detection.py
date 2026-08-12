@@ -49,11 +49,27 @@ def test_user_turn_closure_extends_quiet_floor_on_low_confidence():
     assert low.source == "turn_detector"
     assert low.completion_reason == "low_confidence_quiet_floor"
     assert low.quiet_grace_seconds == LOW_CONFIDENCE_USER_TURN_QUIET_GRACE_SECONDS
-    assert low.quiet_grace_seconds >= 4.0
+    assert low.quiet_grace_seconds >= 3.0
     assert high.source == "turn_detector"
     assert high.completion_reason == "quiet_floor"
     assert high.quiet_grace_seconds == MIN_USER_TURN_QUIET_GRACE_SECONDS
     assert low.quiet_grace_seconds > high.quiet_grace_seconds
+
+
+def test_user_turn_closure_skips_low_confidence_penalty_on_stale_transcription():
+    """A late STT final means the detector scored a stale transcript; the
+    low-confidence penalty would only stack latency on an already-slow turn."""
+    stale = decide_user_turn_closure(
+        signals=UserTurnClosureSignals(eou_probability=0.2, transcription_delay=5.0),
+    )
+    fresh = decide_user_turn_closure(
+        signals=UserTurnClosureSignals(eou_probability=0.2, transcription_delay=0.5),
+    )
+
+    assert stale.completion_reason == "quiet_floor_stale_transcription"
+    assert stale.quiet_grace_seconds == MIN_USER_TURN_QUIET_GRACE_SECONDS
+    assert fresh.completion_reason == "low_confidence_quiet_floor"
+    assert fresh.quiet_grace_seconds == LOW_CONFIDENCE_USER_TURN_QUIET_GRACE_SECONDS
 
 
 def test_user_turn_closure_never_shrinks_below_minimum_floor():

@@ -465,7 +465,9 @@ async def _room_sid(room: rtc.Room) -> str:
     return str(sid or "")
 
 
-def _schedule_voice_lifecycle_packet(room: rtc.Room, event: str, record, reason: str) -> None:
+def _schedule_voice_lifecycle_packet(
+    room: rtc.Room, event: str, record, reason: str
+) -> None:
     task = asyncio.create_task(
         publish_voice_lifecycle_packet(
             room,
@@ -874,6 +876,14 @@ async def livekit_agent(ctx: JobContext):
         lambda: str(getattr(session, "user_state", "") or "") == "speaking"
     )
 
+    def on_user_state_changed_for_mute(event) -> None:
+        delivery_ledger.notify_user_state(
+            new_state=str(getattr(event, "new_state", "") or ""),
+            old_state=str(getattr(event, "old_state", "") or ""),
+        )
+
+    session.on("user_state_changed", on_user_state_changed_for_mute)
+
     subscription_check_task = (
         asyncio.create_task(_verify_cloud_audio_subscription(ctx.room, session))
         if _uses_openbase_cloud_audio()
@@ -991,6 +1001,7 @@ async def livekit_agent(ctx: JobContext):
             session.off(event_name, handler)
         for event_name, handler in announcer_queue_session_handlers:
             session.off(event_name, handler)
+        session.off("user_state_changed", on_user_state_changed_for_mute)
         await announcer_queue.close()
         await voice_router.close()
 
