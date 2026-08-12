@@ -51,7 +51,8 @@ def test_restart_default_schedules_all_openbase_services(monkeypatch):
     assert "livekit-server" in command
     assert "codex-app-server" in command
     assert "django-cli" in command
-    assert "codex-thread-device-sync" not in command
+    assert "code-sync" not in command
+    assert "sync-workers" in command
     assert "super-agents-mcp" not in command
     assert warnings == [{"reason": "restart", "emit_cli_warning": True}]
 
@@ -96,12 +97,12 @@ def test_restart_single_service_schedules_only_that_service(monkeypatch):
         lambda **kwargs: warnings.append(kwargs),
     )
 
-    result = CliRunner().invoke(restart, ["--service", "codex-thread-sync"])
+    result = CliRunner().invoke(restart, ["--service", "sync-workers"])
 
     assert result.exit_code == 0
-    assert "codex-thread-sync" in result.output
+    assert "sync-workers" in result.output
     command = popen_calls[0][0][0][2]
-    assert "codex-thread-sync" in command
+    assert "sync-workers" in command
     assert "livekit-agent" not in command
     assert warnings == []
 
@@ -116,13 +117,13 @@ def test_restart_optional_device_sync_can_be_targeted_explicitly(monkeypatch):
     monkeypatch.setattr(InstallationConfig, "exists", classmethod(lambda cls: True))
     monkeypatch.setattr(restart_module.subprocess, "Popen", FakePopen)
 
-    result = CliRunner().invoke(restart, ["--service", "codex-thread-device-sync"])
+    result = CliRunner().invoke(restart, ["--service", "code-sync"])
 
     assert result.exit_code == 0
-    assert "codex-thread-device-sync" in result.output
+    assert "code-sync" in result.output
     command = popen_calls[0][0][0][2]
-    assert "codex-thread-device-sync" in command
-    assert "codex-thread-sync" not in command
+    assert "code-sync" in command
+    assert "sync-workers" not in command
 
 
 def test_restart_codex_app_server_only_targets_codex_service():
@@ -150,12 +151,12 @@ def test_restart_plan_rejects_super_agents_mcp_target():
 def test_recreate_dispatcher_adds_livekit_agent():
     plan = build_restart_plan(
         RestartRequest(
-            services=("codex-thread-sync",),
+            services=("sync-workers",),
             recreate_dispatcher=True,
         )
     )
 
-    assert plan.services == ("codex-thread-sync", "livekit-agent")
+    assert plan.services == ("sync-workers", "livekit-agent")
     assert plan.recreate_dispatcher is True
 
 

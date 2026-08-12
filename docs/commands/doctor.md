@@ -31,8 +31,8 @@ openbase-coder doctor
   - Claude Code: `claude auth login`
 - Local audio model readiness when Kokoro or local MLX Whisper is selected
 
-Optional services such as `codex-thread-device-sync` are allowed to be stopped
-or absent without causing a doctor failure.
+Optional services such as `code-sync` are allowed to be stopped or absent
+without causing a doctor failure.
 
 ## Required Environment Keys
 

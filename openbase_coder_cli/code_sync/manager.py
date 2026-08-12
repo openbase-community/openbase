@@ -198,23 +198,18 @@ def _service_definition():
 
 
 # Cross-device thread sync rides the code-sync transport (the thread-sync
-# exchange folder is a product-state sync folder), so mirroring devices
-# implies running both backends' device-sync services.
-COMPANION_SERVICE_NAMES = (
-    "codex-thread-device-sync",
-    "claude-thread-device-sync",
-)
+# exchange folder is a product-state sync folder). Its workers live in the
+# always-installed sync-workers service and gate on code_sync_enabled() at
+# runtime, so enabling code sync only needs the Syncthing engine service.
 
 
 def install_and_start_service() -> None:
     from openbase_coder_cli.services.launchd import install_service
-    from openbase_coder_cli.services.registry import find_service, require_installation
+    from openbase_coder_cli.services.registry import require_installation
 
     try:
         installation = require_installation()
         install_service(installation, _service_definition())
-        for name in COMPANION_SERVICE_NAMES:
-            install_service(installation, find_service(name))
     except click.ClickException as exc:
         raise CodeSyncError(str(exc)) from exc
 
@@ -232,12 +227,8 @@ def restart_service_if_installed() -> None:
 
 def stop_and_remove_service() -> bool:
     from openbase_coder_cli.services.launchd import remove_service
-    from openbase_coder_cli.services.registry import find_service
 
-    removed = remove_service(_service_definition())
-    for name in COMPANION_SERVICE_NAMES:
-        remove_service(find_service(name))
-    return removed
+    return remove_service(_service_definition())
 
 
 def enable_code_sync(

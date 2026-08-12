@@ -17,8 +17,8 @@ files and session companion files, records fingerprints in
 `~/.openbase/claude-thread-sync-ledger.json`, and backfills Openbase Claude
 thread metadata so imported sessions can appear in Openbase thread lists.
 
-`run` polls continuously and is used by the default `claude-thread-sync`
-Openbase service.
+`run` polls continuously; the default `sync-workers` Openbase service runs the
+same sweep on an interval.
 
 `devices` exports and imports Openbase-managed Claude Code session snapshots
 through `~/.openbase/claude-thread-sync` by default. Conflicts are not merged;

@@ -373,7 +373,6 @@ def run_due_routines(name: str | None, force: bool) -> None:
 
 SKILLS_AUTO_LINK_SYNC_SECONDS = 300.0
 UPDATE_CHECK_SECONDS = 6 * 3600.0
-CODE_SYNC_TICK_SECONDS = 60.0
 
 
 @routines.command("run-loop")
@@ -399,7 +398,6 @@ def run_loop(interval: float, verbose: bool) -> None:
     logger.info("routine_runner service_started interval=%s", poll_interval)
     next_skills_sync = time.monotonic()
     next_update_check = time.monotonic()
-    next_code_sync_tick = time.monotonic()
     last_auto_update_attempt: str | None = None
     while True:
         started = time.monotonic()
@@ -432,28 +430,8 @@ def run_loop(interval: float, verbose: bool) -> None:
                         summary["errors"],
                     )
 
-        # Reconcile git branch pointers and the write lease for code-sync
-        # (no-op unless code sync is enabled in sync-config.json).
-        if time.monotonic() >= next_code_sync_tick:
-            next_code_sync_tick = time.monotonic() + max(
-                CODE_SYNC_TICK_SECONDS, poll_interval
-            )
-            try:
-                from openbase_coder_cli.code_sync.reconciler import (
-                    run_tick_if_enabled,
-                )
-
-                code_sync_summary = run_tick_if_enabled()
-            except Exception:
-                logger.exception("code_sync tick_failed")
-            else:
-                if code_sync_summary is not None:
-                    logger.info(
-                        "code_sync tick_complete repos=%s conflicts=%s lease=%s",
-                        len(code_sync_summary.get("repos", [])),
-                        code_sync_summary.get("conflicts_count"),
-                        code_sync_summary.get("lease", {}).get("action"),
-                    )
+        # The code-sync reconcile tick moved to the consolidated sync-workers
+        # service (openbase_coder_cli.cli.sync_workers).
 
         # Periodically refresh the update-check cache (standalone installs)
         # so update_available surfaces in status APIs without manual checks,

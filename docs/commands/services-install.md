@@ -25,10 +25,10 @@ For workspace-managed services, generated wrappers prefer binaries from
 before falling back to `PATH`.
 `livekit-server` is still resolved from `PATH` or `/opt/homebrew/bin/livekit-server`.
 
-Optional services, such as `codex-thread-device-sync`, are not installed by
-default. Start one explicitly when the local machine is configured for that
-workflow:
+Optional services, such as the `code-sync` engine, are not installed by
+default; they are installed by the feature that needs them (for example
+`openbase-coder sync enable`) or can be started explicitly:
 
 ```bash
-openbase-coder services start codex-thread-device-sync
+openbase-coder services start code-sync
 ```

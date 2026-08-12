@@ -104,8 +104,8 @@ def test_django_service_uses_livekit_network_mode_for_room_url():
     assert 'export LIVEKIT_URL="${LIVEKIT_URL:-ws://localhost:7880}"' in command
 
 
-def test_codex_thread_sync_service_is_auto_installed_service():
-    service = next(svc for svc in SERVICES if svc.name == "codex-thread-sync")
+def test_sync_workers_service_is_auto_installed_service():
+    service = next(svc for svc in SERVICES if svc.name == "sync-workers")
     command = service.command_template.format(
         openbase_coder="/usr/local/bin/openbase-coder",
         data_dir="/tmp/openbase",
@@ -114,92 +114,53 @@ def test_codex_thread_sync_service_is_auto_installed_service():
 
     assert service.workdir_template == "{data_dir}"
     assert service.install_by_default is True
-    assert 'CODEX_THREAD_SYNC_INTERVAL="${CODEX_THREAD_SYNC_INTERVAL:-60}"' in command
-    assert (
-        'CODEX_THREAD_SYNC_MAX_AGE_DAYS="${CODEX_THREAD_SYNC_MAX_AGE_DAYS:-15}"'
-        in command
-    )
-    assert (
-        'exec /usr/local/bin/openbase-coder codex-sync run --interval "$CODEX_THREAD_SYNC_INTERVAL" --max-age-days "$CODEX_THREAD_SYNC_MAX_AGE_DAYS"'
-        in command
-    )
+    assert command == "exec /usr/local/bin/openbase-coder sync-workers run"
 
 
-def test_codex_thread_device_sync_service_is_optional_service():
-    service = next(svc for svc in SERVICES if svc.name == "codex-thread-device-sync")
-    command = service.command_template.format(
-        openbase_coder="/usr/local/bin/openbase-coder",
-        data_dir="/tmp/openbase",
-        workspace="/tmp/workspace",
+def test_thread_sync_services_are_retired():
+    from openbase_coder_cli.services.definitions import (
+        RETIRED_SERVICE_NAMES,
+        retired_service_stub,
     )
 
-    assert service.workdir_template == "{data_dir}"
-    assert service.install_by_default is False
-    assert (
-        'CODEX_THREAD_DEVICE_SYNC_INTERVAL="${CODEX_THREAD_DEVICE_SYNC_INTERVAL:-60}"'
-        in command
-    )
-    assert (
-        'CODEX_THREAD_DEVICE_SYNC_MAX_AGE_DAYS="${CODEX_THREAD_DEVICE_SYNC_MAX_AGE_DAYS:-15}"'
-        in command
-    )
-    assert (
-        'CODEX_THREAD_DEVICE_SYNC_EXCHANGE_DIR="${CODEX_THREAD_DEVICE_SYNC_EXCHANGE_DIR:-/tmp/openbase/thread-sync}"'
-        in command
-    )
-    assert (
-        'exec /usr/local/bin/openbase-coder codex-sync devices run --interval "$CODEX_THREAD_DEVICE_SYNC_INTERVAL" --max-age-days "$CODEX_THREAD_DEVICE_SYNC_MAX_AGE_DAYS" --exchange-dir "$CODEX_THREAD_DEVICE_SYNC_EXCHANGE_DIR"'
-        in command
-    )
+    defined_names = {svc.name for svc in SERVICES}
+    for name in (
+        "codex-thread-sync",
+        "claude-thread-sync",
+        "codex-thread-device-sync",
+        "claude-thread-device-sync",
+    ):
+        assert name in RETIRED_SERVICE_NAMES
+        assert name not in defined_names
+        stub = retired_service_stub(name)
+        assert stub.name == name
+        assert stub.install_by_default is False
 
 
-def test_claude_thread_sync_service_is_auto_installed_service():
-    service = next(svc for svc in SERVICES if svc.name == "claude-thread-sync")
-    command = service.command_template.format(
-        openbase_coder="/usr/local/bin/openbase-coder",
-        data_dir="/tmp/openbase",
-        workspace="/tmp/workspace",
-    )
+def test_sync_workers_jobs_cover_the_retired_services_and_reconcile():
+    from openbase_coder_cli.cli.sync_workers import build_jobs
 
-    assert service.workdir_template == "{data_dir}"
-    assert service.install_by_default is True
-    assert 'CLAUDE_THREAD_SYNC_INTERVAL="${CLAUDE_THREAD_SYNC_INTERVAL:-60}"' in command
-    assert (
-        'CLAUDE_THREAD_SYNC_MAX_AGE_DAYS="${CLAUDE_THREAD_SYNC_MAX_AGE_DAYS:-15}"'
-        in command
-    )
-    assert (
-        'exec /usr/local/bin/openbase-coder claude-sync run --interval "$CLAUDE_THREAD_SYNC_INTERVAL" --max-age-days "$CLAUDE_THREAD_SYNC_MAX_AGE_DAYS"'
-        in command
-    )
+    names = {job.name for job in build_jobs()}
+    assert names == {
+        "codex_thread_sync",
+        "claude_thread_sync",
+        "codex_thread_device_sync",
+        "claude_thread_device_sync",
+        "code_sync_reconcile",
+    }
 
 
-def test_claude_thread_device_sync_service_is_optional_service():
-    service = next(svc for svc in SERVICES if svc.name == "claude-thread-device-sync")
-    command = service.command_template.format(
-        openbase_coder="/usr/local/bin/openbase-coder",
-        data_dir="/tmp/openbase",
-        workspace="/tmp/workspace",
-    )
+def test_sync_workers_intervals_respect_env_overrides(monkeypatch):
+    from openbase_coder_cli.cli.sync_workers import build_jobs
 
-    assert service.workdir_template == "{data_dir}"
-    assert service.install_by_default is False
-    assert (
-        'CLAUDE_THREAD_DEVICE_SYNC_INTERVAL="${CLAUDE_THREAD_DEVICE_SYNC_INTERVAL:-60}"'
-        in command
-    )
-    assert (
-        'CLAUDE_THREAD_DEVICE_SYNC_MAX_AGE_DAYS="${CLAUDE_THREAD_DEVICE_SYNC_MAX_AGE_DAYS:-15}"'
-        in command
-    )
-    assert (
-        'CLAUDE_THREAD_DEVICE_SYNC_EXCHANGE_DIR="${CLAUDE_THREAD_DEVICE_SYNC_EXCHANGE_DIR:-/tmp/openbase/thread-sync}"'
-        in command
-    )
-    assert (
-        'exec /usr/local/bin/openbase-coder claude-sync devices run --interval "$CLAUDE_THREAD_DEVICE_SYNC_INTERVAL" --max-age-days "$CLAUDE_THREAD_DEVICE_SYNC_MAX_AGE_DAYS" --exchange-dir "$CLAUDE_THREAD_DEVICE_SYNC_EXCHANGE_DIR"'
-        in command
-    )
+    monkeypatch.setenv("CODEX_THREAD_SYNC_INTERVAL", "120")
+    monkeypatch.setenv("CODE_SYNC_TICK_SECONDS", "30")
+    monkeypatch.setenv("CLAUDE_THREAD_SYNC_INTERVAL", "not-a-number")
+    jobs = {job.name: job for job in build_jobs()}
+    assert jobs["codex_thread_sync"].interval == 120.0
+    assert jobs["code_sync_reconcile"].interval == 30.0
+    # Bad values fall back to the default rather than crashing the service.
+    assert jobs["claude_thread_sync"].interval == 60.0
 
 
 def test_openbase_routines_service_is_auto_installed_service():

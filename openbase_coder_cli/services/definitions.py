@@ -136,51 +136,16 @@ SERVICES: list[ServiceDefinition] = [
         backends=(CODEX_BACKEND, OPENBASE_CLOUD_CODEX_BACKEND),
     ),
     ServiceDefinition(
-        name="codex-thread-sync",
-        description="Codex Thread Sync",
-        command_template=(
-            'CODEX_THREAD_SYNC_INTERVAL="${{CODEX_THREAD_SYNC_INTERVAL:-60}}"\n'
-            'CODEX_THREAD_SYNC_MAX_AGE_DAYS="${{CODEX_THREAD_SYNC_MAX_AGE_DAYS:-15}}"\n'
-            'exec {openbase_coder} codex-sync run --interval "$CODEX_THREAD_SYNC_INTERVAL" --max-age-days "$CODEX_THREAD_SYNC_MAX_AGE_DAYS"'
-        ),
+        name="sync-workers",
+        description="Sync Workers (thread, device, and code-sync reconcile)",
+        # One process runs every periodic sync job on its own thread — the
+        # jobs read their historical interval/max-age env overrides
+        # (CODEX_THREAD_SYNC_INTERVAL etc.) from the wrapper-sourced env file
+        # themselves, and state-dependent jobs (device sync, reconcile) gate
+        # at runtime on code-sync enablement instead of being installed and
+        # removed as companion services.
+        command_template="exec {openbase_coder} sync-workers run",
         workdir_template="{data_dir}",
-    ),
-    ServiceDefinition(
-        name="claude-thread-sync",
-        description="Claude Code Thread Sync",
-        command_template=(
-            'CLAUDE_THREAD_SYNC_INTERVAL="${{CLAUDE_THREAD_SYNC_INTERVAL:-60}}"\n'
-            'CLAUDE_THREAD_SYNC_MAX_AGE_DAYS="${{CLAUDE_THREAD_SYNC_MAX_AGE_DAYS:-15}}"\n'
-            'exec {openbase_coder} claude-sync run --interval "$CLAUDE_THREAD_SYNC_INTERVAL" --max-age-days "$CLAUDE_THREAD_SYNC_MAX_AGE_DAYS"'
-        ),
-        workdir_template="{data_dir}",
-    ),
-    ServiceDefinition(
-        name="claude-thread-device-sync",
-        description="Claude Code Thread Device Sync",
-        command_template=(
-            'CLAUDE_THREAD_DEVICE_SYNC_INTERVAL="${{CLAUDE_THREAD_DEVICE_SYNC_INTERVAL:-60}}"\n'
-            'CLAUDE_THREAD_DEVICE_SYNC_MAX_AGE_DAYS="${{CLAUDE_THREAD_DEVICE_SYNC_MAX_AGE_DAYS:-15}}"\n'
-            # Same exchange folder as codex: one transported product-state
-            # dir carries both backends (snapshots are self-describing and
-            # each importer skips the other backend's).
-            'CLAUDE_THREAD_DEVICE_SYNC_EXCHANGE_DIR="${{CLAUDE_THREAD_DEVICE_SYNC_EXCHANGE_DIR:-{data_dir}/thread-sync}}"\n'
-            'exec {openbase_coder} claude-sync devices run --interval "$CLAUDE_THREAD_DEVICE_SYNC_INTERVAL" --max-age-days "$CLAUDE_THREAD_DEVICE_SYNC_MAX_AGE_DAYS" --exchange-dir "$CLAUDE_THREAD_DEVICE_SYNC_EXCHANGE_DIR"'
-        ),
-        workdir_template="{data_dir}",
-        install_by_default=False,
-    ),
-    ServiceDefinition(
-        name="codex-thread-device-sync",
-        description="Codex Thread Device Sync",
-        command_template=(
-            'CODEX_THREAD_DEVICE_SYNC_INTERVAL="${{CODEX_THREAD_DEVICE_SYNC_INTERVAL:-60}}"\n'
-            'CODEX_THREAD_DEVICE_SYNC_MAX_AGE_DAYS="${{CODEX_THREAD_DEVICE_SYNC_MAX_AGE_DAYS:-15}}"\n'
-            'CODEX_THREAD_DEVICE_SYNC_EXCHANGE_DIR="${{CODEX_THREAD_DEVICE_SYNC_EXCHANGE_DIR:-{data_dir}/thread-sync}}"\n'
-            'exec {openbase_coder} codex-sync devices run --interval "$CODEX_THREAD_DEVICE_SYNC_INTERVAL" --max-age-days "$CODEX_THREAD_DEVICE_SYNC_MAX_AGE_DAYS" --exchange-dir "$CODEX_THREAD_DEVICE_SYNC_EXCHANGE_DIR"'
-        ),
-        workdir_template="{data_dir}",
-        install_by_default=False,
     ),
     ServiceDefinition(
         name="openbase-routines",
@@ -304,3 +269,25 @@ def default_services(coding_backend: str | None = None) -> list[ServiceDefinitio
     if coding_backend is None:
         return services
     return [service for service in services if service.supports_backend(coding_backend)]
+
+
+# Services that no longer exist; installs remove any leftover units/plists so
+# upgrades don't strand old processes running retired commands. Their periodic
+# jobs now run inside the consolidated ``sync-workers`` service.
+RETIRED_SERVICE_NAMES: tuple[str, ...] = (
+    "codex-thread-sync",
+    "claude-thread-sync",
+    "codex-thread-device-sync",
+    "claude-thread-device-sync",
+)
+
+
+def retired_service_stub(name: str) -> ServiceDefinition:
+    """A minimal definition for a retired service, for unload/removal only."""
+    return ServiceDefinition(
+        name=name,
+        description=f"Retired service {name}",
+        command_template="",
+        workdir_template="{data_dir}",
+        install_by_default=False,
+    )

@@ -156,7 +156,10 @@ def test_ensure_product_state_folders_adds_missing(monkeypatch, tmp_path) -> Non
     assert manager.ensure_product_state_folders(config_path) == []
 
 
-def test_enable_installs_device_sync_companions(monkeypatch) -> None:
+def test_enable_installs_only_the_engine_service(monkeypatch) -> None:
+    # Device sync no longer rides along as companion services: its workers
+    # live in the always-installed sync-workers service and gate on
+    # code_sync_enabled() at runtime.
     installed = []
     monkeypatch.setattr(
         "openbase_coder_cli.services.launchd.install_service",
@@ -167,8 +170,4 @@ def test_enable_installs_device_sync_companions(monkeypatch) -> None:
         lambda: object(),
     )
     manager.install_and_start_service()
-    assert installed == [
-        "code-sync",
-        "codex-thread-device-sync",
-        "claude-thread-device-sync",
-    ]
+    assert installed == ["code-sync"]

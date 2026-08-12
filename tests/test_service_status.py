@@ -55,7 +55,7 @@ def test_service_status_includes_background_openbase_services(monkeypatch) -> No
     def fake_launchctl_status(service):
         return {
             "installed": True,
-            "pid": "123" if service.name == "codex-thread-sync" else None,
+            "pid": "123" if service.name == "sync-workers" else None,
             "last_exit_code": None,
         }
 
@@ -67,8 +67,8 @@ def test_service_status_includes_background_openbase_services(monkeypatch) -> No
     response = views.service_status(request)
 
     assert response.status_code == 200
-    assert response.data["services"]["codex_thread_sync"] == {
-        "name": "Codex Thread Sync",
+    assert response.data["services"]["sync_workers"] == {
+        "name": "Sync Workers (thread, device, and code-sync reconcile)",
         "port": None,
         "running": True,
         "installed": True,
@@ -82,30 +82,6 @@ def test_service_status_includes_background_openbase_services(monkeypatch) -> No
         "installed": True,
         "last_exit_code": None,
         "optional": False,
-    }
-    assert response.data["services"]["codex_thread_device_sync"] == {
-        "name": "Codex Thread Device Sync",
-        "port": None,
-        "running": False,
-        "installed": True,
-        "last_exit_code": None,
-        "optional": True,
-    }
-    assert response.data["services"]["claude_thread_sync"] == {
-        "name": "Claude Code Thread Sync",
-        "port": None,
-        "running": False,
-        "installed": True,
-        "last_exit_code": None,
-        "optional": False,
-    }
-    assert response.data["services"]["claude_thread_device_sync"] == {
-        "name": "Claude Code Thread Device Sync",
-        "port": None,
-        "running": False,
-        "installed": True,
-        "last_exit_code": None,
-        "optional": True,
     }
     assert response.data["services"]["tailscale_serve"] == {
         "name": "Tailscale Serve",
@@ -131,7 +107,7 @@ def test_service_status_includes_background_openbase_services(monkeypatch) -> No
             {"flag": "-d", "label": "Prevent display sleep"},
         ],
     }
-    assert len(response.data["services"]) == 13
+    assert len(response.data["services"]) == 10
 
 
 def test_service_status_omits_codex_app_server_on_claude_code_backend(
@@ -182,9 +158,8 @@ def test_service_status_omits_codex_app_server_on_claude_code_backend(
 
     assert response.status_code == 200
     assert "codex_app_server" not in response.data["services"]
-    assert "claude_thread_sync" in response.data["services"]
-    assert "claude_thread_device_sync" in response.data["services"]
-    assert len(response.data["services"]) == 12
+    assert "sync_workers" in response.data["services"]
+    assert len(response.data["services"]) == 9
 
 
 def test_thread_device_sync_status_returns_snapshot_payload(monkeypatch) -> None:
