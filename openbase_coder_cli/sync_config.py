@@ -250,6 +250,55 @@ def folder_for_id(folder_id: str, path: Path | None = None) -> SyncFolder | None
     return None
 
 
+def folder_for_relpath(relpath: str, path: Path | None = None) -> SyncFolder | None:
+    normalized = validate_relpath(relpath)
+    for folder in sync_folders(path):
+        if folder.relpath == normalized:
+            return folder
+    return None
+
+
+def add_folder_ignore(
+    relpath: str, pattern: str, path: Path | None = None
+) -> SyncFolder:
+    """Append a custom Syncthing ignore pattern to a synced folder.
+
+    Patterns render under the ``// Folder-specific ignores`` section of the
+    managed ``.stignore`` (see code_sync.ignores); duplicates are ignored.
+    """
+    cleaned = pattern.strip()
+    if not cleaned:
+        raise ValueError("Ignore pattern cannot be empty.")
+    normalized = validate_relpath(relpath)
+    folders = list(sync_folders(path))
+    target = next((f for f in folders if f.relpath == normalized), None)
+    if target is None:
+        raise ValueError(f"~/{normalized} is not a synced folder.")
+    if cleaned in target.extra_ignores:
+        return target
+    updated = SyncFolder(
+        relpath=normalized, extra_ignores=(*target.extra_ignores, cleaned)
+    )
+    set_sync_folders([updated if f.relpath == normalized else f for f in folders], path)
+    return updated
+
+
+def remove_folder_ignore(relpath: str, pattern: str, path: Path | None = None) -> bool:
+    """Remove a custom ignore pattern from a folder; True if one was removed."""
+    cleaned = pattern.strip()
+    normalized = validate_relpath(relpath)
+    folders = list(sync_folders(path))
+    target = next((f for f in folders if f.relpath == normalized), None)
+    if target is None or cleaned not in target.extra_ignores:
+        return False
+    updated = SyncFolder(
+        relpath=normalized,
+        extra_ignores=tuple(p for p in target.extra_ignores if p != cleaned),
+    )
+    set_sync_folders([updated if f.relpath == normalized else f for f in folders], path)
+    return True
+
+
 def _write_sync_config(payload: dict[str, Any], config_path: Path) -> None:
     payload = {**payload, SCHEMA_VERSION_KEY: SYNC_CONFIG_SCHEMA_VERSION}
     config_path.parent.mkdir(parents=True, exist_ok=True)

@@ -109,6 +109,38 @@ def test_folder_list_replace_add_remove(tmp_path: Path) -> None:
     assert sync_config.folder_for_id("cs-unknown", config_path) is None
 
 
+def test_add_and_remove_folder_ignore(tmp_path: Path) -> None:
+    config_path = tmp_path / "sync-config.json"
+    sync_config.set_sync_folders(
+        [{"relpath": "Projects/one"}, {"relpath": "Projects/two"}],
+        config_path,
+    )
+
+    updated = sync_config.add_folder_ignore("Projects/one", "*.log", config_path)
+    assert updated.extra_ignores == ("*.log",)
+    # Duplicate is a no-op, whitespace is trimmed, other folders untouched.
+    sync_config.add_folder_ignore("Projects/one", "  *.log  ", config_path)
+    sync_config.add_folder_ignore("Projects/one", "/build", config_path)
+    folders = {f.relpath: f for f in sync_config.sync_folders(config_path)}
+    assert folders["Projects/one"].extra_ignores == ("*.log", "/build")
+    assert folders["Projects/two"].extra_ignores == ()
+
+    assert sync_config.remove_folder_ignore("Projects/one", "*.log", config_path)
+    assert not sync_config.remove_folder_ignore("Projects/one", "*.log", config_path)
+    assert sync_config.folder_for_relpath(
+        "Projects/one", config_path
+    ).extra_ignores == ("/build",)
+
+
+def test_add_folder_ignore_validates(tmp_path: Path) -> None:
+    config_path = tmp_path / "sync-config.json"
+    sync_config.set_sync_folders([{"relpath": "Projects/one"}], config_path)
+    with pytest.raises(ValueError):
+        sync_config.add_folder_ignore("Projects/one", "   ", config_path)
+    with pytest.raises(ValueError):
+        sync_config.add_folder_ignore("Projects/missing", "*.log", config_path)
+
+
 def test_set_sync_folders_rejects_invalid_entries(tmp_path: Path) -> None:
     config_path = tmp_path / "sync-config.json"
     with pytest.raises(ValueError):
@@ -124,7 +156,12 @@ def test_product_state_relpaths_allowed_other_openbase_rejected():
     for relpath in sync_config.PRODUCT_STATE_RELPATHS:
         assert sync_config.validate_relpath(relpath) == relpath
 
-    for bad in (".openbase", ".openbase/auth-things", ".openbase/codex_home",
-                ".openbase/logs", ".openbase/thread-sync/../db"):
+    for bad in (
+        ".openbase",
+        ".openbase/auth-things",
+        ".openbase/codex_home",
+        ".openbase/logs",
+        ".openbase/thread-sync/../db",
+    ):
         with pytest.raises(ValueError):
             sync_config.validate_relpath(bad)

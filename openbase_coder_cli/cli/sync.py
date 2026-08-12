@@ -156,6 +156,87 @@ def _apply_if_enabled() -> None:
         click.echo("Re-rendered Syncthing config and managed ignores.")
 
 
+def _resolve_ignore_folder(folder: str | None):
+    """Pick the synced folder to edit ignores for (default: the code folder)."""
+    folders = sync_config.sync_folders()
+    if not folders:
+        raise click.ClickException("No synced folders are configured.")
+    if folder:
+        try:
+            match = sync_config.folder_for_relpath(folder)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from None
+        if match is None:
+            raise click.ClickException(f"~/{folder} is not a synced folder.")
+        return match
+    for candidate in folders:
+        if candidate.relpath == "Projects":
+            return candidate
+    if len(folders) == 1:
+        return folders[0]
+    names = ", ".join(f"~/{f.relpath}" for f in folders)
+    raise click.ClickException(
+        f"Multiple synced folders ({names}); pass --folder RELPATH."
+    )
+
+
+@sync.group()
+def ignores() -> None:
+    """Manage custom Syncthing ignore rules for a synced folder.
+
+    Rules are added on top of the managed defaults (.git, node_modules,
+    lockfiles, …) and re-render the folder's .stignore.
+    """
+
+
+@ignores.command("list")
+@click.option(
+    "--folder", default=None, help="Folder relpath (default: the code folder)."
+)
+def ignores_list(folder: str | None) -> None:
+    """Show custom ignore rules for a synced folder."""
+    target = _resolve_ignore_folder(folder)
+    click.echo(f"Custom ignore rules for ~/{target.relpath}:")
+    if not target.extra_ignores:
+        click.echo("  (none)")
+        return
+    for pattern in target.extra_ignores:
+        click.echo(f"  {pattern}")
+
+
+@ignores.command("add")
+@click.argument("pattern")
+@click.option(
+    "--folder", default=None, help="Folder relpath (default: the code folder)."
+)
+def ignores_add(pattern: str, folder: str | None) -> None:
+    """Add a custom ignore PATTERN (Syncthing .stignore syntax)."""
+    target = _resolve_ignore_folder(folder)
+    try:
+        updated = sync_config.add_folder_ignore(target.relpath, pattern)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from None
+    click.echo(f"Ignoring '{pattern.strip()}' in ~/{updated.relpath}.")
+    _apply_if_enabled()
+
+
+@ignores.command("remove")
+@click.argument("pattern")
+@click.option(
+    "--folder", default=None, help="Folder relpath (default: the code folder)."
+)
+def ignores_remove(pattern: str, folder: str | None) -> None:
+    """Remove a custom ignore PATTERN from a synced folder."""
+    target = _resolve_ignore_folder(folder)
+    removed = sync_config.remove_folder_ignore(target.relpath, pattern)
+    if not removed:
+        raise click.ClickException(
+            f"'{pattern.strip()}' is not a custom ignore rule for ~/{target.relpath}."
+        )
+    click.echo(f"Removed '{pattern.strip()}' from ~/{target.relpath}.")
+    _apply_if_enabled()
+
+
 @sync.command()
 def conflicts() -> None:
     """List unresolved sync conflicts."""
