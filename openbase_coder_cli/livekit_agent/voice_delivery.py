@@ -109,6 +109,10 @@ class VoiceDeliveryLedger:
         # True while a safe_to_mute_user has been emitted and neither renewed
         # user speech nor a safe_to_unmute has reopened the mic since.
         self._mute_covers_current_quiet = False
+        # When the VAD input backlog is dropped, skipped audio may have
+        # contained speech: quiet observed before this instant cannot count
+        # toward a mute.
+        self._last_vad_gap_at = float("-inf")
         self._records: dict[str, VoiceDeliveryRecord] = {}
         self._records_by_turn_id: dict[str, VoiceDeliveryRecord] = {}
         self._pending_by_tts_hash: dict[str, deque[str]] = {}
@@ -148,6 +152,15 @@ class VoiceDeliveryLedger:
         if old_state == "speaking":
             self._start_vad_quiet_closure_task()
 
+    def notify_vad_gap(self, dropped_seconds: float) -> None:
+        """Restart quiet verification after the VAD backlog was dropped."""
+        self._last_vad_gap_at = time.monotonic()
+        logger.warning(
+            "dispatch_timing stage=voice_delivery_vad_gap dropped_ms=%d room=%s",
+            max(0, int(dropped_seconds * 1000)),
+            self._room_name,
+        )
+
     def _start_vad_quiet_closure_task(self) -> None:
         if self._mute_covers_current_quiet:
             return
@@ -169,12 +182,17 @@ class VoiceDeliveryLedger:
 
     async def _vad_quiet_closure_after_floor(self) -> None:
         deadline = time.monotonic() + self._vad_quiet_grace_seconds
-        while time.monotonic() < deadline:
+        while True:
+            # A VAD backlog gap invalidates quiet observed before it; the
+            # floor restarts from the gap.
+            deadline = max(
+                deadline, self._last_vad_gap_at + self._vad_quiet_grace_seconds
+            )
             if self._mute_covers_current_quiet or self._user_is_speaking():
                 return
+            if time.monotonic() >= deadline:
+                break
             await asyncio.sleep(self._user_speaking_poll_seconds)
-        if self._mute_covers_current_quiet or self._user_is_speaking():
-            return
         self._emit_vad_quiet_mute()
 
     def _emit_vad_quiet_mute(self) -> None:
@@ -418,6 +436,9 @@ class VoiceDeliveryLedger:
             if not self._user_is_speaking():
                 if quiet_started_at is None:
                     quiet_started_at = time.monotonic()
+                # A VAD backlog gap invalidates quiet observed before it
+                # (including pre-accept credit); restart the floor there.
+                quiet_started_at = max(quiet_started_at, self._last_vad_gap_at)
                 if time.monotonic() - quiet_started_at >= required_quiet_seconds:
                     if wait_logged:
                         logger.info(
