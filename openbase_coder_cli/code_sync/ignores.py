@@ -40,6 +40,25 @@ DEPENDENCY_PATTERNS = (
     "(?d).venv",
     "(?d)venv",
 )
+# Dependency lockfiles regenerate independently on each machine and are
+# transported by git (they are committed), so syncing them adds nothing but
+# `.sync-conflict-*` churn when two machines resolve/regenerate in parallel.
+# This mirrors the .env carve-out logic in reverse: git already moves these,
+# so code sync should stay out of the way.
+LOCKFILE_PATTERNS = (
+    "// Dependency lockfiles (git already transports these; syncing only",
+    "// produces conflict copies when both machines regenerate them)",
+    "(?d)uv.lock",
+    "(?d)package-lock.json",
+    "(?d)pnpm-lock.yaml",
+    "(?d)yarn.lock",
+    "(?d)bun.lockb",
+    "(?d)Cargo.lock",
+    "(?d)poetry.lock",
+    "(?d)Gemfile.lock",
+    "(?d)composer.lock",
+    "(?d)Podfile.lock",
+)
 BUILD_PATTERNS = (
     "// Build outputs",
     "(?d)dist",
@@ -70,6 +89,7 @@ def render_stignore(extra_ignores: tuple[str, ...] = ()) -> str:
         MANAGED_HEADER,
         "\n".join(VCS_PATTERNS),
         "\n".join(DEPENDENCY_PATTERNS),
+        "\n".join(LOCKFILE_PATTERNS),
         "\n".join(BUILD_PATTERNS),
         "\n".join(CACHE_PATTERNS),
     ]

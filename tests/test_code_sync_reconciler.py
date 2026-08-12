@@ -309,6 +309,36 @@ def test_scan_file_conflicts_records_sync_conflict_copies(tmp_path: Path) -> Non
     assert records[0]["kind"] == "file"
 
 
+def test_scan_file_conflicts_resolves_records_for_vanished_copies(
+    tmp_path: Path,
+) -> None:
+    from openbase_coder_cli.sync_config import SyncFolder
+
+    home = tmp_path / "home"
+    folder = SyncFolder(relpath="Projects/demo")
+    folder_root = folder.absolute_path(home)
+    folder_root.mkdir(parents=True)
+    copy = folder_root / "notes.sync-conflict-20260706-101112-ABCDEF.md"
+    copy.write_text("conflict copy\n", encoding="utf-8")
+
+    conflicts_path = tmp_path / "conflicts.json"
+    reconciler.scan_file_conflicts(folder, home, conflicts_path)
+    assert len(conflicts_module.unresolved_conflicts(conflicts_path)) == 1
+
+    # The copy is cleaned up out of band; the next scan must treat the
+    # filesystem as authoritative and stop counting the phantom record.
+    copy.unlink()
+    found = reconciler.scan_file_conflicts(folder, home, conflicts_path)
+
+    assert found == []
+    assert conflicts_module.unresolved_conflicts(conflicts_path) == []
+    # History is retained, just marked resolved rather than deleted.
+    all_records = conflicts_module.read_conflicts(conflicts_path)
+    assert len(all_records) == 1
+    assert all_records[0]["resolved"] is True
+    assert all_records[0]["resolution"] == "disappeared"
+
+
 def test_scan_file_conflicts_skips_generated_artifacts(tmp_path: Path) -> None:
     from openbase_coder_cli.sync_config import SyncFolder
 
@@ -320,7 +350,8 @@ def test_scan_file_conflicts_skips_generated_artifacts(tmp_path: Path) -> None:
         folder_root / "repo/.local/logs/app.sync-conflict-20260706-101112-ABC.log",
         folder_root / "repo/logs/launchd/app.sync-conflict-20260706-101112-ABC.log",
         folder_root / "repo/data/db/base/123.sync-conflict-20260706-101112-ABC",
-        folder_root / "repo/desktop/companion-build/app.sync-conflict-20260706-101112-ABC",
+        folder_root
+        / "repo/desktop/companion-build/app.sync-conflict-20260706-101112-ABC",
         folder_root / "repo/__pycache__/mod.sync-conflict-20260706-101112-ABC.pyc",
     ]
     for path in generated_conflicts:

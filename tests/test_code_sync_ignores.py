@@ -41,6 +41,23 @@ def test_render_stignore_contains_vcs_and_default_patterns() -> None:
     assert "\n.env\n" not in content
 
 
+def test_render_stignore_ignores_dependency_lockfiles() -> None:
+    content = ignores.render_stignore()
+    for pattern in (
+        "(?d)uv.lock",
+        "(?d)package-lock.json",
+        "(?d)pnpm-lock.yaml",
+        "(?d)yarn.lock",
+        "(?d)Cargo.lock",
+        "(?d)poetry.lock",
+        "(?d)Gemfile.lock",
+        "(?d)Podfile.lock",
+    ):
+        assert pattern in content
+    # Bare names so the pattern matches lockfiles at any depth, root included.
+    assert "\n**/uv.lock" not in content
+
+
 def test_render_stignore_appends_extra_ignores() -> None:
     content = ignores.render_stignore(("models/weights", "*.bin"))
     assert "// Folder-specific ignores" in content
