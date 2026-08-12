@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from openbase_coder_cli.mcp import claude_thread_sync
-from openbase_coder_cli.mcp.claude_thread_sync import (
+from openbase_coder_cli.thread_sync import claude_thread_sync
+from openbase_coder_cli.thread_sync.claude_thread_sync import (
     ClaudeConflictResolutionError,
     claude_thread_snapshot_conflicts_payload,
     claude_thread_snapshot_status,
@@ -1184,7 +1184,7 @@ def test_import_auto_clears_claude_conflict_after_content_converges(
 
 
 def test_meaningful_user_text_strips_harness_markup():
-    from openbase_coder_cli.mcp.claude_thread_sync import _meaningful_user_text
+    from openbase_coder_cli.thread_sync.claude_thread_sync import _meaningful_user_text
 
     assert (
         _meaningful_user_text(

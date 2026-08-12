@@ -64,7 +64,7 @@ from openbase_coder_cli.livekit_voice_route import (
     publish_transfer_to_thread,
     super_agent_voice_for_context,
 )
-from openbase_coder_cli.mcp.session_manager import get_session_manager
+from openbase_coder_cli.thread_sync.session_manager import get_session_manager
 from openbase_coder_cli.openbase_coder_cli_app.common import _request_identity
 from openbase_coder_cli.services.cloud_workspace import cloud_workspace_id
 from openbase_coder_cli.stt_providers import (

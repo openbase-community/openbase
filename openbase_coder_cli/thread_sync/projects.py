@@ -6,7 +6,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from openbase_coder_cli.mcp.thread_sync_common import translate_home_path
+from openbase_coder_cli.thread_sync.thread_sync_common import translate_home_path
 from openbase_coder_cli.multi_config import multi_repo_name_set
 
 PROJECTS_FILE = Path.home() / ".openbase" / "coder-projects.json"

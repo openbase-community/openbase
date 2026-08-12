@@ -295,7 +295,7 @@ async def prepare_target_thread_for_direct_livekit(
     thread_id: str,
     directory: str,
 ) -> None:
-    from openbase_coder_cli.mcp.session_manager import get_session_manager
+    from openbase_coder_cli.thread_sync.session_manager import get_session_manager
 
     await get_session_manager().resume_thread_with_developer_instructions(
         thread_id,

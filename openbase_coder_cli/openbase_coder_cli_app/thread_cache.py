@@ -8,8 +8,8 @@ from typing import Any
 
 from asgiref.sync import async_to_sync
 
-from openbase_coder_cli.mcp.models import ThreadInfo
-from openbase_coder_cli.mcp.session_manager import ThreadListPage
+from openbase_coder_cli.thread_sync.models import ThreadInfo
+from openbase_coder_cli.thread_sync.session_manager import ThreadListPage
 
 THREAD_LIST_CACHE_TTL_SECONDS = 8.0
 

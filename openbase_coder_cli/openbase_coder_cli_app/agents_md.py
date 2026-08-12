@@ -10,7 +10,7 @@ from rest_framework import serializers, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from openbase_coder_cli.mcp.session_manager import resolve_super_agent_instructions_path
+from openbase_coder_cli.thread_sync.session_manager import resolve_super_agent_instructions_path
 from openbase_coder_cli.paths import (
     CODEX_AGENTS_MD_PATH,
     CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH,

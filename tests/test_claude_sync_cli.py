@@ -4,7 +4,7 @@ import importlib
 
 from click.testing import CliRunner
 
-from openbase_coder_cli.mcp.claude_thread_sync import (
+from openbase_coder_cli.thread_sync.claude_thread_sync import (
     ClaudeThreadSnapshotResult,
     ClaudeThreadSyncResult,
 )

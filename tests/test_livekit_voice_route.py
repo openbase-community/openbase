@@ -428,7 +428,7 @@ def test_transfer_to_thread_prepares_then_publishes(tmp_path: Path, monkeypatch)
     )
     manager = FakeSessionManager()
     monkeypatch.setattr(
-        "openbase_coder_cli.mcp.session_manager.get_session_manager",
+        "openbase_coder_cli.thread_sync.session_manager.get_session_manager",
         lambda: manager,
     )
     client = FakeLiveKitClient()
@@ -488,7 +488,7 @@ def test_transfer_to_thread_rejects_dispatcher_target(
     )
     manager = FakeSessionManager()
     monkeypatch.setattr(
-        "openbase_coder_cli.mcp.session_manager.get_session_manager",
+        "openbase_coder_cli.thread_sync.session_manager.get_session_manager",
         lambda: manager,
     )
     client = FakeLiveKitClient()
@@ -546,7 +546,7 @@ def test_transfer_to_thread_reuses_existing_thread_voice_history(
     )
     manager = FakeSessionManager()
     monkeypatch.setattr(
-        "openbase_coder_cli.mcp.session_manager.get_session_manager",
+        "openbase_coder_cli.thread_sync.session_manager.get_session_manager",
         lambda: manager,
     )
     client = FakeLiveKitClient()
@@ -576,7 +576,7 @@ def test_transfer_to_thread_fails_when_prepare_fails(tmp_path: Path, monkeypatch
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     manager = FakeSessionManager(fail=True)
     monkeypatch.setattr(
-        "openbase_coder_cli.mcp.session_manager.get_session_manager",
+        "openbase_coder_cli.thread_sync.session_manager.get_session_manager",
         lambda: manager,
     )
     client = FakeLiveKitClient()

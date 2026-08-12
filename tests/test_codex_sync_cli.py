@@ -4,8 +4,8 @@ import importlib
 
 from click.testing import CliRunner
 
-from openbase_coder_cli.mcp.thread_exchange import ThreadSnapshotResult
-from openbase_coder_cli.mcp.thread_import import CodexThreadSyncResult
+from openbase_coder_cli.thread_sync.thread_exchange import ThreadSnapshotResult
+from openbase_coder_cli.thread_sync.thread_import import CodexThreadSyncResult
 
 codex_sync_cli = importlib.import_module("openbase_coder_cli.cli.codex_sync")
 
