@@ -77,19 +77,21 @@ jobs:
           path: coder-react
           ref: ${{ inputs.sibling_ref || 'main' }}
 
+      # multi-react and boilersync-react are external trunk-based projects:
+      # always built from main, never from this workspace's staging/dev.
       - name: Checkout multi-react
         uses: actions/checkout@v4
         with:
           repository: montaguegabe/multi-react
           path: multi-react
-          ref: ${{ inputs.sibling_ref || 'main' }}
+          ref: main
 
       - name: Checkout boilersync-react
         uses: actions/checkout@v4
         with:
           repository: montaguegabe/boilersync-react
           path: boilersync-react
-          ref: ${{ inputs.sibling_ref || 'main' }}
+          ref: main
 
       - name: Checkout super-agents
         uses: actions/checkout@v4
