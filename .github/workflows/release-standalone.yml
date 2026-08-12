@@ -78,6 +78,12 @@ jobs:
           ref: main
           path: boilersync-react
 
+      - name: Checkout super-agents
+        uses: actions/checkout@v4
+        with:
+          repository: montaguegabe/super-agents
+          path: super-agents
+
       - name: Checkout skills
         uses: actions/checkout@v4
         with:
@@ -101,6 +107,7 @@ jobs:
             --arg coder_react "$(git -C coder-react rev-parse HEAD)" \
             --arg multi_react "$(git -C multi-react rev-parse HEAD)" \
             --arg boilersync_react "$(git -C boilersync-react rev-parse HEAD)" \
+            --arg super_agents "$(git -C super-agents rev-parse HEAD)" \
             --arg skills "$(git -C skills rev-parse HEAD)" \
             --arg workspace "$(git -C workspace-seed rev-parse HEAD)" \
             '{
@@ -109,6 +116,7 @@ jobs:
               "coder-react": $coder_react,
               "multi-react": $multi_react,
               "boilersync-react": $boilersync_react,
+              "super-agents": $super_agents,
               "skills": $skills,
               "workspace": $workspace
             }')"
