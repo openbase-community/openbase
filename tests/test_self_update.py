@@ -405,3 +405,80 @@ def test_spawn_detached_self_update_requires_launcher(monkeypatch, tmp_path) -> 
     _patch_standalone_layout(monkeypatch, tmp_path)
     with pytest.raises(self_update.SelfUpdateError, match="launcher"):
         self_update.spawn_detached_self_update()
+
+
+def _fake_releases_response(monkeypatch, releases: list[dict]) -> None:
+    def fake_http_get(url: str) -> bytes:
+        assert url == self_update.RELEASES_API_URL
+        return json.dumps(releases).encode()
+
+    monkeypatch.setattr(self_update, "_http_get", fake_http_get)
+
+
+def _release(tag: str, *, draft: bool = False, with_manifest: bool = True) -> dict:
+    assets = []
+    if with_manifest:
+        assets = [
+            {
+                "name": self_update.MANIFEST_ASSET_NAME,
+                "browser_download_url": f"https://example.test/{tag}/manifest",
+            },
+            {
+                "name": self_update.MANIFEST_SIGNATURE_ASSET_NAME,
+                "browser_download_url": f"https://example.test/{tag}/manifest.sig",
+            },
+        ]
+    return {"tag_name": tag, "draft": draft, "assets": assets}
+
+
+def test_staging_channel_resolves_only_dev_releases(monkeypatch) -> None:
+    _fake_releases_response(
+        monkeypatch,
+        [
+            _release("v0.4.0"),
+            _release("v0.4.0.dev20260812120000"),
+            _release("v0.3.0.dev20260811120000"),
+        ],
+    )
+
+    manifest_url, signature_url = self_update._prerelease_manifest_urls("staging")
+
+    assert manifest_url == "https://example.test/v0.4.0.dev20260812120000/manifest"
+    assert signature_url.endswith("manifest.sig")
+
+
+def test_beta_channel_skips_staging_releases(monkeypatch) -> None:
+    _fake_releases_response(
+        monkeypatch,
+        [
+            _release("v0.5.0.dev20260812120000"),
+            _release("v0.4.0b1"),
+            _release("v0.3.0"),
+        ],
+    )
+
+    manifest_url, _ = self_update._prerelease_manifest_urls("beta")
+
+    assert manifest_url == "https://example.test/v0.4.0b1/manifest"
+
+
+def test_staging_channel_errors_without_staging_releases(monkeypatch) -> None:
+    _fake_releases_response(monkeypatch, [_release("v0.3.0")])
+
+    with pytest.raises(self_update.SelfUpdateError, match="staging"):
+        self_update._prerelease_manifest_urls("staging")
+
+
+def test_staging_channel_skips_drafts_and_manifestless_releases(monkeypatch) -> None:
+    _fake_releases_response(
+        monkeypatch,
+        [
+            _release("v0.5.0.dev20260813120000", draft=True),
+            _release("v0.4.0.dev20260812120000", with_manifest=False),
+            _release("v0.3.0.dev20260811120000"),
+        ],
+    )
+
+    manifest_url, _ = self_update._prerelease_manifest_urls("staging")
+
+    assert manifest_url == "https://example.test/v0.3.0.dev20260811120000/manifest"

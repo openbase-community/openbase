@@ -309,8 +309,8 @@ def result_payload(result: SelfUpdateResult) -> dict:
 
 
 def _fetch_manifest(channel: str) -> dict:
-    if channel == "beta":
-        manifest_url, signature_url = _beta_manifest_urls()
+    if channel in ("beta", "staging"):
+        manifest_url, signature_url = _prerelease_manifest_urls(channel)
     else:
         manifest_url = STABLE_MANIFEST_URL
         signature_url = STABLE_MANIFEST_URL + ".sig"
@@ -332,10 +332,19 @@ def _fetch_manifest(channel: str) -> dict:
     return manifest
 
 
-def _beta_manifest_urls() -> tuple[str, str]:
+def _prerelease_manifest_urls(channel: str) -> tuple[str, str]:
+    """Resolve the newest release serving the given non-stable channel.
+
+    ``.dev`` tags are staging-channel releases cut from staging branches;
+    they are invisible to beta (and to stable via the prerelease flag) so
+    only installs stamped ``staging`` ever receive them.
+    """
     releases = json.loads(_http_get(RELEASES_API_URL))
     for release in releases:
         if release.get("draft"):
+            continue
+        is_staging_release = ".dev" in str(release.get("tag_name", ""))
+        if (channel == "staging") != is_staging_release:
             continue
         assets = {
             asset.get("name"): asset.get("browser_download_url")
@@ -346,7 +355,9 @@ def _beta_manifest_urls() -> tuple[str, str]:
                 assets[MANIFEST_ASSET_NAME],
                 assets.get(MANIFEST_SIGNATURE_ASSET_NAME, ""),
             )
-    raise SelfUpdateError("No release with an update manifest was found.")
+    raise SelfUpdateError(
+        f"No release with an update manifest was found for the {channel} channel."
+    )
 
 
 def _verify_manifest_signature(manifest_bytes: bytes, signature_url: str) -> None:
