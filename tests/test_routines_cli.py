@@ -147,7 +147,7 @@ def test_create_command_routine_calls_super_agents_library(monkeypatch) -> None:
             "--kind",
             "command",
             "--command",
-            "super-agents-open-pr-review-discover --workspace .",
+            "generate-workspace-report --workspace .",
             "--command-timeout-seconds",
             "120",
             "--interval-seconds",
@@ -162,7 +162,7 @@ def test_create_command_routine_calls_super_agents_library(monkeypatch) -> None:
             "name": "discover-prs",
             "prompt": "",
             "kind": "command",
-            "command": "super-agents-open-pr-review-discover --workspace .",
+            "command": "generate-workspace-report --workspace .",
             "commandTimeoutSeconds": 120,
             "scheduleType": "interval",
             "intervalSeconds": 60,
@@ -213,11 +213,18 @@ def test_update_routine_can_switch_to_command(monkeypatch) -> None:
 
     result = CliRunner().invoke(
         routines_cli.routines,
-        ["update", "open-pr-review-routine", "--kind", "command", "--command", "discover"],
+        [
+            "update",
+            "report-routine",
+            "--kind",
+            "command",
+            "--command",
+            "discover",
+        ],
     )
 
     assert result.exit_code == 0, result.output
     assert FakeRoutinesClient.instances[0].calls[0] == (
         "save_routine",
-        {"name": "open-pr-review-routine", "kind": "command", "command": "discover"},
+        {"name": "report-routine", "kind": "command", "command": "discover"},
     )
