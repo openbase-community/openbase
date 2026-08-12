@@ -131,7 +131,7 @@ The product docs live in this repository under `docs/` and are published at
 ### 🚀 Feedback and Contributing
 
 Openbase Coder is in beta. Please help shape the product by opening a
-[GitHub issue](https://github.com/openbase-community/openbase-coder/issues/new)
+[GitHub issue](https://github.com/openbase-community/openbase/issues/new)
 or joining the community on [Discord](https://discord.gg/nYzsn3Vh6y).
 
 ### ⚖️ License

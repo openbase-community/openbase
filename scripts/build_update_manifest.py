@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help=(
             "Base URL the tarball will be downloaded from, e.g. "
-            "https://github.com/openbase-community/openbase-coder/releases/download/v0.2.0/"
+            "https://github.com/openbase-community/openbase/releases/download/v0.2.0/"
         ),
     )
     parser.add_argument(
