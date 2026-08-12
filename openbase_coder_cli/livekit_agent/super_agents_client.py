@@ -12,6 +12,22 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from super_agents.app_protocol import (
+    extract_queued_id as _extract_queued_id,
+)
+from super_agents.app_protocol import (
+    extract_started_turn_id as _extract_turn_id,
+)
+from super_agents.app_protocol import (
+    extract_thread_id as _extract_thread_id,
+)
+from super_agents.app_protocol import (
+    is_queue_item_id as _is_queue_item_id,
+)
+from super_agents.app_protocol import (
+    response_is_queued as _response_is_queued,
+)
+
 from openbase_coder_cli.backend_config import (
     CLAUDE_CODE_BACKEND,
 )
@@ -1401,72 +1417,6 @@ class SuperAgentsLiveKitClient:
             active_target_voice_id=active_target_voice_id,
             active_target_voice_name=active_target_voice_name,
         )
-
-
-def _extract_thread_id(payload: dict[str, Any]) -> str | None:
-    for key in ("threadId", "thread_id"):
-        value = payload.get(key)
-        if isinstance(value, str) and value:
-            return value
-    thread = payload.get("thread")
-    if isinstance(thread, dict):
-        value = thread.get("id") or thread.get("threadId")
-        if isinstance(value, str) and value:
-            return value
-    session = payload.get("session")
-    if isinstance(session, dict):
-        value = session.get("id") or session.get("threadId")
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-
-def _extract_turn_id(payload: dict[str, Any]) -> str | None:
-    if _response_is_queued(payload):
-        return None
-    for key in ("turnId", "turn_id"):
-        value = payload.get(key)
-        if isinstance(value, str) and value and not _is_queue_item_id(value):
-            return value
-    turn = payload.get("turn") or payload.get("item")
-    if isinstance(turn, dict):
-        value = turn.get("id") or turn.get("turnId")
-        if isinstance(value, str) and value and not _is_queue_item_id(value):
-            return value
-    return None
-
-
-def _response_is_queued(payload: dict[str, Any]) -> bool:
-    if payload.get("queued") is True:
-        return True
-    for key in ("turnId", "turn_id", "id"):
-        value = payload.get(key)
-        if isinstance(value, str) and _is_queue_item_id(value):
-            return True
-    item = payload.get("item")
-    if not isinstance(item, dict):
-        return False
-    status = str(item.get("status") or "").lower()
-    item_id = item.get("id")
-    return status in {"queued", "starting"} and (
-        not isinstance(item_id, str) or _is_queue_item_id(item_id)
-    )
-
-
-def _extract_queued_id(payload: dict[str, Any]) -> str | None:
-    for key in ("turnId", "turn_id", "id"):
-        value = payload.get(key)
-        if isinstance(value, str) and _is_queue_item_id(value):
-            return value
-    item = payload.get("item")
-    if not isinstance(item, dict):
-        return None
-    item_id = item.get("id")
-    return item_id if isinstance(item_id, str) and item_id else None
-
-
-def _is_queue_item_id(value: str) -> bool:
-    return value.startswith("q_")
 
 
 def _speech_text_from_progress(progress: dict[str, Any]) -> str:
