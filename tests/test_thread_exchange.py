@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from openbase_coder_cli.mcp import thread_exchange
-from openbase_coder_cli.mcp.thread_exchange import (
+from openbase_coder_cli.thread_sync import thread_exchange
+from openbase_coder_cli.thread_sync.thread_exchange import (
     export_thread_snapshots,
     get_or_create_device_identity,
     import_thread_snapshots,

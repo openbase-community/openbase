@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
-from openbase_coder_cli.mcp import projects
+from openbase_coder_cli.thread_sync import projects
 
 
 def test_recent_projects_filters_private_paths(tmp_path: Path, monkeypatch) -> None:

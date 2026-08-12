@@ -13,7 +13,7 @@ from typing import Any
 from super_agents.app_server_client import DEFAULT_STATE_FILE
 from super_agents.state import SessionRecord, read_state_file_locked
 
-from openbase_coder_cli.mcp.projects import get_recent_projects as _get_recent_projects
+from openbase_coder_cli.thread_sync.projects import get_recent_projects as _get_recent_projects
 from openbase_coder_cli.paths import CODEX_HOME_DIR, NORMAL_CODEX_HOME_DIR
 
 REPORTS_DIRECTORY = ".reports"

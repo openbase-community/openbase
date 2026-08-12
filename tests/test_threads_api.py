@@ -14,8 +14,8 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 
 django.setup()
 
-from openbase_coder_cli.mcp.models import ThreadInfo, ThreadStatus, TurnInfo
-from openbase_coder_cli.mcp.session_manager import ThreadListPage
+from openbase_coder_cli.thread_sync.models import ThreadInfo, ThreadStatus, TurnInfo
+from openbase_coder_cli.thread_sync.session_manager import ThreadListPage
 from openbase_coder_cli.openbase_coder_cli_app import threads as thread_views
 
 

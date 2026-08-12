@@ -6,7 +6,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-from openbase_coder_cli.mcp.thread_import import (
+from openbase_coder_cli.thread_sync.thread_import import (
     CodexThreadSyncResult,
     _active_super_agent_thread_ids,
     _log_sync_result,
@@ -374,7 +374,7 @@ def test_sync_codex_threads_once_transfers_terminal_rollout_with_open_handle(
     )
     _append_terminal(source_rollout)
     monkeypatch.setattr(
-        "openbase_coder_cli.mcp.thread_import._rollout_open_for_write",
+        "openbase_coder_cli.thread_sync.thread_import._rollout_open_for_write",
         lambda path: path == source_rollout,
     )
     _append_index(
@@ -458,7 +458,7 @@ def test_sync_codex_threads_once_logs_conflict_and_continues(
     _append_terminal(normal_conflict, message="normal")
     _append_terminal(voice_conflict, message="voice")
     _append_terminal(ok_rollout, message="ok")
-    caplog.set_level(logging.WARNING, logger="openbase_coder_cli.mcp.thread_import")
+    caplog.set_level(logging.WARNING, logger="openbase_coder_cli.thread_sync.thread_import")
 
     results = sync_codex_threads_once(
         normal_home=normal_home,
@@ -604,7 +604,7 @@ def test_sync_codex_threads_once_skips_threads_older_than_max_age(
 
 
 def test_sync_result_logging_suppresses_routine_results(caplog) -> None:
-    caplog.set_level(logging.INFO, logger="openbase_coder_cli.mcp.thread_import")
+    caplog.set_level(logging.INFO, logger="openbase_coder_cli.thread_sync.thread_import")
 
     _log_sync_result(
         CodexThreadSyncResult("thread-old", "skipped", None, "skipped_old")

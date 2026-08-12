@@ -123,7 +123,7 @@ def test_installation_warning_when_workspace_tracked_on_standalone(
         lambda: SimpleNamespace(standalone=True),
     )
     monkeypatch.setattr(
-        "openbase_coder_cli.mcp.projects.get_recent_projects",
+        "openbase_coder_cli.thread_sync.projects.get_recent_projects",
         lambda: [
             {"path": "/Users/u/Projects/other"},
             {"path": "/Users/u/Projects/openbase/code/openbase-coder-workspace"},

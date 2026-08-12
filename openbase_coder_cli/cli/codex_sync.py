@@ -7,7 +7,7 @@ from pathlib import Path
 
 import click
 
-from openbase_coder_cli.mcp.thread_exchange import (
+from openbase_coder_cli.thread_sync.thread_exchange import (
     DEFAULT_EXCHANGE_DIR,
     DEFAULT_LEDGER_PATH,
     ThreadSnapshotResult,
@@ -17,7 +17,7 @@ from openbase_coder_cli.mcp.thread_exchange import (
     sync_thread_snapshots_once,
     thread_snapshot_status,
 )
-from openbase_coder_cli.mcp.thread_import import (
+from openbase_coder_cli.thread_sync.thread_import import (
     CodexThreadSyncResult,
     sync_codex_threads_once,
 )

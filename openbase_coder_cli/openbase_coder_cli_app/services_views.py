@@ -16,14 +16,14 @@ from rest_framework.response import Response
 from openbase_coder_cli.codex_home_instructions import (
     refresh_openbase_instruction_files_from_installation,
 )
-from openbase_coder_cli.mcp.claude_thread_sync import (
+from openbase_coder_cli.thread_sync.claude_thread_sync import (
     ClaudeConflictResolutionError,
     claude_thread_snapshot_conflicts_payload,
     claude_thread_snapshot_status,
     claude_thread_sync_conflicts_payload,
     resolve_claude_snapshot_conflict,
 )
-from openbase_coder_cli.mcp.thread_exchange import (
+from openbase_coder_cli.thread_sync.thread_exchange import (
     ThreadConflictResolutionError,
     resolve_thread_snapshot_conflict,
     thread_snapshot_conflicts_payload,

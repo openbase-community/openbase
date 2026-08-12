@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from openbase_coder_cli.mcp.session_manager import ThreadListPage
+from openbase_coder_cli.thread_sync.session_manager import ThreadListPage
 from openbase_coder_cli.openbase_coder_cli_app import thread_cache
 
 

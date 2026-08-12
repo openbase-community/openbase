@@ -7,7 +7,7 @@ from pathlib import Path
 
 import click
 
-from openbase_coder_cli.mcp.claude_thread_sync import (
+from openbase_coder_cli.thread_sync.claude_thread_sync import (
     DEFAULT_DEVICE_EXCHANGE_DIR,
     ClaudeThreadSnapshotResult,
     ClaudeThreadSyncResult,
@@ -17,7 +17,7 @@ from openbase_coder_cli.mcp.claude_thread_sync import (
     sync_claude_thread_snapshots_once,
     sync_claude_threads_once,
 )
-from openbase_coder_cli.mcp.thread_exchange import get_or_create_device_identity
+from openbase_coder_cli.thread_sync.thread_exchange import get_or_create_device_identity
 
 
 def _configure_logging(verbose: bool) -> None:

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from openbase_coder_cli.mcp.thread_sync_common import translate_home_path
+from openbase_coder_cli.thread_sync.thread_sync_common import translate_home_path
 
 
 def test_translate_home_path_uses_explicit_source_home() -> None:

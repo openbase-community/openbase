@@ -1,4 +1,4 @@
-from openbase_coder_cli.mcp.thread_payloads import _session_from_thread
+from openbase_coder_cli.thread_sync.thread_payloads import _session_from_thread
 
 
 def test_session_from_thread_maps_backend_session_id() -> None:

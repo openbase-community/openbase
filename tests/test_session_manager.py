@@ -5,8 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import openbase_coder_cli.mcp.session_manager as session_manager_module
-from openbase_coder_cli.mcp.session_manager import (
+import openbase_coder_cli.thread_sync.session_manager as session_manager_module
+from openbase_coder_cli.thread_sync.session_manager import (
     CodexAppServerSessionManager,
     resolve_super_agent_instructions_path,
 )
@@ -1711,7 +1711,7 @@ def test_start_turn_starts_via_super_agents_and_broadcasts(
         events.append((session_id, event))
 
     monkeypatch.setattr(
-        "openbase_coder_cli.mcp.session_manager._broadcast",
+        "openbase_coder_cli.thread_sync.session_manager._broadcast",
         fake_broadcast,
     )
 
@@ -1987,7 +1987,7 @@ def test_turn_started_notification_announces_externally_started_turn(
         events.append((session_id, event))
 
     monkeypatch.setattr(
-        "openbase_coder_cli.mcp.session_manager._broadcast",
+        "openbase_coder_cli.thread_sync.session_manager._broadcast",
         fake_broadcast,
     )
     active_thread = {
@@ -2185,7 +2185,7 @@ def test_turn_failed_broadcasts_error_envelope(monkeypatch, tmp_path: Path) -> N
         events.append((session_id, event))
 
     monkeypatch.setattr(
-        "openbase_coder_cli.mcp.session_manager._broadcast",
+        "openbase_coder_cli.thread_sync.session_manager._broadcast",
         fake_broadcast,
     )
     client = FakeSuperAgentsClient(
@@ -2230,7 +2230,7 @@ def test_agent_message_item_boundaries_are_preserved_in_live_output(
         events.append((session_id, event))
 
     monkeypatch.setattr(
-        "openbase_coder_cli.mcp.session_manager._broadcast",
+        "openbase_coder_cli.thread_sync.session_manager._broadcast",
         fake_broadcast,
     )
     manager = _manager(FakeSuperAgentsClient({}))

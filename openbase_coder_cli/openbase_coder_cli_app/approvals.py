@@ -8,7 +8,7 @@ from rest_framework import serializers, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from openbase_coder_cli.mcp.session_manager import get_session_manager
+from openbase_coder_cli.thread_sync.session_manager import get_session_manager
 from openbase_coder_cli.skill_approvals import (
     answer_skill_approval_request,
     consume_skill_approval_decision,
