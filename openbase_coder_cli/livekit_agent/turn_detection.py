@@ -28,8 +28,17 @@ _TURN_SIGNAL_TTL_SECONDS = 30.0
 _MAX_TURN_SIGNALS = 64
 
 MIN_USER_TURN_QUIET_GRACE_SECONDS = 2.0
-LOW_CONFIDENCE_USER_TURN_QUIET_GRACE_SECONDS = 4.0
+LOW_CONFIDENCE_USER_TURN_QUIET_GRACE_SECONDS = 3.0
 LOW_EOU_PROBABILITY_THRESHOLD = 0.30
+# When the STT final arrives this late, the turn detector scored a stale
+# transcript: the user has already been silent the whole time and the quiet
+# floor re-verifies silence anyway, so the low-confidence penalty only adds
+# mute latency on top of an already-slow pipeline.
+STALE_EOU_TRANSCRIPTION_DELAY_SECONDS = 2.0
+# Floor for the VAD-only provisional mute that fires before any transcript
+# exists. Slightly above the confident transcript-informed floor because
+# there is no semantic end-of-turn signal backing it.
+VAD_ONLY_USER_TURN_QUIET_GRACE_SECONDS = 2.5
 # The quiet floor measures total verified silence. LiveKit's endpointing has
 # already verified `end_of_turn_delay` seconds of silence before the
 # utterance is even accepted; credit it (bounded, in case the metric is
@@ -131,6 +140,17 @@ def decide_user_turn_closure(
     signals = signals or UserTurnClosureSignals()
     eou_probability = signals.eou_probability
     if eou_probability is not None and eou_probability <= LOW_EOU_PROBABILITY_THRESHOLD:
+        transcription_delay = signals.transcription_delay
+        if (
+            transcription_delay is not None
+            and transcription_delay >= STALE_EOU_TRANSCRIPTION_DELAY_SECONDS
+        ):
+            return UserTurnClosureDecision(
+                confidence=eou_probability,
+                source="turn_detector",
+                quiet_grace_seconds=MIN_USER_TURN_QUIET_GRACE_SECONDS,
+                completion_reason="quiet_floor_stale_transcription",
+            )
         return UserTurnClosureDecision(
             confidence=eou_probability,
             source="turn_detector",
