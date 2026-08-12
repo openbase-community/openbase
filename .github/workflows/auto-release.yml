@@ -1,17 +1,20 @@
 # Auto-release: every push to main cuts a stable release with an
-# auto-bumped version (minor by default). See the workspace AUTO_UPDATE.md.
+# auto-bumped version (minor by default), and every push to staging cuts a
+# staging-channel release (.dev-suffixed version, GitHub prerelease) built
+# from every sibling repo's staging HEAD. See the workspace AUTO_UPDATE.md.
 #
 # Commit-message overrides (checked on the head commit of the push):
 #   [skip release]    — do not release this push
 #   [release patch]   — bump the patch version instead of minor
 #   [release major]   — bump the major version
 #
-# Staging and other branches never release; pushes to main are production.
+# Pushes to main are production; staging releases serve only the staging
+# channel and never releases/latest.
 name: Auto Release
 
 on:
   push:
-    branches: [main]
+    branches: [main, staging]
   workflow_dispatch:
     inputs:
       bump:
@@ -26,8 +29,10 @@ permissions:
 
 # A burst of pushes (multi pushes all subrepos together) cancels in-flight
 # builds so the final push releases once, after everything has landed.
+# Per-branch groups: a staging burst must not cancel a main release or
+# vice versa.
 concurrency:
-  group: auto-release
+  group: auto-release-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -71,7 +76,14 @@ jobs:
             patch) patch=$((patch + 1)) ;;
           esac
           version="${major}.${minor}.${patch}"
-          echo "Auto-release: ${latest} -> ${version} (${bump})"
+          if [[ "${GITHUB_REF_NAME}" == "staging" ]]; then
+            # Staging releases are PEP 440 dev releases of the next stable
+            # version: they sort below it, publish as GitHub prereleases,
+            # and the .dev marker is what routes them to the staging
+            # channel (and keeps them out of beta resolution).
+            version="${version}.dev$(date -u +%Y%m%d%H%M%S)"
+          fi
+          echo "Auto-release: ${latest} -> ${version} (${bump}, ${GITHUB_REF_NAME})"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
   release:
@@ -80,4 +92,5 @@ jobs:
     with:
       version: ${{ needs.plan.outputs.version }}
       draft: false
+      sibling_ref: ${{ github.ref_name }}
     secrets: inherit
