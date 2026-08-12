@@ -30,6 +30,7 @@ from urllib.parse import quote
 
 from openbase_coder_cli.code_sync.conflicts import (
     mark_branch_conflicts_resolved,
+    reconcile_file_conflicts_against_disk,
     record_branch_conflict,
     record_file_conflict,
     unresolved_conflicts,
@@ -352,6 +353,13 @@ def scan_file_conflicts(
             folder_id=folder.folder_id, file_relpath=relpath, path=conflicts_path
         )
         found.append(relpath)
+    # Filesystem is the source of truth: any previously-recorded copy the scan
+    # no longer sees (deleted, resolved on a peer, or cleaned up out of band)
+    # stops counting as an open conflict. Without this the ledger only ever
+    # grew and the dashboard showed phantom conflicts for long-gone files.
+    reconcile_file_conflicts_against_disk(
+        folder_id=folder.folder_id, active_relpaths=found, path=conflicts_path
+    )
     return found
 
 

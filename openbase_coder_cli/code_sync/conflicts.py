@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -221,6 +222,47 @@ def mark_file_conflicts_resolved_under(
             continue
         file_relpath = str(conflict.get("path") or "")
         if file_relpath == normalized or file_relpath.startswith(f"{normalized}/"):
+            conflict.update(
+                {
+                    "resolved": True,
+                    "resolution": resolution,
+                    "resolved_at": now,
+                }
+            )
+            resolved_count += 1
+    if resolved_count:
+        _write_conflicts(conflicts, path)
+    return resolved_count
+
+
+def reconcile_file_conflicts_against_disk(
+    *,
+    folder_id: str,
+    active_relpaths: Iterable[str],
+    resolution: str = "disappeared",
+    path: Path | None = None,
+) -> int:
+    """Resolve unresolved file records that no longer exist on disk.
+
+    The filesystem (Syncthing's ``*.sync-conflict-*`` copies) is the source of
+    truth for whether a file conflict is still live; this ledger is only a
+    cache/history over it. A copy can vanish because the user deleted it, a
+    peer's resolution propagated, or it was cleaned up out of band — in every
+    case the record should stop counting as an open conflict. ``active_relpaths``
+    is the set of copies the current scan still sees for this folder.
+    """
+    active = set(active_relpaths)
+    conflicts = read_conflicts(path)
+    resolved_count = 0
+    now = _timestamp()
+    for conflict in conflicts:
+        if (
+            conflict.get("resolved")
+            or conflict.get("kind") != FILE_CONFLICT_KIND
+            or conflict.get("folder_id") != folder_id
+        ):
+            continue
+        if str(conflict.get("path") or "") not in active:
             conflict.update(
                 {
                     "resolved": True,
