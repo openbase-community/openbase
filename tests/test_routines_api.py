@@ -18,7 +18,7 @@ def test_command_routine_create_serializer_accepts_command_without_prompt() -> N
         data={
             "name": "discover-prs",
             "kind": "command",
-            "command": "super-agents-open-pr-review-discover --workspace .",
+            "command": "generate-workspace-report --workspace .",
             "scheduleType": "interval",
         }
     )
