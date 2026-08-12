@@ -3,7 +3,7 @@
 set -eu
 
 RELEASE="${OPENBASE_CODER_RELEASE:-latest}"
-REPO="${OPENBASE_CODER_RELEASE_REPO:-openbase-community/openbase-coder}"
+REPO="${OPENBASE_CODER_RELEASE_REPO:-openbase-community/openbase}"
 BIN_DIR="${OPENBASE_CODER_INSTALL_BIN_DIR:-$HOME/.local/bin}"
 BASE_DIR="${OPENBASE_CODER_HOME:-$HOME/.openbase}"
 PACKAGE_ROOT="$BASE_DIR/packages/standalone"

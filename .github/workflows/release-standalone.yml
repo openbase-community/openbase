@@ -274,7 +274,7 @@ jobs:
             --channel "${{ steps.release.outputs.channel }}" \
             --target "${{ steps.release.outputs.target }}" \
             --tarball "$ARCHIVE_PATH" \
-            --url-base "https://github.com/openbase-community/openbase-coder/releases/download/${{ steps.release.outputs.tag }}/" \
+            --url-base "https://github.com/openbase-community/openbase/releases/download/${{ steps.release.outputs.tag }}/" \
             --repo-shas '${{ steps.shas.outputs.repo_shas }}' \
             --package-metadata "$PACKAGE_DIR/openbase-coder-package.json" \
             --output dist/update-manifest.json
