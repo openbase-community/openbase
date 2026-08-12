@@ -58,6 +58,30 @@ def test_render_stignore_ignores_dependency_lockfiles() -> None:
     assert "\n**/uv.lock" not in content
 
 
+def test_render_stignore_ignores_common_developer_artifacts() -> None:
+    content = ignores.render_stignore()
+    for pattern in (
+        "(?d)trash",
+        "(?d)Trash",
+        "(?d).cache",
+        "(?d).gradle",
+        "(?d)coverage",
+        "(?d)test-results",
+        "(?d)*.egg-info",
+        "(?d)xcuserdata",
+        "(?d)companion-build",
+        # Unity build caches
+        "(?d)**/Library/PackageCache",
+        "(?d)**/Library/ScriptAssemblies",
+        # Local Postgres cluster + sqlite sidecars
+        "(?d)**/data/db/pg_wal",
+        "(?d)*.sqlite-wal",
+        # Openbase local logs
+        "(?d)**/logs/launchd",
+    ):
+        assert pattern in content
+
+
 def test_render_stignore_appends_extra_ignores() -> None:
     content = ignores.render_stignore(("models/weights", "*.bin"))
     assert "// Folder-specific ignores" in content
