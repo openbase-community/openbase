@@ -25,6 +25,28 @@ DEFAULT_SUPER_AGENTS_STORE_HOME = (
 SUPER_AGENTS_STORE_HOME_ENV = "SUPER_AGENTS_CLAUDE_CODE_HOME"
 
 
+def merged_sync_conflicts_payload(
+    home_conflicts: dict[str, Any],
+    device_conflicts: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge home and device conflict payloads into one sorted envelope."""
+    conflicts = [
+        *home_conflicts["conflicts"],
+        *device_conflicts["conflicts"],
+    ]
+    conflicts.sort(key=lambda item: item.get("detected_at") or 0, reverse=True)
+    return {
+        "device": device_conflicts.get("device"),
+        "exchange_dir": device_conflicts.get("exchange_dir"),
+        "ledger_path": device_conflicts.get("ledger_path"),
+        "home_ledger_path": home_conflicts.get("ledger_path"),
+        "home_conflict_count": home_conflicts["conflict_count"],
+        "device_conflict_count": device_conflicts["conflict_count"],
+        "conflict_count": len(conflicts),
+        "conflicts": conflicts,
+    }
+
+
 def translate_home_path(
     value: str | None,
     *,

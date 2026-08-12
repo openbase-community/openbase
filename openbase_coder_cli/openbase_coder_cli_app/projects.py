@@ -15,12 +15,14 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from openbase_coder_cli.thread_sync.projects import get_recent_projects as _get_recent_projects
-from openbase_coder_cli.thread_sync.projects import remove_project as _remove_project
-from openbase_coder_cli.thread_sync.projects import track_project as _track_project
 from openbase_coder_cli.multi_config import multi_repo_names
 from openbase_coder_cli.openbase_coder_cli_app.common import _auth_debug_value
 from openbase_coder_cli.openbase_coder_cli_app.reports import _reports_summary
+from openbase_coder_cli.thread_sync.projects import (
+    get_recent_projects as _get_recent_projects,
+)
+from openbase_coder_cli.thread_sync.projects import remove_project as _remove_project
+from openbase_coder_cli.thread_sync.projects import track_project as _track_project
 
 logger = logging.getLogger(__name__)
 

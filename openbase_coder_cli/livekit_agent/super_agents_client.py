@@ -14,9 +14,9 @@ from typing import Any
 
 from openbase_coder_cli.backend_config import (
     CLAUDE_CODE_BACKEND,
-    CODEX_BACKEND,
-    OPENBASE_CLOUD_BACKEND,
-    OPENBASE_CLOUD_CODEX_BACKEND,
+)
+from openbase_coder_cli.backend_config import (
+    configured_execution_backend as _configured_execution_backend,
 )
 from openbase_coder_cli.claude_auth import (
     heal_claude_auth,
@@ -125,27 +125,6 @@ def _model_name_for_role(
 def _is_super_agents_mcp_server(name: str) -> bool:
     normalized = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
     return normalized in {"super-agents", "mcp-super-agents"}
-
-
-def _execution_backend_for_configured_backend(backend: str) -> str:
-    if backend == OPENBASE_CLOUD_BACKEND:
-        return CLAUDE_CODE_BACKEND
-    if backend == OPENBASE_CLOUD_CODEX_BACKEND:
-        return CODEX_BACKEND
-    return backend
-
-
-def _configured_execution_backend(
-    environment_backend: Callable[[], str],
-) -> str:
-    from openbase_coder_cli.cli.backend import read_backend
-    from openbase_coder_cli.paths import DEFAULT_ENV_FILE_PATH
-
-    if DEFAULT_ENV_FILE_PATH.is_file():
-        configured_backend = read_backend(DEFAULT_ENV_FILE_PATH)
-        if not configured_backend.startswith("unsupported:"):
-            return _execution_backend_for_configured_backend(configured_backend)
-    return environment_backend()
 
 
 class SuperAgentsLiveKitClient:

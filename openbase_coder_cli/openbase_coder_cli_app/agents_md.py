@@ -10,7 +10,6 @@ from rest_framework import serializers, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from openbase_coder_cli.thread_sync.session_manager import resolve_super_agent_instructions_path
 from openbase_coder_cli.paths import (
     CODEX_AGENTS_MD_PATH,
     CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH,
@@ -21,6 +20,9 @@ from openbase_coder_cli.paths import (
     NORMAL_CODEX_HOME_DIR,
     OPENBASE_CLAUDE_CONFIG_DIR,
     OPENBASE_CLAUDE_MD_PATH,
+)
+from openbase_coder_cli.thread_sync.session_manager import (
+    resolve_super_agent_instructions_path,
 )
 
 logger = logging.getLogger(__name__)

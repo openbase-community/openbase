@@ -212,8 +212,8 @@ def _installation_warnings() -> list[dict[str, str]]:
     developer expects localhost:7999 to serve that code — a standalone
     (app-installed) runtime silently serves something older instead.
     """
-    from openbase_coder_cli.thread_sync.projects import get_recent_projects
     from openbase_coder_cli.services.installation import InstallationConfig
+    from openbase_coder_cli.thread_sync.projects import get_recent_projects
 
     try:
         if not InstallationConfig.exists():

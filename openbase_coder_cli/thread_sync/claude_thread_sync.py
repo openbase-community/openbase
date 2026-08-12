@@ -36,6 +36,7 @@ from .thread_sync_common import (
     find_snapshot_record,
     get_or_create_device_identity,
     ledger_sync_decision,
+    merged_sync_conflicts_payload,
     path_stable,
     read_device_identity,
     read_device_ledger,
@@ -661,32 +662,19 @@ def claude_thread_sync_conflicts_payload(
     device_ledger_path: Path = DEFAULT_DEVICE_LEDGER_PATH,
 ) -> dict[str, Any]:
     """Show unresolved Claude session sync conflicts across homes and devices."""
-    home_conflicts = claude_thread_home_sync_conflicts_payload(
-        normal_home=normal_home,
-        openbase_home=openbase_home,
-        ledger_path=home_ledger_path,
+    return merged_sync_conflicts_payload(
+        claude_thread_home_sync_conflicts_payload(
+            normal_home=normal_home,
+            openbase_home=openbase_home,
+            ledger_path=home_ledger_path,
+        ),
+        claude_thread_snapshot_conflicts_payload(
+            openbase_home=openbase_home,
+            exchange_dir=exchange_dir,
+            device_identity_path=device_identity_path,
+            ledger_path=device_ledger_path,
+        ),
     )
-    device_conflicts = claude_thread_snapshot_conflicts_payload(
-        openbase_home=openbase_home,
-        exchange_dir=exchange_dir,
-        device_identity_path=device_identity_path,
-        ledger_path=device_ledger_path,
-    )
-    conflicts = [
-        *home_conflicts["conflicts"],
-        *device_conflicts["conflicts"],
-    ]
-    conflicts.sort(key=lambda item: item.get("detected_at") or 0, reverse=True)
-    return {
-        "device": device_conflicts.get("device"),
-        "exchange_dir": device_conflicts.get("exchange_dir"),
-        "ledger_path": device_conflicts.get("ledger_path"),
-        "home_ledger_path": home_conflicts.get("ledger_path"),
-        "home_conflict_count": home_conflicts["conflict_count"],
-        "device_conflict_count": device_conflicts["conflict_count"],
-        "conflict_count": len(conflicts),
-        "conflicts": conflicts,
-    }
 
 
 def resolve_claude_snapshot_conflict(

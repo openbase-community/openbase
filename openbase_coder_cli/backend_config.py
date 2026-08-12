@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 CODEX_BACKEND = "codex"
 OPENBASE_CLOUD_BACKEND = "openbase_cloud"
 OPENBASE_CLOUD_CODEX_BACKEND = "openbase_cloud_codex"
@@ -45,3 +47,34 @@ def normalize_backend(value: str | None) -> str:
 def _normalize_backend_alias(value: str | None) -> str:
     raw = (value or "").strip().lower()
     return " ".join(raw.replace("_", " ").replace("-", " ").split())
+
+
+def execution_backend_for_configured_backend(backend: str) -> str:
+    """Map a configured backend to the backend that actually executes turns."""
+    if backend == OPENBASE_CLOUD_BACKEND:
+        return CLAUDE_CODE_BACKEND
+    if backend == OPENBASE_CLOUD_CODEX_BACKEND:
+        return CODEX_BACKEND
+    return backend
+
+
+def configured_execution_backend(
+    environment_backend: Callable[[], str] | None = None,
+) -> str:
+    """Resolve the execution backend, preferring the installed env file.
+
+    Imports stay inside the function: ``cli.backend`` imports this module at
+    load time, so importing it at module level would create a cycle.
+    """
+    from openbase_coder_cli.cli.backend import read_backend
+    from openbase_coder_cli.paths import DEFAULT_ENV_FILE_PATH
+
+    if DEFAULT_ENV_FILE_PATH.is_file():
+        configured_backend = read_backend(DEFAULT_ENV_FILE_PATH)
+        if not configured_backend.startswith("unsupported:"):
+            return execution_backend_for_configured_backend(configured_backend)
+    if environment_backend is not None:
+        return environment_backend()
+    from super_agents.backend_clients import backend_from_environment
+
+    return backend_from_environment()

@@ -11,7 +11,7 @@ from openbase_coder_cli.backend_config import (
     CODEX_BACKEND,
     CODING_BACKEND_ENV_KEY,
     OPENBASE_CLOUD_BACKEND,
-    OPENBASE_CLOUD_CODEX_BACKEND,
+    execution_backend_for_configured_backend,
     normalize_backend,
 )
 from openbase_coder_cli.paths import CODEX_DISPATCHER_CONFIG_PATH, DEFAULT_ENV_FILE_PATH
@@ -229,7 +229,7 @@ def backend_model(
     backend: str | None = None,
     path: Path | None = None,
 ) -> str | None:
-    selected_backend = _execution_backend(
+    selected_backend = execution_backend_for_configured_backend(
         _normalize_backend(backend or _configured_backend_from_environment())
     )
     configured_backend = _normalize_backend(
@@ -466,14 +466,6 @@ def _normalize_backend(value: str | None) -> str:
         return normalize_backend(value)
     except ValueError:
         return CODEX_BACKEND
-
-
-def _execution_backend(backend: str) -> str:
-    if backend == OPENBASE_CLOUD_BACKEND:
-        return CLAUDE_CODE_BACKEND
-    if backend == OPENBASE_CLOUD_CODEX_BACKEND:
-        return CODEX_BACKEND
-    return backend
 
 
 def _env_file_values(path: Path) -> dict[str, str]:

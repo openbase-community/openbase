@@ -16,11 +16,6 @@ from openbase_coder_cli.livekit_voice_route import (
     get_livekit_voice_route_state,
     warm_livekit_dispatcher_thread,
 )
-from openbase_coder_cli.thread_sync.models import ThreadStatus
-from openbase_coder_cli.thread_sync.projects import (
-    refresh_projects_from_thread_directories as _refresh_projects_from_threads,
-)
-from openbase_coder_cli.thread_sync.session_manager import ThreadListPage, get_session_manager
 from openbase_coder_cli.openbase_coder_cli_app.common import _auth_debug_value
 from openbase_coder_cli.openbase_coder_cli_app.item_tags import (
     set_thread_tags,
@@ -40,6 +35,14 @@ from openbase_coder_cli.openbase_coder_cli_app.thread_favorites import (
 from openbase_coder_cli.openbase_coder_cli_app.thread_metadata import (
     annotate_thread_payload,
     get_livekit_shared_thread_id,
+)
+from openbase_coder_cli.thread_sync.models import ThreadStatus
+from openbase_coder_cli.thread_sync.projects import (
+    refresh_projects_from_thread_directories as _refresh_projects_from_threads,
+)
+from openbase_coder_cli.thread_sync.session_manager import (
+    ThreadListPage,
+    get_session_manager,
 )
 
 logger = logging.getLogger(__name__)

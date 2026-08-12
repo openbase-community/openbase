@@ -50,6 +50,7 @@ from .thread_sync_common import (
     device_snapshot_dirs,
     file_content_relation,
     find_snapshot_record,
+    merged_sync_conflicts_payload,
     read_device_ledger,
     read_scoped_ledger,
     record_device_snapshot,
@@ -479,32 +480,19 @@ def thread_sync_conflicts_payload(
     device_ledger_path: Path = DEFAULT_LEDGER_PATH,
 ) -> dict[str, Any]:
     """Show unresolved Codex thread sync conflicts across homes and devices."""
-    home_conflicts = thread_home_sync_conflicts_payload(
-        normal_home=normal_home,
-        voice_home=voice_home,
-        ledger_path=home_ledger_path,
+    return merged_sync_conflicts_payload(
+        thread_home_sync_conflicts_payload(
+            normal_home=normal_home,
+            voice_home=voice_home,
+            ledger_path=home_ledger_path,
+        ),
+        thread_snapshot_conflicts_payload(
+            codex_home=voice_home,
+            exchange_dir=exchange_dir,
+            device_identity_path=device_identity_path,
+            ledger_path=device_ledger_path,
+        ),
     )
-    device_conflicts = thread_snapshot_conflicts_payload(
-        codex_home=voice_home,
-        exchange_dir=exchange_dir,
-        device_identity_path=device_identity_path,
-        ledger_path=device_ledger_path,
-    )
-    conflicts = [
-        *home_conflicts["conflicts"],
-        *device_conflicts["conflicts"],
-    ]
-    conflicts.sort(key=lambda item: item.get("detected_at") or 0, reverse=True)
-    return {
-        "device": device_conflicts.get("device"),
-        "exchange_dir": device_conflicts.get("exchange_dir"),
-        "ledger_path": device_conflicts.get("ledger_path"),
-        "home_ledger_path": home_conflicts.get("ledger_path"),
-        "home_conflict_count": home_conflicts["conflict_count"],
-        "device_conflict_count": device_conflicts["conflict_count"],
-        "conflict_count": len(conflicts),
-        "conflicts": conflicts,
-    }
 
 
 def thread_home_sync_conflicts_payload(
