@@ -18,6 +18,7 @@ CLI_ROOT = REPO_ROOT / "cli"
 CONSOLE_ROOT = REPO_ROOT / "console"
 INSTRUCTIONS_ROOT = REPO_ROOT / "instructions"
 SKILLS_ROOT = REPO_ROOT / "skills"
+SUPER_AGENTS_ROOT = REPO_ROOT / "super-agents"
 METADATA_FILENAME = "openbase-coder-package.json"
 
 
@@ -138,6 +139,25 @@ def create_runtime_python(python_dir: Path, python_executable: Path) -> None:
 
 
 def install_cli_package(python_dir: Path) -> None:
+    # super-agents rides sibling-branch HEADs like every other repo in
+    # repo_shas: install it from source first so pip sees the requirement
+    # satisfied instead of resolving super-agents from PyPI.
+    if not SUPER_AGENTS_ROOT.exists():
+        raise SystemExit(
+            f"super-agents checkout missing at {SUPER_AGENTS_ROOT}; "
+            "a PyPI fallback would silently unpin the packaged snapshot."
+        )
+    subprocess.run(
+        [
+            str(runtime_python(python_dir)),
+            "-m",
+            "pip",
+            "install",
+            f"{SUPER_AGENTS_ROOT}[claude]",
+        ],
+        check=True,
+        env=_runtime_pip_env(),
+    )
     subprocess.run(
         [
             str(runtime_python(python_dir)),
@@ -149,6 +169,29 @@ def install_cli_package(python_dir: Path) -> None:
         check=True,
         env=_runtime_pip_env(),
     )
+    _verify_source_super_agents(python_dir)
+
+
+def _verify_source_super_agents(python_dir: Path) -> None:
+    # If the cli's super-agents version floor ever exceeds the sibling
+    # checkout's static version, the cli install above would replace the
+    # source build with a PyPI wheel. Path installs record a direct_url.json;
+    # require it.
+    check = (
+        "import importlib.metadata as m, sys; "
+        "files = m.files('super-agents') or []; "
+        "sys.exit(0 if any(f.name == 'direct_url.json' for f in files) else 1)"
+    )
+    result = subprocess.run(
+        [str(runtime_python(python_dir)), "-c", check],
+        env=_runtime_pip_env(),
+    )
+    if result.returncode != 0:
+        raise SystemExit(
+            "Packaged super-agents came from PyPI, not the sibling checkout; "
+            "bump the version in super-agents/pyproject.toml to satisfy the "
+            "cli's floor, or lower the floor."
+        )
 
 
 def rewrite_bin_shebangs(python_dir: Path) -> None:
