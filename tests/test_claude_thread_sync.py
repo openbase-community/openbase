@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from openbase_coder_cli.thread_sync import claude_thread_sync
+from openbase_coder_cli.thread_sync import claude_snapshot_io
 from openbase_coder_cli.thread_sync.claude_thread_sync import (
     ClaudeConflictResolutionError,
     claude_thread_snapshot_conflicts_payload,
@@ -674,7 +674,7 @@ def test_import_claude_thread_snapshot_failed_commit_leaves_no_visible_session(
     def fail_commit(**_kwargs):
         raise RuntimeError("commit failed")
 
-    monkeypatch.setattr(claude_thread_sync, "_commit_staged_session", fail_commit)
+    monkeypatch.setattr(claude_snapshot_io, "_commit_staged_session", fail_commit)
 
     results = import_claude_thread_snapshots(
         openbase_home=target_home,
