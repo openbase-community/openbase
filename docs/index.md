@@ -12,7 +12,9 @@ These docs cover the whole product, not just the CLI:
 - **[iOS app](ios-tabs.md)** — voice calls with the dispatcher and Super
   Agents, thread management, approvals, reports, and diffs from your phone.
 - **[Web console & Openbase Cloud](console.md)** — the same dashboard in a
-  browser, plus your account at `https://app.openbase.cloud`.
+  browser, plus your account at `https://app.openbase.cloud`. Openbase Cloud's
+  own Heroku-style CLI (`openbase`) is documented separately at
+  [docs-cloud.openbase.cloud](https://docs-cloud.openbase.cloud).
 - **`openbase-coder` CLI** — the local runtime underneath all of the above: a
   Django API + WebSocket server, LiveKit voice services, and launchd/systemd
   service management. See [Commands](commands/index.md).

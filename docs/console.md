@@ -18,6 +18,13 @@ browser, and Openbase Cloud hosts your account at
 Authentication uses the local CLI token managed by `openbase-coder login`
 and the runtime; the iOS app and desktop app handle this for you.
 
+!!! tip "Managing Openbase Cloud from the terminal"
+
+    Openbase Cloud also has its own Heroku-style CLI, `openbase`, for apps,
+    deploys, logs, config, and usage — a fast alternative to this dashboard.
+    See the [Openbase Cloud CLI docs](https://docs-cloud.openbase.cloud). It
+    shares this sign-in: `openbase login` runs `openbase-coder login`.
+
 ## Console Pages
 
 The console serves the same pages as the desktop app dashboard — Overview,
