@@ -339,7 +339,12 @@ jobs:
             dir="$name"
             [ "$name" = "workspace" ] && dir="workspace-seed"
             [ -d "$dir/.git" ] || continue
-            git -C "$dir" fetch origin --quiet "$sibling_ref"
+            ref="$sibling_ref"
+            case "$name" in
+              # External trunk-based projects are always checked out at main.
+              multi-react|boilersync-react) ref="main" ;;
+            esac
+            git -C "$dir" fetch origin --quiet "$ref"
             now="$(git -C "$dir" rev-parse FETCH_HEAD)"
             if [ "$now" != "$sha" ]; then
               echo "::error::$name moved from $sha to $now during the release build; re-tag to release a coherent snapshot."
