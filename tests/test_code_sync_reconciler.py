@@ -339,6 +339,67 @@ def test_scan_file_conflicts_resolves_records_for_vanished_copies(
     assert all_records[0]["resolution"] == "disappeared"
 
 
+def test_reconcile_file_conflicts_adds_and_resolves_in_one_pass(
+    tmp_path: Path,
+) -> None:
+    conflicts_path = tmp_path / "conflicts.json"
+    added, resolved = conflicts_module.reconcile_file_conflicts(
+        folder_id="cs-demo",
+        active_relpaths=["a.sync-conflict-x.md", "b.sync-conflict-x.md"],
+        path=conflicts_path,
+    )
+    assert (added, resolved) == (2, 0)
+
+    # Re-running with a shrunk active set adds nothing and retires the missing
+    # one, deduping the still-present copy rather than re-adding it.
+    added, resolved = conflicts_module.reconcile_file_conflicts(
+        folder_id="cs-demo",
+        active_relpaths=["a.sync-conflict-x.md"],
+        path=conflicts_path,
+    )
+    assert (added, resolved) == (0, 1)
+    unresolved = conflicts_module.unresolved_conflicts(conflicts_path)
+    assert [c["path"] for c in unresolved] == ["a.sync-conflict-x.md"]
+
+
+def test_compact_conflicts_bounds_resolved_history(tmp_path: Path) -> None:
+    conflicts_path = tmp_path / "conflicts.json"
+    # Seed 5 resolved records (varying resolved_at) and 1 unresolved.
+    records = [
+        {
+            "id": f"r{i}",
+            "kind": "file",
+            "folder_id": "cs-demo",
+            "path": f"f{i}",
+            "resolved": True,
+            "resolved_at": f"2026-08-1{i}T00:00:00Z",
+        }
+        for i in range(5)
+    ]
+    records.append(
+        {
+            "id": "live",
+            "kind": "file",
+            "folder_id": "cs-demo",
+            "path": "live",
+            "resolved": False,
+        }
+    )
+    conflicts_module._write_conflicts(records, conflicts_path)
+
+    removed = conflicts_module.compact_conflicts(conflicts_path, max_resolved=2)
+    assert removed == 3
+
+    remaining = conflicts_module.read_conflicts(conflicts_path)
+    ids = {c["id"] for c in remaining}
+    # Unresolved always kept; only the 2 most-recent resolved survive.
+    assert "live" in ids
+    assert {"r4", "r3"}.issubset(ids)
+    assert not any(rid in ids for rid in ("r0", "r1", "r2"))
+    # Idempotent once at/under the cap.
+    assert conflicts_module.compact_conflicts(conflicts_path, max_resolved=2) == 0
+
+
 def test_scan_file_conflicts_skips_generated_artifacts(tmp_path: Path) -> None:
     from openbase_coder_cli.sync_config import SyncFolder
 

@@ -29,10 +29,10 @@ from typing import Any
 from urllib.parse import quote
 
 from openbase_coder_cli.code_sync.conflicts import (
+    compact_conflicts,
     mark_branch_conflicts_resolved,
-    reconcile_file_conflicts_against_disk,
+    reconcile_file_conflicts,
     record_branch_conflict,
-    record_file_conflict,
     unresolved_conflicts,
 )
 from openbase_coder_cli.code_sync.eligibility import (
@@ -349,15 +349,13 @@ def scan_file_conflicts(
         if _is_generated_file_conflict_path(path, folder_root):
             continue
         relpath = str(path.relative_to(folder_root))
-        record_file_conflict(
-            folder_id=folder.folder_id, file_relpath=relpath, path=conflicts_path
-        )
         found.append(relpath)
-    # Filesystem is the source of truth: any previously-recorded copy the scan
-    # no longer sees (deleted, resolved on a peer, or cleaned up out of band)
-    # stops counting as an open conflict. Without this the ledger only ever
-    # grew and the dashboard showed phantom conflicts for long-gone files.
-    reconcile_file_conflicts_against_disk(
+    # Filesystem is the source of truth: one locked pass records newly-seen
+    # copies and retires records whose copy the scan no longer sees (deleted,
+    # resolved on a peer, or cleaned up out of band). Doing it in bulk keeps the
+    # ledger tracking disk without either the phantom growth (records that only
+    # ever accumulated) or a per-copy rewrite of the whole file.
+    reconcile_file_conflicts(
         folder_id=folder.folder_id, active_relpaths=found, path=conflicts_path
     )
     return found
@@ -510,6 +508,9 @@ def run_reconcile_once(
             if final_state is not None:
                 next_repo_states[state_key] = final_state
 
+    # Keep the ledger bounded once per tick: resolved records are audit history
+    # and must not accumulate forever.
+    summary["conflicts_compacted"] = compact_conflicts(conflicts_path)
     summary["conflicts_count"] = len(unresolved_conflicts(conflicts_path))
     write_reconcile_state(
         {
