@@ -36,6 +36,7 @@ from .services import services
 from .setup import setup
 from .super_agent_name import super_agent_name
 from .sync import sync
+from .sync_workers import sync_workers
 from .user import exit_to_dispatch, user
 from .vibes import vibes
 
@@ -91,6 +92,7 @@ main.add_command(computer_use)
 main.add_command(routines)
 main.add_command(super_agent_name)
 main.add_command(sync)
+main.add_command(sync_workers)
 main.add_command(defaults)
 main.add_command(exit_to_dispatch)
 main.add_command(vibes)

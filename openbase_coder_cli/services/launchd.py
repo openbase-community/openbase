@@ -29,9 +29,11 @@ from openbase_coder_cli.paths import (
 )
 from openbase_coder_cli.runtime import stable_runtime_package
 from openbase_coder_cli.services.definitions import (
+    RETIRED_SERVICE_NAMES,
     SERVICES,
     ServiceDefinition,
     default_services,
+    retired_service_stub,
 )
 from openbase_coder_cli.services.installation import InstallationConfig
 
@@ -530,6 +532,11 @@ def install_all_services(config: InstallationConfig) -> None:
             click.echo(
                 f"  Removed {svc.name} (not used by the {coding_backend} backend)."
             )
+
+    # Upgrades must not strand processes for services that no longer exist.
+    for name in RETIRED_SERVICE_NAMES:
+        if remove_service(retired_service_stub(name)):
+            click.echo(f"  Removed retired service {name}.")
 
     for svc in services:
         click.echo(f"  Installing {svc.name}...")

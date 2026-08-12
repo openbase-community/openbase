@@ -24,5 +24,4 @@ tailscale serve --bg --tcp=7880 tcp://127.0.0.1:7880
 `services status` exits non-zero if any required managed service is unhealthy,
 either Serve route is missing, or the external Openbase health check at the
 tailnet `:18080` address fails. Optional services such as
-`codex-thread-device-sync` are reported but do not make the command fail when
-stopped.
+`code-sync` are reported but do not make the command fail when stopped.

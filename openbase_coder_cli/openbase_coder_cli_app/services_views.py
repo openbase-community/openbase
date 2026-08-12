@@ -453,10 +453,7 @@ def service_status(request):
     ):
         del services["codex_app_server"]
     for service_name in (
-        "codex-thread-sync",
-        "codex-thread-device-sync",
-        "claude-thread-sync",
-        "claude-thread-device-sync",
+        "sync-workers",
         "openbase-routines",
     ):
         service = next((svc for svc in SERVICES if svc.name == service_name), None)

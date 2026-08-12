@@ -17,8 +17,8 @@ openbase-coder services start
 # Start only Django API
 openbase-coder services start django-cli
 
-# Opt into cross-device Codex thread snapshot sync
-openbase-coder services start codex-thread-device-sync
+# Start the code-sync engine explicitly (normally `openbase-coder sync enable`)
+openbase-coder services start code-sync
 ```
 
 Starting the default service set also configures the Tailscale Serve routes used
