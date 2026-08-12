@@ -33,7 +33,9 @@ def parse_args() -> argparse.Namespace:
         description="Build the update-manifest.json release asset."
     )
     parser.add_argument("--version", required=True, help="Release version, e.g. 0.2.0")
-    parser.add_argument("--channel", default="stable", choices=("stable", "beta"))
+    parser.add_argument(
+        "--channel", default="stable", choices=("stable", "beta", "staging")
+    )
     parser.add_argument(
         "--target", required=True, help="Target triple, e.g. aarch64-apple-darwin"
     )
