@@ -82,8 +82,10 @@ for source development, even if you are mainly changing the CLI:
 
 ```bash
 uv tool install multi-workspace
-git clone https://github.com/openbase-community/openbase-coder-workspace
+git clone --branch main --single-branch \
+  https://github.com/openbase-community/openbase-coder-workspace
 cd openbase-coder-workspace
+git checkout main
 ./scripts/setup
 ```
 
@@ -93,8 +95,10 @@ authentication, verification, and iteration flow.
 
 The workspace setup syncs the public development repos with `multi`, builds the
 console from source, and runs `openbase-coder setup --workspace-dir` against the
-checkout. The CLI source for this repository lives at `cli/` inside the
-workspace.
+checkout. Keep the workspace on `main` before running setup: `multi` mirrors
+the workspace branch into synced subrepos, while repos pinned in `multi.json`
+stay on their configured branch. The CLI source for this repository lives at
+`cli/` inside the workspace.
 
 For CLI-only development after workspace setup:
 
