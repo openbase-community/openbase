@@ -7,6 +7,10 @@ import logging
 
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
+from openbase_coder_cli.openbase_coder_cli_app.ios_app_control import (
+    COMMAND_ID_RE,
+    ack_group_name,
+)
 from openbase_coder_cli.openbase_coder_cli_app.thread_metadata import (
     annotate_thread_payload,
 )
@@ -278,7 +282,15 @@ class IOSAppControlConsumer(AsyncJsonWebsocketConsumer):
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def receive_json(self, content, **kwargs):
-        return
+        if content.get("type") != "ios_app_control_ack":
+            return
+        command_id = content.get("command_id")
+        if not isinstance(command_id, str) or not COMMAND_ID_RE.match(command_id):
+            return
+        await self.channel_layer.group_send(
+            ack_group_name(command_id),
+            {"type": "ios_app_control_ack", "command_id": command_id},
+        )
 
     async def ios_app_control(self, event):
         await self.send_json({"type": "ios_app_control", "data": event["data"]})

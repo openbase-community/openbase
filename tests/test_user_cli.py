@@ -241,7 +241,11 @@ def test_user_ios_open_url_posts_control_command(monkeypatch):
         calls.append((url, kwargs["json"]))
         return httpx.Response(
             202,
-            json={"command_id": "ios-app-control-1", "status": "published"},
+            json={
+                "command_id": "ios-app-control-1",
+                "status": "delivered",
+                "delivered": True,
+            },
         )
 
     patch_local_server_request(monkeypatch, fake_request)
@@ -252,13 +256,36 @@ def test_user_ios_open_url_posts_control_command(monkeypatch):
     )
 
     assert result.exit_code == 0
-    assert "ios-app-control-1" in result.output
+    assert "delivered: ios-app-control-1" in result.output
     assert calls == [
         (
             "http://127.0.0.1:7999/api/user/ios-app-control/",
             {"action": "open_url", "url": "openbase://threads/123"},
         )
     ]
+
+
+def test_user_ios_open_url_fails_when_no_app_confirms_receipt(monkeypatch):
+    def fake_request(method, url, **kwargs):
+        return httpx.Response(
+            202,
+            json={
+                "command_id": "ios-app-control-1",
+                "status": "published",
+                "delivered": False,
+            },
+        )
+
+    patch_local_server_request(monkeypatch, fake_request)
+
+    result = CliRunner().invoke(
+        user_cli.user,
+        ["ios", "open-url", "openbase://threads/123"],
+    )
+
+    assert result.exit_code != 0
+    assert "published (unconfirmed): ios-app-control-1" in result.output
+    assert "No iOS app confirmed receipt" in result.output
 
 
 def test_user_ios_mute_and_unmute_post_control_commands(monkeypatch):
@@ -269,7 +296,11 @@ def test_user_ios_mute_and_unmute_post_control_commands(monkeypatch):
         calls.append(kwargs["json"])
         return httpx.Response(
             202,
-            json={"command_id": "ios-app-control-1", "status": "published"},
+            json={
+                "command_id": "ios-app-control-1",
+                "status": "delivered",
+                "delivered": True,
+            },
         )
 
     patch_local_server_request(monkeypatch, fake_request)
@@ -293,7 +324,11 @@ def test_user_ios_debug_livekit_call_posts_control_command(monkeypatch):
         calls.append(kwargs["json"])
         return httpx.Response(
             202,
-            json={"command_id": "ios-app-control-1", "status": "published"},
+            json={
+                "command_id": "ios-app-control-1",
+                "status": "delivered",
+                "delivered": True,
+            },
         )
 
     patch_local_server_request(monkeypatch, fake_request)
@@ -313,7 +348,11 @@ def test_user_ios_developer_call_posts_control_command(monkeypatch):
         calls.append(kwargs["json"])
         return httpx.Response(
             202,
-            json={"command_id": "ios-app-control-1", "status": "published"},
+            json={
+                "command_id": "ios-app-control-1",
+                "status": "delivered",
+                "delivered": True,
+            },
         )
 
     patch_local_server_request(monkeypatch, fake_request)
@@ -333,7 +372,11 @@ def test_user_ios_upload_logs_posts_control_command(monkeypatch):
         calls.append(kwargs["json"])
         return httpx.Response(
             202,
-            json={"command_id": "ios-app-control-1", "status": "published"},
+            json={
+                "command_id": "ios-app-control-1",
+                "status": "delivered",
+                "delivered": True,
+            },
         )
 
     patch_local_server_request(monkeypatch, fake_request)
