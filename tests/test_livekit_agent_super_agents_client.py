@@ -974,7 +974,10 @@ async def test_super_agents_livekit_client_proactively_steers_active_turn(
 async def test_super_agents_livekit_client_passes_dispatcher_reasoning_to_steer(
     tmp_path: Path,
 ) -> None:
-    backend = FakeLongRunningSuperAgentsBackend()
+    class CodexLongRunningBackend(FakeLongRunningSuperAgentsBackend):
+        backend = "codex"
+
+    backend = CodexLongRunningBackend()
     state_path = tmp_path / "livekit-voice-route.json"
     dispatcher_config_path = tmp_path / "dispatcher-config.json"
     dispatcher_config_path.write_text(
@@ -998,6 +1001,42 @@ async def test_super_agents_livekit_client_passes_dispatcher_reasoning_to_steer(
 
     assert turn_id == "turn-1"
     assert backend.steer_turn_inputs[0]["reasoningEffort"] == "low"
+
+
+@pytest.mark.asyncio
+async def test_super_agents_livekit_client_omits_reasoning_on_claude_backend(
+    tmp_path: Path,
+) -> None:
+    backend = FakeLongRunningSuperAgentsBackend()
+    state_path = tmp_path / "livekit-voice-route.json"
+    dispatcher_config_path = tmp_path / "dispatcher-config.json"
+    dispatcher_config_path.write_text(
+        json.dumps(
+            {
+                "dispatcher_reasoning_effort": "low",
+                "super_agents_reasoning_effort": "xhigh",
+            }
+        ),
+        encoding="utf-8",
+    )
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(state_path),
+        dispatcher_config_path=dispatcher_config_path,
+        backend_client=backend,
+    )
+
+    first = asyncio.create_task(client.run_turn("write about strawberries"))
+    await backend.progress_called.wait()
+
+    turn_id = await client.steer_active_turn("stop and write about blueberries")
+
+    backend.release_progress.set()
+    await first
+
+    assert turn_id == "turn-1"
+    assert "reasoningEffort" not in backend.started_turns[0][1]
+    assert "reasoningEffort" not in backend.steer_turn_inputs[0]
 
 
 @pytest.mark.asyncio
