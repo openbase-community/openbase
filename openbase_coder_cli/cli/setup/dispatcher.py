@@ -15,6 +15,7 @@ from openbase_coder_cli.dispatcher_config import (
     STT_PROVIDER_KEY,
     TTS_PROVIDER_KEY,
 )
+from openbase_coder_cli.local_audio import LOCAL_AUDIO_PYTHON_MAX
 from openbase_coder_cli.paths import (
     CODEX_DISPATCHER_CONFIG_PATH,
 )
@@ -53,7 +54,6 @@ LOCAL_AUDIO_REQUIREMENTS = (
     "kokoro>=0.9.4",
     "mlx-whisper>=0.4.3",
 )
-LOCAL_AUDIO_PYTHON_MAX = (3, 13)
 
 
 def _ensure_codex_home_dispatcher_config(audio_provider: str | None = None) -> None:
@@ -200,7 +200,3 @@ def _python_version(python_path: Path) -> tuple[int, int]:
     )
     major, minor = result.stdout.strip().split(".", 1)
     return int(major), int(minor)
-
-
-
-

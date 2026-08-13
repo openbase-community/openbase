@@ -14,6 +14,7 @@ from openbase_coder_cli.backend_config import (
     execution_backend_for_configured_backend,
     normalize_backend,
 )
+from openbase_coder_cli.local_audio import local_audio_python_error
 from openbase_coder_cli.paths import CODEX_DISPATCHER_CONFIG_PATH, DEFAULT_ENV_FILE_PATH
 from openbase_coder_cli.stt_providers import (
     DEFAULT_STT_PROVIDER_ID,
@@ -337,11 +338,11 @@ def selected_stt_provider_id(path: Path | None = None) -> str:
 
 def set_stt_provider(provider_id: str, path: Path | None = None) -> dict[str, str]:
     normalized_provider_id = normalize_stt_provider_id(provider_id)
-    if (
-        normalized_provider_id == LOCAL_MLX_WHISPER_STT_PROVIDER_ID
-        and not local_mlx_whisper_readiness().ready
-    ):
-        raise ValueError("Download local MLX Whisper before selecting local STT.")
+    if normalized_provider_id == LOCAL_MLX_WHISPER_STT_PROVIDER_ID:
+        if error := local_audio_python_error():
+            raise ValueError(error)
+        if not local_mlx_whisper_readiness().ready:
+            raise ValueError("Download local MLX Whisper before selecting local STT.")
 
     config_path = path or CODEX_DISPATCHER_CONFIG_PATH
     _write_dispatcher_config(
@@ -405,8 +406,11 @@ def set_tts_provider_and_dispatcher_voice(
 ) -> dict[str, str]:
     normalized_provider_id = normalize_tts_provider_id(provider_id)
     provider = get_tts_provider(normalized_provider_id)
-    if normalized_provider_id == KOKORO_PROVIDER_ID and not provider.readiness().ready:
-        raise ValueError("Download Kokoro local voices before selecting Kokoro.")
+    if normalized_provider_id == KOKORO_PROVIDER_ID:
+        if error := local_audio_python_error():
+            raise ValueError(error)
+        if not provider.readiness().ready:
+            raise ValueError("Download Kokoro local voices before selecting Kokoro.")
     normalized = voice_id.strip()
     voice = provider.voice_for_id(normalized)
     if voice is None:
