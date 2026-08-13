@@ -21,7 +21,11 @@ from openbase_coder_cli.config.token_manager import (
     DEFAULT_WEB_BACKEND_URL,
     get_token_manager,
 )
-from openbase_coder_cli.env_file import selected_backend_from_env_file
+from openbase_coder_cli.dispatcher_config import selected_tts_provider_id
+from openbase_coder_cli.env_file import (
+    env_file_values,
+    selected_backend_from_env_file,
+)
 from openbase_coder_cli.paths import (
     CODEX_HOME_DIR,
     DEFAULT_ENV_FILE_PATH,
@@ -79,8 +83,8 @@ def write_onboarding_cache(updates: dict[str, Any]) -> None:
     )
 
 
-def selected_coding_backend() -> str:
-    """The coding backend configured for this install (env file wins)."""
+def _runtime_env_path() -> Path:
+    """The runtime .env file for this install (installation config wins)."""
     env_path = DEFAULT_ENV_FILE_PATH
     if InstallationConfig.exists():
         try:
@@ -89,8 +93,46 @@ def selected_coding_backend() -> str:
             pass
         else:
             if config.env_file:
-                env_path = os.path.expanduser(config.env_file)
-    return selected_backend_from_env_file(Path(env_path))
+                env_path = Path(os.path.expanduser(config.env_file))
+    return Path(env_path)
+
+
+def selected_coding_backend() -> str:
+    """The coding backend configured for this install (env file wins)."""
+    return selected_backend_from_env_file(_runtime_env_path())
+
+
+# Onboarding audio provider ids as the desktop presents them, derived from
+# the dispatcher config's TTS provider id — the source of truth the voice
+# services read.
+_AUDIO_PROVIDER_BY_TTS_ID = {
+    "openbase_cloud": "openbase-cloud",
+    "cartesia": "cartesia",
+    "kokoro": "local",
+}
+VOICE_KEY_NAMES = ("ASSEMBLY_AI_API_KEY", "CARTESIA_API_KEY")
+
+
+def audio_status() -> dict[str, Any]:
+    """Voice audio facts for this install.
+
+    The dispatcher config's selected TTS provider is the source of truth for
+    the audio provider; provider keys are read live from the runtime env
+    file. ``voice_ready`` means the selected provider needs no further local
+    configuration — Openbase Cloud audio rides on the cloud login, which
+    ``authenticated`` reports separately.
+    """
+    tts_provider_id = selected_tts_provider_id()
+    provider = _AUDIO_PROVIDER_BY_TTS_ID.get(tts_provider_id, tts_provider_id)
+    env_values = env_file_values(_runtime_env_path())
+    keys = {name: bool(env_values.get(name)) for name in VOICE_KEY_NAMES}
+    if provider == "cartesia":
+        voice_ready = all(keys.values())
+    else:
+        # openbase-cloud needs no local keys; local (kokoro/MLX) is a
+        # dev-managed setup whose model state must not block onboarding.
+        voice_ready = True
+    return {"provider": provider, "voice_ready": voice_ready, "keys": keys}
 
 
 def codex_auth_present() -> bool:
@@ -151,7 +193,10 @@ def onboarding_status_payload() -> dict[str, Any]:
         "authenticated": authenticated,
         "auth_status": auth_status,
         "backend_auth": backend_auth_status(authenticated=authenticated),
+        "audio": audio_status(),
         "tailscale_self": tailscale_self_identity(),
         "tailscale_serve": tailscale_serve_health().to_dict(),
+        # Last-report hint only; live pairing facts come from the cloud
+        # registry via GET /api/onboarding/cloud-state/.
         "cloud": read_onboarding_cache(),
     }

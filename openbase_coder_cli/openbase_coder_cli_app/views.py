@@ -59,7 +59,10 @@ from openbase_coder_cli.openbase_coder_cli_app.livekit import (
 from openbase_coder_cli.openbase_coder_cli_app.model_settings import (
     backend_model_settings,  # noqa: F401
 )
-from openbase_coder_cli.openbase_coder_cli_app.onboarding import onboarding_status
+from openbase_coder_cli.openbase_coder_cli_app.onboarding import (
+    onboarding_cloud_state,
+    onboarding_status,
+)
 from openbase_coder_cli.openbase_coder_cli_app.plugins_tools import (
     boilersync_templates,
     bootstrap_run,
@@ -319,6 +322,7 @@ __all__ = [
     "livekit_voice_route_exit",
     "livekit_voice_route_transfer",
     "local_stt_download",
+    "onboarding_cloud_state",
     "onboarding_status",
     "openbase_restart",
     "openbase_service_action",
