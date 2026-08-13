@@ -41,8 +41,8 @@ Useful keys:
 
 | Key | Purpose |
 | --- | --- |
-| `dispatcher_reasoning_effort` | Default dispatcher reasoning effort |
-| `super_agents_reasoning_effort` | Default Super Agents reasoning effort |
+| `dispatcher_reasoning_effort` | Default dispatcher reasoning effort (Codex backend only) |
+| `super_agents_reasoning_effort` | Default Super Agents reasoning effort (Codex backend only) |
 | `backend_models` | Backend-specific default dispatcher and default Super Agents models for `codex`, `openbase_cloud`, and `claude_code` |
 
 ## Agent/Voice Variables

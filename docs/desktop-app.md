@@ -204,7 +204,9 @@ The Settings page groups configuration into sections:
   before changing it, then restarts Openbase services and recreates the
   dispatcher automatically.
 - **Backend Model**, **Service Tier**, **Reasoning** — model and reasoning
-  defaults for agents (same as `openbase-coder defaults ...`).
+  defaults for agents (same as `openbase-coder defaults ...`). Reasoning
+  levels apply to the Codex backend only; on Claude Code, reasoning effort
+  follows the Service Tier (Fast mode) and cannot be set directly.
 - **LiveKit Companion Screen Sharing** (desktop app only) — see below.
 - **Dispatcher Voice** — TTS/STT provider and voice selection, voice API
   keys, local model downloads, and a "Recreate LiveKit thread" action.
