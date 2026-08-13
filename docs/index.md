@@ -45,7 +45,8 @@ setup, login, and service steps by hand.
 For source development, clone the workspace repo and run its setup script:
 
 ```bash
-git clone https://github.com/openbase-community/openbase-coder-workspace
+git clone --branch main --single-branch \
+  https://github.com/openbase-community/openbase-coder-workspace
 cd openbase-coder-workspace
 ./scripts/setup
 ```

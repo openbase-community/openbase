@@ -89,16 +89,27 @@ git checkout main
 ./scripts/setup
 ```
 
+To install the current development branch instead:
+
+```bash
+uv tool install multi-workspace
+git clone --branch develop --single-branch \
+  https://github.com/openbase-community/openbase-coder-workspace
+cd openbase-coder-workspace
+git checkout develop
+./scripts/setup
+```
+
 After cloning the workspace, use
 [`DEV_RUNBOOK.md`](../DEV_RUNBOOK.md) for the full developer install,
 authentication, verification, and iteration flow.
 
 The workspace setup syncs the public development repos with `multi`, builds the
 console from source, and runs `openbase-coder setup --workspace-dir` against the
-checkout. Keep the workspace on `main` before running setup: `multi` mirrors
-the workspace branch into synced subrepos, while repos pinned in `multi.json`
-stay on their configured branch. The CLI source for this repository lives at
-`cli/` inside the workspace.
+checkout. Keep the workspace on the branch you want before running setup:
+`multi` mirrors the workspace branch into synced subrepos, while repos pinned
+in `multi.json` stay on their configured branch. The CLI source for this
+repository lives at `cli/` inside the workspace.
 
 For CLI-only development after workspace setup:
 

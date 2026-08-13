@@ -72,7 +72,8 @@ its setup script from the workspace root. It syncs the sub-repos with
 against your checkout:
 
 ```bash
-git clone https://github.com/openbase-community/openbase-coder-workspace
+git clone --branch main --single-branch \
+  https://github.com/openbase-community/openbase-coder-workspace
 cd openbase-coder-workspace
 ./scripts/setup
 ```
