@@ -51,6 +51,7 @@ class TurnInfo(BaseModel):
     accumulated_stderr: str = ""
     return_code: int | None = None
     message: str = Field(default="", serialization_alias="prompt")
+    model: str | None = None
     reasoning_effort: str | None = None
     steers: list[TurnSteerInfo] = Field(default_factory=list)
 
@@ -72,6 +73,10 @@ class ThreadInfo(BaseModel):
     # The backend-native conversation id (e.g. the Claude Code session id for
     # claude_code threads), used to resume the transcript outside Openbase.
     backend_session_id: str | None = None
+    # Model and reasoning effort last used by the thread, as reported by the
+    # backend (session/thread rows, falling back to the newest turn).
+    model: str | None = None
+    reasoning_effort: str | None = None
     session_type: Literal["codex"] = Field(default="codex", exclude=True)
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
