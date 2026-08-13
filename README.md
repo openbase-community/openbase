@@ -87,6 +87,10 @@ cd openbase-coder-workspace
 ./scripts/setup
 ```
 
+After cloning the workspace, use
+[`DEV_RUNBOOK.md`](../DEV_RUNBOOK.md) for the full developer install,
+authentication, verification, and iteration flow.
+
 The workspace setup syncs the public development repos with `multi`, builds the
 console from source, and runs `openbase-coder setup --workspace-dir` against the
 checkout. The CLI source for this repository lives at `cli/` inside the
