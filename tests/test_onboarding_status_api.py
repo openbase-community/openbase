@@ -87,6 +87,9 @@ def test_onboarding_status_payload_composes_checks(monkeypatch, tmp_path) -> Non
         "backend_auth_status",
         lambda *, authenticated: {"backend": "codex", "ready": authenticated},
     )
+    monkeypatch.setattr(
+        onboarding, "selected_tts_provider_id", lambda: "openbase_cloud"
+    )
 
     payload = onboarding.onboarding_status_payload()
 
@@ -106,6 +109,110 @@ def test_onboarding_status_payload_composes_checks(monkeypatch, tmp_path) -> Non
     assert payload["tailscale_self"]["dns_name"] == "mac.tailnet.ts.net"
     assert payload["tailscale_serve"] == {"healthy": True}
     assert payload["cloud"] == {"last_register": {"ok": True}}
+    assert payload["audio"] == {
+        "provider": "openbase-cloud",
+        "voice_ready": True,
+        "keys": {"ASSEMBLY_AI_API_KEY": False, "CARTESIA_API_KEY": False},
+    }
+
+
+def _isolate_audio_env(monkeypatch, tmp_path, env_text: str) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(env_text, encoding="utf-8")
+    monkeypatch.setattr(
+        onboarding.InstallationConfig, "exists", classmethod(lambda cls: True)
+    )
+    monkeypatch.setattr(
+        onboarding.InstallationConfig,
+        "load",
+        classmethod(lambda cls: SimpleNamespace(env_file=str(env_file))),
+    )
+
+
+def test_audio_status_cartesia_requires_both_keys(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(onboarding, "selected_tts_provider_id", lambda: "cartesia")
+
+    _isolate_audio_env(monkeypatch, tmp_path, "ASSEMBLY_AI_API_KEY=abc\n")
+    partial = onboarding.audio_status()
+    assert partial["provider"] == "cartesia"
+    assert partial["voice_ready"] is False
+    assert partial["keys"] == {"ASSEMBLY_AI_API_KEY": True, "CARTESIA_API_KEY": False}
+
+    _isolate_audio_env(
+        monkeypatch, tmp_path, "ASSEMBLY_AI_API_KEY=abc\nCARTESIA_API_KEY=def\n"
+    )
+    assert onboarding.audio_status()["voice_ready"] is True
+
+
+def test_audio_status_local_provider_does_not_block(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(onboarding, "selected_tts_provider_id", lambda: "kokoro")
+    _isolate_audio_env(monkeypatch, tmp_path, "")
+
+    payload = onboarding.audio_status()
+
+    assert payload["provider"] == "local"
+    assert payload["voice_ready"] is True
+
+
+def test_onboarding_cloud_state_proxies_live_state(monkeypatch) -> None:
+    from openbase_coder_cli.openbase_coder_cli_app import (
+        onboarding as onboarding_views,
+    )
+
+    state = {"devices": [{"kind": "desktop"}], "desktop_count": 1, "mobile_count": 0}
+    monkeypatch.setattr(
+        "openbase_coder_cli.code_sync.eligibility.fetch_cloud_state", lambda: state
+    )
+
+    request = APIRequestFactory().get("/api/onboarding/cloud-state/")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+    response = onboarding_views.onboarding_cloud_state(request)
+
+    assert response.status_code == 200
+    assert response.data == state
+
+
+def test_onboarding_cloud_state_reports_login_required(monkeypatch) -> None:
+    from openbase_coder_cli.config.token_manager import AuthLoginRequiredError
+    from openbase_coder_cli.openbase_coder_cli_app import (
+        onboarding as onboarding_views,
+    )
+
+    def raise_login_required():
+        raise AuthLoginRequiredError("Login required.")
+
+    monkeypatch.setattr(
+        "openbase_coder_cli.code_sync.eligibility.fetch_cloud_state",
+        raise_login_required,
+    )
+
+    request = APIRequestFactory().get("/api/onboarding/cloud-state/")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+    response = onboarding_views.onboarding_cloud_state(request)
+
+    assert response.status_code == 401
+    assert "Login" in response.data["error"]
+
+
+def test_onboarding_cloud_state_reports_unreachable_cloud(monkeypatch) -> None:
+    from openbase_coder_cli.config.token_manager import AuthTransientError
+    from openbase_coder_cli.openbase_coder_cli_app import (
+        onboarding as onboarding_views,
+    )
+
+    def raise_transient():
+        raise AuthTransientError("connection refused")
+
+    monkeypatch.setattr(
+        "openbase_coder_cli.code_sync.eligibility.fetch_cloud_state", raise_transient
+    )
+
+    request = APIRequestFactory().get("/api/onboarding/cloud-state/")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+    response = onboarding_views.onboarding_cloud_state(request)
+
+    assert response.status_code == 502
+    assert "unreachable" in response.data["error"]
 
 
 def test_cli_configured_false_when_installation_missing(monkeypatch) -> None:
