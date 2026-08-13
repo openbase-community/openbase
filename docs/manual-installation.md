@@ -36,10 +36,12 @@ there because it may include app-selected options such as the coding backend.
 
 ## Install Prerequisites
 
-Install Tailscale before continuing if you want iPhone-to-Mac voice networking:
+Install Tailscale before continuing if you want iPhone-to-Mac voice
+networking. On macOS, use the Mac App Store variant (see
+[Getting Started](getting-started.md#prerequisites)):
 
 ```bash
-open https://tailscale.com/download/mac
+open https://apps.apple.com/us/app/tailscale/id1475387142
 ```
 
 The desktop app's bundled runtime package includes Python, Openbase Coder

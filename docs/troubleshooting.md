@@ -87,6 +87,37 @@ LIVEKIT_TCP_PORT=7881
 LIVEKIT_UDP_PORT=7882
 ```
 
+## Tailscale Login Loops or CLI Errors After an Update (macOS)
+
+Symptoms, usually right after a Tailscale app update or a macOS security
+update, with the site-download (standalone) Tailscale variant:
+
+- Tailscale shows "Authentication In Progress" or "Waiting for Network..."
+  forever, or "Unable to add a new user. Please try again."
+- Every CLI command fails, even `tailscale down`:
+  `The Tailscale CLI failed to start: ... (Tailscale.CLIError error 1.)`
+- In Openbase, the iPhone sticks on connecting while the Mac's backend is
+  otherwise healthy.
+
+This is a known failure state of the standalone variant's macOS system
+extension; uninstalling and reinstalling the same variant often does not
+recover it. Switch to the Mac App Store variant, which uses a sandboxed
+network extension and avoids this class of breakage:
+
+1. Fully uninstall the current Tailscale following
+   [Tailscale's uninstall steps](https://tailscale.com/kb/1153/uninstall),
+   then reboot. Never leave both variants installed at once.
+2. Install [Tailscale from the Mac App Store](https://apps.apple.com/us/app/tailscale/id1475387142)
+   and sign in to the same tailnet.
+3. Re-run setup from the desktop app (or `openbase-coder setup`) so the
+   Tailscale Serve routes are configured again, then verify with
+   `tailscale serve status` and `openbase-coder doctor`.
+
+The App Store variant supports everything Openbase uses (port-mode
+Tailscale Serve, the bundled CLI, MagicDNS). The site download remains an
+option for machines without App Store access; the one conflict to know
+about in the App Store variant is Apple's Screen Time web filter.
+
 ## Voice Route Exit Returns 502 With Invalid LiveKit URL
 
 Symptoms:
