@@ -291,6 +291,7 @@ def _run_from_turn(
         accumulated_stderr=stderr,
         return_code=0 if status == SessionStatus.completed else -1,
         message=message,
+        model=_optional_turn_string(turn, "model"),
         reasoning_effort=_optional_turn_string(
             turn,
             "reasoningEffort",
@@ -342,6 +343,12 @@ def _session_from_thread(
             "backendSessionId",
             "backend_session_id",
         ),
+        model=_optional_thread_string(thread, "model"),
+        reasoning_effort=_optional_thread_string(
+            thread,
+            "reasoningEffort",
+            "reasoning_effort",
+        ),
         session_type="codex",
         created_at=_timestamp_to_datetime(thread.get("createdAt")),
         updated_at=_timestamp_to_datetime(
@@ -385,6 +392,13 @@ def _session_from_thread(
 
     session.current_run = current_run
     session.run_history = run_history
+    for run in ([current_run] if current_run else []) + list(reversed(run_history)):
+        if session.model is None and run.model:
+            session.model = run.model
+        if session.reasoning_effort is None and run.reasoning_effort:
+            session.reasoning_effort = run.reasoning_effort
+        if session.model is not None and session.reasoning_effort is not None:
+            break
     if (
         current_run is None
         and run_history
