@@ -20,8 +20,10 @@ app. On first run it shows a guided setup flow:
 
 1. **Welcome** — overview of the steps ahead.
 2. **Check prerequisites** — verifies macOS, the bundled CLI (activated
-   automatically), and Tailscale. You can download Tailscale from here if it
-   is missing.
+   automatically), and Tailscale. You can install Tailscale from here if it
+   is missing (the app links the Mac App Store variant; see
+   [Troubleshooting](troubleshooting.md#tailscale-login-loops-or-cli-errors-after-an-update-macos)
+   for why).
 3. **Set up Openbase Cloud** — starts the normal managed path: Cloud-proxied
    Claude Code plus managed speech-to-text and voice output, with a generous
    Openbase Cloud free trial and no third-party provider keys.

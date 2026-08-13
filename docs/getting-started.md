@@ -11,7 +11,14 @@ when you prefer the terminal or are setting up a headless machine.
 ## Prerequisites
 
 - macOS (`setup` and `services` use launchd) or Linux (systemd user services). The `computer-use` CLI is Linux-only for Openbase DevSpace Xorg/DCV desktops; macOS agents use native Computer Use tooling.
-- Tailscale, signed in and connected, for iOS app access to the local CLI
+- Tailscale, signed in and connected, for iOS app access to the local CLI.
+  On macOS, install the
+  [Mac App Store variant](https://apps.apple.com/us/app/tailscale/id1475387142):
+  it avoids the site-download variant's system-extension problems after
+  updates (see
+  [Troubleshooting](troubleshooting.md#tailscale-login-loops-or-cli-errors-after-an-update-macos)),
+  and it supports everything Openbase needs. Never install both variants at
+  once.
 - Openbase Cloud login for the normal `openbase_cloud` backend
 
 Openbase Coder has exactly two deployment modes:
