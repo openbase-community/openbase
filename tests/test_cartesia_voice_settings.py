@@ -505,3 +505,86 @@ def test_apple_music_playback_entitlement_uses_request_bearer_jwt(
     assert response.status_code == 200
     assert response.data["available"] is True
     assert captured["access_token"] == "caller.jwt.token"
+
+
+def test_tts_settings_rejects_kokoro_on_unsupported_python(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "dispatcher-config.json"
+    monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
+    monkeypatch.setattr(
+        views,
+        "set_tts_provider_and_dispatcher_voice",
+        dispatcher_config.set_tts_provider_and_dispatcher_voice,
+    )
+    monkeypatch.setattr(
+        dispatcher_config,
+        "local_audio_python_error",
+        lambda: "Local audio requires a Python 3.12 Openbase Coder runtime.",
+    )
+    # Even with the models downloaded, an unsupported Python must block.
+    monkeypatch.setattr(
+        get_tts_provider(KOKORO_PROVIDER_ID),
+        "readiness",
+        lambda: SimpleNamespace(ready=True),
+    )
+
+    response = views.tts_settings(
+        _authenticated_request(
+            "PUT",
+            "/api/settings/tts/",
+            {"provider": "kokoro", "voice_id": "af_heart"},
+        )
+    )
+
+    assert response.status_code == 400
+    assert "Python 3.12" in response.data["detail"]
+
+
+def test_stt_settings_rejects_local_on_unsupported_python(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "dispatcher-config.json"
+    monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
+    monkeypatch.setattr(views, "set_stt_provider", dispatcher_config.set_stt_provider)
+    monkeypatch.setattr(
+        dispatcher_config,
+        "local_audio_python_error",
+        lambda: "Local audio requires a Python 3.12 Openbase Coder runtime.",
+    )
+    monkeypatch.setattr(
+        dispatcher_config,
+        "local_mlx_whisper_readiness",
+        lambda: SimpleNamespace(ready=True),
+    )
+
+    response = views.stt_settings(
+        _authenticated_request(
+            "PUT",
+            "/api/settings/stt/",
+            {"provider": "local_mlx_whisper"},
+        )
+    )
+
+    assert response.status_code == 400
+    assert "Python 3.12" in response.data["detail"]
+
+
+def test_local_audio_downloads_reject_unsupported_python(monkeypatch) -> None:
+    monkeypatch.setattr(
+        views._livekit,
+        "local_audio_python_error",
+        lambda: "Local audio requires a Python 3.12 Openbase Coder runtime.",
+    )
+
+    tts_response = views.kokoro_tts_download(
+        _authenticated_request("POST", "/api/settings/tts/kokoro/download/")
+    )
+    stt_response = views.local_stt_download(
+        _authenticated_request("POST", "/api/settings/stt/local/download/")
+    )
+
+    assert tts_response.status_code == 400
+    assert "Python 3.12" in tts_response.data["detail"]
+    assert stt_response.status_code == 400
+    assert "Python 3.12" in stt_response.data["detail"]

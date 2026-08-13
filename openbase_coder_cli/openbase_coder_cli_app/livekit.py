@@ -64,6 +64,7 @@ from openbase_coder_cli.livekit_voice_route import (
     publish_transfer_to_thread,
     super_agent_voice_for_context,
 )
+from openbase_coder_cli.local_audio import local_audio_python_error
 from openbase_coder_cli.openbase_coder_cli_app.common import _request_identity
 from openbase_coder_cli.services.cloud_workspace import cloud_workspace_id
 from openbase_coder_cli.stt_providers import (
@@ -375,6 +376,8 @@ def tts_settings(request):
 @api_view(["POST"])
 def kokoro_tts_download(request):
     """Download/cache the local Kokoro model and every supported voice file."""
+    if error := local_audio_python_error():
+        return Response({"detail": error}, status=status.HTTP_400_BAD_REQUEST)
     provider = get_tts_provider(KOKORO_PROVIDER_ID)
     try:
         download = provider.download_all_voices()
@@ -425,6 +428,8 @@ def stt_settings(request):
 @api_view(["POST"])
 def local_stt_download(request):
     """Download/cache the local MLX Whisper STT model."""
+    if error := local_audio_python_error():
+        return Response({"detail": error}, status=status.HTTP_400_BAD_REQUEST)
     try:
         download = download_local_mlx_whisper()
     except Exception as exc:
