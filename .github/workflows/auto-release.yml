@@ -77,11 +77,23 @@ jobs:
           esac
           version="${major}.${minor}.${patch}"
           if [[ "${GITHUB_REF_NAME}" == "staging" ]]; then
-            # Staging releases are PEP 440 dev releases of the next stable
-            # version: they sort below it, publish as GitHub prereleases,
-            # and the .dev marker is what routes them to the staging
-            # channel (and keeps them out of beta resolution).
-            version="${version}.dev$(date -u +%Y%m%d%H%M%S)"
+            # Staging releases are PEP 440 dev releases: GitHub prereleases,
+            # routed to the staging channel by the .dev marker (which also
+            # keeps them out of beta resolution). The tag must end in
+            # exactly .dev0 — setuptools-scm refuses to version commits past
+            # any other .devN tag, which would break every from-source build
+            # (uv tool install git+..., dev workspace syncs). So each staging
+            # release patch-bumps past the highest existing tag of any kind;
+            # stable keeps minor-bumping, so the next stable still sorts
+            # above every staging build.
+            latest_any="$(git tag --list 'v[0-9]*' \
+              | sed -e 's/^v//' -e 's/\.dev[0-9]*$//' \
+              | grep -Ev '([0-9](a|b|rc)[0-9])|-' \
+              | sort -t. -k1,1n -k2,2n -k3,3n \
+              | tail -1)"
+            latest_any="${latest_any:-0.0.0}"
+            IFS=. read -r any_major any_minor any_patch <<< "$latest_any"
+            version="${any_major}.${any_minor}.$((any_patch + 1)).dev0"
           fi
           echo "Auto-release: ${latest} -> ${version} (${bump}, ${GITHUB_REF_NAME})"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
