@@ -223,35 +223,35 @@ def ios() -> None:
 def ios_open_url(url: str) -> None:
     """Ask the foreground iOS app to open a URL or deep link."""
     data = _publish_ios_app_control({"action": "open_url", "url": url})
-    click.echo(f"iOS open-url command published: {data.get('command_id')}")
+    _report_ios_command_result(data, "open-url")
 
 
 @ios.command("mute")
 def ios_mute() -> None:
     """Mute the active iOS voice call."""
     data = _publish_ios_app_control({"action": "set_call_muted", "muted": True})
-    click.echo(f"iOS mute command published: {data.get('command_id')}")
+    _report_ios_command_result(data, "mute")
 
 
 @ios.command("unmute")
 def ios_unmute() -> None:
     """Unmute the active iOS voice call."""
     data = _publish_ios_app_control({"action": "set_call_muted", "muted": False})
-    click.echo(f"iOS unmute command published: {data.get('command_id')}")
+    _report_ios_command_result(data, "unmute")
 
 
 @ios.command("start-livekit-voice-test")
 def ios_start_livekit_voice_test() -> None:
     """Switch iOS to the debug LiveKit tab and start its configured call."""
     data = _publish_ios_app_control({"action": "start_livekit_voice_test_call"})
-    click.echo(f"iOS LiveKit voice test command published: {data.get('command_id')}")
+    _report_ios_command_result(data, "LiveKit voice test")
 
 
 @ios.command("start-developer-call")
 def ios_start_developer_call() -> None:
     """Switch iOS to the normal call tab and start the developer call."""
     data = _publish_ios_app_control({"action": "start_developer_call"})
-    click.echo(f"iOS developer call command published: {data.get('command_id')}")
+    _report_ios_command_result(data, "developer call")
 
 
 @ios.command("upload-logs")
@@ -267,12 +267,24 @@ def ios_upload_logs(limit: int | None) -> None:
     if limit is not None:
         payload["limit"] = limit
     data = _publish_ios_app_control(payload)
-    click.echo(f"iOS diagnostics upload command published: {data.get('command_id')}")
+    _report_ios_command_result(data, "diagnostics upload")
 
 
 def _publish_ios_app_control(payload: dict[str, object]) -> dict:
     response = local_server_request("POST", "/api/user/ios-app-control/", json=payload)
     return response.json()
+
+
+def _report_ios_command_result(data: dict, label: str) -> None:
+    command_id = data.get("command_id")
+    if data.get("delivered"):
+        click.echo(f"iOS {label} command delivered: {command_id}")
+        return
+    click.echo(f"iOS {label} command published (unconfirmed): {command_id}")
+    raise click.ClickException(
+        "No iOS app confirmed receipt. The Openbase app is likely closed, "
+        "backgrounded, or signed out; bring it to the foreground and retry."
+    )
 
 
 ios.add_command(ios_open_url, "open-link")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 import uuid
@@ -15,6 +16,10 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 IOS_APP_CONTROL_GROUP = "ios_app_control"
+IOS_APP_CONTROL_ACK_TIMEOUT_SECONDS = 5.0
+# Channel-layer group names only allow [a-zA-Z0-9._-]; command ids are
+# validated against this before being embedded in an ack group name.
+COMMAND_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 IOS_APP_CONTROL_ACTIONS = {
     "open_url",
     "set_call_muted",
@@ -44,9 +49,7 @@ class IOSAppControlSerializer(serializers.Serializer):
                 raise serializers.ValidationError("url is required for open_url.")
             _validate_url(url)
         elif action == "set_call_muted" and "muted" not in attrs:
-            raise serializers.ValidationError(
-                "muted is required for set_call_muted."
-            )
+            raise serializers.ValidationError("muted is required for set_call_muted.")
         return attrs
 
 
@@ -63,6 +66,35 @@ def _validate_url(value: str) -> None:
         raise serializers.ValidationError("url must not contain control characters.")
 
 
+def ack_group_name(command_id: str) -> str:
+    return f"ios_app_control_ack.{command_id}"
+
+
+async def _publish_and_await_ack(
+    channel_layer, command: dict[str, Any], timeout: float
+) -> bool:
+    """Publish a command, then wait for a device ack on a per-command group.
+
+    The ack channel is joined before publishing so the ack cannot race the
+    subscription. Returns whether a connected app confirmed receipt.
+    """
+    ack_channel = await channel_layer.new_channel()
+    ack_group = ack_group_name(command["command_id"])
+    await channel_layer.group_add(ack_group, ack_channel)
+    try:
+        await channel_layer.group_send(
+            IOS_APP_CONTROL_GROUP,
+            {"type": "ios_app_control", "data": command},
+        )
+        try:
+            await asyncio.wait_for(channel_layer.receive(ack_channel), timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
+    finally:
+        await channel_layer.group_discard(ack_group, ack_channel)
+
+
 def publish_ios_app_control(payload: dict[str, Any]) -> dict[str, Any]:
     command = {
         "command_id": f"ios-app-control-{uuid.uuid4().hex}",
@@ -72,11 +104,10 @@ def publish_ios_app_control(payload: dict[str, Any]) -> dict[str, Any]:
     channel_layer = get_channel_layer()
     if channel_layer is None:
         raise RuntimeError("Channel layer is not configured.")
-    async_to_sync(channel_layer.group_send)(
-        IOS_APP_CONTROL_GROUP,
-        {"type": "ios_app_control", "data": command},
+    delivered = async_to_sync(_publish_and_await_ack)(
+        channel_layer, command, IOS_APP_CONTROL_ACK_TIMEOUT_SECONDS
     )
-    return command
+    return {**command, "delivered": delivered}
 
 
 @api_view(["POST"])
@@ -86,11 +117,14 @@ def ios_app_control(request):
     try:
         command = publish_ios_app_control(dict(input_serializer.validated_data))
     except RuntimeError as exc:
-        return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        return Response(
+            {"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE
+        )
     return Response(
         {
             "command_id": command["command_id"],
-            "status": "published",
+            "status": "delivered" if command["delivered"] else "published",
+            "delivered": command["delivered"],
             "action": command["action"],
         },
         status=status.HTTP_202_ACCEPTED,
