@@ -11,6 +11,11 @@ trap 'rm -rf "$build_dir"' EXIT
 
 cp "$cli_dir/scripts/release-workspace/package.json" "$build_dir/"
 cp "$cli_dir/scripts/release-workspace/pnpm-workspace.yaml" "$build_dir/"
+# Seed the current lockfile so unchanged third-party deps keep their pinned
+# versions; without it pnpm re-resolves every dependency from scratch.
+if [ -f "$cli_dir/scripts/release-workspace/pnpm-lock.yaml" ]; then
+  cp "$cli_dir/scripts/release-workspace/pnpm-lock.yaml" "$build_dir/"
+fi
 for repo in console coder-react multi-react boilersync-react; do
   mkdir -p "$build_dir/$repo"
   cp "$workspace_dir/$repo/package.json" "$build_dir/$repo/"
