@@ -31,6 +31,8 @@ assets rendered in iframes.
 Local Kokoro/MLX audio is optional. When setup is run with
 `--audio-provider local`, the CLI installs the local-audio Python packages into
 the bundled runtime and downloads the Kokoro voices and MLX Whisper model.
+Local audio needs an Apple Silicon Mac and a Python 3.12 runtime — see
+[Local-Only Mode](local-only.md).
 
 Optional developer backends:
 
