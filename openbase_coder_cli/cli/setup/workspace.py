@@ -224,8 +224,11 @@ def _init_cli_workspace(workspace_dir: str) -> None:
 
     uv_bin = which("uv")
     if not uv_bin:
-        click.echo("'uv' not found on PATH, skipping CLI workspace init.")
-        return
+        raise click.ClickException(
+            "'uv' is required to initialize the CLI workspace — install it "
+            "with 'curl -LsSf https://astral.sh/uv/install.sh | sh' (or "
+            "'brew install uv'), then re-run 'openbase-coder setup'."
+        )
 
     click.echo("Initializing CLI workspace...")
 
