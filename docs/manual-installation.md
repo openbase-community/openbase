@@ -48,7 +48,9 @@ still needs `uv`, Git, Node, and workspace tooling.
 
 If you want fully local Kokoro/MLX audio, run setup with
 `--audio-provider local`; setup installs the optional local-audio packages into
-the bundled Python runtime and downloads the required models.
+the bundled Python runtime and downloads the required models. This requires an
+Apple Silicon Mac and a Python 3.12 runtime — see
+[Local-Only Mode](local-only.md).
 
 ## Run Setup Yourself
 

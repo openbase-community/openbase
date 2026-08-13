@@ -6,6 +6,12 @@ fun than the managed path: Kokoro voice quality is lower than Cartesia or
 Openbase Cloud audio, local MLX Whisper is not streaming in the same way, and a
 call usually takes longer to set up because the local models need to load.
 
+Local audio requires an Apple Silicon Mac and a Python 3.12 Openbase Coder
+runtime: MLX Whisper only runs on Apple Silicon, and Kokoro declares Python
+`<3.13`. Setup and the console settings refuse local audio on Python 3.13 or
+newer; on Linux or Intel Macs the MLX dependencies are not available. Use the
+Openbase Cloud or Cartesia audio providers on those machines.
+
 ## Use Local STT and TTS From the GUI
 
 The recommended path is the GUI — the [desktop app](desktop-app.md) during
