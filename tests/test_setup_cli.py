@@ -914,10 +914,12 @@ def test_ensure_claude_auth_bridge_syncs_before_status(monkeypatch) -> None:
     _patch_setup(
         monkeypatch,
         "sync_normal_claude_state",
-        lambda: calls.append("sync")
-        or claude_auth.ClaudeAuthBridgeResult(
-            state_updated=True,
-            message="synced normal state",
+        lambda: (
+            calls.append("sync")
+            or claude_auth.ClaudeAuthBridgeResult(
+                state_updated=True,
+                message="synced normal state",
+            )
         ),
     )
     _patch_setup(
@@ -928,8 +930,12 @@ def test_ensure_claude_auth_bridge_syncs_before_status(monkeypatch) -> None:
     _patch_setup(
         monkeypatch,
         "claude_auth_status",
-        lambda: calls.append("status")
-        or claude_auth.ClaudeAuthStatus(logged_in=True, raw_output="{}", returncode=0),
+        lambda: (
+            calls.append("status")
+            or claude_auth.ClaudeAuthStatus(
+                logged_in=True, raw_output="{}", returncode=0
+            )
+        ),
     )
 
     setup_cli._ensure_claude_auth_bridge(login_if_needed=False)
@@ -1645,3 +1651,61 @@ def test_require_byok_audio_keys_skips_other_providers(tmp_path, monkeypatch) ->
     )
 
     assert keys == ("", "")
+
+
+def test_resolve_interactive_mode_no_flags_on_tty(monkeypatch) -> None:
+    _fake_tty_stdin(monkeypatch, "")
+    ctx = setup_cli.setup.make_context("setup", [])
+    with ctx:
+        assert setup_cli._resolve_interactive_mode(None, False) is True
+
+
+def test_resolve_interactive_mode_any_flag_disables_prompts(monkeypatch) -> None:
+    _fake_tty_stdin(monkeypatch, "")
+    ctx = setup_cli.setup.make_context("setup", ["--skip-services"])
+    with ctx:
+        assert setup_cli._resolve_interactive_mode(None, False) is False
+
+
+def test_resolve_interactive_mode_workspace_dir_flag_disables_prompts(
+    tmp_path, monkeypatch
+) -> None:
+    _fake_tty_stdin(monkeypatch, "")
+    ctx = setup_cli.setup.make_context(
+        "setup", ["--workspace-dir", str(tmp_path), "--backend", "codex"]
+    )
+    with ctx:
+        assert setup_cli._resolve_interactive_mode(None, False) is False
+
+
+def test_resolve_interactive_mode_forced_interactive_wins(monkeypatch) -> None:
+    _fake_tty_stdin(monkeypatch, "")
+    ctx = setup_cli.setup.make_context("setup", ["--interactive", "--skip-services"])
+    with ctx:
+        assert setup_cli._resolve_interactive_mode(True, False) is True
+
+
+def test_resolve_interactive_mode_forced_non_interactive_wins(monkeypatch) -> None:
+    _fake_tty_stdin(monkeypatch, "")
+    ctx = setup_cli.setup.make_context("setup", ["--non-interactive"])
+    with ctx:
+        assert setup_cli._resolve_interactive_mode(False, False) is False
+
+
+def test_resolve_interactive_mode_json_progress_disables_prompts(
+    monkeypatch,
+) -> None:
+    _fake_tty_stdin(monkeypatch, "")
+    ctx = setup_cli.setup.make_context("setup", ["--interactive", "--json-progress"])
+    with ctx:
+        assert setup_cli._resolve_interactive_mode(True, True) is False
+
+
+def test_resolve_interactive_mode_non_tty_disables_prompts(monkeypatch) -> None:
+    import io
+    import sys
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+    ctx = setup_cli.setup.make_context("setup", [])
+    with ctx:
+        assert setup_cli._resolve_interactive_mode(None, False) is False

@@ -38,9 +38,12 @@ With no flags, setup runs interactively on a fresh install: numbered pickers
 choose the coding backend (`codex`, `claude-code`, or `openbase-cloud`) and
 the voice audio provider — Cloud TTS/STT (the recommended default),
 bring-your-own-keys (AssemblyAI + Cartesia; setup prompts for the keys), or
-local models (not recommended; see [Local-Only Mode](../local-only.md)). Pass
-`--backend` and `--audio-provider` to skip the pickers — see
-[setup](../commands/setup.md).
+local models (not recommended; see [Local-Only Mode](../local-only.md)).
+
+Passing **any** flag disables all prompts, so scripted and AI-agent runs
+never block: fresh non-interactive installs require `--backend` and default
+the audio provider to `openbase-cloud`. See [setup](../commands/setup.md)
+for the full flag list and the `--interactive` override.
 
 If a standalone desktop/CLI install, or a different development workspace
 install, already exists, the workspace script stops and links to

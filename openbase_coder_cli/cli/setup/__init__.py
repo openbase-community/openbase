@@ -16,6 +16,7 @@ from pathlib import Path
 from shutil import which  # noqa: F401
 
 import click
+from click.core import ParameterSource
 
 from openbase_coder_cli.backend_binaries import ensure_backend_binary
 from openbase_coder_cli.backend_config import (
@@ -322,8 +323,9 @@ class _SetupProgress:
     default=None,
     help=(
         "Default coding backend: codex, openbase-cloud, or claude-code. "
-        "Prompted for when creating a new env file if omitted; "
-        "existing env files are only changed when this option is provided."
+        "Interactive runs pick it when creating a new env file if omitted; "
+        "non-interactive fresh installs require it. Existing env files are "
+        "only changed when this option is provided."
     ),
 )
 @click.option(
@@ -331,8 +333,9 @@ class _SetupProgress:
     type=click.Choice(AUDIO_PROVIDER_OPTIONS),
     default=None,
     help=(
-        "Voice audio provider. New dispatcher configs use openbase-cloud when "
-        "omitted; existing configs are only changed when this option is provided."
+        "Voice audio provider. Interactive runs pick it for new dispatcher "
+        "configs if omitted; otherwise new configs use openbase-cloud. "
+        "Existing configs are only changed when this option is provided."
     ),
 )
 @click.option(
@@ -341,6 +344,19 @@ class _SetupProgress:
     help=(
         "Emit NDJSON step events on stdout for UI-driven setup; "
         "human-readable output moves to stderr."
+    ),
+)
+@click.option(
+    "--interactive/--non-interactive",
+    "interactive_mode",
+    default=None,
+    help=(
+        "Force or forbid the first-run pickers (coding backend, voice audio "
+        "provider, BYOK voice keys). By default setup is only interactive "
+        "when run with no flags at all on a terminal; passing any flag "
+        "implies --non-interactive, so scripted and AI-agent runs never "
+        "block on a prompt. Non-interactive fresh installs require "
+        "--backend and default the audio provider to openbase-cloud."
     ),
 )
 def setup(
@@ -355,27 +371,36 @@ def setup(
     coding_backend: str | None,
     audio_provider: str | None,
     json_progress: bool,
+    interactive_mode: bool | None,
 ) -> None:
-    """Full install flow for Openbase Coder."""
+    """Full install flow for Openbase Coder.
+
+    Run with no flags on a terminal for an interactive first-time setup with
+    pickers for the coding backend and voice audio provider. Passing any flag
+    disables all prompts (AI-agent and script safe): fresh installs then
+    require --backend and default the audio provider to openbase-cloud. Pass
+    --interactive to combine flags with the pickers.
+    """
     if platform.system() not in ("Darwin", "Linux"):
         raise click.ClickException("Setup is only supported on macOS and Linux.")
+    interactive = _resolve_interactive_mode(interactive_mode, json_progress)
     if coding_backend is not None:
         try:
             coding_backend = normalize_backend(coding_backend)
         except ValueError as exc:
             raise click.ClickException(str(exc)) from exc
     coding_backend = _require_backend_choice(
-        env_file, coding_backend, interactive=not json_progress
+        env_file, coding_backend, interactive=interactive
     )
     audio_provider = _require_audio_provider_choice(
-        audio_provider, interactive=not json_progress
+        audio_provider, interactive=interactive
     )
     assembly_ai_api_key, cartesia_api_key = _require_byok_audio_keys(
         env_file,
         audio_provider,
         assembly_ai_api_key,
         cartesia_api_key,
-        interactive=not json_progress,
+        interactive=interactive,
     )
 
     progress = _SetupProgress(json_progress)
@@ -408,6 +433,30 @@ def setup(
         "To enable remote authentication, run 'openbase-coder login' "
         "and ensure OPENBASE_CODER_CLI_WEB_BACKEND_URL is set in your .env."
     )
+
+
+def _resolve_interactive_mode(
+    interactive_mode: bool | None,
+    json_progress: bool,
+) -> bool:
+    """Decide whether setup may prompt.
+
+    Interactive only when explicitly forced with --interactive, or when the
+    command was invoked with no command-line flags at all on a terminal.
+    Any explicit flag implies non-interactive so scripted and AI-agent runs
+    never block on a prompt.
+    """
+    if json_progress:
+        return False
+    if interactive_mode is not None:
+        return interactive_mode
+    ctx = click.get_current_context(silent=True)
+    if ctx is not None and any(
+        ctx.get_parameter_source(name) == ParameterSource.COMMANDLINE
+        for name in ctx.params
+    ):
+        return False
+    return sys.stdin.isatty()
 
 
 def _prompt_pick(
@@ -486,7 +535,7 @@ def _require_backend_choice(
     """
     if coding_backend is not None or Path(env_file).is_file():
         return coding_backend
-    if interactive and sys.stdin.isatty():
+    if interactive:
         choice = _prompt_pick("Coding backend:", _BACKEND_PICKER_OPTIONS)
         return normalize_backend(choice)
     raise click.ClickException(
@@ -508,7 +557,7 @@ def _require_audio_provider_choice(
     """
     if audio_provider is not None or CODEX_DISPATCHER_CONFIG_PATH.exists():
         return audio_provider
-    if interactive and sys.stdin.isatty():
+    if interactive:
         return _prompt_pick(
             "Voice audio provider:",
             _AUDIO_PROVIDER_PICKER_OPTIONS,
@@ -534,7 +583,6 @@ def _require_byok_audio_keys(
         audio_provider != AUDIO_PROVIDER_CARTESIA
         or Path(env_file).is_file()
         or not interactive
-        or not sys.stdin.isatty()
     ):
         return assembly_ai_api_key, cartesia_api_key
     if not assembly_ai_api_key:
