@@ -312,7 +312,7 @@ jobs:
             [ "$name" = "workspace" ] && dir="workspace-seed"
             [ -d "$dir/.git" ] || continue
             git -C "$dir" fetch origin --quiet
-            now="$(git -C "$dir" rev-parse "origin/HEAD" 2>/dev/null || git -C "$dir" rev-parse origin/main)"
+            now="$(git -C "$dir" rev-parse origin/main)"
             if [ "$now" != "$sha" ]; then
               echo "::error::$name moved from $sha to $now during the release build; re-tag to release a coherent snapshot."
               exit 1
