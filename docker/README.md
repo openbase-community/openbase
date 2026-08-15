@@ -57,6 +57,15 @@ docker exec -it openbase-coder openbase-coder login
 docker restart openbase-coder   # services pick up the machine token
 ```
 
+`openbase-coder login` starts its OAuth callback listener on a random
+loopback port *inside the container*, but the browser redirect lands on the
+loopback of the machine running the browser. Userspace tailscaled forwards
+inbound tailnet TCP to the container's loopback, so bridge the redirect over
+the tailnet: note the `127.0.0.1:<port>` in the printed authorize URL, run a
+loopback forwarder on the browser machine
+(`socat TCP-LISTEN:<port>,bind=127.0.0.1,fork TCP:<container-tailnet-ip>:<port>`),
+open the URL, then stop the forwarder.
+
 The runtime is reachable at `http://<hostname>.<tailnet>.ts.net:18080/api/health/`
 on the tailnet (the entrypoint logs the exact URL) and at
 `http://localhost:7999/api/health/` on the docker host.
