@@ -70,12 +70,12 @@ from openbase_coder_cli.cli.setup.codex import (
     _workspace_skill_sources,  # noqa: F401
 )
 from openbase_coder_cli.cli.setup.dispatcher import (
-    AUDIO_PROVIDER_CARTESIA,  # noqa: F401
+    AUDIO_PROVIDER_CARTESIA,
     AUDIO_PROVIDER_LOCAL,
-    AUDIO_PROVIDER_OPENBASE_CLOUD,  # noqa: F401
+    AUDIO_PROVIDER_OPENBASE_CLOUD,
     AUDIO_PROVIDER_OPTIONS,
     CODEX_HOME_DEFAULT_DISPATCHER_CONFIG,  # noqa: F401
-    DEFAULT_AUDIO_PROVIDER,  # noqa: F401
+    DEFAULT_AUDIO_PROVIDER,
     LOCAL_AUDIO_PYTHON_MAX,  # noqa: F401
     LOCAL_AUDIO_REQUIREMENTS,  # noqa: F401
     _audio_provider_config,  # noqa: F401
@@ -143,7 +143,7 @@ from openbase_coder_cli.dispatcher_config import (
 from openbase_coder_cli.livekit_install import ensure_pinned_livekit_server
 from openbase_coder_cli.paths import (
     CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH,  # noqa: F401
-    CODEX_DISPATCHER_CONFIG_PATH,  # noqa: F401
+    CODEX_DISPATCHER_CONFIG_PATH,
     CODEX_DISPATCHER_INSTRUCTIONS_PATH,  # noqa: F401
     CODEX_HOME_DIR,  # noqa: F401
     CODEX_SUPER_AGENT_INSTRUCTIONS_PATH,  # noqa: F401
@@ -367,6 +367,16 @@ def setup(
     coding_backend = _require_backend_choice(
         env_file, coding_backend, interactive=not json_progress
     )
+    audio_provider = _require_audio_provider_choice(
+        audio_provider, interactive=not json_progress
+    )
+    assembly_ai_api_key, cartesia_api_key = _require_byok_audio_keys(
+        env_file,
+        audio_provider,
+        assembly_ai_api_key,
+        cartesia_api_key,
+        interactive=not json_progress,
+    )
 
     progress = _SetupProgress(json_progress)
     try:
@@ -400,6 +410,69 @@ def setup(
     )
 
 
+def _prompt_pick(
+    title: str,
+    options: tuple[tuple[str, str, str], ...],
+    *,
+    default: str | None = None,
+) -> str:
+    """Numbered terminal picker over (value, label, description) options."""
+    click.echo()
+    click.echo(title)
+    default_number: int | None = None
+    for number, (value, label, description) in enumerate(options, start=1):
+        click.echo(f"  {number}) {label} — {description}")
+        if value == default:
+            default_number = number
+    choice = click.prompt(
+        "Choose an option",
+        type=click.IntRange(1, len(options)),
+        default=default_number,
+        show_default=default_number is not None,
+    )
+    return options[choice - 1][0]
+
+
+_BACKEND_PICKER_OPTIONS = (
+    (
+        CODEX_BACKEND,
+        "codex",
+        "native Codex app-server with OpenAI models, using your Codex CLI login",
+    ),
+    (
+        CLAUDE_CODE_BACKEND,
+        "claude-code",
+        "Claude Code using your local Claude login and billing",
+    ),
+    (
+        OPENBASE_CLOUD_BACKEND,
+        "openbase-cloud",
+        "Cloud-proxied Claude Code with only an Openbase login; no personal "
+        "Anthropic account needed",
+    ),
+)
+
+_AUDIO_PROVIDER_PICKER_OPTIONS = (
+    (
+        AUDIO_PROVIDER_OPENBASE_CLOUD,
+        "Cloud TTS/STT",
+        "managed speech-to-text and text-to-speech through Openbase Cloud "
+        "(recommended)",
+    ),
+    (
+        AUDIO_PROVIDER_CARTESIA,
+        "Bring your own keys",
+        "AssemblyAI speech-to-text and Cartesia text-to-speech with your own API keys",
+    ),
+    (
+        AUDIO_PROVIDER_LOCAL,
+        "Local models",
+        "on-device Kokoro TTS and MLX Whisper STT; Apple Silicon with Python "
+        "3.12 only (not recommended)",
+    ),
+)
+
+
 def _require_backend_choice(
     env_file: str,
     coding_backend: str | None,
@@ -409,21 +482,66 @@ def _require_backend_choice(
     """Resolve the backend for a fresh install without preferring one.
 
     Existing env files keep their configured backend. New installs must pick
-    one: interactively via a prompt, otherwise via --backend.
+    one: interactively via a picker, otherwise via --backend.
     """
     if coding_backend is not None or Path(env_file).is_file():
         return coding_backend
     if interactive and sys.stdin.isatty():
-        choice = click.prompt(
-            "Coding backend",
-            type=click.Choice(("codex", "claude-code", "openbase-cloud")),
-            show_choices=True,
-        )
+        choice = _prompt_pick("Coding backend:", _BACKEND_PICKER_OPTIONS)
         return normalize_backend(choice)
     raise click.ClickException(
         "No coding backend configured yet. Pass --backend "
         "codex|claude-code|openbase-cloud for a first-time setup."
     )
+
+
+def _require_audio_provider_choice(
+    audio_provider: str | None,
+    *,
+    interactive: bool,
+) -> str | None:
+    """Pick the voice audio provider for a fresh install.
+
+    Existing dispatcher configs keep their configured provider. Fresh
+    interactive installs pick one; non-interactive installs keep the
+    openbase-cloud default.
+    """
+    if audio_provider is not None or CODEX_DISPATCHER_CONFIG_PATH.exists():
+        return audio_provider
+    if interactive and sys.stdin.isatty():
+        return _prompt_pick(
+            "Voice audio provider:",
+            _AUDIO_PROVIDER_PICKER_OPTIONS,
+            default=DEFAULT_AUDIO_PROVIDER,
+        )
+    return audio_provider
+
+
+def _require_byok_audio_keys(
+    env_file: str,
+    audio_provider: str | None,
+    assembly_ai_api_key: str,
+    cartesia_api_key: str,
+    *,
+    interactive: bool,
+) -> tuple[str, str]:
+    """Collect voice keys when the bring-your-own-keys provider is picked.
+
+    Setup only writes these keys into a freshly generated env file, so an
+    existing env file is left for the user to edit by hand instead.
+    """
+    if (
+        audio_provider != AUDIO_PROVIDER_CARTESIA
+        or Path(env_file).is_file()
+        or not interactive
+        or not sys.stdin.isatty()
+    ):
+        return assembly_ai_api_key, cartesia_api_key
+    if not assembly_ai_api_key:
+        assembly_ai_api_key = click.prompt("AssemblyAI API key (speech-to-text)")
+    if not cartesia_api_key:
+        cartesia_api_key = click.prompt("Cartesia API key (text-to-speech)")
+    return assembly_ai_api_key, cartesia_api_key
 
 
 def _refuse_to_clobber_dev_install() -> None:

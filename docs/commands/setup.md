@@ -68,10 +68,11 @@ openbase-coder setup --backend openbase-cloud
   Openbase login and no personal Anthropic account requirement.
 
 Codex and Claude Code are peers; there is no silent default. When creating a
-new `~/.openbase/.env` with `--backend` omitted, setup prompts interactively
-for the backend, and errors in non-interactive runs (including
-`--json-progress`) asking for an explicit `--backend`. Existing env files keep
-their configured backend and are only changed when `--backend` is passed.
+new `~/.openbase/.env` with `--backend` omitted, setup shows a numbered
+interactive picker for the backend, and errors in non-interactive runs
+(including `--json-progress`) asking for an explicit `--backend`. Existing
+env files keep their configured backend and are only changed when `--backend`
+is passed.
 
 Setup installs the selected backend's CLI on demand if it is missing: `codex`
 from its GitHub release binaries into `~/.openbase/bin`, `claude` via
@@ -80,11 +81,30 @@ Anthropic's official native installer. Backend-specific services (such as
 `openbase-coder services status` shows `not used (<backend> backend)` for
 gated-out services.
 
-With `--audio-provider local`, setup installs the optional Kokoro/MLX local
-audio dependencies and downloads the required models. This path requires an
-Apple Silicon Mac (MLX) and a Python 3.12 runtime — Kokoro currently declares
-Python `<3.13`, and setup refuses local audio on newer runtimes. Standalone
-packages should be built with Python 3.12 to keep local audio available.
+## Voice Audio Selection
+
+Setup also configures the voice audio provider. On a fresh install (no
+`~/.openbase/dispatcher-config.json` yet) with `--audio-provider` omitted,
+interactive runs show a numbered picker:
+
+- `openbase-cloud` (Cloud TTS/STT): managed speech-to-text and text-to-speech
+  through Openbase Cloud — the recommended default.
+- `cartesia` (bring your own keys): AssemblyAI speech-to-text and Cartesia
+  text-to-speech with your own API keys. Picking this interactively also
+  prompts for the AssemblyAI and Cartesia keys when they were not provided
+  via options or environment variables, and writes them into the freshly
+  generated `.env`.
+- `local` (not recommended): on-device Kokoro TTS and MLX Whisper STT.
+
+Non-interactive runs keep the `openbase-cloud` default, and existing
+dispatcher configs are only changed when `--audio-provider` is passed.
+
+With `--audio-provider local` (or the local picker choice), setup installs
+the optional Kokoro/MLX local audio dependencies and downloads the required
+models. This path requires an Apple Silicon Mac (MLX) and a Python 3.12
+runtime — Kokoro currently declares Python `<3.13`, and setup refuses local
+audio on newer runtimes. Standalone packages should be built with Python 3.12
+to keep local audio available.
 
 ## Options
 
@@ -99,7 +119,7 @@ packages should be built with Python 3.12 to keep local audio available.
 | `--link-claude-config` | `false` | Symlink Openbase's Claude settings to the normal `~/.claude/settings.json` |
 | `--fast-mode/--no-fast-mode` | `true` | Use the fast service tier for the voice dispatcher. Super Agents stay on the standard tier; both are adjustable in console settings |
 | `--backend NAME` | prompted for new env files | Default coding backend: `codex`, `claude-code`, or `openbase-cloud`. Existing env files are only changed when provided |
-| `--audio-provider NAME` | `openbase-cloud` for new dispatcher configs | Voice audio provider. Existing configs are only changed when provided |
+| `--audio-provider NAME` | picker on fresh interactive installs, else `openbase-cloud` for new dispatcher configs | Voice audio provider. Existing configs are only changed when provided |
 | `--json-progress` | `false` | Emit NDJSON step events on stdout for UI-driven setup; human-readable output moves to stderr |
 
 ## Behavior Details

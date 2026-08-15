@@ -1513,3 +1513,135 @@ def test_relink_workspace_skills_noop_without_installation(monkeypatch) -> None:
     )
 
     assert codex_setup.relink_workspace_skills_from_installation() is False
+
+
+def _fake_tty_stdin(monkeypatch, text: str) -> None:
+    import io
+    import sys
+
+    class _FakeTTY(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr(sys, "stdin", _FakeTTY(text))
+
+
+def test_require_backend_choice_picker_maps_numbers(tmp_path, monkeypatch) -> None:
+    _fake_tty_stdin(monkeypatch, "3\n")
+
+    choice = setup_cli._require_backend_choice(
+        str(tmp_path / ".env"), None, interactive=True
+    )
+
+    assert choice == "openbase_cloud"
+
+
+def test_require_backend_choice_keeps_existing_env(tmp_path, monkeypatch) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENBASE_CODING_BACKEND=codex\n")
+    _fake_tty_stdin(monkeypatch, "1\n")
+
+    assert (
+        setup_cli._require_backend_choice(str(env_file), None, interactive=True) is None
+    )
+
+
+def test_require_audio_provider_choice_picker_maps_numbers(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        setup_cli,
+        "CODEX_DISPATCHER_CONFIG_PATH",
+        tmp_path / "dispatcher-config.json",
+    )
+    _fake_tty_stdin(monkeypatch, "2\n")
+
+    assert setup_cli._require_audio_provider_choice(None, interactive=True) == (
+        setup_cli.AUDIO_PROVIDER_CARTESIA
+    )
+
+
+def test_require_audio_provider_choice_enter_uses_cloud_default(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        setup_cli,
+        "CODEX_DISPATCHER_CONFIG_PATH",
+        tmp_path / "dispatcher-config.json",
+    )
+    _fake_tty_stdin(monkeypatch, "\n")
+
+    assert setup_cli._require_audio_provider_choice(None, interactive=True) == (
+        setup_cli.AUDIO_PROVIDER_OPENBASE_CLOUD
+    )
+
+
+def test_require_audio_provider_choice_keeps_existing_dispatcher_config(
+    tmp_path, monkeypatch
+) -> None:
+    config_path = tmp_path / "dispatcher-config.json"
+    config_path.write_text("{}\n")
+    monkeypatch.setattr(setup_cli, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
+    _fake_tty_stdin(monkeypatch, "3\n")
+
+    assert setup_cli._require_audio_provider_choice(None, interactive=True) is None
+
+
+def test_require_audio_provider_choice_non_interactive_keeps_default(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        setup_cli,
+        "CODEX_DISPATCHER_CONFIG_PATH",
+        tmp_path / "dispatcher-config.json",
+    )
+
+    assert setup_cli._require_audio_provider_choice(None, interactive=False) is None
+
+
+def test_require_byok_audio_keys_prompts_for_missing_keys(
+    tmp_path, monkeypatch
+) -> None:
+    _fake_tty_stdin(monkeypatch, "aai-key\ncartesia-key\n")
+
+    keys = setup_cli._require_byok_audio_keys(
+        str(tmp_path / ".env"),
+        setup_cli.AUDIO_PROVIDER_CARTESIA,
+        "",
+        "",
+        interactive=True,
+    )
+
+    assert keys == ("aai-key", "cartesia-key")
+
+
+def test_require_byok_audio_keys_leaves_existing_env_alone(
+    tmp_path, monkeypatch
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("")
+    _fake_tty_stdin(monkeypatch, "unused\n")
+
+    keys = setup_cli._require_byok_audio_keys(
+        str(env_file),
+        setup_cli.AUDIO_PROVIDER_CARTESIA,
+        "",
+        "",
+        interactive=True,
+    )
+
+    assert keys == ("", "")
+
+
+def test_require_byok_audio_keys_skips_other_providers(tmp_path, monkeypatch) -> None:
+    _fake_tty_stdin(monkeypatch, "unused\n")
+
+    keys = setup_cli._require_byok_audio_keys(
+        str(tmp_path / ".env"),
+        setup_cli.AUDIO_PROVIDER_OPENBASE_CLOUD,
+        "",
+        "",
+        interactive=True,
+    )
+
+    assert keys == ("", "")
