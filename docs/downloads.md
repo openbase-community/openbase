@@ -20,4 +20,4 @@ What each one is for:
 
 Developers who want to work from source should clone
 `openbase-coder-workspace` and run its `./scripts/setup` instead — see
-[Getting Started](getting-started.md).
+[Developer Setup](getting-started/developer-setup.md).

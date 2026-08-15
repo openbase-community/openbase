@@ -21,8 +21,9 @@ These docs cover the whole product, not just the CLI:
 
 ## Which Page Do I Need?
 
-- Installing for the first time → [Getting Started](getting-started.md) or
-  just [download the desktop app](downloads.md) and follow its setup flow.
+- Installing for the first time → [Getting Started](getting-started/index.md):
+  [download the Mac app](getting-started/mac-app.md) or use the
+  [developer setup](getting-started/developer-setup.md).
 - What can I do in the Mac app? → [Desktop App](desktop-app.md)
 - What can I do on my phone? → [iOS App](ios-tabs.md)
 - What is app.openbase.cloud for? → [Web Console & Cloud](console.md)
@@ -62,7 +63,9 @@ Using the apps:
 
 Setup and operations:
 
-- [Getting Started](getting-started.md)
+- [Getting Started](getting-started/index.md)
+  ([Mac App Download](getting-started/mac-app.md) ·
+  [Developer Setup](getting-started/developer-setup.md))
 - [Downloads](downloads.md)
 - [Manual Setup](manual-installation.md)
 - [Cloud DevSpace](cloud-devspace.md)
