@@ -119,8 +119,10 @@ userspace mode, use the kernel TUN or sidecar variants above.
 
 ## Limitations
 
-- **No web console UI**: source builds don't bundle the prebuilt console
-  frontend; the Django API serves everything except the console pages.
+- **Console tracks remote refs, not the local checkout**: the web console is
+  cloned from the public console/coder-react/multi-react/boilersync-react
+  repos during the image build (`CONSOLE_REF` etc. build args, default
+  develop/main), so a locally modified console is not what gets baked in.
 - **No systemd/launchd**: services are supervised by the entrypoint script
   with a restart-on-exit loop; `openbase-coder services start/stop` is not
   functional inside the container.

@@ -7,6 +7,42 @@
 # DevSpace AMI): a workspace directory holding this cli checkout plus the
 # super-agents sibling that [tool.uv.sources] requires, with the cli venv
 # synced at build time so first-run `openbase-coder setup` is fast.
+# --- Console build stage ------------------------------------------------------
+# The web console lives in sibling repos (all public); clone and build them in
+# a node stage so the runtime image serves the console UI. Refs are ARGs —
+# note they track the remotes, not the local checkout this image builds from.
+FROM node:24-slim AS console-build
+ARG CONSOLE_REPO=https://github.com/openbase-community/openbase-coder-console
+ARG CONSOLE_REF=develop
+ARG CODER_REACT_REPO=https://github.com/openbase-community/openbase-coder-react
+ARG CODER_REACT_REF=develop
+ARG MULTI_REACT_REPO=https://github.com/montaguegabe/multi-react
+ARG MULTI_REACT_REF=main
+ARG BOILERSYNC_REACT_REPO=https://github.com/montaguegabe/boilersync-react
+ARG BOILERSYNC_REACT_REF=main
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+RUN git clone --depth 1 --branch "$CONSOLE_REF" "$CONSOLE_REPO" console \
+    && git clone --depth 1 --branch "$CODER_REACT_REF" "$CODER_REACT_REPO" coder-react \
+    && git clone --depth 1 --branch "$MULTI_REACT_REF" "$MULTI_REACT_REPO" multi-react \
+    && git clone --depth 1 --branch "$BOILERSYNC_REACT_REF" "$BOILERSYNC_REACT_REPO" boilersync-react
+
+# Minimal pnpm workspace mirroring the multi workspace's frontend packages
+# (console depends on @openbase/coder-react via workspace:*, which depends on
+# multi-react and boilersync-react).
+RUN printf 'packages:\n  - console\n  - coder-react\n  - multi-react\n  - boilersync-react\n' \
+        > pnpm-workspace.yaml \
+    && printf '{\n  "name": "openbase-coder-docker-console",\n  "private": true,\n  "packageManager": "pnpm@10.18.0",\n  "pnpm": {\n    "overrides": {\n      "@types/react": "^18.3.3",\n      "@types/react-dom": "^18.3.0"\n    }\n  }\n}\n' \
+        > package.json \
+    && corepack enable \
+    && pnpm install \
+    && pnpm --dir console build
+
+# --- Runtime image ------------------------------------------------------------
 FROM python:3.13-slim-bookworm
 
 # hatch-vcs needs git metadata that the build context does not include; pass
@@ -71,11 +107,17 @@ RUN cd cli \
     && git tag "v$OPENBASE_CODER_VERSION" \
     && uv sync
 
+# Prebuilt console UI; the env override makes django serve it directly and
+# keeps the runtime's own console-build step skipped (no console source here).
+COPY --from=console-build --chown=openbase:openbase \
+    /build/console/dist /opt/openbase-coder/console-dist
+
 WORKDIR /home/openbase
 # ~/.openbase/bin leads so the entrypoint's tailscale CLI shim (which targets
 # the in-container tailscaled socket) also wins in `docker exec` shells.
 ENV PATH="/home/openbase/.openbase/bin:/opt/openbase-coder/workspace/cli/.venv/bin:${PATH}" \
-    OPENBASE_CODER_WORKSPACE_DIR=/opt/openbase-coder/workspace
+    OPENBASE_CODER_WORKSPACE_DIR=/opt/openbase-coder/workspace \
+    OPENBASE_CODER_CLI_CONSOLE_BUILD_DIR=/opt/openbase-coder/console-dist
 
 # All state (env file, sqlite DB, downloaded backend binaries, logs) lives in
 # ~/.openbase; keep it on a volume so logins and setup survive restarts.
