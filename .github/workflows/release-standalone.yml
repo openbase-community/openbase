@@ -54,36 +54,42 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: openbase-community/openbase-coder-console
+          ref: main
           path: console
 
       - name: Checkout coder-react
         uses: actions/checkout@v4
         with:
           repository: openbase-community/openbase-coder-react
+          ref: main
           path: coder-react
 
       - name: Checkout multi-react
         uses: actions/checkout@v4
         with:
           repository: montaguegabe/multi-react
+          ref: main
           path: multi-react
 
       - name: Checkout boilersync-react
         uses: actions/checkout@v4
         with:
           repository: montaguegabe/boilersync-react
+          ref: main
           path: boilersync-react
 
       - name: Checkout skills
         uses: actions/checkout@v4
         with:
           repository: openbase-community/openbase-coder-skills
+          ref: main
           path: skills
 
       - name: Checkout workspace instructions
         uses: actions/checkout@v4
         with:
           repository: openbase-community/openbase-coder-workspace
+          ref: main
           path: workspace-seed
 
       - name: Capture repo SHAs
