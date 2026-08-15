@@ -431,7 +431,8 @@ def _agent_error_detail(exc: Exception) -> str:
     if _is_openbase_cloud_audio_provider_error(exc):
         return (
             "Openbase Cloud audio could not start the selected STT/TTS provider. "
-            "Check your Openbase Cloud audio subscription and voice settings, then "
+            "If your audio credits are used up, subscribe or upgrade at "
+            "app.openbase.cloud; otherwise check your voice settings, then "
             "rejoin the call."
         )
     summary = redact_exception_text(exc)
