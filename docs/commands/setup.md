@@ -51,6 +51,16 @@ The workspace script is for a clean source-workspace install. If it finds an
 existing standalone install or a different development workspace install, it
 stops and directs you to [Uninstall](../uninstall.md) before making changes.
 
+## Interactive Mode
+
+Setup is only interactive when run with no flags at all on a terminal, or
+when `--interactive` is passed explicitly. Passing **any** other flag implies
+`--non-interactive`, so scripted and AI-agent invocations never block on a
+prompt: fresh non-interactive installs require `--backend` (setup errors
+otherwise) and default the audio provider to `openbase-cloud`.
+`./scripts/setup` passes `--interactive` for you when you give it no flags on
+a terminal, since it always injects `--workspace-dir` itself.
+
 ## Backend Selection
 
 Setup configures the default coding backend:
@@ -68,11 +78,11 @@ openbase-coder setup --backend openbase-cloud
   Openbase login and no personal Anthropic account requirement.
 
 Codex and Claude Code are peers; there is no silent default. When creating a
-new `~/.openbase/.env` with `--backend` omitted, setup shows a numbered
-interactive picker for the backend, and errors in non-interactive runs
-(including `--json-progress`) asking for an explicit `--backend`. Existing
-env files keep their configured backend and are only changed when `--backend`
-is passed.
+new `~/.openbase/.env` with `--backend` omitted, interactive runs show a
+numbered picker for the backend, and non-interactive runs (including
+`--json-progress`) error asking for an explicit `--backend`. Existing env
+files keep their configured backend and are only changed when `--backend` is
+passed.
 
 Setup installs the selected backend's CLI on demand if it is missing: `codex`
 from its GitHub release binaries into `~/.openbase/bin`, `claude` via
@@ -120,6 +130,7 @@ to keep local audio available.
 | `--fast-mode/--no-fast-mode` | `true` | Use the fast service tier for the voice dispatcher. Super Agents stay on the standard tier; both are adjustable in console settings |
 | `--backend NAME` | prompted for new env files | Default coding backend: `codex`, `claude-code`, or `openbase-cloud`. Existing env files are only changed when provided |
 | `--audio-provider NAME` | picker on fresh interactive installs, else `openbase-cloud` for new dispatcher configs | Voice audio provider. Existing configs are only changed when provided |
+| `--interactive/--non-interactive` | interactive only for flagless terminal runs | Force or forbid the first-run pickers. Passing any other flag implies `--non-interactive` |
 | `--json-progress` | `false` | Emit NDJSON step events on stdout for UI-driven setup; human-readable output moves to stderr |
 
 ## Behavior Details
