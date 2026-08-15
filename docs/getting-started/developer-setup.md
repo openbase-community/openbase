@@ -34,6 +34,14 @@ cd openbase-coder-workspace
 ./scripts/setup
 ```
 
+With no flags, setup runs interactively on a fresh install: numbered pickers
+choose the coding backend (`codex`, `claude-code`, or `openbase-cloud`) and
+the voice audio provider — Cloud TTS/STT (the recommended default),
+bring-your-own-keys (AssemblyAI + Cartesia; setup prompts for the keys), or
+local models (not recommended; see [Local-Only Mode](../local-only.md)). Pass
+`--backend` and `--audio-provider` to skip the pickers — see
+[setup](../commands/setup.md).
+
 If a standalone desktop/CLI install, or a different development workspace
 install, already exists, the workspace script stops and links to
 [Uninstall](../uninstall.md). Uninstall first, then rerun `./scripts/setup`.

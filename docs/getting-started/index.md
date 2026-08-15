@@ -55,7 +55,7 @@ Whichever path you choose, `openbase-coder setup`:
 
 1. Detects the bundled runtime package (standalone mode), or locates your workspace checkout (development mode).
 2. Writes `~/.openbase/installation.json`.
-3. Generates `~/.openbase/.env` (if it does not already exist), prompting for the coding backend when `--backend` is omitted.
+3. Generates `~/.openbase/.env` (if it does not already exist). On a fresh interactive install, numbered pickers choose the coding backend (when `--backend` is omitted) and the voice audio provider (when `--audio-provider` is omitted): Cloud TTS/STT, bring-your-own-keys, or local models.
 4. Installs the selected backend's CLI on demand if missing (codex from GitHub release binaries into `~/.openbase/bin`, claude via Anthropic's official installer).
 5. Generates Openbase instruction files from bundled or workspace templates, links Openbase Claude instructions to the generated Openbase AGENTS file, and keeps normal Claude linked to normal Codex AGENTS.
 6. Symlinks bundled or workspace skills into both Openbase Codex and Claude config skill homes.
