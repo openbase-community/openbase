@@ -17,8 +17,8 @@ from openbase_coder_cli.tts_providers import OPENBASE_CLOUD_TTS_PROVIDER_ID
 
 OPENBASE_CLOUD_AUDIO_SUBSCRIBE_DETAIL = (
     "Openbase Cloud audio requires an active Openbase subscription with "
-    "available audio credits. Subscribe in Openbase Cloud, or switch voice "
-    "settings to direct provider keys or local audio."
+    "available audio credits. Subscribe at app.openbase.cloud, or switch "
+    "voice settings to direct provider keys or local audio."
 )
 OPENBASE_CLOUD_SUBSCRIBE_DETAIL = (
     "Apple Music playback requires an active Openbase Cloud subscription."
@@ -56,8 +56,8 @@ def ensure_openbase_cloud_audio_subscription(
         provider_names = _provider_names(exhausted)
         raise OpenbaseCloudAudioSubscriptionError(
             f"Openbase Cloud audio is out of {provider_names} credits for this "
-            "month. Subscribe in Openbase Cloud, or switch voice settings to "
-            "direct provider keys or local audio."
+            "month. Subscribe or upgrade at app.openbase.cloud, or switch "
+            "voice settings to direct provider keys or local audio."
         )
 
 

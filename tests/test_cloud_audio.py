@@ -68,7 +68,7 @@ def test_openbase_cloud_audio_check_requires_active_subscription(monkeypatch):
 
     message = str(exc_info.value)
     assert "active Openbase subscription" in message
-    assert "Subscribe in Openbase Cloud" in message
+    assert "app.openbase.cloud" in message
 
 
 def test_openbase_cloud_subscription_entitlement_allows_paid_feature(monkeypatch):
@@ -168,7 +168,7 @@ def test_openbase_cloud_audio_check_rejects_exhausted_selected_provider(monkeypa
 
     message = str(exc_info.value)
     assert "AssemblyAI credits" in message
-    assert "Subscribe in Openbase Cloud" in message
+    assert "app.openbase.cloud" in message
 
 
 def test_openbase_cloud_audio_check_preserves_backend_denial_detail(monkeypatch):
