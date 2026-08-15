@@ -14,7 +14,11 @@ nav = [
     { "Voice Routing" = "voice-routing.md" },
     { "Sync Between Your Computers" = "code-sync.md" }
   ]},
-  { "Getting Started" = "getting-started.md" },
+  { "Getting Started" = [
+    "getting-started/index.md",
+    { "Mac App Download" = "getting-started/mac-app.md" },
+    { "Developer Setup" = "getting-started/developer-setup.md" }
+  ]},
   { "Downloads" = "downloads.md" },
   { "Manual Setup" = "manual-installation.md" },
   { "Cloud DevSpace" = "cloud-devspace.md" },

@@ -133,7 +133,7 @@ The product docs live in this repository under `docs/` and are published at
 
 [Downloads](docs/downloads.md)
 
-[Getting Started](docs/getting-started.md)
+[Getting Started](docs/getting-started/index.md)
 
 [Desktop App](docs/desktop-app.md)
 

@@ -38,7 +38,7 @@ there because it may include app-selected options such as the coding backend.
 
 Install Tailscale before continuing if you want iPhone-to-Mac voice
 networking. On macOS, use the Mac App Store variant (see
-[Getting Started](getting-started.md#prerequisites)):
+[Getting Started](getting-started/index.md#prerequisites)):
 
 ```bash
 open https://apps.apple.com/us/app/tailscale/id1475387142
