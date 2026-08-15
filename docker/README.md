@@ -27,12 +27,15 @@ Or with compose: `docker compose up --build`.
 ## Run
 
 ```sh
-docker run -d --name openbase-coder \
+docker run -d --name openbase-coder --hostname openbase-coder \
   -e TS_AUTHKEY=tskey-auth-... \
   -p 7999:7999 \
   -v openbase-data:/home/openbase/.openbase \
   openbase-coder:local
 ```
+
+(`--hostname` matters: an interactive `tailscale up` names the tailnet node
+after the container hostname, which is otherwise a random container ID.)
 
 On first start the entrypoint:
 

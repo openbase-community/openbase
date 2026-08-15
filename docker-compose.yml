@@ -3,6 +3,9 @@ services:
     build: .
     image: openbase-coder:local
     container_name: openbase-coder
+    # Tailscale uses the container hostname as the default node name when
+    # joining interactively (docker exec ... tailscale up).
+    hostname: openbase-coder
     restart: unless-stopped
     environment:
       OPENBASE_CODER_BACKEND: ${OPENBASE_CODER_BACKEND:-openbase-cloud}
