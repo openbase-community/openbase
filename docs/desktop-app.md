@@ -25,8 +25,8 @@ app. On first run it shows a guided setup flow:
    [Troubleshooting](troubleshooting.md#tailscale-login-loops-or-cli-errors-after-an-update-macos)
    for why).
 3. **Set up Openbase Cloud** — starts the normal managed path: Cloud-proxied
-   Claude Code plus managed speech-to-text and voice output, with a generous
-   Openbase Cloud free trial and no third-party provider keys.
+   Claude Code plus managed speech-to-text and voice output, with free
+   Openbase Cloud monthly allowances and no third-party provider keys.
 4. **Voice configuration** — the normal Openbase Cloud path is already
    configured; developer/provider-key audio remains available later in
    settings.
