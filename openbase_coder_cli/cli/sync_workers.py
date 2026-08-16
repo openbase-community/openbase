@@ -36,6 +36,7 @@ DEFAULT_INTERVAL_SECONDS = 60.0
 DEFAULT_MAX_AGE_DAYS = 15
 DEFAULT_STABILITY_DELAY_SECONDS = 0.2
 CODE_SYNC_TICK_SECONDS = 60.0
+CLOUD_REGISTER_INTERVAL_SECONDS = 3600.0
 
 
 def _env_float(name: str, default: float) -> float:
@@ -203,6 +204,33 @@ def _claude_devices_tick() -> None:
     )
 
 
+def _cloud_registration_tick() -> None:
+    from openbase_coder_cli.config.token_manager import (
+        DEFAULT_WEB_BACKEND_URL,
+        TokenManager,
+    )
+    from openbase_coder_cli.services.cloud_registration import register_and_report
+
+    # Login-time registration is one-shot and fails silently on network or
+    # backend blips, leaving the machine invisible to the account until the
+    # next login. This periodic re-report self-heals; the first tick runs at
+    # service start, so a restart also re-registers promptly.
+    if not TokenManager(DEFAULT_WEB_BACKEND_URL).has_refresh_token:
+        logger.debug("cloud_registration skipped no_login")
+        return
+    result = register_and_report()
+    if result.ok:
+        logger.info("cloud_registration report_complete")
+    elif not result.supported:
+        logger.debug("cloud_registration endpoint_unsupported")
+    else:
+        logger.warning(
+            "cloud_registration report_failed error=%s status=%s",
+            result.error,
+            result.status_code,
+        )
+
+
 def _code_sync_reconcile_tick() -> None:
     from openbase_coder_cli.code_sync.reconciler import run_tick_if_enabled
 
@@ -249,6 +277,13 @@ def build_jobs() -> list[SyncJob]:
             name="code_sync_reconcile",
             interval=_env_float("CODE_SYNC_TICK_SECONDS", CODE_SYNC_TICK_SECONDS),
             tick=_code_sync_reconcile_tick,
+        ),
+        SyncJob(
+            name="cloud_registration",
+            interval=_env_float(
+                "OPENBASE_CLOUD_REGISTER_INTERVAL", CLOUD_REGISTER_INTERVAL_SECONDS
+            ),
+            tick=_cloud_registration_tick,
         ),
     ]
 
