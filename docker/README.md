@@ -13,6 +13,14 @@ hosts via Docker Desktop. User-facing instructions live in
 `docs/docker.md` (published at docs.openbase.cloud); this file is the deeper
 image/development reference.
 
+## Publishing
+
+CI publishes `openbaseai/openbase` (linux/amd64 + linux/arm64) via
+`.github/workflows/docker-image.yml` on pushes to `main` that touch the
+image inputs, tagging `latest` plus a version derived from the newest `v*`
+tag. It needs the `DOCKERHUB_TOKEN` repo secret (a Docker Hub access token
+for the `openbaseai` account); without it the workflow warns and skips.
+
 ## Build
 
 From the repo root:

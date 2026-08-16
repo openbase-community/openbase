@@ -1,0 +1,127 @@
+# Build and publish the openbaseai/openbase Docker image (linux/amd64 +
+# linux/arm64) on pushes to main that touch the image inputs. Each platform
+# builds natively on its own runner (no QEMU), pushes by digest, and a final
+# job merges the digests into the multi-arch latest + version tags.
+#
+# Requires the DOCKERHUB_TOKEN repo secret (a Docker Hub access token for the
+# openbaseai account; override the username with a DOCKERHUB_USERNAME
+# secret). Without the token the workflow warns and skips publishing rather
+# than failing the push.
+name: Docker Image
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker/**"
+      - "openbase_coder_cli/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/docker-image.yml"
+  workflow_dispatch:
+
+env:
+  IMAGE: openbaseai/openbase
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.check.outputs.publish }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - id: check
+        env:
+          HAS_TOKEN: ${{ secrets.DOCKERHUB_TOKEN != '' }}
+        run: |
+          if [ "$HAS_TOKEN" = "true" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::DOCKERHUB_TOKEN secret is not set; skipping image publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: version
+        # PEP440-ish stamp from the latest release tag: vX.Y.Z at the tag,
+        # X.Y.Z.postN for N commits past it (matches manual publishes).
+        run: |
+          tag=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo v0.0.0)
+          count=$(git rev-list --count "$tag"..HEAD)
+          base="${tag#v}"
+          if [ "$count" = "0" ]; then
+            echo "version=$base" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$base.post$count" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: preflight
+    if: needs.preflight.outputs.publish == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            slug: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            slug: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME || 'openbaseai' }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            OPENBASE_CODER_VERSION=${{ needs.preflight.outputs.version }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=docker-image-${{ matrix.slug }}
+          cache-to: type=gha,mode=max,scope=docker-image-${{ matrix.slug }}
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.slug }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: [preflight, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME || 'openbaseai' }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Create multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            -t "$IMAGE:latest" \
+            -t "$IMAGE:${{ needs.preflight.outputs.version }}" \
+            $(printf "$IMAGE@sha256:%s " *)
+      - name: Inspect
+        run: docker buildx imagetools inspect "$IMAGE:latest"
