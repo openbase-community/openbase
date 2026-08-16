@@ -92,6 +92,32 @@ def _make_workspace_checkout(root):
     return root
 
 
+def test_setup_windows_proceeds_past_os_guard(monkeypatch) -> None:
+    monkeypatch.setattr(setup_cli.platform, "system", lambda: "Windows")
+    sentinel = RuntimeError("reached backend resolution")
+
+    def _raise(*_args, **_kwargs):
+        raise sentinel
+
+    monkeypatch.setattr(setup_cli, "_require_backend_choice", _raise)
+
+    runner = CliRunner()
+    result = runner.invoke(setup_cli.setup, ["--backend", "claude-code"])
+
+    assert "Setup is only supported" not in (result.output or "")
+    assert result.exception is sentinel
+
+
+def test_setup_rejects_unsupported_os(monkeypatch) -> None:
+    monkeypatch.setattr(setup_cli.platform, "system", lambda: "SunOS")
+
+    runner = CliRunner()
+    result = runner.invoke(setup_cli.setup, ["--backend", "claude-code"])
+
+    assert result.exit_code != 0
+    assert "Setup is only supported" in result.output
+
+
 def test_resolve_dev_workspace_dir_prefers_explicit_dir(tmp_path) -> None:
     workspace = _make_workspace_checkout(tmp_path / "workspace")
 
