@@ -49,11 +49,16 @@ _LIVEKIT_SERVER_COMMAND = (
     '        LIVEKIT_CONFIG_BODY="$(printf \'rtc:\\n  tcp_port: %s\\n  udp_port: %s\\n  enable_loopback_candidate: true\\n  interfaces:\\n    includes:\\n      - %s\\n  ips:\\n    includes:\\n      - 127.0.0.1/32\\n\' "$LIVEKIT_TCP_PORT" "$LIVEKIT_UDP_PORT" "$LIVEKIT_LOOPBACK_IFACE")"\n'
     "        ;;\n"
     "    tailscale)\n"
-    '        if [ -z "${{LIVEKIT_NODE_IP:-}}" ] && command -v tailscale >/dev/null 2>&1; then\n'
-    '            LIVEKIT_NODE_IP="$(tailscale ip -4 2>/dev/null | head -n 1)"\n'
+    # App Store Tailscale keeps its CLI inside the app bundle, off every PATH.
+    '        TAILSCALE_BIN="$(command -v tailscale || true)"\n'
+    '        if [ -z "$TAILSCALE_BIN" ] && [ -x "/Applications/Tailscale.app/Contents/MacOS/Tailscale" ]; then\n'
+    '            TAILSCALE_BIN="/Applications/Tailscale.app/Contents/MacOS/Tailscale"\n'
     "        fi\n"
-    '        if [ -z "${{LIVEKIT_NODE_IP_V6:-}}" ] && command -v tailscale >/dev/null 2>&1; then\n'
-    '            LIVEKIT_NODE_IP_V6="$(tailscale ip -6 2>/dev/null | head -n 1)"\n'
+    '        if [ -z "${{LIVEKIT_NODE_IP:-}}" ] && [ -n "$TAILSCALE_BIN" ]; then\n'
+    '            LIVEKIT_NODE_IP="$("$TAILSCALE_BIN" ip -4 2>/dev/null | head -n 1)"\n'
+    "        fi\n"
+    '        if [ -z "${{LIVEKIT_NODE_IP_V6:-}}" ] && [ -n "$TAILSCALE_BIN" ]; then\n'
+    '            LIVEKIT_NODE_IP_V6="$("$TAILSCALE_BIN" ip -6 2>/dev/null | head -n 1)"\n'
     "        fi\n"
     '        if [ -n "${{LIVEKIT_NODE_IP:-}}" ] && ! [[ "$LIVEKIT_NODE_IP" =~ ^([0-9]{{1,3}}\\.){{3}}[0-9]{{1,3}}$ ]]; then\n'
     '            echo "Ignoring invalid Tailscale IPv4 value: $LIVEKIT_NODE_IP" >&2\n'
@@ -137,8 +142,13 @@ _OPENBASE_ROUTINES_COMMAND = (
 
 _LIVEKIT_AGENT_COMMAND = (
     'LIVEKIT_NETWORK_MODE="${{LIVEKIT_NETWORK_MODE:-tailscale}}"\n'
-    'if [ -z "${{LIVEKIT_NODE_IP:-}}" ] && command -v tailscale >/dev/null 2>&1; then\n'
-    '    LIVEKIT_NODE_IP="$(tailscale ip -4 2>/dev/null | head -n 1)"\n'
+    # App Store Tailscale keeps its CLI inside the app bundle, off every PATH.
+    'TAILSCALE_BIN="$(command -v tailscale || true)"\n'
+    'if [ -z "$TAILSCALE_BIN" ] && [ -x "/Applications/Tailscale.app/Contents/MacOS/Tailscale" ]; then\n'
+    '    TAILSCALE_BIN="/Applications/Tailscale.app/Contents/MacOS/Tailscale"\n'
+    "fi\n"
+    'if [ -z "${{LIVEKIT_NODE_IP:-}}" ] && [ -n "$TAILSCALE_BIN" ]; then\n'
+    '    LIVEKIT_NODE_IP="$("$TAILSCALE_BIN" ip -4 2>/dev/null | head -n 1)"\n'
     "fi\n"
     'if [ "$LIVEKIT_NETWORK_MODE" = "tailscale" ]; then\n'
     '    export LIVEKIT_URL="${{LIVEKIT_AGENT_URL:-ws://localhost:7880}}"\n'
@@ -155,8 +165,13 @@ _LIVEKIT_AGENT_COMMAND = (
 
 _DJANGO_CLI_COMMAND = (
     'LIVEKIT_NETWORK_MODE="${{LIVEKIT_NETWORK_MODE:-tailscale}}"\n'
-    'if [ -z "${{LIVEKIT_NODE_IP:-}}" ] && command -v tailscale >/dev/null 2>&1; then\n'
-    '    LIVEKIT_NODE_IP="$(tailscale ip -4 2>/dev/null | head -n 1)"\n'
+    # App Store Tailscale keeps its CLI inside the app bundle, off every PATH.
+    'TAILSCALE_BIN="$(command -v tailscale || true)"\n'
+    'if [ -z "$TAILSCALE_BIN" ] && [ -x "/Applications/Tailscale.app/Contents/MacOS/Tailscale" ]; then\n'
+    '    TAILSCALE_BIN="/Applications/Tailscale.app/Contents/MacOS/Tailscale"\n'
+    "fi\n"
+    'if [ -z "${{LIVEKIT_NODE_IP:-}}" ] && [ -n "$TAILSCALE_BIN" ]; then\n'
+    '    LIVEKIT_NODE_IP="$("$TAILSCALE_BIN" ip -4 2>/dev/null | head -n 1)"\n'
     "fi\n"
     'if [ -n "${{LIVEKIT_NODE_IP:-}}" ] && ! [[ "$LIVEKIT_NODE_IP" =~ ^([0-9]{{1,3}}\\.){{3}}[0-9]{{1,3}}$ ]]; then\n'
     '    echo "Ignoring invalid Tailscale IPv4 value: $LIVEKIT_NODE_IP" >&2\n'

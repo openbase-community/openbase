@@ -14,7 +14,12 @@ def test_livekit_server_service_supports_tailscale_and_local_modes():
     assert "    local)" in command
     assert "    tailscale)" in command
     assert 'LIVEKIT_TCP_PORT="${LIVEKIT_TCP_PORT:-7881}"' in command
-    assert 'LIVEKIT_NODE_IP_V6="$(tailscale ip -6 2>/dev/null | head -n 1)"' in command
+    assert (
+        'LIVEKIT_NODE_IP_V6="$("$TAILSCALE_BIN" ip -6 2>/dev/null | head -n 1)"'
+        in command
+    )
+    # App Store installs keep the tailscale CLI inside the app bundle.
+    assert "/Applications/Tailscale.app/Contents/MacOS/Tailscale" in command
     assert "Ignoring invalid Tailscale IPv4 value: $LIVEKIT_NODE_IP" in command
     assert "Ignoring invalid Tailscale IPv6 value: $LIVEKIT_NODE_IP_V6" in command
     assert 'ifconfig 2>/dev/null | awk -v ip="$LIVEKIT_NODE_IP"' in command

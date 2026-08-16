@@ -391,9 +391,15 @@ def _check_port(port: int) -> bool:
 
 def _check_tailscale() -> bool:
     """Check if Tailscale is connected."""
+    from openbase_coder_cli.services.tailscale_serve import _tailscale_bin
+
+    # App Store installs keep the CLI inside the app bundle, off PATH.
+    tailscale_bin = _tailscale_bin()
+    if not tailscale_bin:
+        return False
     try:
         result = subprocess.run(
-            ["tailscale", "status"],
+            [tailscale_bin, "status"],
             capture_output=True,
             timeout=5,
         )
