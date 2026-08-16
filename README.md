@@ -16,8 +16,8 @@ surface.
 
 This repository is the main open-source entry point for Openbase Coder. It
 contains the local `openbase-coder` runtime, the public product docs, the
-developer setup path, and the service layer used by the Mac app, iOS app, web
-console, and Openbase Cloud.
+developer setup path, and the service layer used by the Mac app, iOS app,
+Android app, web console, and Openbase Cloud.
 
 ### ✏️ What You Can Do
 
@@ -30,15 +30,15 @@ Core workflows are:
 * Start and steer coding work by voice through a dispatcher agent.
 * Route an active voice call between the dispatcher and individual Super Agents.
 * Track running, waiting, completed, and failed coding threads.
-* Continue threads from the Mac app, browser console, iOS app, or CLI.
+* Continue threads from the Mac app, browser console, iOS app, Android app, or CLI.
 * Approve or deny agent permission requests without babysitting a terminal.
 * Review live output, generated Markdown reports, and git diffs.
 * Browse projects, reports, routines, skills, templates, devices, service
   health, and runtime settings from the shared dashboard.
-* Use your iPhone as the remote control for calls, approvals, reports, diffs,
-  and thread follow-up.
-* Run the local runtime on your Mac, a Linux machine, or an Openbase Cloud
-  DevSpace.
+* Use your iPhone or Android phone as the remote control for calls, approvals,
+  reports, diffs, and thread follow-up.
+* Run the local runtime on your Mac, a Linux machine, Windows via the Docker
+  image, or an Openbase Cloud DevSpace.
 * Extend the runtime with plugins, skills, routines, bootstrap commands, and
   console pages.
 
@@ -53,6 +53,9 @@ Openbase Coder has several user-facing surfaces backed by the local
 * **iOS app**: the voice and review client. Start calls, transfer voice to
   agents, follow threads, handle approvals, read reports, and inspect diffs
   from your phone.
+* **Android app**: the same phone client for Android (Kotlin/Compose),
+  mirroring the iOS workflow — calls, threads, approvals, reports, diffs, and
+  screen-share viewing.
 * **Web console**: the same dashboard served in a browser by the local runtime.
 * **CLI**: the local service manager and automation surface for setup, login,
   services, plugins, routines, voice routing, diagnostics, and development.
@@ -72,8 +75,12 @@ Most users should install the Mac app first:
 2. Open the app and follow guided setup. The app activates the bundled CLI,
    checks prerequisites, lets you choose a coding backend and voice provider,
    signs you in, and helps pair your iPhone over Tailscale.
-3. Install the iOS beta from the Downloads page if you want the phone control
-   surface for voice calls, approvals, reports, and diffs.
+3. Install the iOS beta or the Android APK from the Downloads page if you want
+   the phone control surface for voice calls, approvals, reports, and diffs.
+
+Prefer a container, or running on Windows? Run the `openbaseai/openbase` Docker
+image instead of the Mac app — it runs the full runtime in a Linux container
+(with Docker Desktop on Windows). See [Run in Docker](docs/docker.md).
 
 ### 🛠️ Developer Setup
 
@@ -140,6 +147,8 @@ The product docs live in this repository under `docs/` and are published at
 [iOS App](docs/ios-tabs.md)
 
 [Web Console and Openbase Cloud](docs/console.md)
+
+[Run in Docker](docs/docker.md)
 
 [Commands](docs/commands/index.md)
 

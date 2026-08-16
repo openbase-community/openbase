@@ -1,8 +1,8 @@
 # Openbase Coder
 
 Openbase Coder is a voice-first AI coding product. You talk to coding agents
-from your iPhone or Mac while a local runtime on your computer runs the actual
-coding sessions against your repositories.
+from your iPhone, Android phone, or Mac while a local runtime on your computer
+runs the actual coding sessions against your repositories.
 
 These docs cover the whole product, not just the CLI:
 
@@ -11,6 +11,9 @@ These docs cover the whole product, not just the CLI:
   skills, settings, and screen sharing.
 - **[iOS app](ios-tabs.md)** — voice calls with the dispatcher and Super
   Agents, thread management, approvals, reports, and diffs from your phone.
+- **Android app** — the same phone client for Android (Kotlin/Compose),
+  mirroring the iOS workflow: voice calls, threads, approvals, reports, and
+  diffs. Get the APK from [Downloads](downloads.md).
 - **[Web console & Openbase Cloud](console.md)** — the same dashboard in a
   browser, plus your account at `https://app.openbase.cloud`. Openbase Cloud's
   own Heroku-style CLI (`openbase`) is documented separately at
@@ -22,10 +25,11 @@ These docs cover the whole product, not just the CLI:
 ## Which Page Do I Need?
 
 - Installing for the first time → [Getting Started](getting-started/index.md):
-  [download the Mac app](getting-started/mac-app.md) or use the
-  [developer setup](getting-started/developer-setup.md).
+  [download the Mac app](getting-started/mac-app.md), use the
+  [developer setup](getting-started/developer-setup.md), or run it in
+  [Docker (including on Windows)](docker.md).
 - What can I do in the Mac app? → [Desktop App](desktop-app.md)
-- What can I do on my phone? → [iOS App](ios-tabs.md)
+- What can I do on my phone? → [iOS App](ios-tabs.md) (the Android app mirrors it)
 - What is app.openbase.cloud for? → [Web Console & Cloud](console.md)
 - Talking to agents by voice, transferring calls → [Voice Routing](voice-routing.md)
 - Something is broken → [Troubleshooting](troubleshooting.md)
@@ -68,6 +72,7 @@ Setup and operations:
   [Developer Setup](getting-started/developer-setup.md))
 - [Downloads](downloads.md)
 - [Manual Setup](manual-installation.md)
+- [Run in Docker](docker.md)
 - [Cloud DevSpace](cloud-devspace.md)
 - [Local-Only Mode](local-only.md)
 - [Troubleshooting](troubleshooting.md)
