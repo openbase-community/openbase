@@ -30,10 +30,12 @@ permissions:
 # A burst of pushes (multi pushes all subrepos together) cancels in-flight
 # builds so the final push releases once, after everything has landed.
 # Per-branch groups: a staging burst must not cancel a main release or
-# vice versa.
+# vice versa. A [skip release] push must NOT cancel: its own run skips
+# itself, so cancelling would leave the predecessor's release uncut with
+# nothing replacing it (a silently dropped release).
 concurrency:
   group: auto-release-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ !contains(github.event.head_commit.message || '', '[skip release]') }}
 
 jobs:
   plan:
