@@ -178,6 +178,11 @@ mv "$tmp_env" "$ENV_FILE"
 # uv project state; install it explicitly here (idempotent: checks version).
 python -c "from openbase_coder_cli.livekit_install import ensure_pinned_livekit_server; ensure_pinned_livekit_server()"
 
+# Voice-agent model files: baked into current images, but heal older images
+# and volumes (a fast no-op when the cache is warm; non-fatal offline).
+python -m openbase_coder_cli.livekit_agent.livekit download-files \
+    || echo "[entrypoint] WARN: could not verify LiveKit model files; voice calls may fail until they download."
+
 # Regenerate wrappers every start so binary paths track image upgrades.
 openbase-coder services regenerate
 

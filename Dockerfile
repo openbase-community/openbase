@@ -107,6 +107,14 @@ RUN cd cli \
     && git tag "v$OPENBASE_CODER_VERSION" \
     && uv sync
 
+# Voice sessions need the LiveKit VAD/turn-detector model files (e.g.
+# languages.json) at call time with downloads disabled. First-run setup
+# fetches them into ~/.cache, but that is container-layer state — a
+# recreated container reuses the volume, skips setup, and would crash the
+# agent mid-call. Bake the models into the image.
+RUN cd cli \
+    && .venv/bin/python -m openbase_coder_cli.livekit_agent.livekit download-files
+
 # Prebuilt console UI; the env override makes django serve it directly and
 # keeps the runtime's own console-build step skipped (no console source here).
 COPY --from=console-build --chown=openbase:openbase \
