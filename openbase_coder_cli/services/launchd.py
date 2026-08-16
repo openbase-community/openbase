@@ -515,6 +515,12 @@ def _external_supervisor_status(svc: ServiceDefinition) -> dict:
             os.kill(pid, 0)
         except OSError:
             pid = None
+    if not svc.install_by_default and pid is None:
+        # Wrapper regeneration writes files for optional services (code-sync,
+        # cloud heartbeat) regardless of whether their feature is on; under
+        # an external supervisor "installed" means actually supervised, so a
+        # disabled feature doesn't warn as an unexpectedly installed service.
+        return {"installed": False}
     return {"installed": True, "pid": str(pid) if pid else None}
 
 
