@@ -33,6 +33,7 @@ from openbase_coder_cli.paths import (
     OPENBASE_CLAUDE_JSON_PATH,
     STANDALONE_RELEASES_DIR,
 )
+from openbase_coder_cli.platforms import is_windows
 from openbase_coder_cli.runtime import stable_runtime_package
 from openbase_coder_cli.services.definitions import SERVICES
 from openbase_coder_cli.services.installation import InstallationConfig
@@ -80,8 +81,11 @@ def _parse_env_file() -> dict[str, str]:
 def _get_listening_sockets() -> list[tuple[str, int]]:
     """Return (bind_address, port) for all TCP LISTEN sockets.
 
-    Uses lsof to query the system, falling back to ss when lsof is missing.
+    Uses lsof to query the system, falling back to ss when lsof is missing
+    and to netstat on Windows, which has neither.
     """
+    if is_windows():
+        return _get_listening_sockets_netstat()
     try:
         result = subprocess.run(
             ["lsof", "-iTCP", "-sTCP:LISTEN", "-P", "-n"],
@@ -106,6 +110,35 @@ def _get_listening_sockets() -> list[tuple[str, int]]:
         except ValueError:
             continue
         key = (host, port)
+        if key not in seen:
+            seen.add(key)
+            sockets.append(key)
+    return sockets
+
+
+def _get_listening_sockets_netstat() -> list[tuple[str, int]]:
+    try:
+        result = subprocess.run(
+            ["netstat", "-ano", "-p", "tcp"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    seen: set[tuple[str, int]] = set()
+    sockets: list[tuple[str, int]] = []
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        # "TCP  127.0.0.1:7999  0.0.0.0:0  LISTENING  27932"
+        if len(parts) < 4 or parts[3].upper() != "LISTENING":
+            continue
+        host, separator, port_str = parts[1].rpartition(":")
+        if not separator or not port_str.isdigit():
+            continue
+        # Keep the bracket-free form so the exposure checks below compare
+        # against the same shapes lsof reports.
+        key = (host.strip("[]"), int(port_str))
         if key not in seen:
             seen.add(key)
             sockets.append(key)
