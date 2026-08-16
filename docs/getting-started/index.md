@@ -3,7 +3,7 @@
 Openbase Coder runs as the `openbase-coder` CLI runtime on your own machine.
 Pick the install path that matches how you want to run it:
 
-### Mac App (Electron)
+### Mac App (guided)
 
 **[Mac App Download](mac-app.md)** — download the desktop app and let its
 guided setup install everything: the bundled CLI runtime, managed Claude

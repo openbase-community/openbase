@@ -1,6 +1,6 @@
 # Mac App Download
 
-The Electron desktop app is the production install path: it bundles the
+The desktop app is the production install path: it bundles the
 complete CLI runtime and walks you through setup in the app — no terminal
 required — including managed Claude Code, managed voice audio, and iPhone
 pairing. (Prefer working from source? See
