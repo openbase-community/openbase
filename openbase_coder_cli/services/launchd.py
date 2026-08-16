@@ -491,7 +491,36 @@ def launchctl_kill(svc: ServiceDefinition) -> bool:
     return result.returncode == 0
 
 
+# Set to "external" when something other than launchd/systemd supervises the
+# generated wrappers (e.g. the Docker entrypoint). The supervisor maintains
+# <data_dir>/run/<name>.pid files: written on service start, removed on exit.
+EXTERNAL_SUPERVISOR_ENV = "OPENBASE_CODER_SERVICE_SUPERVISOR"
+EXTERNAL_SUPERVISOR_RUN_DIR = OPENBASE_BASE_DIR / "run"
+
+
+def _external_supervisor() -> bool:
+    return os.environ.get(EXTERNAL_SUPERVISOR_ENV, "").lower() == "external"
+
+
+def _external_supervisor_status(svc: ServiceDefinition) -> dict:
+    if not _wrapper_path(svc).is_file():
+        return {"installed": False}
+    pid: int | None = None
+    try:
+        pid = int((EXTERNAL_SUPERVISOR_RUN_DIR / f"{svc.name}.pid").read_text().strip())
+    except (OSError, ValueError):
+        pid = None
+    if pid is not None:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            pid = None
+    return {"installed": True, "pid": str(pid) if pid else None}
+
+
 def launchctl_status(svc: ServiceDefinition) -> dict:
+    if _external_supervisor():
+        return _external_supervisor_status(svc)
     if not _is_macos():
         from openbase_coder_cli.services.systemd import systemd_status
 

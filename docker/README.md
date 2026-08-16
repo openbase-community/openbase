@@ -124,8 +124,11 @@ userspace mode, use the kernel TUN or sidecar variants above.
   repos during the image build (`CONSOLE_REF` etc. build args, default
   develop/main), so a locally modified console is not what gets baked in.
 - **No systemd/launchd**: services are supervised by the entrypoint script
-  with a restart-on-exit loop; `openbase-coder services start/stop` is not
-  functional inside the container.
+  with a restart-on-exit loop. Service *status* (console health banners,
+  `services status`) is accurate — the image sets
+  `OPENBASE_CODER_SERVICE_SUPERVISOR=external` and the entrypoint maintains
+  `~/.openbase/run/<name>.pid` files — but start/stop/restart actions are
+  not functional; restart the container instead.
 - **Coding sessions operate on the container filesystem**: mount the
   projects you want agents to work on
   (e.g. `-v ~/Projects:/home/openbase/Projects`).

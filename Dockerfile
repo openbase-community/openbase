@@ -117,7 +117,8 @@ WORKDIR /home/openbase
 # the in-container tailscaled socket) also wins in `docker exec` shells.
 ENV PATH="/home/openbase/.openbase/bin:/opt/openbase-coder/workspace/cli/.venv/bin:${PATH}" \
     OPENBASE_CODER_WORKSPACE_DIR=/opt/openbase-coder/workspace \
-    OPENBASE_CODER_CLI_CONSOLE_BUILD_DIR=/opt/openbase-coder/console-dist
+    OPENBASE_CODER_CLI_CONSOLE_BUILD_DIR=/opt/openbase-coder/console-dist \
+    OPENBASE_CODER_SERVICE_SUPERVISOR=external
 
 # All state (env file, sqlite DB, downloaded backend binaries, logs) lives in
 # ~/.openbase; keep it on a volume so logins and setup survive restarts.

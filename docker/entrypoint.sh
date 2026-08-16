@@ -26,16 +26,28 @@ fi
 DATA_DIR="${OPENBASE_CODER_CLI_DATA_DIR:-$HOME/.openbase}"
 ENV_FILE="$DATA_DIR/.env"
 WRAPPER_DIR="$DATA_DIR/launchd"
+RUN_DIR="$DATA_DIR/run"
 NETWORK_MODE="${OPENBASE_CODER_NETWORK_MODE:-tailscale}"
 
-# Run a command under a restart-on-exit loop, prefixing its output.
+# Tell the runtime the entrypoint (not launchd/systemd) supervises services;
+# status checks then read the $RUN_DIR/<name>.pid files maintained below.
+export OPENBASE_CODER_SERVICE_SUPERVISOR=external
+mkdir -p "$RUN_DIR"
+rm -f "$RUN_DIR"/*.pid
+
+# Run a command under a restart-on-exit loop, prefixing its output and
+# maintaining the service pidfile the runtime's status checks read.
 start_supervised() {
     name="$1"
     shift
     (
         while :; do
+            "$@" 2>&1 &
+            svc_pid=$!
+            echo "$svc_pid" >"$RUN_DIR/$name.pid"
             rc=0
-            "$@" 2>&1 || rc=$?
+            wait "$svc_pid" || rc=$?
+            rm -f "$RUN_DIR/$name.pid"
             echo "[supervisor] exited with status $rc; restarting in 5s"
             sleep 5
         done
