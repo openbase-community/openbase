@@ -12,7 +12,8 @@ development installs need:
 
 - Git
 - [`uv`](https://docs.astral.sh/uv/)
-- Node and npm (or pnpm) for building the console from source
+- Node 20+ and pnpm for building the console from source (the setup script
+  checks both and fails fast with install instructions)
 
 Optional developer backends:
 
@@ -44,6 +45,12 @@ Passing **any** flag disables all prompts, so scripted and AI-agent runs
 never block: fresh non-interactive installs require `--backend` and default
 the audio provider to `openbase-cloud`. See [setup](../commands/setup.md)
 for the full flag list and the `--interactive` override.
+
+Interactive runs finish by offering `openbase-coder login` (browser OAuth),
+then confirm the device is registered with Openbase Cloud and that Tailscale
+Serve is exposing the local API and LiveKit, and print a QR code for the
+[phone app downloads page](https://openbase.cloud/downloads.html).
+Non-interactive runs end with the login hint instead, exactly as before.
 
 If a standalone desktop/CLI install, or a different development workspace
 install, already exists, the workspace script stops and links to

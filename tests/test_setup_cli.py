@@ -1709,3 +1709,54 @@ def test_resolve_interactive_mode_non_tty_disables_prompts(monkeypatch) -> None:
     ctx = setup_cli.setup.make_context("setup", [])
     with ctx:
         assert setup_cli._resolve_interactive_mode(None, False) is False
+
+
+def test_interactive_login_checks_skip_when_declined(tmp_path, monkeypatch) -> None:
+    class _LoggedOut:
+        def __init__(self, url):
+            self.has_refresh_token = False
+
+    calls = []
+    monkeypatch.setattr(setup_cli, "TokenManager", _LoggedOut)
+    monkeypatch.setattr(setup_cli, "register_and_report", lambda **kw: calls.append(kw))
+    _fake_tty_stdin(monkeypatch, "n\n")
+
+    setup_cli._interactive_cloud_login_and_checks(
+        str(tmp_path / ".env"), cli_configured=True
+    )
+
+    assert calls == []
+
+
+def test_interactive_login_checks_report_when_logged_in(tmp_path, monkeypatch) -> None:
+    class _LoggedIn:
+        def __init__(self, url):
+            self.has_refresh_token = True
+
+    reports = []
+    monkeypatch.setattr(setup_cli, "TokenManager", _LoggedIn)
+    monkeypatch.setattr(
+        setup_cli,
+        "tailscale_serve_health",
+        lambda: SimpleNamespace(healthy=True, error=None),
+    )
+
+    def fake_report(**kwargs):
+        reports.append(kwargs)
+        return SimpleNamespace(ok=True, supported=True, error=None)
+
+    monkeypatch.setattr(setup_cli, "register_and_report", fake_report)
+
+    setup_cli._interactive_cloud_login_and_checks(
+        str(tmp_path / ".env"), cli_configured=True
+    )
+
+    assert reports == [{"cli_configured": True, "serve_healthy": True}]
+
+
+def test_print_app_download_qr_outputs_url(capsys) -> None:
+    setup_cli._print_app_download_qr()
+
+    out = capsys.readouterr().out
+    assert "https://openbase.cloud/downloads.html" in out
+    assert "█" in out or "▀" in out or "▄" in out

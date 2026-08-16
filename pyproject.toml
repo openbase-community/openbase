@@ -17,6 +17,7 @@ dependencies = [
     "whitenoise>=6.8.0",
     "channels>=4.2.0",
     "pydantic>=2.12.5",
+    "qrcode>=8.0",
     "PyJWT>=2.9.0",
     "cryptography>=43.0.0",
     "anyio>=4.13.0",

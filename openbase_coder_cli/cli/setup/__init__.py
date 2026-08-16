@@ -129,10 +129,10 @@ from openbase_coder_cli.config.machine_token_manager import (
     MachineTokenManager,  # noqa: F401
 )
 from openbase_coder_cli.config.token_manager import (
-    DEFAULT_WEB_BACKEND_URL,  # noqa: F401
+    DEFAULT_WEB_BACKEND_URL,
     AuthLoginRequiredError,  # noqa: F401
     AuthTransientError,  # noqa: F401
-    TokenManager,  # noqa: F401
+    TokenManager,
 )
 from openbase_coder_cli.dispatcher_config import (
     DISPATCHER_VOICE_ID_KEY,  # noqa: F401
@@ -164,6 +164,7 @@ from openbase_coder_cli.runtime import (
     packaged_instructions_dir,  # noqa: F401
     packaged_skills_dir,  # noqa: F401
 )
+from openbase_coder_cli.services.cloud_registration import register_and_report
 from openbase_coder_cli.services.installation import InstallationConfig
 from openbase_coder_cli.services.launchd import install_all_services
 from openbase_coder_cli.services.onboarding import compute_cli_configured
@@ -429,10 +430,90 @@ def setup(
     click.echo()
     click.echo("Setup complete.")
     click.echo()
-    click.echo(
-        "To enable remote authentication, run 'openbase-coder login' "
-        "and ensure OPENBASE_CODER_CLI_WEB_BACKEND_URL is set in your .env."
+    if interactive:
+        _interactive_cloud_login_and_checks(env_file, cli_configured=cli_configured)
+        _print_app_download_qr()
+    else:
+        click.echo(
+            "To enable remote authentication, run 'openbase-coder login' "
+            "and ensure OPENBASE_CODER_CLI_WEB_BACKEND_URL is set in your .env."
+        )
+
+
+APP_DOWNLOADS_URL = "https://openbase.cloud/downloads.html"
+
+
+def _interactive_cloud_login_and_checks(env_file: str, *, cli_configured: bool) -> None:
+    """Interactive setup tail: login, then verify cloud registration and Serve.
+
+    Only ever called on interactive runs; non-interactive runs (including the
+    desktop app's --json-progress onboarding, which renders its own sign-in
+    step) keep the plain login hint instead.
+    """
+    web_backend_url = (
+        _env_file_values(Path(env_file)).get("OPENBASE_CODER_CLI_WEB_BACKEND_URL")
+        or DEFAULT_WEB_BACKEND_URL
     )
+    if TokenManager(web_backend_url).has_refresh_token:
+        click.echo("Already logged in to Openbase Cloud.")
+    elif click.confirm(
+        "Log in to Openbase Cloud now? (required for iPhone pairing and "
+        "cloud onboarding)",
+        default=True,
+    ):
+        from openbase_coder_cli.cli import auth as _auth
+
+        click.get_current_context().invoke(_auth.login)
+    else:
+        click.echo(
+            "Skipping login. Run 'openbase-coder login' later; iPhone pairing "
+            "and cloud onboarding need it."
+        )
+        return
+
+    # Login already registers the device; re-report with the freshest facts
+    # so the cloud sees this install as configured, and surface the result.
+    serve_health = tailscale_serve_health()
+    report = register_and_report(
+        cli_configured=cli_configured,
+        serve_healthy=serve_health.healthy,
+    )
+    if report.ok:
+        click.echo("Device registered with Openbase Cloud.")
+    elif report.supported:
+        click.echo(
+            click.style(
+                "Warning: could not register this device with Openbase "
+                f"Cloud: {report.error}",
+                fg="yellow",
+            )
+        )
+    if serve_health.healthy:
+        click.echo("Tailscale Serve is exposing the local API and LiveKit.")
+    else:
+        click.echo(
+            click.style(
+                "Warning: Tailscale Serve is not fully healthy: "
+                f"{serve_health.error or 'routes not configured'}",
+                fg="yellow",
+            )
+        )
+        click.echo(
+            "  Re-check with 'openbase-coder onboarding status' once "
+            "Tailscale is signed in and connected."
+        )
+
+
+def _print_app_download_qr() -> None:
+    """Terminal QR code pointing at the phone app downloads page."""
+    import qrcode
+
+    click.echo()
+    click.echo("Scan to get the Openbase iOS/Android app:")
+    qr = qrcode.QRCode(border=1)
+    qr.add_data(APP_DOWNLOADS_URL)
+    qr.print_ascii(invert=True)
+    click.echo(APP_DOWNLOADS_URL)
 
 
 def _resolve_interactive_mode(

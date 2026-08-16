@@ -61,6 +61,14 @@ otherwise) and default the audio provider to `openbase-cloud`.
 `./scripts/setup` passes `--interactive` for you when you give it no flags on
 a terminal, since it always injects `--workspace-dir` itself.
 
+After the phases complete, interactive runs also offer to run
+`openbase-coder login` (browser OAuth; skipped if already logged in), then
+verify the device registered with Openbase Cloud and that Tailscale Serve is
+exposing the local API and LiveKit, and print a terminal QR code linking the
+phone app downloads page. Non-interactive runs — including the desktop
+app's `--json-progress` onboarding, which renders its own sign-in step —
+end with the plain login hint, unchanged.
+
 ## Backend Selection
 
 Setup configures the default coding backend:
