@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import platform
 import sys
 import time
 from pathlib import Path
@@ -162,6 +161,11 @@ from openbase_coder_cli.paths import (
     OPENBASE_CLAUDE_JSON_PATH,  # noqa: F401
     OPENBASE_CLAUDE_SETTINGS_PATH,  # noqa: F401
     OPENBASE_SOUNDS_DIR,  # noqa: F401
+)
+from openbase_coder_cli.platforms import (
+    SUPPORTED_SYSTEMS,
+    is_supported,
+    service_manager_name,
 )
 from openbase_coder_cli.runtime import (
     current_runtime_package,
@@ -414,8 +418,9 @@ def setup(
     require --backend and default the audio provider to openbase-cloud. Pass
     --interactive to combine flags with the pickers.
     """
-    if platform.system() not in ("Darwin", "Linux", "Windows"):
-        raise click.ClickException("Setup is only supported on macOS and Linux.")
+    if not is_supported():
+        supported = ", ".join(SUPPORTED_SYSTEMS)
+        raise click.ClickException(f"Setup is only supported on {supported}.")
     interactive = _resolve_interactive_mode(interactive_mode, json_progress)
     install_normal_agent_hooks = _resolve_normal_agent_hooks_choice(
         install_normal_agent_hooks,
@@ -944,8 +949,7 @@ def _run_setup_phases(
     progress.step("services", "start")
     if not skip_services:
         click.echo()
-        service_manager = "launchd" if platform.system() == "Darwin" else "systemd"
-        click.echo(f"Installing {service_manager} services...")
+        click.echo(f"Installing {service_manager_name()} services...")
         install_all_services(config)
         progress.step("services", "ok")
     else:

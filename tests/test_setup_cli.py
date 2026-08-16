@@ -93,7 +93,7 @@ def _make_workspace_checkout(root):
 
 
 def test_setup_windows_proceeds_past_os_guard(monkeypatch) -> None:
-    monkeypatch.setattr(setup_cli.platform, "system", lambda: "Windows")
+    monkeypatch.setattr("openbase_coder_cli.platforms.current_system", lambda: "Windows")
     sentinel = RuntimeError("reached backend resolution")
 
     def _raise(*_args, **_kwargs):
@@ -109,7 +109,7 @@ def test_setup_windows_proceeds_past_os_guard(monkeypatch) -> None:
 
 
 def test_setup_rejects_unsupported_os(monkeypatch) -> None:
-    monkeypatch.setattr(setup_cli.platform, "system", lambda: "SunOS")
+    monkeypatch.setattr("openbase_coder_cli.platforms.current_system", lambda: "SunOS")
 
     runner = CliRunner()
     result = runner.invoke(setup_cli.setup, ["--backend", "claude-code"])
