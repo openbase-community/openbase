@@ -141,4 +141,10 @@ falls short.
   not functional; restart the container instead.
 - **Coding sessions operate on the container filesystem**: mount the
   projects you want agents to work on
-  (e.g. `-v ~/Projects:/home/openbase/Projects`).
+  (e.g. `-v ~/Projects:/home/openbase/Projects`). Node (with npm/corepack)
+  and git are bundled for agent tooling; other toolchains must be installed
+  into the container.
+- **Code-sync works**: syncthing is bundled (pinned to the version
+  `code_sync/install.py` would download). After enabling sync from the
+  console, restart the container so the entrypoint starts the code-sync
+  service.

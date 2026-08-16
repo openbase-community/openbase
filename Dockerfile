@@ -74,6 +74,38 @@ RUN curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.noarmor.gpg \
     && apt-get install -y --no-install-recommends tailscale \
     && rm -rf /var/lib/apt/lists/*
 
+# Syncthing powers the code-sync feature; the on-demand installer
+# (code_sync/install.py) honors a PATH binary, so bake the same pinned
+# release it would download. Keep version + sha256 in sync with install.py.
+ARG SYNCTHING_VERSION=v2.1.1
+ARG SYNCTHING_SHA256_AMD64=0b960a67a0391156c2ca45943ed1ceaad9ae1fc3772d967e6aafc5a7c662565d
+ARG SYNCTHING_SHA256_ARM64=2c831e27c73a5c9217bdbbfcdb695d41b027f9d8bf8303f55590881e7b907f7f
+ARG TARGETARCH
+RUN set -eux; \
+    case "$TARGETARCH" in \
+        amd64) sha="$SYNCTHING_SHA256_AMD64" ;; \
+        arm64) sha="$SYNCTHING_SHA256_ARM64" ;; \
+        *) echo "unsupported arch $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    asset="syncthing-linux-$TARGETARCH-$SYNCTHING_VERSION"; \
+    curl -fsSL -o /tmp/syncthing.tar.gz \
+        "https://github.com/syncthing/syncthing/releases/download/$SYNCTHING_VERSION/$asset.tar.gz"; \
+    echo "$sha  /tmp/syncthing.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/syncthing.tar.gz -C /tmp "$asset/syncthing"; \
+    install -m 0755 "/tmp/$asset/syncthing" /usr/local/bin/syncthing; \
+    rm -rf /tmp/syncthing.tar.gz "/tmp/$asset"; \
+    syncthing --version
+
+# Node for coding agents working on mounted JS/TS projects (the console
+# itself is served as static files and does not need it). Reuse the console
+# build stage's node — same Debian base, correct per-platform binary.
+COPY --from=console-build /usr/local/bin/node /usr/local/bin/node
+COPY --from=console-build /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack \
+    && node --version && npm --version
+
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 COPY docker/entrypoint.sh /usr/local/bin/openbase-coder-entrypoint
