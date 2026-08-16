@@ -1,9 +1,14 @@
 # Developer Setup
 
-Installing from a workspace checkout is a fully supported install path. Use
-it when you want to develop Openbase Coder itself, run the runtime from
-source, or set up a machine without the desktop app (for example a headless
-Linux box you administer over SSH).
+Installing from a workspace checkout is a fully supported install path, with
+an interactive terminal flow: run `./scripts/setup` with no flags and it
+picks your coding backend and voice audio provider, walks you through
+Openbase Cloud login, and verifies the install. Use it when you want to
+develop Openbase Coder itself, run the runtime from source, or set up a
+machine without the desktop app (for example a headless Linux box you
+administer over SSH). (Just want the product on a Mac? See
+[Mac App Download](mac-app.md). On Windows, see
+[Run in Docker](../docker.md).)
 
 ## Prerequisites
 

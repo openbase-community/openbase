@@ -1,19 +1,36 @@
 # Getting Started
 
-Openbase Coder runs on your Mac (or a Linux machine) as the `openbase-coder`
-CLI runtime. There are two supported ways to install it:
+Openbase Coder runs as the `openbase-coder` CLI runtime on your own machine.
+Pick the install path that matches how you want to run it:
 
-- **[Mac App Download](mac-app.md)** — download the desktop app and let its
-  guided setup install everything: the bundled CLI runtime, managed Claude
-  Code, managed voice audio, and iPhone pairing. The fastest path for most
-  users.
-- **[Developer Setup](developer-setup.md)** — clone the
-  `openbase-coder-workspace` repo and install from source with its setup
-  script. Fully supported; choose it when you want to develop Openbase Coder
-  itself, run the runtime from a checkout, or set up a machine without the
-  desktop app (for example a headless Linux box).
+### Mac App (Electron)
 
-These correspond to Openbase Coder's two deployment modes:
+**[Mac App Download](mac-app.md)** — download the desktop app and let its
+guided setup install everything: the bundled CLI runtime, managed Claude
+Code, managed voice audio, and iPhone pairing. No terminal required. The
+fastest path for most users on an Apple Silicon Mac.
+
+### Developer Setup (interactive CLI)
+
+**[Developer Setup](developer-setup.md)** — clone the
+`openbase-coder-workspace` repo and run its interactive `./scripts/setup`
+from a terminal: pickers choose your coding backend and voice audio
+provider, then the script walks you through Openbase Cloud login and
+verifies your install. Fully supported; choose it when you want to develop
+Openbase Coder itself, run the runtime from a checkout, or set up a machine
+without the desktop app (for example a headless Linux box).
+
+### Windows & Docker
+
+**[Run in Docker](../docker.md)** — the full runtime in a single Linux
+container, joined to your tailnet as its own device. Because Docker Desktop
+runs Linux containers on macOS and Windows, this is currently the way to
+run Openbase Coder on a **Windows** machine.
+
+---
+
+The Mac app and developer paths correspond to Openbase Coder's two
+deployment modes:
 
 - **Standalone (production)**: a bundled runtime package, shipped inside the
   desktop app, containing Python, the CLI, LiveKit server, a prebuilt
@@ -30,7 +47,8 @@ iOS app.
 
 ## Prerequisites
 
-Common to both install paths:
+Common to the Mac app and developer paths (the Docker path lists its own on
+[Run in Docker](../docker.md#prerequisites)):
 
 - macOS (`setup` and `services` use launchd) or Linux (systemd user services). The `computer-use` CLI is Linux-only for Openbase DevSpace Xorg/DCV desktops; macOS agents use native Computer Use tooling.
 - Tailscale, signed in and connected, for iOS app access to the local CLI.
