@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import fcntl
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # type: ignore[assignment]
 import hashlib
 import json
 import logging
@@ -188,7 +191,8 @@ def run_self_update(*, force: bool = False, report=print) -> SelfUpdateResult:
     lock_path = STANDALONE_PACKAGES_DIR / ".self-update.lock"
     lock_handle = lock_path.open("w")
     try:
-        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if fcntl is not None:
+            fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         lock_handle.close()
         return SelfUpdateResult(
@@ -200,7 +204,8 @@ def run_self_update(*, force: bool = False, report=print) -> SelfUpdateResult:
     try:
         return _run_self_update_locked(package, force=force, report=report)
     finally:
-        fcntl.flock(lock_handle, fcntl.LOCK_UN)
+        if fcntl is not None:
+            fcntl.flock(lock_handle, fcntl.LOCK_UN)
         lock_handle.close()
 
 

@@ -50,6 +50,10 @@ def _resolve_binary(name: str, homebrew_fallback: str | None = None) -> str:
     path = shutil.which(name)
     if path:
         return path
+    py_dir = Path(sys.executable).parent
+    for candidate in [py_dir / name, py_dir / f"{name}.exe"]:
+        if candidate.is_file():
+            return str(candidate)
     fallbacks: list[Path] = []
     if homebrew_fallback:
         fallbacks.append(Path(homebrew_fallback))
@@ -68,8 +72,14 @@ def _workspace_binary_candidates(config: InstallationConfig, name: str) -> list[
     workspace = Path(config.workspace_path)
     return [
         workspace / ".venv" / "bin" / name,
+        workspace / ".venv" / "Scripts" / name,
+        workspace / ".venv" / "Scripts" / f"{name}.exe",
         workspace / "cli" / ".venv" / "bin" / name,
+        workspace / "cli" / ".venv" / "Scripts" / name,
+        workspace / "cli" / ".venv" / "Scripts" / f"{name}.exe",
         workspace / "agent" / ".venv" / "bin" / name,
+        workspace / "agent" / ".venv" / "Scripts" / name,
+        workspace / "agent" / ".venv" / "Scripts" / f"{name}.exe",
     ]
 
 
@@ -79,7 +89,7 @@ def _resolve_binary_with_preferred_paths(
     homebrew_fallback: str | None = None,
 ) -> str:
     for path in preferred_paths:
-        if path.is_file() and os.access(path, os.X_OK):
+        if path.is_file() and (sys.platform == "win32" or os.access(path, os.X_OK)):
             return str(path)
     return _resolve_binary(name, homebrew_fallback)
 

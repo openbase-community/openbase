@@ -115,6 +115,8 @@ def windows_bootstrap(svc: ServiceDefinition) -> None:
             _schtasks("/Run", "/TN", task, check=False)
             return
         time.sleep(0.5 * (attempt + 1))
+    if _schtasks("/Run", "/TN", task, check=False).returncode == 0:
+        return
     detail = (result.stderr.strip() or result.stdout.strip()) if result else ""
     raise click.ClickException(f"Failed to start {task}: {detail}")
 
@@ -151,13 +153,17 @@ def _parse_schtasks_list(output: str) -> dict[str, str]:
 
 
 def _find_pid(svc: ServiceDefinition) -> str | None:
-    marker = f"openbase_coder_cli.services.runners {svc.command_template}"
+    markers = [
+        f"openbase_coder_cli.services.runners {svc.command_template}",
+        f"com.openbase.coder.{svc.name}",
+        _service_label(svc),
+    ]
     for proc in psutil.process_iter(["pid", "cmdline"]):
         try:
             cmdline = " ".join(proc.info.get("cmdline") or [])
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
-        if marker in cmdline:
+        if any(m in cmdline for m in markers):
             return str(proc.info["pid"])
     return None
 
@@ -173,10 +179,11 @@ def windows_status(svc: ServiceDefinition) -> dict:
         return {"installed": False}
 
     info = _parse_schtasks_list(result.stdout)
-    status_text = info.get("Status", "")
-    pid = _find_pid(svc) if status_text.strip().lower() == "running" else None
+    status_text = info.get("Status") or info.get("Estado") or ""
+    is_running = status_text.strip().lower() in {"running", "en ejecución"}
+    pid = _find_pid(svc) if is_running else None
     return {
         "installed": True,
         "pid": pid,
-        "last_exit_code": info.get("Last Result"),
+        "last_exit_code": info.get("Last Result") or info.get("Último resultado"),
     }

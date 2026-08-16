@@ -143,14 +143,63 @@ class _OAuthCallbackServer(HTTPServer):
     allow_reuse_address = True
 
 
+def _parse_pasted_oauth_callback(pasted: str, expected_state: str) -> dict[str, str]:
+    pasted = pasted.strip()
+    if "://" in pasted or "?" in pasted or "code=" in pasted:
+        if "?" in pasted:
+            query = pasted.split("?", 1)[1]
+        elif "://" in pasted:
+            query = urlparse(pasted).query
+        else:
+            query = pasted
+        q = parse_qs(query)
+        code = q.get("code", [""])[0]
+        state = q.get("state", [""])[0]
+        error = q.get("error", [""])[0]
+        error_desc = q.get("error_description", [""])[0]
+        if code:
+            return {
+                "code": code,
+                "state": state,
+                "error": error,
+                "error_description": error_desc,
+            }
+
+    if "&state=" in pasted:
+        parts = pasted.split("&state=", 1)
+        code_part = parts[0]
+        if code_part.startswith("code="):
+            code_part = code_part[5:]
+        return {"code": code_part, "state": parts[1]}
+
+    if pasted.startswith("code="):
+        pasted = pasted[5:]
+    return {"code": pasted, "state": expected_state}
+
+
 def _wait_for_callback(
     redirect_uri: str, *, expected_state: str = ""
 ) -> dict[str, str]:
     parsed = urlparse(redirect_uri)
-    server = _OAuthCallbackServer(
-        (parsed.hostname or "127.0.0.1", parsed.port or 80),
-        _OAuthCallbackHandler,
-    )
+    try:
+        server = _OAuthCallbackServer(
+            (parsed.hostname or "127.0.0.1", parsed.port or 80),
+            _OAuthCallbackHandler,
+        )
+    except OSError as exc:
+        click.echo(
+            click.style(
+                f"\nWarning: Could not bind callback listener on {redirect_uri} ({exc}).",
+                fg="yellow",
+            )
+        )
+        click.echo(
+            "Please complete the sign-in in your browser, then copy the full redirect URL\n"
+            "(e.g. http://127.0.0.1:52807/oauth/callback?code=...&state=...) from your browser's address bar and paste it below:\n"
+        )
+        pasted = click.prompt("Redirect URL or code").strip()
+        return _parse_pasted_oauth_callback(pasted, expected_state)
+
     server.timeout = 1
     server.done = threading.Event()
     server.result = {}
