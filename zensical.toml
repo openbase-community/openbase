@@ -22,6 +22,7 @@ nav = [
   { "Downloads" = "downloads.md" },
   { "Manual Setup" = "manual-installation.md" },
   { "Cloud DevSpace" = "cloud-devspace.md" },
+  { "Run in Docker" = "docker.md" },
   { "Local-Only Mode" = "local-only.md" },
   { "Troubleshooting" = "troubleshooting.md" },
   { "Uninstall" = "uninstall.md" },

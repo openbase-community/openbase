@@ -7,10 +7,11 @@ native install: phones and other devices reach the runtime over the tailnet
 via `tailscale serve` (18080 → 7999 API, 7880 → 7880 LiveKit signaling), and
 LiveKit advertises the tailnet address for media.
 
-This is an internal/development mechanism, not a supported installation
-pathway (see the workspace `GLOSSARY.md`). Use it for headless testing,
-CI-style smoke checks, and experimenting with the runtime on machines where
-a native install is impractical.
+The published image is `openbaseai/openbase` on Docker Hub (linux/amd64 +
+linux/arm64), and it is the supported way to run Openbase Coder on Windows
+hosts via Docker Desktop. User-facing instructions live in
+`docs/docker.md` (published at docs.openbase.cloud); this file is the deeper
+image/development reference.
 
 ## Build
 
