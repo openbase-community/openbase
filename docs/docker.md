@@ -75,6 +75,7 @@ docker restart openbase-coder
 
 - Console: `http://openbase-coder.<your-tailnet>.ts.net:18080`
 - iOS app: **Settings → Backend Host** → your container's tailnet name.
+  Voice calls — including call audio — work over the tailnet.
 - Local API health (on the Docker host): `http://localhost:7999/api/health/`
 
 Coding sessions operate on the container's filesystem. Mount the projects
@@ -88,15 +89,56 @@ docker run -d --name openbase-coder --hostname openbase-coder \
   openbaseai/openbase
 ```
 
+## Codex and Claude Code backends
+
+The container defaults to the Openbase Cloud backend. To use native Codex or
+Claude Code instead, log in *inside the container* — do not copy credential
+files in from another machine (copied logins break when the provider rotates
+refresh tokens). Logins persist in the `openbase-data` volume.
+
+Claude Code (no port bridging needed):
+
+```sh
+docker exec -it openbase-coder openbase-coder claude login
+```
+
+Open the printed URL in any browser, sign in, and paste the code it shows
+back into the terminal. `openbase-coder claude status` confirms the scoped
+login.
+
+Codex:
+
+```sh
+docker exec -it openbase-coder codex login
+```
+
+Codex waits for a browser redirect to `http://localhost:1455/...`, which
+lives inside the container — bridge port `1455` from your browser machine
+over the tailnet exactly like the [Openbase login](#log-in-to-openbase)
+above, then open the printed URL. The service picks the login up through its
+auth symlink; no re-setup is needed.
+
+Then switch the backend and restart:
+
+```sh
+docker exec -it openbase-coder openbase-coder backend use claude_code   # or codex
+docker restart openbase-coder
+```
+
+(Use the CLI + `docker restart` rather than the console's backend setting
+inside Docker — the console's automatic service restart relies on
+launchd/systemd, which the container does not run.)
+
 ## Notes and limits
 
 - Service status in the console reflects the container's supervisor, but the
   console's service start/stop buttons do not apply inside Docker — restart
   the container instead.
-- Voice calls signal over the tailnet like any install. If call audio does
-  not flow on your network, see the advanced networking variants in the
-  [image documentation](https://github.com/openbase-community/openbase/tree/develop/docker)
-  (kernel TUN and Tailscale sidecar modes).
+- Voice calls run over the tailnet like any install, including call audio
+  (verified with real phone calls against the default unprivileged
+  networking mode). Advanced networking variants (kernel TUN, Tailscale
+  sidecar) are described in the
+  [image documentation](https://github.com/openbase-community/openbase/tree/develop/docker).
 - Choose a different coding backend or bring-your-own voice keys with
   `-e OPENBASE_CODER_BACKEND=...`, `-e OPENBASE_CODER_AUDIO_PROVIDER=...`,
   `-e ASSEMBLY_AI_API_KEY=...`, and `-e CARTESIA_API_KEY=...` on the first

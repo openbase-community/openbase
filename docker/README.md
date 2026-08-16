@@ -114,9 +114,10 @@ so mode changes take effect on `docker restart`.
 
 Signaling and the API go over `tailscale serve` (TCP), which is fully
 supported in userspace mode. LiveKit **media** is UDP to port 7882 on the
-tailnet address; userspace netstack forwards it to loopback, but this path
-has not yet been verified with a live phone call — if media fails in
-userspace mode, use the kernel TUN or sidecar variants above.
+tailnet address; userspace netstack forwards it to loopback, and this path
+is verified working with real phone calls. The kernel TUN and sidecar
+variants above remain available for networks where userspace forwarding
+falls short.
 
 ## Limitations
 

@@ -35,6 +35,13 @@ export OPENBASE_CODER_SERVICE_SUPERVISOR=external
 mkdir -p "$RUN_DIR"
 rm -f "$RUN_DIR"/*.pid
 
+# `codex login` writes ~/.codex (which setup symlinks the service auth to);
+# keep it inside the volume so backend logins survive container recreation.
+if [ ! -e "$HOME/.codex" ]; then
+    mkdir -p "$DATA_DIR/normal-codex-home"
+    ln -s "$DATA_DIR/normal-codex-home" "$HOME/.codex"
+fi
+
 # Run a command under a restart-on-exit loop, prefixing its output and
 # maintaining the service pidfile the runtime's status checks read.
 start_supervised() {
