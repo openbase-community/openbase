@@ -74,6 +74,8 @@ openbase-coder restart --service livekit-server
 openbase-coder restart --service livekit-agent
 ```
 
+Openbase Coder also heals stale voice-agent state on its own in the background: if the agent's pre-warmed pool goes stale after sleep/wake and a call would otherwise stall, it detects and recycles the agent automatically. This manual restart stays available for when a call is failing right now.
+
 For new installs, `openbase-coder setup` generates the corrected LiveKit wrapper automatically. Existing installs need regenerated wrappers because launchd runs the generated shell scripts in `~/.openbase/launchd/`.
 
 The corrected wrapper derives `LIVEKIT_INTERFACE` from the interface that owns `LIVEKIT_NODE_IP`, rather than trusting a route lookup while Tailscale is still settling. You can still override the values in `~/.openbase/.env` when needed:

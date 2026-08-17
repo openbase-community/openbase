@@ -37,6 +37,7 @@ DEFAULT_MAX_AGE_DAYS = 15
 DEFAULT_STABILITY_DELAY_SECONDS = 0.2
 CODE_SYNC_TICK_SECONDS = 60.0
 CLOUD_REGISTER_INTERVAL_SECONDS = 3600.0
+LIVEKIT_POOL_WATCHDOG_TICK_SECONDS = 30.0
 
 
 def _env_float(name: str, default: float) -> float:
@@ -231,6 +232,18 @@ def _cloud_registration_tick() -> None:
         )
 
 
+def _livekit_pool_watchdog_tick() -> None:
+    # Detect the stale pre-warmed job pool (calls that log
+    # ``wait_pc_connection timed out`` and never reach a live agent) and
+    # self-heal by bouncing livekit-agent — escalating to server+agent on a
+    # recurrence — plus proactively recycle the idle agent so the pool never
+    # goes stale. Guarded by an active-call check and a rolling rate limit;
+    # all the logic lives in the dedicated module to keep this file thin.
+    from openbase_coder_cli.services.livekit_pool_watchdog import run_tick
+
+    run_tick()
+
+
 def _code_sync_reconcile_tick() -> None:
     from openbase_coder_cli.code_sync.reconciler import run_tick_if_enabled
 
@@ -284,6 +297,14 @@ def build_jobs() -> list[SyncJob]:
                 "OPENBASE_CLOUD_REGISTER_INTERVAL", CLOUD_REGISTER_INTERVAL_SECONDS
             ),
             tick=_cloud_registration_tick,
+        ),
+        SyncJob(
+            name="livekit_pool_watchdog",
+            interval=_env_float(
+                "LIVEKIT_POOL_WATCHDOG_TICK_SECONDS",
+                LIVEKIT_POOL_WATCHDOG_TICK_SECONDS,
+            ),
+            tick=_livekit_pool_watchdog_tick,
         ),
     ]
 
