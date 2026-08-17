@@ -152,6 +152,8 @@ def test_sync_workers_jobs_cover_the_retired_services_and_reconcile():
         "codex_thread_device_sync",
         "claude_thread_device_sync",
         "code_sync_reconcile",
+        "cloud_registration",
+        "livekit_pool_watchdog",
     }
 
 
