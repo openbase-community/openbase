@@ -1,8 +1,8 @@
 """Dispatcher and Super Agents reasoning settings API views.
 
 Reasoning levels only apply to Codex turns. On the Claude Code execution
-backend, effort is derived from the service tier (Fast mode), so the setting
-is reported as non-editable and writes are rejected.
+backend, turns run at the default effort, so the setting is reported as
+non-editable and writes are rejected.
 """
 
 from __future__ import annotations

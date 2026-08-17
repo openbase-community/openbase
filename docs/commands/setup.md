@@ -135,7 +135,7 @@ to keep local audio available.
 | `--skip-services` | `false` | Skip background service installation |
 | `--link-codex-config` | `false` | Symlink Openbase's service Codex config to `~/.codex/config.toml`. **Warning:** setup then writes Openbase's permission overrides (`sandbox_mode = "danger-full-access"` and a no-prompt approval policy) into that shared normal config |
 | `--link-claude-config` | `false` | Symlink Openbase's Claude settings to the normal `~/.claude/settings.json` |
-| `--fast-mode/--no-fast-mode` | `true` | Use the fast service tier for the voice dispatcher. Super Agents stay on the standard tier; both are adjustable in console settings |
+| `--fast-mode/--no-fast-mode` | `true` | Use the fast service tier for the voice dispatcher. Super Agents stay on the standard tier; both are adjustable in console settings (Codex backend only — Claude Code turns always run at the standard tier) |
 | `--backend NAME` | prompted for new env files | Default coding backend: `codex`, `claude-code`, or `openbase-cloud`. Existing env files are only changed when provided |
 | `--audio-provider NAME` | picker on fresh interactive installs, else `openbase-cloud` for new dispatcher configs | Voice audio provider. Existing configs are only changed when provided |
 | `--interactive/--non-interactive` | interactive only for flagless terminal runs | Force or forbid the first-run pickers. Passing any other flag implies `--non-interactive` |

@@ -293,8 +293,8 @@ class SuperAgentsClientThreadsMixin:
 
     def _configured_reasoning_effort(self) -> str | None:
         if not self._backend_is_codex():
-            # Reasoning levels are Codex-only; Claude effort follows the
-            # service tier (Fast mode), so never forward the stored setting.
+            # Reasoning levels are Codex-only; Claude turns run at the default
+            # effort, so never forward the stored setting.
             return None
         if self._use_super_agent_reasoning:
             return self._super_agents_reasoning_effort() or "high"

@@ -222,10 +222,12 @@ class SuperAgentsClientTurnsMixin:
             "agentName": self._super_agent_agent_name,
             "approvalPolicy": self._approval_policy,
             "sandbox": self._sandbox,
-            "serviceTier": self._service_tier,
             "_mcpCallId": dispatch_id,
         }
         if self._backend_is_codex():
+            # Service tiers are Codex-only; on Claude a tier would be remapped
+            # to a reasoning-effort downgrade, so never forward it.
+            turn_input["serviceTier"] = self._service_tier
             turn_input["model"] = self._model_name
         elif self._model_name:
             turn_input["model"] = self._model_name

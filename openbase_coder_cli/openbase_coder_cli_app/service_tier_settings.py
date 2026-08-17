@@ -3,6 +3,10 @@
 Fast mode is scoped: the voice dispatcher defaults to the fast lane
 (latency-sensitive), Super Agents default to standard. Either scope can be
 switched in console settings — including fast for both.
+
+Service tiers only apply to Codex turns. On the Claude Code execution
+backend the setting is reported as non-editable and writes are rejected;
+Claude turns always run at the standard tier.
 """
 
 from __future__ import annotations
@@ -12,6 +16,10 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from openbase_coder_cli import dispatcher_config
+from openbase_coder_cli.backend_config import (
+    CLAUDE_CODE_BACKEND,
+    configured_execution_backend,
+)
 from openbase_coder_cli.cli.setup import _upsert_env_file_values
 from openbase_coder_cli.paths import DEFAULT_ENV_FILE_PATH
 
@@ -19,13 +27,21 @@ SERVICE_TIER_OPTIONS = ("fast", "standard")
 SERVICE_TIER_DETAILS = {
     "fast": {
         "label": "Fast",
-        "summary": "Use the faster service tier for Codex and the lower-effort lane for Claude.",
+        "summary": "Use the faster Codex service tier.",
     },
     "standard": {
         "label": "Standard",
-        "summary": "Use the standard Codex service tier and the higher-effort lane for Claude.",
+        "summary": "Use the standard Codex service tier.",
     },
 }
+CLAUDE_BACKEND_SERVICE_TIER_ERROR = dispatcher_config.CLAUDE_BACKEND_SERVICE_TIER_ERROR
+
+
+def _service_tier_editable() -> bool:
+    try:
+        return configured_execution_backend() != CLAUDE_CODE_BACKEND
+    except Exception:
+        return True
 
 
 class ServiceTierSettingsSerializer(serializers.Serializer):
@@ -40,7 +56,12 @@ class ServiceTierSettingsSerializer(serializers.Serializer):
 def _service_tier_payload(*, changed: bool = False) -> dict:
     dispatcher_tier = dispatcher_config.dispatcher_service_tier()
     super_agents_tier = dispatcher_config.super_agents_service_tier()
+    editable = _service_tier_editable()
     return {
+        "editable": editable,
+        "not_editable_reason": (
+            None if editable else CLAUDE_BACKEND_SERVICE_TIER_ERROR
+        ),
         "dispatcher_service_tier": dispatcher_tier,
         "super_agents_service_tier": super_agents_tier,
         "effective": {
@@ -75,6 +96,12 @@ def service_tier_settings(request):
     """Read or update the per-scope service tiers used for new turns."""
     if request.method == "GET":
         return Response(_service_tier_payload(), status=status.HTTP_200_OK)
+
+    if not _service_tier_editable():
+        return Response(
+            {"error": CLAUDE_BACKEND_SERVICE_TIER_ERROR},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     serializer = ServiceTierSettingsSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
