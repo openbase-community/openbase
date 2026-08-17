@@ -44,6 +44,8 @@ from openbase_coder_cli.services.keep_awake import keep_system_awake
     "--workers",
     default=1,
     type=int,
+    # Do not pass --workers > 1: websocket group broadcasts silently break
+    # across processes (see the gunicorn branch below).
     help="Number of worker processes.",
     show_default=True,
 )
@@ -122,7 +124,13 @@ def server(
         if reload_:
             cmd.append("--reload")
     else:
-        # Build the gunicorn command for multi-worker deployments.
+        # WARNING: multi-worker breaks websocket group broadcasts. The channel
+        # layer is InMemoryChannelLayer (config/settings.py), which does not
+        # span processes: a group_send issued on one worker never reaches a
+        # websocket held by another, so thread output streaming and
+        # ios_app_control acks fail intermittently depending on which worker
+        # handled each connection. Keep --workers at 1 unless the channel
+        # layer becomes cross-process (e.g. Redis) first.
         cmd = [
             sys.executable,
             "-m",
