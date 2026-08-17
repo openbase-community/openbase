@@ -8,6 +8,7 @@ import os
 import httpx
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError, transaction
 from rest_framework import authentication, exceptions
 
 from openbase_coder_cli.config.jwt_validation import InvalidTokenError, JWKSValidator
@@ -157,14 +158,24 @@ def _get_or_create_user(*, sub: str):
     email = f"{sub}@jwt"
     manager = User.objects
 
-    if hasattr(manager, "create_user"):
-        return manager.create_user(username=sub, email=email, password=None)
+    try:
+        with transaction.atomic():
+            if hasattr(manager, "create_user"):
+                return manager.create_user(username=sub, email=email, password=None)
 
-    user = User(username=sub, email=email)
-    if hasattr(user, "set_unusable_password"):
-        user.set_unusable_password()
-    user.save()
-    return user
+            user = User(username=sub, email=email)
+            if hasattr(user, "set_unusable_password"):
+                user.set_unusable_password()
+            user.save()
+            return user
+    except IntegrityError:
+        # A device's first contact fires several API requests at once, all
+        # racing to create the same user; losers re-fetch the winner's row
+        # instead of surfacing 500s.
+        user = User.objects.filter(username=sub).first()
+        if user is not None:
+            return user
+        raise
 
 
 class JWTAuthentication(authentication.BaseAuthentication):
