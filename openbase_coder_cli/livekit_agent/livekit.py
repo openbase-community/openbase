@@ -435,10 +435,10 @@ def _agent_error_detail(exc: Exception) -> str:
         )
     if _is_openbase_cloud_audio_provider_error(exc):
         return (
-            "Openbase Cloud audio could not start the selected STT/TTS provider. "
-            "If your audio credits are used up, subscribe or upgrade at "
-            "app.openbase.cloud; otherwise check your voice settings, then "
-            "rejoin the call."
+            "The call ended because Openbase Cloud audio was interrupted — "
+            "usually a brief service update. Please call again in a minute. "
+            "If your audio credits are used up instead, subscribe or upgrade "
+            "at app.openbase.cloud."
         )
     summary = redact_exception_text(exc)
     return (
@@ -458,6 +458,40 @@ async def _report_agent_error(room: rtc.Room, exc: Exception) -> None:
         )
     except Exception:
         logger.exception("Unable to publish LiveKit agent error packet")
+
+
+async def _end_call_after_agent_error(ctx: JobContext, exc: Exception) -> None:
+    """Boot the call after an unrecoverable error.
+
+    Publish the reason first (the iOS app renders the packet detail verbatim
+    and plays its call-ended sound), give the reliable data channel a moment
+    to flush, then delete the room so every participant is disconnected
+    instead of sitting in a silent, half-dead call."""
+    await _report_agent_error(ctx.room, exc)
+    await asyncio.sleep(0.75)
+    room_name = str(getattr(ctx.room, "name", "") or "")
+    api_key = os.environ.get("LIVEKIT_API_KEY")
+    api_secret = os.environ.get("LIVEKIT_API_SECRET")
+    if room_name and api_key and api_secret:
+        import livekit.api as livekit_api
+
+        try:
+            client = livekit_api.LiveKitAPI(
+                url=os.environ.get("LIVEKIT_URL", "ws://localhost:7880"),
+                api_key=api_key,
+                api_secret=api_secret,
+            )
+            try:
+                await client.room.delete_room(
+                    livekit_api.DeleteRoomRequest(room=room_name)
+                )
+            finally:
+                await client.aclose()
+        except Exception:
+            # Fall through to shutdown: the agent still leaves, and LiveKit's
+            # empty-room timeout eventually ends the call.
+            logger.exception("Unable to delete LiveKit room %s", room_name)
+    ctx.shutdown(reason="agent-error")
 
 
 async def _room_sid(room: rtc.Room) -> str:
@@ -798,7 +832,7 @@ async def _start_voice_session(
         session,
         voice_router,
         enable_logging=LIVEKIT_VERBOSE_LOGGING,
-        on_unrecoverable_error=lambda exc: _report_agent_error(ctx.room, exc),
+        on_unrecoverable_error=lambda exc: _end_call_after_agent_error(ctx, exc),
     )
 
     # Start the session
@@ -876,7 +910,7 @@ async def livekit_agent(ctx: JobContext):
             ctx.room.name,
             exception_chain_summary(exc),
         )
-        await _report_agent_error(ctx.room, exc)
+        await _end_call_after_agent_error(ctx, exc)
         raise
     delivery_ledger.set_user_speaking_provider(
         lambda: str(getattr(session, "user_state", "") or "") == "speaking"
