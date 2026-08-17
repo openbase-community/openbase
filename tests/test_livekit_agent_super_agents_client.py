@@ -1005,7 +1005,7 @@ async def test_super_agents_livekit_client_passes_dispatcher_reasoning_to_steer(
 
 
 @pytest.mark.asyncio
-async def test_super_agents_livekit_client_omits_reasoning_on_claude_backend(
+async def test_super_agents_livekit_client_forwards_reasoning_without_tier_on_claude(
     tmp_path: Path,
 ) -> None:
     backend = FakeLongRunningSuperAgentsBackend()
@@ -1036,8 +1036,8 @@ async def test_super_agents_livekit_client_omits_reasoning_on_claude_backend(
     await first
 
     assert turn_id == "turn-1"
-    assert "reasoningEffort" not in backend.started_turns[0][1]
-    assert "reasoningEffort" not in backend.steer_turn_inputs[0]
+    assert backend.started_turns[0][1]["reasoningEffort"] == "low"
+    assert backend.steer_turn_inputs[0]["reasoningEffort"] == "low"
     assert "serviceTier" not in backend.started_turns[0][1]
 
 
