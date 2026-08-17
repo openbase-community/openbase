@@ -38,11 +38,16 @@ DISPATCHER_CONFIG_SCHEMA_VERSION = 1
 REASONING_EFFORTS = {"low", "medium", "high", "xhigh"}
 DISPATCHER_REASONING_EFFORT_KEY = "dispatcher_reasoning_effort"
 SUPER_AGENTS_REASONING_EFFORT_KEY = "super_agents_reasoning_effort"
-# Reasoning levels are Codex-only; on Claude Code, effort follows the
-# service tier (Fast mode). Shared by the settings API and defaults CLI.
+# Reasoning levels and service tiers are Codex-only; Claude Code turns run at
+# the default effort and standard tier. Shared by the settings APIs and the
+# defaults CLI.
 CLAUDE_BACKEND_REASONING_ERROR = (
     "Reasoning levels are not configurable on the Claude Code backend. "
-    "Use Fast mode to control Claude reasoning effort."
+    "Claude turns run at the default reasoning effort."
+)
+CLAUDE_BACKEND_SERVICE_TIER_ERROR = (
+    "Fast mode is not configurable on the Claude Code backend. "
+    "Claude turns always run at the standard tier."
 )
 DISPATCHER_SERVICE_TIER_KEY = "dispatcher_service_tier"
 SUPER_AGENTS_SERVICE_TIER_KEY = "super_agents_service_tier"

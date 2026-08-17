@@ -6,9 +6,10 @@ In the apps: **Settings → Backend Model / Service Tier / Reasoning** in the
 [desktop app](../desktop-app.md) and [console](../console.md) edit the same
 settings.
 
-Reasoning levels apply to the Codex backend only. On the Claude Code backend,
-reasoning effort follows the service tier (Fast mode), and the
-`*-reasoning` commands only show stored values — setting them is rejected.
+Reasoning levels and service tiers (Fast mode) apply to the Codex backend
+only. On the Claude Code backend, turns run at the standard tier and the
+default reasoning effort, and the `*-reasoning` commands only show stored
+values — setting them is rejected.
 
 ## Usage
 
