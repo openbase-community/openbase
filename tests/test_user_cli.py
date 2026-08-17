@@ -696,7 +696,6 @@ def test_top_level_exit_to_dispatch_posts_route_command(monkeypatch):
 def test_default_dispatcher_reasoning_sets_config_file(monkeypatch, tmp_path):
     config_path = tmp_path / "dispatcher-config.json"
     monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
-    monkeypatch.setattr(defaults_cli, "configured_execution_backend", lambda: "codex")
 
     result = CliRunner().invoke(defaults_cli.defaults, ["dispatcher-reasoning", "low"])
 
@@ -713,7 +712,6 @@ def test_default_dispatcher_reasoning_sets_config_file(monkeypatch, tmp_path):
 def test_default_super_agents_reasoning_sets_config_file(monkeypatch, tmp_path):
     config_path = tmp_path / "dispatcher-config.json"
     monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
-    monkeypatch.setattr(defaults_cli, "configured_execution_backend", lambda: "codex")
 
     result = CliRunner().invoke(
         defaults_cli.defaults, ["super-agents-reasoning", "medium"]
@@ -727,25 +725,6 @@ def test_default_super_agents_reasoning_sets_config_file(monkeypatch, tmp_path):
         ]
         == "medium"
     )
-
-
-def test_default_reasoning_rejected_on_claude_backend(monkeypatch, tmp_path):
-    config_path = tmp_path / "dispatcher-config.json"
-    monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
-    monkeypatch.setattr(
-        defaults_cli, "configured_execution_backend", lambda: "claude_code"
-    )
-
-    for command in ("dispatcher-reasoning", "super-agents-reasoning"):
-        result = CliRunner().invoke(defaults_cli.defaults, [command, "low"])
-
-        assert result.exit_code != 0
-        assert "not configurable on the Claude Code backend" in result.output
-        assert not config_path.exists()
-
-    # Show-only invocations stay allowed so users can inspect stored values.
-    result = CliRunner().invoke(defaults_cli.defaults, ["dispatcher-reasoning"])
-    assert result.exit_code == 0
 
 
 def test_default_dispatcher_model_sets_config_file(monkeypatch, tmp_path):
@@ -790,8 +769,7 @@ def test_reasoning_config_ignores_legacy_shared_key(tmp_path):
     assert dispatcher_config.super_agents_reasoning_effort(config_path) is None
 
 
-def test_default_dispatcher_reasoning_rejects_invalid_level(monkeypatch):
-    monkeypatch.setattr(defaults_cli, "configured_execution_backend", lambda: "codex")
+def test_default_dispatcher_reasoning_rejects_invalid_level():
     result = CliRunner().invoke(
         defaults_cli.defaults, ["dispatcher-reasoning", "extreme"]
     )

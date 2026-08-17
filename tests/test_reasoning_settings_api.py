@@ -40,17 +40,12 @@ def test_reasoning_settings_reads_config(monkeypatch, tmp_path: Path) -> None:
         encoding="utf-8",
     )
     monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
-    monkeypatch.setattr(
-        reasoning_settings, "configured_execution_backend", lambda: "codex"
-    )
 
     response = reasoning_settings.reasoning_settings(
         _authenticated_request("GET", "/api/settings/reasoning/")
     )
 
     assert response.status_code == 200
-    assert response.data["editable"] is True
-    assert response.data["not_editable_reason"] is None
     assert response.data["dispatcher_reasoning_effort"] == "low"
     assert response.data["super_agents_reasoning_effort"] == "high"
     assert response.data["effective"] == {
@@ -65,9 +60,6 @@ def test_reasoning_settings_reads_config(monkeypatch, tmp_path: Path) -> None:
 def test_reasoning_settings_persists_config(monkeypatch, tmp_path: Path) -> None:
     config_path = tmp_path / "dispatcher-config.json"
     monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
-    monkeypatch.setattr(
-        reasoning_settings, "configured_execution_backend", lambda: "codex"
-    )
 
     response = reasoning_settings.reasoning_settings(
         _authenticated_request(
@@ -91,9 +83,6 @@ def test_reasoning_settings_persists_config(monkeypatch, tmp_path: Path) -> None
 def test_reasoning_settings_rejects_invalid_effort(monkeypatch, tmp_path: Path) -> None:
     config_path = tmp_path / "dispatcher-config.json"
     monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
-    monkeypatch.setattr(
-        reasoning_settings, "configured_execution_backend", lambda: "codex"
-    )
 
     response = reasoning_settings.reasoning_settings(
         _authenticated_request(
@@ -108,50 +97,4 @@ def test_reasoning_settings_rejects_invalid_effort(monkeypatch, tmp_path: Path) 
 
     assert response.status_code == 400
     assert "dispatcher_reasoning_effort" in response.data
-    assert not config_path.exists()
-
-
-def test_reasoning_settings_not_editable_on_claude_backend(
-    monkeypatch, tmp_path: Path
-) -> None:
-    config_path = tmp_path / "dispatcher-config.json"
-    monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
-    monkeypatch.setattr(
-        reasoning_settings, "configured_execution_backend", lambda: "claude_code"
-    )
-
-    response = reasoning_settings.reasoning_settings(
-        _authenticated_request("GET", "/api/settings/reasoning/")
-    )
-
-    assert response.status_code == 200
-    assert response.data["editable"] is False
-    assert (
-        response.data["not_editable_reason"]
-        == reasoning_settings.CLAUDE_BACKEND_REASONING_ERROR
-    )
-
-
-def test_reasoning_settings_rejects_writes_on_claude_backend(
-    monkeypatch, tmp_path: Path
-) -> None:
-    config_path = tmp_path / "dispatcher-config.json"
-    monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
-    monkeypatch.setattr(
-        reasoning_settings, "configured_execution_backend", lambda: "claude_code"
-    )
-
-    response = reasoning_settings.reasoning_settings(
-        _authenticated_request(
-            "PUT",
-            "/api/settings/reasoning/",
-            {
-                "dispatcher_reasoning_effort": "medium",
-                "super_agents_reasoning_effort": "xhigh",
-            },
-        )
-    )
-
-    assert response.status_code == 400
-    assert response.data["error"] == reasoning_settings.CLAUDE_BACKEND_REASONING_ERROR
     assert not config_path.exists()
