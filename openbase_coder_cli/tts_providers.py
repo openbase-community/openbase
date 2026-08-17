@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import threading
-import uuid
 from dataclasses import asdict, dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-import numpy as np
-from livekit.agents import tts as livekit_tts
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
-from livekit.plugins import cartesia
+if TYPE_CHECKING:
+    import numpy as np
+    from livekit.agents import tts as livekit_tts
 
 from openbase_coder_cli.cartesia_voice_catalog import (
     CARTESIA_VOICE_CATALOG,
@@ -202,6 +199,8 @@ class CartesiaTTSProvider(BaseTTSProvider):
         volume: float = DEFAULT_CARTESIA_TTS_VOLUME,
         **kwargs,
     ) -> livekit_tts.TTS:
+        from livekit.plugins import cartesia
+
         cartesia_kwargs: dict[str, str] = {}
         if base_url:
             cartesia_kwargs["base_url"] = base_url
@@ -310,6 +309,10 @@ class KokoroTTSProvider(BaseTTSProvider):
         )
 
     def create_livekit_tts(self, *, voice_id: str, **kwargs) -> livekit_tts.TTS:
+        from livekit.agents import tts as livekit_tts
+
+        from openbase_coder_cli.tts_kokoro_livekit import KokoroLiveKitTTS
+
         return livekit_tts.StreamAdapter(
             tts=KokoroLiveKitTTS(
                 provider=self,
@@ -318,6 +321,8 @@ class KokoroTTSProvider(BaseTTSProvider):
         )
 
     def synthesize_pcm(self, *, text: str, voice_id: str) -> bytes:
+        import numpy as np
+
         voice = self.voice_for_id(voice_id)
         if voice is None:
             raise ValueError(f"Unknown Kokoro voice: {voice_id}")
@@ -348,56 +353,15 @@ class KokoroTTSProvider(BaseTTSProvider):
             return pipeline
 
 
-class KokoroLiveKitTTS(livekit_tts.TTS):
-    def __init__(
-        self,
-        *,
-        provider: KokoroTTSProvider,
-        voice_id: str,
-    ) -> None:
-        super().__init__(
-            capabilities=livekit_tts.TTSCapabilities(streaming=False),
-            sample_rate=24000,
-            num_channels=1,
-        )
-        self._provider = provider
-        self._voice_id = voice_id
+# KokoroLiveKitTTS/KokoroChunkedStream live in tts_kokoro_livekit so importing
+# provider metadata does not pull in livekit.agents; re-export lazily for
+# existing importers.
+def __getattr__(name: str):
+    if name in {"KokoroLiveKitTTS", "KokoroChunkedStream"}:
+        from openbase_coder_cli import tts_kokoro_livekit
 
-    @property
-    def model(self) -> str:
-        return KOKORO_REPO_ID
-
-    @property
-    def provider(self) -> str:
-        return "Kokoro"
-
-    def synthesize(
-        self,
-        text: str,
-        *,
-        conn_options=DEFAULT_API_CONNECT_OPTIONS,
-    ) -> livekit_tts.ChunkedStream:
-        return KokoroChunkedStream(tts=self, input_text=text, conn_options=conn_options)
-
-    def prewarm(self) -> None:
-        self._provider._pipeline_for_voice(self._voice_id)
-
-    def _synthesize_pcm(self, text: str) -> bytes:
-        return self._provider.synthesize_pcm(text=text, voice_id=self._voice_id)
-
-
-class KokoroChunkedStream(livekit_tts.ChunkedStream):
-    async def _run(self, output_emitter) -> None:
-        output_emitter.initialize(
-            request_id=f"kokoro-{uuid.uuid4().hex}",
-            sample_rate=self._tts.sample_rate,
-            num_channels=self._tts.num_channels,
-            mime_type="audio/pcm",
-        )
-        pcm = await asyncio.to_thread(self._tts._synthesize_pcm, self.input_text)
-        if pcm:
-            output_emitter.push(pcm)
-            output_emitter.flush()
+        return getattr(tts_kokoro_livekit, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 _CARTESIA_PROVIDER = CartesiaTTSProvider()
@@ -451,6 +415,8 @@ def _kokoro_required_files() -> tuple[str, ...]:
 
 
 def _audio_array(audio) -> np.ndarray:
+    import numpy as np
+
     if hasattr(audio, "detach"):
         audio = audio.detach().cpu().numpy()
     return np.asarray(audio, dtype=np.float32).reshape(-1)

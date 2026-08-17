@@ -6,8 +6,10 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-import livekit.api as livekit_api
+if TYPE_CHECKING:
+    import livekit.api as livekit_api
 
 ANNOUNCER_TOPIC = "openbase.announcer.say"
 MAX_ANNOUNCER_TEXT_LENGTH = 2000
@@ -53,6 +55,8 @@ async def publish_announcer_message(
     voice_id: str | None = None,
     livekit_client: livekit_api.LiveKitAPI | None = None,
 ) -> AnnouncerPublishResult:
+    import livekit.api as livekit_api
+
     started = time.monotonic()
     normalized_text = validate_announcer_text(text)
     owns_client = livekit_client is None
@@ -114,6 +118,8 @@ async def publish_announcer_audio_file(
     room_name: str | None = None,
     livekit_client: livekit_api.LiveKitAPI | None = None,
 ) -> AnnouncerPublishResult:
+    import livekit.api as livekit_api
+
     started = time.monotonic()
     normalized_path = str(audio_path).strip()
     if not normalized_path:
@@ -209,6 +215,8 @@ async def active_voice_room_exists() -> bool:
 
 
 def _build_livekit_client() -> livekit_api.LiveKitAPI:
+    import livekit.api as livekit_api
+
     api_key = os.environ.get("LIVEKIT_API_KEY")
     api_secret = os.environ.get("LIVEKIT_API_SECRET")
     if not api_key or not api_secret:
@@ -225,6 +233,8 @@ async def _resolve_target_room(
     *,
     room_name: str | None,
 ) -> _TargetRoom:
+    import livekit.api as livekit_api
+
     if room_name:
         agent_identities = await _agent_identities_for_room(client, room_name)
         if not agent_identities:
@@ -267,6 +277,8 @@ async def _agent_identities_for_room(
     client: livekit_api.LiveKitAPI,
     room_name: str,
 ) -> tuple[str, ...]:
+    import livekit.api as livekit_api
+
     participant_response = await client.room.list_participants(
         livekit_api.ListParticipantsRequest(room=room_name)
     )
@@ -282,6 +294,8 @@ def _active_agent_identities(participants) -> tuple[str, ...]:
 
 
 def _is_active_agent_participant(participant) -> bool:
+    import livekit.api as livekit_api
+
     return (
         int(getattr(participant, "kind", -1)) == livekit_api.ParticipantInfo.Kind.AGENT
         and _is_connected_participant(participant)
@@ -290,6 +304,8 @@ def _is_active_agent_participant(participant) -> bool:
 
 
 def _is_active_standard_participant(participant) -> bool:
+    import livekit.api as livekit_api
+
     return int(
         getattr(participant, "kind", -1)
     ) == livekit_api.ParticipantInfo.Kind.STANDARD and _is_connected_participant(
@@ -298,6 +314,8 @@ def _is_active_standard_participant(participant) -> bool:
 
 
 def _is_connected_participant(participant) -> bool:
+    import livekit.api as livekit_api
+
     return int(getattr(participant, "state", -1)) in {
         livekit_api.ParticipantInfo.State.JOINED,
         livekit_api.ParticipantInfo.State.ACTIVE,
