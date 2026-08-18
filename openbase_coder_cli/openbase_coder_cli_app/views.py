@@ -6,8 +6,6 @@ so existing URL imports and tests can continue importing from `.views`.
 
 from __future__ import annotations
 
-from django.views.decorators.csrf import csrf_exempt
-
 from openbase_coder_cli.dispatcher_config import (
     dispatcher_voice,
     set_dispatcher_voice,
@@ -176,109 +174,91 @@ def _sync_skills_compat_globals() -> None:
     _skills._home_skills_dir = _home_skills_dir
 
 
-@csrf_exempt
 def agents_md(request):
     _sync_agents_md_compat_globals()
     return _agents_md.agents_md(request)
 
 
-@csrf_exempt
 def ios_logs_upload(request):
     _diagnostics.DEFAULT_LOG_DIR = DEFAULT_LOG_DIR
     return _diagnostics.ios_logs_upload(request)
 
 
-@csrf_exempt
 def user_say(request):
     _sync_livekit_compat_globals()
     return _livekit.user_say(request)
 
 
-@csrf_exempt
 def user_play(request):
     _sync_livekit_compat_globals()
     return _livekit.user_play(request)
 
 
-@csrf_exempt
 def cartesia_voice_settings(request):
     _sync_livekit_compat_globals()
     return _livekit.cartesia_voice_settings(request)
 
 
-@csrf_exempt
 def tts_settings(request):
     _sync_livekit_compat_globals()
     return _livekit.tts_settings(request)
 
 
-@csrf_exempt
 def kokoro_tts_download(request):
     _sync_livekit_compat_globals()
     return _livekit.kokoro_tts_download(request)
 
 
-@csrf_exempt
 def stt_settings(request):
     _sync_livekit_compat_globals()
     return _livekit.stt_settings(request)
 
 
-@csrf_exempt
 def local_stt_download(request):
     _sync_livekit_compat_globals()
     return _livekit.local_stt_download(request)
 
 
-@csrf_exempt
 def dispatcher_voice_settings(request):
     _sync_livekit_compat_globals()
     return _livekit.dispatcher_voice_settings(request)
 
 
-@csrf_exempt
 def livekit_companion_session(request):
     _sync_livekit_compat_globals()
     return _livekit.livekit_companion_session(request)
 
 
-@csrf_exempt
 def livekit_companion_start(request):
     _sync_livekit_compat_globals()
     return _livekit.livekit_companion_start(request)
 
 
-@csrf_exempt
 def skills_list(request):
     _sync_skills_compat_globals()
     return _skills.skills_list(request)
 
 
-@csrf_exempt
 def skills_symlink(request):
     _sync_skills_compat_globals()
     return _skills.skills_symlink(request)
 
 
-@csrf_exempt
 def skills_auto_link_settings(request):
     _sync_skills_compat_globals()
     return _skills.skills_auto_link_settings(request)
 
 
-@csrf_exempt
 def printing_press_catalog(request):
     _sync_skills_compat_globals()
     return _skills.printing_press_catalog(request)
 
 
-@csrf_exempt
 def printing_press_install(request):
     _sync_skills_compat_globals()
     return _skills.printing_press_install(request)
 
 
-@csrf_exempt
 def skill_detail(request, skill_name):
     _sync_skills_compat_globals()
     return _skills.skill_detail(request, skill_name)
