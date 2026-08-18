@@ -92,8 +92,21 @@ def _echo_status() -> None:
     click.echo(f"Lease:     {sync_config.lease_mode()}")
     folders = sync_config.sync_folders()
     click.echo(f"Folders:   {len(folders)}")
+    folder_statuses, engine_errors = _engine_folder_statuses(enabled, folders)
     for folder in folders:
-        click.echo(f"  {folder.folder_id}  ~/{folder.relpath}")
+        line = f"  {folder.folder_id}  ~/{folder.relpath}"
+        folder_status = folder_statuses.get(folder.folder_id)
+        if folder_status is not None:
+            line += f"  {folder_status.get('state') or 'unknown'}"
+        click.echo(line)
+        error = str((folder_status or {}).get("error") or "")
+        if error:
+            click.echo(click.style(f"    ERROR: {error[:200]}", fg="red"))
+    for engine_error in engine_errors[-2:]:
+        message = str(engine_error.get("message") or "")[:200]
+        if message:
+            click.echo(click.style(f"Engine error: {message}", fg="red"))
+    _echo_last_reconcile()
     if eligibility.peers:
         click.echo("Peers:")
         for peer in eligibility.peers:
@@ -116,6 +129,46 @@ def _echo_status() -> None:
         )
     else:
         click.echo("Conflicts: 0")
+
+
+def _engine_folder_statuses(
+    enabled: bool, folders: list[sync_config.SyncFolder]
+) -> tuple[dict[str, dict], list[dict]]:
+    """Per-folder engine status and recent engine errors, or empty on failure."""
+    if not enabled:
+        return {}, []
+    from openbase_coder_cli.code_sync.syncthing import SyncthingClient
+
+    try:
+        client = SyncthingClient()
+        statuses = {
+            folder.folder_id: client.folder_status(folder.folder_id)
+            for folder in folders
+        }
+        return statuses, client.system_errors()
+    except CodeSyncError as exc:
+        click.echo(click.style(f"Engine:    unreachable ({exc})", fg="yellow"))
+        return {}, []
+
+
+def _echo_last_reconcile() -> None:
+    from openbase_coder_cli.code_sync.reconciler import read_reconcile_state
+
+    state = read_reconcile_state()
+    last_at = state.get("last_reconcile_at")
+    if not last_at:
+        return
+    last_summary = state.get("last_summary")
+    if not isinstance(last_summary, dict):
+        click.echo(f"Reconcile: {last_at}")
+        return
+    click.echo(
+        f"Reconcile: {last_at}  repos={last_summary.get('repo_count', 0)} "
+        f"ff={last_summary.get('fast_forwarded', 0)} "
+        f"awaiting={last_summary.get('awaiting_files', 0)} "
+        f"diverged={last_summary.get('diverged', 0)} "
+        f"errors={last_summary.get('errors', 0)}"
+    )
 
 
 @sync.command()
@@ -294,7 +347,10 @@ def resolve(conflict_id: str, action: str | None) -> None:
 )
 def reconcile(loop: bool, interval: float) -> None:
     """Reconcile git branch pointers with peers (one tick or a loop)."""
-    from openbase_coder_cli.code_sync.reconciler import run_tick_if_enabled
+    from openbase_coder_cli.code_sync.reconciler import (
+        reconcile_counts,
+        run_tick_if_enabled,
+    )
 
     if not loop:
         summary = run_tick_if_enabled()
@@ -318,10 +374,26 @@ def reconcile(loop: bool, interval: float) -> None:
             logger.exception("code_sync tick_failed")
         else:
             if summary is not None:
+                counts = reconcile_counts(summary)
                 logger.info(
-                    "code_sync tick_complete repos=%s conflicts=%s",
-                    len(summary.get("repos", [])),
+                    "code_sync tick_complete repos=%s up_to_date=%s "
+                    "fast_forwarded=%s awaiting_files=%s remote_behind=%s "
+                    "diverged=%s skipped=%s fetch_failed=%s converged=%s "
+                    "published=%s conflicts=%s errors=%s",
+                    counts["repo_count"],
+                    counts["up_to_date"],
+                    counts["fast_forwarded"],
+                    counts["awaiting_files"],
+                    counts["remote_behind"],
+                    counts["diverged"],
+                    counts["skipped"],
+                    counts["fetch_failed"],
+                    counts["converged"],
+                    counts["published"],
                     summary.get("conflicts_count"),
+                    counts["errors"],
                 )
+                if summary.get("errors"):
+                    logger.warning("code_sync tick_errors %s", summary["errors"])
         elapsed = time.monotonic() - started
         time.sleep(max(poll_interval - elapsed, 1.0))

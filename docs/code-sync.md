@@ -142,3 +142,46 @@ List and resolve them with `openbase-coder sync conflicts` and
 `openbase-coder sync resolve`, or from the console/iOS conflict pages.
 
 See the [`sync` command reference](commands/sync.md) for the full CLI.
+
+## Troubleshooting
+
+### File sync stalled (folder in error state)
+
+When free disk drops below the engine's floor, Syncthing keeps running but
+its folders enter an error state (typically `insufficient space on disk for
+database`) and **nothing syncs** — the peer's working trees go stale, deleted
+files can echo back from the peer as untracked copies, and branch switches
+stop propagating (repository manifests ride the same folder).
+
+Where the stall surfaces:
+
+- a red banner on the dashboard (health warnings), plus a low-disk warning
+  before the hard floor is hit,
+- the Sync page: a "File sync is stalled" callout and a red state badge with
+  the error on each affected folder row,
+- `openbase-coder sync status`: an `ERROR:` line under the affected folder,
+- `/api/sync/status/`: `folders[].error` and `syncthing_errors`.
+
+The managed config pins an absolute floor of 2 GiB (`minDiskFree` per folder
+and `minHomeDiskFree` for the engine's database) instead of Syncthing's 1%
+default, which on large disks pauses sync with tens of GiB still free. Fix:
+free disk space, then restart Openbase services (`openbase-coder services
+stop code-sync && openbase-coder services start code-sync`); the folders
+recover on the next scan.
+
+### Reading the reconcile heartbeat
+
+Every reconcile tick logs one summary line to the sync-workers log:
+
+```
+code_sync tick_complete repos=41 up_to_date=39 fast_forwarded=1
+awaiting_files=1 remote_behind=0 diverged=0 skipped=0 fetch_failed=0
+converged=0 published=1 conflicts=0 errors=0 lease=noop
+```
+
+`awaiting_files` climbing without draining means git state is ready but file
+delivery is behind — check for a Syncthing stall. Per-repo failures are
+isolated (one broken repo cannot abort the tick) and named in a
+`code_sync tick_errors` warning line. The same counts appear in
+`openbase-coder sync status` (`Reconcile:` line) and in
+`/api/sync/status/` under `last_reconcile`.

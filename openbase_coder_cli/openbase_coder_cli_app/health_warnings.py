@@ -11,6 +11,7 @@ feature enabled.
 from __future__ import annotations
 
 import calendar
+import shutil
 import time
 from typing import Callable
 
@@ -19,6 +20,9 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 RECONCILE_STALE_SECONDS = 10 * 60
+# Warn while there is still room to act; the engine's hard pause floor is
+# MIN_DISK_FREE_MB (2 GiB) in the rendered Syncthing config.
+SYNC_DISK_LOW_BYTES = 5 * 1024 * 1024 * 1024
 
 # Conditional services: expected exactly when the callable returns True.
 # Services not listed here are expected iff install_by_default.
@@ -111,12 +115,13 @@ def _sync_warnings() -> list[dict[str, str]]:
     from openbase_coder_cli.code_sync.ignores import STIGNORE_FILENAME
     from openbase_coder_cli.code_sync.reconciler import read_reconcile_state
     from openbase_coder_cli.code_sync.syncthing import SyncthingClient
+    from openbase_coder_cli.paths import CODE_SYNC_DIR
     from openbase_coder_cli.services.tailnet_devices import tailscale_self_identity
     from openbase_coder_cli.sync_config import sync_folders
 
     warnings: list[dict[str, str]] = []
 
-    # Engine reachable + peers connected.
+    # Engine reachable + peers connected + folders actually syncing.
     try:
         client = SyncthingClient()
         for device_id, conn in client.connections().items():
@@ -131,6 +136,25 @@ def _sync_warnings() -> list[dict[str, str]]:
                         "see the file-sync skill for half-open connections.",
                     )
                 )
+        # A folder in error state (e.g. "insufficient space on disk") stops
+        # syncing while the engine stays up — historically invisible. One
+        # warning per distinct error message, not per folder.
+        seen_folder_errors: dict[str, str] = {}
+        for folder in sync_folders():
+            folder_status = client.folder_status(folder.folder_id)
+            error = str(folder_status.get("error") or "")
+            if error and error not in seen_folder_errors:
+                seen_folder_errors[error] = folder.relpath
+        for error, relpath in seen_folder_errors.items():
+            warnings.append(
+                _warning(
+                    f"sync-folder-error:{relpath}",
+                    "critical",
+                    f"Sync folder '{relpath}' has stopped syncing: {error[:200]}",
+                    "Free disk space on this Mac, then restart Openbase "
+                    "services; see the code-sync docs troubleshooting.",
+                )
+            )
     except CodeSyncError as exc:
         warnings.append(
             _warning(
@@ -138,6 +162,23 @@ def _sync_warnings() -> list[dict[str, str]]:
                 "critical",
                 f"Code sync is enabled but its engine is unreachable: {exc}",
                 "Run 'openbase-coder restart' or 'openbase-coder sync enable'.",
+            )
+        )
+
+    # Low disk pauses Syncthing folders (absolute floor MIN_DISK_FREE_MB in
+    # the rendered config); warn before that line is crossed.
+    try:
+        free_bytes = shutil.disk_usage(str(CODE_SYNC_DIR)).free
+    except OSError:
+        free_bytes = None
+    if free_bytes is not None and free_bytes < SYNC_DISK_LOW_BYTES:
+        warnings.append(
+            _warning(
+                "sync-disk-low",
+                "warning",
+                f"Only {free_bytes // (1024 * 1024 * 1024)} GiB of disk is "
+                "free; below 2 GiB file sync pauses entirely.",
+                "Free disk space on this Mac.",
             )
         )
 
@@ -179,7 +220,7 @@ def _sync_warnings() -> list[dict[str, str]]:
                     "warning",
                     f"Git-state reconciliation last ran {int(stale // 60)} "
                     "minutes ago; commits are not propagating.",
-                    "Check the openbase-routines service.",
+                    "Check the sync-workers service.",
                 )
             )
 

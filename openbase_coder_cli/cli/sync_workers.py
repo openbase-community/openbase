@@ -245,16 +245,36 @@ def _livekit_pool_watchdog_tick() -> None:
 
 
 def _code_sync_reconcile_tick() -> None:
-    from openbase_coder_cli.code_sync.reconciler import run_tick_if_enabled
+    from openbase_coder_cli.code_sync.reconciler import (
+        reconcile_counts,
+        run_tick_if_enabled,
+    )
 
     summary = run_tick_if_enabled()
-    if summary is not None:
-        logger.info(
-            "code_sync tick_complete repos=%s conflicts=%s lease=%s",
-            len(summary.get("repos", [])),
-            summary.get("conflicts_count"),
-            summary.get("lease", {}).get("action"),
-        )
+    if summary is None:
+        return
+    counts = reconcile_counts(summary)
+    logger.info(
+        "code_sync tick_complete repos=%s up_to_date=%s fast_forwarded=%s "
+        "awaiting_files=%s remote_behind=%s diverged=%s skipped=%s "
+        "fetch_failed=%s converged=%s published=%s conflicts=%s errors=%s "
+        "lease=%s",
+        counts["repo_count"],
+        counts["up_to_date"],
+        counts["fast_forwarded"],
+        counts["awaiting_files"],
+        counts["remote_behind"],
+        counts["diverged"],
+        counts["skipped"],
+        counts["fetch_failed"],
+        counts["converged"],
+        counts["published"],
+        summary.get("conflicts_count"),
+        counts["errors"],
+        summary.get("lease", {}).get("action"),
+    )
+    if summary.get("errors"):
+        logger.warning("code_sync tick_errors %s", summary["errors"])
 
 
 def build_jobs() -> list[SyncJob]:

@@ -252,6 +252,9 @@ def sync_status(request):
             try:
                 folder_status = client.folder_status(folder.folder_id)
                 entry["state"] = str(folder_status.get("state") or "unknown")
+                # e.g. "insufficient space on disk for database" — the engine
+                # keeps running but the folder stops syncing.
+                entry["error"] = str(folder_status.get("error") or "")
                 completion = client.folder_completion(folder.folder_id)
                 entry["completion"] = completion.get("completion")
                 folder_config = client.folder_config(folder.folder_id)
@@ -261,7 +264,27 @@ def sync_status(request):
                 entry["error"] = str(exc)
         folders.append(entry)
 
+    syncthing_errors = []
+    if client is not None:
+        try:
+            syncthing_errors = [
+                {
+                    "when": str(error.get("when") or ""),
+                    "message": str(error.get("message") or "")[:300],
+                }
+                for error in client.system_errors()[-5:]
+            ]
+        except CodeSyncError:
+            syncthing_errors = []
+
     reconcile_state = read_reconcile_state()
+    last_summary = reconcile_state.get("last_summary")
+    last_reconcile = {}
+    if reconcile_state.get("last_reconcile_at"):
+        last_reconcile = {
+            "at": reconcile_state["last_reconcile_at"],
+            **(last_summary if isinstance(last_summary, dict) else {}),
+        }
     return Response(
         {
             "enabled": enabled,
@@ -269,7 +292,9 @@ def sync_status(request):
             "lease_mode": sync_config.lease_mode(),
             "lease_holder_device_id": sync_config.lease_holder_device_id() or "",
             "folders": folders,
+            "syncthing_errors": syncthing_errors,
             "last_reconcile_at": reconcile_state.get("last_reconcile_at", ""),
+            "last_reconcile": last_reconcile,
             "conflicts_count": len(unresolved_conflicts()),
         },
         status=status.HTTP_200_OK,

@@ -74,6 +74,18 @@ def test_render_config_folder_shape(tmp_path: Path) -> None:
     assert params["versionsPath"] == str(tmp_path / "sync-versions" / folder.folder_id)
 
 
+def test_render_config_sets_absolute_disk_free_floors(tmp_path: Path) -> None:
+    root = _render(tmp_path)
+
+    folder_floor = root.find("folder").find("minDiskFree")
+    assert folder_floor.get("unit") == "MB"
+    assert folder_floor.text == str(syncthing.MIN_DISK_FREE_MB)
+
+    home_floor = root.find("options").find("minHomeDiskFree")
+    assert home_floor.get("unit") == "MB"
+    assert home_floor.text == str(syncthing.MIN_DISK_FREE_MB)
+
+
 def test_write_config_keeps_api_key_stable(tmp_path: Path) -> None:
     def _write() -> str | None:
         syncthing.write_config(
