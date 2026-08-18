@@ -52,17 +52,19 @@ setups, pass `-e TS_AUTHKEY=tskey-auth-...` to `docker run` instead, using an
 docker exec -it openbase-coder openbase-coder login
 ```
 
-The login prints a browser URL whose final redirect targets a
-`http://127.0.0.1:<port>/...` address that lives inside the container. Bridge
-that port from the machine whose browser you use, over the tailnet (find the
-container's address with `docker exec openbase-coder tailscale ip -4`):
+The login prints a browser URL whose final redirect targets
+`http://127.0.0.1:52807/...` — an address that lives inside the container
+(the callback port is always `52807`, so you can even set the bridge up
+before starting the login). Bridge that port from the machine whose browser
+you use, over the tailnet (find the container's address with
+`docker exec openbase-coder tailscale ip -4`):
 
 - macOS / Linux:
-  `socat TCP-LISTEN:<port>,bind=127.0.0.1,fork TCP:<container-tailnet-ip>:<port>`
+  `socat TCP-LISTEN:52807,bind=127.0.0.1,fork TCP:<container-tailnet-ip>:52807`
 - Windows (PowerShell as Administrator):
-  `netsh interface portproxy add v4tov4 listenport=<port> listenaddress=127.0.0.1 connectport=<port> connectaddress=<container-tailnet-ip>`
+  `netsh interface portproxy add v4tov4 listenport=52807 listenaddress=127.0.0.1 connectport=52807 connectaddress=<container-tailnet-ip>`
   (remove it afterwards with `netsh interface portproxy delete v4tov4
-  listenport=<port> listenaddress=127.0.0.1`)
+  listenport=52807 listenaddress=127.0.0.1`)
 
 Then open the login URL, finish signing in, and restart the container once so
 every service picks up the new credentials:
