@@ -151,10 +151,6 @@ LIVEKIT_VERBOSE_LOGGING = os.getenv("LIVEKIT_VERBOSE_LOGGING", "").strip().lower
     "yes",
     "on",
 }
-LIVEKIT_CODEX_ACK_DELAY_SECONDS = float(
-    os.getenv("LIVEKIT_CODEX_ACK_DELAY_SECONDS", "0") or 0
-)
-LIVEKIT_CODEX_ACK_MESSAGE = os.getenv("LIVEKIT_CODEX_ACK_MESSAGE", "Okay.").strip()
 BRAIN_SCORE_ENABLED = os.getenv(
     "OPENBASE_BRAIN_SCORE_ENABLED", "1"
 ).strip().lower() in {
