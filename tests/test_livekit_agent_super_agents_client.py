@@ -1550,3 +1550,60 @@ async def test_preflight_heal_skipped_for_non_claude_backends(
         backend_client=FakeSuperAgentsBackend(),
     )
     await client.prepare()
+
+
+class FakeEventDrivenBackend(FakeSuperAgentsBackend):
+    """Backend that pushes turn completion via wait_for_turn_update instead of
+    forcing the poll loop to re-query on a fixed interval."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._completed = False
+        self.wait_calls = 0
+
+    async def progress_by_label(self, input_data) -> dict[str, Any]:
+        self.progress_calls += 1
+        if not self._completed:
+            return {
+                "status": "running",
+                "threadId": input_data.thread_id,
+                "turnId": input_data.turn_id,
+            }
+        return {
+            "status": "completed",
+            "threadId": input_data.thread_id,
+            "turnId": input_data.turn_id,
+            "lastUsefulMessage": "The event driven answer is ready.",
+        }
+
+    async def wait_for_turn_update(
+        self, thread_id: str, turn_id: str, timeout: float
+    ) -> None:
+        # Stand in for a pushed turn/completed notification arriving.
+        self.wait_calls += 1
+        self._completed = True
+
+
+@pytest.mark.asyncio
+async def test_super_agents_livekit_client_awaits_pushed_turn_completion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A big fixed interval would make this test hang for seconds if the loop
+    # fell back to sleeping; awaiting the push must return promptly instead.
+    monkeypatch.setattr(super_agents_client_module, "TURN_POLL_INTERVAL_SECONDS", 30.0)
+    backend = FakeEventDrivenBackend()
+    state_path = tmp_path / "livekit-voice-route.json"
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(state_path),
+        backend_client=backend,
+    )
+
+    result = await asyncio.wait_for(client.run_turn("what's the answer?"), timeout=2.0)
+
+    # The loop awaited the pushed completion (wait_calls) rather than sleeping
+    # out the 30s fixed interval, and re-read progress once the push landed.
+    assert backend.wait_calls == 1
+    assert backend.progress_calls >= 2
+    assert result["_livekit_speech_text"] == "The event driven answer is ready."

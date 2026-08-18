@@ -89,6 +89,14 @@ __all__ = [
 ]
 
 TURN_POLL_INTERVAL_SECONDS = 0.5
+# When the backend can push turn updates (Codex app-server), the poll loop
+# awaits the next pushed update instead of re-querying every
+# TURN_POLL_INTERVAL_SECONDS. This is the fixed idle wait between the last
+# push and the next re-sync poll -- a safety net for the rare missed push on
+# a healthy connection, not the common path (a terminal notification wakes the
+# loop instantly). Kept generous so a running turn produces ~2 progress reads
+# instead of one every 0.5s.
+TURN_PUSH_WAIT_FALLBACK_SECONDS = 5.0
 # A busy app-server can miss individual progress polls (observed: thread/read
 # timing out after 30s while the backend churned on tool output). Keep polling
 # through transient failures instead of killing the voice generation that is
@@ -588,7 +596,22 @@ class SuperAgentsLiveKitClient(
                         continue
                 return progress
             empty_answer_started_at = None
+            await self._wait_for_turn_progress(thread_id, turn_id)
+
+    async def _wait_for_turn_progress(self, thread_id: str, turn_id: str) -> None:
+        """Wait for the backend to make progress on a still-running turn.
+
+        Prefers the backend's push channel (Codex app-server emits
+        turn/completed notifications), awaiting the next update so a finished
+        turn is spoken immediately instead of up to TURN_POLL_INTERVAL_SECONDS
+        later. Backends without a push channel (Claude Code store) fall back to
+        the original fixed-interval sleep -- no behavior change for them.
+        """
+        waiter = getattr(self._backend_client, "wait_for_turn_update", None)
+        if waiter is None:
             await asyncio.sleep(TURN_POLL_INTERVAL_SECONDS)
+            return
+        await waiter(thread_id, turn_id, TURN_PUSH_WAIT_FALLBACK_SECONDS)
 
     async def _ensure_claude_auth_ready(self) -> None:
         """Heal a dead Openbase Claude login before the thread takes turns.
