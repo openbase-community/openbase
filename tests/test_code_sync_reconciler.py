@@ -584,3 +584,49 @@ def test_run_reconcile_once_persists_last_summary(tmp_path: Path, monkeypatch) -
     # Flat legacy keys remain for older readers.
     assert state["fast_forwarded"] == 0
     assert state["diverged"] == 0
+
+
+def test_auth_header_is_resolved_per_repo(tmp_path: Path, monkeypatch) -> None:
+    """Long sweeps outlive one access token; each repo must re-resolve it."""
+    from openbase_coder_cli import sync_config
+    from openbase_coder_cli.code_sync.eligibility import SyncPeer
+
+    home = tmp_path / "home"
+    for name in ("alpha", "beta"):
+        repo = _init_repo(home / "Projects" / name)
+        _commit(repo, "app.py", "print('v1')\n", "initial")
+        peer_clone = tmp_path / f"{name}-peer"
+        subprocess.run(
+            ["git", "clone", "--quiet", str(repo), str(peer_clone)],
+            capture_output=True,
+            check=True,
+        )
+    config_path = tmp_path / "sync-config.json"
+    sync_config.set_sync_folders([{"relpath": "Projects"}], config_path)
+    monkeypatch.setattr(
+        reconciler, "RECONCILE_STATE_PATH", tmp_path / "reconcile-state.json"
+    )
+    token_calls = {"count": 0}
+
+    def counting_token(_self) -> str:
+        token_calls["count"] += 1
+        return f"token-{token_calls['count']}"
+
+    monkeypatch.setattr(reconciler.TokenManager, "get_access_token", counting_token)
+    monkeypatch.setattr(
+        reconciler,
+        "peer_git_url",
+        lambda _peer, _folder_id, relpath: str(tmp_path / f"{Path(relpath).name}-peer"),
+    )
+    peer = SyncPeer("peer", "peer", "desktop", "peer.test", "engine")
+
+    summary = reconciler.run_reconcile_once(
+        config_path=config_path,
+        home=home,
+        conflicts_path=tmp_path / "conflicts.json",
+        peers=(peer,),
+    )
+
+    assert summary["errors"] == []
+    # One initial probe plus at least one resolution per repo.
+    assert token_calls["count"] >= 3

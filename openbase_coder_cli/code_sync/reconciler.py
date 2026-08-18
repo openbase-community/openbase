@@ -382,14 +382,26 @@ def run_reconcile_once(
     if not peers:
         summary["errors"].append("no syncable peers advertised")
 
-    auth_header = None
-    if peers:
+    # A full sweep can outlive one access token (hundreds of repos, minutes
+    # of fetches), so resolve the header per use — the manager returns its
+    # cached token while valid and refreshes mid-sweep when it expires.
+    token_manager = TokenManager(web_backend_url()) if peers else None
+    auth_error_logged = False
+
+    def current_auth_header() -> str | None:
+        nonlocal auth_error_logged
+        if token_manager is None:
+            return None
         try:
-            token = TokenManager(web_backend_url()).get_access_token()
-            auth_header = f"Bearer {token}"
+            return f"Bearer {token_manager.get_access_token()}"
         except (AuthLoginRequiredError, AuthTransientError) as exc:
-            summary["errors"].append(f"auth: {exc}")
-            peers = ()
+            if not auth_error_logged:
+                summary["errors"].append(f"auth: {exc}")
+                auth_error_logged = True
+            return None
+
+    if peers and current_auth_header() is None:
+        peers = ()
 
     from openbase_coder_cli.code_sync.repositories import (
         adopt_repository,
@@ -410,6 +422,7 @@ def run_reconcile_once(
     def reconcile_one_repo(
         folder: SyncFolder, folder_root: Path, repo: Path, repo_relpath: str
     ) -> None:
+        auth_header = current_auth_header()
         try:
             is_worktree = ensure_worktree_manifest(repo, home)
         except (OSError, subprocess.TimeoutExpired):
@@ -466,7 +479,10 @@ def run_reconcile_once(
             remote = peer_git_url(peers[0], folder.folder_id, rel) if peers else None
             try:
                 action = adopt_worktree(
-                    candidate, home=home, remote_url=remote, auth_header=auth_header
+                    candidate,
+                    home=home,
+                    remote_url=remote,
+                    auth_header=current_auth_header(),
                 )
             except (OSError, subprocess.TimeoutExpired) as exc:
                 action = f"adopt_error: {exc}"
@@ -481,7 +497,7 @@ def run_reconcile_once(
                     remote_urls=(
                         peer_git_url(peer, folder.folder_id, rel) for peer in peers
                     ),
-                    auth_header=auth_header,
+                    auth_header=current_auth_header(),
                 )
             except (OSError, subprocess.TimeoutExpired) as exc:
                 action = f"adopt_error: {exc}"
