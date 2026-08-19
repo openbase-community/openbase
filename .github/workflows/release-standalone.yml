@@ -226,9 +226,6 @@ jobs:
           fi
           echo "LIVEKIT_SERVER_BIN=${livekit_server}" >> "$GITHUB_ENV"
 
-      - name: Install Syncthing
-        run: |
-
       - name: Build package directory
         env:
           # hatch-vcs only honors the unsuffixed form; the _FOR_<dist> variant
