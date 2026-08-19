@@ -97,6 +97,10 @@ from openbase_coder_cli.cli.setup.env import (
     _upsert_env_file_values,  # noqa: F401
 )
 from openbase_coder_cli.cli.setup.hooks import (
+    ensure_claude_session_id_hook,
+    ensure_codex_session_id_hook,
+)
+from openbase_coder_cli.cli.setup.hooks import (
     ensure_session_id_hook_script as _ensure_session_id_hook_script,
 )
 from openbase_coder_cli.cli.setup.workspace import (
@@ -308,6 +312,14 @@ class _SetupProgress:
     help=("Symlink Openbase's Claude settings to the normal ~/.claude/settings.json."),
 )
 @click.option(
+    "--install-normal-agent-hooks/--no-install-normal-agent-hooks",
+    default=None,
+    help=(
+        "Also install Agent-Thread-Id session hooks in the normal Claude Code "
+        "and Codex homes. Openbase-managed homes are always configured."
+    ),
+)
+@click.option(
     "--fast-mode/--no-fast-mode",
     "fast_mode",
     default=True,
@@ -368,6 +380,7 @@ def setup(
     skip_services: bool,
     link_codex_config: bool,
     link_claude_config: bool,
+    install_normal_agent_hooks: bool | None,
     fast_mode: bool,
     coding_backend: str | None,
     audio_provider: str | None,
@@ -385,6 +398,10 @@ def setup(
     if platform.system() not in ("Darwin", "Linux"):
         raise click.ClickException("Setup is only supported on macOS and Linux.")
     interactive = _resolve_interactive_mode(interactive_mode, json_progress)
+    install_normal_agent_hooks = _resolve_normal_agent_hooks_choice(
+        install_normal_agent_hooks,
+        interactive=interactive,
+    )
     if coding_backend is not None:
         try:
             coding_backend = normalize_backend(coding_backend)
@@ -415,6 +432,7 @@ def setup(
             skip_services=skip_services,
             link_codex_config=link_codex_config,
             link_claude_config=link_claude_config,
+            install_normal_agent_hooks=install_normal_agent_hooks,
             fast_mode=fast_mode,
             coding_backend=coding_backend,
             audio_provider=audio_provider,
@@ -538,6 +556,22 @@ def _resolve_interactive_mode(
     ):
         return False
     return sys.stdin.isatty()
+
+
+def _resolve_normal_agent_hooks_choice(
+    configured: bool | None,
+    *,
+    interactive: bool,
+) -> bool:
+    if configured is not None:
+        return configured
+    if not interactive:
+        return False
+    return click.confirm(
+        "Install session provenance hooks in your normal Claude Code and "
+        "Codex homes too?",
+        default=False,
+    )
 
 
 def _prompt_pick(
@@ -711,6 +745,7 @@ def _run_setup_phases(
     fast_mode: bool,
     coding_backend: str | None,
     audio_provider: str | None,
+    install_normal_agent_hooks: bool = False,
 ) -> bool:
     """Run the setup phases, returning whether Tailscale Serve is healthy."""
     progress.step("workspace", "start")
@@ -803,6 +838,9 @@ def _run_setup_phases(
         workspace_dir if use_dev_workspace else "",
         link_claude_config=link_claude_config,
     )
+    if install_normal_agent_hooks:
+        ensure_codex_session_id_hook(NORMAL_CODEX_CONFIG_PATH)
+        ensure_claude_session_id_hook(NORMAL_CLAUDE_SETTINGS_PATH)
     # UI-driven setup (--json-progress) must never block on an interactive
     # browser OAuth flow; the desktop app renders a dedicated backend sign-in
     # step after setup instead (see specs/onboarding).

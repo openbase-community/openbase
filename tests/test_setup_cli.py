@@ -98,6 +98,48 @@ def test_resolve_dev_workspace_dir_prefers_explicit_dir(tmp_path) -> None:
     assert setup_cli.resolve_dev_workspace_dir(str(workspace)) == str(workspace)
 
 
+def test_normal_agent_hooks_default_off_for_noninteractive_setup(monkeypatch) -> None:
+    monkeypatch.setattr(
+        setup_cli.click,
+        "confirm",
+        lambda *_args, **_kwargs: pytest.fail("noninteractive setup must not prompt"),
+    )
+
+    assert (
+        setup_cli._resolve_normal_agent_hooks_choice(None, interactive=False) is False
+    )
+
+
+def test_normal_agent_hooks_interactive_prompt_defaults_off(monkeypatch) -> None:
+    prompts = []
+
+    def confirm(prompt, *, default):
+        prompts.append((prompt, default))
+        return True
+
+    monkeypatch.setattr(setup_cli.click, "confirm", confirm)
+
+    assert setup_cli._resolve_normal_agent_hooks_choice(None, interactive=True) is True
+    assert prompts == [
+        (
+            "Install session provenance hooks in your normal Claude Code and "
+            "Codex homes too?",
+            False,
+        )
+    ]
+
+
+def test_normal_agent_hooks_explicit_choice_does_not_prompt(monkeypatch) -> None:
+    monkeypatch.setattr(
+        setup_cli.click,
+        "confirm",
+        lambda *_args, **_kwargs: pytest.fail("explicit choice must not prompt"),
+    )
+
+    assert setup_cli._resolve_normal_agent_hooks_choice(True, interactive=True) is True
+    assert setup_cli._resolve_normal_agent_hooks_choice(False, interactive=True) is False
+
+
 def test_resolve_dev_workspace_dir_rejects_non_workspace_dir(tmp_path) -> None:
     plain_dir = tmp_path / "not-a-workspace"
     plain_dir.mkdir()
