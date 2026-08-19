@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
+from pathlib import Path
 
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
+from super_agents.app_permissions import DEFAULT_APPROVAL_REQUESTS_FILE
+from watchfiles import awatch
 
+from openbase_coder_cli.openbase_coder_cli_app.approvals import (
+    pending_approval_requests,
+)
 from openbase_coder_cli.openbase_coder_cli_app.ios_app_control import (
     COMMAND_ID_RE,
     ack_group_name,
@@ -257,6 +265,113 @@ class AllThreadsConsumer(AsyncJsonWebsocketConsumer):
                 "thread_id": event["thread_id"],
                 "data": event["data"],
             }
+        )
+
+
+class _ApprovalStoreWatcher:
+    """Broadcast native approval-store changes while socket clients exist."""
+
+    group_name = "approval_requests"
+
+    def __init__(self) -> None:
+        self._connections = 0
+        self._task: asyncio.Task[None] | None = None
+
+    def acquire(self) -> None:
+        self._connections += 1
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._watch(_approval_store_path()))
+
+    async def release(self) -> None:
+        self._connections = max(0, self._connections - 1)
+        if self._connections or self._task is None:
+            return
+        task = self._task
+        self._task = None
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def _watch(self, store_path: Path) -> None:
+        from channels.layers import get_channel_layer
+
+        store_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        channel_layer = get_channel_layer()
+        try:
+            async for _changes in awatch(
+                store_path.parent,
+                watch_filter=lambda _change, changed_path: Path(changed_path)
+                == store_path,
+                debounce=50,
+                step=25,
+            ):
+                if channel_layer is not None:
+                    await channel_layer.group_send(
+                        self.group_name,
+                        {"type": "approval_requests_changed"},
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Approval store watcher failed; closing live clients")
+            if channel_layer is not None:
+                await channel_layer.group_send(
+                    self.group_name,
+                    {"type": "approval_requests_unavailable"},
+                )
+
+
+def _approval_store_path() -> Path:
+    configured = os.environ.get("SUPER_AGENTS_APPROVAL_REQUESTS_FILE")
+    return Path(configured).expanduser() if configured else DEFAULT_APPROVAL_REQUESTS_FILE
+
+
+_approval_store_watcher = _ApprovalStoreWatcher()
+
+
+class ApprovalRequestsConsumer(AsyncJsonWebsocketConsumer):
+    """Push pending approval snapshots when the native queue changes."""
+
+    group_name = _ApprovalStoreWatcher.group_name
+
+    async def connect(self):
+        self._watching = False
+        if self.scope.get("user") != "authenticated":
+            await self.close(code=4001)
+            return
+
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self.accept()
+        _approval_store_watcher.acquire()
+        self._watching = True
+        await self._send_snapshot()
+
+    async def disconnect(self, close_code):
+        if getattr(self, "_watching", False):
+            await _approval_store_watcher.release()
+        await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    async def receive_json(self, content, **kwargs):
+        if content.get("action") == "refresh":
+            await self._send_snapshot()
+
+    async def approval_requests_changed(self, event):
+        await self._send_snapshot()
+
+    async def approval_requests_unavailable(self, event):
+        await self.close(code=1011)
+
+    async def _send_snapshot(self):
+        try:
+            requests = await pending_approval_requests()
+        except (ValueError, RuntimeError) as exc:
+            logger.warning("Unable to load approval requests: %s", exc)
+            await self.close(code=1011)
+            return
+        await self.send_json(
+            {"type": "approval_requests", "data": {"requests": requests}}
         )
 
 

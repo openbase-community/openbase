@@ -118,7 +118,9 @@ Call tab is where you actually speak to it. See
 ### Approvals
 
 Pending permission requests from running agents (commands, tool calls) with
-Accept and Decline buttons. Auto-refreshes every 5 seconds.
+Accept and Decline buttons. The page receives authenticated live snapshots
+from the local approval queue and falls back to 5-second HTTP refreshes when
+the WebSocket is unavailable.
 
 **On iPhone:** the Approvals tab shows the same queue with approve/deny
 buttons, and approval push notifications deep-link straight to it — so you
