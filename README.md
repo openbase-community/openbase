@@ -6,6 +6,7 @@
   <a href="https://docs.openbase.cloud"><img src="https://img.shields.io/badge/read%20the-docs-blue" alt="Documentation"></a>
   <a href="https://discord.gg/nYzsn3Vh6y"><img src="https://img.shields.io/badge/discord-join%20chat-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://openbase.cloud/downloads"><img src="https://img.shields.io/badge/download-macOS-black?logo=apple&logoColor=white" alt="Download for macOS"></a>
+  <a href="https://knock-knock.mxcl.dev/openbase-community/openbase"><img src="https://knock-knock.mxcl.dev/badge.svg" alt="Knock Knock"></a>
 </p>
 <br>
 
