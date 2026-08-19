@@ -512,6 +512,60 @@ def test_user_say_reports_server_error(monkeypatch):
     assert "No active LiveKit voice room" in result.output
 
 
+def test_user_say_falls_back_to_linked_notification(monkeypatch):
+    def fake_request(method, url, **kwargs):
+        assert method == "POST"
+        return httpx.Response(
+            200,
+            json={
+                "status": "no_active_room",
+                "detail": "No active LiveKit voice room was found.",
+                "agent_name": "Dottie",
+                "thread_id": "thread-42",
+            },
+        )
+
+    notifications = []
+    patch_local_server_request(monkeypatch, fake_request)
+    monkeypatch.setattr(
+        user_cli,
+        "send_user_say_fallback",
+        lambda **kwargs: notifications.append(kwargs),
+    )
+
+    result = CliRunner().invoke(user_cli.user, ["say", "Dottie", "review", "ready"])
+
+    assert result.exit_code == 0
+    assert "sending a linked iPhone notification" in result.output
+    assert "accepted by Openbase Cloud" in result.output
+    assert notifications == [
+        {
+            "agent_name": "Dottie",
+            "message": "review ready",
+            "thread_id": "thread-42",
+        }
+    ]
+
+
+def test_user_say_fallback_requires_authoritative_thread(monkeypatch):
+    def fake_request(method, url, **kwargs):
+        return httpx.Response(
+            200,
+            json={
+                "status": "no_active_room",
+                "detail": "No active LiveKit voice room was found.",
+                "thread_id": "",
+            },
+        )
+
+    patch_local_server_request(monkeypatch, fake_request)
+
+    result = CliRunner().invoke(user_cli.user, ["say", "Dottie", "review ready"])
+
+    assert result.exit_code != 0
+    assert "No agent thread was available" in result.output
+
+
 def test_resolve_sound_path_accepts_existing_path(tmp_path):
     audio_path = tmp_path / "done.wav"
     audio_path.write_bytes(b"audio")

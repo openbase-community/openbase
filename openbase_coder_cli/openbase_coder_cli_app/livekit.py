@@ -267,7 +267,20 @@ def user_say(request):
     except AnnouncerValidationError as exc:
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
     except NoActiveLiveKitRoomError as exc:
-        return Response({"detail": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        logger.info(
+            "dispatch_timing stage=user_say_no_active_room agent_name=%s thread_id=%s",
+            agent_name,
+            voice_entry.thread_id,
+        )
+        return Response(
+            {
+                "status": "no_active_room",
+                "detail": str(exc),
+                "agent_name": agent_name,
+                "thread_id": voice_entry.thread_id,
+            },
+            status=status.HTTP_200_OK,
+        )
     except AnnouncerError as exc:
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
     except Exception:

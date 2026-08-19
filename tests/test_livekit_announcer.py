@@ -611,6 +611,40 @@ def test_user_say_api_selects_latest_matching_agent(tmp_path, monkeypatch):
     assert response.data["message_id"] == "announcer-1"
 
 
+def test_user_say_api_returns_thread_for_no_active_room(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    record_voice_assignment(
+        thread_id="thread-42",
+        agent_name="Dottie",
+        cwd="/tmp/project",
+        voice_id="voice-dottie",
+        voice_name="Dottie",
+        kind="codex_thread",
+        source="test",
+    )
+
+    async def no_active_room(*_args, **_kwargs):
+        raise NoActiveLiveKitRoomError("No active LiveKit voice room was found.")
+
+    monkeypatch.setattr(views, "publish_announcer_message", no_active_room)
+    request = APIRequestFactory().post(
+        "/api/user/say/",
+        {"agent_name": "Dottie", "text": "review ready"},
+        format="json",
+    )
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+
+    response = views.user_say(request)
+
+    assert response.status_code == 200
+    assert response.data == {
+        "status": "no_active_room",
+        "detail": "No active LiveKit voice room was found.",
+        "agent_name": "Dottie",
+        "thread_id": "thread-42",
+    }
+
+
 def test_user_play_api_passes_audio_path(monkeypatch, tmp_path):
     audio_path = tmp_path / "done.wav"
     audio_path.write_bytes(b"audio")

@@ -109,7 +109,11 @@ openbase-coder user say "Lucy" "I finished the documentation update."
 
 The first argument is the speaking agent name. The remaining words are the
 message to speak. This is useful for Super Agent introductions, plan-mode
-questions, completion notices, and brief requests for user attention.
+questions, completion notices, and brief requests for user attention. If no
+voice room is active, the command sends the same message as an iPhone alert
+that opens the speaking agent's thread. This fallback requires an Openbase
+Cloud login and an iPhone registered for notifications; if either delivery
+path fails, the command exits with an error instead of claiming success.
 
 For local audio cues:
 
@@ -153,4 +157,5 @@ openbase-coder user play /path/to/sound.wav
 - `openbase-coder exit-to-dispatch`: top-level alias for returning to the
   dispatcher.
 - `openbase-coder user say AGENT_NAME MESSAGE`: speak a short announcement in
-  the active room.
+  the active room, or send a thread-linked iPhone notification when no room is
+  active.
