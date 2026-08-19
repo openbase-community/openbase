@@ -311,6 +311,9 @@ def login() -> None:
 @click.command()
 def logout() -> None:
     """Log out and clear stored tokens."""
+    from openbase_coder_cli.voice_lockdown import get_voice_lockdown_broker
+
+    get_voice_lockdown_broker().revoke_all(reason="logout")
     if AUTH_JSON_PATH.is_file():
         AUTH_JSON_PATH.unlink()
         if MACHINE_TOKEN_JSON_PATH.is_file():

@@ -62,6 +62,9 @@ from openbase_coder_cli.openbase_coder_cli_app.views import (
     livekit_voice_route_exit,
     livekit_voice_route_transfer,
     local_stt_download,
+    lockdown_challenge_detail,
+    lockdown_challenges,
+    lockdown_status,
     onboarding_cloud_state,
     onboarding_status,
     openbase_restart,
@@ -175,6 +178,13 @@ urlpatterns = [
         name="thread-steer-turn",
     ),
     path("approval-requests/", approval_requests, name="approval-requests"),
+    path("lockdown/", lockdown_status, name="lockdown-status"),
+    path("lockdown/challenges/", lockdown_challenges, name="lockdown-challenges"),
+    path(
+        "lockdown/challenges/<str:challenge_id>/",
+        lockdown_challenge_detail,
+        name="lockdown-challenge-detail",
+    ),
     path(
         "approval-requests/<str:request_id>/",
         approval_request_detail,

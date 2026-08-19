@@ -200,7 +200,11 @@ class _OpenbaseSuperAgentsClient(CodexAppServerClient):
     def __init__(
         self, manager: "CodexAppServerSessionManager", ws_url: str | None
     ) -> None:
-        super().__init__(ws_url=ws_url)
+        from openbase_coder_cli.voice_lockdown.execution_controls import (
+            managed_execution_controls,
+        )
+
+        super().__init__(ws_url=ws_url, **managed_execution_controls())
         self._manager = manager
 
     async def start_managed_server(self) -> None:
@@ -233,7 +237,11 @@ def _default_client_for_execution_backend(
     if execution_backend == CLAUDE_CODE_BACKEND:
         from super_agents.claude_sdk import ClaudeAgentSdkClient
 
-        return ClaudeAgentSdkClient()
+        from openbase_coder_cli.voice_lockdown.execution_controls import (
+            managed_execution_controls,
+        )
+
+        return ClaudeAgentSdkClient(**managed_execution_controls())
     return _OpenbaseSuperAgentsClient(manager, ws_url)
 
 

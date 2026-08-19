@@ -355,6 +355,14 @@ def _super_agents_mcp_command(workspace_dir: Path) -> tuple[Path, list[str]]:
     # An empty workspace_dir means standalone mode; never emit paths relative
     # to whatever directory setup happened to run from.
     has_workspace = bool(str(workspace_dir).strip()) and str(workspace_dir) != "."
+    managed_candidates = (
+        workspace_dir / ".venv" / "bin" / "openbase-coder",
+        workspace_dir / "cli" / ".venv" / "bin" / "openbase-coder",
+    )
+    if has_workspace:
+        for candidate in managed_candidates:
+            if candidate.is_file():
+                return candidate, ["super-agents-mcp"]
     candidates = (
         workspace_dir / ".venv" / "bin" / SUPER_AGENTS_MCP_COMMAND,
         workspace_dir / "cli" / ".venv" / "bin" / SUPER_AGENTS_MCP_COMMAND,
@@ -366,6 +374,9 @@ def _super_agents_mcp_command(workspace_dir: Path) -> tuple[Path, list[str]]:
 
     runtime_package = current_runtime_package()
     if runtime_package is not None:
+        managed_command = runtime_package.python_path.parent / "openbase-coder"
+        if managed_command.is_file():
+            return stable_package_path(managed_command), ["super-agents-mcp"]
         bundled_command = runtime_package.python_path.parent / SUPER_AGENTS_MCP_COMMAND
         if bundled_command.is_file():
             # Persisted into MCP configs: must survive release rotation.

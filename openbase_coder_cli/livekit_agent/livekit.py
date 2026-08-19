@@ -129,6 +129,7 @@ from openbase_coder_cli.livekit_agent.config import (  # noqa: F401
     _read_instruction_file,
     load_direct_livekit_developer_instructions,
 )
+from openbase_coder_cli.livekit_agent.lockdown_stt import VoiceLockdownSTT
 from openbase_coder_cli.livekit_agent.logging_utils import (  # noqa: F401
     _event_text_hash,
     _frame_duration_ms,
@@ -233,6 +234,7 @@ from openbase_coder_cli.tts_providers import (  # noqa: F401
     OPENBASE_CLOUD_TTS_PROVIDER_ID,
     get_tts_provider,
 )
+from openbase_coder_cli.voice_lockdown import get_voice_lockdown_broker
 
 logger = logging.getLogger(__name__)
 
@@ -332,7 +334,14 @@ def _build_voice_backend_client(*, persist_thread: bool) -> SuperAgentsLiveKitCl
 _shared_voice_backend_client = _build_voice_backend_client(persist_thread=True)
 
 
-def _build_stt(vad_model=None):
+def _build_stt(
+    vad_model=None,
+    *,
+    lockdown_broker=None,
+    lockdown_room_sid: str = "",
+    lockdown_participant_identity: str = "",
+    lockdown_outcome=None,
+):
     stt_provider = selected_stt_provider_id()
     if stt_provider == DEEPGRAM_STT_PROVIDER_ID:
         logger.info("Using Deepgram STT")
@@ -357,6 +366,16 @@ def _build_stt(vad_model=None):
     else:
         raise ValueError(f"Unsupported STT provider={stt_provider!r}")
 
+    # This must be the innermost wrapper: armed phrase candidates are removed
+    # before scoring, verbose logging, deduplication, chat history, or an LLM.
+    if lockdown_broker is not None:
+        stt = VoiceLockdownSTT(
+            stt,
+            broker=lockdown_broker,
+            room_sid=lockdown_room_sid,
+            participant_identity=lockdown_participant_identity,
+            on_outcome=lockdown_outcome,
+        )
     stt = BrainScoreSTT(stt) if _brain_score_enabled() else stt
     stt = LoggingSTT(stt) if LIVEKIT_VERBOSE_LOGGING else stt
     return FinalTranscriptDedupSTT(stt)
@@ -809,9 +828,36 @@ async def _start_voice_session(
     session_vad = _diagnostic_vad(ctx.proc.userdata["vad"])
     turn_signal_tracker = VoiceTurnSignalTracker()
 
+    room_sid = await _room_sid(ctx.room)
+    remote_participants = list(ctx.room.remote_participants.values())
+    participant_identity = (
+        str(remote_participants[0].identity or "")
+        if len(remote_participants) == 1
+        else ""
+    )
+    session_holder: dict[str, AgentSession] = {}
+
+    def lockdown_outcome(outcome: str) -> None:
+        session_for_notice = session_holder.get("session")
+        if session_for_notice is None:
+            return
+        notices = {
+            "authorized": "Authorized for this action once.",
+            "mismatch": "That phrase did not match.",
+            "rate_limited": "Too many attempts. Safe phrase authorization is temporarily paused.",
+        }
+        if notice := notices.get(outcome):
+            session_for_notice.say(notice)
+
     # Set up a voice AI pipeline
     session = AgentSession(
-        stt=_build_stt(session_vad),
+        stt=_build_stt(
+            session_vad,
+            lockdown_broker=get_voice_lockdown_broker(),
+            lockdown_room_sid=room_sid,
+            lockdown_participant_identity=participant_identity,
+            lockdown_outcome=lockdown_outcome,
+        ),
         llm=CodexLiveKitLLM(
             voice_router,
             turn_signal_tracker=turn_signal_tracker,
@@ -826,6 +872,7 @@ async def _start_voice_session(
         vad=session_vad,
         preemptive_generation=False,
     )
+    session_holder["session"] = session
     session_diagnostic_handlers = _register_session_diagnostics(
         session,
         voice_router,
@@ -1002,6 +1049,7 @@ async def livekit_agent(ctx: JobContext):
             _packet_hash(data_packet),
         )
         if route_command.action == "exit_to_dispatch":
+            get_voice_lockdown_broker().revoke_all(reason="voice_route_exit")
             voice_router.exit_to_dispatch()
             announcer_queue.enqueue(
                 AnnouncerMessage(
@@ -1015,6 +1063,7 @@ async def livekit_agent(ctx: JobContext):
                     "Ignoring incomplete LiveKit voice route transfer command"
                 )
                 return
+            get_voice_lockdown_broker().revoke_all(reason="voice_route_transfer")
             asyncio.create_task(
                 _transfer_voice_route(
                     voice_router,
@@ -1031,6 +1080,7 @@ async def livekit_agent(ctx: JobContext):
     ctx.room.on("data_received", on_data_received)
 
     async def close_announcer_queue(*_args) -> None:
+        get_voice_lockdown_broker().revoke_all(reason="voice_session_closed")
         if subscription_check_task is not None:
             subscription_check_task.cancel()
         ctx.room.off("data_received", on_data_received)

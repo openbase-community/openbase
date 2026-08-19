@@ -54,6 +54,11 @@ from openbase_coder_cli.openbase_coder_cli_app.livekit import (
     livekit_voice_route_exit,
     livekit_voice_route_transfer,
 )
+from openbase_coder_cli.openbase_coder_cli_app.lockdown import (
+    lockdown_challenge_detail,
+    lockdown_challenges,
+    lockdown_status,
+)
 from openbase_coder_cli.openbase_coder_cli_app.model_settings import (
     backend_model_settings,  # noqa: F401
 )
@@ -293,6 +298,9 @@ __all__ = [
     "ios_app_control",
     "kokoro_tts_download",
     "keep_awake_settings",
+    "lockdown_challenge_detail",
+    "lockdown_challenges",
+    "lockdown_status",
     "launchctl_ignored_settings",
     "launchctl_service_action",
     "launchctl_services_list",

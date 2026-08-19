@@ -9,6 +9,11 @@ from typing import Any
 
 import click
 from super_agents.app_server_client import CodexAppServerClient
+from super_agents.execution_control import configure_execution_controls
+
+from openbase_coder_cli.voice_lockdown.execution_controls import (
+    managed_execution_controls,
+)
 
 REASONING_EFFORTS = ("low", "medium", "high", "xhigh")
 SANDBOX_TYPES = ("readOnly", "workspaceWrite", "dangerFullAccess")
@@ -25,6 +30,7 @@ def _json_echo(value: dict[str, Any]) -> None:
 def _run_client(coro):
     async def runner():
         client = CodexAppServerClient()
+        configure_execution_controls(client, **managed_execution_controls())
         try:
             return await coro(client)
         finally:

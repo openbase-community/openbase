@@ -78,5 +78,8 @@ def auth_refresh_jwt(request):
 @permission_classes([AllowAny])
 def auth_logout(request):
     """Clear the locally stored JWT tokens."""
+    from openbase_coder_cli.voice_lockdown import get_voice_lockdown_broker
+
+    get_voice_lockdown_broker().revoke_all(reason="logout")
     get_token_manager().clear()
     return Response({"success": True}, status=status.HTTP_200_OK)

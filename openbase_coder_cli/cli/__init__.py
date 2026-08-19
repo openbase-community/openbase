@@ -24,6 +24,7 @@ from .computer_use import computer_use
 from .defaults import defaults
 from .desktop import desktop
 from .doctor import doctor
+from .lockdown import lockdown
 from .onboarding import onboarding
 from .plugins import plugins
 from .provision import provision
@@ -35,6 +36,7 @@ from .server import server
 from .services import services
 from .setup import setup
 from .super_agent_name import super_agent_name
+from .super_agents_mcp import super_agents_mcp
 from .sync import sync
 from .sync_workers import sync_workers
 from .user import exit_to_dispatch, user
@@ -70,6 +72,7 @@ main.add_command(setup)
 main.add_command(backend)
 main.add_command(services)
 main.add_command(doctor)
+main.add_command(lockdown)
 main.add_command(onboarding)
 main.add_command(desktop)
 main.add_command(login)
@@ -91,6 +94,7 @@ main.add_command(claude_chrome)
 main.add_command(computer_use)
 main.add_command(routines)
 main.add_command(super_agent_name)
+main.add_command(super_agents_mcp)
 main.add_command(sync)
 main.add_command(sync_workers)
 main.add_command(defaults)

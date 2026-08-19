@@ -200,6 +200,10 @@ class SuperAgentsClientThreadsMixin:
         from super_agents.app_server_client import CodexAppServerClient
         from super_agents.backend_clients import backend_from_environment
 
+        from openbase_coder_cli.voice_lockdown.execution_controls import (
+            managed_execution_controls,
+        )
+
         try:
             from openbase_coder_cli.livekit_agent.config import _load_openbase_env
 
@@ -211,8 +215,8 @@ class SuperAgentsClientThreadsMixin:
         if execution_backend == CLAUDE_CODE_BACKEND:
             from super_agents.claude_sdk import ClaudeAgentSdkClient
 
-            return ClaudeAgentSdkClient()
-        return CodexAppServerClient()
+            return ClaudeAgentSdkClient(**managed_execution_controls())
+        return CodexAppServerClient(**managed_execution_controls())
 
     def _register_backend_callback(self) -> None:
         register = getattr(self._backend_client, "register_permission_callback", None)
