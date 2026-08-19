@@ -171,22 +171,36 @@ def test_routine_catalog_is_explicitly_read_only(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "source",
+    ("entry_overrides", "source"),
     [
-        _source(repository_url="http://github.com/openbase/example-skill"),
-        _source(repository_url="https://token@github.com/openbase/example-skill"),
-        _source(repository_url="https://github.com/openbase/example-skill?ref=main"),
-        _source(commit="main"),
-        _source(path="../example"),
-        _source(path="skills\\example"),
-        _source(integrity="sha256:not-a-digest"),
+        ({}, _source(repository_url="http://github.com/openbase/example-skill")),
+        (
+            {},
+            _source(
+                repository_url="https://token@github.com/openbase/example-skill"
+            ),
+        ),
+        (
+            {},
+            _source(
+                repository_url="https://github.com/openbase/example-skill?ref=main"
+            ),
+        ),
+        ({}, _source(commit="main")),
+        ({}, _source(path="../example")),
+        ({}, _source(path="skills\\example")),
+        ({}, _source(integrity="sha256:not-a-digest")),
+        ({"docs_url": "javascript:alert(1)"}, _source()),
+        ({"docs_url": "https://user@example.com/docs"}, _source()),
     ],
 )
-def test_catalog_rejects_mutable_or_unsafe_sources(monkeypatch, source):
+def test_catalog_rejects_mutable_or_unsafe_sources_and_links(
+    monkeypatch, entry_overrides, source
+):
     monkeypatch.setattr(
         marketplace,
         "_fetch_catalog",
-        lambda **_kwargs: [_entry(source=source)],
+        lambda **_kwargs: [_entry(source=source, **entry_overrides)],
     )
 
     response = marketplace.marketplace_skills(

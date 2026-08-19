@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlparse
 
 import httpx
 from rest_framework import status
@@ -261,6 +261,21 @@ def _catalog_entry_payload(entry: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(entry.get(field), str):
             raise MarketplaceContractError(
                 f"Catalog entry has an invalid {field}."
+            )
+    docs_url = entry.get("docs_url")
+    if not isinstance(docs_url, str):
+        raise MarketplaceContractError("Catalog entry has an invalid docs_url.")
+    if docs_url:
+        parsed_docs_url = urlparse(docs_url)
+        if (
+            parsed_docs_url.scheme != "https"
+            or not parsed_docs_url.hostname
+            or parsed_docs_url.username
+            or parsed_docs_url.password
+            or parsed_docs_url.port is not None
+        ):
+            raise MarketplaceContractError(
+                "Catalog documentation URL is not allowed."
             )
     source = _catalog_source(entry.get("source"))
     if source is not None and kind != "skill":
