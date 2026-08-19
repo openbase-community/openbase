@@ -9,6 +9,12 @@ from pathlib import Path
 
 import click
 
+from openbase_coder_cli.backend_config import (
+    CLAUDE_CODE_BACKEND,
+    DEFAULT_CODING_BACKEND,
+    OPENBASE_CLOUD_BACKEND,
+    SUPER_AGENTS_DEFAULT_BACKEND_ENV_KEY,
+)
 from openbase_coder_cli.claude_auth import (
     claude_auth_status,
     copy_normal_claude_keychain,
@@ -91,7 +97,10 @@ def _ensure_normal_claude_md_symlink() -> None:
 
 
 def _ensure_claude_config(
-    workspace_dir: str, *, link_claude_config: bool = False
+    workspace_dir: str,
+    *,
+    coding_backend: str = DEFAULT_CODING_BACKEND,
+    link_claude_config: bool = False,
 ) -> None:
     """Configure Openbase's Claude Code config dir."""
     OPENBASE_CLAUDE_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -125,6 +134,11 @@ def _ensure_claude_config(
                     "CODEX_SUPER_AGENT_INSTRUCTIONS_PATH": str(
                         CODEX_SUPER_AGENT_INSTRUCTIONS_PATH
                     ),
+                    SUPER_AGENTS_DEFAULT_BACKEND_ENV_KEY: (
+                        OPENBASE_CLOUD_BACKEND
+                        if coding_backend == OPENBASE_CLOUD_BACKEND
+                        else CLAUDE_CODE_BACKEND
+                    ),
                 },
             },
         },
@@ -156,6 +170,7 @@ def _ensure_normal_claude_mcp(workspace_dir: str) -> None:
         "type": "stdio",
         "command": str(command_path),
         **({"args": args} if args else {}),
+        "env": {SUPER_AGENTS_DEFAULT_BACKEND_ENV_KEY: CLAUDE_CODE_BACKEND},
     }
     if mcp_servers.get("super-agents") == entry:
         click.echo(

@@ -10,7 +10,12 @@ from shutil import which
 
 import click
 
-from openbase_coder_cli.backend_config import DEFAULT_CODING_BACKEND
+from openbase_coder_cli.backend_config import (
+    CODEX_BACKEND,
+    DEFAULT_CODING_BACKEND,
+    OPENBASE_CLOUD_CODEX_BACKEND,
+    SUPER_AGENTS_DEFAULT_BACKEND_ENV_KEY,
+)
 from openbase_coder_cli.cli.setup.hooks import ensure_codex_session_id_hook
 from openbase_coder_cli.codex_backend_config import apply_backend_to_codex_config
 from openbase_coder_cli.codex_home_instructions import (
@@ -253,6 +258,7 @@ def _ensure_codex_home_config(
         f"[{SUPER_AGENTS_MCP_TABLE}]\n"
         f"command = {json.dumps(str(command_path))}\n"
         f"{_toml_args_line(args)}"
+        f"{_toml_env_line(_codex_child_backend(coding_backend))}"
     )
 
     if not command_path.is_file():
@@ -292,6 +298,7 @@ def _ensure_normal_codex_mcp(workspace_dir: str) -> None:
         f"[{SUPER_AGENTS_MCP_TABLE}]\n"
         f"command = {json.dumps(str(command_path))}\n"
         f"{_toml_args_line(args)}"
+        f"{_toml_env_line(CODEX_BACKEND)}"
     )
 
     existing = ""
@@ -411,6 +418,18 @@ def _toml_args_line(args: list[str]) -> str:
     if not args:
         return ""
     return f"args = {json.dumps(args)}\n"
+
+
+def _toml_env_line(backend: str) -> str:
+    return (
+        f"env = {{ {SUPER_AGENTS_DEFAULT_BACKEND_ENV_KEY} = {json.dumps(backend)} }}\n"
+    )
+
+
+def _codex_child_backend(coding_backend: str) -> str:
+    if coding_backend == OPENBASE_CLOUD_CODEX_BACKEND:
+        return OPENBASE_CLOUD_CODEX_BACKEND
+    return CODEX_BACKEND
 
 
 def _ensure_toml_root_values(

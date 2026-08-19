@@ -716,6 +716,7 @@ def test_ensure_codex_home_config_creates_config(tmp_path, monkeypatch) -> None:
         "\n"
         "[mcp_servers.super-agents]\n"
         f"command = {json.dumps(str(command))}\n"
+        'env = { SUPER_AGENTS_DEFAULT_BACKEND = "codex" }\n'
         + _expected_session_id_hook_suffix(codex_home)
     )
 
@@ -769,6 +770,26 @@ def test_ensure_codex_home_config_replaces_stale_values(tmp_path, monkeypatch) -
     assert '[mcp_servers.playwright]\ncommand = "npx"' in updated
 
 
+def test_ensure_codex_home_config_preserves_cloud_codex_child_default(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    command = workspace / ".venv" / "bin" / "super-agents-mcp"
+    codex_home = tmp_path / "codex_home"
+    command.parent.mkdir(parents=True)
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+    _patch_setup(monkeypatch, "CODEX_HOME_DIR", codex_home)
+
+    setup_cli._ensure_codex_home_config(
+        str(workspace),
+        coding_backend="openbase_cloud_codex",
+    )
+
+    assert 'env = { SUPER_AGENTS_DEFAULT_BACKEND = "openbase_cloud_codex" }' in (
+        codex_home / "config.toml"
+    ).read_text(encoding="utf-8")
+
+
 def test_ensure_codex_home_config_falls_back_to_resolved_uv(
     tmp_path, monkeypatch
 ) -> None:
@@ -798,6 +819,7 @@ def test_ensure_codex_home_config_falls_back_to_resolved_uv(
         "[mcp_servers.super-agents]\n"
         f"command = {json.dumps(str(uv_bin))}\n"
         f"args = {json.dumps(['--directory', str(cli_dir), 'run', 'super-agents-mcp'])}\n"
+        'env = { SUPER_AGENTS_DEFAULT_BACKEND = "codex" }\n'
         + _expected_session_id_hook_suffix(codex_home)
     )
 
@@ -860,6 +882,7 @@ def test_ensure_claude_config_installs_super_agents_mcp(tmp_path, monkeypatch) -
             "CODEX_SUPER_AGENT_INSTRUCTIONS_PATH": str(
                 setup_cli.CODEX_SUPER_AGENT_INSTRUCTIONS_PATH
             ),
+            "SUPER_AGENTS_DEFAULT_BACKEND": "claude_code",
         },
     }
     settings = json.loads((claude_config / "settings.json").read_text(encoding="utf-8"))
@@ -869,6 +892,29 @@ def test_ensure_claude_config_installs_super_agents_mcp(tmp_path, monkeypatch) -
     assert settings["claudeMdExcludes"] == [
         str(setup_cli.NORMAL_CLAUDE_CONFIG_DIR / "CLAUDE.md")
     ]
+
+
+def test_ensure_claude_config_preserves_cloud_child_default(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    command = workspace / ".venv" / "bin" / "super-agents-mcp"
+    _codex_home, claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    claude_json = claude_config / ".claude.json"
+    command.parent.mkdir(parents=True)
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+    _patch_setup(monkeypatch, "OPENBASE_CLAUDE_JSON_PATH", claude_json)
+
+    setup_cli._ensure_claude_config(
+        str(workspace),
+        coding_backend="openbase_cloud",
+    )
+
+    payload = json.loads(claude_json.read_text(encoding="utf-8"))
+    assert (
+        payload["mcpServers"]["super-agents"]["env"]["SUPER_AGENTS_DEFAULT_BACKEND"]
+        == "openbase_cloud"
+    )
 
 
 def test_ensure_claude_settings_seeds_from_normal_claude_settings(

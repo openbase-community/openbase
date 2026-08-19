@@ -836,6 +836,7 @@ def _run_setup_phases(
         )
     _ensure_claude_config(
         workspace_dir if use_dev_workspace else "",
+        coding_backend=selected_coding_backend,
         link_claude_config=link_claude_config,
     )
     if install_normal_agent_hooks:
