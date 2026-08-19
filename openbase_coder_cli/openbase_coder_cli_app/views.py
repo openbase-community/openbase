@@ -46,6 +46,11 @@ from openbase_coder_cli.openbase_coder_cli_app.diagnostics import (
     health_check,
 )
 from openbase_coder_cli.openbase_coder_cli_app.env_settings import env_settings
+from openbase_coder_cli.openbase_coder_cli_app.inbound_calls import (
+    inbound_call_activate,  # noqa: F401
+    inbound_call_decline,  # noqa: F401
+    user_call,  # noqa: F401
+)
 from openbase_coder_cli.openbase_coder_cli_app.ios_app_control import ios_app_control
 from openbase_coder_cli.openbase_coder_cli_app.livekit import (
     apple_music_playback_entitlement,  # noqa: F401

@@ -55,6 +55,38 @@ def test_user_say_posts_message(monkeypatch):
     assert calls[0][1]["json"] == {"agent_name": "Dottie", "text": "hello there"}
 
 
+def test_user_call_posts_only_agent_and_caller(monkeypatch):
+    calls = []
+
+    def fake_request(method, url, **kwargs):
+        calls.append((method, url, kwargs["json"]))
+        return httpx.Response(
+            202,
+            json={
+                "invitation_id": "A" * 43,
+                "expires_at": 123,
+                "device_count": 2,
+                "agent_name": "Dottie",
+            },
+        )
+
+    patch_local_server_request(monkeypatch, fake_request)
+    result = CliRunner().invoke(
+        user_cli.user,
+        ["call", "Dottie", "--caller-name", "Dottie Agent"],
+    )
+
+    assert result.exit_code == 0
+    assert "2 registered device(s)" in result.output
+    assert calls == [
+        (
+            "POST",
+            "http://127.0.0.1:7999/api/user/call/",
+            {"agent_name": "Dottie", "caller_name": "Dottie Agent"},
+        )
+    ]
+
+
 def test_user_say_posts_explicit_room(monkeypatch):
     calls = []
 

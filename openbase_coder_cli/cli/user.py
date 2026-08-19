@@ -27,6 +27,32 @@ def user() -> None:
 
 
 @user.command()
+@click.argument("agent_name")
+@click.option(
+    "--caller-name",
+    default="",
+    help="Name shown by CallKit. Defaults to the resolved agent name.",
+)
+def call(agent_name: str, caller_name: str) -> None:
+    """Ring the iPhone and connect it to a known local agent."""
+    normalized_agent_name = " ".join(agent_name.split())
+    normalized_caller_name = " ".join(caller_name.split())
+    if not normalized_agent_name:
+        raise click.ClickException("Agent name is required and cannot be blank.")
+    payload = {"agent_name": normalized_agent_name}
+    if normalized_caller_name:
+        payload["caller_name"] = normalized_caller_name
+    response = local_server_request("POST", "/api/user/call/", json=payload)
+    data = response.json()
+    device_count = data.get("device_count")
+    resolved_agent = data.get("agent_name") or normalized_agent_name
+    click.echo(
+        f"Inbound call for {resolved_agent} accepted for "
+        f"{device_count} registered device(s)."
+    )
+
+
+@user.command()
 @click.argument("words", nargs=-1, metavar="AGENT_NAME MESSAGE")
 @click.option(
     "--room",
