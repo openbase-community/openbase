@@ -23,6 +23,7 @@ from openbase_coder_cli.livekit_agent.turn_detection import (
     latest_user_turn_signals_from_chat_ctx,
 )
 from openbase_coder_cli.onboarding_reminder import append_onboarding_reminder
+from openbase_coder_cli.voice_tags import wrap_voice_prompt
 
 if TYPE_CHECKING:
     from openbase_coder_cli.livekit_agent.voice_routing import LiveKitVoiceRouter
@@ -138,6 +139,7 @@ class CodexLLMStream(llm.LLMStream):
             self._emit_delta("Back to dispatch.")
             return
 
+        prompt = wrap_voice_prompt(prompt)
         if self._voice_router.is_dispatcher_active:
             prompt = append_onboarding_reminder(prompt)
 
