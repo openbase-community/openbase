@@ -779,7 +779,10 @@ def _run_setup_phases(
 
     # --- Initialize runtime assets ---
     if use_dev_workspace:
-        _init_cli_workspace(workspace_dir)
+        _init_cli_workspace(
+            workspace_dir,
+            include_local_audio=audio_provider == AUDIO_PROVIDER_LOCAL,
+        )
     else:
         _init_standalone_runtime(runtime_package)
 

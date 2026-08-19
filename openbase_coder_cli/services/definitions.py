@@ -23,6 +23,8 @@ class ServiceDefinition:
     service_type: str = "simple"
     restart_policy: str | None = "always"
     keep_alive: bool = True
+    # Services that must restart after this service to reconnect cleanly.
+    restart_dependents: tuple[str, ...] = ()
 
     def supports_backend(self, coding_backend: str) -> bool:
         return self.backends is None or coding_backend in self.backends
@@ -231,6 +233,7 @@ SERVICES: list[ServiceDefinition] = [
         port=7880,
         cleanup_ports=(7880, 7881),
         cleanup_command_substrings=("livekit-server",),
+        restart_dependents=("livekit-agent",),
     ),
     ServiceDefinition(
         name="codex-app-server",

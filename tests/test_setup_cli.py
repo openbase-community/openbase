@@ -1265,7 +1265,11 @@ def test_setup_configures_tailscale_serve(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         setup_cli, "_symlink_codex_home_skills", lambda _workspace_dir: None
     )
-    _patch_setup(monkeypatch, "_init_cli_workspace", lambda _workspace_dir: None)
+    _patch_setup(
+        monkeypatch,
+        "_init_cli_workspace",
+        lambda _workspace_dir, **_kwargs: None,
+    )
     monkeypatch.setattr(
         setup_cli, "_ensure_codex_home_config", lambda *_args, **_kwargs: None
     )
@@ -1366,6 +1370,37 @@ def test_ensure_local_audio_dependencies_rejects_python_313(
 
     with pytest.raises(Exception, match="requires a Python 3.12"):
         setup_cli._ensure_local_audio_dependencies(runtime_package)
+
+
+def test_init_cli_workspace_retains_selected_local_audio_extra(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    cli_dir = workspace / "cli"
+    cli_dir.mkdir(parents=True)
+    commands = []
+
+    _patch_setup(monkeypatch, "which", lambda _name: "uv")
+    _patch_setup(
+        monkeypatch,
+        "_download_livekit_model_files",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def fake_run(command, **kwargs):
+        commands.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0)
+
+    _patch_setup(monkeypatch, "subprocess", SimpleNamespace(run=fake_run))
+
+    setup_cli._init_cli_workspace(str(workspace), include_local_audio=True)
+
+    assert commands == [
+        (
+            ["uv", "sync", "--extra", "local-audio"],
+            {"cwd": str(cli_dir), "check": True},
+        )
+    ]
 
 
 def test_workspace_skill_sources_supports_direct_skill_dirs(tmp_path) -> None:

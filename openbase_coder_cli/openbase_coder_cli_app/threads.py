@@ -27,6 +27,11 @@ from openbase_coder_cli.openbase_coder_cli_app.thread_cache import (
     get_cached_thread_state,
     invalidate_thread_list_cache,
 )
+from openbase_coder_cli.openbase_coder_cli_app.thread_errors import (
+    THREAD_DATA_UNAVAILABLE_CODE,
+    is_thread_data_unavailable_error,
+    thread_error_message,
+)
 from openbase_coder_cli.openbase_coder_cli_app.thread_favorites import (
     favorite_payload,
     is_thread_favorite,
@@ -449,7 +454,19 @@ def thread_detail(request, thread_id):
         invalidate_thread_list_cache()
         return Response({"success": True})
 
-    thread = async_to_sync(manager.get_thread_state)(thread_id)
+    try:
+        thread = async_to_sync(manager.get_thread_state)(thread_id)
+    except RuntimeError as exc:
+        if not is_thread_data_unavailable_error(exc):
+            raise
+        logger.info("thread_detail unreadable rollout thread_id=%s", thread_id)
+        return Response(
+            {
+                "error": thread_error_message(exc),
+                "code": THREAD_DATA_UNAVAILABLE_CODE,
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
     if thread is None:
         return Response(
             {"error": f"Thread {thread_id} not found"},

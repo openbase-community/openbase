@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
@@ -10,6 +9,10 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from openbase_coder_cli.openbase_coder_cli_app.ios_app_control import (
     COMMAND_ID_RE,
     ack_group_name,
+)
+from openbase_coder_cli.openbase_coder_cli_app.thread_errors import (
+    thread_error_code,
+    thread_error_message,
 )
 from openbase_coder_cli.openbase_coder_cli_app.thread_metadata import (
     annotate_thread_payload,
@@ -20,19 +23,8 @@ logger = logging.getLogger(__name__)
 
 
 def _friendly_error(exc: Exception) -> str:
-    """Extract a human-readable message from manager errors.
-
-    The session manager bubbles up codex app-server JSON-RPC errors as
-    RuntimeError("{json}"), which is unhelpful when surfaced to the UI.
-    """
-    raw = str(exc)
-    try:
-        payload = json.loads(raw)
-    except (ValueError, TypeError):
-        return raw
-    if isinstance(payload, dict) and isinstance(payload.get("message"), str):
-        return payload["message"]
-    return raw
+    """Extract a safe human-readable message from manager errors."""
+    return thread_error_message(exc)
 
 
 class ThreadConsumer(AsyncJsonWebsocketConsumer):
@@ -61,7 +53,10 @@ class ThreadConsumer(AsyncJsonWebsocketConsumer):
                     "type": "error",
                     "data": {
                         "message": _friendly_error(exc),
-                        "code": "thread_state_unavailable",
+                        "code": thread_error_code(
+                            exc,
+                            fallback="thread_state_unavailable",
+                        ),
                     },
                 }
             )
