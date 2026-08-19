@@ -64,8 +64,20 @@ touch it for:
 Both apps link to it directly: the desktop sidebar's **Cloud** item and the
 iOS sidebar's **Cloud** tab.
 
-Openbase Cloud also hosts deployment tooling, which is outside the scope of
-these docs.
+### Deploying apps (Openbase Cloud PaaS)
+
+Openbase Cloud also runs a managed platform-as-a-service for deploying your
+own apps — a Heroku-style push-to-deploy flow, separate from the Coder coding
+runtime these docs cover. You connect a GitHub repository in the **Deployment**
+dashboard at `https://app.openbase.cloud`, and pushes to the tracked branch
+build and release automatically for both backend and frontend apps. Config
+vars, secrets, hostnames, logs, releases, and usage are all managed there.
+
+The same account drives it from the terminal with the separate `openbase`
+CLI (`openbase apps`, `openbase logs`, `openbase config`, …); it shares this
+sign-in, so `openbase login` runs `openbase-coder login`. See the
+[Openbase Cloud CLI docs](https://docs-cloud.openbase.cloud) for the full
+deploy workflow.
 
 **On iPhone:** the Cloud tab opens app.openbase.cloud in the embedded
 browser, and onboarding's "Start with Cloud" path uses it without any local
