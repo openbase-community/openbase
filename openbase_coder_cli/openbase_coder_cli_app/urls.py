@@ -62,6 +62,9 @@ from openbase_coder_cli.openbase_coder_cli_app.views import (
     livekit_voice_route_exit,
     livekit_voice_route_transfer,
     local_stt_download,
+    marketplace_routines,
+    marketplace_skill_install,
+    marketplace_skills,
     onboarding_cloud_state,
     onboarding_status,
     openbase_restart,
@@ -231,6 +234,21 @@ urlpatterns = [
         name="project-reports-download",
     ),
     path("skills/", skills_list, name="skills-list"),
+    path(
+        "marketplace/skills/",
+        marketplace_skills,
+        name="marketplace-skills",
+    ),
+    path(
+        "marketplace/skills/install/",
+        marketplace_skill_install,
+        name="marketplace-skill-install",
+    ),
+    path(
+        "marketplace/routines/",
+        marketplace_routines,
+        name="marketplace-routines",
+    ),
     path(
         "skills/auto-link-personal/",
         skills_auto_link_settings,
