@@ -390,22 +390,21 @@ def _check_port(port: int) -> bool:
 
 
 def _check_tailscale() -> bool:
-    """Check if Tailscale is connected."""
-    from openbase_coder_cli.services.tailscale_serve import _tailscale_bin
+    """Check if the active tailnet provider (official Tailscale or Openbase
+    netmesh) is connected."""
+    from openbase_coder_cli.services import tailscale_provider as tp
 
-    # App Store installs keep the CLI inside the app bundle, off PATH.
-    tailscale_bin = _tailscale_bin()
-    if not tailscale_bin:
+    if tp.tool_path() is None:
         return False
-    try:
-        result = subprocess.run(
-            [tailscale_bin, "status"],
-            capture_output=True,
-            timeout=5,
-        )
-        return result.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
+    status = tp.status_json()
+    if status.get("error"):
         return False
+    state = status.get("BackendState")
+    if state:
+        return state in ("Running", "Starting")
+    # Fall back to "has a self tailnet IP".
+    self_payload = status.get("Self") or {}
+    return bool(self_payload.get("TailscaleIPs"))
 
 
 def _check_web_backend() -> bool:
@@ -429,6 +428,9 @@ def service_status(request):
         request.path,
         _auth_debug_value(request),
     )
+    from openbase_coder_cli.services import tailscale_provider as tp
+
+    _tailnet_label = "Openbase Netmesh" if tp.is_netmesh() else "Tailscale"
     services = {
         "django": {"name": "Django (Coder CLI)", "port": 7999, "optional": False},
         "codex_app_server": {
@@ -444,7 +446,7 @@ def service_status(request):
             "port": None,
             "optional": False,
         },
-        "tailscale": {"name": "Tailscale", "port": None, "optional": False},
+        "tailscale": {"name": _tailnet_label, "port": None, "optional": False},
         "keep_awake": keep_awake_status_payload(),
     }
     # Backend-scoped services (e.g. the Codex App Server on the claude_code
@@ -490,7 +492,7 @@ def service_status(request):
         )
     serve_health = tailscale_serve_health()
     services["tailscale_serve"] = {
-        "name": "Tailscale Serve",
+        "name": f"{_tailnet_label} Serve",
         "port": 18080,
         "running": serve_health.healthy,
         "host": serve_health.host,

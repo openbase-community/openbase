@@ -37,6 +37,7 @@ from .setup import setup
 from .super_agent_name import super_agent_name
 from .sync import sync
 from .sync_workers import sync_workers
+from .tailnet import tailnet
 from .user import exit_to_dispatch, user
 from .vibes import vibes
 
@@ -70,6 +71,7 @@ main.add_command(setup)
 main.add_command(backend)
 main.add_command(services)
 main.add_command(doctor)
+main.add_command(tailnet)
 main.add_command(onboarding)
 main.add_command(desktop)
 main.add_command(login)

@@ -54,31 +54,28 @@ class TailscaleServeHealth:
 
 
 def configure_tailscale_serve() -> None:
-    tailscale_bin = _tailscale_bin()
-    if not tailscale_bin:
-        raise RuntimeError(
-            "tailscale was not found (checked PATH and /Applications/Tailscale.app)."
-        )
+    from openbase_coder_cli.services import tailscale_provider as tp
 
-    _run_tailscale(
-        tailscale_bin,
-        "serve",
-        "--bg",
-        f"--http={OPENBASE_CODER_TAILNET_PORT}",
-        f"http://127.0.0.1:{OPENBASE_CODER_LOCAL_PORT}",
-    )
-    _run_tailscale(
-        tailscale_bin,
-        "serve",
-        "--bg",
-        f"--tcp={LIVEKIT_TAILNET_PORT}",
-        f"tcp://127.0.0.1:{LIVEKIT_LOCAL_PORT}",
+    tp.apply_serve(
+        [
+            {
+                "proto": "http",
+                "port": OPENBASE_CODER_TAILNET_PORT,
+                "target": f"http://127.0.0.1:{OPENBASE_CODER_LOCAL_PORT}",
+            },
+            {
+                "proto": "tcp",
+                "port": LIVEKIT_TAILNET_PORT,
+                "target": f"tcp://127.0.0.1:{LIVEKIT_LOCAL_PORT}",
+            },
+        ]
     )
 
 
 def tailscale_serve_health() -> TailscaleServeHealth:
-    tailscale_bin = _tailscale_bin()
-    if not tailscale_bin:
+    from openbase_coder_cli.services import tailscale_provider as tp
+
+    if tp.tool_path() is None:
         return TailscaleServeHealth(
             tailscale_available=False,
             tailscale_running=False,
@@ -87,10 +84,10 @@ def tailscale_serve_health() -> TailscaleServeHealth:
             openbase_configured=False,
             livekit_configured=False,
             openbase_reachable=False,
-            error="tailscale was not found (checked PATH and /Applications/Tailscale.app).",
+            error=f"{tp.provider()} control tool was not found.",
         )
 
-    status = _tailscale_status(tailscale_bin)
+    status = tp.status_json()
     if status.get("error"):
         return TailscaleServeHealth(
             tailscale_available=True,
@@ -104,7 +101,7 @@ def tailscale_serve_health() -> TailscaleServeHealth:
         )
 
     host = _self_dns_name(status)
-    serve_status = _tailscale_serve_status(tailscale_bin)
+    serve_status = tp.serve_status_json()
     if serve_status.get("error"):
         return TailscaleServeHealth(
             tailscale_available=True,
@@ -120,7 +117,18 @@ def tailscale_serve_health() -> TailscaleServeHealth:
     openbase_configured = _openbase_serve_configured(serve_status, host)
     livekit_configured = _livekit_serve_configured(serve_status)
     openbase_url = _openbase_url(host)
-    openbase_reachable, reachability_error = _openbase_reachable(openbase_url)
+    # Probe reachability via the tailnet IP rather than the MagicDNS name: the
+    # backend can reach the IP with no DNS, so this doesn't depend on system
+    # MagicDNS being configured (which differs between Tailscale and netmesh, and
+    # isn't wired up on macOS for netmesh). But `tailscale serve --http` mounts are
+    # name-based (virtual-hosted), so an IP request 404s — we present the MagicDNS
+    # name in the Host header so the serve mount and Django ALLOWED_HOSTS match.
+    probe_ip = _self_tailnet_ipv4(status)
+    probe_url = _openbase_url(probe_ip) or openbase_url
+    host_header = (
+        f"{host}:{OPENBASE_CODER_TAILNET_PORT}" if (probe_ip and host) else None
+    )
+    openbase_reachable, reachability_error = _openbase_reachable(probe_url, host_header)
 
     return TailscaleServeHealth(
         tailscale_available=True,
@@ -206,6 +214,17 @@ def _self_dns_name(status: dict[str, Any]) -> str | None:
     return dns_name.strip().rstrip(".") or None
 
 
+def _self_tailnet_ipv4(status: dict[str, Any]) -> str | None:
+    """This node's tailnet IPv4, for a DNS-independent reachability probe."""
+    self_payload = status.get("Self")
+    if not isinstance(self_payload, dict):
+        return None
+    for ip in self_payload.get("TailscaleIPs") or []:
+        if isinstance(ip, str) and "." in ip and ":" not in ip:
+            return ip
+    return None
+
+
 def _openbase_url(host: str | None) -> str | None:
     if not host:
         return None
@@ -248,12 +267,19 @@ def _livekit_serve_configured(payload: dict[str, Any]) -> bool:
     )
 
 
-def _openbase_reachable(openbase_url: str | None) -> tuple[bool, str | None]:
+def _openbase_reachable(
+    openbase_url: str | None, host_header: str | None = None
+) -> tuple[bool, str | None]:
     if not openbase_url:
         return False, "Tailscale DNS name is unavailable."
     url = f"{openbase_url}{OPENBASE_HEALTH_PATH}"
+    # When probing by IP, present the MagicDNS name via the Host header so the
+    # name-based `tailscale serve --http` mount and Django ALLOWED_HOSTS accept it.
+    headers = {"Host": host_header} if host_header else None
     try:
-        response = httpx.get(url, timeout=TAILSCALE_HEALTH_TIMEOUT_SECONDS)
+        response = httpx.get(
+            url, timeout=TAILSCALE_HEALTH_TIMEOUT_SECONDS, headers=headers
+        )
     except httpx.HTTPError as exc:
         return False, str(exc)
 
