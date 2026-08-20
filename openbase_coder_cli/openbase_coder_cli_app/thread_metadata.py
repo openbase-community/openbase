@@ -88,7 +88,15 @@ def annotate_thread_payload(
         history = get_voice_history_entry(resolved_thread_id)
         if history is not None:
             assignment = _voice_assignment_from_history(history)
-        elif agent_name:
+        else:
+            # Derive a stable voice from the thread context even when no
+            # agent_name is set. Super Agent / dispatcher-spawned threads carry
+            # a label but almost never an agent_name (it stays None in the
+            # Super Agents state), so gating derivation on agent_name left those
+            # threads nameless in the console. super_agent_voice_for_context
+            # falls back to a deterministic voice keyed on thread_id/label, so
+            # every non-dispatcher thread now shows a consistent human name
+            # (e.g. "Jacqueline") whether or not it was ever on a live call.
             voice = super_agent_voice_for_context(
                 resolved_thread_id,
                 display_name,
