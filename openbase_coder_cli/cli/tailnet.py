@@ -1,8 +1,10 @@
 """``openbase-coder tailnet`` — select the tailnet provider.
 
-coder can ride on the official Tailscale client or on Openbase's self-hosted
-netmesh (headscale + hardened macOS client). Only one is active at a time; it is
-chosen at setup (``OPENBASE_CODER_CLI_TAILSCALE_PROVIDER``) and switched here.
+coder can ride on the official Tailscale client, on Openbase's self-hosted
+netmesh (headscale + hardened macOS/iOS VPN client), or on netmesh joined by an
+in-process embedded node (no VPN on either side; ``netmesh-tsnet``). Only one is
+active at a time; it is chosen at setup (``OPENBASE_CODER_CLI_TAILSCALE_PROVIDER``)
+and switched here.
 """
 
 from __future__ import annotations
@@ -28,18 +30,18 @@ def tailnet() -> None:
 
 
 @tailnet.command("set-provider")
-@click.argument("name", type=click.Choice([tp.PROVIDER_TAILSCALE, tp.PROVIDER_NETMESH]))
+@click.argument("name", type=click.Choice(list(tp.PROVIDER_VALUES)))
 def set_provider(name: str) -> None:
     """Switch the active tailnet provider.
 
-    When switching to netmesh, the netmesh MagicDNS suffix is added to the
-    allowed hosts so served requests (which arrive with a netmesh Host header)
-    are accepted by the backend.
+    When switching to either netmesh transport, the netmesh MagicDNS suffix is
+    added to the allowed hosts so served requests (which arrive with a netmesh
+    Host header) are accepted by the backend.
     """
     path = _env_path()
     values: dict[str, str] = {PROVIDER_ENV_KEY: name}
 
-    if name == tp.PROVIDER_NETMESH:
+    if name in (tp.PROVIDER_NETMESH, tp.PROVIDER_NETMESH_TSNET):
         existing = env_file_values(path)
         hosts = existing.get(ALLOWED_HOSTS_ENV_KEY, "localhost,127.0.0.1,.ts.net")
         host_list = [h.strip() for h in hosts.split(",") if h.strip()]
@@ -49,6 +51,12 @@ def set_provider(name: str) -> None:
 
     upsert_env_file_values(path, values)
     click.echo(f"Tailnet provider set to '{name}' in {path}.")
+    if name == tp.PROVIDER_NETMESH_TSNET:
+        click.echo(
+            "Note: embedded no-VPN transport needs the openbase-tunneld daemon, "
+            "which is staged separately — control/serve ops report pending until "
+            "it lands."
+        )
     click.echo(
         "Restart coder services to apply (e.g. `openbase-coder services restart`)."
     )

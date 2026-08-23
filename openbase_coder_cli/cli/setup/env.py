@@ -36,6 +36,10 @@ from openbase_coder_cli.paths import (
     OPENBASE_CLAUDE_CONFIG_DIR,
 )
 
+TAILNET_PROVIDER_ENV_KEY = "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"
+ALLOWED_HOSTS_ENV_KEY = "OPENBASE_CODER_CLI_ALLOWED_HOSTS"
+NETMESH_ALLOWED_SUFFIX = ".netmesh.openbase.cloud"
+
 
 def _ensure_env_file(
     env_file: str,
@@ -43,6 +47,7 @@ def _ensure_env_file(
     assembly_ai_api_key: str,
     cartesia_api_key: str,
     coding_backend: str | None = None,
+    tailnet_provider: str | None = None,
 ) -> None:
     path = Path(env_file)
     if coding_backend:
@@ -51,10 +56,14 @@ def _ensure_env_file(
         updates = _missing_livekit_client_credential_values(path)
         if coding_backend:
             updates[CODING_BACKEND_ENV_KEY] = coding_backend
+        if tailnet_provider:
+            updates.update(_tailnet_provider_updates(path, tailnet_provider))
         if updates:
             _upsert_env_file_values(path, updates)
             if coding_backend:
                 click.echo(f"Updated {CODING_BACKEND_ENV_KEY} in {path}.")
+            if tailnet_provider:
+                click.echo(f"Updated {TAILNET_PROVIDER_ENV_KEY} in {path}.")
             if any(key.startswith("LIVEKIT_CLIENT_") for key in updates):
                 click.echo(
                     f"Updated client-facing LiveKit token credentials in {path}."
@@ -64,6 +73,7 @@ def _ensure_env_file(
         return
 
     path.parent.mkdir(parents=True, exist_ok=True)
+    selected_provider = tailnet_provider or "tailscale"
     secret_key = secrets.token_urlsafe(50)
     livekit_api_key = "APIkey" + secrets.token_urlsafe(12)
     livekit_api_secret = secrets.token_urlsafe(32)
@@ -101,11 +111,12 @@ def _ensure_env_file(
         "# Override the CLI API listener. Keep this on localhost when using Tailscale Serve.",
         "# OPENBASE_CODER_CLI_HOST=127.0.0.1",
         "# Allow localhost and Tailscale Serve hostnames.",
-        "OPENBASE_CODER_CLI_ALLOWED_HOSTS=localhost,127.0.0.1,.ts.net",
-        "# Tailnet provider: 'tailscale' (official) or 'netmesh' (self-hosted",
-        "# headscale + Openbase client). Switch later with:",
-        "#   openbase-coder tailnet set-provider netmesh|tailscale",
-        "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER=tailscale",
+        f"OPENBASE_CODER_CLI_ALLOWED_HOSTS={_allowed_hosts_for(selected_provider)}",
+        "# Tailnet provider: 'tailscale' (official Tailscale), 'netmesh'",
+        "# (self-hosted headscale + Openbase VPN client), or 'netmesh-tsnet'",
+        "# (netmesh via an in-process embedded node — no VPN on either side).",
+        "# Switch later with: openbase-coder tailnet set-provider <name>",
+        f"OPENBASE_CODER_CLI_TAILSCALE_PROVIDER={selected_provider}",
         "# Coding backend used by Super Agents and the managed service.",
         f"# Set {CODING_BACKEND_ENV_KEY} to codex, openbase_cloud, or claude_code.",
         f"{CODING_BACKEND_ENV_KEY}={coding_backend or DEFAULT_CODING_BACKEND}",
@@ -144,6 +155,33 @@ def _ensure_env_file(
 
     path.write_text("\n".join(lines) + "\n")
     click.echo(f"Generated .env at {path}")
+
+
+_DEFAULT_ALLOWED_HOSTS = "localhost,127.0.0.1,.ts.net"
+
+
+def _allowed_hosts_for(provider: str) -> str:
+    """Allowed-hosts list for a fresh .env, adding the netmesh MagicDNS suffix
+    for either netmesh transport (served requests arrive with a netmesh Host)."""
+    hosts = [h for h in _DEFAULT_ALLOWED_HOSTS.split(",") if h]
+    if provider in ("netmesh", "netmesh-tsnet") and NETMESH_ALLOWED_SUFFIX not in hosts:
+        hosts.append(NETMESH_ALLOWED_SUFFIX)
+    return ",".join(hosts)
+
+
+def _tailnet_provider_updates(path: Path, provider: str) -> dict[str, str]:
+    """Env updates to switch an existing .env to ``provider``: the provider key,
+    plus the netmesh MagicDNS suffix in allowed hosts for the netmesh transports."""
+    updates: dict[str, str] = {TAILNET_PROVIDER_ENV_KEY: provider}
+    if provider in ("netmesh", "netmesh-tsnet"):
+        hosts = _env_file_values(path).get(
+            ALLOWED_HOSTS_ENV_KEY, _DEFAULT_ALLOWED_HOSTS
+        )
+        host_list = [h.strip() for h in hosts.split(",") if h.strip()]
+        if NETMESH_ALLOWED_SUFFIX not in host_list:
+            host_list.append(NETMESH_ALLOWED_SUFFIX)
+            updates[ALLOWED_HOSTS_ENV_KEY] = ",".join(host_list)
+    return updates
 
 
 def _selected_coding_backend(env_file: Path, requested_backend: str | None) -> str:

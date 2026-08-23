@@ -29,6 +29,14 @@ TIMEOUT_SECONDS = 5
 
 PROVIDER_TAILSCALE = "tailscale"
 PROVIDER_NETMESH = "netmesh"
+# Same self-hosted headscale as ``netmesh``, but joined by an in-process embedded
+# node (tsnet on the Mac via openbase-tunneld; TailscaleKit on iOS) instead of a
+# device-wide VPN — so NO system extension / VPN profile is needed on either end
+# and only the Openbase apps' own traffic rides the tailnet. The embedded
+# transport (tunneld) is staged separately; selecting this records the choice.
+PROVIDER_NETMESH_TSNET = "netmesh-tsnet"
+
+PROVIDER_VALUES = (PROVIDER_TAILSCALE, PROVIDER_NETMESH, PROVIDER_NETMESH_TSNET)
 
 # Where the netmesh client bundles the shim (overridable for dev installs).
 NETMESH_CTL_DEFAULT = "/Applications/OpenbaseNetmesh.app/Contents/MacOS/netmesh-ctl"
@@ -45,11 +53,18 @@ def provider() -> str:
     value = (
         (os.environ.get("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER") or "").strip().lower()
     )
-    return PROVIDER_NETMESH if value == PROVIDER_NETMESH else PROVIDER_TAILSCALE
+    return value if value in PROVIDER_VALUES else PROVIDER_TAILSCALE
 
 
 def is_netmesh() -> bool:
-    return provider() == PROVIDER_NETMESH
+    """True for either netmesh transport (VPN or embedded tsnet) — both ride the
+    self-hosted headscale control plane and share netmesh labelling/hostnames."""
+    return provider() in (PROVIDER_NETMESH, PROVIDER_NETMESH_TSNET)
+
+
+def is_netmesh_tsnet() -> bool:
+    """True only for the embedded, no-VPN netmesh transport (openbase-tunneld)."""
+    return provider() == PROVIDER_NETMESH_TSNET
 
 
 def tailscale_bin() -> str | None:
@@ -72,8 +87,20 @@ def netmesh_ctl_bin() -> str | None:
     return shutil.which("netmesh-ctl")
 
 
+# The embedded no-VPN transport is reached via openbase-tunneld's loopback
+# control API, not the netmesh-ctl shim. That client is staged separately
+# (option 3 / openbase#10), so until it lands the tsnet provider records the
+# selection but its runtime ops report this instead of using the VPN shim.
+TSNET_PENDING_ERROR = (
+    "Embedded netmesh (tsnet, no-VPN) transport is selected but its control "
+    "daemon (openbase-tunneld) is not wired up in this build yet."
+)
+
+
 def tool_path() -> str | None:
     """Path to the active provider's control tool, or None if not installed."""
+    if is_netmesh_tsnet():
+        return None  # openbase-tunneld control client is staged (see above)
     return netmesh_ctl_bin() if is_netmesh() else tailscale_bin()
 
 
@@ -105,6 +132,8 @@ def status_json() -> dict[str, Any]:
 
     Returns a dict with an ``error`` key on failure.
     """
+    if is_netmesh_tsnet():
+        return {"error": TSNET_PENDING_ERROR}
     if is_netmesh():
         ctl = netmesh_ctl_bin()
         if not ctl:
@@ -118,6 +147,8 @@ def status_json() -> dict[str, Any]:
 
 def serve_status_json() -> dict[str, Any]:
     """Parsed serve status (shape matches ``tailscale serve status --json``)."""
+    if is_netmesh_tsnet():
+        return {"error": TSNET_PENDING_ERROR}
     if is_netmesh():
         ctl = netmesh_ctl_bin()
         if not ctl:
@@ -134,6 +165,8 @@ def apply_serve(rules: list[dict[str, Any]]) -> None:
 
     Raises ``RuntimeError`` on failure.
     """
+    if is_netmesh_tsnet():
+        raise RuntimeError(TSNET_PENDING_ERROR)
     if is_netmesh():
         ctl = netmesh_ctl_bin()
         if not ctl:

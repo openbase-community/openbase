@@ -172,6 +172,12 @@ from openbase_coder_cli.services.cloud_registration import register_and_report
 from openbase_coder_cli.services.installation import InstallationConfig
 from openbase_coder_cli.services.launchd import install_all_services
 from openbase_coder_cli.services.onboarding import compute_cli_configured
+from openbase_coder_cli.services.tailscale_provider import (
+    PROVIDER_NETMESH,
+    PROVIDER_NETMESH_TSNET,
+    PROVIDER_TAILSCALE,
+    PROVIDER_VALUES,
+)
 from openbase_coder_cli.services.tailscale_serve import (
     configure_tailscale_serve,
     tailscale_serve_health,
@@ -352,6 +358,18 @@ class _SetupProgress:
     ),
 )
 @click.option(
+    "--tailnet-provider",
+    type=click.Choice(list(PROVIDER_VALUES)),
+    default=None,
+    help=(
+        "Tailnet transport: 'tailscale' (official), 'netmesh' (self-hosted "
+        "headscale + Openbase VPN client), or 'netmesh-tsnet' (netmesh via an "
+        "in-process embedded node — no VPN on either side). Interactive runs "
+        "pick it for a new env file if omitted; otherwise new files default to "
+        "tailscale. Existing env files are only changed when this is provided."
+    ),
+)
+@click.option(
     "--json-progress",
     is_flag=True,
     help=(
@@ -384,6 +402,7 @@ def setup(
     fast_mode: bool,
     coding_backend: str | None,
     audio_provider: str | None,
+    tailnet_provider: str | None,
     json_progress: bool,
     interactive_mode: bool | None,
 ) -> None:
@@ -413,6 +432,9 @@ def setup(
     audio_provider = _require_audio_provider_choice(
         audio_provider, interactive=interactive
     )
+    tailnet_provider = _require_tailnet_provider_choice(
+        env_file, tailnet_provider, interactive=interactive
+    )
     assembly_ai_api_key, cartesia_api_key = _require_byok_audio_keys(
         env_file,
         audio_provider,
@@ -436,6 +458,7 @@ def setup(
             fast_mode=fast_mode,
             coding_backend=coding_backend,
             audio_provider=audio_provider,
+            tailnet_provider=tailnet_provider,
         )
     except Exception as exc:
         progress.abort(str(exc))
@@ -637,6 +660,50 @@ _AUDIO_PROVIDER_PICKER_OPTIONS = (
 )
 
 
+_TAILNET_PROVIDER_PICKER_OPTIONS = (
+    (
+        PROVIDER_TAILSCALE,
+        "Tailscale",
+        "official Tailscale client + Tailscale Serve (default)",
+    ),
+    (
+        PROVIDER_NETMESH,
+        "Openbase Netmesh (VPN)",
+        "self-hosted headscale + the Openbase VPN client (device-wide tunnel; "
+        "lowest-latency voice)",
+    ),
+    (
+        PROVIDER_NETMESH_TSNET,
+        "Openbase Netmesh (no VPN)",
+        "self-hosted headscale joined by an in-process embedded node — no VPN or "
+        "system extension on either side (embedded daemon staged separately)",
+    ),
+)
+
+
+def _require_tailnet_provider_choice(
+    env_file: str,
+    tailnet_provider: str | None,
+    *,
+    interactive: bool,
+) -> str | None:
+    """Pick the tailnet transport for a fresh install.
+
+    Existing env files keep their configured provider unless --tailnet-provider
+    is passed. New installs pick interactively; non-interactive fresh installs
+    keep the tailscale default.
+    """
+    if tailnet_provider is not None or Path(env_file).is_file():
+        return tailnet_provider
+    if interactive:
+        return _prompt_pick(
+            "Tailnet transport:",
+            _TAILNET_PROVIDER_PICKER_OPTIONS,
+            default=PROVIDER_TAILSCALE,
+        )
+    return tailnet_provider
+
+
 def _require_backend_choice(
     env_file: str,
     coding_backend: str | None,
@@ -745,6 +812,7 @@ def _run_setup_phases(
     fast_mode: bool,
     coding_backend: str | None,
     audio_provider: str | None,
+    tailnet_provider: str | None = None,
     install_normal_agent_hooks: bool = False,
 ) -> bool:
     """Run the setup phases, returning whether Tailscale Serve is healthy."""
@@ -784,6 +852,7 @@ def _run_setup_phases(
         assembly_ai_api_key=assembly_ai_api_key,
         cartesia_api_key=cartesia_api_key,
         coding_backend=coding_backend,
+        tailnet_provider=tailnet_provider,
     )
     selected_coding_backend = _selected_coding_backend(Path(env_file), coding_backend)
     if selected_coding_backend == OPENBASE_CLOUD_BACKEND:
