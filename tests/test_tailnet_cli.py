@@ -138,3 +138,18 @@ def test_enroll_without_login_fails_cleanly(env_path, monkeypatch):
     result = CliRunner().invoke(tailnet_cli.tailnet, ["enroll"])
     assert result.exit_code != 0
     assert "login" in result.output
+
+
+def test_netmesh_routes_through_stock_tailscale_off_macos(monkeypatch):
+    tp = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
+    monkeypatch.setenv("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", "netmesh")
+
+    monkeypatch.setattr("platform.system", lambda: "Windows")
+    assert tp.netmesh_uses_stock_tailscale() is True
+    monkeypatch.setattr(tp, "tailscale_bin", lambda: "C:\\ts\\tailscale.exe")
+    assert tp.tool_path() == "C:\\ts\\tailscale.exe"
+
+    monkeypatch.setattr("platform.system", lambda: "Darwin")
+    assert tp.netmesh_uses_stock_tailscale() is False
+    monkeypatch.setattr(tp, "netmesh_ctl_bin", lambda: "/n/netmesh-ctl")
+    assert tp.tool_path() == "/n/netmesh-ctl"

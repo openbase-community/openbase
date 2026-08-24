@@ -62,6 +62,19 @@ def is_netmesh() -> bool:
     return provider() in (PROVIDER_NETMESH, PROVIDER_NETMESH_TSNET)
 
 
+def netmesh_uses_stock_tailscale() -> bool:
+    """True when the netmesh VPN rides the stock tailscale client.
+
+    The hardened netmesh client (netmesh-ctl + root daemon) is macOS-only.
+    Windows and Linux join the same self-hosted headscale with the official
+    tailscale client (``tailscale login --login-server``), so every netmesh
+    control operation on those hosts is a plain tailscale operation.
+    """
+    import platform as _platform
+
+    return _platform.system() != "Darwin"
+
+
 def is_netmesh_tsnet() -> bool:
     """True only for the embedded, no-VPN netmesh transport (openbase-tunneld)."""
     return provider() == PROVIDER_NETMESH_TSNET
@@ -96,7 +109,9 @@ def tool_path() -> str | None:
         from openbase_coder_cli.services.tunneld import tunneld_tool_path
 
         return tunneld_tool_path()
-    return netmesh_ctl_bin() if is_netmesh() else tailscale_bin()
+    if is_netmesh() and not netmesh_uses_stock_tailscale():
+        return netmesh_ctl_bin()
+    return tailscale_bin()
 
 
 def _run(argv: list[str]) -> subprocess.CompletedProcess[str]:
@@ -134,7 +149,7 @@ def status_json() -> dict[str, Any]:
         if payload is None:
             return {"error": error or "openbase-tunneld status unavailable"}
         return payload
-    if is_netmesh():
+    if is_netmesh() and not netmesh_uses_stock_tailscale():
         ctl = netmesh_ctl_bin()
         if not ctl:
             return {"error": "netmesh-ctl not found"}
@@ -172,7 +187,7 @@ def serve_status_json() -> dict[str, Any]:
                 f"{host}:18080": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:7999"}}}
             }
         return payload
-    if is_netmesh():
+    if is_netmesh() and not netmesh_uses_stock_tailscale():
         ctl = netmesh_ctl_bin()
         if not ctl:
             return {"error": "netmesh-ctl not found"}
@@ -195,7 +210,7 @@ def apply_serve(rules: list[dict[str, Any]]) -> None:
 
         ensure_tunneld_running()
         return
-    if is_netmesh():
+    if is_netmesh() and not netmesh_uses_stock_tailscale():
         ctl = netmesh_ctl_bin()
         if not ctl:
             raise RuntimeError("netmesh-ctl was not found.")

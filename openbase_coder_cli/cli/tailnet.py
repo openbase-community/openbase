@@ -130,10 +130,16 @@ def _apply_provider(name: str, *, push_cloud: bool) -> None:
     _reregister_device()
 
     if name == tp.PROVIDER_NETMESH:
-        click.echo(
-            "Next: open the Openbase Netmesh app, sign in, and Connect so "
-            "this machine joins the VPN."
-        )
+        if tp.netmesh_uses_stock_tailscale():
+            click.echo(
+                "Next: this machine joins the netmesh through the official "
+                "Tailscale client pointed at Openbase's control server."
+            )
+        else:
+            click.echo(
+                "Next: open the Openbase Netmesh app, sign in, and Connect so "
+                "this machine joins the VPN."
+            )
     elif name == tp.PROVIDER_TAILSCALE:
         click.echo("Next: make sure the Tailscale app is running and signed in.")
 
@@ -179,6 +185,10 @@ def _bootout_legacy_tunneld_agent() -> None:
 
 
 def _bring_up_transport(name: str) -> None:
+    if name == tp.PROVIDER_NETMESH and tp.netmesh_uses_stock_tailscale():
+        _join_netmesh_with_stock_tailscale()
+        _apply_serve_best_effort()
+        return
     if name != tp.PROVIDER_NETMESH_TSNET:
         _apply_serve_best_effort()
         return
@@ -209,6 +219,63 @@ def _bring_up_transport(name: str) -> None:
         click.echo("openbase-tunneld is running and joined the tailnet.")
     except RuntimeError as exc:
         click.echo(click.style(f"Warning: {exc}", fg="yellow"))
+
+
+def _join_netmesh_with_stock_tailscale() -> None:
+    """Windows/Linux netmesh VPN: log the official client into our headscale.
+
+    There is no hardened netmesh client off macOS; the same self-hosted
+    control plane is joined with ``tailscale login --login-server`` and a
+    cloud-minted single-use key.
+    """
+    from openbase_coder_cli.services.cloud_registration import netmesh_enroll
+
+    tailscale_bin = tp.tailscale_bin()
+    if not tailscale_bin:
+        click.echo(
+            click.style(
+                "Warning: the tailscale client is not installed. Install it "
+                "from tailscale.com, then rerun "
+                "'openbase-coder tailnet set-provider netmesh'.",
+                fg="yellow",
+            )
+        )
+        return
+    enrollment = netmesh_enroll()
+    if not enrollment:
+        click.echo(
+            click.style(
+                "Warning: could not mint a netmesh key (run "
+                "'openbase-coder login' first). Join manually with: "
+                "tailscale login --login-server https://net.openbase.cloud",
+                fg="yellow",
+            )
+        )
+        return
+    result = subprocess.run(  # noqa: S603 - fixed argv
+        [
+            tailscale_bin,
+            "login",
+            "--login-server",
+            enrollment["control_url"],
+            "--auth-key",
+            enrollment["auth_key"],
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if result.returncode != 0:
+        click.echo(
+            click.style(
+                "Warning: tailscale login against the netmesh control server "
+                f"failed: {result.stderr.strip() or result.stdout.strip()}",
+                fg="yellow",
+            )
+        )
+        return
+    click.echo("Joined the netmesh with the official Tailscale client.")
 
 
 def _apply_serve_best_effort() -> None:
