@@ -17,14 +17,12 @@ from typing import Any
 
 from openbase_coder_cli.paths import (
     CODEX_HOME_DIR,
-    NORMAL_CODEX_HOME_DIR,
     OPENBASE_BASE_DIR,
 )
 
-from .thread_import import (
+from .codex_state import (
     DEFAULT_SYNC_MAX_AGE_DAYS,
     SESSION_INDEX_NAME,
-    SYNC_LEDGER_NAME,
     ThreadTransferError,
     _active_super_agent_thread_ids,
     _connect,
@@ -50,9 +48,7 @@ from .thread_sync_common import (
     device_snapshot_dirs,
     file_content_relation,
     find_snapshot_record,
-    merged_sync_conflicts_payload,
     read_device_ledger,
-    read_scoped_ledger,
     record_device_snapshot,
     remove_empty_dir,
     run_snapshot_export,
@@ -76,7 +72,6 @@ IMPORT_BACKUP_DIR_NAME = ".codex-thread-sync-backups"
 DEFAULT_EXCHANGE_DIR = OPENBASE_BASE_DIR / "thread-sync"
 DEFAULT_DEVICE_IDENTITY_PATH = OPENBASE_BASE_DIR / DEVICE_IDENTITY_NAME
 DEFAULT_LEDGER_PATH = OPENBASE_BASE_DIR / LEDGER_NAME
-DEFAULT_HOME_SYNC_LEDGER_PATH = OPENBASE_BASE_DIR / SYNC_LEDGER_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -464,95 +459,6 @@ def thread_snapshot_conflicts_payload(
     return {
         "device": identity.to_json() if identity else None,
         "exchange_dir": str(exchange_dir),
-        "ledger_path": str(ledger_path),
-        "conflict_count": len(conflicts),
-        "conflicts": conflicts,
-    }
-
-
-def thread_sync_conflicts_payload(
-    *,
-    normal_home: Path = NORMAL_CODEX_HOME_DIR,
-    voice_home: Path = CODEX_HOME_DIR,
-    home_ledger_path: Path = DEFAULT_HOME_SYNC_LEDGER_PATH,
-    exchange_dir: Path = DEFAULT_EXCHANGE_DIR,
-    device_identity_path: Path = DEFAULT_DEVICE_IDENTITY_PATH,
-    device_ledger_path: Path = DEFAULT_LEDGER_PATH,
-) -> dict[str, Any]:
-    """Show unresolved Codex thread sync conflicts across homes and devices."""
-    return merged_sync_conflicts_payload(
-        thread_home_sync_conflicts_payload(
-            normal_home=normal_home,
-            voice_home=voice_home,
-            ledger_path=home_ledger_path,
-        ),
-        thread_snapshot_conflicts_payload(
-            codex_home=voice_home,
-            exchange_dir=exchange_dir,
-            device_identity_path=device_identity_path,
-            ledger_path=device_ledger_path,
-        ),
-    )
-
-
-def thread_home_sync_conflicts_payload(
-    *,
-    normal_home: Path = NORMAL_CODEX_HOME_DIR,
-    voice_home: Path = CODEX_HOME_DIR,
-    ledger_path: Path = DEFAULT_HOME_SYNC_LEDGER_PATH,
-) -> dict[str, Any]:
-    ledger = read_scoped_ledger(
-        ledger_path,
-        scope_key="threads",
-        logger=logger,
-        malformed_event="codex_thread_sync_ledger_malformed",
-    )
-    normal_db = state_db_path(normal_home)
-    voice_db = state_db_path(voice_home)
-    conflicts: list[dict[str, Any]] = []
-    for thread_id, thread_ledger in ledger.items():
-        if not isinstance(thread_id, str) or not isinstance(thread_ledger, dict):
-            continue
-        if thread_ledger.get("status") != "conflict":
-            continue
-        normal_row = _exchange_thread_row(normal_db, thread_id)
-        voice_row = _exchange_thread_row(voice_db, thread_id)
-        normal_fingerprint = _fingerprint_id(
-            _thread_fingerprint(normal_row, normal_home, thread_id)
-        )
-        voice_fingerprint = _fingerprint_id(
-            _thread_fingerprint(voice_row, voice_home, thread_id)
-        )
-        title = (
-            _string((voice_row or {}).get("title"))
-            or _string((normal_row or {}).get("title"))
-            or thread_id
-        )
-        cwd = _string((voice_row or {}).get("cwd")) or _string(
-            (normal_row or {}).get("cwd")
-        )
-        conflicts.append(
-            {
-                "id": f"home:{thread_id}",
-                "source_type": "home",
-                "thread_id": thread_id,
-                "title": title,
-                "cwd": cwd,
-                "reason": _string(thread_ledger.get("reason")) or "conflict",
-                "detected_at": thread_ledger.get("synced_at"),
-                "normal_fingerprint": normal_fingerprint,
-                "voice_fingerprint": voice_fingerprint,
-                "local_fingerprint": voice_fingerprint,
-                "current_local_fingerprint": voice_fingerprint,
-                "normal": _local_thread_payload(normal_row, normal_fingerprint),
-                "voice": _local_thread_payload(voice_row, voice_fingerprint),
-                "local": _local_thread_payload(voice_row, voice_fingerprint),
-                "remote_label": "Normal Codex home",
-                "is_resolvable": False,
-            }
-        )
-
-    return {
         "ledger_path": str(ledger_path),
         "conflict_count": len(conflicts),
         "conflicts": conflicts,

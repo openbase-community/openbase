@@ -285,7 +285,7 @@ def test_install_writes_verified_files_and_provenance(
     request_data = {
         "slug": "example-skill",
         "commit": COMMIT,
-        "targets": ["home", "openbase_codex"],
+        "targets": ["home", "codex"],
         "confirmed": True,
     }
     response = marketplace.marketplace_skill_install(
@@ -293,7 +293,7 @@ def test_install_writes_verified_files_and_provenance(
     )
 
     assert response.status_code == 201
-    for scope in ("home", "openbase_codex"):
+    for scope in ("home", "codex"):
         destination = roots[scope] / "example-skill"
         assert (destination / "SKILL.md").read_bytes() == skill_md
         assert (destination / "scripts/check.sh").stat().st_mode & 0o111
@@ -411,7 +411,7 @@ def test_install_rolls_back_earlier_targets_when_later_target_fails(
             {
                 "slug": "example-skill",
                 "commit": COMMIT,
-                "targets": ["home", "openbase_codex"],
+                "targets": ["home", "codex"],
                 "confirmed": True,
             },
         )
@@ -419,4 +419,4 @@ def test_install_rolls_back_earlier_targets_when_later_target_fails(
 
     assert response.status_code == 500
     assert not (roots["home"] / "example-skill").exists()
-    assert not (roots["openbase_codex"] / "example-skill").exists()
+    assert not (roots["codex"] / "example-skill").exists()

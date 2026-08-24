@@ -221,7 +221,7 @@ def test_coding_backend_settings_persists_claude_code_selection(
     monkeypatch.setattr(backend_settings, "DEFAULT_ENV_FILE_PATH", env_file)
     monkeypatch.setattr(
         backend_settings,
-        "claude_auth_status",
+        "verified_claude_auth_status",
         lambda: SimpleNamespace(
             logged_in=True, raw_output='{"loggedIn": true}', returncode=0
         ),
@@ -238,7 +238,7 @@ def test_coding_backend_settings_persists_claude_code_selection(
     assert response.status_code == 200
     assert response.data["backend"] == "claude_code"
     assert response.data["claude_auth"]["logged_in"] is True
-    assert response.data["claude_auth"]["command"] == "openbase-coder claude sync-state"
+    assert response.data["claude_auth"]["command"] == "claude login"
     assert response.data["changed"] is True
     assert "Claude Code" in response.data["restart_hint"]
     assert "OPENBASE_CODING_BACKEND=claude_code" in env_file.read_text(encoding="utf-8")
@@ -411,33 +411,20 @@ def test_claude_auth_settings_syncs_state_and_reports_status(
     monkeypatch.setattr(backend_settings, "DEFAULT_ENV_FILE_PATH", env_file)
     monkeypatch.setattr(
         backend_settings,
-        "sync_normal_claude_state",
+        "verified_claude_auth_status",
         lambda: SimpleNamespace(
-            state_updated=True, message="Synced normal Claude Code state into Openbase."
+            logged_in=True, raw_output='{"loggedIn": true}', returncode=0
         ),
     )
-    monkeypatch.setattr(backend_settings, "copy_normal_claude_keychain", lambda: True)
-    statuses = iter(
-        [
-            SimpleNamespace(
-                logged_in=False, raw_output='{"loggedIn": false}', returncode=1
-            ),
-            SimpleNamespace(
-                logged_in=True, raw_output='{"loggedIn": true}', returncode=0
-            ),
-        ]
-    )
-    monkeypatch.setattr(backend_settings, "claude_auth_status", lambda: next(statuses))
 
     response = backend_settings.claude_auth_settings(
         _authenticated_request("POST", "/api/settings/coding-backend/claude-auth/")
     )
 
     assert response.status_code == 200
-    assert response.data["command"] == "openbase-coder claude sync-state"
+    assert response.data["command"] == "claude login"
     assert response.data["logged_in"] is True
-    assert response.data["state_updated"] is True
-    assert response.data["keychain_copied"] is True
+    assert response.data["verified"] is True
 
 
 def test_claude_plugin_settings_reports_enabled_state(
@@ -587,36 +574,19 @@ def test_urlconf_loads_with_all_settings_views() -> None:
     assert reverse("coding-backend-codex-plugin-settings")
 
 
-def test_coding_backend_settings_heals_dead_claude_login_on_save(
+def test_coding_backend_settings_verifies_claude_login_on_save(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    """Saving the Claude backend runs a verified (probe-backed) status check."""
     env_file = tmp_path / ".env"
     monkeypatch.setattr(backend_settings, "DEFAULT_ENV_FILE_PATH", env_file)
-    statuses = iter(
-        [
-            SimpleNamespace(
-                logged_in=False, raw_output='{"loggedIn": false}', returncode=1
-            ),
-            SimpleNamespace(
-                logged_in=True, raw_output='{"loggedIn": true}', returncode=0
-            ),
-        ]
-    )
-    monkeypatch.setattr(backend_settings, "claude_auth_status", lambda: next(statuses))
-    synced: list[str] = []
     monkeypatch.setattr(
         backend_settings,
-        "sync_normal_claude_state",
-        lambda: (
-            synced.append("state")
-            or SimpleNamespace(state_updated=True, message="synced")
+        "verified_claude_auth_status",
+        lambda: SimpleNamespace(
+            logged_in=False, raw_output='{"loggedIn": false}', returncode=1
         ),
-    )
-    monkeypatch.setattr(
-        backend_settings,
-        "copy_normal_claude_keychain",
-        lambda: synced.append("keychain") or True,
     )
 
     response = backend_settings.coding_backend_settings(
@@ -628,7 +598,8 @@ def test_coding_backend_settings_heals_dead_claude_login_on_save(
     )
 
     assert response.status_code == 200
-    assert synced == ["state", "keychain"]
-    assert response.data["claude_auth"]["logged_in"] is True
-    assert response.data["claude_auth"]["keychain_copied"] is True
-    assert response.data["claude_auth"]["state_updated"] is True
+    assert response.data["claude_auth"]["logged_in"] is False
+    assert response.data["claude_auth"]["command"] == "claude login"
+    assert response.data["claude_auth"]["verified"] is True
+
+

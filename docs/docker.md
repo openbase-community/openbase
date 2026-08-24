@@ -105,8 +105,7 @@ docker exec -it openbase-coder openbase-coder claude login
 ```
 
 Open the printed URL in any browser, sign in, and paste the code it shows
-back into the terminal. `openbase-coder claude status` confirms the scoped
-login.
+back into the terminal. `openbase-coder claude status` confirms the login.
 
 Codex:
 
@@ -117,8 +116,8 @@ docker exec -it openbase-coder codex login
 Codex waits for a browser redirect to `http://localhost:1455/...`, which
 lives inside the container — bridge port `1455` from your browser machine
 over the tailnet exactly like the [Openbase login](#log-in-to-openbase)
-above, then open the printed URL. The service picks the login up through its
-auth symlink; no re-setup is needed.
+above, then open the printed URL. Openbase services read the shared
+`~/.codex/auth.json` directly; no re-setup is needed.
 
 Then switch the backend and restart:
 

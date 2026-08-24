@@ -6,9 +6,10 @@ CLI environment is broken.
 
 Openbase Coder state lives in four places, each removed in its own section
 below: the CLI runtime state in `~/.openbase`, the desktop app's Electron
-state and caches under `~/Library`, a managed Claude credential in the macOS
-Keychain (Claude Code backend only), and the iOS app's on-phone state
-(removed automatically when you delete the app from the iPhone).
+state and caches under `~/Library`, a few Openbase entries in your shared
+Codex/Claude agent configs (`~/.codex`, `~/.claude`), and the iOS app's
+on-phone state (removed automatically when you delete the app from the
+iPhone).
 
 ## Service Cleanup With The CLI
 
@@ -135,19 +136,27 @@ On iPhone, deleting the Openbase app removes its local state (the CLI auth
 token in the Keychain and the backend host list); there is nothing else to
 clean up on the phone.
 
-## Remove Keychain Credentials
+## Clean Up Shared Agent Configs
 
-If the Claude Code backend was ever used, the CLI stored a managed Claude
-credential in the macOS Keychain under a service name derived from the
-Openbase Claude config path. Remove it with:
+Openbase registers exactly two things in your own Codex and Claude homes: the
+`super-agents` MCP server and the session-ID hook. It stores no separate
+agent credential — Openbase used your normal Codex and Claude Code logins
+directly, and those are untouched by uninstalling. To remove the Openbase
+entries:
 
-```bash
-suffix=$(python3 -c 'import hashlib,os;print(hashlib.sha256(os.path.expanduser("~/.openbase/claude_config").encode()).hexdigest()[:8])')
-security delete-generic-password -s "Claude Code-credentials-$suffix" 2>/dev/null || true
-```
+- In `~/.codex/config.toml`: delete the `[mcp_servers.super-agents]` table
+  and the `[[hooks.SessionStart]]` entry pointing at
+  `~/.openbase/hooks/inject-session-id.sh` (plus its matching `[hooks.state]`
+  trust entry).
+- In `~/.claude.json`: delete the `mcpServers.super-agents` entry.
+- In `~/.claude/settings.json`: delete the session-ID hook entry under
+  `hooks`.
 
-This does not touch your normal Claude Code login (`Claude Code-credentials`
-without a suffix), which belongs to Claude Code itself.
+Setup also symlinks skills into the shared homes. Remove the symlinks that
+point at Openbase sources (the workspace checkout or `~/.openbase`
+packages) — inspect with `ls -l ~/.codex/skills ~/.claude/skills` and delete
+Openbase-owned links, leaving any real skill directories of your own in
+place.
 
 ## Optional Tailscale Cleanup
 

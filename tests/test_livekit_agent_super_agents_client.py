@@ -1421,76 +1421,59 @@ def test_speech_text_from_progress_prefers_scoped_turn_over_session_preview() ->
     assert _speech_text_from_progress(progress) == "The requested turn answer."
 
 
-def test_claude_auth_heal_scheduled_on_auth_failure_speech(monkeypatch) -> None:
-    healed: list[str] = []
+def test_claude_auth_warning_logged_on_auth_failure_speech(monkeypatch, caplog) -> None:
+    import logging
+
     monkeypatch.setattr(
-        super_agents_client_module,
-        "heal_claude_auth",
-        lambda: healed.append("heal")
-        or SimpleNamespace(state_updated=True, message="ok"),
+        super_agents_client_module, "_last_claude_auth_warn_monotonic", None
     )
-
-    class InlineThread:
-        def __init__(self, *, target, name=None, daemon=None) -> None:
-            self._target = target
-
-        def start(self) -> None:
-            self._target()
-
-    monkeypatch.setattr(super_agents_client_module.threading, "Thread", InlineThread)
-    monkeypatch.setattr(
-        super_agents_client_module, "_last_claude_auth_heal_monotonic", None
-    )
+    caplog.set_level(logging.WARNING)
 
     super_agents_client_module._maybe_schedule_claude_auth_heal(
         "Failed to authenticate: OAuth session expired and could not be refreshed"
     )
-    assert healed == ["heal"]
+    assert caplog.text.count("claude login") == 1
 
-    # Debounced: an immediate repeat must not trigger a second heal.
+    # Debounced: an immediate repeat must not warn again.
     super_agents_client_module._maybe_schedule_claude_auth_heal(
         "Failed to authenticate: OAuth session expired and could not be refreshed"
     )
-    assert healed == ["heal"]
+    assert caplog.text.count("claude login") == 1
 
 
-def test_claude_auth_heal_not_scheduled_for_normal_speech(monkeypatch) -> None:
-    def _no_heal():
-        raise AssertionError("heal must not run for normal speech")
+def test_claude_auth_warning_not_logged_for_normal_speech(monkeypatch, caplog) -> None:
+    import logging
 
-    monkeypatch.setattr(super_agents_client_module, "heal_claude_auth", _no_heal)
     monkeypatch.setattr(
-        super_agents_client_module, "_last_claude_auth_heal_monotonic", None
+        super_agents_client_module, "_last_claude_auth_warn_monotonic", None
     )
+    caplog.set_level(logging.WARNING)
 
     super_agents_client_module._maybe_schedule_claude_auth_heal(
         "The build passed and I pushed the fix."
     )
     super_agents_client_module._maybe_schedule_claude_auth_heal("")
 
+    assert "claude login" not in caplog.text
+
 
 @pytest.mark.asyncio
-async def test_preflight_heal_runs_for_logged_out_claude_backend(
-    monkeypatch, tmp_path: Path
+async def test_preflight_warns_for_logged_out_claude_backend(
+    monkeypatch, tmp_path: Path, caplog
 ) -> None:
+    import logging
+
     backend = FakeSuperAgentsBackend()
     backend.backend = "claude_code"
-    calls: list[str] = []
+    caplog.set_level(logging.WARNING)
     monkeypatch.setattr(
         super_agents_client_module,
         "verified_claude_auth_status",
-        lambda: calls.append("status")
-        or SimpleNamespace(
+        lambda: SimpleNamespace(
             logged_in=False,
             raw_output="Not logged in · Please run /login",
             returncode=0,
         ),
-    )
-    monkeypatch.setattr(
-        super_agents_client_module,
-        "heal_claude_auth",
-        lambda: calls.append("heal")
-        or SimpleNamespace(state_updated=True, message="ok"),
     )
 
     client = SuperAgentsLiveKitClient(
@@ -1501,19 +1484,18 @@ async def test_preflight_heal_runs_for_logged_out_claude_backend(
     result = await client.run_turn("hello dispatch")
 
     assert result["_livekit_turn_id"] == "turn-1"
-    assert calls == ["status", "heal"]
+    assert "claude login" in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_preflight_heal_skipped_when_claude_logged_in(
-    monkeypatch, tmp_path: Path
+async def test_preflight_quiet_when_claude_logged_in(
+    monkeypatch, tmp_path: Path, caplog
 ) -> None:
+    import logging
+
     backend = FakeSuperAgentsBackend()
     backend.backend = "claude_code"
-
-    def _no_heal():
-        raise AssertionError("heal must not run for a healthy login")
-
+    caplog.set_level(logging.WARNING)
     monkeypatch.setattr(
         super_agents_client_module,
         "verified_claude_auth_status",
@@ -1521,7 +1503,6 @@ async def test_preflight_heal_skipped_when_claude_logged_in(
             logged_in=True, raw_output='{"loggedIn": true}', returncode=0
         ),
     )
-    monkeypatch.setattr(super_agents_client_module, "heal_claude_auth", _no_heal)
 
     client = SuperAgentsLiveKitClient(
         cwd="/tmp/project",
@@ -1531,6 +1512,7 @@ async def test_preflight_heal_skipped_when_claude_logged_in(
     result = await client.run_turn("hello dispatch")
 
     assert result["_livekit_turn_id"] == "turn-1"
+    assert "claude login" not in caplog.text
 
 
 @pytest.mark.asyncio

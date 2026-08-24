@@ -24,8 +24,9 @@ openbase-coder [OPTIONS] COMMAND [ARGS]
 | Command | Description |
 |---|---|
 | [`backend`](backend.md) | View or switch the selected coding backend |
-| [`claude`](claude.md) | Manage Openbase's Claude Code auth |
-| [`claude-sync`](claude-sync.md) | Synchronize Claude Code sessions between normal and Openbase config homes |
+| [`claude`](claude.md) | Inspect the Claude Code login used by Openbase sessions |
+| [`claude-sync`](claude-sync.md) | Synchronize Claude Code session snapshots across devices |
+| [`codex-sync`](codex-sync.md) | Synchronize Codex session snapshots across devices |
 | [`defaults`](defaults.md) | Manage default dispatcher and Super Agents model/reasoning settings |
 | [`setup`](setup.md) | Full local bootstrap flow |
 | [`server`](server.md) | Run local Django/ASGI server |

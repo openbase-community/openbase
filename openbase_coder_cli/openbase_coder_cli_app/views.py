@@ -107,7 +107,6 @@ from openbase_coder_cli.openbase_coder_cli_app.service_tier_settings import (
     service_tier_settings,
 )
 from openbase_coder_cli.openbase_coder_cli_app.services_views import (
-    agents_generation_settings,
     dangerous_confirmation_settings,
     keep_awake_settings,
     launchctl_ignored_settings,
@@ -138,16 +137,15 @@ from openbase_coder_cli.openbase_coder_cli_app.threads import (
     thread_tags,
 )
 from openbase_coder_cli.paths import (
+    CLAUDE_CONFIG_DIR,
     CODEX_AGENTS_MD_PATH,
     CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH,
     CODEX_DISPATCHER_INSTRUCTIONS_PATH,
     CODEX_HOME_DIR,
     CODEX_SUPER_AGENT_INSTRUCTIONS_PATH,
     DEFAULT_LOG_DIR,
-    NORMAL_CODEX_AGENTS_MD_PATH,
-    NORMAL_CODEX_HOME_DIR,
-    OPENBASE_CLAUDE_CONFIG_DIR,
-    OPENBASE_CLAUDE_MD_PATH,
+    OPENBASE_AGENTS_MD_PATH,
+    OPENBASE_INSTRUCTIONS_DIR,
 )
 
 
@@ -159,10 +157,8 @@ def _sync_agents_md_compat_globals() -> None:
     _agents_md.CODEX_DISPATCHER_INSTRUCTIONS_PATH = CODEX_DISPATCHER_INSTRUCTIONS_PATH
     _agents_md.CODEX_HOME_DIR = CODEX_HOME_DIR
     _agents_md.CODEX_SUPER_AGENT_INSTRUCTIONS_PATH = CODEX_SUPER_AGENT_INSTRUCTIONS_PATH
-    _agents_md.NORMAL_CODEX_AGENTS_MD_PATH = NORMAL_CODEX_AGENTS_MD_PATH
-    _agents_md.NORMAL_CODEX_HOME_DIR = NORMAL_CODEX_HOME_DIR
-    _agents_md.OPENBASE_CLAUDE_CONFIG_DIR = OPENBASE_CLAUDE_CONFIG_DIR
-    _agents_md.OPENBASE_CLAUDE_MD_PATH = OPENBASE_CLAUDE_MD_PATH
+    _agents_md.OPENBASE_AGENTS_MD_PATH = OPENBASE_AGENTS_MD_PATH
+    _agents_md.OPENBASE_INSTRUCTIONS_DIR = OPENBASE_INSTRUCTIONS_DIR
 
 
 def _sync_livekit_compat_globals() -> None:
@@ -180,7 +176,7 @@ def _sync_livekit_compat_globals() -> None:
 
 def _sync_skills_compat_globals() -> None:
     _skills.CODEX_HOME_DIR = CODEX_HOME_DIR
-    _skills.OPENBASE_CLAUDE_CONFIG_DIR = OPENBASE_CLAUDE_CONFIG_DIR
+    _skills.CLAUDE_CONFIG_DIR = CLAUDE_CONFIG_DIR
     _skills._home_skills_dir = _home_skills_dir
 
 
@@ -276,7 +272,6 @@ def skill_detail(request, skill_name):
 
 __all__ = [
     "agents_md",
-    "agents_generation_settings",
     "all_project_reports",
     "approval_request_detail",
     "approval_requests",

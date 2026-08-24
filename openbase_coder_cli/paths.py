@@ -9,18 +9,19 @@ STANDALONE_RELEASES_DIR = STANDALONE_PACKAGES_DIR / "releases"
 STANDALONE_CURRENT_DIR = STANDALONE_PACKAGES_DIR / "current"
 OPENBASE_SOUNDS_DIR = OPENBASE_BASE_DIR / "sounds"
 OPENBASE_INSTRUCTIONS_DIR = OPENBASE_BASE_DIR / "instructions"
-CODEX_HOME_DIR = OPENBASE_BASE_DIR / "codex_home"
+# Openbase shares the user's real agent homes: sessions started from the
+# terminal, the desktop apps, and Openbase voice all live in one store per
+# backend. Openbase-specific posture (permissions, instructions) is passed
+# per session, never written into these homes' defaults.
+CODEX_HOME_DIR = Path.home() / ".codex"
 CODEX_AGENTS_MD_PATH = CODEX_HOME_DIR / "AGENTS.md"
-NORMAL_CODEX_HOME_DIR = Path.home() / ".codex"
-NORMAL_CODEX_AGENTS_MD_PATH = NORMAL_CODEX_HOME_DIR / "AGENTS.md"
-NORMAL_CODEX_CONFIG_PATH = NORMAL_CODEX_HOME_DIR / "config.toml"
-NORMAL_CLAUDE_CONFIG_DIR = Path.home() / ".claude"
-NORMAL_CLAUDE_SETTINGS_PATH = NORMAL_CLAUDE_CONFIG_DIR / "settings.json"
-NORMAL_CLAUDE_STATE_PATH = Path.home() / ".claude.json"
-OPENBASE_CLAUDE_CONFIG_DIR = OPENBASE_BASE_DIR / "claude_config"
-OPENBASE_CLAUDE_JSON_PATH = OPENBASE_CLAUDE_CONFIG_DIR / ".claude.json"
-OPENBASE_CLAUDE_MD_PATH = OPENBASE_CLAUDE_CONFIG_DIR / "CLAUDE.md"
-OPENBASE_CLAUDE_SETTINGS_PATH = OPENBASE_CLAUDE_CONFIG_DIR / "settings.json"
+CODEX_CONFIG_PATH = CODEX_HOME_DIR / "config.toml"
+CLAUDE_CONFIG_DIR = Path.home() / ".claude"
+CLAUDE_SETTINGS_PATH = CLAUDE_CONFIG_DIR / "settings.json"
+CLAUDE_STATE_PATH = Path.home() / ".claude.json"
+# Rendered Openbase base agent instructions, delivered per session (Codex
+# developerInstructions / Claude system prompt), not via the shared homes.
+OPENBASE_AGENTS_MD_PATH = OPENBASE_INSTRUCTIONS_DIR / "AGENTS.md"
 OPENBASE_DIRECT_LIVEKIT_INSTRUCTIONS_PATH = (
     OPENBASE_INSTRUCTIONS_DIR / "VOICE_INSTRUCTIONS.md"
 )

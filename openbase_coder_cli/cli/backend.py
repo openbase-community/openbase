@@ -13,10 +13,6 @@ from openbase_coder_cli.backend_config import (
     SELECTABLE_BACKENDS,
     normalize_backend,
 )
-from openbase_coder_cli.codex_backend_config import (
-    apply_backend_to_codex_config,
-    codex_config_path_for_env_file,
-)
 from openbase_coder_cli.env_file import (
     active_env_key,
     format_env_value,
@@ -99,8 +95,10 @@ def read_backend(env_file: Path) -> str:
 
 
 def write_backend(env_file: Path, backend_name: str) -> None:
+    # Backend model/provider choices reach Codex as app-server launch
+    # overrides (services/runners.py), so persisting the env value is enough;
+    # the service restart picks it up.
     normalized = normalize_backend(backend_name)
-    values = read_env_values(env_file) if env_file.is_file() else {}
     env_file.parent.mkdir(parents=True, exist_ok=True)
     if env_file.is_file():
         upsert_env_file_values(env_file, {BACKEND_ENV_KEY: normalized})
@@ -108,11 +106,6 @@ def write_backend(env_file: Path, backend_name: str) -> None:
         env_file.write_text(
             f"{BACKEND_ENV_KEY}={format_env_value(normalized)}\n", encoding="utf-8"
         )
-    apply_backend_to_codex_config(
-        normalized,
-        config_path=codex_config_path_for_env_file(env_file),
-        web_backend_url=values.get("OPENBASE_CODER_CLI_WEB_BACKEND_URL"),
-    )
 
 
 def read_env_values(env_file: Path) -> dict[str, str]:

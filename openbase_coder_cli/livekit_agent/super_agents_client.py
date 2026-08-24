@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -26,7 +25,6 @@ from openbase_coder_cli.backend_config import (
     configured_execution_backend as _configured_execution_backend,
 )
 from openbase_coder_cli.claude_auth import (
-    heal_claude_auth,
     is_claude_auth_failure_text,
     verified_claude_auth_status,
 )
@@ -113,40 +111,28 @@ TURN_POLL_COMPLETED_EMPTY_SPEECH_GRACE_SECONDS = 2.0
 # as orphaned (no voice dispatch consumed it) and handing it to the orphaned
 # result handler to be spoken directly.
 ORPHANED_RESULT_GRACE_SECONDS = 1.5
-# The Openbase Claude Code credential is a copy of the normal login, so it
-# goes stale whenever the normal config dir rotates the shared refresh token
-# first. Claude Code then answers turns with a "Failed to authenticate ..."
-# string instead of erroring, which would otherwise be spoken on every turn
-# until someone runs `openbase-coder claude sync-state` by hand.
-CLAUDE_AUTH_HEAL_DEBOUNCE_SECONDS = 300.0
-_last_claude_auth_heal_monotonic: float | None = None
+# Claude Code answers turns with a "Failed to authenticate ..." string
+# instead of erroring when the login dies. Sessions share the user's own
+# ~/.claude login, so there is nothing to re-bridge — surface the failure
+# loudly (debounced) and direct the user to `claude login`.
+CLAUDE_AUTH_WARN_DEBOUNCE_SECONDS = 300.0
+_last_claude_auth_warn_monotonic: float | None = None
 
 
 def _maybe_schedule_claude_auth_heal(speech_text: str) -> None:
-    """Re-bridge Claude auth in the background when a turn spoke a login failure."""
-    global _last_claude_auth_heal_monotonic
+    """Log a debounced warning when a turn spoke a Claude login failure."""
+    global _last_claude_auth_warn_monotonic
     if not is_claude_auth_failure_text(speech_text):
         return
     now = time.monotonic()
-    last = _last_claude_auth_heal_monotonic
-    if last is not None and now - last < CLAUDE_AUTH_HEAL_DEBOUNCE_SECONDS:
+    last = _last_claude_auth_warn_monotonic
+    if last is not None and now - last < CLAUDE_AUTH_WARN_DEBOUNCE_SECONDS:
         return
-    _last_claude_auth_heal_monotonic = now
-
-    def _heal() -> None:
-        try:
-            result = heal_claude_auth()
-        except Exception:
-            logger.exception("Claude auth auto-heal crashed")
-            return
-        log = logger.info if result.state_updated else logger.warning
-        log(
-            "Claude auth failure surfaced in a spoken answer; auto-heal %s: %s",
-            "succeeded" if result.state_updated else "failed",
-            result.message,
-        )
-
-    threading.Thread(target=_heal, name="claude-auth-heal", daemon=True).start()
+    _last_claude_auth_warn_monotonic = now
+    logger.warning(
+        "Claude auth failure surfaced in a spoken answer; run `claude login` "
+        "to restore the Claude Code login."
+    )
 
 
 def _model_name_for_role(
@@ -614,13 +600,11 @@ class SuperAgentsLiveKitClient(
         await waiter(thread_id, turn_id, TURN_PUSH_WAIT_FALLBACK_SECONDS)
 
     async def _ensure_claude_auth_ready(self) -> None:
-        """Heal a dead Openbase Claude login before the thread takes turns.
+        """Warn up front when the shared Claude login is dead.
 
-        A stranded refresh token can leave the scoped config dir fully logged
-        out (Claude Code wipes the credential after a failed refresh), and in
-        that state every turn answers "Not logged in · Please run /login".
-        The spoken-answer heal only fires after a failed turn, so verify and
-        re-bridge up front instead of letting the first turn fail.
+        In that state every turn answers "Not logged in · Please run /login";
+        checking before the thread takes turns surfaces the problem in the
+        logs immediately instead of as a spoken failure.
         """
         if getattr(self._backend_client, "backend", None) != CLAUDE_CODE_BACKEND:
             return
@@ -629,19 +613,12 @@ class SuperAgentsLiveKitClient(
             if status.logged_in:
                 return
             logger.warning(
-                "Openbase Claude Code login unavailable before thread start; "
-                "attempting auto-heal: %s",
+                "Claude Code login unavailable before thread start; run "
+                "`claude login` to restore it: %s",
                 status.raw_output,
             )
-            result = await asyncio.to_thread(heal_claude_auth)
-            log = logger.info if result.state_updated else logger.warning
-            log(
-                "Claude auth pre-flight heal %s: %s",
-                "succeeded" if result.state_updated else "failed",
-                result.message,
-            )
         except Exception:
-            logger.exception("Claude auth pre-flight heal crashed")
+            logger.exception("Claude auth pre-flight check crashed")
 
 
 def _should_wait_for_speech_text(

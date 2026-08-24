@@ -1,8 +1,13 @@
+"""Claude Code login status for the shared ~/.claude home.
+
+Openbase uses the user's own Claude Code login directly (one credential
+store, no copies), so this module only reports whether that login works —
+there is no bridging or healing to do.
+"""
+
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import platform
 import shutil
 import subprocess
@@ -11,13 +16,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from openbase_coder_cli.paths import (
-    NORMAL_CLAUDE_STATE_PATH,
-    OPENBASE_CLAUDE_CONFIG_DIR,
-    OPENBASE_CLAUDE_JSON_PATH,
-)
+from openbase_coder_cli.paths import CLAUDE_CONFIG_DIR
 
-NORMAL_CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
+CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
 # Claude Code prints turn-level auth failures as result text (exit code 0).
 # An expired-but-present login answers "Failed to authenticate. API Error:
 # 401 Invalid bearer token" or "Failed to authenticate: OAuth session expired
@@ -30,132 +31,13 @@ CLAUDE_AUTH_PROBE_TIMEOUT_SECONDS = 90
 
 
 @dataclass(frozen=True)
-class ClaudeAuthBridgeResult:
-    state_updated: bool
-    message: str
-
-
-@dataclass(frozen=True)
 class ClaudeAuthStatus:
     logged_in: bool
     raw_output: str
     returncode: int
 
 
-def openbase_claude_keychain_service(
-    config_dir: Path = OPENBASE_CLAUDE_CONFIG_DIR,
-) -> str:
-    suffix = hashlib.sha256(str(config_dir).encode("utf-8")).hexdigest()[:8]
-    return f"{NORMAL_CLAUDE_KEYCHAIN_SERVICE}-{suffix}"
-
-
-def claude_env(config_dir: Path = OPENBASE_CLAUDE_CONFIG_DIR) -> dict[str, str]:
-    env = os.environ.copy()
-    env["CLAUDE_CONFIG_DIR"] = str(config_dir)
-    return env
-
-
-def sync_normal_claude_state(
-    *,
-    normal_state_path: Path = NORMAL_CLAUDE_STATE_PATH,
-    openbase_state_path: Path = OPENBASE_CLAUDE_JSON_PATH,
-) -> ClaudeAuthBridgeResult:
-    """Merge normal Claude Code state into Openbase's managed state file.
-
-    The target is ``$CLAUDE_CONFIG_DIR/.claude.json`` — the file Claude Code
-    actually reads and writes when ``CLAUDE_CONFIG_DIR`` is set. Existing
-    Openbase values win; ``mcpServers`` entries are unioned.
-    """
-    state_updated = _merge_claude_state(
-        normal_state_path=normal_state_path,
-        openbase_state_path=openbase_state_path,
-    )
-    message = (
-        "Synced normal Claude Code state into Openbase."
-        if state_updated
-        else "Normal Claude Code state was not found or was already synced."
-    )
-    return ClaudeAuthBridgeResult(
-        state_updated=state_updated,
-        message=message,
-    )
-
-
-def copy_normal_claude_keychain(
-    *, config_dir: Path = OPENBASE_CLAUDE_CONFIG_DIR
-) -> bool:
-    """Copy the normal Claude Code OAuth keychain item to Openbase's service.
-
-    Claude Code stores tokens under a per-``CLAUDE_CONFIG_DIR`` keychain
-    service, so the JSON state merge alone never transfers a login. Copying
-    the keychain item lets non-interactive installs inherit the user's normal
-    Claude login instead of requiring a second browser OAuth flow.
-    """
-    if platform.system() != "Darwin":
-        return False
-    secret = _read_keychain_secret(NORMAL_CLAUDE_KEYCHAIN_SERVICE)
-    if not secret:
-        return False
-    account = _keychain_account(NORMAL_CLAUDE_KEYCHAIN_SERVICE) or os.environ.get(
-        "USER", ""
-    )
-    target_service = openbase_claude_keychain_service(config_dir)
-    result = subprocess.run(
-        [
-            "security",
-            "add-generic-password",
-            "-U",
-            "-s",
-            target_service,
-            "-a",
-            account,
-            "-w",
-            secret,
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return result.returncode == 0
-
-
-def _read_keychain_secret(service: str) -> str | None:
-    result = subprocess.run(
-        ["security", "find-generic-password", "-s", service, "-w"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return None
-    secret = result.stdout.strip()
-    return secret or None
-
-
-def _keychain_account(service: str) -> str | None:
-    result = subprocess.run(
-        ["security", "find-generic-password", "-s", service],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return None
-    for line in result.stdout.splitlines():
-        stripped = line.strip()
-        if stripped.startswith('"acct"'):
-            _key, _sep, value = stripped.partition("=")
-            value = value.strip()
-            if value.startswith('"') and value.endswith('"'):
-                return value[1:-1]
-    return None
-
-
-def claude_auth_status(
-    *,
-    config_dir: Path = OPENBASE_CLAUDE_CONFIG_DIR,
-    claude_command: str | None = None,
-) -> ClaudeAuthStatus:
+def claude_auth_status(*, claude_command: str | None = None) -> ClaudeAuthStatus:
     command = claude_command or shutil.which("claude") or "claude"
     try:
         completed = subprocess.run(
@@ -163,7 +45,6 @@ def claude_auth_status(
             check=False,
             capture_output=True,
             text=True,
-            env=claude_env(config_dir),
         )
     except FileNotFoundError:
         return ClaudeAuthStatus(
@@ -192,13 +73,11 @@ def is_claude_auth_failure_text(text: str | None) -> bool:
     return bool(text) and text.strip().startswith(CLAUDE_AUTH_FAILURE_PREFIXES)
 
 
-def read_openbase_claude_credential_expiry(
-    config_dir: Path = OPENBASE_CLAUDE_CONFIG_DIR,
-) -> float | None:
-    """Epoch-ms expiry of the Openbase-scoped Claude OAuth access token."""
+def read_claude_credential_expiry() -> float | None:
+    """Epoch-ms expiry of the stored Claude OAuth access token."""
     payload: dict[str, Any] = {}
     if platform.system() == "Darwin":
-        secret = _read_keychain_secret(openbase_claude_keychain_service(config_dir))
+        secret = _read_keychain_secret(CLAUDE_KEYCHAIN_SERVICE)
         if secret:
             try:
                 parsed = json.loads(secret)
@@ -207,7 +86,7 @@ def read_openbase_claude_credential_expiry(
             if isinstance(parsed, dict):
                 payload = parsed
     else:
-        payload = _read_json_object(config_dir / ".credentials.json")
+        payload = _read_json_object(CLAUDE_CONFIG_DIR / ".credentials.json")
     oauth = payload.get("claudeAiOauth")
     if not isinstance(oauth, dict):
         return None
@@ -215,12 +94,21 @@ def read_openbase_claude_credential_expiry(
     return float(expires) if isinstance(expires, int | float) else None
 
 
-def probe_claude_auth(
-    *,
-    config_dir: Path = OPENBASE_CLAUDE_CONFIG_DIR,
-    claude_command: str | None = None,
-) -> ClaudeAuthStatus:
-    """Run a minimal real turn to see whether the scoped login actually works.
+def _read_keychain_secret(service: str) -> str | None:
+    result = subprocess.run(
+        ["security", "find-generic-password", "-s", service, "-w"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    secret = result.stdout.strip()
+    return secret or None
+
+
+def probe_claude_auth(*, claude_command: str | None = None) -> ClaudeAuthStatus:
+    """Run a minimal real turn to see whether the login actually works.
 
     ``claude auth status`` reports cached account state and keeps saying
     ``loggedIn: true`` after the OAuth tokens die, so only a real API call can
@@ -235,7 +123,6 @@ def probe_claude_auth(
             check=False,
             capture_output=True,
             text=True,
-            env=claude_env(config_dir),
             timeout=CLAUDE_AUTH_PROBE_TIMEOUT_SECONDS,
         )
     except FileNotFoundError:
@@ -259,9 +146,7 @@ def probe_claude_auth(
 
 
 def verified_claude_auth_status(
-    *,
-    config_dir: Path = OPENBASE_CLAUDE_CONFIG_DIR,
-    claude_command: str | None = None,
+    *, claude_command: str | None = None
 ) -> ClaudeAuthStatus:
     """Auth status that catches expired-but-cached logins.
 
@@ -269,51 +154,20 @@ def verified_claude_auth_status(
     past its expiry, verify with a probe turn: the probe either refreshes the
     tokens (still logged in) or surfaces the real auth failure.
     """
-    status = claude_auth_status(config_dir=config_dir, claude_command=claude_command)
+    status = claude_auth_status(claude_command=claude_command)
     if not status.logged_in:
         return status
-    expiry_ms = read_openbase_claude_credential_expiry(config_dir)
+    expiry_ms = read_claude_credential_expiry()
     if expiry_ms is None or expiry_ms > time.time() * 1000:
         return status
-    probe = probe_claude_auth(config_dir=config_dir, claude_command=claude_command)
+    probe = probe_claude_auth(claude_command=claude_command)
     if probe.logged_in:
         return status
     return probe
 
 
-def heal_claude_auth(
-    *,
-    config_dir: Path = OPENBASE_CLAUDE_CONFIG_DIR,
-    claude_command: str | None = None,
-) -> ClaudeAuthBridgeResult:
-    """Re-bridge the normal Claude Code login after a scoped auth failure.
-
-    The Openbase credential is a copy of the normal login, so whichever config
-    dir refreshes first strands the other copy's refresh token. Copying the
-    (healthy) normal credential back in is the recovery; ``state_updated``
-    reports whether a probe confirmed the bridged login works.
-    """
-    sync_normal_claude_state()
-    if not copy_normal_claude_keychain(config_dir=config_dir):
-        return ClaudeAuthBridgeResult(
-            state_updated=False,
-            message="No normal Claude Code login was available to copy.",
-        )
-    probe = probe_claude_auth(config_dir=config_dir, claude_command=claude_command)
-    if probe.logged_in:
-        return ClaudeAuthBridgeResult(
-            state_updated=True,
-            message="Re-bridged the normal Claude Code login into Openbase.",
-        )
-    return ClaudeAuthBridgeResult(
-        state_updated=False,
-        message=f"Re-bridged login still failing: {probe.raw_output}",
-    )
-
-
 def run_claude_login(
     *,
-    config_dir: Path = OPENBASE_CLAUDE_CONFIG_DIR,
     claude_command: str | None = None,
     sso: bool = False,
     email: str | None = None,
@@ -324,42 +178,7 @@ def run_claude_login(
         args.append("--sso")
     if email:
         args.extend(["--email", email])
-    return subprocess.call(args, env=claude_env(config_dir))
-
-
-def _merge_claude_state(
-    *,
-    normal_state_path: Path,
-    openbase_state_path: Path,
-) -> bool:
-    normal_state = _read_json_object(normal_state_path)
-    if not normal_state:
-        return False
-
-    existing_state = _read_json_object(openbase_state_path)
-    merged: dict[str, Any] = {**normal_state, **existing_state}
-    mcp_servers: dict[str, Any] = {}
-    for payload in (normal_state, existing_state):
-        value = payload.get("mcpServers")
-        if isinstance(value, dict):
-            mcp_servers.update(value)
-    if mcp_servers:
-        merged["mcpServers"] = mcp_servers
-
-    if merged == existing_state:
-        return False
-
-    openbase_state_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = openbase_state_path.with_name(
-        f"{openbase_state_path.name}.tmp.{os.getpid()}"
-    )
-    tmp_path.write_text(
-        json.dumps(merged, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    tmp_path.chmod(0o600)
-    tmp_path.replace(openbase_state_path)
-    return True
+    return subprocess.call(args)
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:

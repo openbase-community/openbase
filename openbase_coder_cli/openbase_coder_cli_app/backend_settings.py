@@ -21,11 +21,7 @@ from openbase_coder_cli.backend_config import (
     SELECTABLE_BACKENDS,
     normalize_backend,
 )
-from openbase_coder_cli.claude_auth import (
-    claude_auth_status,
-    copy_normal_claude_keychain,
-    sync_normal_claude_state,
-)
+from openbase_coder_cli.claude_auth import verified_claude_auth_status
 from openbase_coder_cli.cli.backend import read_backend, write_backend
 from openbase_coder_cli.paths import CODEX_HOME_DIR, DEFAULT_ENV_FILE_PATH
 
@@ -126,32 +122,16 @@ def _backend_note(backend: str) -> str | None:
     return None
 
 
-def _claude_auth_payload(
-    *, sync: bool = False, sync_if_logged_out: bool = False
-) -> dict:
-    state_updated = False
-    keychain_copied = False
-    message = None
-    if sync_if_logged_out and not sync:
-        sync = not claude_auth_status().logged_in
-    if sync:
-        sync_result = sync_normal_claude_state()
-        state_updated = sync_result.state_updated
-        message = sync_result.message
-        keychain_copied = copy_normal_claude_keychain()
-
-    status_result = claude_auth_status()
-    if sync and not status_result.logged_in and keychain_copied:
-        status_result = claude_auth_status()
-
+def _claude_auth_payload(*, verify: bool = False) -> dict:
+    # Sessions share the user's own ~/.claude login; there is nothing to
+    # bridge or sync — just report whether that login works.
+    status_result = verified_claude_auth_status()
     return {
-        "command": "openbase-coder claude sync-state",
+        "command": "claude login",
         "logged_in": status_result.logged_in,
         "raw_output": status_result.raw_output,
         "returncode": status_result.returncode,
-        "state_updated": state_updated,
-        "keychain_copied": keychain_copied,
-        "message": message,
+        "verified": verify,
     }
 
 
@@ -186,11 +166,7 @@ def _backend_payload(*, changed: bool = False, sync_claude_auth: bool = False) -
         "restart_hint": _restart_hint(configured_backend),
     }
     if configured_backend == CLAUDE_CODE_BACKEND:
-        # Saving the backend from settings should repair a dead bridged login
-        # (stranded refresh token) instead of just reporting it.
-        payload["claude_auth"] = _claude_auth_payload(
-            sync_if_logged_out=sync_claude_auth
-        )
+        payload["claude_auth"] = _claude_auth_payload(verify=sync_claude_auth)
     return payload
 
 
@@ -349,7 +325,7 @@ def _claude_plugins_payload(*, changed_plugin: str | None = None) -> dict:
         )
     return {
         "backend": read_backend(DEFAULT_ENV_FILE_PATH),
-        "claude_config_dir": str(claude_plugins.OPENBASE_CLAUDE_JSON_PATH.parent),
+        "claude_config_dir": str(claude_plugins.CLAUDE_STATE_PATH.parent),
         "plugins": plugins,
         "changed": changed_plugin is not None,
         "changed_plugin": changed_plugin,
@@ -389,4 +365,4 @@ def claude_auth_settings(request):
             },
             status=status.HTTP_400_BAD_REQUEST,
         )
-    return Response(_claude_auth_payload(sync=request.method == "POST"))
+    return Response(_claude_auth_payload(verify=request.method == "POST"))

@@ -32,14 +32,13 @@ FOLDER_ID_PREFIX = "cs-"
 FOLDER_ID_HEX_DIGITS = 16
 
 # Product state that syncs between a user's devices as a first-class part
-# of code sync: the thread-sync transport and the Openbase-managed agent
-# homes' skills for BOTH backends (codex/claude parity). These are the only
-# paths allowed inside ~/.openbase — everything else there is machine-local
-# (auth, device identity, databases, logs, packages) and must never sync.
+# of code sync: the thread-sync transport. It is the only path allowed
+# inside ~/.openbase — everything else there is machine-local (auth, device
+# identity, databases, logs, packages) and must never sync. The shared agent
+# homes (~/.codex, ~/.claude) are the user's own and never sync either;
+# skill symlinks in them are machine-local and self-heal at service start.
 PRODUCT_STATE_RELPATHS = (
     ".openbase/thread-sync",
-    ".openbase/codex_home/skills",
-    ".openbase/claude_config/skills",
 )
 
 

@@ -58,23 +58,40 @@ def test_livekit_server_tailscale_mode_exits_without_node_ip(monkeypatch):
 
 
 def test_codex_app_server_builds_default_backend_argv(tmp_path, monkeypatch):
-    monkeypatch.setattr(runners, "OPENBASE_BASE_DIR", tmp_path)
-    env: dict[str, str] = {}
-    binaries = {"codex": "/usr/local/bin/codex", "openbase_coder": "/usr/local/bin/openbase-coder"}
+    from openbase_coder_cli import paths
+
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setattr(paths, "CODEX_HOME_DIR", codex_home)
+    # A stray CODEX_HOME in the service environment must not retarget the
+    # service away from the shared ~/.codex home.
+    env: dict[str, str] = {"CODEX_HOME": "/somewhere/else"}
+    binaries = {
+        "codex": "/usr/local/bin/codex",
+        "openbase_coder": "/usr/local/bin/openbase-coder",
+    }
 
     argv, out_env = runners.build_codex_app_server(env, binaries)
 
     assert argv[0] == "/usr/local/bin/codex"
     assert argv[1] == "app-server"
-    assert "--listen" in argv
-    assert argv[-1] == "ws://127.0.0.1:4500"
-    assert out_env["CODEX_HOME"] == str(tmp_path / "codex_home")
+    assert argv[2:8] == [
+        "-c",
+        'model_reasoning_effort="high"',
+        "-c",
+        'service_tier="standard"',
+        "-c",
+        'model="gpt-5.5"',
+    ]
+    assert argv[-2:] == ["--listen", "ws://127.0.0.1:4500"]
+    assert out_env["CODEX_HOME"] == str(codex_home)
     assert out_env["DISABLE_AUTOUPDATER"] == "1"
-    assert (tmp_path / "codex_home").is_dir()
+    assert codex_home.is_dir()
 
 
 def test_codex_app_server_fetches_cloud_token_for_cloud_backend(tmp_path, monkeypatch):
-    monkeypatch.setattr(runners, "OPENBASE_BASE_DIR", tmp_path)
+    from openbase_coder_cli import paths
+
+    monkeypatch.setattr(paths, "CODEX_HOME_DIR", tmp_path / ".codex")
 
     class _Result:
         returncode = 0
@@ -82,21 +99,38 @@ def test_codex_app_server_fetches_cloud_token_for_cloud_backend(tmp_path, monkey
 
     monkeypatch.setattr(runners.subprocess, "run", lambda *a, **k: _Result())
     env = {"OPENBASE_CODING_BACKEND": "openbase_cloud_codex"}
-    binaries = {"codex": "/usr/local/bin/codex", "openbase_coder": "/usr/local/bin/openbase-coder"}
+    binaries = {
+        "codex": "/usr/local/bin/codex",
+        "openbase_coder": "/usr/local/bin/openbase-coder",
+    }
 
-    _, out_env = runners.build_codex_app_server(env, binaries)
+    argv, out_env = runners.build_codex_app_server(env, binaries)
 
     assert out_env["OPENBASE_CLOUD_CODEX_API_KEY"] == "cloud-token-value"
+    assert 'model="gpt-5.5"' in argv
+    assert 'model_provider="openbase_cloud"' in argv
+    assert 'model_providers.openbase_cloud.name="Openbase Cloud"' in argv
+    assert any(
+        arg.startswith('model_providers.openbase_cloud.base_url="') for arg in argv
+    )
+    assert (
+        'model_providers.openbase_cloud.env_key="OPENBASE_CLOUD_CODEX_API_KEY"' in argv
+    )
+    assert 'model_providers.openbase_cloud.wire_api="responses"' in argv
 
 
 def test_sync_workers_argv():
-    argv, env = runners.build_sync_workers({}, {"openbase_coder": "/bin/openbase-coder"})
+    argv, env = runners.build_sync_workers(
+        {}, {"openbase_coder": "/bin/openbase-coder"}
+    )
 
     assert argv == ["/bin/openbase-coder", "sync-workers", "run"]
 
 
 def test_openbase_routines_default_interval():
-    argv, _ = runners.build_openbase_routines({}, {"openbase_coder": "/bin/openbase-coder"})
+    argv, _ = runners.build_openbase_routines(
+        {}, {"openbase_coder": "/bin/openbase-coder"}
+    )
 
     assert argv == [
         "/bin/openbase-coder",
@@ -109,7 +143,9 @@ def test_openbase_routines_default_interval():
 
 def test_openbase_routines_custom_interval():
     env = {"OPENBASE_CODER_ROUTINES_INTERVAL": "30"}
-    argv, _ = runners.build_openbase_routines(env, {"openbase_coder": "/bin/openbase-coder"})
+    argv, _ = runners.build_openbase_routines(
+        env, {"openbase_coder": "/bin/openbase-coder"}
+    )
 
     assert argv[-1] == "30"
 
@@ -209,9 +245,7 @@ def test_openbase_cloud_auth_rehydrate_argv():
 
 def test_openbase_cloud_heartbeat_rehydrates_then_builds_heartbeat_argv(monkeypatch):
     calls = []
-    monkeypatch.setattr(
-        runners.subprocess, "run", lambda argv, **k: calls.append(argv)
-    )
+    monkeypatch.setattr(runners.subprocess, "run", lambda argv, **k: calls.append(argv))
     env = {"OPENBASE_CLOUD_HEARTBEAT_INTERVAL": "45"}
     binaries = {"openbase_coder": "/bin/openbase-coder"}
 
@@ -238,8 +272,12 @@ def test_load_env_merges_env_file_over_process_env(tmp_path, monkeypatch):
     from openbase_coder_cli.services.installation import InstallationConfig
 
     env_file = tmp_path / ".env"
-    env_file.write_text("LIVEKIT_NETWORK_MODE=lan\nOPENBASE_CODER_ROUTINES_INTERVAL=30\n")
-    monkeypatch.setattr(runners.os, "environ", {"LIVEKIT_NETWORK_MODE": "tailscale", "PATH": "/bin"})
+    env_file.write_text(
+        "LIVEKIT_NETWORK_MODE=lan\nOPENBASE_CODER_ROUTINES_INTERVAL=30\n"
+    )
+    monkeypatch.setattr(
+        runners.os, "environ", {"LIVEKIT_NETWORK_MODE": "tailscale", "PATH": "/bin"}
+    )
     config = InstallationConfig(env_file=str(env_file))
 
     env = runners._load_env(config)

@@ -6,8 +6,8 @@ Pick the install path that matches how you want to run it:
 ### Mac App (guided)
 
 **[Mac App Download](mac-app.md)** — download the desktop app and let its
-guided setup install everything: the bundled CLI runtime, managed Claude
-Code, managed voice audio, and iPhone pairing. No terminal required. The
+guided setup install everything: the bundled CLI runtime, your coding
+backend, managed voice audio, and iPhone pairing. No terminal required. The
 fastest path for most users on an Apple Silicon Mac.
 
 ### Developer Setup (interactive CLI)
@@ -75,8 +75,8 @@ Whichever path you choose, `openbase-coder setup`:
 2. Writes `~/.openbase/installation.json`.
 3. Generates `~/.openbase/.env` (if it does not already exist). On a fresh interactive install, numbered pickers choose the coding backend (when `--backend` is omitted) and the voice audio provider (when `--audio-provider` is omitted): Cloud TTS/STT, bring-your-own-keys, or local models.
 4. Installs the selected backend's CLI on demand if missing (codex from GitHub release binaries into `~/.openbase/bin`, claude via Anthropic's official installer).
-5. Generates Openbase instruction files from bundled or workspace templates, links Openbase Claude instructions to the generated Openbase AGENTS file, and keeps normal Claude linked to normal Codex AGENTS.
-6. Symlinks bundled or workspace skills into both Openbase Codex and Claude config skill homes.
+5. Generates Openbase instruction files from bundled or workspace templates — including the Openbase base instructions at `~/.openbase/instructions/AGENTS.md`, delivered to each Openbase session — and keeps `~/.claude/CLAUDE.md` linked to `~/.codex/AGENTS.md`.
+6. Registers the super-agents MCP server and the session-ID hook in your shared agent homes (`~/.codex/config.toml`, `~/.claude.json`, `~/.claude/settings.json`) and symlinks bundled or workspace skills into `~/.codex/skills` and `~/.claude/skills`. Nothing else in the shared homes is touched — Openbase sessions use your own Codex and Claude Code logins and settings.
 7. Downloads LiveKit agent model files (VAD, turn detector) in both modes, and initializes the CLI venv with `uv sync` in development mode.
 8. Writes Codex app-server defaults such as `CODEX_MODEL=gpt-5.5`, `CODEX_MODEL_REASONING_EFFORT=high`, `CODEX_SERVICE_TIER=standard`, `CODEX_APP_SERVER_URL`, and `LIVEKIT_CODEX_THREAD_CWD`.
 9. Uses the bundled console build, or builds `console` in development mode.

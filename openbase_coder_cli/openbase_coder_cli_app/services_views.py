@@ -18,17 +18,14 @@ from openbase_coder_cli.codex_home_instructions import (
 from openbase_coder_cli.openbase_coder_cli_app.common import _auth_debug_value
 from openbase_coder_cli.services.console_settings import (
     DEFAULT_DANGEROUS_CONFIRMATION_PHRASE,
-    DEFAULT_INCLUDE_NORMAL_CODEX_AGENTS,
     DEFAULT_KEEP_SYSTEM_AWAKE,
     DEFAULT_USER_ADDRESS_NAME,
     get_dangerous_confirmation_phrase,
     get_ignored_launchctl_labels,
     get_keep_system_awake_enabled,
     get_user_address_name,
-    include_normal_codex_agents_in_openbase_agents,
     set_dangerous_confirmation_phrase,
     set_ignored_launchctl_labels,
-    set_include_normal_codex_agents_in_openbase_agents,
     set_keep_system_awake_enabled,
     set_user_address_name,
 )
@@ -53,7 +50,6 @@ from openbase_coder_cli.thread_sync.claude_thread_sync import (
     ClaudeConflictResolutionError,
     claude_thread_snapshot_conflicts_payload,
     claude_thread_snapshot_status,
-    claude_thread_sync_conflicts_payload,
     resolve_claude_snapshot_conflict,
 )
 from openbase_coder_cli.thread_sync.thread_exchange import (
@@ -61,7 +57,6 @@ from openbase_coder_cli.thread_sync.thread_exchange import (
     resolve_thread_snapshot_conflict,
     thread_snapshot_conflicts_payload,
     thread_snapshot_status,
-    thread_sync_conflicts_payload,
 )
 
 logger = logging.getLogger(__name__)
@@ -120,10 +115,6 @@ class DangerousConfirmationSettingsSerializer(serializers.Serializer):
         return attrs
 
 
-class AgentsGenerationSettingsSerializer(serializers.Serializer):
-    include_normal_codex_agents_in_openbase_agents = serializers.BooleanField()
-
-
 class KeepAwakeSettingsSerializer(serializers.Serializer):
     keep_system_awake = serializers.BooleanField()
 
@@ -134,18 +125,6 @@ def _dangerous_confirmation_settings_payload(*, refreshed: bool = False) -> dict
         "default_dangerous_confirmation_phrase": DEFAULT_DANGEROUS_CONFIRMATION_PHRASE,
         "user_address_name": get_user_address_name(),
         "default_user_address_name": DEFAULT_USER_ADDRESS_NAME,
-        "refreshed": refreshed,
-    }
-
-
-def _agents_generation_settings_payload(*, refreshed: bool = False) -> dict:
-    return {
-        "include_normal_codex_agents_in_openbase_agents": (
-            include_normal_codex_agents_in_openbase_agents()
-        ),
-        "default_include_normal_codex_agents_in_openbase_agents": (
-            DEFAULT_INCLUDE_NORMAL_CODEX_AGENTS
-        ),
         "refreshed": refreshed,
     }
 
@@ -207,26 +186,6 @@ def dangerous_confirmation_settings(request):
     if user_address_name is not None:
         payload["user_address_name"] = user_address_name
     return Response(payload)
-
-
-@api_view(["GET", "PATCH"])
-def agents_generation_settings(request):
-    """Read or update generated Openbase instruction settings."""
-    if request.method == "GET":
-        return Response(_agents_generation_settings_payload())
-
-    serializer = AgentsGenerationSettingsSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-    include_normal = set_include_normal_codex_agents_in_openbase_agents(
-        serializer.validated_data["include_normal_codex_agents_in_openbase_agents"]
-    )
-    refreshed = refresh_openbase_instruction_files_from_installation()
-    return Response(
-        {
-            **_agents_generation_settings_payload(refreshed=refreshed),
-            "include_normal_codex_agents_in_openbase_agents": include_normal,
-        }
-    )
 
 
 @api_view(["GET", "PATCH"])
@@ -311,12 +270,16 @@ def thread_device_sync_conflicts(request):
 
 @api_view(["GET"])
 def thread_sync_conflicts(request):
-    """Show unresolved thread sync conflicts across homes and devices for both backends."""
+    """Show unresolved cross-device thread sync conflicts for both backends.
+
+    Local thread stores are the shared agent homes, so device snapshots are
+    the only remaining sync surface (and conflict source).
+    """
     return Response(
         {
-            **_with_conflict_backend(thread_sync_conflicts_payload(), "codex"),
+            **_with_conflict_backend(thread_snapshot_conflicts_payload(), "codex"),
             "claude": _with_conflict_backend(
-                claude_thread_sync_conflicts_payload(), "claude"
+                claude_thread_snapshot_conflicts_payload(), "claude"
             ),
         }
     )

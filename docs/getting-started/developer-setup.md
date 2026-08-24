@@ -23,9 +23,8 @@ development installs need:
 Optional developer backends:
 
 - Codex CLI authenticated in your normal user account when using the `codex` backend
-- Claude Code login for the `claude-code` backend (on macOS, setup bridges
-  your normal Claude Code login into Openbase's managed config automatically
-  when it can; `openbase-coder claude login` is the fallback)
+- Claude Code login for the `claude-code` backend (Openbase uses your own
+  `claude login` directly; `openbase-coder claude login` is a thin wrapper)
 
 ## Clone and Run Setup
 

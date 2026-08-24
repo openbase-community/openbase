@@ -23,7 +23,6 @@ from openbase_coder_cli.openbase_coder_cli_app.update import (
     update_status,
 )
 from openbase_coder_cli.openbase_coder_cli_app.views import (
-    agents_generation_settings,
     agents_md,
     all_project_reports,
     apple_music_playback_entitlement,
@@ -300,11 +299,6 @@ urlpatterns = [
         "settings/launchctl-ignored/",
         launchctl_ignored_settings,
         name="launchctl-ignored-settings",
-    ),
-    path(
-        "settings/agents-generation/",
-        agents_generation_settings,
-        name="agents-generation-settings",
     ),
     path(
         "settings/dangerous-confirmation/",

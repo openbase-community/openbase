@@ -30,26 +30,6 @@ SUPER_AGENTS_STORE_HOME_ENV = "SUPER_AGENTS_CLAUDE_CODE_HOME"
 INVALID_SNAPSHOT_CACHE_KEY = "invalid_snapshots"
 
 
-def merged_sync_conflicts_payload(
-    home_conflicts: dict[str, Any],
-    device_conflicts: dict[str, Any],
-) -> dict[str, Any]:
-    """Merge home and device conflict payloads into one sorted envelope."""
-    conflicts = [
-        *home_conflicts["conflicts"],
-        *device_conflicts["conflicts"],
-    ]
-    conflicts.sort(key=lambda item: item.get("detected_at") or 0, reverse=True)
-    return {
-        "device": device_conflicts.get("device"),
-        "exchange_dir": device_conflicts.get("exchange_dir"),
-        "ledger_path": device_conflicts.get("ledger_path"),
-        "home_ledger_path": home_conflicts.get("ledger_path"),
-        "home_conflict_count": home_conflicts["conflict_count"],
-        "device_conflict_count": device_conflicts["conflict_count"],
-        "conflict_count": len(conflicts),
-        "conflicts": conflicts,
-    }
 
 
 def translate_home_path(
@@ -161,28 +141,8 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     os.replace(tmp_name, path)
 
 
-def read_scoped_ledger(
-    path: Path,
-    *,
-    scope_key: str,
-    logger: logging.Logger,
-    malformed_event: str,
-) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        logger.warning("%s path=%s", malformed_event, path)
-        return {}
-    if not isinstance(raw, dict):
-        return {}
-    entries = raw.get(scope_key)
-    return entries if isinstance(entries, dict) else {}
 
 
-def write_scoped_ledger(path: Path, *, scope_key: str, ledger: dict[str, Any]) -> None:
-    write_json_atomic(path, {scope_key: ledger})
 
 
 def read_device_ledger(
@@ -348,90 +308,12 @@ def parent_fingerprint_for_export(
     return parent if parent and parent != fingerprint_id else None
 
 
-def record_synced_pair(
-    ledger: dict[str, Any],
-    *,
-    entity_key: str,
-    entity_id: str,
-    left_key: str,
-    left_fingerprint: dict[str, Any],
-    right_key: str,
-    right_fingerprint: dict[str, Any],
-    reason: str,
-) -> None:
-    ledger[entity_id] = {
-        entity_key: entity_id,
-        left_key: left_fingerprint,
-        right_key: right_fingerprint,
-        "status": "synced",
-        "reason": reason,
-        "synced_at": time.time(),
-    }
 
 
-def record_sync_conflict(
-    ledger: dict[str, Any],
-    *,
-    entity_key: str,
-    entity_id: str,
-    left_key: str,
-    left_fingerprint: dict[str, Any],
-    right_key: str,
-    right_fingerprint: dict[str, Any],
-    reason: str,
-) -> None:
-    ledger[entity_id] = {
-        entity_key: entity_id,
-        left_key: left_fingerprint,
-        right_key: right_fingerprint,
-        "status": "conflict",
-        "reason": reason,
-        "synced_at": time.time(),
-    }
 
 
-def fingerprint_matches(
-    value: Any,
-    fingerprint: dict[str, Any],
-    *,
-    keys: tuple[str, ...],
-) -> bool:
-    return isinstance(value, dict) and all(
-        value.get(key) == fingerprint.get(key) for key in keys
-    )
 
 
-def ledger_sync_decision(
-    previous: Any,
-    *,
-    left_key: str,
-    right_key: str,
-    left_fingerprint: dict[str, Any],
-    right_fingerprint: dict[str, Any],
-    fingerprint_keys: tuple[str, ...],
-) -> str:
-    """Classify a home pair against its previous ledger entry.
-
-    Returns one of ``both_changed``, ``conflict_unresolved``, ``left_changed``,
-    ``right_changed``, or ``ledger_current``.
-    """
-    if not isinstance(previous, dict):
-        return "both_changed"
-    if previous.get("status") == "conflict":
-        return "conflict_unresolved"
-    left_changed = not fingerprint_matches(
-        previous.get(left_key), left_fingerprint, keys=fingerprint_keys
-    )
-    right_changed = not fingerprint_matches(
-        previous.get(right_key), right_fingerprint, keys=fingerprint_keys
-    )
-    if left_changed and right_changed:
-        return "both_changed"
-    if left_changed:
-        return "left_changed"
-    if right_changed:
-        return "right_changed"
-    return "ledger_current"
 
 
 def sync_cutoff_ms(max_age_days: int | None) -> int | None:

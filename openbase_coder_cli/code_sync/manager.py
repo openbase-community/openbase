@@ -297,9 +297,9 @@ def apply_settings_change(config_path: Path | None = None) -> dict[str, Any]:
 def ensure_product_state_folders(config_path: Path | None = None) -> list[str]:
     """Add the first-class product-state folders when missing.
 
-    Thread sync between devices and the Openbase-managed agent homes'
-    skills (codex AND claude) ride code sync automatically — they are not
-    something the user discovers and adds by hand.
+    Thread sync between devices rides code sync automatically — it is not
+    something the user discovers and adds by hand. The shared agent homes
+    (~/.codex, ~/.claude) are the user's own and never sync.
     """
     from openbase_coder_cli.sync_config import (
         PRODUCT_STATE_RELPATHS,

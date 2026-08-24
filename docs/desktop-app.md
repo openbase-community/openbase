@@ -153,7 +153,8 @@ schedules a routine. Create a routine explicitly from the Routines page after
 reviewing a template.
 
 You can also edit installed skill sources and enable auto-linking of personal
-skills into the Openbase agent homes.
+skills (`~/.agents/skills`, the `home` scope) into the shared agent homes at
+`~/.codex/skills` and `~/.claude/skills`.
 
 **On iPhone:** skills are not managed from the iOS app.
 
@@ -185,9 +186,12 @@ Hosts** action for picking which Mac the phone talks to.
 
 ### Instructions
 
-Edit the agent instruction documents (AGENTS.md / CLAUDE.md variants) for
-each environment: voice Codex home, normal Codex home, Claude config, direct
-LiveKit voice sessions, Super Agents, and the dispatcher.
+Edit the agent instruction documents for each target: the Openbase base
+instructions (`~/.openbase/instructions/AGENTS.md`, delivered to every
+Openbase session on both backends), your own Codex home `AGENTS.md`
+(`~/.codex/AGENTS.md`, which applies to all Codex sessions including
+Openbase's), direct LiveKit voice sessions, Super Agents, and the
+dispatcher.
 
 **On iPhone:** not available.
 

@@ -9,8 +9,8 @@ from click.testing import CliRunner
 # The cli package re-exports the click Group as `tailnet`, shadowing the
 # submodule attribute; load the module object explicitly.
 tailnet_cli = importlib.import_module("openbase_coder_cli.cli.tailnet")
-from openbase_coder_cli.env_file import env_file_values
-from openbase_coder_cli.services import cloud_registration
+from openbase_coder_cli.env_file import env_file_values  # noqa: E402
+from openbase_coder_cli.services import cloud_registration  # noqa: E402
 
 
 @pytest.fixture

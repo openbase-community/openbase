@@ -30,43 +30,28 @@ from openbase_coder_cli.backend_config import (
 from openbase_coder_cli.claude_auth import (
     claude_auth_status,  # noqa: F401
     run_claude_login,  # noqa: F401
-    sync_normal_claude_state,  # noqa: F401
 )
 from openbase_coder_cli.cli.node import run_workspace_package_command  # noqa: F401
 from openbase_coder_cli.cli.setup.claude import (
-    CLAUDE_CODE_PERMISSION_MODE,  # noqa: F401
-    OPENBASE_CLAUDE_SETTINGS_DEFAULTS,  # noqa: F401
-    _ensure_claude_auth_bridge,
-    _ensure_claude_config,
-    _ensure_claude_settings,  # noqa: F401
-    _ensure_normal_claude_mcp,
-    _ensure_normal_claude_md_symlink,
-    _merge_claude_md_excludes,  # noqa: F401
-    _merge_claude_settings,  # noqa: F401
+    _ensure_claude_hooks,
+    _ensure_claude_mcp,
+    _ensure_claude_md_symlink,
     _read_json_object,  # noqa: F401
 )
 from openbase_coder_cli.cli.setup.codex import (
-    CODEX_HOME_DEFAULT_FILES,  # noqa: F401
     CODEX_HOME_DEFAULT_SOURCE_DIR,  # noqa: F401
-    CODEX_HOME_PERMISSION_VALUES,  # noqa: F401
     CODEX_HOME_SKILLS_SOURCE_DIR,  # noqa: F401
     SUPER_AGENTS_MCP_COMMAND,  # noqa: F401
     SUPER_AGENTS_MCP_TABLE,  # noqa: F401
     _default_instructions_dir,  # noqa: F401
     _default_skills_dir,  # noqa: F401
-    _ensure_codex_home_config,
-    _ensure_codex_home_default_files,
-    _ensure_matching_symlink_or_file,  # noqa: F401
-    _ensure_normal_codex_mcp,
-    _ensure_toml_root_values,  # noqa: F401
+    _ensure_codex_config,
+    _ensure_openbase_instruction_files,
     _replace_toml_table,  # noqa: F401
     _super_agents_mcp_command,  # noqa: F401
-    _symlink_codex_auth,
-    _symlink_codex_home_config,  # noqa: F401
     _symlink_codex_home_skills,
     _symlink_skills_to_root,  # noqa: F401
     _toml_args_line,  # noqa: F401
-    _toml_root_key,  # noqa: F401
     _workspace_skill_sources,  # noqa: F401
 )
 from openbase_coder_cli.cli.setup.dispatcher import (
@@ -96,10 +81,6 @@ from openbase_coder_cli.cli.setup.env import (
     _upsert_env_file_values,  # noqa: F401
 )
 from openbase_coder_cli.cli.setup.hooks import (
-    ensure_claude_session_id_hook,
-    ensure_codex_session_id_hook,
-)
-from openbase_coder_cli.cli.setup.hooks import (
     ensure_session_id_hook_script as _ensure_session_id_hook_script,
 )
 from openbase_coder_cli.cli.setup.workspace import (
@@ -119,12 +100,8 @@ from openbase_coder_cli.cli.setup.workspace import (
     _syncthing_global_ignore_path,  # noqa: F401
     resolve_dev_workspace_dir,
 )
-from openbase_coder_cli.codex_backend_config import (
-    apply_backend_to_codex_config,  # noqa: F401
-)
 from openbase_coder_cli.codex_home_instructions import (
     ensure_openbase_agents_md,  # noqa: F401
-    ensure_openbase_claude_md_symlink,  # noqa: F401
     ensure_rendered_instruction_file,  # noqa: F401
 )
 from openbase_coder_cli.config.machine_token_manager import (
@@ -146,20 +123,14 @@ from openbase_coder_cli.dispatcher_config import (
 )
 from openbase_coder_cli.livekit_install import ensure_pinned_livekit_server
 from openbase_coder_cli.paths import (
+    CLAUDE_CONFIG_DIR,  # noqa: F401
     CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH,  # noqa: F401
     CODEX_DISPATCHER_CONFIG_PATH,
     CODEX_DISPATCHER_INSTRUCTIONS_PATH,  # noqa: F401
     CODEX_HOME_DIR,  # noqa: F401
     CODEX_SUPER_AGENT_INSTRUCTIONS_PATH,  # noqa: F401
     DEFAULT_ENV_FILE_PATH,
-    NORMAL_CLAUDE_CONFIG_DIR,  # noqa: F401
-    NORMAL_CLAUDE_SETTINGS_PATH,  # noqa: F401
-    NORMAL_CODEX_AGENTS_MD_PATH,  # noqa: F401
-    NORMAL_CODEX_CONFIG_PATH,  # noqa: F401
     OPENBASE_BASE_DIR,
-    OPENBASE_CLAUDE_CONFIG_DIR,  # noqa: F401
-    OPENBASE_CLAUDE_JSON_PATH,  # noqa: F401
-    OPENBASE_CLAUDE_SETTINGS_PATH,  # noqa: F401
     OPENBASE_SOUNDS_DIR,  # noqa: F401
 )
 from openbase_coder_cli.platforms import (
@@ -310,26 +281,6 @@ class _SetupProgress:
     help="Skip background service installation.",
 )
 @click.option(
-    "--link-codex-config",
-    is_flag=True,
-    help=(
-        "Symlink Openbase's service Codex config to the normal ~/.codex/config.toml."
-    ),
-)
-@click.option(
-    "--link-claude-config",
-    is_flag=True,
-    help=("Symlink Openbase's Claude settings to the normal ~/.claude/settings.json."),
-)
-@click.option(
-    "--install-normal-agent-hooks/--no-install-normal-agent-hooks",
-    default=None,
-    help=(
-        "Also install Agent-Thread-Id session hooks in the normal Claude Code "
-        "and Codex homes. Openbase-managed homes are always configured."
-    ),
-)
-@click.option(
     "--fast-mode/--no-fast-mode",
     "fast_mode",
     default=True,
@@ -400,9 +351,6 @@ def setup(
     assembly_ai_api_key: str,
     cartesia_api_key: str,
     skip_services: bool,
-    link_codex_config: bool,
-    link_claude_config: bool,
-    install_normal_agent_hooks: bool | None,
     fast_mode: bool,
     coding_backend: str | None,
     audio_provider: str | None,
@@ -422,10 +370,6 @@ def setup(
         supported = ", ".join(SUPPORTED_SYSTEMS)
         raise click.ClickException(f"Setup is only supported on {supported}.")
     interactive = _resolve_interactive_mode(interactive_mode, json_progress)
-    install_normal_agent_hooks = _resolve_normal_agent_hooks_choice(
-        install_normal_agent_hooks,
-        interactive=interactive,
-    )
     if coding_backend is not None:
         try:
             coding_backend = normalize_backend(coding_backend)
@@ -457,9 +401,6 @@ def setup(
             assembly_ai_api_key=assembly_ai_api_key,
             cartesia_api_key=cartesia_api_key,
             skip_services=skip_services,
-            link_codex_config=link_codex_config,
-            link_claude_config=link_claude_config,
-            install_normal_agent_hooks=install_normal_agent_hooks,
             fast_mode=fast_mode,
             coding_backend=coding_backend,
             audio_provider=audio_provider,
@@ -584,22 +525,6 @@ def _resolve_interactive_mode(
     ):
         return False
     return sys.stdin.isatty()
-
-
-def _resolve_normal_agent_hooks_choice(
-    configured: bool | None,
-    *,
-    interactive: bool,
-) -> bool:
-    if configured is not None:
-        return configured
-    if not interactive:
-        return False
-    return click.confirm(
-        "Install session provenance hooks in your normal Claude Code and "
-        "Codex homes too?",
-        default=False,
-    )
 
 
 def _prompt_pick(
@@ -812,13 +737,10 @@ def _run_setup_phases(
     assembly_ai_api_key: str,
     cartesia_api_key: str,
     skip_services: bool,
-    link_codex_config: bool,
-    link_claude_config: bool,
     fast_mode: bool,
     coding_backend: str | None,
     audio_provider: str | None,
     tailnet_provider: str | None = None,
-    install_normal_agent_hooks: bool = False,
 ) -> bool:
     """Run the setup phases, returning whether Tailscale Serve is healthy."""
     progress.step("workspace", "start")
@@ -871,10 +793,8 @@ def _run_setup_phases(
         # Standalone packages bundle the pinned engine; dev installs download
         # the same pin so both pathways exercise one livekit-server.
         ensure_pinned_livekit_server()
-    if selected_coding_backend == CODEX_BACKEND:
-        _symlink_codex_auth()
-    _ensure_normal_claude_md_symlink()
-    _ensure_codex_home_default_files(workspace_dir if use_dev_workspace else "")
+    _ensure_claude_md_symlink()
+    _ensure_openbase_instruction_files(workspace_dir if use_dev_workspace else "")
     _ensure_codex_home_dispatcher_config(audio_provider=audio_provider)
     set_dispatcher_service_tier("fast" if fast_mode else "standard")
     click.echo(
@@ -895,39 +815,24 @@ def _run_setup_phases(
     else:
         _init_standalone_runtime(runtime_package)
 
-    # --- Configure the service CODEX_HOME ---
+    # --- Register super-agents MCP + hooks in the shared agent homes ---
     _ensure_session_id_hook_script()
-    if link_codex_config:
-        _ensure_codex_home_config(
-            workspace_dir if use_dev_workspace else "",
-            coding_backend=selected_coding_backend,
-            link_codex_config=True,
-        )
-    else:
-        _ensure_codex_home_config(
-            workspace_dir if use_dev_workspace else "",
-            coding_backend=selected_coding_backend,
-        )
-    _ensure_claude_config(
+    _ensure_codex_config(
         workspace_dir if use_dev_workspace else "",
         coding_backend=selected_coding_backend,
-        link_claude_config=link_claude_config,
     )
-    if install_normal_agent_hooks:
-        ensure_codex_session_id_hook(NORMAL_CODEX_CONFIG_PATH)
-        ensure_claude_session_id_hook(NORMAL_CLAUDE_SETTINGS_PATH)
-    # UI-driven setup (--json-progress) must never block on an interactive
-    # browser OAuth flow; the desktop app renders a dedicated backend sign-in
-    # step after setup instead (see specs/onboarding).
-    _ensure_claude_auth_bridge(
-        login_if_needed=selected_coding_backend == CLAUDE_CODE_BACKEND
-        and not progress.enabled,
-        required=selected_coding_backend == CLAUDE_CODE_BACKEND,
+    _ensure_claude_mcp(
+        workspace_dir if use_dev_workspace else "",
+        coding_backend=selected_coding_backend,
     )
-
-    # --- Register super-agents MCP in the user's normal agent homes ---
-    _ensure_normal_codex_mcp(workspace_dir if use_dev_workspace else "")
-    _ensure_normal_claude_mcp(workspace_dir if use_dev_workspace else "")
+    _ensure_claude_hooks()
+    if selected_coding_backend == CLAUDE_CODE_BACKEND:
+        status = claude_auth_status()
+        if not status.logged_in:
+            click.echo(
+                "Claude Code is not logged in. Run `claude login` before using "
+                "the Claude Code backend."
+            )
 
     # --- Install/update user-facing CLI shim ---
     _install_cli_shim(workspace_dir if use_dev_workspace else "")

@@ -137,10 +137,15 @@ def build_livekit_server(
 def build_codex_app_server(
     env: dict[str, str], binaries: dict[str, str]
 ) -> RunnerArgvEnv:
-    codex_home = str(OPENBASE_BASE_DIR / "codex_home")
-    Path(codex_home).mkdir(parents=True, exist_ok=True)
+    from openbase_coder_cli.backend_config import normalize_backend
+    from openbase_coder_cli.codex_backend_config import codex_backend_cli_overrides
+    from openbase_coder_cli.paths import CODEX_HOME_DIR
+
+    CODEX_HOME_DIR.mkdir(parents=True, exist_ok=True)
     env = dict(env)
-    env["CODEX_HOME"] = codex_home
+    # The shared ~/.codex is the default home, but pin it so a stray
+    # CODEX_HOME in the service environment can't retarget the service.
+    env["CODEX_HOME"] = str(CODEX_HOME_DIR)
     env.setdefault("DISABLE_AUTOUPDATER", "1")
     backend = env.get("OPENBASE_CODING_BACKEND", "codex")
     reasoning_effort = env.get("CODEX_MODEL_REASONING_EFFORT", "high")
@@ -164,6 +169,14 @@ def build_codex_app_server(
             raise SystemExit(1)
         env["OPENBASE_CLOUD_CODEX_API_KEY"] = result.stdout.strip()
 
+    try:
+        backend_overrides = codex_backend_cli_overrides(
+            normalize_backend(backend),
+            web_backend_url=env.get("OPENBASE_CODER_CLI_WEB_BACKEND_URL"),
+        )
+    except ValueError:
+        backend_overrides = []
+
     argv = [
         binaries["codex"],
         "app-server",
@@ -171,6 +184,7 @@ def build_codex_app_server(
         f'model_reasoning_effort="{reasoning_effort}"',
         "-c",
         f'service_tier="{service_tier}"',
+        *backend_overrides,
         "--listen",
         "ws://127.0.0.1:4500",
     ]

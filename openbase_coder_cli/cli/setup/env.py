@@ -33,7 +33,7 @@ from openbase_coder_cli.env_file import (
 )
 from openbase_coder_cli.paths import (
     CODEX_DISPATCHER_CONFIG_PATH,
-    OPENBASE_CLAUDE_CONFIG_DIR,
+    OPENBASE_AGENTS_MD_PATH,
 )
 
 TAILNET_PROVIDER_ENV_KEY = "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"
@@ -53,6 +53,7 @@ def _ensure_env_file(
     if coding_backend:
         coding_backend = normalize_backend(coding_backend)
     if path.is_file():
+        _drop_managed_claude_config_dir(path)
         updates = _missing_livekit_client_credential_values(path)
         if coding_backend:
             updates[CODING_BACKEND_ENV_KEY] = coding_backend
@@ -121,8 +122,14 @@ def _ensure_env_file(
         f"# Set {CODING_BACKEND_ENV_KEY} to codex, openbase_cloud, or claude_code.",
         f"{CODING_BACKEND_ENV_KEY}={coding_backend or DEFAULT_CODING_BACKEND}",
         "# openbase_cloud runs Cloud-proxied Claude Code; codex uses codex-app-server.",
-        f"CLAUDE_CONFIG_DIR={OPENBASE_CLAUDE_CONFIG_DIR}",
         f"SUPER_AGENTS_DEFAULT_CONFIG_PATH={CODEX_DISPATCHER_CONFIG_PATH}",
+        "# Openbase sessions run in the shared agent homes with their own",
+        "# per-session posture: native gating off (Openbase approvals layer",
+        "# handles approvals) and the Openbase base instructions.",
+        "SUPER_AGENTS_CODEX_APPROVAL_POLICY=never",
+        "SUPER_AGENTS_CODEX_SANDBOX_POLICY=danger-full-access",
+        f"SUPER_AGENTS_BASE_INSTRUCTIONS_PATH={OPENBASE_AGENTS_MD_PATH}",
+        "CLAUDE_CODE_ENABLE_TELEMETRY=0",
         "CODEX_MODEL_REASONING_EFFORT=high",
         "# App-server ambient tier follows the Super Agents lane; the voice",
         "# dispatcher passes its (fast by default) tier explicitly per turn.",
@@ -220,11 +227,37 @@ def _ensure_openbase_cloud_machine_token(env_file: Path) -> None:
         click.echo("Openbase Cloud machine token is configured.")
 
 
+def _drop_managed_claude_config_dir(path: Path) -> None:
+    """Remove a CLAUDE_CONFIG_DIR pointing at the retired managed dir.
+
+    Sessions run against the user's real ~/.claude now; a leftover env value
+    from an older install would silently retarget every Claude session at the
+    abandoned ~/.openbase/claude_config.
+    """
+    retired_dir = ".openbase/claude_config"
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    kept = [
+        line
+        for line in lines
+        if not (
+            line.split("=", 1)[0].strip() == "CLAUDE_CONFIG_DIR"
+            and retired_dir in line
+        )
+    ]
+    if kept != lines:
+        path.write_text("".join(kept), encoding="utf-8")
+        click.echo(f"Removed retired CLAUDE_CONFIG_DIR from {path}.")
+
+
 def _missing_livekit_client_credential_values(path: Path) -> dict[str, str]:
     existing = _env_file_values(path)
     updates: dict[str, str] = {}
-    if not existing.get("CLAUDE_CONFIG_DIR"):
-        updates["CLAUDE_CONFIG_DIR"] = str(OPENBASE_CLAUDE_CONFIG_DIR)
+    if not existing.get("SUPER_AGENTS_CODEX_APPROVAL_POLICY"):
+        updates["SUPER_AGENTS_CODEX_APPROVAL_POLICY"] = "never"
+    if not existing.get("SUPER_AGENTS_CODEX_SANDBOX_POLICY"):
+        updates["SUPER_AGENTS_CODEX_SANDBOX_POLICY"] = "danger-full-access"
+    if not existing.get("SUPER_AGENTS_BASE_INSTRUCTIONS_PATH"):
+        updates["SUPER_AGENTS_BASE_INSTRUCTIONS_PATH"] = str(OPENBASE_AGENTS_MD_PATH)
     if not existing.get("SUPER_AGENTS_DEFAULT_CONFIG_PATH"):
         updates["SUPER_AGENTS_DEFAULT_CONFIG_PATH"] = str(CODEX_DISPATCHER_CONFIG_PATH)
     if not existing.get("LIVEKIT_CLIENT_API_KEY") or existing.get(

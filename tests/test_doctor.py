@@ -248,8 +248,6 @@ def test_doctor_allows_optional_stopped_services(monkeypatch, tmp_path):
     )
     codex_home = tmp_path / "codex_home"
     codex_home.mkdir()
-    (tmp_path / ".codex").mkdir()
-    (tmp_path / ".codex" / "auth.json").write_text("{}", encoding="utf-8")
     (codex_home / "auth.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(
         doctor_cli.Path,
@@ -281,7 +279,9 @@ def test_doctor_skips_backend_scoped_services_on_other_backends(monkeypatch, tmp
             console_build_dir="",
         ),
     )
-    monkeypatch.setattr(doctor_cli, "configured_coding_backends", lambda: ["claude_code"])
+    monkeypatch.setattr(
+        doctor_cli, "configured_coding_backends", lambda: ["claude_code"]
+    )
     monkeypatch.setattr(
         doctor_cli,
         "SERVICES",
@@ -402,8 +402,6 @@ def test_doctor_reports_missing_tailscale_as_setup_action(monkeypatch, tmp_path)
     )
     codex_home = tmp_path / "codex_home"
     codex_home.mkdir()
-    (tmp_path / ".codex").mkdir()
-    (tmp_path / ".codex" / "auth.json").write_text("{}", encoding="utf-8")
     (codex_home / "auth.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(
         doctor_cli.Path,
@@ -465,19 +463,10 @@ def test_check_code_sync_fails_when_managed_stignore_lacks_git(monkeypatch, tmp_
 
 def _patch_agent_home_paths(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        doctor_cli, "NORMAL_CODEX_CONFIG_PATH", tmp_path / "codex" / "config.toml"
+        doctor_cli, "CODEX_CONFIG_PATH", tmp_path / "codex" / "config.toml"
     )
-    monkeypatch.setattr(
-        doctor_cli, "NORMAL_CLAUDE_STATE_PATH", tmp_path / ".claude.json"
-    )
-    monkeypatch.setattr(
-        doctor_cli,
-        "OPENBASE_CLAUDE_JSON_PATH",
-        tmp_path / "claude_config" / ".claude.json",
-    )
-    monkeypatch.setattr(
-        doctor_cli, "OPENBASE_CLAUDE_CONFIG_DIR", tmp_path / "claude_config"
-    )
+    monkeypatch.setattr(doctor_cli, "CLAUDE_STATE_PATH", tmp_path / ".claude.json")
+    monkeypatch.setattr(doctor_cli, "CLAUDE_CONFIG_DIR", tmp_path / "claude_config")
     monkeypatch.setattr(doctor_cli, "STANDALONE_RELEASES_DIR", tmp_path / "releases")
 
 
@@ -523,12 +512,11 @@ def test_mcp_registration_check_fails_on_dangling_command(monkeypatch, tmp_path)
     )
 
     assert any(
-        level == "fail" and "normal Codex config" in message and str(gone) in message
+        level == "fail" and "Codex config" in message and str(gone) in message
         for level, message in messages
     )
     assert any(
-        level == "ok" and "normal Claude config" in message
-        for level, message in messages
+        level == "ok" and "Claude config" in message for level, message in messages
     )
 
 
@@ -550,7 +538,7 @@ def test_mcp_registration_check_warns_on_version_pinned_command(monkeypatch, tmp
 
     assert any(
         level == "warn"
-        and "normal Claude config" in message
+        and "Claude config" in message
         and "pinned to versioned release" in message
         for level, message in messages
     )

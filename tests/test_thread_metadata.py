@@ -58,7 +58,18 @@ def test_annotate_thread_payload_includes_active_target_voice_name(
     }
     assert target["display_name"] == "Target thread"
     assert other["voice_route"] == {"role": "none", "active": False}
-    assert other["voice_assignment"] is None
+    # Threads outside the voice route still get a stable derived voice so the
+    # console can show a consistent human name for them.
+    derived_voice = voice_route.super_agent_voice_for_context(
+        "other-1", "other-1", None
+    )
+    assert other["voice_assignment"] == {
+        "thread_id": "other-1",
+        "agent_name": None,
+        "voice_id": derived_voice.voice_id,
+        "voice_name": derived_voice.name,
+        "source": "derived",
+    }
 
 
 def test_annotate_thread_payload_resolves_missing_voice_name_from_catalog(
@@ -187,6 +198,11 @@ def test_annotate_thread_payload_does_not_derive_agent_name_from_thread_name(
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(
         voice_route,
+        "selected_tts_provider_id",
+        lambda: voice_route.CARTESIA_PROVIDER_ID,
+    )
+    monkeypatch.setattr(
+        voice_route,
         "SUPER_AGENT_VOICES",
         (voice_route.CartesiaVoice("voice-a", "Alice"),),
     )
@@ -200,7 +216,16 @@ def test_annotate_thread_payload_does_not_derive_agent_name_from_thread_name(
         }
     )
 
-    assert payload["voice_assignment"] is None
+    # A voice is still derived deterministically, but the agent name is never
+    # invented from the thread name.
+    assert payload["agent_name"] is None
+    assert payload["voice_assignment"] == {
+        "thread_id": "thread-1",
+        "agent_name": None,
+        "voice_id": "voice-a",
+        "voice_name": "Alice",
+        "source": "derived",
+    }
     assert payload["display_name"] == "Build thread"
 
 

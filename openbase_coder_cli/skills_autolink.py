@@ -1,10 +1,9 @@
-"""Auto-link personal agent skills into the Openbase-managed agent homes.
+"""Auto-link personal agent skills into the shared agent homes.
 
 When ``auto_link_personal_skills`` is enabled in the dispatcher config,
-skills under the user's normal Codex and Claude Code skill homes are symlinked
-into both the Openbase Codex home and the Openbase Claude config dir. Claude
-Code fully overrides the user-level home when ``CLAUDE_CONFIG_DIR`` is set, so
-without these links voice sessions would not see personal skills at all.
+skills under ``~/.agents/skills`` (and Claude-installed skills) are symlinked
+into the shared ``~/.codex/skills`` and ``~/.claude/skills`` so both backends
+discover them.
 
 Standalone (no Django imports) so it can run from the Django app startup, the
 skills API, and the ``openbase-coder routines run-loop`` service, which
@@ -17,9 +16,8 @@ from pathlib import Path
 
 from openbase_coder_cli import dispatcher_config
 from openbase_coder_cli.paths import (
+    CLAUDE_CONFIG_DIR,
     CODEX_HOME_DIR,
-    NORMAL_CLAUDE_CONFIG_DIR,
-    OPENBASE_CLAUDE_CONFIG_DIR,
 )
 
 
@@ -27,21 +25,21 @@ def home_skills_dir() -> Path:
     return Path.home() / ".agents" / "skills"
 
 
-def normal_claude_skills_dir() -> Path:
-    return NORMAL_CLAUDE_CONFIG_DIR / "skills"
+def claude_skills_dir() -> Path:
+    return CLAUDE_CONFIG_DIR / "skills"
 
 
 def personal_skill_source_dirs() -> dict[str, Path]:
     return {
         "home": home_skills_dir(),
-        "normal_claude": normal_claude_skills_dir(),
+        "claude": claude_skills_dir(),
     }
 
 
 def auto_link_target_dirs() -> dict[str, Path]:
     return {
-        "openbase_codex": CODEX_HOME_DIR / "skills",
-        "openbase_claude": OPENBASE_CLAUDE_CONFIG_DIR / "skills",
+        "codex": CODEX_HOME_DIR / "skills",
+        "claude": claude_skills_dir(),
     }
 
 
@@ -73,7 +71,7 @@ def link_skill_dir(source_dir: Path, target_dir: Path) -> bool:
 
 
 def sync_auto_linked_skills() -> dict:
-    """Link every personal skill into both Openbase agent homes.
+    """Link every personal skill into both shared agent homes.
 
     No-op (with ``enabled: False``) when the auto-link setting is off.
     """
@@ -88,6 +86,8 @@ def sync_auto_linked_skills() -> dict:
         for source_scope, source_root in personal_skill_source_dirs().items():
             skill_dirs = list_skill_dirs(source_root)
             for target_scope, target_root in auto_link_target_dirs().items():
+                if target_root == source_root:
+                    continue
                 for source_dir in skill_dirs:
                     target_dir = target_root / source_dir.name
                     entry = {

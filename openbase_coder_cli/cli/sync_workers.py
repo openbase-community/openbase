@@ -1,9 +1,9 @@
 """``openbase-coder sync-workers`` — all periodic sync jobs in one process.
 
-One launchd/systemd service replaces the former quartet of near-identical
-polling services (codex-thread-sync, claude-thread-sync,
-codex-thread-device-sync, claude-thread-device-sync) and also runs the
-code-sync reconcile tick that previously hid inside ``openbase-routines``.
+One launchd/systemd service runs the periodic cross-device thread snapshot
+syncs plus the code-sync reconcile tick that previously hid inside
+``openbase-routines``. Local thread stores are the shared agent homes, so
+there is no home↔home sync job anymore.
 
 Each job runs on its own thread with its own interval and per-tick error
 isolation, so one slow or failing job never delays the others. Jobs that only
@@ -81,58 +81,6 @@ class SyncJob:
     tick: Callable[[], None]
 
 
-def _codex_threads_tick() -> None:
-    from openbase_coder_cli.cli.codex_sync import _sync_result_summary
-    from openbase_coder_cli.thread_sync.thread_import import sync_codex_threads_once
-
-    results = sync_codex_threads_once(
-        stability_delay_seconds=DEFAULT_STABILITY_DELAY_SECONDS,
-        max_age_days=max(
-            _env_int("CODEX_THREAD_SYNC_MAX_AGE_DAYS", DEFAULT_MAX_AGE_DAYS), 0
-        ),
-    )
-    summary = _sync_result_summary(results)
-    logger.info(
-        "codex_thread_sync sweep_complete total=%s transferred=%s conflicts=%s "
-        "errors=%s skipped=%s already_synced=%s reason_counts=%s direction_counts=%s",
-        summary["total"],
-        summary["transferred"],
-        summary["conflicts"],
-        summary["errors"],
-        summary["skipped"],
-        summary["already_synced"],
-        summary["reason_counts"],
-        summary["direction_counts"],
-    )
-
-
-def _claude_threads_tick() -> None:
-    from openbase_coder_cli.cli.claude_sync import _sync_result_summary
-    from openbase_coder_cli.thread_sync.claude_thread_sync import (
-        sync_claude_threads_once,
-    )
-
-    results = sync_claude_threads_once(
-        stability_delay_seconds=DEFAULT_STABILITY_DELAY_SECONDS,
-        max_age_days=max(
-            _env_int("CLAUDE_THREAD_SYNC_MAX_AGE_DAYS", DEFAULT_MAX_AGE_DAYS), 0
-        ),
-    )
-    summary = _sync_result_summary(results)
-    logger.info(
-        "claude_thread_sync sweep_complete total=%s transferred=%s conflicts=%s "
-        "errors=%s skipped=%s already_synced=%s reason_counts=%s direction_counts=%s",
-        summary["total"],
-        summary["transferred"],
-        summary["conflicts"],
-        summary["errors"],
-        summary["skipped"],
-        summary["already_synced"],
-        summary["reason_counts"],
-        summary["direction_counts"],
-    )
-
-
 def _codex_devices_tick() -> None:
     # Cross-device snapshots ride the code-sync transport (the exchange folder
     # is a product-state sync folder), so this is a no-op until code sync is
@@ -203,6 +151,24 @@ def _claude_devices_tick() -> None:
         export_summary["reason_counts"],
         import_summary["reason_counts"],
     )
+
+
+def _claude_app_index_tick() -> None:
+    # Best-effort injection of Openbase Claude sessions into the Claude
+    # desktop app's private session index (macOS only; no-op elsewhere or
+    # when the app has no index). See claude_app_index module docstring.
+    from openbase_coder_cli.claude_app_index import sync_claude_app_index
+
+    result = sync_claude_app_index()
+    if result.get("supported"):
+        logger.info(
+            "claude_app_index sweep_complete sessions=%s created=%s updated=%s",
+            result.get("sessions"),
+            result.get("created"),
+            result.get("updated"),
+        )
+    else:
+        logger.debug("claude_app_index skipped reason=%s", result.get("reason"))
 
 
 def _cloud_registration_tick() -> None:
@@ -281,18 +247,6 @@ def build_jobs() -> list[SyncJob]:
     """The full job set; gating happens inside each tick, not here."""
     return [
         SyncJob(
-            name="codex_thread_sync",
-            interval=_env_float("CODEX_THREAD_SYNC_INTERVAL", DEFAULT_INTERVAL_SECONDS),
-            tick=_codex_threads_tick,
-        ),
-        SyncJob(
-            name="claude_thread_sync",
-            interval=_env_float(
-                "CLAUDE_THREAD_SYNC_INTERVAL", DEFAULT_INTERVAL_SECONDS
-            ),
-            tick=_claude_threads_tick,
-        ),
-        SyncJob(
             name="codex_thread_device_sync",
             interval=_env_float(
                 "CODEX_THREAD_DEVICE_SYNC_INTERVAL", DEFAULT_INTERVAL_SECONDS
@@ -305,6 +259,11 @@ def build_jobs() -> list[SyncJob]:
                 "CLAUDE_THREAD_DEVICE_SYNC_INTERVAL", DEFAULT_INTERVAL_SECONDS
             ),
             tick=_claude_devices_tick,
+        ),
+        SyncJob(
+            name="claude_app_index",
+            interval=_env_float("CLAUDE_APP_INDEX_SYNC_INTERVAL", DEFAULT_INTERVAL_SECONDS),
+            tick=_claude_app_index_tick,
         ),
         SyncJob(
             name="code_sync_reconcile",

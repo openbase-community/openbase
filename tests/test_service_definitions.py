@@ -60,15 +60,16 @@ def test_thread_sync_services_are_retired():
         assert stub.install_by_default is False
 
 
-def test_sync_workers_jobs_cover_the_retired_services_and_reconcile():
+def test_sync_workers_jobs_cover_device_sync_and_reconcile():
+    # The home<->home thread sync engine is gone (shared agent homes); the
+    # workers only run device sync, reconcile, registration, and watchdog jobs.
     from openbase_coder_cli.cli.sync_workers import build_jobs
 
     names = {job.name for job in build_jobs()}
     assert names == {
-        "codex_thread_sync",
-        "claude_thread_sync",
         "codex_thread_device_sync",
         "claude_thread_device_sync",
+        "claude_app_index",
         "code_sync_reconcile",
         "cloud_registration",
         "livekit_pool_watchdog",
@@ -78,14 +79,14 @@ def test_sync_workers_jobs_cover_the_retired_services_and_reconcile():
 def test_sync_workers_intervals_respect_env_overrides(monkeypatch):
     from openbase_coder_cli.cli.sync_workers import build_jobs
 
-    monkeypatch.setenv("CODEX_THREAD_SYNC_INTERVAL", "120")
+    monkeypatch.setenv("CODEX_THREAD_DEVICE_SYNC_INTERVAL", "120")
     monkeypatch.setenv("CODE_SYNC_TICK_SECONDS", "30")
-    monkeypatch.setenv("CLAUDE_THREAD_SYNC_INTERVAL", "not-a-number")
+    monkeypatch.setenv("CLAUDE_THREAD_DEVICE_SYNC_INTERVAL", "not-a-number")
     jobs = {job.name: job for job in build_jobs()}
-    assert jobs["codex_thread_sync"].interval == 120.0
+    assert jobs["codex_thread_device_sync"].interval == 120.0
     assert jobs["code_sync_reconcile"].interval == 30.0
     # Bad values fall back to the default rather than crashing the service.
-    assert jobs["claude_thread_sync"].interval == 60.0
+    assert jobs["claude_thread_device_sync"].interval == 60.0
 
 
 def test_openbase_routines_service_is_auto_installed_service():

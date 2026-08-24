@@ -15,7 +15,6 @@ from openbase_coder_cli.thread_sync.thread_exchange import (
     resolve_thread_snapshot_conflict,
     thread_snapshot_conflicts_payload,
     thread_snapshot_status,
-    thread_sync_conflicts_payload,
 )
 
 
@@ -555,99 +554,6 @@ def test_import_snapshot_detects_divergent_local_thread(tmp_path: Path) -> None:
         ledger_path=target_ledger,
     )
     assert status["conflict_count"] == 1
-
-
-def test_thread_sync_conflicts_payload_includes_home_and_device_conflicts(
-    tmp_path: Path,
-) -> None:
-    normal_home = tmp_path / "normal"
-    voice_home = tmp_path / "voice"
-    source_home = tmp_path / "source"
-    exchange_dir = tmp_path / "exchange"
-    home_ledger = tmp_path / "home-ledger.json"
-    device_ledger = tmp_path / "device-ledger.json"
-    source_device = tmp_path / "source-device.json"
-    target_device = tmp_path / "target-device.json"
-    for home in (normal_home, voice_home, source_home):
-        _create_state_db(home / "state_5.sqlite")
-
-    _insert_thread(
-        normal_home,
-        "thread-home",
-        title="Normal title",
-        updated_at=20,
-        terminal_message="normal",
-    )
-    _insert_thread(
-        voice_home,
-        "thread-home",
-        title="Voice title",
-        updated_at=30,
-        terminal_message="voice",
-    )
-    home_ledger.write_text(
-        json.dumps(
-            {
-                "threads": {
-                    "thread-home": {
-                        "thread_id": "thread-home",
-                        "normal": {"rollout_sha256": "normal"},
-                        "voice": {"rollout_sha256": "voice"},
-                        "status": "conflict",
-                        "reason": "both_homes_changed",
-                        "synced_at": 123.0,
-                    }
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    _insert_thread(
-        source_home,
-        "thread-device",
-        title="Remote title",
-        updated_at=40,
-        terminal_message="remote",
-    )
-    _insert_thread(
-        voice_home,
-        "thread-device",
-        title="Local title",
-        updated_at=50,
-        terminal_message="local",
-    )
-    export_thread_snapshots(
-        codex_home=source_home,
-        exchange_dir=exchange_dir,
-        device_identity_path=source_device,
-        ledger_path=tmp_path / "source-ledger.json",
-        stability_delay_seconds=0,
-        max_age_days=None,
-    )
-    import_thread_snapshots(
-        codex_home=voice_home,
-        exchange_dir=exchange_dir,
-        device_identity_path=target_device,
-        ledger_path=device_ledger,
-    )
-
-    payload = thread_sync_conflicts_payload(
-        normal_home=normal_home,
-        voice_home=voice_home,
-        home_ledger_path=home_ledger,
-        exchange_dir=exchange_dir,
-        device_identity_path=target_device,
-        device_ledger_path=device_ledger,
-    )
-
-    assert payload["conflict_count"] == 2
-    assert payload["home_conflict_count"] == 1
-    assert payload["device_conflict_count"] == 1
-    assert {conflict["source_type"] for conflict in payload["conflicts"]} == {
-        "home",
-        "device",
-    }
 
 
 def test_resolve_conflict_accept_remote_latest_overwrites_local_thread(

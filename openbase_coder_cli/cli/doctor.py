@@ -25,12 +25,11 @@ from openbase_coder_cli.dispatcher_config import (
     selected_tts_provider_id,
 )
 from openbase_coder_cli.paths import (
+    CLAUDE_CONFIG_DIR,
+    CLAUDE_STATE_PATH,
+    CODEX_CONFIG_PATH,
     CODEX_HOME_DIR,
     DEFAULT_ENV_FILE_PATH,
-    NORMAL_CLAUDE_STATE_PATH,
-    NORMAL_CODEX_CONFIG_PATH,
-    OPENBASE_CLAUDE_CONFIG_DIR,
-    OPENBASE_CLAUDE_JSON_PATH,
     STANDALONE_RELEASES_DIR,
 )
 from openbase_coder_cli.platforms import is_windows
@@ -341,21 +340,12 @@ def _check_agent_auth(env: dict[str, str], ok, warn, fail, action=None) -> None:
     backend = _selected_backend(env)
     ok(f"coding backend selected: {backend}")
 
-    codex_auth = Path.home() / ".codex" / "auth.json"
-    service_codex_auth = CODEX_HOME_DIR / "auth.json"
+    codex_auth = CODEX_HOME_DIR / "auth.json"
     if backend == CODEX_BACKEND:
         if codex_auth.is_file():
             ok("Codex auth: logged in")
         else:
             action("Codex auth missing: run 'codex login'")
-
-        if service_codex_auth.exists():
-            ok("Openbase Codex service auth bridge: configured")
-        else:
-            warn(
-                "Openbase Codex service auth bridge missing: "
-                "run 'openbase-coder setup' after 'codex login'"
-            )
 
     if backend == OPENBASE_CLOUD_BACKEND:
         from openbase_coder_cli.services.onboarding import cloud_login_status
@@ -408,23 +398,13 @@ def _check_super_agents_mcp_registrations(ok, warn, fail) -> None:
     """
     configs = (
         (
-            "normal Codex config",
-            NORMAL_CODEX_CONFIG_PATH,
+            "Codex config",
+            CODEX_CONFIG_PATH,
             _read_super_agents_command_codex,
         ),
         (
-            "Openbase Codex home config",
-            CODEX_HOME_DIR / "config.toml",
-            _read_super_agents_command_codex,
-        ),
-        (
-            "normal Claude config",
-            NORMAL_CLAUDE_STATE_PATH,
-            _read_super_agents_command_claude,
-        ),
-        (
-            "Openbase Claude config",
-            OPENBASE_CLAUDE_JSON_PATH,
+            "Claude config",
+            CLAUDE_STATE_PATH,
             _read_super_agents_command_claude,
         ),
     )
@@ -466,8 +446,8 @@ def _check_super_agents_mcp_registrations(ok, warn, fail) -> None:
 
 def _check_agent_home_skills(ok, warn, fail) -> None:
     for label, skills_dir in (
-        ("Openbase Codex home skills", CODEX_HOME_DIR / "skills"),
-        ("Openbase Claude config skills", OPENBASE_CLAUDE_CONFIG_DIR / "skills"),
+        ("Codex home skills", CODEX_HOME_DIR / "skills"),
+        ("Claude config skills", CLAUDE_CONFIG_DIR / "skills"),
     ):
         if not skills_dir.is_dir():
             warn(f"{label}: missing at {skills_dir}; run 'openbase-coder setup'")

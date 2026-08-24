@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .claude_models import CLAUDE_EVENT_TYPES
-from .thread_import import _string
+from .codex_state import _string
 
 
 def _parse_claude_jsonl(root: Path, session_id: str) -> dict[str, Any] | None:

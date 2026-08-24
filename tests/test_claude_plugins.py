@@ -7,8 +7,8 @@ from openbase_coder_cli import claude_plugins
 
 
 def _configure_managed_config(monkeypatch, tmp_path: Path) -> Path:
-    config_path = tmp_path / "claude_config" / ".claude.json"
-    monkeypatch.setattr(claude_plugins, "OPENBASE_CLAUDE_JSON_PATH", config_path)
+    config_path = tmp_path / ".claude.json"
+    monkeypatch.setattr(claude_plugins, "CLAUDE_STATE_PATH", config_path)
     return config_path
 
 
@@ -16,7 +16,6 @@ def test_enable_adds_entry_and_preserves_other_servers(
     monkeypatch, tmp_path: Path
 ) -> None:
     config_path = _configure_managed_config(monkeypatch, tmp_path)
-    config_path.parent.mkdir(parents=True)
     config_path.write_text(
         json.dumps(
             {
@@ -98,14 +97,12 @@ def test_chrome_toggle_writes_extra_args_env(monkeypatch, tmp_path: Path) -> Non
     assert "SUPER_AGENTS_CLAUDE_EXTRA_ARGS" in content
     from openbase_coder_cli.env_file import env_file_values
 
-    assert json.loads(
-        env_file_values(env_file)["SUPER_AGENTS_CLAUDE_EXTRA_ARGS"]
-    ) == {"chrome": None}
+    assert json.loads(env_file_values(env_file)["SUPER_AGENTS_CLAUDE_EXTRA_ARGS"]) == {
+        "chrome": None
+    }
 
 
-def test_chrome_disable_preserves_other_extra_args(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_chrome_disable_preserves_other_extra_args(monkeypatch, tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
         'SUPER_AGENTS_CLAUDE_EXTRA_ARGS="{\\"chrome\\": null, \\"max-turns\\": \\"5\\"}"\n',
@@ -119,9 +116,7 @@ def test_chrome_disable_preserves_other_extra_args(
 
     from openbase_coder_cli.env_file import env_file_values
 
-    remaining = json.loads(
-        env_file_values(env_file)["SUPER_AGENTS_CLAUDE_EXTRA_ARGS"]
-    )
+    remaining = json.loads(env_file_values(env_file)["SUPER_AGENTS_CLAUDE_EXTRA_ARGS"])
     assert remaining == {"max-turns": "5"}
 
 
