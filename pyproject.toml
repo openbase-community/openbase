@@ -44,6 +44,7 @@ dependencies = [
     "livekit-plugins-deepgram==1.5.4",
     "livekit-plugins-noise-cancellation>=0.2.5",
     "aiohttp>=3.13.3",
+    "psutil>=6.1.0",
     "multi-workspace>=3.2.3",
     "super-agents[claude]>=0.1.13",
     "websockets>=16.0",

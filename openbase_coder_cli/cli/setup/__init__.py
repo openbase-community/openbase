@@ -414,7 +414,7 @@ def setup(
     require --backend and default the audio provider to openbase-cloud. Pass
     --interactive to combine flags with the pickers.
     """
-    if platform.system() not in ("Darwin", "Linux"):
+    if platform.system() not in ("Darwin", "Linux", "Windows"):
         raise click.ClickException("Setup is only supported on macOS and Linux.")
     interactive = _resolve_interactive_mode(interactive_mode, json_progress)
     install_normal_agent_hooks = _resolve_normal_agent_hooks_choice(

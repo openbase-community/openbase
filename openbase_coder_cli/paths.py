@@ -41,6 +41,12 @@ DEFAULT_LOG_DIR = OPENBASE_BASE_DIR / "logs"
 LAUNCHD_WRAPPER_DIR = OPENBASE_BASE_DIR / "launchd"
 PLIST_DIR = Path.home() / "Library" / "LaunchAgents"
 SYSTEMD_UNIT_DIR = Path.home() / ".config" / "systemd" / "user"
+# Windows Task Scheduler backend: XML task-definition source files live here
+# (filesystem, mirrors PLIST_DIR/SYSTEMD_UNIT_DIR); the task database itself
+# is registered under TASK_SCHEDULER_FOLDER, a Task Scheduler namespace path,
+# not a filesystem path.
+TASK_SCHEDULER_DIR = OPENBASE_BASE_DIR / "tasks"
+TASK_SCHEDULER_FOLDER = r"\OpenbaseCoder"
 LAUNCHD_DOMAIN = "com.openbase.coder"
 AUTH_JSON_PATH = OPENBASE_BASE_DIR / "auth.json"
 SYNC_CONFIG_PATH = OPENBASE_BASE_DIR / "sync-config.json"

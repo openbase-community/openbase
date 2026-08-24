@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import os
 import platform
-import re
 import shlex
 import shutil
-import signal
 import subprocess
 import sys
 import textwrap
@@ -26,8 +24,10 @@ from openbase_coder_cli.paths import (
     OPENBASE_BASE_DIR,
     OPENBASE_BIN_DIR,
     PLIST_DIR,
+    TASK_SCHEDULER_DIR,
 )
 from openbase_coder_cli.runtime import stable_runtime_package
+from openbase_coder_cli.services import process_utils
 from openbase_coder_cli.services.definitions import (
     RETIRED_SERVICE_NAMES,
     SERVICES,
@@ -42,10 +42,18 @@ def _is_macos() -> bool:
     return platform.system() == "Darwin"
 
 
+def _is_windows() -> bool:
+    return sys.platform == "win32"
+
+
 def _resolve_binary(name: str, homebrew_fallback: str | None = None) -> str:
     path = shutil.which(name)
     if path:
         return path
+    py_dir = Path(sys.executable).parent
+    for candidate in [py_dir / name, py_dir / f"{name}.exe"]:
+        if candidate.is_file():
+            return str(candidate)
     fallbacks: list[Path] = []
     if homebrew_fallback:
         fallbacks.append(Path(homebrew_fallback))
@@ -64,8 +72,14 @@ def _workspace_binary_candidates(config: InstallationConfig, name: str) -> list[
     workspace = Path(config.workspace_path)
     return [
         workspace / ".venv" / "bin" / name,
+        workspace / ".venv" / "Scripts" / name,
+        workspace / ".venv" / "Scripts" / f"{name}.exe",
         workspace / "cli" / ".venv" / "bin" / name,
+        workspace / "cli" / ".venv" / "Scripts" / name,
+        workspace / "cli" / ".venv" / "Scripts" / f"{name}.exe",
         workspace / "agent" / ".venv" / "bin" / name,
+        workspace / "agent" / ".venv" / "Scripts" / name,
+        workspace / "agent" / ".venv" / "Scripts" / f"{name}.exe",
     ]
 
 
@@ -75,7 +89,7 @@ def _resolve_binary_with_preferred_paths(
     homebrew_fallback: str | None = None,
 ) -> str:
     for path in preferred_paths:
-        if path.is_file() and os.access(path, os.X_OK):
+        if path.is_file() and (sys.platform == "win32" or os.access(path, os.X_OK)):
             return str(path)
     return _resolve_binary(name, homebrew_fallback)
 
@@ -151,12 +165,14 @@ def _binary_resolvers(config: InstallationConfig) -> dict[str, Callable[[], str]
 
 
 def _service_template_keys(services: Iterable[ServiceDefinition]) -> set[str]:
+    # ``command_template`` is now a plain runner key (see services/runners.py)
+    # and never contains ``{...}`` fields — only ``workdir_template`` still
+    # needs scanning (e.g. "{runtime_workdir}").
     keys: set[str] = set()
     for svc in services:
-        for template in (svc.command_template, svc.workdir_template):
-            for _text, field, _spec, _conv in Formatter().parse(template):
-                if field:
-                    keys.add(field)
+        for _text, field, _spec, _conv in Formatter().parse(svc.workdir_template):
+            if field:
+                keys.add(field)
     return keys
 
 
@@ -173,7 +189,9 @@ def _resolve_binaries(
     if services is None:
         services = SERVICES
     resolvers = _binary_resolvers(config)
-    keys = _service_template_keys(services)
+    # "python" is always needed: every wrapper now execs the runner module
+    # through it, regardless of what workdir_template references.
+    keys = _service_template_keys(services) | {"python"}
     return {key: resolvers[key]() for key in sorted(keys) if key in resolvers}
 
 
@@ -223,73 +241,18 @@ def _truncate_existing_logs(svc: ServiceDefinition) -> None:
     _truncate_log_file(_log_path(svc))
 
 
-def _service_command(pid: int) -> str:
-    result = subprocess.run(
-        ["ps", "-p", str(pid), "-o", "command="],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return result.stdout.strip()
-
-
-def _listening_pids(port: int) -> set[int]:
-    try:
-        result = subprocess.run(
-            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError:
-        return _listening_pids_ss(port)
-    pids: set[int] = set()
-    for line in result.stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            pids.add(int(line))
-        except ValueError:
-            continue
-    return pids
-
-
-def _listening_pids_ss(port: int) -> set[int]:
-    try:
-        result = subprocess.run(
-            ["ss", "-ltnpH", f"sport = :{port}"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError:
-        return set()
-    pids: set[int] = set()
-    for match in re.finditer(r"pid=(\d+)", result.stdout):
-        pids.add(int(match.group(1)))
-    return pids
-
-
-def _signal_pid(pid: int, sig: signal.Signals) -> None:
-    try:
-        os.kill(pid, sig)
-    except ProcessLookupError:
-        return
-
-
 def _matches_cleanup_signature(svc: ServiceDefinition, pid: int) -> bool:
     if not svc.cleanup_command_substrings:
         return True
 
-    command = _service_command(pid)
+    command = process_utils.process_cmdline(pid)
     return all(token in command for token in svc.cleanup_command_substrings)
 
 
 def _cleanup_candidate_pids(svc: ServiceDefinition) -> set[int]:
     candidates: set[int] = set()
     for port in svc.cleanup_ports:
-        for pid in _listening_pids(port):
+        for pid in process_utils.listening_pids(port):
             if _matches_cleanup_signature(svc, pid):
                 candidates.add(pid)
     return candidates
@@ -302,14 +265,14 @@ def _cleanup_lingering_processes(svc: ServiceDefinition) -> None:
         return
 
     for pid in lingering_pids:
-        _signal_pid(pid, signal.SIGTERM)
+        process_utils.terminate(pid)
 
     time.sleep(1)
 
     stubborn_pids = _cleanup_candidate_pids(svc)
 
     for pid in stubborn_pids:
-        _signal_pid(pid, signal.SIGKILL)
+        process_utils.terminate(pid, force=True)
 
 
 def _ensure_launchd_paths() -> None:
@@ -317,6 +280,8 @@ def _ensure_launchd_paths() -> None:
     LAUNCHD_WRAPPER_DIR.mkdir(parents=True, exist_ok=True)
     if _is_macos():
         PLIST_DIR.mkdir(parents=True, exist_ok=True)
+    elif _is_windows():
+        TASK_SCHEDULER_DIR.mkdir(parents=True, exist_ok=True)
     else:
         from openbase_coder_cli.paths import SYSTEMD_UNIT_DIR
 
@@ -328,6 +293,14 @@ def _write_service_files(
     config: InstallationConfig,
     binaries: dict[str, str],
 ) -> None:
+    if not _is_macos() and _is_windows():
+        # Windows has no shell, so it skips the bash wrapper entirely —
+        # Task Scheduler execs python -m ...runners directly.
+        from openbase_coder_cli.services.windows import generate_task_xml
+
+        generate_task_xml(svc, config, binaries["python"])
+        return
+
     generate_wrapper(svc, config, binaries)
     if _is_macos():
         generate_plist(svc, config)
@@ -353,11 +326,13 @@ def generate_wrapper(
     env_file = config.env_file
     data_dir = str(OPENBASE_BASE_DIR)
 
-    # Binary paths land in shell command position (e.g. the bundled CLI under
-    # "/Applications/Openbase Coder.app" contains a space) — quote them.
-    quoted_binaries = {name: shlex.quote(path) for name, path in binaries.items()}
-    template_vars = {"workspace": workspace, "data_dir": data_dir, **quoted_binaries}
-    cmd = svc.command_template.format(**template_vars)
+    # The python path lands in shell command position (e.g. the bundled CLI
+    # under "/Applications/Openbase Coder.app" contains a space) — quote it.
+    python_bin = shlex.quote(binaries["python"])
+    cmd = (
+        f"exec {python_bin} -m openbase_coder_cli.services.runners "
+        f"{svc.command_template}"
+    )
     workdir = svc.workdir_template.format(
         workspace=workspace, data_dir=data_dir, **binaries
     )
@@ -441,6 +416,11 @@ def _launchctl(*args: str, check: bool = True) -> subprocess.CompletedProcess:
 
 def launchctl_bootstrap(svc: ServiceDefinition) -> None:
     if not _is_macos():
+        if _is_windows():
+            from openbase_coder_cli.services.windows import windows_bootstrap
+
+            windows_bootstrap(svc)
+            return
         from openbase_coder_cli.services.systemd import systemd_bootstrap
 
         systemd_bootstrap(svc)
@@ -469,6 +449,10 @@ def launchctl_bootstrap(svc: ServiceDefinition) -> None:
 
 def launchctl_bootout(svc: ServiceDefinition) -> bool:
     if not _is_macos():
+        if _is_windows():
+            from openbase_coder_cli.services.windows import windows_bootout
+
+            return windows_bootout(svc)
         from openbase_coder_cli.services.systemd import systemd_bootout
 
         return systemd_bootout(svc)
@@ -481,6 +465,10 @@ def launchctl_bootout(svc: ServiceDefinition) -> bool:
 
 def launchctl_kickstart(svc: ServiceDefinition) -> bool:
     if not _is_macos():
+        if _is_windows():
+            from openbase_coder_cli.services.windows import windows_kickstart
+
+            return windows_kickstart(svc)
         from openbase_coder_cli.services.systemd import systemd_kickstart
 
         return systemd_kickstart(svc)
@@ -493,6 +481,10 @@ def launchctl_kickstart(svc: ServiceDefinition) -> bool:
 
 def launchctl_kill(svc: ServiceDefinition) -> bool:
     if not _is_macos():
+        if _is_windows():
+            from openbase_coder_cli.services.windows import windows_kill
+
+            return windows_kill(svc)
         from openbase_coder_cli.services.systemd import systemd_kill
 
         return systemd_kill(svc)
@@ -540,6 +532,10 @@ def launchctl_status(svc: ServiceDefinition) -> dict:
     if _external_supervisor():
         return _external_supervisor_status(svc)
     if not _is_macos():
+        if _is_windows():
+            from openbase_coder_cli.services.windows import windows_status
+
+            return windows_status(svc)
         from openbase_coder_cli.services.systemd import systemd_status
 
         return systemd_status(svc)
