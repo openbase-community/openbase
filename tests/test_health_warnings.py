@@ -109,6 +109,25 @@ def test_collect_skips_sync_checks_when_disabled(monkeypatch) -> None:
     assert called == []
 
 
+def test_disconnected_peer_warning_uses_configured_name() -> None:
+    warnings = hw._disconnected_peer_warnings(
+        {"PEERAAA-BBBBBBB": {"connected": False, "paused": False}},
+        {"PEERAAA-BBBBBBB": "Gabe's Mac mini"},
+    )
+
+    assert len(warnings) == 1
+    assert warnings[0]["id"] == "sync-peer-disconnected:PEERAAA"
+    assert "Sync peer Gabe's Mac mini is not connected" in warnings[0]["message"]
+
+
+def test_disconnected_peer_warning_falls_back_to_short_id() -> None:
+    warnings = hw._disconnected_peer_warnings(
+        {"PEERAAA-BBBBBBB": {"connected": False, "paused": False}}, {}
+    )
+
+    assert "Sync peer PEERAAA… is not connected" in warnings[0]["message"]
+
+
 def test_installation_warning_when_workspace_tracked_on_standalone(
     monkeypatch,
 ) -> None:

@@ -132,6 +132,28 @@ def test_write_config_preserves_receiveonly_folder_type(tmp_path: Path) -> None:
     assert root.find("folder").get("type") == "receiveonly"
 
 
+def test_configured_device_names(tmp_path: Path) -> None:
+    syncthing.write_config(
+        self_device_id=SELF_ID,
+        self_name="Gabe's MacBook Pro",
+        peers=[
+            syncthing.PeerDevice(
+                device_id=PEER_ID,
+                name="Gabe's Mac mini",
+                address=syncthing.peer_address("mini.tail1234.ts.net"),
+            )
+        ],
+        folders=[],
+        config_dir=tmp_path,
+        home=tmp_path,
+    )
+
+    assert syncthing.configured_device_names(tmp_path) == {
+        SELF_ID: "Gabe's MacBook Pro",
+        PEER_ID: "Gabe's Mac mini",
+    }
+
+
 def test_device_id_parsing_and_storage(tmp_path: Path) -> None:
     output = f"Device ID: {SELF_ID}\n"
     assert syncthing._device_id_from_output(output) == SELF_ID

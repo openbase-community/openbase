@@ -13,7 +13,7 @@ from __future__ import annotations
 import calendar
 import shutil
 import time
-from typing import Callable
+from typing import Any, Callable
 
 from rest_framework import status
 from rest_framework.decorators import api_view
@@ -54,6 +54,26 @@ def _warning(
         "message": message,
         "action": action,
     }
+
+
+def _disconnected_peer_warnings(
+    connections: dict[str, Any], device_names: dict[str, str]
+) -> list[dict[str, str]]:
+    warnings: list[dict[str, str]] = []
+    for device_id, conn in connections.items():
+        if not conn.get("connected") and not conn.get("paused"):
+            peer_name = device_names.get(device_id) or f"{device_id[:7]}…"
+            warnings.append(
+                _warning(
+                    f"sync-peer-disconnected:{device_id[:7]}",
+                    "critical",
+                    f"Sync peer {peer_name} is not connected; file sync "
+                    "between your machines is stopped.",
+                    "Check the peer machine is on and on the tailnet; "
+                    "see the file-sync skill for half-open connections.",
+                )
+            )
+    return warnings
 
 
 def _service_warnings() -> list[dict[str, str]]:
@@ -115,7 +135,10 @@ def _sync_warnings() -> list[dict[str, str]]:
     from openbase_coder_cli.code_sync import manager as sync_manager
     from openbase_coder_cli.code_sync.ignores import STIGNORE_FILENAME
     from openbase_coder_cli.code_sync.reconciler import read_reconcile_state
-    from openbase_coder_cli.code_sync.syncthing import SyncthingClient
+    from openbase_coder_cli.code_sync.syncthing import (
+        SyncthingClient,
+        configured_device_names,
+    )
     from openbase_coder_cli.paths import CODE_SYNC_DIR
     from openbase_coder_cli.services.tailnet_devices import tailscale_self_identity
     from openbase_coder_cli.sync_config import sync_folders
@@ -125,18 +148,11 @@ def _sync_warnings() -> list[dict[str, str]]:
     # Engine reachable + peers connected + folders actually syncing.
     try:
         client = SyncthingClient()
-        for device_id, conn in client.connections().items():
-            if not conn.get("connected") and not conn.get("paused"):
-                warnings.append(
-                    _warning(
-                        f"sync-peer-disconnected:{device_id[:7]}",
-                        "critical",
-                        f"Sync peer {device_id[:7]}… is not connected; file "
-                        "sync between your machines is stopped.",
-                        "Check the peer machine is on and on the tailnet; "
-                        "see the file-sync skill for half-open connections.",
-                    )
-                )
+        warnings.extend(
+            _disconnected_peer_warnings(
+                client.connections(), configured_device_names()
+            )
+        )
         # A folder in error state (e.g. "insufficient space on disk") stops
         # syncing while the engine stays up — historically invisible. One
         # warning per distinct error message, not per folder.
