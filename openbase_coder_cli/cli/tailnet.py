@@ -137,8 +137,8 @@ def _apply_provider(name: str, *, push_cloud: bool) -> None:
             )
         else:
             click.echo(
-                "Next: open the Openbase Netmesh app, sign in, and Connect so "
-                "this machine joins the VPN."
+                "Next: connect the Openbase VPN from the Openbase desktop "
+                "app (Prerequisites → Openbase VPN)."
             )
     elif name == tp.PROVIDER_TAILSCALE:
         click.echo("Next: make sure the Tailscale app is running and signed in.")
@@ -167,7 +167,7 @@ def _teardown_transport(previous: str) -> None:
             click.echo("Reset Tailscale Serve rules.")
     elif previous == tp.PROVIDER_NETMESH:
         click.echo(
-            "You can disconnect the Openbase Netmesh VPN from its menu bar "
+            "You can disconnect the Openbase VPN from the Openbase desktop "
             "app; its serve rules are no longer used."
         )
 
