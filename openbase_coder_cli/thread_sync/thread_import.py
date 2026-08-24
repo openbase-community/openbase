@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -32,6 +33,7 @@ from .thread_sync_common import (
 )
 
 STATE_DB_NAME = "state_5.sqlite"
+_STATE_DB_PATTERN = re.compile(r"state_(\d+)\.sqlite")
 SESSION_INDEX_NAME = "session_index.jsonl"
 SYNC_LEDGER_NAME = "codex-thread-sync-ledger.json"
 TERMINAL_EVENT_TYPES = {"task_complete", "turn_aborted"}
@@ -45,6 +47,31 @@ FINGERPRINT_MATCH_KEYS = (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def state_db_path(home: Path) -> Path:
+    """Path of the newest-schema ``state_<N>.sqlite`` in ``home``.
+
+    Codex leaves superseded state databases in place when a schema migration
+    creates the next ``state_<N>`` file, so a pinned filename would keep
+    syncing the frozen pre-migration database after a Codex upgrade.
+    """
+    best_version: int | None = None
+    best_path = home / STATE_DB_NAME
+    for candidate in home.glob("state_*.sqlite"):
+        match = _STATE_DB_PATTERN.fullmatch(candidate.name)
+        if match is None:
+            continue
+        version = int(match.group(1))
+        if best_version is None or version > best_version:
+            best_version = version
+            best_path = candidate
+    return best_path
+
+
+def _state_db_version(path: Path) -> int | None:
+    match = _STATE_DB_PATTERN.fullmatch(path.name)
+    return int(match.group(1)) if match else None
 
 
 @dataclass(frozen=True)
@@ -188,9 +215,9 @@ def list_codex_threads_for_transfer(
     include_transferred: bool = True,
 ) -> list[CodexThreadTransferCandidate]:
     """List Codex threads in one home and mark whether they exist in another."""
-    source_db = source_home / STATE_DB_NAME
+    source_db = state_db_path(source_home)
     index_by_id = _latest_session_index_entries(source_home / SESSION_INDEX_NAME)
-    target_thread_ids = _target_thread_ids(target_home / STATE_DB_NAME)
+    target_thread_ids = _target_thread_ids(state_db_path(target_home))
     rows = _thread_rows(source_db)
 
     threads: list[CodexThreadTransferCandidate] = []
@@ -282,12 +309,17 @@ def sync_codex_threads_once(
     active_thread_ids: set[str] | None = None,
 ) -> list[CodexThreadSyncResult]:
     """Run one conservative bidirectional sync pass between Codex homes."""
-    normal_db = normal_home / STATE_DB_NAME
-    voice_db = voice_home / STATE_DB_NAME
+    normal_db = state_db_path(normal_home)
+    voice_db = state_db_path(voice_home)
     if not normal_db.exists():
         raise ThreadTransferError(f"Normal Codex state database not found: {normal_db}")
     if not voice_db.exists():
         raise ThreadTransferError(f"Voice Codex state database not found: {voice_db}")
+    if _state_db_version(normal_db) != _state_db_version(voice_db):
+        raise ThreadTransferError(
+            "Codex state schema mismatch between homes: "
+            f"{normal_db.name} (normal) vs {voice_db.name} (voice)"
+        )
 
     active_ids = set(active_thread_ids or set()) | _active_super_agent_thread_ids()
     ledger = _read_sync_ledger(ledger_path)
@@ -350,8 +382,8 @@ def transfer_codex_threads(
     if not thread_ids:
         raise ValueError("thread_ids must not be empty")
 
-    source_db = source_home / STATE_DB_NAME
-    target_db = target_home / STATE_DB_NAME
+    source_db = state_db_path(source_home)
+    target_db = state_db_path(target_home)
     if not source_db.exists():
         raise ThreadTransferError(
             f"{source_label} state database not found: {source_db}"

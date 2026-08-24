@@ -6,14 +6,18 @@ import sqlite3
 import time
 from pathlib import Path
 
+import pytest
+
 from openbase_coder_cli.thread_sync.thread_import import (
     CodexThreadSyncResult,
+    ThreadTransferError,
     _active_super_agent_thread_ids,
     _log_sync_result,
     export_voice_codex_threads,
     import_normal_codex_threads,
     list_normal_codex_threads,
     list_voice_codex_threads,
+    state_db_path,
     sync_codex_threads_once,
 )
 
@@ -458,7 +462,9 @@ def test_sync_codex_threads_once_logs_conflict_and_continues(
     _append_terminal(normal_conflict, message="normal")
     _append_terminal(voice_conflict, message="voice")
     _append_terminal(ok_rollout, message="ok")
-    caplog.set_level(logging.WARNING, logger="openbase_coder_cli.thread_sync.thread_import")
+    caplog.set_level(
+        logging.WARNING, logger="openbase_coder_cli.thread_sync.thread_import"
+    )
 
     results = sync_codex_threads_once(
         normal_home=normal_home,
@@ -604,7 +610,9 @@ def test_sync_codex_threads_once_skips_threads_older_than_max_age(
 
 
 def test_sync_result_logging_suppresses_routine_results(caplog) -> None:
-    caplog.set_level(logging.INFO, logger="openbase_coder_cli.thread_sync.thread_import")
+    caplog.set_level(
+        logging.INFO, logger="openbase_coder_cli.thread_sync.thread_import"
+    )
 
     _log_sync_result(
         CodexThreadSyncResult("thread-old", "skipped", None, "skipped_old")
@@ -726,3 +734,33 @@ def test_active_super_agent_thread_ids_honors_store_home_env(
     active = _active_super_agent_thread_ids(state_path=tmp_path / "missing-state.json")
 
     assert active == {"0197aaaa-1111-2222-3333-444455556666"}
+
+
+def test_state_db_path_prefers_newest_schema_version(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    _create_state_db(home / "state_5.sqlite")
+    _create_state_db(home / "state_6.sqlite")
+    (home / "state.db").write_text("", encoding="utf-8")
+
+    assert state_db_path(home) == home / "state_6.sqlite"
+
+
+def test_state_db_path_defaults_when_no_versioned_db(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+
+    assert state_db_path(home) == home / "state_5.sqlite"
+
+
+def test_sync_codex_threads_once_raises_on_schema_mismatch(tmp_path: Path) -> None:
+    normal_home = tmp_path / "normal"
+    voice_home = tmp_path / "voice"
+    _create_state_db(normal_home / "state_6.sqlite")
+    _create_state_db(voice_home / "state_5.sqlite")
+
+    with pytest.raises(ThreadTransferError, match="schema mismatch"):
+        sync_codex_threads_once(
+            normal_home=normal_home,
+            voice_home=voice_home,
+            ledger_path=tmp_path / "ledger.json",
+        )
