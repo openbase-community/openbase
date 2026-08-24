@@ -87,11 +87,14 @@ func startTURN(srv *tsnet.Server, stateDir string, tailnetIP net.IP) (*turnCrede
 		PacketConnConfigs: []turn.PacketConnConfig{{
 			PacketConn: pc,
 			RelayAddressGenerator: &turn.RelayAddressGeneratorStatic{
-				// Advertise the host's primary interface so LiveKit's ICE
-				// (which may prune loopback remote candidates) can pair with
-				// the relayed candidate; sockets bind all interfaces.
-				RelayAddress: primaryHostIP(),
-				Address:      "0.0.0.0",
+				// Loopback-only allocation sockets: every peer the relay talks
+				// to is host-local (LiveKit runs in "local" network mode in
+				// embedded transport, advertising 127.0.0.1 candidates), and
+				// macOS delivers same-host packets with a loopback source
+				// anyway. Binding loopback keeps relay ports off the LAN
+				// entirely — pion permissions were the only gate before.
+				RelayAddress: net.IPv4(127, 0, 0, 1),
+				Address:      "127.0.0.1",
 			},
 		}},
 	})
@@ -100,51 +103,6 @@ func startTURN(srv *tsnet.Server, stateDir string, tailnetIP net.IP) (*turnCrede
 		return nil, fmt.Errorf("turn server: %w", err)
 	}
 	return creds, nil
-}
-
-// primaryHostIP picks the address advertised for relay allocations: the
-// local LiveKit server must be able to send UDP to it. Skip point-to-point
-// interfaces — VPN/Tailscale tunnels are P2P and their addresses die with
-// the owning app, while physical LAN interfaces are broadcast (LAN address
-// ranges can't be trusted instead: some ISPs hand out CGNAT space on WiFi).
-// Falls back to loopback when the machine has no usable interface.
-func primaryHostIP() net.IP {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return net.IPv4(127, 0, 0, 1)
-	}
-	var fallback net.IP
-	for _, iface := range ifaces {
-		if iface.Flags&net.FlagUp == 0 ||
-			iface.Flags&net.FlagLoopback != 0 ||
-			iface.Flags&net.FlagPointToPoint != 0 {
-			continue
-		}
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, addr := range addrs {
-			ipNet, ok := addr.(*net.IPNet)
-			if !ok {
-				continue
-			}
-			ip4 := ipNet.IP.To4()
-			if ip4 == nil || ip4.IsLinkLocalUnicast() {
-				continue
-			}
-			if ip4.IsPrivate() {
-				return ip4
-			}
-			if fallback == nil {
-				fallback = ip4
-			}
-		}
-	}
-	if fallback != nil {
-		return fallback
-	}
-	return net.IPv4(127, 0, 0, 1)
 }
 
 func randomHex(bytes int) string {
