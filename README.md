@@ -38,8 +38,8 @@ Core workflows are:
   health, and runtime settings from the shared dashboard.
 * Use your iPhone or Android phone as the remote control for calls, approvals,
   reports, diffs, and thread follow-up.
-* Run the local runtime on your Mac, a Linux machine, Windows via the Docker
-  image, or an Openbase Cloud DevSpace.
+* Run the local runtime on your Mac, a Linux machine, Windows (natively — in
+  beta — or via the Docker image), or an Openbase Cloud DevSpace.
 * Extend the runtime with plugins, skills, routines, bootstrap commands, and
   console pages.
 
@@ -79,9 +79,14 @@ Most users should install the Mac app first:
 3. Install the iOS beta or the Android APK from the Downloads page if you want
    the phone control surface for voice calls, approvals, reports, and diffs.
 
-Prefer a container, or running on Windows? Run the `openbaseai/openbase` Docker
-image instead of the Mac app — it runs the full runtime in a Linux container
-(with Docker Desktop on Windows). See [Run in Docker](docs/docker.md).
+Prefer a container? Run the `openbaseai/openbase` Docker image instead of the
+Mac app — it runs the full runtime in a Linux container (with Docker Desktop
+on Windows). See [Run in Docker](docs/docker.md).
+
+On Windows you can also run the runtime natively (beta): `./scripts/setup`
+works from a Windows checkout, and services are supervised without launchd or
+systemd through the Windows service backend, with Task Scheduler starting them
+at login. The Docker image remains the most battle-tested Windows path.
 
 ### 🛠️ Developer Setup
 
@@ -162,6 +167,13 @@ The product docs live in this repository under `docs/` and are published at
 Openbase Coder is in beta. Please help shape the product by opening a
 [GitHub issue](https://github.com/openbase-community/openbase/issues/new)
 or joining the community on [Discord](https://discord.gg/nYzsn3Vh6y).
+
+Special thanks to our Peruvian hackathon participants
+[@rivacortez](https://github.com/rivacortez) and
+[@Diego22rct](https://github.com/Diego22rct), whose fork work is the
+foundation of native Windows support — the cross-platform service runners,
+the Windows service backend, cross-platform file locking, and the Windows
+setup path all draw on their contributions.
 
 ### ⚖️ License
 
