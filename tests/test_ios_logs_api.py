@@ -126,3 +126,40 @@ def test_ios_logs_upload_rejects_entries_over_retained_buffer(
 
     assert response.status_code == 400
     assert not (tmp_path / "logs" / "ios-app.log").exists()
+
+
+def test_ios_logs_upload_accepts_long_diagnostic_fields(monkeypatch, tmp_path) -> None:
+    log_dir = tmp_path / "logs"
+    monkeypatch.setattr(views, "DEFAULT_LOG_DIR", log_dir)
+    long_value = ("diagnostic detail " * 500).rstrip()
+
+    response = _upload_ios_logs(
+        {
+            "entries": [
+                {
+                    **_ios_log_entry(0),
+                    "message": long_value,
+                    "metadata": {"error": long_value},
+                    "line": f"[Diagnostics] {long_value}",
+                }
+            ]
+        }
+    )
+
+    assert response.status_code == 201
+    payload = json.loads(
+        (log_dir / "ios-app.log").read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert payload["entry"]["message"] == long_value
+    assert payload["entry"]["metadata"]["error"] == long_value
+
+
+def test_ios_logs_upload_rejects_oversized_batch(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(views, "DEFAULT_LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr(diagnostics, "IOS_LOG_UPLOAD_MAX_BYTES", 100)
+
+    response = _upload_ios_logs({"entries": [_ios_log_entry(0)]})
+
+    assert response.status_code == 400
+    assert "2 MiB batch limit" in str(response.data["entries"][0])
+    assert not (tmp_path / "logs" / "ios-app.log").exists()
