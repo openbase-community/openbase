@@ -38,8 +38,14 @@ PROVIDER_NETMESH_TSNET = "netmesh-tsnet"
 
 PROVIDER_VALUES = (PROVIDER_TAILSCALE, PROVIDER_NETMESH, PROVIDER_NETMESH_TSNET)
 
-# Where the netmesh client bundles the shim (overridable for dev installs).
-NETMESH_CTL_DEFAULT = "/Applications/OpenbaseNetmesh.app/Contents/MacOS/netmesh-ctl"
+# Where the netmesh VPN machinery bundles the shim, most-preferred first:
+# the companion nested in the Openbase desktop app (the shipping layout — the
+# standalone Openbase Netmesh app is retired), then the legacy standalone app.
+NETMESH_CTL_CANDIDATES = (
+    "/Applications/Openbase.app/Contents/Resources/OpenbaseNetmeshCompanion.app"
+    "/Contents/MacOS/netmesh-ctl",
+    "/Applications/OpenbaseNetmesh.app/Contents/MacOS/netmesh-ctl",
+)
 
 _TAILSCALE_FALLBACK_PATHS = (
     "/usr/local/bin/tailscale",
@@ -95,8 +101,9 @@ def netmesh_ctl_bin() -> str | None:
     override = os.environ.get("OPENBASE_CODER_CLI_NETMESH_CTL")
     if override and os.access(override, os.X_OK):
         return override
-    if os.access(NETMESH_CTL_DEFAULT, os.X_OK):
-        return NETMESH_CTL_DEFAULT
+    for candidate in NETMESH_CTL_CANDIDATES:
+        if os.access(candidate, os.X_OK):
+            return candidate
     return shutil.which("netmesh-ctl")
 
 

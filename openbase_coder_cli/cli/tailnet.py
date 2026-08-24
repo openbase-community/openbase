@@ -317,14 +317,23 @@ def _reregister_device() -> None:
 
 
 @tailnet.command("enroll")
-def enroll() -> None:
+@click.option(
+    "--json",
+    "json_",
+    is_flag=True,
+    help="Print the enrollment as JSON without redeeming it (for the desktop "
+    "app's netmesh companion).",
+)
+def enroll(json_: bool) -> None:
     """Join this machine to the user's netmesh with a cloud-minted key.
 
     Requires `openbase-coder login`. In embedded (netmesh-tsnet) mode the key
     is redeemed by the tunneld daemon automatically; in VPN mode the key is
-    printed for the Openbase Netmesh app's manual-join screen (until the app
-    enrolls on its own).
+    handed to whatever drives the VPN (the desktop app's netmesh companion
+    consumes the --json form).
     """
+    import json as json_module
+
     from openbase_coder_cli.services.cloud_registration import netmesh_enroll
 
     enrollment = netmesh_enroll()
@@ -333,6 +342,16 @@ def enroll() -> None:
             "Could not mint a netmesh key. Run 'openbase-coder login' first "
             "and check that openbase-cloud is reachable."
         )
+    if json_:
+        click.echo(
+            json_module.dumps(
+                {
+                    "control_url": enrollment["control_url"],
+                    "auth_key": enrollment["auth_key"],
+                }
+            )
+        )
+        return
     if tp.is_netmesh_tsnet():
         from openbase_coder_cli.services.tunneld import ensure_tunneld_running
 
@@ -341,7 +360,7 @@ def enroll() -> None:
         return
     click.echo(f"control url: {enrollment['control_url']}")
     click.echo(f"auth key (single-use): {enrollment['auth_key']}")
-    click.echo("Use these in the Openbase Netmesh app's manual join screen.")
+    click.echo("Use these to join the netmesh VPN.")
 
 
 @tailnet.command("sync")
