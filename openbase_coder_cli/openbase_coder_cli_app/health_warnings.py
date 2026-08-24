@@ -59,12 +59,13 @@ def _warning(
 def _service_warnings() -> list[dict[str, str]]:
     from openbase_coder_cli.services.definitions import SERVICES
     from openbase_coder_cli.services.launchd import launchctl_status
-    from openbase_coder_cli.services.selection import configured_coding_backend
+    from openbase_coder_cli.services.selection import (
+        service_supports_configured_backends,
+    )
 
     warnings: list[dict[str, str]] = []
-    coding_backend = configured_coding_backend()
     for service in SERVICES:
-        if not service.supports_backend(coding_backend):
+        if not service_supports_configured_backends(service):
             # Backend-scoped services are intentionally absent when another
             # coding backend is selected.
             continue

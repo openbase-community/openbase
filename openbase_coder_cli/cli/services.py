@@ -19,7 +19,7 @@ from openbase_coder_cli.services.registry import (
     require_installation,
     target_services,
 )
-from openbase_coder_cli.services.selection import configured_coding_backend
+from openbase_coder_cli.services.selection import configured_coding_backends
 from openbase_coder_cli.services.tailscale_serve import (
     configure_tailscale_serve,
     tailscale_serve_health,
@@ -132,22 +132,25 @@ def uninstall(name: str | None) -> None:
 def status() -> None:
     """Show status of all services."""
     require_installation()
-    coding_backend = configured_coding_backend()
+    coding_backends = configured_coding_backends()
+    backends_label = "/".join(coding_backends)
     has_failure = False
     click.echo("Service Status:")
     click.echo()
     for svc in SERVICES:
         info = launchctl_status(svc)
         name_col = f"  {svc.name:<20}"
-        required = getattr(svc, "install_by_default", True) and svc.supports_backend(
-            coding_backend
+        supports = getattr(svc, "supports_backend", None)
+        backend_supported = supports is None or any(
+            supports(backend) for backend in coding_backends
         )
+        required = getattr(svc, "install_by_default", True) and backend_supported
         if not info["installed"]:
             if required:
                 click.echo(f"{name_col} not installed")
                 has_failure = True
-            elif not svc.supports_backend(coding_backend):
-                click.echo(f"{name_col} not used ({coding_backend} backend)")
+            elif not backend_supported:
+                click.echo(f"{name_col} not used ({backends_label} backend)")
             else:
                 click.echo(f"{name_col} optional (not installed)")
         elif info["pid"]:

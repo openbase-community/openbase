@@ -18,7 +18,9 @@ from openbase_coder_cli.openbase_coder_cli_app import (  # noqa: E402
 
 
 def test_service_status_includes_background_openbase_services(monkeypatch) -> None:
-    monkeypatch.setattr(services_views, "configured_coding_backend", lambda: "codex")
+    monkeypatch.setattr(
+        services_views, "service_supports_configured_backends", lambda service: True
+    )
     monkeypatch.setattr(services_views, "_check_port", lambda port: True)
     monkeypatch.setattr(services_views, "_check_tailscale", lambda: True)
     monkeypatch.setattr(services_views, "_check_web_backend", lambda: True)
@@ -114,7 +116,9 @@ def test_service_status_omits_codex_app_server_on_claude_code_backend(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        services_views, "configured_coding_backend", lambda: "claude_code"
+        services_views,
+        "service_supports_configured_backends",
+        lambda service: service.supports_backend("claude_code"),
     )
     monkeypatch.setattr(services_views, "_check_port", lambda port: True)
     monkeypatch.setattr(services_views, "_check_tailscale", lambda: True)

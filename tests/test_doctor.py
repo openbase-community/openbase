@@ -191,7 +191,7 @@ def test_doctor_allows_optional_stopped_services(monkeypatch, tmp_path):
             workspace_path=str(tmp_path),
         ),
     )
-    monkeypatch.setattr(doctor_cli, "configured_coding_backend", lambda: "codex")
+    monkeypatch.setattr(doctor_cli, "configured_coding_backends", lambda: ["codex"])
     monkeypatch.setattr(
         doctor_cli,
         "SERVICES",
@@ -281,7 +281,7 @@ def test_doctor_skips_backend_scoped_services_on_other_backends(monkeypatch, tmp
             console_build_dir="",
         ),
     )
-    monkeypatch.setattr(doctor_cli, "configured_coding_backend", lambda: "claude_code")
+    monkeypatch.setattr(doctor_cli, "configured_coding_backends", lambda: ["claude_code"])
     monkeypatch.setattr(
         doctor_cli,
         "SERVICES",
@@ -364,7 +364,7 @@ def test_doctor_reports_missing_tailscale_as_setup_action(monkeypatch, tmp_path)
             workspace_path=str(tmp_path),
         ),
     )
-    monkeypatch.setattr(doctor_cli, "configured_coding_backend", lambda: "codex")
+    monkeypatch.setattr(doctor_cli, "configured_coding_backends", lambda: ["codex"])
     monkeypatch.setattr(doctor_cli, "SERVICES", [])
     monkeypatch.setattr(doctor_cli, "_get_listening_sockets", lambda: [])
     monkeypatch.setattr(doctor_cli, "DEFAULT_ENV_FILE_PATH", env_file)
