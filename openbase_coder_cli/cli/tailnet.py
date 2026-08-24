@@ -18,6 +18,7 @@ from openbase_coder_cli.services import tailscale_provider as tp
 PROVIDER_ENV_KEY = "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"
 ALLOWED_HOSTS_ENV_KEY = "OPENBASE_CODER_CLI_ALLOWED_HOSTS"
 NETMESH_ALLOWED_SUFFIX = ".netmesh.openbase.cloud"
+LIVEKIT_MODE_ENV_KEY = "LIVEKIT_NETWORK_MODE"
 
 
 def _env_path():
@@ -48,6 +49,16 @@ def set_provider(name: str) -> None:
         if NETMESH_ALLOWED_SUFFIX not in host_list:
             host_list.append(NETMESH_ALLOWED_SUFFIX)
             values[ALLOWED_HOSTS_ENV_KEY] = ",".join(host_list)
+
+    # Embedded mode: all media reaches LiveKit host-locally through the tunneld
+    # TURN relay, so LiveKit must run in "local" network mode. With --node-ip
+    # set (tailscale mode), every advertised candidate collapses to that IP,
+    # the loopback candidate is never sent, the phone never installs a TURN
+    # permission for 127.0.0.1, and the server's host-local checks (which
+    # arrive with a loopback source) are all dropped by the relay.
+    values[LIVEKIT_MODE_ENV_KEY] = (
+        "local" if name == tp.PROVIDER_NETMESH_TSNET else "tailscale"
+    )
 
     upsert_env_file_values(path, values)
     click.echo(f"Tailnet provider set to '{name}' in {path}.")
