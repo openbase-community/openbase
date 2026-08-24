@@ -26,6 +26,7 @@ from .desktop import desktop
 from .doctor import doctor
 from .onboarding import onboarding
 from .plugins import plugins
+from .pr_review_routine import pr_review_routine
 from .provision import provision
 from .reports import reports
 from .restart import restart, self_restart
@@ -78,6 +79,7 @@ main.add_command(login)
 main.add_command(logout)
 main.add_command(auth)
 main.add_command(plugins)
+main.add_command(pr_review_routine)
 main.add_command(provision)
 main.add_command(reports)
 main.add_command(bootstrap)
