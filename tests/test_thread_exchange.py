@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -975,3 +976,104 @@ def test_import_auto_clears_conflict_after_content_converges(tmp_path: Path) -> 
         ledger_path=target_ledger,
     )
     assert status["conflict_count"] == 0
+
+
+def _exported_snapshot_metadata_path(exchange_dir: Path) -> Path:
+    snapshot_dirs = sorted((exchange_dir / "devices").glob("*/snapshots/*/*"))
+    assert len(snapshot_dirs) == 1
+    return snapshot_dirs[0] / "metadata.json"
+
+
+def test_import_caches_invalid_snapshot_and_revalidates_on_change(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / "source"
+    target_home = tmp_path / "target"
+    exchange_dir = tmp_path / "exchange"
+    ledger_path = tmp_path / "target-ledger.json"
+    _create_state_db(source_home / "state_5.sqlite")
+    _create_state_db(target_home / "state_5.sqlite")
+    _insert_thread(source_home, "thread-1", title="Thread title", updated_at=20)
+    export_thread_snapshots(
+        codex_home=source_home,
+        exchange_dir=exchange_dir,
+        device_identity_path=tmp_path / "source-device.json",
+        ledger_path=tmp_path / "source-ledger.json",
+        stability_delay_seconds=0,
+        max_age_days=None,
+    )
+    metadata_path = _exported_snapshot_metadata_path(exchange_dir)
+    valid_metadata = metadata_path.read_text(encoding="utf-8")
+    metadata_path.write_text("not json", encoding="utf-8")
+
+    def run_import() -> list:
+        return import_thread_snapshots(
+            codex_home=target_home,
+            exchange_dir=exchange_dir,
+            device_identity_path=tmp_path / "target-device.json",
+            ledger_path=ledger_path,
+        )
+
+    first = run_import()
+    assert [result.status for result in first] == ["skipped"]
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    assert len(ledger["invalid_snapshots"]) == 1
+
+    # An unchanged invalid snapshot must not be re-read: make the metadata
+    # unreadable so any parse attempt would raise.
+    metadata_path.chmod(0o000)
+    try:
+        second = run_import()
+    finally:
+        metadata_path.chmod(0o600)
+    assert [(result.status, result.reason) for result in second] == [
+        (first[0].status, first[0].reason)
+    ]
+
+    metadata_path.write_text(valid_metadata, encoding="utf-8")
+    third = run_import()
+    assert [result.status for result in third] == ["imported"]
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    assert ledger["invalid_snapshots"] == {}
+
+
+def test_import_prunes_cache_entries_for_removed_snapshots(tmp_path: Path) -> None:
+    source_home = tmp_path / "source"
+    target_home = tmp_path / "target"
+    exchange_dir = tmp_path / "exchange"
+    ledger_path = tmp_path / "target-ledger.json"
+    _create_state_db(source_home / "state_5.sqlite")
+    _create_state_db(target_home / "state_5.sqlite")
+    _insert_thread(source_home, "thread-1", title="Thread title", updated_at=20)
+    export_thread_snapshots(
+        codex_home=source_home,
+        exchange_dir=exchange_dir,
+        device_identity_path=tmp_path / "source-device.json",
+        ledger_path=tmp_path / "source-ledger.json",
+        stability_delay_seconds=0,
+        max_age_days=None,
+    )
+    metadata_path = _exported_snapshot_metadata_path(exchange_dir)
+    metadata_path.write_text("not json", encoding="utf-8")
+
+    import_thread_snapshots(
+        codex_home=target_home,
+        exchange_dir=exchange_dir,
+        device_identity_path=tmp_path / "target-device.json",
+        ledger_path=ledger_path,
+    )
+    assert (
+        len(json.loads(ledger_path.read_text(encoding="utf-8"))["invalid_snapshots"])
+        == 1
+    )
+
+    shutil.rmtree(metadata_path.parent)
+    import_thread_snapshots(
+        codex_home=target_home,
+        exchange_dir=exchange_dir,
+        device_identity_path=tmp_path / "target-device.json",
+        ledger_path=ledger_path,
+    )
+    assert (
+        json.loads(ledger_path.read_text(encoding="utf-8"))["invalid_snapshots"] == {}
+    )
