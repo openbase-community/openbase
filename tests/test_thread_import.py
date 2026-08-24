@@ -458,7 +458,9 @@ def test_sync_codex_threads_once_logs_conflict_and_continues(
     _append_terminal(normal_conflict, message="normal")
     _append_terminal(voice_conflict, message="voice")
     _append_terminal(ok_rollout, message="ok")
-    caplog.set_level(logging.WARNING, logger="openbase_coder_cli.thread_sync.thread_import")
+    caplog.set_level(
+        logging.WARNING, logger="openbase_coder_cli.thread_sync.thread_import"
+    )
 
     results = sync_codex_threads_once(
         normal_home=normal_home,
@@ -604,7 +606,9 @@ def test_sync_codex_threads_once_skips_threads_older_than_max_age(
 
 
 def test_sync_result_logging_suppresses_routine_results(caplog) -> None:
-    caplog.set_level(logging.INFO, logger="openbase_coder_cli.thread_sync.thread_import")
+    caplog.set_level(
+        logging.INFO, logger="openbase_coder_cli.thread_sync.thread_import"
+    )
 
     _log_sync_result(
         CodexThreadSyncResult("thread-old", "skipped", None, "skipped_old")
@@ -726,3 +730,101 @@ def test_active_super_agent_thread_ids_honors_store_home_env(
     active = _active_super_agent_thread_ids(state_path=tmp_path / "missing-state.json")
 
     assert active == {"0197aaaa-1111-2222-3333-444455556666"}
+
+
+def _append_truncated_line(rollout_path: Path) -> None:
+    with rollout_path.open("a", encoding="utf-8") as handle:
+        handle.write('{"timestamp": "2026-05-21T12:00:01.000Z", "type": "eve')
+
+
+def test_sync_codex_threads_once_transfers_thread_with_truncated_tail(
+    tmp_path: Path,
+) -> None:
+    normal_home = tmp_path / "normal"
+    voice_home = tmp_path / "voice"
+    ledger = tmp_path / "ledger.json"
+    _create_state_db(normal_home / "state_5.sqlite")
+    _create_state_db(voice_home / "state_5.sqlite")
+    source_rollout = _insert_thread(
+        normal_home,
+        "thread-1",
+        title="Thread title",
+        updated_at=20,
+    )
+    _append_terminal(source_rollout)
+    _append_truncated_line(source_rollout)
+
+    results = sync_codex_threads_once(
+        normal_home=normal_home,
+        voice_home=voice_home,
+        ledger_path=ledger,
+        stability_delay_seconds=0,
+        max_age_days=None,
+    )
+
+    assert [(result.thread_id, result.status) for result in results] == [
+        ("thread-1", "transferred")
+    ]
+    target_rollout = voice_home / source_rollout.relative_to(normal_home)
+    assert target_rollout.exists()
+
+
+def test_sync_codex_threads_once_skips_truncated_rollout_open_for_write(
+    tmp_path: Path,
+) -> None:
+    normal_home = tmp_path / "normal"
+    voice_home = tmp_path / "voice"
+    ledger = tmp_path / "ledger.json"
+    _create_state_db(normal_home / "state_5.sqlite")
+    _create_state_db(voice_home / "state_5.sqlite")
+    source_rollout = _insert_thread(
+        normal_home,
+        "thread-1",
+        title="Thread title",
+        updated_at=20,
+    )
+    _append_terminal(source_rollout)
+    with source_rollout.open("a", encoding="utf-8") as handle:
+        handle.write('{"timestamp": "2026-05-21T12:00:01.000Z", "type": "eve')
+        handle.flush()
+
+        results = sync_codex_threads_once(
+            normal_home=normal_home,
+            voice_home=voice_home,
+            ledger_path=ledger,
+            stability_delay_seconds=0,
+            max_age_days=None,
+        )
+
+    assert [(result.thread_id, result.status, result.reason) for result in results] == [
+        ("thread-1", "skipped", "skipped_active")
+    ]
+
+
+def test_sync_codex_threads_once_marks_rollout_without_events_malformed(
+    tmp_path: Path,
+) -> None:
+    normal_home = tmp_path / "normal"
+    voice_home = tmp_path / "voice"
+    ledger = tmp_path / "ledger.json"
+    _create_state_db(normal_home / "state_5.sqlite")
+    _create_state_db(voice_home / "state_5.sqlite")
+    source_rollout = _insert_thread(
+        normal_home,
+        "thread-1",
+        title="Thread title",
+        updated_at=20,
+    )
+    source_rollout.write_text("not json at all\n", encoding="utf-8")
+
+    results = sync_codex_threads_once(
+        normal_home=normal_home,
+        voice_home=voice_home,
+        ledger_path=ledger,
+        stability_delay_seconds=0,
+        max_age_days=None,
+    )
+
+    assert [(result.thread_id, result.status, result.reason) for result in results] == [
+        ("thread-1", "skipped", "rollout_malformed")
+    ]
