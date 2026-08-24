@@ -57,7 +57,9 @@ def _livekit_config_body(
     )
 
 
-def build_livekit_server(env: dict[str, str], binaries: dict[str, str]) -> RunnerArgvEnv:
+def build_livekit_server(
+    env: dict[str, str], binaries: dict[str, str]
+) -> RunnerArgvEnv:
     mode = env.get("LIVEKIT_NETWORK_MODE", "tailscale")
     tcp_port = env.get("LIVEKIT_TCP_PORT", "7881")
     udp_port = env.get("LIVEKIT_UDP_PORT", "7882")
@@ -132,7 +134,9 @@ def build_livekit_server(env: dict[str, str], binaries: dict[str, str]) -> Runne
     return argv, env
 
 
-def build_codex_app_server(env: dict[str, str], binaries: dict[str, str]) -> RunnerArgvEnv:
+def build_codex_app_server(
+    env: dict[str, str], binaries: dict[str, str]
+) -> RunnerArgvEnv:
     codex_home = str(OPENBASE_BASE_DIR / "codex_home")
     Path(codex_home).mkdir(parents=True, exist_ok=True)
     env = dict(env)
@@ -177,7 +181,9 @@ def build_sync_workers(env: dict[str, str], binaries: dict[str, str]) -> RunnerA
     return [binaries["openbase_coder"], "sync-workers", "run"], env
 
 
-def build_openbase_routines(env: dict[str, str], binaries: dict[str, str]) -> RunnerArgvEnv:
+def build_openbase_routines(
+    env: dict[str, str], binaries: dict[str, str]
+) -> RunnerArgvEnv:
     interval = env.get("OPENBASE_CODER_ROUTINES_INTERVAL", "60")
     return (
         [binaries["openbase_coder"], "routines", "run-loop", "--interval", interval],
@@ -276,7 +282,9 @@ def build_code_sync(env: dict[str, str], binaries: dict[str, str]) -> RunnerArgv
     return argv, env
 
 
-def build_openbase_tunneld(env: dict[str, str], binaries: dict[str, str]) -> RunnerArgvEnv:
+def build_openbase_tunneld(
+    env: dict[str, str], binaries: dict[str, str]
+) -> RunnerArgvEnv:
     env = dict(env)
     # The daemon's flag defaults point at Tailscale's hosted control plane;
     # the embedded transport always rides Openbase's headscale.
@@ -294,9 +302,7 @@ def build_openbase_cloud_heartbeat(
     env: dict[str, str], binaries: dict[str, str]
 ) -> RunnerArgvEnv:
     interval = env.get("OPENBASE_CLOUD_HEARTBEAT_INTERVAL", "60")
-    subprocess.run(
-        [binaries["openbase_coder"], "cloud", "rehydrate-auth"], check=False
-    )
+    subprocess.run([binaries["openbase_coder"], "cloud", "rehydrate-auth"], check=False)
     argv = [
         binaries["openbase_coder"],
         "cloud",
@@ -355,7 +361,11 @@ def _load_env(config: InstallationConfig) -> dict[str, str]:
 def run(name: str) -> None:
     if name not in RUNNERS:
         raise SystemExit(f"Unknown service runner: {name}")
-    config = InstallationConfig.load() if InstallationConfig.exists() else InstallationConfig()
+    config = (
+        InstallationConfig.load()
+        if InstallationConfig.exists()
+        else InstallationConfig()
+    )
     binaries = _resolve_binaries(name, config)
     build, _ = RUNNERS[name]
     argv, env = build(_load_env(config), binaries)
@@ -365,9 +375,7 @@ def run(name: str) -> None:
 def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
     if not args:
-        raise SystemExit(
-            "Usage: python -m openbase_coder_cli.services.runners <name>"
-        )
+        raise SystemExit("Usage: python -m openbase_coder_cli.services.runners <name>")
     run(args[0])
 
 
