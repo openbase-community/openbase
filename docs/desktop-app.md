@@ -139,10 +139,21 @@ app, the console, or `openbase-coder routines ...`.
 
 ### Skills
 
-Browse installed agent skills and the Printing Press skill catalog. You can
-search, view skill metadata (version, targets, MCP tool details), install
-catalog skills to one or more targets, edit skill sources, and enable
-auto-linking of personal skills into the Openbase agent homes.
+Browse installed agent skills, the Openbase catalog, and the Printing Press
+catalog. An Openbase catalog skill is installable only when its Django-admin
+registry entry pins a GitHub repository, full commit SHA, safe subdirectory,
+and optional `SKILL.md` digest. The confirmation dialog shows that provenance
+and the selected agent homes; installation never runs catalog dependencies or
+scripts. Existing skills with the same name are treated as conflicts rather
+than overwritten.
+
+The Routine templates tab is browse-only. It shows prompts, commands,
+schedules, and required skills from the managed registry, but never creates or
+schedules a routine. Create a routine explicitly from the Routines page after
+reviewing a template.
+
+You can also edit installed skill sources and enable auto-linking of personal
+skills into the Openbase agent homes.
 
 **On iPhone:** skills are not managed from the iOS app.
 

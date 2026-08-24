@@ -24,7 +24,6 @@ from openbase_coder_cli.paths import (
 from .thread_import import (
     DEFAULT_SYNC_MAX_AGE_DAYS,
     SESSION_INDEX_NAME,
-    STATE_DB_NAME,
     SYNC_LEDGER_NAME,
     ThreadTransferError,
     _active_super_agent_thread_ids,
@@ -40,6 +39,7 @@ from .thread_import import (
     _thread_fingerprint,
     _thread_rows,
     _thread_safe_for_sync,
+    state_db_path,
 )
 from .thread_sync_common import (
     DeviceIdentity,
@@ -157,7 +157,7 @@ def export_thread_snapshots(
     active_thread_ids: set[str] | None = None,
     source_user_home: Path | None = None,
 ) -> list[ThreadSnapshotResult]:
-    state_db = codex_home / STATE_DB_NAME
+    state_db = state_db_path(codex_home)
     if not state_db.exists():
         raise ThreadTransferError(f"Codex state database not found: {state_db}")
 
@@ -283,7 +283,7 @@ def import_thread_snapshots(
     ledger_path: Path = DEFAULT_LEDGER_PATH,
     target_user_home: Path | None = None,
 ) -> list[ThreadSnapshotResult]:
-    state_db = codex_home / STATE_DB_NAME
+    state_db = state_db_path(codex_home)
     if not state_db.exists():
         raise ThreadTransferError(f"Codex state database not found: {state_db}")
 
@@ -403,7 +403,7 @@ def thread_snapshot_conflicts_payload(
     identity = read_device_identity(device_identity_path)
     ledger = _read_exchange_ledger(ledger_path)
     conflicts: list[dict[str, Any]] = []
-    state_db = codex_home / STATE_DB_NAME
+    state_db = state_db_path(codex_home)
     for thread_id, thread_ledger in ledger.get("threads", {}).items():
         if not isinstance(thread_id, str) or not isinstance(thread_ledger, dict):
             continue
@@ -507,8 +507,8 @@ def thread_home_sync_conflicts_payload(
         logger=logger,
         malformed_event="codex_thread_sync_ledger_malformed",
     )
-    normal_db = normal_home / STATE_DB_NAME
-    voice_db = voice_home / STATE_DB_NAME
+    normal_db = state_db_path(normal_home)
+    voice_db = state_db_path(voice_home)
     conflicts: list[dict[str, Any]] = []
     for thread_id, thread_ledger in ledger.items():
         if not isinstance(thread_id, str) or not isinstance(thread_ledger, dict):
@@ -584,7 +584,7 @@ def resolve_thread_snapshot_conflict(
     if not source_device_id:
         raise ThreadConflictResolutionError("source_device_not_found")
 
-    state_db = codex_home / STATE_DB_NAME
+    state_db = state_db_path(codex_home)
     local_row = _exchange_thread_row(state_db, thread_id)
     local_fingerprint = _fingerprint_id(
         _thread_fingerprint(local_row, codex_home, thread_id)
@@ -894,7 +894,7 @@ def _apply_snapshot_db_state(
         thread_row["cwd"] = translated_cwd
     dynamic_tools = metadata.get("dynamic_tools")
     dynamic_tools = dynamic_tools if isinstance(dynamic_tools, list) else []
-    with closing(_connect(codex_home / STATE_DB_NAME)) as conn:
+    with closing(_connect(state_db_path(codex_home))) as conn:
         _upsert_thread_row(
             conn, thread_id, thread_row, target_rollout, overwrite=overwrite
         )

@@ -46,6 +46,11 @@ from openbase_coder_cli.openbase_coder_cli_app.diagnostics import (
     health_check,
 )
 from openbase_coder_cli.openbase_coder_cli_app.env_settings import env_settings
+from openbase_coder_cli.openbase_coder_cli_app.inbound_calls import (
+    inbound_call_activate,  # noqa: F401
+    inbound_call_decline,  # noqa: F401
+    user_call,  # noqa: F401
+)
 from openbase_coder_cli.openbase_coder_cli_app.ios_app_control import ios_app_control
 from openbase_coder_cli.openbase_coder_cli_app.livekit import (
     apple_music_playback_entitlement,  # noqa: F401
@@ -53,6 +58,11 @@ from openbase_coder_cli.openbase_coder_cli_app.livekit import (
     livekit_voice_route,
     livekit_voice_route_exit,
     livekit_voice_route_transfer,
+)
+from openbase_coder_cli.openbase_coder_cli_app.marketplace import (
+    marketplace_routines,
+    marketplace_skill_install,
+    marketplace_skills,
 )
 from openbase_coder_cli.openbase_coder_cli_app.model_settings import (
     backend_model_settings,  # noqa: F401
@@ -302,6 +312,9 @@ __all__ = [
     "livekit_voice_route_exit",
     "livekit_voice_route_transfer",
     "local_stt_download",
+    "marketplace_skill_install",
+    "marketplace_skills",
+    "marketplace_routines",
     "onboarding_cloud_state",
     "onboarding_status",
     "openbase_restart",

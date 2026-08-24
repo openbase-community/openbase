@@ -122,6 +122,28 @@ openbase-coder user play success
 openbase-coder user play /path/to/sound.wav
 ```
 
+## Ring The User For An Urgent Voice Handoff
+
+Use an inbound call only when the user explicitly asked to be called or the
+task is urgent enough to justify ringing their phone:
+
+```bash
+openbase-coder user call "Lucy"
+```
+
+The agent name must resolve to an existing resumable thread. Openbase Coder
+stores that route locally, asks Openbase Cloud to send a short-lived VoIP
+invitation to the user's registered iPhones, and reports how many devices
+accepted the invitation. The push does not contain a thread ID, local path,
+LiveKit credential, or room-routing instruction. If the user answers, the app
+connects to the local dispatcher room first and activates the stored agent
+route only after that room is connected.
+
+Command success means Cloud accepted the ring request; it does not prove that
+an iPhone displayed or answered it. The command requires Cloud login, a signed
+iOS app with PushKit enabled, a registered device, and a reachable local
+Openbase Coder runtime. A declined or expired invitation cannot be reused.
+
 ## Typical Voice Handoff
 
 1. The dispatcher starts or finds a Super Agent thread.
@@ -159,3 +181,5 @@ openbase-coder user play /path/to/sound.wav
 - `openbase-coder user say AGENT_NAME MESSAGE`: speak a short announcement in
   the active room, or send a thread-linked iPhone notification when no room is
   active.
+- `openbase-coder user call AGENT_NAME`: explicitly ring registered iPhones for
+  an urgent, short-lived handoff to an existing agent thread.

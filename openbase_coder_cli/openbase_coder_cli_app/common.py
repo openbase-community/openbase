@@ -4,6 +4,20 @@ from __future__ import annotations
 
 from typing import Any
 
+from rest_framework import serializers
+
+
+class ExactFieldsSerializer(serializers.Serializer):
+    """Reject unexpected input fields instead of silently ignoring them."""
+
+    def to_internal_value(self, data):
+        unknown = set(data) - set(self.fields)
+        if unknown:
+            raise serializers.ValidationError(
+                {field: ["Unknown field."] for field in sorted(unknown)}
+            )
+        return super().to_internal_value(data)
+
 
 def _request_identity(request) -> str:
     if isinstance(request.auth, dict):
