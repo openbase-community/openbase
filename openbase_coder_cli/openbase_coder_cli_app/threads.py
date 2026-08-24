@@ -312,17 +312,36 @@ def thread_list(request):
                 {"error": "directory is required"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        thread = async_to_sync(manager.create_thread)(directory)
+        backend = request.data.get("backend") or None
+        create_kwargs = {}
+        if backend:
+            # Only the mixed-backend facade can target a backend; on a
+            # single-backend install anything but that backend is an error.
+            if getattr(manager, "manager_for_backend", None) is not None:
+                if manager.manager_for_backend(backend) is None:
+                    return Response(
+                        {"error": f"backend {backend!r} is not configured"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                create_kwargs["backend"] = backend
+            elif backend != getattr(manager, "_execution_backend", backend):
+                return Response(
+                    {"error": f"backend {backend!r} is not configured"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        thread = async_to_sync(manager.create_thread)(directory, **create_kwargs)
         invalidate_thread_list_cache()
         logger.info(
-            "thread_list created thread_id=%s directory=%s",
+            "thread_list created thread_id=%s directory=%s backend=%s",
             thread.session_id,
             thread.directory,
+            thread.backend,
         )
         return Response(
             {
                 "thread_id": thread.session_id,
                 "directory": thread.directory,
+                "backend": thread.backend,
             },
             status=status.HTTP_201_CREATED,
         )
