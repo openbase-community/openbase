@@ -180,13 +180,13 @@ def cloud_login_status() -> dict[str, Any]:
 
 
 def onboarding_status_payload() -> dict[str, Any]:
-    """Local onboarding status consumed by the Mac app and console."""
+    """Local onboarding status consumed by the Mac app, iOS app, and console."""
     checks = cli_configured_checks()
     from openbase_coder_cli.self_update import version_info
 
     auth_status = cloud_login_status()
     authenticated = auth_status["status"] == "logged_in"
-    return {
+    payload = {
         "cli_configured": all(checks.values()),
         "checks": checks,
         "versions": version_info(),
@@ -200,3 +200,15 @@ def onboarding_status_payload() -> dict[str, Any]:
         # registry via GET /api/onboarding/cloud-state/.
         "cloud": read_onboarding_cache(),
     }
+    from openbase_coder_cli.services import tailscale_provider as tp
+
+    if tp.is_netmesh_tsnet():
+        # Embedded-mode phones route WebRTC media through the tunneld TURN
+        # relay; this endpoint is their credential channel (loopback and the
+        # user's own tailnet only).
+        from openbase_coder_cli.services.tunneld import voice_turn_info
+
+        turn = voice_turn_info()
+        if turn:
+            payload["voice_turn"] = turn
+    return payload

@@ -87,20 +87,15 @@ def netmesh_ctl_bin() -> str | None:
     return shutil.which("netmesh-ctl")
 
 
-# The embedded no-VPN transport is reached via openbase-tunneld's loopback
-# control API, not the netmesh-ctl shim. That client is staged separately
-# (option 3 / openbase#10), so until it lands the tsnet provider records the
-# selection but its runtime ops report this instead of using the VPN shim.
-TSNET_PENDING_ERROR = (
-    "Embedded netmesh (tsnet, no-VPN) transport is selected but its control "
-    "daemon (openbase-tunneld) is not wired up in this build yet."
-)
-
-
 def tool_path() -> str | None:
     """Path to the active provider's control tool, or None if not installed."""
     if is_netmesh_tsnet():
-        return None  # openbase-tunneld control client is staged (see above)
+        # The embedded no-VPN transport is controlled via openbase-tunneld's
+        # loopback API rather than a CLI binary; "installed" means the daemon
+        # binary is locatable or a daemon has already run here.
+        from openbase_coder_cli.services.tunneld import tunneld_tool_path
+
+        return tunneld_tool_path()
     return netmesh_ctl_bin() if is_netmesh() else tailscale_bin()
 
 
@@ -133,7 +128,12 @@ def status_json() -> dict[str, Any]:
     Returns a dict with an ``error`` key on failure.
     """
     if is_netmesh_tsnet():
-        return {"error": TSNET_PENDING_ERROR}
+        from openbase_coder_cli.services.tunneld import tunneld_status
+
+        _available, payload, error = tunneld_status()
+        if payload is None:
+            return {"error": error or "openbase-tunneld status unavailable"}
+        return payload
     if is_netmesh():
         ctl = netmesh_ctl_bin()
         if not ctl:
@@ -148,7 +148,30 @@ def status_json() -> dict[str, Any]:
 def serve_status_json() -> dict[str, Any]:
     """Parsed serve status (shape matches ``tailscale serve status --json``)."""
     if is_netmesh_tsnet():
-        return {"error": TSNET_PENDING_ERROR}
+        # tunneld forwards the serve routes natively; synthesize the shape the
+        # tailscale-serve parsers expect from its health payload. (Serve health
+        # itself takes a dedicated tunneld path in tailscale_serve.)
+        from openbase_coder_cli.services.tunneld import tunneld_health
+
+        health = tunneld_health()
+        if not health.get("reachable"):
+            return {
+                "error": str(health.get("error") or "openbase-tunneld is not reachable")
+            }
+        if not health.get("forwards_up"):
+            return {"error": "openbase-tunneld forwards are not up yet"}
+        host = str(health.get("self_dns_name") or "").rstrip(".")
+        payload: dict[str, Any] = {
+            "TCP": {
+                "18080": {"HTTP": True},
+                "7880": {"TCPForward": "127.0.0.1:7880"},
+            }
+        }
+        if host:
+            payload["Web"] = {
+                f"{host}:18080": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:7999"}}}
+            }
+        return payload
     if is_netmesh():
         ctl = netmesh_ctl_bin()
         if not ctl:
@@ -166,7 +189,12 @@ def apply_serve(rules: list[dict[str, Any]]) -> None:
     Raises ``RuntimeError`` on failure.
     """
     if is_netmesh_tsnet():
-        raise RuntimeError(TSNET_PENDING_ERROR)
+        # The daemon forwards 18080/7880/7881 itself; "applying serve" means
+        # making sure it is running and logged in.
+        from openbase_coder_cli.services.tunneld import ensure_tunneld_running
+
+        ensure_tunneld_running()
+        return
     if is_netmesh():
         ctl = netmesh_ctl_bin()
         if not ctl:

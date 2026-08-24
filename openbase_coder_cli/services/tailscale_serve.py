@@ -75,6 +75,9 @@ def configure_tailscale_serve() -> None:
 def tailscale_serve_health() -> TailscaleServeHealth:
     from openbase_coder_cli.services import tailscale_provider as tp
 
+    if tp.is_netmesh_tsnet():
+        return _tunneld_serve_health()
+
     if tp.tool_path() is None:
         return TailscaleServeHealth(
             tailscale_available=False,
@@ -139,6 +142,65 @@ def tailscale_serve_health() -> TailscaleServeHealth:
         livekit_configured=livekit_configured,
         openbase_reachable=openbase_reachable,
         error=reachability_error,
+    )
+
+
+def _tunneld_serve_health() -> TailscaleServeHealth:
+    """Serve health for the embedded (netmesh-tsnet) transport.
+
+    The tunneld daemon forwards the routes natively, so "configured" means its
+    forwards are up, and reachability is verified by dialing our own node
+    through the daemon (the host network stack has no route into the tailnet).
+    Adapted from the tsnet prototype branch, keyed on the provider.
+    """
+    from openbase_coder_cli.services.tunneld import tunneld_health, tunneld_probe
+
+    health = tunneld_health()
+    if not health.get("reachable"):
+        return TailscaleServeHealth(
+            tailscale_available=False,
+            tailscale_running=False,
+            host=None,
+            openbase_url=None,
+            openbase_configured=False,
+            livekit_configured=False,
+            openbase_reachable=False,
+            error=str(health.get("error") or "openbase-tunneld is not reachable."),
+        )
+
+    running = health.get("backend_state") == "Running"
+    host = str(health.get("self_dns_name") or "").strip().rstrip(".") or None
+    forwards_up = bool(health.get("forwards_up"))
+    openbase_url = _openbase_url(host)
+
+    error: str | None = None
+    if not running:
+        if health.get("auth_url"):
+            error = f"tunneld needs a tailnet login: {health['auth_url']}"
+        else:
+            error = f"tunneld backend state is {health.get('backend_state')}."
+
+    openbase_reachable = False
+    if running and forwards_up and host:
+        probe = tunneld_probe(host, OPENBASE_CODER_TAILNET_PORT, OPENBASE_HEALTH_PATH)
+        if probe.get("ok"):
+            openbase_reachable = True
+        else:
+            # Self-dial can lag right after startup; fall back to checking the
+            # local backend directly so a healthy install isn't flagged.
+            openbase_reachable, error = _openbase_reachable(
+                f"http://127.0.0.1:{OPENBASE_CODER_LOCAL_PORT}"
+            )
+
+    return TailscaleServeHealth(
+        tailscale_available=True,
+        tailscale_running=running,
+        host=host,
+        openbase_url=openbase_url,
+        openbase_configured=forwards_up,
+        livekit_configured=forwards_up,
+        openbase_reachable=openbase_reachable,
+        error=error,
     )
 
 
