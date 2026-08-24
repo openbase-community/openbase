@@ -18,6 +18,7 @@ from openbase_coder_cli.openbase_coder_cli_app import (  # noqa: E402
 
 
 def test_service_status_includes_background_openbase_services(monkeypatch) -> None:
+    monkeypatch.delenv("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", raising=False)
     monkeypatch.setattr(
         services_views, "service_supports_configured_backends", lambda service: True
     )

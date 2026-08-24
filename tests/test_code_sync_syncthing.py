@@ -143,20 +143,18 @@ def test_device_id_parsing_and_storage(tmp_path: Path) -> None:
 
 
 def test_code_sync_service_definition() -> None:
-    service = next(svc for svc in SERVICES if svc.name == "code-sync")
-    command = service.command_template.format(
-        syncthing="/opt/homebrew/bin/syncthing",
-        data_dir="/tmp/openbase",
-        workspace="/tmp/workspace",
-    )
+    from openbase_coder_cli.services import runners
 
+    service = next(svc for svc in SERVICES if svc.name == "code-sync")
     assert service.install_by_default is False
-    assert (
-        'exec /opt/homebrew/bin/syncthing serve --home "/tmp/openbase/code-sync"'
-        in command
-    )
-    assert "--no-browser" in command
-    assert "--no-restart" in command
+    assert service.command_template == "code-sync"
+
+    build, binary_keys = runners.RUNNERS["code-sync"]
+    argv, _env = build({}, {"syncthing": "/opt/homebrew/bin/syncthing"})
+    assert binary_keys == ("syncthing",)
+    assert argv[:3] == ["/opt/homebrew/bin/syncthing", "serve", "--home"]
+    assert "--no-browser" in argv
+    assert "--no-restart" in argv
 
 
 def test_device_id_parsing_v2_output() -> None:

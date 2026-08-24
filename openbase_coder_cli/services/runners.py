@@ -276,6 +276,14 @@ def build_code_sync(env: dict[str, str], binaries: dict[str, str]) -> RunnerArgv
     return argv, env
 
 
+def build_openbase_tunneld(env: dict[str, str], binaries: dict[str, str]) -> RunnerArgvEnv:
+    env = dict(env)
+    # The daemon's flag defaults point at Tailscale's hosted control plane;
+    # the embedded transport always rides Openbase's headscale.
+    env.setdefault("OPENBASE_TSNET_CONTROL_URL", "https://net.openbase.cloud")
+    return [binaries["tunneld"], "serve"], env
+
+
 def build_openbase_cloud_auth_rehydrate(
     env: dict[str, str], binaries: dict[str, str]
 ) -> RunnerArgvEnv:
@@ -310,6 +318,7 @@ RUNNERS: dict[str, tuple[callable, tuple[str, ...]]] = {
     "livekit-agent": (build_livekit_agent, ("python",)),
     "django-cli": (build_django_cli, ("openbase_coder",)),
     "code-sync": (build_code_sync, ("syncthing",)),
+    "openbase-tunneld": (build_openbase_tunneld, ("tunneld",)),
     "openbase-cloud-auth-rehydrate": (
         build_openbase_cloud_auth_rehydrate,
         ("openbase_coder",),

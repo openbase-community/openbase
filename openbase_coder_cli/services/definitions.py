@@ -117,12 +117,7 @@ SERVICES: list[ServiceDefinition] = [
     ServiceDefinition(
         name="openbase-tunneld",
         description="Openbase Tunneld (embedded tailnet, no VPN)",
-        command_template=(
-            # The daemon's flag defaults point at Tailscale's hosted control
-            # plane; the embedded transport always rides Openbase's headscale.
-            'export OPENBASE_TSNET_CONTROL_URL="${{OPENBASE_TSNET_CONTROL_URL:-https://net.openbase.cloud}}"\n'
-            "exec {tunneld} serve"
-        ),
+        command_template="openbase-tunneld",
         workdir_template="{data_dir}",
         # Installed by `openbase-coder tailnet set-provider netmesh-tsnet`
         # (the embedded transport), never on tailscale/VPN installs.
