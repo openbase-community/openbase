@@ -779,7 +779,9 @@ def _thread_safe_for_sync(
         return ThreadSyncSafety(False, "rollout_not_found")
     if not path_stable(rollout, stability_delay_seconds):
         return ThreadSyncSafety(False, "skipped_unstable")
-    terminal = _rollout_terminal_event(rollout)
+    terminal, has_undecodable_lines = _rollout_terminal_event(rollout)
+    if has_undecodable_lines and _rollout_open_for_write(rollout):
+        return ThreadSyncSafety(False, "skipped_active")
     if terminal is None:
         return ThreadSyncSafety(False, "rollout_malformed")
     if terminal not in TERMINAL_EVENT_TYPES:
@@ -795,31 +797,41 @@ def _target_row_safe_for_overwrite(
     thread_id: str,
 ) -> bool:
     rollout = _source_rollout_path(row, home, thread_id)
-    return (
-        rollout is not None
-        and not _rollout_open_for_write(rollout)
-        and _rollout_terminal_event(rollout) in TERMINAL_EVENT_TYPES
-    )
+    if rollout is None or _rollout_open_for_write(rollout):
+        return False
+    terminal, _ = _rollout_terminal_event(rollout)
+    return terminal in TERMINAL_EVENT_TYPES
 
 
-def _rollout_terminal_event(path: Path) -> str | None:
+def _rollout_terminal_event(path: Path) -> tuple[str | None, bool]:
+    """Last parseable event type, plus whether any line failed to decode.
+
+    Undecodable lines are skipped rather than poisoning the rollout: a crash
+    mid-append leaves a truncated tail forever, and treating that as malformed
+    would permanently strand the thread from sync. Callers must still treat
+    undecodable content in a file that is open for write as an in-progress
+    append, not history.
+    """
     last_event_type: str | None = None
+    has_undecodable_lines = False
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
-            return None
+            has_undecodable_lines = True
+            continue
         if not isinstance(event, dict):
-            return None
+            has_undecodable_lines = True
+            continue
         event_type = _string(event.get("type"))
         payload = event.get("payload")
         if event_type == "event_msg" and isinstance(payload, dict):
             last_event_type = _string(payload.get("type"))
         elif event_type:
             last_event_type = event_type
-    return last_event_type
+    return last_event_type, has_undecodable_lines
 
 
 def _rollout_open_for_write(path: Path) -> bool:

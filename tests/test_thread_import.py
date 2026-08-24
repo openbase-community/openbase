@@ -764,3 +764,101 @@ def test_sync_codex_threads_once_raises_on_schema_mismatch(tmp_path: Path) -> No
             voice_home=voice_home,
             ledger_path=tmp_path / "ledger.json",
         )
+
+
+def _append_truncated_line(rollout_path: Path) -> None:
+    with rollout_path.open("a", encoding="utf-8") as handle:
+        handle.write('{"timestamp": "2026-05-21T12:00:01.000Z", "type": "eve')
+
+
+def test_sync_codex_threads_once_transfers_thread_with_truncated_tail(
+    tmp_path: Path,
+) -> None:
+    normal_home = tmp_path / "normal"
+    voice_home = tmp_path / "voice"
+    ledger = tmp_path / "ledger.json"
+    _create_state_db(normal_home / "state_5.sqlite")
+    _create_state_db(voice_home / "state_5.sqlite")
+    source_rollout = _insert_thread(
+        normal_home,
+        "thread-1",
+        title="Thread title",
+        updated_at=20,
+    )
+    _append_terminal(source_rollout)
+    _append_truncated_line(source_rollout)
+
+    results = sync_codex_threads_once(
+        normal_home=normal_home,
+        voice_home=voice_home,
+        ledger_path=ledger,
+        stability_delay_seconds=0,
+        max_age_days=None,
+    )
+
+    assert [(result.thread_id, result.status) for result in results] == [
+        ("thread-1", "transferred")
+    ]
+    target_rollout = voice_home / source_rollout.relative_to(normal_home)
+    assert target_rollout.exists()
+
+
+def test_sync_codex_threads_once_skips_truncated_rollout_open_for_write(
+    tmp_path: Path,
+) -> None:
+    normal_home = tmp_path / "normal"
+    voice_home = tmp_path / "voice"
+    ledger = tmp_path / "ledger.json"
+    _create_state_db(normal_home / "state_5.sqlite")
+    _create_state_db(voice_home / "state_5.sqlite")
+    source_rollout = _insert_thread(
+        normal_home,
+        "thread-1",
+        title="Thread title",
+        updated_at=20,
+    )
+    _append_terminal(source_rollout)
+    with source_rollout.open("a", encoding="utf-8") as handle:
+        handle.write('{"timestamp": "2026-05-21T12:00:01.000Z", "type": "eve')
+        handle.flush()
+
+        results = sync_codex_threads_once(
+            normal_home=normal_home,
+            voice_home=voice_home,
+            ledger_path=ledger,
+            stability_delay_seconds=0,
+            max_age_days=None,
+        )
+
+    assert [(result.thread_id, result.status, result.reason) for result in results] == [
+        ("thread-1", "skipped", "skipped_active")
+    ]
+
+
+def test_sync_codex_threads_once_marks_rollout_without_events_malformed(
+    tmp_path: Path,
+) -> None:
+    normal_home = tmp_path / "normal"
+    voice_home = tmp_path / "voice"
+    ledger = tmp_path / "ledger.json"
+    _create_state_db(normal_home / "state_5.sqlite")
+    _create_state_db(voice_home / "state_5.sqlite")
+    source_rollout = _insert_thread(
+        normal_home,
+        "thread-1",
+        title="Thread title",
+        updated_at=20,
+    )
+    source_rollout.write_text("not json at all\n", encoding="utf-8")
+
+    results = sync_codex_threads_once(
+        normal_home=normal_home,
+        voice_home=voice_home,
+        ledger_path=ledger,
+        stability_delay_seconds=0,
+        max_age_days=None,
+    )
+
+    assert [(result.thread_id, result.status, result.reason) for result in results] == [
+        ("thread-1", "skipped", "rollout_malformed")
+    ]
