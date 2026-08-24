@@ -57,10 +57,13 @@ def _packaged_binary() -> str | None:
 
 
 def tunneld_binary() -> str | None:
-    """Locate the openbase-tunneld binary (env override, package, PATH)."""
+    """Locate the openbase-tunneld binary (env override, bin dir, package, PATH)."""
     override = os.environ.get("OPENBASE_TUNNELD_BIN")
     if override and os.access(override, os.X_OK):
         return override
+    bin_dir_candidate = Path.home() / ".openbase" / "bin" / "openbase-tunneld"
+    if os.access(bin_dir_candidate, os.X_OK):
+        return str(bin_dir_candidate)
     return _packaged_binary() or shutil.which("openbase-tunneld")
 
 
@@ -213,12 +216,24 @@ def ensure_tunneld_running(auth_key: str | None = None) -> None:
         )
 
     login_submitted = False
+    enroll_attempted = False
     deadline = time.monotonic() + TUNNELD_START_WAIT_SECONDS
     while True:
         health = tunneld_health()
         if health.get("backend_state") == "Running" and health.get("forwards_up"):
             return
         if health.get("backend_state") == "NeedsLogin":
+            if not auth_key and not enroll_attempted:
+                # Zero-touch: mint a netmesh key with the user's cloud login.
+                # Imported lazily (cloud_registration -> tailscale_serve -> us).
+                from openbase_coder_cli.services.cloud_registration import (
+                    netmesh_enroll,
+                )
+
+                enroll_attempted = True
+                enrollment = netmesh_enroll()
+                if enrollment:
+                    auth_key = enrollment["auth_key"]
             if auth_key and not login_submitted:
                 login_submitted = tunneld_login(auth_key)
                 if login_submitted:

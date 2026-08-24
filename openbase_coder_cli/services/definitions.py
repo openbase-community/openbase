@@ -305,7 +305,26 @@ SERVICES: list[ServiceDefinition] = [
         # `openbase-coder provision`, never on normal local installs.
         install_by_default=False,
     ),
+    ServiceDefinition(
+        name="openbase-tunneld",
+        description="Openbase Tunneld (embedded tailnet, no VPN)",
+        command_template=(
+            # The daemon's flag defaults point at Tailscale's hosted control
+            # plane; the embedded transport always rides Openbase's headscale.
+            'export OPENBASE_TSNET_CONTROL_URL="${{OPENBASE_TSNET_CONTROL_URL:-https://net.openbase.cloud}}"\n'
+            "exec {tunneld} serve"
+        ),
+        workdir_template="{data_dir}",
+        # Installed by `openbase-coder tailnet set-provider netmesh-tsnet`
+        # (the embedded transport), never on tailscale/VPN installs.
+        install_by_default=False,
+        port=7998,
+        cleanup_ports=(7998,),
+        cleanup_command_substrings=("openbase-tunneld",),
+    ),
 ]
+
+TUNNELD_SERVICE = next(s for s in SERVICES if s.name == "openbase-tunneld")
 
 
 def default_services(coding_backend: str | None = None) -> list[ServiceDefinition]:

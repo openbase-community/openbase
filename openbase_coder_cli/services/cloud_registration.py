@@ -34,6 +34,8 @@ from openbase_coder_cli.services.tailnet_devices import tailscale_self_identity
 from openbase_coder_cli.services.tailscale_serve import tailscale_serve_health
 
 DEVICE_REGISTER_PATH = "/api/openbase/devices/register/"
+NETMESH_ENROLL_PATH = "/api/openbase/netmesh/enroll/"
+TAILNET_PROVIDER_PATH = "/api/openbase/tailnet-provider/"
 REQUEST_TIMEOUT_SECONDS = 15
 
 
@@ -200,6 +202,40 @@ def register_and_report(
     Returns the first failing result so callers can surface a single warning.
     """
     return report_cli_state(cli_configured=cli_configured, serve_healthy=serve_healthy)
+
+
+def netmesh_enroll() -> dict[str, Any] | None:
+    """Mint a netmesh pre-auth key for the signed-in user. Never raises.
+
+    Returns the enroll payload ({control_url, auth_key, ...}) or None when the
+    user is not logged in, the cloud errors, or netmesh is not deployed there.
+    """
+    result = _post_to_cloud(NETMESH_ENROLL_PATH, {})
+    if not result.ok or not isinstance(result.response, dict):
+        return None
+    if not result.response.get("auth_key") or not result.response.get("control_url"):
+        return None
+    return result.response
+
+
+def push_tailnet_provider(provider: str) -> CloudReportResult:
+    """Record the account-level tailnet transport in openbase-cloud.
+
+    The three providers are three different networks, so the whole device
+    fleet must converge on this value (other devices read it from onboarding
+    state). Never raises; ``supported=False`` when the cloud predates the
+    endpoint.
+    """
+    return _post_to_cloud(TAILNET_PROVIDER_PATH, {"provider": provider})
+
+
+def fetch_tailnet_provider() -> str | None:
+    """The account-level tailnet transport, or None when unavailable."""
+    result = _post_to_cloud(TAILNET_PROVIDER_PATH, {}, method="GET")
+    if not result.ok or not isinstance(result.response, dict):
+        return None
+    provider = result.response.get("provider")
+    return provider if isinstance(provider, str) and provider else None
 
 
 def _post_to_cloud(
