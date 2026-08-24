@@ -20,9 +20,12 @@ mixed-backend without changes.
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import TYPE_CHECKING, Any
 
 from .models import ThreadInfo
+from .session_manager_base import ThreadListPage
+from .thread_payloads import _session_sort_key
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .session_manager import CodexAppServerSessionManager
@@ -77,6 +80,83 @@ class MultiBackendSessionManager:
         merged.sort(key=lambda thread: thread.updated_at, reverse=True)
         return merged
 
+    async def list_thread_page(
+        self,
+        *,
+        limit: int,
+        cursor: str | None = None,
+    ) -> ThreadListPage:
+        """Merge one recency-ordered page across every backend.
+
+        Every inner manager pages with integer offsets into its own
+        recency-sorted listing, so the composite cursor is a JSON object of
+        per-backend offsets; a backend absent from it is exhausted. Each page
+        fetches ``limit`` from every live backend at its offset, merge-sorts,
+        keeps the top ``limit``, and advances each backend's offset by how
+        many of ITS items were actually consumed.
+        """
+        offsets = self._decode_page_cursor(cursor)
+
+        async def fetch(manager: Any, offset: int) -> ThreadListPage:
+            return await manager.list_thread_page(
+                limit=limit, cursor=str(offset) if offset else None
+            )
+
+        live = [
+            (backend, self._managers[backend], offset)
+            for backend, offset in offsets.items()
+            if backend in self._managers
+        ]
+        results = await asyncio.gather(
+            *(fetch(manager, offset) for _, manager, offset in live),
+            return_exceptions=True,
+        )
+
+        tagged: list[tuple[str, Any]] = []
+        page_meta: dict[str, tuple[int, int, str | None]] = {}
+        for (backend, _, offset), result in zip(live, results, strict=True):
+            if isinstance(result, BaseException):
+                # A down backend drops out of this pagination run; its threads
+                # reappear on the next first-page load, matching list_threads.
+                continue
+            page_meta[backend] = (offset, len(result.threads), result.next_cursor)
+            for thread in result.threads:
+                if thread.backend is None:
+                    thread.backend = backend
+                self._thread_backend[thread.session_id] = thread.backend
+                tagged.append((backend, thread))
+
+        tagged.sort(key=lambda item: _session_sort_key(item[1]), reverse=True)
+        page = tagged[:limit]
+
+        consumed: dict[str, int] = {}
+        for backend, _ in page:
+            consumed[backend] = consumed.get(backend, 0) + 1
+        next_offsets: dict[str, int] = {}
+        for backend, (offset, fetched, inner_next) in page_meta.items():
+            used = consumed.get(backend, 0)
+            if used < fetched or inner_next is not None:
+                next_offsets[backend] = offset + used
+        return ThreadListPage(
+            threads=[thread for _, thread in page],
+            next_cursor=json.dumps(next_offsets) if next_offsets else None,
+        )
+
+    def _decode_page_cursor(self, cursor: str | None) -> dict[str, int]:
+        if not cursor:
+            return {backend: 0 for backend in self._managers}
+        try:
+            decoded = json.loads(cursor)
+        except ValueError:
+            return {backend: 0 for backend in self._managers}
+        if not isinstance(decoded, dict):
+            return {backend: 0 for backend in self._managers}
+        offsets: dict[str, int] = {}
+        for backend, offset in decoded.items():
+            if backend in self._managers and isinstance(offset, int) and offset >= 0:
+                offsets[backend] = offset
+        return offsets
+
     async def list_approval_requests(self) -> list[dict[str, Any]]:
         results = await asyncio.gather(
             *(m.list_approval_requests() for m in self._managers.values()),
@@ -88,6 +168,28 @@ class MultiBackendSessionManager:
                 continue
             merged.extend(result)
         return merged
+
+    async def answer_approval_request(
+        self,
+        request_id: str | int,
+        decision: Any,
+    ) -> dict[str, Any]:
+        """Answer on whichever backend has the request pending.
+
+        The primary is the fallback so an id no backend lists still gets the
+        primary's shared-permission fallback and native not-found error.
+        """
+        wanted = str(request_id)
+        for backend, manager in self._managers.items():
+            if backend == self._primary_backend:
+                continue
+            try:
+                pending = await manager.list_approval_requests()
+            except Exception:  # noqa: BLE001 - probing; backend may be down
+                continue
+            if any(str(req.get("id")) == wanted for req in pending):
+                return await manager.answer_approval_request(request_id, decision)
+        return await self._primary.answer_approval_request(request_id, decision)
 
     # -- creation: explicit backend or primary --
 

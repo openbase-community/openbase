@@ -27,6 +27,7 @@ class FakeManager:
         self.backend = backend
         self.threads = {t.session_id: t for t in threads}
         self.calls: list[tuple[str, str]] = []
+        self.approval_payloads: list[dict] = [{"backend": backend}]
 
     async def list_threads(self) -> list[ThreadInfo]:
         return list(self.threads.values())
@@ -43,12 +44,31 @@ class FakeManager:
         return True
 
     async def list_approval_requests(self):
-        return [{"backend": self.backend}]
+        return self.approval_payloads
 
     async def create_thread(self, directory: str, thread_id: str | None = None):
         thread = _thread(thread_id or f"new-{self.backend}", minutes_ago=0)
         self.threads[thread.session_id] = thread
         return thread
+
+    async def answer_approval_request(self, request_id, decision):
+        self.calls.append(("answer_approval_request", str(request_id)))
+        return {"answered": True, "backend": self.backend}
+
+
+class PagingManager(FakeManager):
+    async def list_thread_page(self, *, limit: int, cursor: str | None = None):
+        from openbase_coder_cli.thread_sync.session_manager_base import ThreadListPage
+
+        ordered = sorted(
+            self.threads.values(), key=lambda t: t.updated_at, reverse=True
+        )
+        start = int(cursor or 0)
+        end = start + limit
+        return ThreadListPage(
+            threads=ordered[start:end],
+            next_cursor=str(end) if end < len(ordered) else None,
+        )
 
 
 class ExplodingManager:
@@ -121,6 +141,51 @@ async def test_one_backend_down_keeps_other_listings(managers):
     assert {t.session_id for t in threads} == {"c1", "c2"}
     approvals = await facade.list_approval_requests()
     assert approvals == [{"backend": "codex"}]
+
+
+async def test_list_thread_page_merges_and_paginates():
+    codex = PagingManager(
+        "codex",
+        [_thread("c1", minutes_ago=1), _thread("c2", minutes_ago=4)],
+    )
+    claude = PagingManager(
+        "claude_code",
+        [_thread("k1", minutes_ago=2), _thread("k2", minutes_ago=3)],
+    )
+    facade = MultiBackendSessionManager({"codex": codex, "claude_code": claude})
+
+    first = await facade.list_thread_page(limit=3)
+    assert [t.session_id for t in first.threads] == ["c1", "k1", "k2"]
+    assert first.next_cursor is not None
+
+    second = await facade.list_thread_page(limit=3, cursor=first.next_cursor)
+    assert [t.session_id for t in second.threads] == ["c2"]
+    assert second.next_cursor is None
+
+
+async def test_list_thread_page_survives_one_backend_down():
+    codex = PagingManager(
+        "codex", [_thread("c1", minutes_ago=1), _thread("c2", minutes_ago=2)]
+    )
+    facade = MultiBackendSessionManager(
+        {"codex": codex, "claude_code": ExplodingManager()}
+    )
+    page = await facade.list_thread_page(limit=5)
+    assert [t.session_id for t in page.threads] == ["c1", "c2"]
+    assert page.next_cursor is None
+
+
+async def test_answer_approval_routes_to_owning_backend(managers):
+    codex, claude = managers
+    claude.approval_payloads = [{"id": "req-7", "backend": "claude_code"}]
+    facade = MultiBackendSessionManager({"codex": codex, "claude_code": claude})
+
+    result = await facade.answer_approval_request("req-7", "accept")
+    assert result["backend"] == "claude_code"
+    assert claude.calls == [("answer_approval_request", "req-7")]
+
+    result = await facade.answer_approval_request("req-unknown", "decline")
+    assert result["backend"] == "codex"
 
 
 def test_configured_execution_backends_single(monkeypatch):
