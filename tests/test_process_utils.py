@@ -26,6 +26,9 @@ def test_listening_pids_returns_pids_matching_port_and_listen_state(monkeypatch)
     monkeypatch.setattr(
         process_utils.psutil, "net_connections", lambda kind="inet": conns
     )
+    # macOS routes through lsof instead of the psutil scan; force the
+    # psutil path so the fake connections are what gets inspected.
+    monkeypatch.setattr(process_utils.sys, "platform", "linux")
 
     assert process_utils.listening_pids(7880) == {111}
 
