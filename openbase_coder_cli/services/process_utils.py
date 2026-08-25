@@ -23,6 +23,11 @@ _SIGKILL = getattr(signal, "SIGKILL", 9)
 
 def listening_pids(port: int) -> set[int]:
     """PIDs of processes with a LISTEN socket bound to ``port``."""
+    if sys.platform == "darwin":
+        # psutil.net_connections needs root on macOS — it raises AccessDenied
+        # on the first SIP-protected process it scans. lsof does per-process
+        # lookups and works unprivileged.
+        return _listening_pids_lsof(port)
     pids: set[int] = set()
     for conn in psutil.net_connections(kind="inet"):
         if (
@@ -33,6 +38,22 @@ def listening_pids(port: int) -> set[int]:
         ):
             pids.add(conn.pid)
     return pids
+
+
+def _listening_pids_lsof(port: int) -> set[int]:
+    import subprocess
+
+    try:
+        result = subprocess.run(  # noqa: S603 - fixed argv
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    return {int(token) for token in result.stdout.split() if token.isdigit()}
 
 
 def process_cmdline(pid: int) -> str:
