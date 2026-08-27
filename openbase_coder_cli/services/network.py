@@ -9,43 +9,27 @@ Windows alike.
 from __future__ import annotations
 
 import ipaddress
-import platform
-import shutil
 import socket
-import subprocess
 
 import psutil
 
+
 # App Store Tailscale keeps its CLI inside the app bundle, off every PATH.
-_TAILSCALE_MACOS_APP_BUNDLE = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
-
-
-def _tailscale_binary() -> str | None:
-    found = shutil.which("tailscale")
-    if found:
-        return found
-    if platform.system() == "Darwin":
-        from pathlib import Path
-
-        if Path(_TAILSCALE_MACOS_APP_BUNDLE).is_file():
-            return _TAILSCALE_MACOS_APP_BUNDLE
-    return None
-
-
 def tailscale_ip(family: str = "4") -> str | None:
-    """The node's Tailscale IPv4 (``family="4"``) or IPv6 address."""
-    binary = _tailscale_binary()
-    if not binary:
-        return None
-    result = subprocess.run(
-        [binary, "ip", f"-{family}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    for line in result.stdout.splitlines():
-        candidate = line.strip()
-        if candidate:
+    """The node's tailnet IPv4 (``family="4"``) or IPv6 address.
+
+    Routed through the provider abstraction so it answers for whichever
+    transport is active (Tailscale app, netmesh VPN, or the embedded node)
+    rather than assuming the official daemon.
+    """
+    from openbase_coder_cli.services import tailscale_provider as tp
+
+    payload = tp.status_json()
+    for ip in (payload.get("Self") or {}).get("TailscaleIPs") or []:
+        candidate = str(ip).strip()
+        if not candidate:
+            continue
+        if (family == "4" and "." in candidate) or (family == "6" and ":" in candidate):
             return candidate
     return None
 

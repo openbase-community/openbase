@@ -35,22 +35,23 @@ def test_resolve_interface_returns_none_for_invalid_ip():
     assert network.resolve_interface("not-an-ip") is None
 
 
-def test_tailscale_ip_returns_first_line_from_cli(monkeypatch):
-    monkeypatch.setattr(network.shutil, "which", lambda name: "/usr/bin/tailscale")
-
-    class _Result:
-        stdout = "100.64.1.2\n"
+def test_tailscale_ip_reads_active_provider_status(monkeypatch):
+    from openbase_coder_cli.services import tailscale_provider as tp
 
     monkeypatch.setattr(
-        network.subprocess, "run", lambda *args, **kwargs: _Result()
+        tp,
+        "status_json",
+        lambda: {"Self": {"TailscaleIPs": ["100.64.1.2", "fd7a:115c:a1e0::2"]}},
     )
 
     assert network.tailscale_ip("4") == "100.64.1.2"
+    assert network.tailscale_ip("6") == "fd7a:115c:a1e0::2"
 
 
-def test_tailscale_ip_returns_none_when_binary_missing(monkeypatch):
-    monkeypatch.setattr(network.shutil, "which", lambda name: None)
-    monkeypatch.setattr(network.platform, "system", lambda: "Linux")
+def test_tailscale_ip_returns_none_when_provider_errors(monkeypatch):
+    from openbase_coder_cli.services import tailscale_provider as tp
+
+    monkeypatch.setattr(tp, "status_json", lambda: {"error": "not running"})
 
     assert network.tailscale_ip("4") is None
 

@@ -87,6 +87,10 @@ def _apply_provider(name: str, *, push_cloud: bool) -> None:
     values[LIVEKIT_MODE_ENV_KEY] = (
         "local" if name == tp.PROVIDER_NETMESH_TSNET else "tailscale"
     )
+    # A pinned LIVEKIT_NODE_IP from the previous transport is stale after a
+    # switch (each transport is a different node/IP). Blank it so the service
+    # runner derives the address from the ACTIVE provider instead.
+    values["LIVEKIT_NODE_IP"] = ""
     upsert_env_file_values(path, values)
     click.echo(f"Tailnet provider set to '{name}' in {path}.")
 
