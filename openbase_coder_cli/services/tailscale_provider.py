@@ -55,11 +55,32 @@ _TAILSCALE_FALLBACK_PATHS = (
 
 
 def provider() -> str:
-    """The active provider name (defaults to ``tailscale``)."""
+    """The active provider name (defaults to ``tailscale``).
+
+    The process env wins (launchd service wrappers source the installed env
+    file before exec'ing), but interactive CLI invocations never source it —
+    so fall back to reading ``~/.openbase/.env`` directly. Without this,
+    ``tailnet status`` and every provider-routed operation silently ran in
+    tailscale mode from a bare shell regardless of the configured transport.
+    """
     value = (
         (os.environ.get("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER") or "").strip().lower()
     )
-    return value if value in PROVIDER_VALUES else PROVIDER_TAILSCALE
+    if value in PROVIDER_VALUES:
+        return value
+    try:
+        from openbase_coder_cli.env_file import env_file_values
+        from openbase_coder_cli.paths import DEFAULT_ENV_FILE_PATH
+
+        file_value = (
+            env_file_values(DEFAULT_ENV_FILE_PATH)
+            .get("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", "")
+            .strip()
+            .lower()
+        )
+    except Exception:  # noqa: BLE001 - unreadable env file means default
+        return PROVIDER_TAILSCALE
+    return file_value if file_value in PROVIDER_VALUES else PROVIDER_TAILSCALE
 
 
 def is_netmesh() -> bool:

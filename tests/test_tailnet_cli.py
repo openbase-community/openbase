@@ -200,3 +200,18 @@ def test_tailnet_status_errors_when_provider_unreachable(monkeypatch):
 
     assert result.exit_code != 0
     assert "daemon not running" in result.output
+
+
+def test_provider_falls_back_to_env_file_without_process_env(monkeypatch, tmp_path):
+    tp = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
+    monkeypatch.delenv("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", raising=False)
+    env_path = tmp_path / ".env"
+    env_path.write_text("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER=netmesh\n")
+    monkeypatch.setattr(
+        "openbase_coder_cli.paths.DEFAULT_ENV_FILE_PATH", env_path
+    )
+
+    assert tp.provider() == "netmesh"
+
+    env_path.write_text("")
+    assert tp.provider() == "tailscale"
