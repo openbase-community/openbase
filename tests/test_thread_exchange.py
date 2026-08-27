@@ -252,7 +252,7 @@ def test_import_snapshot_translates_source_home_cwd(tmp_path: Path) -> None:
     source_home = tmp_path / "source-codex"
     target_home = tmp_path / "target-codex"
     exchange_dir = tmp_path / "exchange"
-    source_user_home = Path("/Users/gabe")
+    source_user_home = Path("/Users/example")
     target_user_home = Path("/home/ubuntu")
     _create_state_db(source_home / "state_5.sqlite")
     _create_state_db(target_home / "state_5.sqlite")
@@ -261,7 +261,7 @@ def test_import_snapshot_translates_source_home_cwd(tmp_path: Path) -> None:
         "thread-1",
         title="Thread title",
         updated_at=20,
-        cwd="/Users/gabe/Projects/openbase/code/openbase-coder-workspace",
+        cwd="/Users/example/Projects/openbase/code/openbase-coder-workspace",
     )
     export_thread_snapshots(
         codex_home=source_home,
@@ -296,7 +296,7 @@ def test_import_migrates_existing_foreign_home_cwd(tmp_path: Path) -> None:
         "thread-1",
         title="Thread title",
         updated_at=20,
-        cwd="/Users/gabe/Projects/example",
+        cwd="/Users/example/Projects/example",
     )
 
     import_thread_snapshots(

@@ -139,7 +139,7 @@ def test_import_claude_thread_snapshot_creates_session_and_backfills_metadata(
     exchange_dir = tmp_path / "exchange"
     db_path = tmp_path / "target-state.sqlite3"
     session_id = "1416448e-c428-455b-bceb-5ac34da8ee4e"
-    source_cwd = "/Users/gabe/Projects/openbase/code/openbase-coder-workspace"
+    source_cwd = "/Users/example/Projects/openbase/code/openbase-coder-workspace"
     target_cwd = "/home/ubuntu/Projects/openbase/code/openbase-coder-workspace"
     _write_session(
         source_home,
@@ -156,7 +156,7 @@ def test_import_claude_thread_snapshot_creates_session_and_backfills_metadata(
         super_agents_db_path=tmp_path / "source-state.sqlite3",
         stability_delay_seconds=0,
         max_age_days=None,
-        source_user_home=Path("/Users/gabe"),
+        source_user_home=Path("/Users/example"),
     )
 
     results = import_claude_thread_snapshots(
@@ -198,7 +198,7 @@ def test_import_claude_snapshots_migrates_existing_foreign_home_cwd(
         )
         conn.execute(
             "insert into sessions (id, cwd) values (?, ?)",
-            ("session-1", "/Users/gabe/Projects/example"),
+            ("session-1", "/Users/example/Projects/example"),
         )
 
     import_claude_thread_snapshots(

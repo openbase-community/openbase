@@ -622,11 +622,11 @@ def test_ensure_codex_config_preserves_user_config_values(
                 'approval_policy = "on-request"',
                 'model = "gpt-5.5-mini"',
                 "",
-                '[projects."/Users/gabemontague"]',
+                '[projects."/Users/example"]',
                 'trust_level = "trusted"',
                 "",
                 "[mcp_servers.super-agents]",
-                'command = "/Users/gabemontague/.local/bin/uv"',
+                'command = "/Users/example/.local/bin/uv"',
                 'args = ["--directory", "/bad", "run", "super-agents-mcp"]',
                 "",
                 "[mcp_servers.playwright]",
@@ -645,9 +645,9 @@ def test_ensure_codex_config_preserves_user_config_values(
     assert 'model = "gpt-5.5-mini"' in updated
     assert 'sandbox_mode = "danger-full-access"' not in updated
     assert updated.count("[mcp_servers.super-agents]") == 1
-    assert "/Users/gabemontague/.local/bin/uv" not in updated
+    assert "/Users/example/.local/bin/uv" not in updated
     assert "args =" not in updated
-    assert '[projects."/Users/gabemontague"]\ntrust_level = "trusted"' in updated
+    assert '[projects."/Users/example"]\ntrust_level = "trusted"' in updated
     assert f"command = {json.dumps(str(command))}" in updated
     assert '[mcp_servers.playwright]\ncommand = "npx"' in updated
     assert SUPER_AGENTS_PERMISSION_ENV_SUFFIX in updated

@@ -159,7 +159,7 @@ def test_product_state_relpaths_allowed_other_openbase_rejected():
     for bad in (
         ".openbase",
         ".openbase/auth-things",
-        ".openbase/codex_home",
+        ".openbase/legacy-managed",
         ".openbase/logs",
         ".openbase/thread-sync/../db",
     ):
@@ -181,7 +181,7 @@ def test_remove_legacy_openbase_folder_is_not_blocked_by_add_guard(
                 "schema_version": 1,
                 "folders": [
                     {"relpath": "Projects", "extra_ignores": []},
-                    {"relpath": ".openbase/codex_home/skills", "extra_ignores": []},
+                    {"relpath": ".openbase/legacy-managed/skills", "extra_ignores": []},
                 ],
             }
         ),
@@ -190,26 +190,26 @@ def test_remove_legacy_openbase_folder_is_not_blocked_by_add_guard(
 
     # The guard still blocks *adding* it back.
     with pytest.raises(ValueError):
-        sync_config.validate_relpath(".openbase/codex_home/skills")
+        sync_config.validate_relpath(".openbase/legacy-managed/skills")
 
     assert (
-        sync_config.remove_sync_folder(".openbase/codex_home/skills", config_path)
+        sync_config.remove_sync_folder(".openbase/legacy-managed/skills", config_path)
         is True
     )
     assert [f.relpath for f in sync_config.sync_folders(config_path)] == ["Projects"]
     # Idempotent: removing an absent folder returns False, no raise.
     assert (
-        sync_config.remove_sync_folder(".openbase/codex_home/skills", config_path)
+        sync_config.remove_sync_folder(".openbase/legacy-managed/skills", config_path)
         is False
     )
 
 
 def test_relpath_for_path_guard_toggle() -> None:
     home = Path.home()
-    legacy = home / ".openbase" / "codex_home" / "skills"
+    legacy = home / ".openbase" / "legacy-managed" / "skills"
     with pytest.raises(ValueError):
         sync_config.relpath_for_path(legacy)
     assert (
         sync_config.relpath_for_path(legacy, guard=False)
-        == ".openbase/codex_home/skills"
+        == ".openbase/legacy-managed/skills"
     )
