@@ -136,6 +136,9 @@ def sync_checkout_manifest(
     previous_state: dict[str, str] | None,
     remote_urls: Iterable[str],
     auth_header: str | None,
+    folder_id: str = "",
+    repo_relpath: str = "",
+    conflicts_path: Path | None = None,
 ) -> str:
     """Publish a local checkout change or consume its synced manifest."""
     from openbase_coder_cli.code_sync.worktrees import (
@@ -166,12 +169,21 @@ def sync_checkout_manifest(
         if locally_changed:
             publish()
             return "published_local_change"
-        return converge_repository_to_manifest(
+        action = converge_repository_to_manifest(
             repo,
             manifest,
             remote_urls=remote_urls,
             auth_header=auth_header,
+            folder_id=folder_id,
+            repo_relpath=repo_relpath,
+            conflicts_path=conflicts_path,
         )
+        if action == "local_ahead":
+            # The peer's manifest lags this machine; local history wins and
+            # the peers converge to US on their next tick.
+            publish()
+            return "local_ahead_republished"
+        return action
     if not is_worktree:
         # Refresh a newly added/changed safe origin URL even when the branch
         # state itself did not move.
@@ -225,11 +237,19 @@ def converge_repository_to_manifest(
     *,
     remote_urls: Iterable[str],
     auth_header: str | None = None,
+    folder_id: str = "",
+    repo_relpath: str = "",
+    conflicts_path: Path | None = None,
 ) -> str:
     """Converge branch/head to the manifest while preserving file content.
 
-    Any commit that would leave the active branch's history is retained under
-    ``refs/openbase-code-sync/backups`` before the ref moves.
+    A manifest whose head is an ANCESTOR of the local head is stale (the peer
+    lags this machine) — converging would rewind real work, so the local
+    state wins and the caller republishes it instead. Any commit that a true
+    divergence displaces from the active branch's history is retained under
+    ``refs/openbase-code-sync/backups`` before the ref moves, and the
+    displacement is recorded as a branch conflict so it surfaces in health
+    warnings instead of disappearing silently (the 2026-08-25 incident).
     """
     from openbase_coder_cli.code_sync.reconciler import (
         _git,
@@ -270,7 +290,28 @@ def converge_repository_to_manifest(
             == 0
         )
         if not is_fast_forward:
+            manifest_is_stale = (
+                _git(
+                    ["merge-base", "--is-ancestor", desired_head, old_target], repo
+                ).returncode
+                == 0
+            )
+            if manifest_is_stale:
+                return "local_ahead"
             backup = _preserve_commit(repo, old_target)
+            if backup:
+                from openbase_coder_cli.code_sync.conflicts import (
+                    record_branch_conflict,
+                )
+
+                record_branch_conflict(
+                    folder_id=folder_id,
+                    repo_relpath=repo_relpath,
+                    branch=branch,
+                    local_sha=old_target,
+                    remote_sha=desired_head,
+                    path=conflicts_path,
+                )
     update_args = ["update-ref", target_ref, desired_head]
     if old_target:
         update_args.append(old_target)

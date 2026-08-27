@@ -237,3 +237,48 @@ def test_reconcile_tick_consumes_remote_branch_manifest(
     assert summary["repository_manifests"] == [{"path": "", "action": "converged"}]
     assert _git(local, "rev-parse", "--abbrev-ref", "HEAD") == "feature"
     assert _git(local, "rev-parse", "HEAD") == source_head
+
+
+def test_stale_manifest_never_rewinds_a_locally_ahead_branch(tmp_path: Path) -> None:
+    # The 2026-08-25 incident: the peer's manifest lagged this machine and
+    # convergence rewound real commits into a backup ref. A manifest whose
+    # head is an ancestor of the local head must lose to local history.
+    local, source = _pair(tmp_path)
+    manifest = repositories.ensure_repository_manifest(source)
+    assert manifest is not None
+    ahead_head = _commit(local, "app.py", "print('newer local work')\n", "ahead")
+
+    action = repositories.converge_repository_to_manifest(
+        local, manifest, remote_urls=(str(source),)
+    )
+
+    assert action == "local_ahead"
+    assert _git(local, "rev-parse", "HEAD") == ahead_head
+
+
+def test_divergence_displacement_records_a_branch_conflict(tmp_path: Path) -> None:
+    from openbase_coder_cli.code_sync.conflicts import read_conflicts
+
+    local, source = _pair(tmp_path)
+    local_head = _commit(local, "app.py", "print('local')\n", "local")
+    source_head = _commit(source, "app.py", "print('source')\n", "source")
+    manifest = repositories.ensure_repository_manifest(source)
+    assert manifest is not None
+    _copy_without_git(source, local)
+    conflicts_path = tmp_path / "conflicts.json"
+
+    action = repositories.converge_repository_to_manifest(
+        local,
+        manifest,
+        remote_urls=(str(source),),
+        folder_id="projects",
+        repo_relpath="repo",
+        conflicts_path=conflicts_path,
+    )
+
+    assert action.startswith("converged; backup=")
+    conflicts = read_conflicts(conflicts_path)
+    assert any(
+        entry.get("local_sha") == local_head and entry.get("remote_sha") == source_head
+        for entry in conflicts
+    )

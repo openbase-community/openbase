@@ -440,6 +440,9 @@ def run_reconcile_once(
                 peer_git_url(peer, folder.folder_id, repo_relpath) for peer in peers
             ),
             auth_header=auth_header,
+            folder_id=folder.folder_id,
+            repo_relpath=repo_relpath,
+            conflicts_path=conflicts_path,
         )
         manifest_summary_key = (
             "worktree_manifests" if is_worktree else "repository_manifests"
