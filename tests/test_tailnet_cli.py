@@ -153,3 +153,50 @@ def test_netmesh_routes_through_stock_tailscale_off_macos(monkeypatch):
     assert tp.netmesh_uses_stock_tailscale() is False
     monkeypatch.setattr(tp, "netmesh_ctl_bin", lambda: "/n/netmesh-ctl")
     assert tp.tool_path() == "/n/netmesh-ctl"
+
+
+def test_tailnet_status_renders_state_and_peer_paths(monkeypatch):
+    tp = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
+    monkeypatch.setattr(tp, "provider", lambda: "netmesh-tsnet")
+    monkeypatch.setattr(
+        tp,
+        "status_json",
+        lambda: {
+            "BackendState": "Running",
+            "Self": {
+                "DNSName": "mac.netmesh.openbase.cloud.",
+                "TailscaleIPs": ["100.64.0.10"],
+            },
+            "Peer": {
+                "a": {
+                    "HostName": "iphone",
+                    "TailscaleIPs": ["100.64.0.11"],
+                    "Online": True,
+                    "CurAddr": "192.168.0.59:41641",
+                },
+                "b": {
+                    "HostName": "testpeer",
+                    "TailscaleIPs": ["100.64.0.2"],
+                    "Online": False,
+                },
+            },
+        },
+    )
+
+    result = CliRunner().invoke(tailnet_cli.tailnet, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert "state:" in result.output and "Running" in result.output
+    assert "mac.netmesh.openbase.cloud" in result.output
+    assert "direct 192.168.0.59:41641" in result.output
+    assert "offline" in result.output
+
+
+def test_tailnet_status_errors_when_provider_unreachable(monkeypatch):
+    tp = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
+    monkeypatch.setattr(tp, "status_json", lambda: {"error": "daemon not running"})
+
+    result = CliRunner().invoke(tailnet_cli.tailnet, ["status"])
+
+    assert result.exit_code != 0
+    assert "daemon not running" in result.output

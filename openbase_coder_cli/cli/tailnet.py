@@ -396,3 +396,52 @@ def show() -> None:
     click.echo(f"configured provider: {configured}")
     click.echo(f"active provider:     {tp.provider()}")
     click.echo(f"control tool:        {tp.tool_path() or '(not found)'}")
+
+
+@tailnet.command("status")
+@click.option("--json", "json_", is_flag=True, help="Print the raw status JSON.")
+def status(json_: bool) -> None:
+    """Live tailnet connectivity: backend state, this node, and per-peer path.
+
+    The CLI equivalent of the menu-bar readout: whether this machine is
+    actually joined to the network (any provider — Tailscale app, netmesh
+    VPN, or the embedded no-VPN node) and whether each peer is reachable
+    direct or via a DERP relay.
+    """
+    import json as json_module
+
+    payload = tp.status_json()
+    if json_:
+        click.echo(json_module.dumps(payload, indent=2))
+        return
+    if error := payload.get("error"):
+        raise click.ClickException(f"{tp.provider()}: {error}")
+
+    state = payload.get("BackendState") or "unknown"
+    color = {"Running": "green", "Starting": "yellow"}.get(state, "red")
+    click.echo(f"provider: {tp.provider()}")
+    click.echo("state:    " + click.style(state, fg=color))
+
+    self_node = payload.get("Self") or {}
+    dns = str(self_node.get("DNSName") or "").rstrip(".")
+    ips = ", ".join(self_node.get("TailscaleIPs") or [])
+    if dns or ips:
+        click.echo(f"this node: {dns or '(no name)'}  {ips}")
+
+    peers = list((payload.get("Peer") or {}).values())
+    if not peers:
+        click.echo("peers: none visible")
+        return
+    click.echo("peers:")
+    for peer in sorted(peers, key=lambda p: str(p.get("HostName") or "")):
+        name = str(peer.get("HostName") or "?")
+        ip4 = next((ip for ip in peer.get("TailscaleIPs") or [] if "." in ip), "")
+        if not peer.get("Online"):
+            path = click.style("offline", fg="red")
+        elif peer.get("CurAddr"):
+            path = click.style(f"direct {peer['CurAddr']}", fg="green")
+        elif peer.get("Relay"):
+            path = click.style(f"relay {peer['Relay']}", fg="yellow")
+        else:
+            path = "idle"
+        click.echo(f"  {name:<32} {ip4:<16} {path}")
