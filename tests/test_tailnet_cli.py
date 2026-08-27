@@ -202,16 +202,24 @@ def test_tailnet_status_errors_when_provider_unreachable(monkeypatch):
     assert "daemon not running" in result.output
 
 
-def test_provider_falls_back_to_env_file_without_process_env(monkeypatch, tmp_path):
+def test_provider_reads_env_file_as_single_source_of_truth(
+    monkeypatch, _isolated_default_env_file
+):
     tp = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
-    monkeypatch.delenv("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", raising=False)
-    env_path = tmp_path / ".env"
+    env_path = _isolated_default_env_file
     env_path.write_text("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER=netmesh\n")
-    monkeypatch.setattr(
-        "openbase_coder_cli.paths.DEFAULT_ENV_FILE_PATH", env_path
-    )
 
+    monkeypatch.delenv("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", raising=False)
     assert tp.provider() == "netmesh"
 
+    # The installed file wins even over a stale shell export.
+    monkeypatch.setenv("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", "tailscale")
+    assert tp.provider() == "netmesh"
+
+    # No file value -> the env var decides; nothing anywhere -> default.
     env_path.write_text("")
+    assert tp.provider() == "tailscale"
+    monkeypatch.setenv("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", "netmesh-tsnet")
+    assert tp.provider() == "netmesh-tsnet"
+    monkeypatch.delenv("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", raising=False)
     assert tp.provider() == "tailscale"
