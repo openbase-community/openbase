@@ -140,14 +140,23 @@ async def test_screen_share_inactive_error_is_surfaced(desktop_server) -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_control_file_reports_desktop_not_running(
+async def test_missing_control_file_falls_back_to_companion(
     monkeypatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(
         mcp_shim, "DESKTOP_CONTROL_JSON_PATH", tmp_path / "missing.json"
     )
 
-    with pytest.raises(RuntimeError, match="desktop app is not running"):
+    # No desktop app: the endpoint resolves to the companion's own IPC (the
+    # same contract Linux uses) instead of failing outright...
+    endpoint = mcp_shim._endpoint()
+    assert endpoint["prefix"] == "/desktop-control"
+    assert "X-Openbase-Companion-Secret" in endpoint["headers"]
+
+    # ...and only errors — with companion guidance — when the companion is
+    # unreachable too.
+    monkeypatch.setenv("OPENBASE_LIVEKIT_COMPANION_IPC_PORT", "1")
+    with pytest.raises(RuntimeError, match="companion is not running"):
         await mcp_shim._call_tool("screenshot", {})
 
 

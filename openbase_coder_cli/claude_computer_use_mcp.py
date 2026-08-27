@@ -5,9 +5,11 @@ Agent SDK sessions (the Claude backend's dispatcher and Super Agents threads)
 get desktop control from this server instead. Every tool call proxies to the
 desktop app's control server, which resolves fresh from
 `~/.openbase/desktop-control.json` on each call so the shim survives desktop
-app restarts (the port and secret rotate per launch). The desktop side owns
-all safety enforcement: actions are refused there unless screen sharing is
-active, so the user always sees what the agent does.
+app restarts (the port and secret rotate per launch); without the desktop
+app it falls back to the screen-share companion's own IPC, so developer
+installs get computer use too. Safety is enforced in the companion: actions
+are refused unless screen sharing is active, so the user always sees what
+the agent does.
 """
 
 from __future__ import annotations
@@ -43,9 +45,10 @@ INSTRUCTIONS = (
 )
 
 DESKTOP_NOT_RUNNING_ERROR = (
-    "The Openbase Coder desktop app is not running, so computer use is "
-    "unavailable. Ask the user to start the Openbase Coder desktop app, then "
-    "retry."
+    "No desktop control endpoint is reachable — computer use needs screen "
+    "sharing to be active. Ask the user to start screen sharing (from the "
+    "Openbase desktop app, the phone, or `openbase-coder screen-share "
+    "start`), then retry."
 )
 
 _XY_SCHEMA = {
@@ -183,7 +186,7 @@ ACTION_TOOLS = {
 }
 
 
-LINUX_COMPANION_NOT_RUNNING_ERROR = (
+COMPANION_NOT_RUNNING_ERROR = (
     "The Openbase desktop companion is not running, so computer use is "
     "unavailable. Start screen sharing first with `openbase-coder "
     "computer-use screen-share start` (it launches the companion), then retry."
@@ -197,25 +200,32 @@ def _is_macos() -> bool:
 def _endpoint() -> JsonObject:
     """Resolve the platform's desktop-control endpoint.
 
-    macOS proxies through the Electron desktop app (dynamic port/secret from
-    the control file); Linux talks directly to the DevSpace companion (fixed
-    port, shared local secret) via the same /desktop-control contract.
+    When the Electron desktop app is running it owns the endpoint (dynamic
+    port/secret from the control file). Otherwise — developer installs on
+    macOS, and always on Linux — the shim talks directly to the screen-share
+    companion's own IPC (fixed port, shared local secret) via the same
+    /desktop-control contract; the companion itself enforces the
+    only-while-screen-sharing policy either way.
     """
     if _is_macos():
         try:
             payload = json.loads(DESKTOP_CONTROL_JSON_PATH.read_text(encoding="utf-8"))
         except (FileNotFoundError, OSError, json.JSONDecodeError):
-            raise RuntimeError(DESKTOP_NOT_RUNNING_ERROR) from None
+            payload = {}
         port = payload.get("port")
         secret = payload.get("secret")
-        if not isinstance(port, int) or port <= 0 or not isinstance(secret, str):
-            raise RuntimeError(DESKTOP_NOT_RUNNING_ERROR)
-        return {
-            "port": port,
-            "headers": {"X-Openbase-Desktop-Secret": secret},
-            "prefix": "/computer-use",
-            "unreachable_error": DESKTOP_NOT_RUNNING_ERROR,
-        }
+        if isinstance(port, int) and port > 0 and isinstance(secret, str):
+            return {
+                "port": port,
+                "headers": {"X-Openbase-Desktop-Secret": secret},
+                "prefix": "/computer-use",
+                "unreachable_error": DESKTOP_NOT_RUNNING_ERROR,
+            }
+        # No desktop app running: talk to the screen-share companion's own
+        # IPC directly, exactly like the Linux path below — the companion
+        # serves the same /desktop-control contract and enforces the
+        # only-while-screen-sharing policy itself, so developer installs get
+        # computer use without the Electron app.
 
     from openbase_coder_cli.cli.computer_use import (
         DEFAULT_COMPANION_PORT,
@@ -237,7 +247,7 @@ def _endpoint() -> JsonObject:
         "port": port,
         "headers": {"X-Openbase-Companion-Secret": secret},
         "prefix": "/desktop-control",
-        "unreachable_error": LINUX_COMPANION_NOT_RUNNING_ERROR,
+        "unreachable_error": COMPANION_NOT_RUNNING_ERROR,
     }
 
 
