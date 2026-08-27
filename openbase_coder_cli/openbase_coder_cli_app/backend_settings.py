@@ -97,7 +97,15 @@ def _set_claude_plugin_enabled(plugin_name: str, enabled: bool) -> bool:
 
 
 class CodingBackendSerializer(serializers.Serializer):
-    backend = serializers.ChoiceField(choices=SELECTABLE_BACKENDS)
+    backend = serializers.ChoiceField(choices=SELECTABLE_BACKENDS, required=False)
+    location = serializers.ChoiceField(choices=("local", "cloud"), required=False)
+
+    def validate(self, attrs):
+        if not attrs.get("backend") and not attrs.get("location"):
+            raise serializers.ValidationError(
+                "Provide either 'location' (local|cloud) or a legacy 'backend'."
+            )
+        return attrs
 
 
 class CodexPluginToggleSerializer(serializers.Serializer):
@@ -136,10 +144,35 @@ def _claude_auth_payload(*, verify: bool = False) -> dict:
 
 
 def _backend_payload(*, changed: bool = False, sync_claude_auth: bool = False) -> dict:
+    from openbase_coder_cli.dispatcher_config import backend_location
+
     configured_backend = read_backend(DEFAULT_ENV_FILE_PATH)
     payload = {
         "backend": configured_backend,
         "configured_backend": configured_backend,
+        # Where code runs is the user-facing choice; the engine (Claude Code
+        # vs Codex) follows the model picked per role, not a global setting.
+        "location": backend_location(configured_backend),
+        "location_options": [
+            {
+                "id": "local",
+                "label": "Local CLI",
+                "description": (
+                    "Agents run on this machine. Both engines (Claude Code "
+                    "and Codex) are available; each launch's model picks the "
+                    "engine."
+                ),
+            },
+            {
+                "id": "cloud",
+                "label": "Openbase Cloud",
+                "description": (
+                    "Agents run through Openbase Cloud with your Openbase "
+                    "login (Claude Code engine). Existing local Codex threads "
+                    "stay visible read-only."
+                ),
+            },
+        ],
         "execution_backend": CLAUDE_CODE_BACKEND
         if configured_backend == OPENBASE_CLOUD_BACKEND
         else CODEX_BACKEND
@@ -268,14 +301,23 @@ def coding_backend_settings(request):
     serializer = CodingBackendSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     previous_backend = read_backend(DEFAULT_ENV_FILE_PATH)
-    next_backend = normalize_backend(serializer.validated_data["backend"])
+    location = serializer.validated_data.get("location")
     try:
-        write_backend(DEFAULT_ENV_FILE_PATH, next_backend)
+        if location:
+            from openbase_coder_cli.cli.backend import write_backend_location
+
+            write_backend_location(DEFAULT_ENV_FILE_PATH, location)
+        else:
+            write_backend(
+                DEFAULT_ENV_FILE_PATH,
+                normalize_backend(serializer.validated_data["backend"]),
+            )
     except ValueError as exc:
         return Response(
             {"error": str(exc)},
             status=status.HTTP_400_BAD_REQUEST,
         )
+    next_backend = read_backend(DEFAULT_ENV_FILE_PATH)
     return Response(
         _backend_payload(
             changed=previous_backend != next_backend,

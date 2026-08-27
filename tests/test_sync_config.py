@@ -165,3 +165,51 @@ def test_product_state_relpaths_allowed_other_openbase_rejected():
     ):
         with pytest.raises(ValueError):
             sync_config.validate_relpath(bad)
+
+
+def test_remove_legacy_openbase_folder_is_not_blocked_by_add_guard(
+    tmp_path: Path,
+) -> None:
+    """A folder registered before the ~/.openbase add-guard (or grandfathered
+    in) must still be removable — removal is never gated by add-time policy."""
+    config_path = tmp_path / "sync-config.json"
+    # Write a legacy registry entry directly: `set_sync_folders` would now
+    # reject this relpath, mirroring a config from an older CLI.
+    config_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "folders": [
+                    {"relpath": "Projects", "extra_ignores": []},
+                    {"relpath": ".openbase/codex_home/skills", "extra_ignores": []},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # The guard still blocks *adding* it back.
+    with pytest.raises(ValueError):
+        sync_config.validate_relpath(".openbase/codex_home/skills")
+
+    assert (
+        sync_config.remove_sync_folder(".openbase/codex_home/skills", config_path)
+        is True
+    )
+    assert [f.relpath for f in sync_config.sync_folders(config_path)] == ["Projects"]
+    # Idempotent: removing an absent folder returns False, no raise.
+    assert (
+        sync_config.remove_sync_folder(".openbase/codex_home/skills", config_path)
+        is False
+    )
+
+
+def test_relpath_for_path_guard_toggle() -> None:
+    home = Path.home()
+    legacy = home / ".openbase" / "codex_home" / "skills"
+    with pytest.raises(ValueError):
+        sync_config.relpath_for_path(legacy)
+    assert (
+        sync_config.relpath_for_path(legacy, guard=False)
+        == ".openbase/codex_home/skills"
+    )

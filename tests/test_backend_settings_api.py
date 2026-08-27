@@ -110,12 +110,18 @@ def test_backend_model_settings_lists_claude_fable(
 
     assert response.status_code == 200
     assert response.data["backend"] == "claude_code"
+    assert response.data["location"] == "local"
     assert [option["id"] for option in response.data["options"]] == [
         "fable",
         "opus",
         "sonnet",
         "haiku",
+        "gpt-5.5",
     ]
+    # Locally both engines are available; the model picks the engine.
+    assert all(option["available"] for option in response.data["options"])
+    assert response.data["options"][0]["engine"] == "claude"
+    assert response.data["options"][-1]["engine"] == "codex"
 
 
 def test_backend_model_settings_lists_openbase_cloud_claude_model(
@@ -142,12 +148,20 @@ def test_backend_model_settings_lists_openbase_cloud_claude_model(
 
     assert response.status_code == 200
     assert response.data["backend"] == "openbase_cloud"
+    assert response.data["location"] == "cloud"
     assert [option["id"] for option in response.data["options"]] == [
         "sonnet",
         "opus",
         "fable",
         "haiku",
+        "gpt-5.5",
     ]
+    # Codex is read-only on Openbase Cloud: listed, but not selectable.
+    availability = {
+        option["id"]: option["available"] for option in response.data["options"]
+    }
+    assert availability["gpt-5.5"] is False
+    assert availability["fable"] is True
 
 
 def test_backend_model_settings_accepts_fable(
@@ -204,13 +218,52 @@ def test_backend_model_settings_updates_dispatcher_role(
         _authenticated_request(
             "PUT",
             "/api/settings/backend-model/",
-            {"role": "dispatcher", "model": "gpt-dispatcher"},
+            {"role": "dispatcher", "model": "gpt-5.5"},
         )
     )
 
     assert response.status_code == 200
-    assert response.data["models"]["dispatcher"] == "gpt-dispatcher"
+    assert response.data["models"]["dispatcher"] == "gpt-5.5"
+    assert response.data["roles"]["dispatcher"]["engine"] == "codex"
     assert response.data["restart_required"] is True
+    # The dispatcher role never rewrites the primary backend.
+    assert "OPENBASE_CODING_BACKEND=codex" in env_file.read_text(encoding="utf-8")
+
+
+def test_super_agents_model_choice_updates_primary_backend(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Picking a Claude default super-agent model on a Codex-primary install
+    moves the primary backend to the engine that runs the model."""
+    env_file = tmp_path / ".env"
+    config_path = tmp_path / "dispatcher-config.json"
+    env_file.write_text("OPENBASE_CODING_BACKEND=codex\n", encoding="utf-8")
+    monkeypatch.setattr(model_settings, "DEFAULT_ENV_FILE_PATH", env_file)
+    monkeypatch.setattr(
+        model_settings.dispatcher_config,
+        "DEFAULT_ENV_FILE_PATH",
+        env_file,
+    )
+    monkeypatch.setattr(
+        model_settings.dispatcher_config,
+        "CODEX_DISPATCHER_CONFIG_PATH",
+        config_path,
+    )
+
+    response = model_settings.backend_model_settings(
+        _authenticated_request(
+            "PUT",
+            "/api/settings/backend-model/",
+            {"role": "super_agents", "model": "fable"},
+        )
+    )
+
+    assert response.status_code == 200
+    assert response.data["roles"]["super_agents"]["engine"] == "claude"
+    assert "OPENBASE_CODING_BACKEND=claude_code" in env_file.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_coding_backend_settings_persists_claude_code_selection(
@@ -603,3 +656,61 @@ def test_coding_backend_settings_verifies_claude_login_on_save(
     assert response.data["claude_auth"]["verified"] is True
 
 
+
+
+def test_coding_backend_location_local_engages_both_engines(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENBASE_CODING_BACKEND=openbase_cloud\n", encoding="utf-8")
+    monkeypatch.setattr(backend_settings, "DEFAULT_ENV_FILE_PATH", env_file)
+    monkeypatch.setattr(
+        backend_settings,
+        "verified_claude_auth_status",
+        lambda: SimpleNamespace(
+            logged_in=True, raw_output='{"loggedIn": true}', returncode=0
+        ),
+    )
+    response = backend_settings.coding_backend_settings(
+        _authenticated_request(
+            "PUT",
+            "/api/settings/coding-backend/",
+            {"location": "local"},
+        )
+    )
+
+    assert response.status_code == 200
+    content = env_file.read_text(encoding="utf-8")
+    assert "OPENBASE_CODING_BACKENDS=codex,claude_code" in content
+    assert response.data["location"] == "local"
+
+
+def test_coding_backend_location_cloud_sets_openbase_cloud_primary(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENBASE_CODING_BACKEND=codex\n", encoding="utf-8")
+    monkeypatch.setattr(backend_settings, "DEFAULT_ENV_FILE_PATH", env_file)
+    monkeypatch.setattr(
+        backend_settings,
+        "verified_claude_auth_status",
+        lambda: SimpleNamespace(
+            logged_in=True, raw_output='{"loggedIn": true}', returncode=0
+        ),
+    )
+
+    response = backend_settings.coding_backend_settings(
+        _authenticated_request(
+            "PUT",
+            "/api/settings/coding-backend/",
+            {"location": "cloud"},
+        )
+    )
+
+    assert response.status_code == 200
+    content = env_file.read_text(encoding="utf-8")
+    assert "OPENBASE_CODING_BACKEND=openbase_cloud" in content
+    assert "OPENBASE_CODING_BACKENDS=openbase_cloud,codex" in content
+    assert response.data["location"] == "cloud"

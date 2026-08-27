@@ -207,12 +207,40 @@ class SuperAgentsClientThreadsMixin:
         except Exception:
             logger.warning("Unable to refresh Openbase env before backend selection")
 
-        execution_backend = _configured_execution_backend(backend_from_environment)
+        execution_backend = self._dispatcher_execution_backend()
+        if execution_backend is None:
+            execution_backend = _configured_execution_backend(backend_from_environment)
         if execution_backend == CLAUDE_CODE_BACKEND:
             from super_agents.claude_sdk import ClaudeAgentSdkClient
 
             return ClaudeAgentSdkClient()
         return CodexAppServerClient()
+
+    def _dispatcher_execution_backend(self) -> str | None:
+        """The engine the dispatcher's configured MODEL requires, if any.
+
+        The dispatcher role picks backend-and-model together: a Claude
+        dispatcher model must run on the Claude client even when the
+        configured primary backend is Codex, and vice versa.
+        """
+        from super_agents.backend_clients import CODEX_BACKEND
+
+        from openbase_coder_cli.dispatcher_config import (
+            CLAUDE_ENGINE,
+            CODEX_ENGINE,
+            dispatcher_model,
+            model_engine,
+        )
+
+        try:
+            engine = model_engine(dispatcher_model(self._dispatcher_config_path))
+        except Exception:
+            return None
+        if engine == CLAUDE_ENGINE:
+            return CLAUDE_CODE_BACKEND
+        if engine == CODEX_ENGINE:
+            return CODEX_BACKEND
+        return None
 
     def _register_backend_callback(self) -> None:
         register = getattr(self._backend_client, "register_permission_callback", None)

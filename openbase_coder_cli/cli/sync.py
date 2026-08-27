@@ -189,7 +189,7 @@ def add(path: Path) -> None:
 def remove(path: Path) -> None:
     """Remove a directory from code sync (files stay on disk)."""
     try:
-        relpath = sync_config.relpath_for_path(path)
+        relpath = sync_config.relpath_for_path(path, guard=False)
         removed = sync_config.remove_sync_folder(relpath)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from None
