@@ -151,8 +151,10 @@ def test_manifest_enforces_branch_without_rewriting_synced_files(
 
 
 def test_divergent_commit_is_preserved_before_manifest_convergence(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ) -> None:
+    # Legacy auto-displacement, behind an explicit opt-in.
+    monkeypatch.setenv("OPENBASE_CODE_SYNC_AUTO_DISPLACE", "1")
     local, source = _pair(tmp_path)
     local_head = _commit(local, "app.py", "print('local')\n", "local")
     source_head = _commit(source, "app.py", "print('source')\n", "source")
@@ -256,9 +258,12 @@ def test_stale_manifest_never_rewinds_a_locally_ahead_branch(tmp_path: Path) -> 
     assert _git(local, "rev-parse", "HEAD") == ahead_head
 
 
-def test_divergence_displacement_records_a_branch_conflict(tmp_path: Path) -> None:
+def test_divergence_displacement_records_a_branch_conflict(
+    tmp_path: Path, monkeypatch
+) -> None:
     from openbase_coder_cli.code_sync.conflicts import read_conflicts
 
+    monkeypatch.setenv("OPENBASE_CODE_SYNC_AUTO_DISPLACE", "1")
     local, source = _pair(tmp_path)
     local_head = _commit(local, "app.py", "print('local')\n", "local")
     source_head = _commit(source, "app.py", "print('source')\n", "source")
@@ -280,5 +285,42 @@ def test_divergence_displacement_records_a_branch_conflict(tmp_path: Path) -> No
     conflicts = read_conflicts(conflicts_path)
     assert any(
         entry.get("local_sha") == local_head and entry.get("remote_sha") == source_head
+        for entry in conflicts
+    )
+
+
+def test_divergence_pauses_and_records_conflict_by_default(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Default behavior: automation never picks a winner between two real
+    # histories — the ref stays put and the conflict is recorded for
+    # `openbase-coder sync resolve`.
+    from openbase_coder_cli.code_sync.conflicts import read_conflicts
+
+    monkeypatch.delenv("OPENBASE_CODE_SYNC_AUTO_DISPLACE", raising=False)
+    local, source = _pair(tmp_path)
+    local_head = _commit(local, "app.py", "print('local')\n", "local")
+    source_head = _commit(source, "app.py", "print('source')\n", "source")
+    manifest = repositories.ensure_repository_manifest(source)
+    assert manifest is not None
+    _copy_without_git(source, local)
+    conflicts_path = tmp_path / "conflicts.json"
+
+    action = repositories.converge_repository_to_manifest(
+        local,
+        manifest,
+        remote_urls=(str(source),),
+        folder_id="projects",
+        repo_relpath="repo",
+        conflicts_path=conflicts_path,
+    )
+
+    assert action == "divergence_paused"
+    assert _git(local, "rev-parse", "HEAD") == local_head
+    conflicts = read_conflicts(conflicts_path)
+    assert any(
+        entry.get("local_sha") == local_head
+        and entry.get("remote_sha") == source_head
+        and not entry.get("resolved")
         for entry in conflicts
     )

@@ -149,9 +149,7 @@ def _sync_warnings() -> list[dict[str, str]]:
     try:
         client = SyncthingClient()
         warnings.extend(
-            _disconnected_peer_warnings(
-                client.connections(), configured_device_names()
-            )
+            _disconnected_peer_warnings(client.connections(), configured_device_names())
         )
         # A folder in error state (e.g. "insufficient space on disk") stops
         # syncing while the engine stays up — historically invisible. One
@@ -198,6 +196,30 @@ def _sync_warnings() -> list[dict[str, str]]:
                 "Free disk space on this Mac.",
             )
         )
+
+    # Paused divergent branches: automation never picks a winner between two
+    # real histories, so an unresolved branch conflict means sync is holding
+    # a repo's ref until the user decides. Loud by design (2026-08-25).
+    from openbase_coder_cli.code_sync.conflicts import unresolved_conflicts
+
+    try:
+        for conflict in unresolved_conflicts():
+            if conflict.get("kind") != "branch":
+                continue
+            repo = conflict.get("repo_relpath") or "."
+            branch = conflict.get("branch") or "?"
+            warnings.append(
+                _warning(
+                    f"sync-branch-diverged:{conflict.get('id')}",
+                    "critical",
+                    f"Sync is paused for {repo}@{branch}: this machine and a "
+                    "peer have divergent git history for the same branch.",
+                    "Pick a side with 'openbase-coder sync resolve "
+                    f"{conflict.get('id')} --keep-local' or '--use-remote'.",
+                )
+            )
+    except Exception:  # noqa: BLE001 - conflicts file may be absent/corrupt
+        logger.debug("Unable to read sync conflicts", exc_info=True)
 
     # This device must advertise a tailscale identity or peers will drop it.
     identity = tailscale_self_identity()

@@ -11,9 +11,11 @@ branch ONLY when it is provably safe:
 - the local working tree already matches the fetched commit's tree
   (Syncthing has delivered the files, so nothing moves twice).
 
-Divergence is normally converged through a synced repository manifest while
-preserving displaced commits under recovery refs. Unsafe states remain
-untouched and surface as conflict records for the product UI.
+Branch pointers follow a synced repository manifest, but only through
+provably-safe moves: fast-forwards converge, a stale manifest (its head an
+ancestor of local) loses to local history, and true divergence pauses as a
+recorded conflict for `openbase-coder sync resolve` — automation never picks
+a winner between two real histories.
 """
 
 from __future__ import annotations

@@ -243,13 +243,15 @@ def converge_repository_to_manifest(
 ) -> str:
     """Converge branch/head to the manifest while preserving file content.
 
-    A manifest whose head is an ANCESTOR of the local head is stale (the peer
-    lags this machine) — converging would rewind real work, so the local
-    state wins and the caller republishes it instead. Any commit that a true
-    divergence displaces from the active branch's history is retained under
-    ``refs/openbase-code-sync/backups`` before the ref moves, and the
-    displacement is recorded as a branch conflict so it surfaces in health
-    warnings instead of disappearing silently (the 2026-08-25 incident).
+    Convergence only performs provably-safe moves. A manifest whose head is
+    an ANCESTOR of the local head is stale (the peer lags this machine) —
+    the local state wins and the caller republishes it. Truly divergent
+    history PAUSES: the ref stays put, a branch conflict is recorded for
+    health warnings and ``openbase-coder sync resolve``, and no winner is
+    picked automatically (the 2026-08-25 incident). Setting
+    ``OPENBASE_CODE_SYNC_AUTO_DISPLACE=1`` restores the legacy behavior of
+    displacing to the manifest with the old tip retained under
+    ``refs/openbase-code-sync/backups``.
     """
     from openbase_coder_cli.code_sync.reconciler import (
         _git,
@@ -298,20 +300,27 @@ def converge_repository_to_manifest(
             )
             if manifest_is_stale:
                 return "local_ahead"
-            backup = _preserve_commit(repo, old_target)
-            if backup:
-                from openbase_coder_cli.code_sync.conflicts import (
-                    record_branch_conflict,
-                )
+            from openbase_coder_cli.code_sync.conflicts import (
+                record_branch_conflict,
+            )
 
-                record_branch_conflict(
-                    folder_id=folder_id,
-                    repo_relpath=repo_relpath,
-                    branch=branch,
-                    local_sha=old_target,
-                    remote_sha=desired_head,
-                    path=conflicts_path,
-                )
+            record_branch_conflict(
+                folder_id=folder_id,
+                repo_relpath=repo_relpath,
+                branch=branch,
+                local_sha=old_target,
+                remote_sha=desired_head,
+                path=conflicts_path,
+            )
+            if os.environ.get("OPENBASE_CODE_SYNC_AUTO_DISPLACE") != "1":
+                # Truly divergent history: neither machine's automation has
+                # standing to pick a winner. The ref stays put (Syncthing has
+                # already made the files match, so the machines are not
+                # materially out of step), the conflict surfaces in health
+                # warnings, and `openbase-coder sync resolve` decides.
+                return "divergence_paused"
+            # Legacy opt-in: displace to the manifest, preserving the old tip.
+            backup = _preserve_commit(repo, old_target)
     update_args = ["update-ref", target_ref, desired_head]
     if old_target:
         update_args.append(old_target)
