@@ -288,6 +288,10 @@ class NetmeshCompanion:
     def register(self) -> CompanionStatus:
         return self._parse_status(self._request("POST", "/register"))
 
+    def disconnect(self) -> CompanionStatus:
+        """Stop the VPN tunnel (the root daemon stays registered)."""
+        return self._parse_status(self._request("POST", "/disconnect", timeout=30.0))
+
     def open_approval_settings(self) -> None:
         try:
             self._request("POST", "/open-approval-settings")

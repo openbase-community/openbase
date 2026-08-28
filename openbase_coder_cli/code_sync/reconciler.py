@@ -616,14 +616,19 @@ def run_tick_if_enabled() -> dict[str, Any] | None:
 def _refresh_config_if_peers_changed(eligibility, peers) -> None:
     """Re-render the Syncthing config when the syncable peer set changes.
 
-    New devices register their ``syncthing_device_id`` capability after this
-    device last rendered config.xml (e.g. a freshly provisioned DevSpace);
-    this picks them up without requiring a settings mutation.
+    The fingerprint covers device ids AND their tailnet DNS names: a peer
+    that switches tailnet transport keeps its device id but changes its
+    MagicDNS name, and the rendered config pins that name as the peer's
+    address — so a name change must re-render too, or every reconnect dials
+    a dead host. New devices (fresh ``syncthing_device_id`` capability) are
+    picked up the same way, without requiring a settings mutation.
     """
     from openbase_coder_cli.code_sync import CodeSyncError
     from openbase_coder_cli.code_sync import manager as sync_manager
 
-    rendered_ids = sorted(peer.syncthing_device_id for peer in peers)
+    rendered_ids = sorted(
+        f"{peer.syncthing_device_id}@{peer.tailscale_magic_dns}" for peer in peers
+    )
     state = read_reconcile_state()
     if (
         state.get("rendered_peer_ids") == rendered_ids

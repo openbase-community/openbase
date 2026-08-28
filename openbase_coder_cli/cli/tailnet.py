@@ -66,9 +66,57 @@ def set_provider(name: str, no_cloud: bool) -> None:
     _apply_provider(name, push_cloud=not no_cloud)
 
 
+def _capability_error(name: str) -> str | None:
+    """Why this machine cannot run transport ``name``, or None if it can.
+
+    Guards both explicit switches and account-level adoption (`tailnet sync`):
+    a device must decline — with the reason — rather than half-switch into a
+    transport it cannot bring up (which strands it off the tailnet entirely).
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    if name == tp.PROVIDER_TAILSCALE:
+        if tp.tailscale_bin() is None:
+            return (
+                "the Tailscale client is not installed (https://tailscale.com/download)"
+            )
+        return None
+    if name == tp.PROVIDER_NETMESH and not tp.netmesh_uses_stock_tailscale():
+        if _sys.platform != "darwin":
+            return "the hardened Openbase VPN client is macOS-only"
+        from openbase_coder_cli.services.netmesh_companion import (
+            _find_companion_app,
+            _missing_build_tools,
+        )
+
+        workspace = _dev_workspace_dir_or_none()
+        workspace_path = _Path(workspace) if workspace else None
+        if _find_companion_app(workspace_path) is not None:
+            return None
+        if workspace_path is None:
+            return (
+                "the Openbase VPN companion is not installed "
+                "(install the Openbase desktop app)"
+            )
+        missing = _missing_build_tools(workspace_path)
+        if missing:
+            return "building the Openbase VPN companion needs: " + "; ".join(missing)
+        return None
+    return None
+
+
 def _apply_provider(name: str, *, push_cloud: bool) -> None:
     path = _env_path()
     previous = _configured_provider()
+
+    if previous != name:
+        blocked = _capability_error(name)
+        if blocked is not None:
+            raise click.ClickException(
+                f"This machine cannot run the '{name}' transport: {blocked}. "
+                f"Keeping '{previous}'."
+            )
 
     values: dict[str, str] = {PROVIDER_ENV_KEY: name}
     if name in (tp.PROVIDER_NETMESH, tp.PROVIDER_NETMESH_TSNET):
@@ -128,7 +176,14 @@ def _apply_provider(name: str, *, push_cloud: bool) -> None:
     # the managed service crashloops behind it.
     _bootout_legacy_tunneld_agent()
     if previous != name:
+        # Capture the outgoing transport's node identity while it can still
+        # be queried, so the node can be revoked after teardown.
+        old_node = _old_transport_node_identity(previous)
         _teardown_transport(previous)
+        # Revoke BEFORE the new transport enrolls: headscale frees the node
+        # name, so the new node never gets a "-1" suffix (which would orphan
+        # the DNS name every peer's sync config points at).
+        _revoke_old_node(previous, old_node)
     _bring_up_transport(name)
     _restart_transport_services()
     _reregister_device()
@@ -168,10 +223,89 @@ def _teardown_transport(previous: str) -> None:
             )
             click.echo("Reset Tailscale Serve rules.")
     elif previous == tp.PROVIDER_NETMESH:
-        click.echo(
-            "You can disconnect the Openbase VPN from the Openbase desktop "
-            "app; its serve rules are no longer used."
+        if tp.netmesh_uses_stock_tailscale():
+            click.echo(
+                "Log the official Tailscale client out of the netmesh (or back "
+                "into your own tailnet) — its netmesh login is no longer used."
+            )
+            return
+        # macOS: actually stop the VPN tunnel — leaving it running alongside
+        # the next transport creates a second live node and a stale route.
+        from openbase_coder_cli.services.netmesh_companion import (
+            NetmeshCompanion,
+            NetmeshCompanionError,
         )
+
+        try:
+            companion = NetmeshCompanion(workspace_dir=_dev_workspace_dir_or_none())
+            companion.ensure_running(build_if_missing=False)
+            companion.disconnect()
+            click.echo("Disconnected the Openbase VPN.")
+        except NetmeshCompanionError as exc:
+            click.echo(f"Note: could not disconnect the Openbase VPN: {exc}")
+
+
+def _old_transport_node_identity(previous: str) -> dict | None:
+    """Self identity (HostName/DNSName) of the transport being left, or None.
+
+    Queried per-provider rather than via the routed ``status_json`` because the
+    env file already carries the NEW provider by the time teardown runs.
+    """
+    if previous not in (tp.PROVIDER_NETMESH, tp.PROVIDER_NETMESH_TSNET):
+        return None
+    if previous == tp.PROVIDER_NETMESH and tp.netmesh_uses_stock_tailscale():
+        return None
+    try:
+        payload = tp.status_json(provider_name=previous)
+    except Exception:  # noqa: BLE001 - identity capture is best-effort
+        return None
+    if not isinstance(payload, dict):
+        return None
+    self_node = payload.get("Self")
+    return self_node if isinstance(self_node, dict) else None
+
+
+def _revoke_old_node(previous: str, old_node: dict | None) -> None:
+    """Delete the outgoing transport's headscale node (best-effort).
+
+    Only netmesh-family transports own headscale nodes; leaving the official
+    Tailscale network revokes nothing. Matching is by node name against the
+    captured Self identity — the devices API is scoped to this user, so the
+    worst miss is a lingering stale node (the pre-existing behavior).
+    """
+    if previous not in (tp.PROVIDER_NETMESH, tp.PROVIDER_NETMESH_TSNET):
+        return
+    if not old_node:
+        click.echo(
+            "Note: could not identify the old tailnet node; it may linger "
+            "(delete it from the netmesh devices list if so)."
+        )
+        return
+    from openbase_coder_cli.services.cloud_registration import (
+        list_netmesh_devices,
+        revoke_netmesh_device,
+    )
+
+    names = {
+        str(old_node.get("HostName") or "").strip().lower(),
+        str(old_node.get("DNSName") or "").strip().rstrip(".").split(".")[0].lower(),
+    }
+    names.discard("")
+    if not names:
+        return
+    matches = [
+        device
+        for device in list_netmesh_devices()
+        if str(device.get("name") or "").strip().lower() in names
+    ]
+    if not matches:
+        return
+    # This runs after teardown and before the new transport enrolls, so a
+    # name match IS the node we just stopped; headscale's online flag can lag
+    # the teardown, so prefer an offline match but don't require one.
+    target = next((d for d in matches if not d.get("online")), matches[0])
+    if revoke_netmesh_device(str(target.get("id"))):
+        click.echo(f"Removed the old tailnet node '{target.get('name')}'.")
 
 
 def _bootout_legacy_tunneld_agent() -> None:
@@ -289,12 +423,10 @@ def _join_netmesh_with_stock_tailscale() -> None:
 
 def _dev_workspace_dir_or_none() -> str | None:
     """The dev workspace checkout, or None for an end-user standalone install."""
-    from openbase_coder_cli.cli.setup.workspace import resolve_dev_workspace_dir
+    from openbase_coder_cli.services.netmesh_companion import _workspace_dir_quiet
 
-    try:
-        return resolve_dev_workspace_dir(None)
-    except click.ClickException:
-        return None
+    found = _workspace_dir_quiet()
+    return str(found) if found is not None else None
 
 
 def _netmesh_hostname() -> str:

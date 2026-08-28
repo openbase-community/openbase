@@ -35,6 +35,7 @@ from openbase_coder_cli.services.tailscale_serve import tailscale_serve_health
 
 DEVICE_REGISTER_PATH = "/api/openbase/devices/register/"
 NETMESH_ENROLL_PATH = "/api/openbase/netmesh/enroll/"
+NETMESH_DEVICES_PATH = "/api/openbase/netmesh/devices/"
 TAILNET_PROVIDER_PATH = "/api/openbase/tailnet-provider/"
 REQUEST_TIMEOUT_SECONDS = 15
 
@@ -216,6 +217,20 @@ def netmesh_enroll() -> dict[str, Any] | None:
     if not result.response.get("auth_key") or not result.response.get("control_url"):
         return None
     return result.response
+
+
+def list_netmesh_devices() -> list[dict[str, Any]]:
+    """This user's netmesh (headscale) nodes. Never raises; [] on any failure."""
+    result = _post_to_cloud(NETMESH_DEVICES_PATH, {}, method="GET")
+    if not result.ok or not isinstance(result.response, list):
+        return []
+    return [entry for entry in result.response if isinstance(entry, dict)]
+
+
+def revoke_netmesh_device(node_id: str) -> bool:
+    """Delete one of this user's netmesh nodes. Never raises."""
+    result = _post_to_cloud(f"{NETMESH_DEVICES_PATH}{node_id}/", {}, method="DELETE")
+    return result.ok
 
 
 def push_tailnet_provider(provider: str) -> CloudReportResult:

@@ -129,3 +129,70 @@ def test_netmesh_ctl_path_finds_dev_companion_shim(tmp_path: Path) -> None:
 
 def test_netmesh_ctl_path_none_when_absent(tmp_path: Path) -> None:
     assert nc.netmesh_ctl_path(tmp_path / "empty-ws") is None
+
+
+def test_capability_error_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import importlib
+
+    t = importlib.import_module("openbase_coder_cli.cli.tailnet")
+    tp = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
+
+    # tailscale: blocked without a client binary.
+    monkeypatch.setattr(tp, "tailscale_bin", lambda: None)
+    assert "Tailscale client is not installed" in (t._capability_error("tailscale") or "")
+    monkeypatch.setattr(tp, "tailscale_bin", lambda: "/usr/bin/tailscale")
+    assert t._capability_error("tailscale") is None
+
+    # netmesh on non-mac (stock-tailscale path): no companion requirement.
+    monkeypatch.setattr(tp, "netmesh_uses_stock_tailscale", lambda: True)
+    assert t._capability_error("netmesh") is None
+
+    # netmesh on macOS without companion or workspace: blocked with guidance.
+    monkeypatch.setattr(tp, "netmesh_uses_stock_tailscale", lambda: False)
+    monkeypatch.setattr(t, "_dev_workspace_dir_or_none", lambda: None)
+    monkeypatch.setattr(nc, "_find_companion_app", lambda ws: None)
+    blocked = t._capability_error("netmesh")
+    assert blocked is not None and "desktop app" in blocked
+
+    # tsnet: never blocked.
+    assert t._capability_error("netmesh-tsnet") is None
+
+
+def test_revoke_old_node_matches_offline_by_captured_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
+
+    t = importlib.import_module("openbase_coder_cli.cli.tailnet")
+    cr = importlib.import_module("openbase_coder_cli.services.cloud_registration")
+
+    revoked: list[str] = []
+    devices = [
+        {"id": "7", "name": "gabes-mac-mini-openbase", "online": True},
+        {"id": "9", "name": "gabes-mac-mini-openbase", "online": False},
+    ]
+    monkeypatch.setattr(cr, "list_netmesh_devices", lambda: devices)
+    monkeypatch.setattr(
+        cr, "revoke_netmesh_device", lambda node_id: revoked.append(node_id) or True
+    )
+
+    t._revoke_old_node(
+        "netmesh-tsnet",
+        {"HostName": "gabes-mac-mini-openbase", "DNSName": ""},
+    )
+    # Prefers the OFFLINE match, never the live node.
+    assert revoked == ["9"]
+
+
+def test_revoke_old_node_skips_official_tailscale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
+
+    t = importlib.import_module("openbase_coder_cli.cli.tailnet")
+    cr = importlib.import_module("openbase_coder_cli.services.cloud_registration")
+    monkeypatch.setattr(
+        cr, "list_netmesh_devices", lambda: (_ for _ in ()).throw(AssertionError)
+    )
+    # Leaving the official Tailscale network revokes nothing (no API call).
+    t._revoke_old_node("tailscale", {"HostName": "x"})

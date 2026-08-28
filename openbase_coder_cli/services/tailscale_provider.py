@@ -174,19 +174,23 @@ def _parsed(argv: list[str]) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def status_json() -> dict[str, Any]:
+def status_json(provider_name: str | None = None) -> dict[str, Any]:
     """Parsed node status (shape matches ``tailscale status --json``: Self, Peer…).
 
-    Returns a dict with an ``error`` key on failure.
+    Routes by the active provider, or by ``provider_name`` when given — a
+    transport switch needs the OUTGOING transport's status after the env file
+    already carries the new value. Returns a dict with an ``error`` key on
+    failure.
     """
-    if is_netmesh_tsnet():
+    selected = provider_name or provider()
+    if selected == PROVIDER_NETMESH_TSNET:
         from openbase_coder_cli.services.tunneld import tunneld_status
 
         _available, payload, error = tunneld_status()
         if payload is None:
             return {"error": error or "openbase-tunneld status unavailable"}
         return payload
-    if is_netmesh() and not netmesh_uses_stock_tailscale():
+    if selected == PROVIDER_NETMESH and not netmesh_uses_stock_tailscale():
         ctl = netmesh_ctl_bin()
         if not ctl:
             return {"error": "netmesh-ctl not found"}
