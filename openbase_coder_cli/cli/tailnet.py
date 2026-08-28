@@ -355,13 +355,19 @@ def _bring_up_transport(name: str) -> None:
             )
         )
         return
-    try:
-        # Waits for Running + forwards; mints a netmesh key with the user's
-        # cloud login if the node still needs one.
-        ensure_tunneld_running()
-        click.echo("openbase-tunneld is running and joined the tailnet.")
-    except RuntimeError as exc:
-        click.echo(click.style(f"Warning: {exc}", fg="yellow"))
+    # Waits for Running + forwards; mints a netmesh key with the user's
+    # cloud login if the node still needs one. The first attempt right after
+    # a transport switch can catch tunneld mid-startup in NeedsLogin (its old
+    # node key was just revoked); one retry covers that window.
+    last_error: RuntimeError | None = None
+    for _attempt in range(2):
+        try:
+            ensure_tunneld_running()
+            click.echo("openbase-tunneld is running and joined the tailnet.")
+            return
+        except RuntimeError as exc:
+            last_error = exc
+    click.echo(click.style(f"Warning: {last_error}", fg="yellow"))
 
 
 def _join_netmesh_with_stock_tailscale() -> None:

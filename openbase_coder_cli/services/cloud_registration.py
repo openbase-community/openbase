@@ -46,7 +46,7 @@ class CloudReportResult:
     supported: bool
     error: str | None = None
     status_code: int | None = None
-    response: dict[str, Any] | None = None
+    response: dict[str, Any] | list[Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -301,7 +301,11 @@ def _post_to_cloud(
         ok=True,
         supported=True,
         status_code=response.status_code,
-        response=response_payload if isinstance(response_payload, dict) else None,
+        # dict for object endpoints, list for collection endpoints (e.g.
+        # the netmesh devices list); anything else is dropped.
+        response=response_payload
+        if isinstance(response_payload, (dict, list))
+        else None,
     )
 
 
