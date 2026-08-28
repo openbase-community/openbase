@@ -68,3 +68,41 @@ def test_non_darwin_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(nc.sys, "platform", "linux")
     with pytest.raises(nc.NetmeshCompanionError, match="macOS-only"):
         nc.NetmeshCompanion()
+
+
+def test_missing_build_tools_lists_absent_and_skips_go_when_staged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import shutil
+
+    workspace = tmp_path / "ws"
+    # Only xcodegen/xcodebuild present; node + go absent.
+    present = {"xcodegen", "xcodebuild"}
+    monkeypatch.setattr(
+        shutil, "which", lambda name: f"/usr/bin/{name}" if name in present else None
+    )
+    missing = nc._missing_build_tools(workspace)
+    assert any(m.startswith("node") for m in missing)
+    assert any(m.startswith("go") for m in missing)  # engine not staged -> go needed
+
+    # Stage the tailscale engine -> go no longer required.
+    vendor = workspace / "desktop" / "netmesh-macos" / "vendor" / "tailscale-bin"
+    vendor.mkdir(parents=True)
+    (vendor / "tailscaled").write_text("")
+    (vendor / "tailscale").write_text("")
+    missing_staged = nc._missing_build_tools(workspace)
+    assert not any(m.startswith("go") for m in missing_staged)
+
+
+def test_build_companion_fails_fast_with_prereq_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import shutil
+
+    workspace = tmp_path / "ws"
+    stage = workspace / "desktop" / "scripts" / "stage-netmesh-companion.mjs"
+    stage.parent.mkdir(parents=True)
+    stage.write_text("// stage script")
+    monkeypatch.setattr(shutil, "which", lambda name: None)  # nothing installed
+    with pytest.raises(nc.NetmeshCompanionError, match="needs these tools first"):
+        nc._build_companion(workspace)

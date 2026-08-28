@@ -86,6 +86,35 @@ def _find_companion_app(workspace_dir: Path | None) -> Path | None:
     return None
 
 
+def _missing_build_tools(workspace_dir: Path) -> list[str]:
+    """Tools required to build the companion that aren't installed.
+
+    This is the single source of truth for the netmesh (Openbase VPN) build
+    prerequisites — the human docs point here rather than re-listing them.
+    ``go`` is only needed when the pinned tailscale engine hasn't been staged
+    yet (it's a gitignored ~56 MB build artifact).
+    """
+    import shutil
+
+    missing: list[str] = []
+    if shutil.which("node") is None:
+        missing.append("node (https://nodejs.org — or `brew install node`)")
+    if shutil.which("xcodegen") is None:
+        missing.append("xcodegen (`brew install xcodegen`)")
+    if shutil.which("xcodebuild") is None:
+        missing.append(
+            "Xcode (install from the App Store, then `xcodebuild -runFirstLaunch`)"
+        )
+    vendor = workspace_dir / "desktop" / "netmesh-macos" / "vendor" / "tailscale-bin"
+    engine_staged = (vendor / "tailscaled").exists() and (vendor / "tailscale").exists()
+    if not engine_staged and shutil.which("go") is None:
+        missing.append(
+            "go (`brew install go`) — builds the pinned tailscale engine; or "
+            "stage prebuilt binaries into desktop/netmesh-macos/vendor/tailscale-bin/"
+        )
+    return missing
+
+
 def _build_companion(workspace_dir: Path) -> Path:
     """Build the companion from the in-repo netmesh-macos project (dev)."""
     desktop = workspace_dir / "desktop"
@@ -93,6 +122,12 @@ def _build_companion(workspace_dir: Path) -> Path:
     if not stage.is_file():
         raise NetmeshCompanionError(
             f"Cannot build the netmesh companion: {stage} is missing."
+        )
+    missing = _missing_build_tools(workspace_dir)
+    if missing:
+        raise NetmeshCompanionError(
+            "Building the Openbase VPN companion needs these tools first:\n  - "
+            + "\n  - ".join(missing)
         )
     try:
         subprocess.run(  # noqa: S603,S607 - fixed argv, dev build
