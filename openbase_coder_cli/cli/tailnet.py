@@ -333,6 +333,15 @@ def _provision_netmesh_companion() -> None:
         warn(str(exc))
         return
 
+    if status.running and status.helper_enabled:
+        # Re-apply (e.g. re-running set-provider for serve rules): the tunnel
+        # is already up — don't mint a fresh single-use key or churn the node.
+        click.echo(
+            f"Openbase VPN already connected: {status.dns_name or 'netmesh'} "
+            f"({status.self_ip or '?'})."
+        )
+        return
+
     if not status.helper_enabled:
         try:
             companion.register()
