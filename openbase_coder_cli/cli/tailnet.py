@@ -139,11 +139,9 @@ def _apply_provider(name: str, *, push_cloud: bool) -> None:
                 "Next: this machine joins the netmesh through the official "
                 "Tailscale client pointed at Openbase's control server."
             )
-        else:
-            click.echo(
-                "Next: connect the Openbase VPN from the Openbase desktop "
-                "app (Prerequisites → Openbase VPN)."
-            )
+        # macOS: the Openbase VPN companion was provisioned in
+        # _bring_up_transport above (which prints its own status / any
+        # one-time approval prompt).
     elif name == tp.PROVIDER_TAILSCALE:
         click.echo("Next: make sure the Tailscale app is running and signed in.")
 
@@ -191,6 +189,13 @@ def _bootout_legacy_tunneld_agent() -> None:
 def _bring_up_transport(name: str) -> None:
     if name == tp.PROVIDER_NETMESH and tp.netmesh_uses_stock_tailscale():
         _join_netmesh_with_stock_tailscale()
+        _apply_serve_best_effort()
+        return
+    if name == tp.PROVIDER_NETMESH:
+        # macOS netmesh VPN: the companion (root tailscaled + hardened helper)
+        # IS the transport. Build/register/connect it here so `netmesh` is a
+        # first-class CLI/setup choice instead of "go open the desktop app."
+        _provision_netmesh_companion()
         _apply_serve_best_effort()
         return
     if name != tp.PROVIDER_NETMESH_TSNET:
@@ -280,6 +285,100 @@ def _join_netmesh_with_stock_tailscale() -> None:
         )
         return
     click.echo("Joined the netmesh with the official Tailscale client.")
+
+
+def _dev_workspace_dir_or_none() -> str | None:
+    """The dev workspace checkout, or None for an end-user standalone install."""
+    from openbase_coder_cli.cli.setup.workspace import resolve_dev_workspace_dir
+
+    try:
+        return resolve_dev_workspace_dir(None)
+    except click.ClickException:
+        return None
+
+
+def _netmesh_hostname() -> str:
+    """Sanitized ``<host>-openbase`` tailnet name for this machine."""
+    import socket
+
+    raw = socket.gethostname().split(".")[0]
+    sanitized = "".join(c if c.isalnum() else "-" for c in raw.lower())
+    collapsed = "-".join(part for part in sanitized.split("-") if part)
+    return f"{collapsed}-openbase" if collapsed else "openbase-mac"
+
+
+def _provision_netmesh_companion() -> None:
+    """Build, register, and connect the macOS Openbase VPN companion.
+
+    This is what makes ``netmesh`` a first-class CLI/``./scripts/setup`` choice:
+    the companion (root ``tailscaled`` + hardened helper) is built from the
+    in-repo ``desktop/netmesh-macos`` project when needed, its SMAppService
+    background item is registered (a one-time GUI approval), and the tunnel is
+    connected with a freshly minted netmesh key.
+    """
+    from openbase_coder_cli.services.cloud_registration import netmesh_enroll
+    from openbase_coder_cli.services.netmesh_companion import (
+        NetmeshCompanion,
+        NetmeshCompanionError,
+    )
+
+    def warn(message: str) -> None:
+        click.echo(click.style(f"Warning: {message}", fg="yellow"))
+
+    try:
+        companion = NetmeshCompanion(workspace_dir=_dev_workspace_dir_or_none())
+        click.echo("Bringing up the Openbase VPN companion…")
+        status = companion.ensure_running()
+    except NetmeshCompanionError as exc:
+        warn(str(exc))
+        return
+
+    if not status.helper_enabled:
+        try:
+            companion.register()
+        except NetmeshCompanionError as exc:
+            warn(f"could not register the Openbase VPN background service: {exc}")
+            return
+        companion.open_approval_settings()
+        click.echo(
+            "Approve 'OpenbaseNetmesh' in System Settings → General → Login "
+            "Items & Extensions (Allow in the Background); connecting will "
+            "resume automatically."
+        )
+        if not companion.wait_for_helper_approval():
+            warn(
+                "timed out waiting for approval — re-run "
+                "'openbase-coder tailnet set-provider netmesh' once approved."
+            )
+            return
+
+    enrollment = netmesh_enroll()
+    if not enrollment:
+        warn("could not mint a netmesh key — sign in to Openbase first.")
+        return
+    control_url = enrollment.get("control_url") or enrollment.get("controlURL")
+    auth_key = enrollment.get("auth_key") or enrollment.get("authKey")
+    if not control_url or not auth_key:
+        warn("netmesh enrollment did not return a control URL + key.")
+        return
+
+    try:
+        connected = companion.connect(
+            control_url=control_url,
+            auth_key=auth_key,
+            hostname=_netmesh_hostname(),
+        )
+    except NetmeshCompanionError as exc:
+        warn(f"the Openbase VPN failed to connect: {exc}")
+        return
+
+    if connected.running:
+        click.echo(
+            f"Openbase VPN connected: {connected.dns_name or 'netmesh'} "
+            f"({connected.self_ip or '?'})."
+        )
+    else:
+        warn(f"Openbase VPN did not report Running (state={connected.backend_state}).")
 
 
 def _apply_serve_best_effort() -> None:

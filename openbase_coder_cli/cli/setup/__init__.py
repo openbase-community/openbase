@@ -861,6 +861,29 @@ def _run_setup_phases(
         click.echo("Skipped service installation (--skip-services).")
         progress.step("services", "ok", "skipped (--skip-services)")
 
+    # --- Provision the netmesh VPN (macOS Openbase VPN companion) ---
+    # Makes `netmesh` a first-class setup choice: build + register + connect
+    # the companion, instead of leaving the user with the provider value set
+    # but no VPN. (tunneld for netmesh-tsnet is installed by install_all_services.)
+    if (
+        not skip_services
+        and tailnet_provider == PROVIDER_NETMESH
+        and sys.platform == "darwin"
+    ):
+        from openbase_coder_cli.cli.tailnet import _provision_netmesh_companion
+
+        click.echo()
+        click.echo("Provisioning the Openbase VPN (netmesh)...")
+        try:
+            _provision_netmesh_companion()
+        except Exception as exc:  # noqa: BLE001 - VPN issues must not fail setup
+            click.echo(
+                click.style(
+                    f"Warning: Openbase VPN provisioning did not complete: {exc}",
+                    fg="yellow",
+                )
+            )
+
     click.echo()
     click.echo("Configuring Tailscale Serve routes...")
     progress.step("tailscale_serve", "start")
