@@ -38,12 +38,12 @@ PROVIDER_NETMESH_TSNET = "netmesh-tsnet"
 
 PROVIDER_VALUES = (PROVIDER_TAILSCALE, PROVIDER_NETMESH, PROVIDER_NETMESH_TSNET)
 
-# Where the netmesh VPN machinery bundles the shim, most-preferred first:
-# the companion nested in the Openbase desktop app (the shipping layout — the
-# standalone Openbase Netmesh app is retired), then the legacy standalone app.
+# Last-resort netmesh-ctl location: the legacy standalone Openbase Netmesh app
+# (retired). The shipping companion (nested in the desktop app) and the dev
+# companion-build/DerivedData layouts are resolved from netmesh_companion —
+# the single source of truth for where the companion lives — so they are not
+# re-declared here.
 NETMESH_CTL_CANDIDATES = (
-    "/Applications/Openbase.app/Contents/Resources/OpenbaseNetmeshCompanion.app"
-    "/Contents/MacOS/netmesh-ctl",
     "/Applications/OpenbaseNetmesh.app/Contents/MacOS/netmesh-ctl",
 )
 
@@ -123,6 +123,14 @@ def netmesh_ctl_bin() -> str | None:
     override = os.environ.get("OPENBASE_CODER_CLI_NETMESH_CTL")
     if override and os.access(override, os.X_OK):
         return override
+    # Shipping + dev companion layouts, resolved from the single source in
+    # netmesh_companion (so a dev install's companion-build/ shim is found).
+    from openbase_coder_cli.services.netmesh_companion import netmesh_ctl_path
+
+    shared = netmesh_ctl_path()
+    if shared and os.access(shared, os.X_OK):
+        return shared
+    # Legacy standalone app (retired) as a last resort.
     for candidate in NETMESH_CTL_CANDIDATES:
         if os.access(candidate, os.X_OK):
             return candidate

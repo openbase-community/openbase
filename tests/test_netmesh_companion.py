@@ -106,3 +106,26 @@ def test_build_companion_fails_fast_with_prereq_message(
     monkeypatch.setattr(shutil, "which", lambda name: None)  # nothing installed
     with pytest.raises(nc.NetmeshCompanionError, match="needs these tools first"):
         nc._build_companion(workspace)
+
+
+def test_netmesh_ctl_path_finds_dev_companion_shim(tmp_path: Path) -> None:
+    """Regression: on a dev install the shim lives in desktop/companion-build,
+    which the serve-rules step must find (it previously only looked in
+    /Applications and reported 'netmesh-ctl was not found')."""
+    workspace = tmp_path / "ws"
+    macos = (
+        workspace
+        / "desktop"
+        / "companion-build"
+        / "OpenbaseNetmeshCompanion.app"
+        / "Contents"
+        / "MacOS"
+    )
+    macos.mkdir(parents=True)
+    shim = macos / "netmesh-ctl"
+    shim.write_text("#!/bin/sh\n")
+    assert nc.netmesh_ctl_path(workspace) == str(shim)
+
+
+def test_netmesh_ctl_path_none_when_absent(tmp_path: Path) -> None:
+    assert nc.netmesh_ctl_path(tmp_path / "empty-ws") is None

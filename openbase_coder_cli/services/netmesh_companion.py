@@ -86,6 +86,45 @@ def _find_companion_app(workspace_dir: Path | None) -> Path | None:
     return None
 
 
+def _workspace_dir_quiet() -> Path | None:
+    """The dev workspace dir without emitting the usual "Using workspace" line."""
+    try:
+        from openbase_coder_cli.cli.setup.workspace import (
+            _editable_install_workspace_dir,
+            _recorded_workspace_dir,
+        )
+    except Exception:  # noqa: BLE001 - resolution is best-effort
+        return None
+    for resolver in (_recorded_workspace_dir, _editable_install_workspace_dir):
+        try:
+            found = resolver()
+        except Exception:  # noqa: BLE001
+            found = None
+        if found is not None:
+            return Path(found)
+    return None
+
+
+def netmesh_ctl_path(workspace_dir: str | Path | None = None) -> str | None:
+    """Absolute path to the companion's ``netmesh-ctl`` shim, or None.
+
+    The single source of truth for locating netmesh-ctl across the shipping
+    (installed desktop app) and dev (in-repo companion-build / DerivedData)
+    layouts — so the serve-rules step and the companion manager can never
+    disagree about where the companion lives.
+    """
+    ws = (
+        Path(workspace_dir).expanduser()
+        if workspace_dir is not None
+        else _workspace_dir_quiet()
+    )
+    app = _find_companion_app(ws)
+    if app is None:
+        return None
+    ctl = app / "Contents" / "MacOS" / "netmesh-ctl"
+    return str(ctl) if ctl.is_file() else None
+
+
 def _missing_build_tools(workspace_dir: Path) -> list[str]:
     """Tools required to build the companion that aren't installed.
 
