@@ -208,11 +208,22 @@ def ensure_tunneld_running(auth_key: str | None = None) -> None:
                 "openbase-tunneld is not running and no binary was found "
                 "(set OPENBASE_TUNNELD_BIN or add openbase-tunneld to PATH)."
             )
+        from openbase_coder_cli.services.tailnet_hostname import (
+            TSNET_HOSTNAME_ENV_KEY,
+            netmesh_hostname,
+        )
+
+        # The node name must match what the VPN companion would use — peers
+        # store it (phone backend host, syncthing addresses), so both
+        # transports enroll under the one canonical name.
+        env = dict(os.environ)
+        env.setdefault(TSNET_HOSTNAME_ENV_KEY, netmesh_hostname())
         subprocess.Popen(
             [binary, "serve"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
+            env=env,
         )
 
     login_submitted = False

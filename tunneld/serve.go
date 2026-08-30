@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"tailscale.com/tsnet"
@@ -43,8 +44,7 @@ type serveConfig struct {
 func parseServeFlags(args []string) (*serveConfig, error) {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	cfg := &serveConfig{}
-	defaultHost, _ := os.Hostname()
-	fs.StringVar(&cfg.hostname, "hostname", envOr("OPENBASE_TSNET_HOSTNAME", defaultHost+"-openbase"), "tailnet hostname for this node")
+	fs.StringVar(&cfg.hostname, "hostname", envOr("OPENBASE_TSNET_HOSTNAME", defaultHostname()), "tailnet hostname for this node")
 	fs.StringVar(&cfg.stateDir, "statedir", envOr("OPENBASE_TSNET_STATE_DIR", defaultStateDir("tsnet")), "directory for tsnet node state")
 	fs.StringVar(&cfg.authKey, "authkey", os.Getenv("TS_AUTHKEY"), "Tailscale auth key (defaults to $TS_AUTHKEY)")
 	fs.StringVar(&cfg.controlURL, "control-url", os.Getenv("OPENBASE_TSNET_CONTROL_URL"), "coordination server URL (empty = Tailscale hosted)")
@@ -193,6 +193,35 @@ func defaultStateDir(name string) string {
 		return filepath.Join(".", ".openbase", name)
 	}
 	return filepath.Join(home, ".openbase", name)
+}
+
+// defaultHostname mirrors the CLI's netmesh_hostname() (services/
+// tailnet_hostname.py): strip the DNS suffix, reduce to lowercase
+// alphanumerics and dashes, append "-openbase". Peers store this node's
+// MagicDNS name, so every netmesh transport must derive the identical name.
+func defaultHostname() string {
+	raw, _ := os.Hostname()
+	if i := strings.IndexByte(raw, '.'); i >= 0 {
+		raw = raw[:i]
+	}
+	var b strings.Builder
+	for _, r := range strings.ToLower(raw) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	parts := []string{}
+	for _, part := range strings.Split(b.String(), "-") {
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	if len(parts) == 0 {
+		return "openbase-mac"
+	}
+	return strings.Join(parts, "-") + "-openbase"
 }
 
 func envOr(key, fallback string) string {

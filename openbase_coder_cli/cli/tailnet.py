@@ -16,6 +16,7 @@ import click
 
 from openbase_coder_cli.cli.utils import get_data_dir
 from openbase_coder_cli.env_file import env_file_values, upsert_env_file_values
+from openbase_coder_cli.services import tailnet_hostname as tunneld_hostname
 from openbase_coder_cli.services import tailscale_provider as tp
 
 PROVIDER_ENV_KEY = "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"
@@ -126,6 +127,14 @@ def _apply_provider(name: str, *, push_cloud: bool) -> None:
         if NETMESH_ALLOWED_SUFFIX not in host_list:
             host_list.append(NETMESH_ALLOWED_SUFFIX)
             values[ALLOWED_HOSTS_ENV_KEY] = ",".join(host_list)
+        # Both netmesh transports MUST enroll under the same node name: peers
+        # store this machine's MagicDNS name (phone backend host, syncthing
+        # addresses), so a name that drifted across a transport switch would
+        # strand them on a dead address. tunneld reads this env key; the VPN
+        # companion gets the same value passed explicitly on connect.
+        values[tunneld_hostname.TSNET_HOSTNAME_ENV_KEY] = (
+            tunneld_hostname.netmesh_hostname()
+        )
     # Embedded mode: all media reaches LiveKit host-locally through the tunneld
     # TURN relay, so LiveKit must run in "local" network mode. With --node-ip
     # set (tailscale mode), every advertised candidate collapses to that IP,
@@ -222,6 +231,20 @@ def _teardown_transport(previous: str) -> None:
                 check=False,
             )
             click.echo("Reset Tailscale Serve rules.")
+            # Disconnect the official client: both tailscaleds claim the
+            # 100.100.100.100 MagicDNS resolver, and while the official one
+            # holds it, netmesh names silently stop resolving system-wide
+            # (syncthing peers, git-pointer fetches, phone-facing serves).
+            subprocess.run(  # noqa: S603 - fixed argv, best-effort
+                [tailscale_bin, "down"],
+                capture_output=True,
+                timeout=15,
+                check=False,
+            )
+            click.echo(
+                "Disconnected the official Tailscale client (it conflicts "
+                "with netmesh MagicDNS while connected)."
+            )
     elif previous == tp.PROVIDER_NETMESH:
         if tp.netmesh_uses_stock_tailscale():
             click.echo(
@@ -326,6 +349,18 @@ def _bring_up_transport(name: str) -> None:
         _apply_serve_best_effort()
         return
     if name == tp.PROVIDER_NETMESH:
+        # A connected official Tailscale client steals the 100.100.100.100
+        # MagicDNS resolver from the companion, silently breaking netmesh
+        # name resolution system-wide — down it even when it wasn't the
+        # transport we're leaving (e.g. the user connected it by hand).
+        tailscale_bin = tp.tailscale_bin()
+        if tailscale_bin:
+            subprocess.run(  # noqa: S603 - fixed argv, best-effort
+                [tailscale_bin, "down"],
+                capture_output=True,
+                timeout=15,
+                check=False,
+            )
         # macOS netmesh VPN: the companion (root tailscaled + hardened helper)
         # IS the transport. Build/register/connect it here so `netmesh` is a
         # first-class CLI/setup choice instead of "go open the desktop app."
@@ -333,6 +368,17 @@ def _bring_up_transport(name: str) -> None:
         _apply_serve_best_effort()
         return
     if name != tp.PROVIDER_NETMESH_TSNET:
+        if name == tp.PROVIDER_TAILSCALE:
+            # Mirror of the teardown-side `tailscale down`: reconnect the
+            # official client this transport rides on.
+            tailscale_bin = tp.tailscale_bin()
+            if tailscale_bin:
+                subprocess.run(  # noqa: S603 - fixed argv, best-effort
+                    [tailscale_bin, "up"],
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
+                )
         _apply_serve_best_effort()
         return
 
@@ -437,12 +483,9 @@ def _dev_workspace_dir_or_none() -> str | None:
 
 def _netmesh_hostname() -> str:
     """Sanitized ``<host>-openbase`` tailnet name for this machine."""
-    import socket
+    from openbase_coder_cli.services.tailnet_hostname import netmesh_hostname
 
-    raw = socket.gethostname().split(".")[0]
-    sanitized = "".join(c if c.isalnum() else "-" for c in raw.lower())
-    collapsed = "-".join(part for part in sanitized.split("-") if part)
-    return f"{collapsed}-openbase" if collapsed else "openbase-mac"
+    return netmesh_hostname()
 
 
 def _provision_netmesh_companion() -> None:
