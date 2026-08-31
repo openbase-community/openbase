@@ -1,5 +1,7 @@
 """Regression tests for the installation-scoped local API trust boundary."""
 
+# ruff: noqa: E402 -- Django must be configured before app imports.
+
 from __future__ import annotations
 
 import os
