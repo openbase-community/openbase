@@ -31,7 +31,7 @@ from openbase_coder_cli.openbase_coder_cli_app.approvals import (
 )
 from openbase_coder_cli.openbase_coder_cli_app.auth import (
     auth_logout,
-    auth_refresh_jwt,
+    auth_refresh_jwt_removed,
     auth_session,
 )
 from openbase_coder_cli.openbase_coder_cli_app.backend_settings import (
@@ -276,7 +276,7 @@ __all__ = [
     "approval_request_detail",
     "approval_requests",
     "auth_logout",
-    "auth_refresh_jwt",
+    "auth_refresh_jwt_removed",
     "auth_session",
     "boilersync_templates",
     "bootstrap_run",

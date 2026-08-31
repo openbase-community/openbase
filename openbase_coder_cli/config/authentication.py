@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 
 import httpx
 from django.conf import settings
@@ -11,8 +12,41 @@ from django.db import IntegrityError, transaction
 from rest_framework import authentication, exceptions
 
 from openbase_coder_cli.config.jwt_validation import InvalidTokenError, JWKSValidator
+from openbase_coder_cli.config.local_api_token import get_local_api_token
 
 logger = logging.getLogger(__name__)
+
+
+class LocalAPIAuthentication(authentication.BaseAuthentication):
+    """Authenticate an out-of-band installation capability.
+
+    The token is stored owner-readable on the host and delivered by trusted
+    native/CLI launch paths. Network reachability, source IP, Host, Origin,
+    and forwarded headers are intentionally irrelevant to this check.
+    """
+
+    keyword = "Bearer"
+
+    def authenticate(self, request):
+        auth_header = authentication.get_authorization_header(request)
+        try:
+            auth_parts = auth_header.decode("utf-8").split()
+        except UnicodeDecodeError:
+            return None
+        if len(auth_parts) != 2 or auth_parts[0].lower() != self.keyword.lower():
+            return None
+
+        token = auth_parts[1]
+        if token.count(".") == 2:
+            return None
+        if not secrets.compare_digest(token, get_local_api_token()):
+            raise exceptions.AuthenticationFailed("Invalid local API capability.")
+
+        user = _get_or_create_user(sub="local-installation")
+        return (user, {"auth_type": "local_installation"})
+
+    def authenticate_header(self, request):
+        return self.keyword
 
 
 def is_owner_identity(claims: dict) -> bool:
@@ -191,7 +225,7 @@ class JWTAuthentication(authentication.BaseAuthentication):
 
         token = auth_parts[1]
 
-        # Static bearer tokens don't contain '.'; JWTs have exactly two.
+        # The local capability authentication class handles non-JWT bearers.
         if token.count(".") != 2:
             return None
 

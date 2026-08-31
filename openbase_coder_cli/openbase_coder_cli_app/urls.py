@@ -29,7 +29,7 @@ from openbase_coder_cli.openbase_coder_cli_app.views import (
     approval_request_detail,
     approval_requests,
     auth_logout,
-    auth_refresh_jwt,
+    auth_refresh_jwt_removed,
     auth_session,
     backend_model_settings,
     boilersync_templates,
@@ -126,7 +126,11 @@ router = DefaultRouter()
 
 urlpatterns = [
     path("auth/session/", auth_session, name="auth-session"),
-    path("auth/refresh-jwt/", auth_refresh_jwt, name="auth-refresh-jwt"),
+    path(
+        "auth/refresh-jwt/",
+        auth_refresh_jwt_removed,
+        name="auth-refresh-jwt-removed",
+    ),
     path("auth/logout/", auth_logout, name="auth-logout"),
     path("agents-md/", agents_md, name="agents-md"),
     path("health/", health_check, name="health-check"),

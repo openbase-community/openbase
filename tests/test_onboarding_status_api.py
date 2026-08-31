@@ -48,11 +48,7 @@ def test_onboarding_status_returns_payload(monkeypatch) -> None:
     assert response.data == _fake_status_payload()
 
 
-def test_onboarding_status_allows_anonymous_requests(monkeypatch) -> None:
-    # Regression: the desktop onboarding shell polls this endpoint without a
-    # local JWT (it is how the UI learns the user just signed in). The default
-    # IsAuthenticated permission returned 401, which the shell swallowed, so
-    # onboarding stuck at "Sign in to Openbase" after every successful login.
+def test_onboarding_status_allows_authenticated_installation(monkeypatch) -> None:
     from openbase_coder_cli.openbase_coder_cli_app import (
         onboarding as onboarding_views,
     )
@@ -62,6 +58,7 @@ def test_onboarding_status_allows_anonymous_requests(monkeypatch) -> None:
     )
 
     request = APIRequestFactory().get("/api/onboarding/status/")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
     response = views.onboarding_status(request)
 
     assert response.status_code == 200

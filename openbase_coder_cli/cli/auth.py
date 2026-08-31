@@ -13,6 +13,10 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 import click
 import httpx
 
+from openbase_coder_cli.config.local_api_token import (
+    get_local_api_token,
+    rotate_local_api_token,
+)
 from openbase_coder_cli.config.machine_token_manager import (
     MachineTokenError,
     MachineTokenManager,
@@ -372,6 +376,29 @@ def logout() -> None:
 @click.group()
 def auth() -> None:
     """Authentication helpers."""
+
+
+@auth.command("print-local-api-token")
+@click.option(
+    "--rotate",
+    is_flag=True,
+    help="Invalidate the current installation capability and print a new one.",
+)
+def print_local_api_token(rotate: bool) -> None:
+    """Print the owner-only capability for this local Coder runtime."""
+    click.echo(rotate_local_api_token() if rotate else get_local_api_token())
+
+
+@auth.command("open-console")
+@click.option("--port", type=int, default=None, help="Override the local API port.")
+def open_console(port: int | None) -> None:
+    """Open a browser console with the local capability delivered in-fragment."""
+    resolved_port = port or int(os.environ.get("OPENBASE_CODER_CLI_PORT", "7999"))
+    fragment = urlencode({"openbase-local-token": get_local_api_token()})
+    url = f"http://127.0.0.1:{resolved_port}/#{fragment}"
+    if not webbrowser.open(url):
+        raise click.ClickException("Could not open the local browser console.")
+    click.echo("Opened the authenticated local console.")
 
 
 @auth.command("status")

@@ -8,15 +8,20 @@ browser, and Openbase Cloud hosts your account at
 ## Reaching the Console
 
 - **Desktop app** — the dashboard is the console; no browser needed.
-- **Local browser** — `http://127.0.0.1:7999` on the Mac running the
-  runtime, or `http://<tailscale-host>:18080` from any device on your
-  tailnet.
+- **Local browser** — run `openbase-coder auth open-console` on the computer
+  running the runtime. It opens `127.0.0.1:7999` with an owner-only,
+  installation-scoped capability and removes that capability from the address
+  bar immediately after launch.
+- **Another tailnet device** — use the iOS/Android app, which supplies your
+  owner JWT. Merely knowing the Tailscale, Netmesh, Docker, or Maritime URL is
+  intentionally insufficient to authenticate to the runtime.
 - **From the iOS app** — the Console tab opens the local console in an
   embedded browser with your CLI auth token injected automatically; the Diff
   tab opens the mobile-optimized diff view at `/mobile/diff`.
 
-Authentication uses the local CLI token managed by `openbase-coder login`
-and the runtime; the iOS app and desktop app handle this for you.
+Authentication uses either the owner's Openbase JWT or the runtime's local
+installation capability. The iOS, Android, and desktop apps handle this for
+you; a browser launched manually without the capability remains unauthenticated.
 
 !!! tip "Managing Openbase Cloud from the terminal"
 

@@ -13,7 +13,6 @@ such as backend host and call audio. This page is the underlying reference.
 | Variable                                  | Required | Default                                          | Purpose                                     |
 | ----------------------------------------- | -------- | ------------------------------------------------ | ------------------------------------------- |
 | `OPENBASE_CODER_CLI_SECRET_KEY`           | Yes      | none                                             | Django secret key                           |
-| `OPENBASE_CODER_CLI_API_TOKEN`            | Yes      | none                                             | Static bearer token auth                    |
 | `OPENBASE_CODER_CLI_WEB_BACKEND_URL`      | No       | `https://app.openbase.cloud`                     | JWT/JWKS source + login endpoints           |
 | `OPENBASE_CODER_CLI_JWT_JWKS_URL`         | No       | `<WEB_BACKEND_URL>/.well-known/jwks.json`        | JWKS URL for local JWT signature validation |
 | `OPENBASE_CODER_CLI_JWT_AUTH_SESSION_URL` | No       | `<WEB_BACKEND_URL>/_allauth/app/v1/auth/session` | Fallback endpoint to validate JWTs remotely |
@@ -97,7 +96,13 @@ Example:
 
 All protected API routes support either:
 
-1. Static token auth: `Authorization: Bearer <OPENBASE_CODER_CLI_API_TOKEN>`
-2. JWT auth: RS256 JWT validated against `OPENBASE_CODER_CLI_JWT_JWKS_URL` (with fallback validation against `OPENBASE_CODER_CLI_JWT_AUTH_SESSION_URL`)
+1. The owner-only installation capability in `~/.openbase/local-api-token`,
+   delivered out of band by the desktop app or `openbase-coder auth open-console`.
+2. An owner JWT validated against `OPENBASE_CODER_CLI_JWT_JWKS_URL` (with
+   fallback validation against `OPENBASE_CODER_CLI_JWT_AUTH_SESSION_URL`).
 
-WebSocket auth accepts `?token=` in query string with either the static token or JWT.
+The capability file is created with mode `0600`. Rotate it with
+`openbase-coder auth print-local-api-token --rotate`; clients holding the old
+value lose access immediately. There is no environment setting that disables
+this authentication boundary. WebSocket auth accepts the same credentials in
+its `?token=` query parameter.
