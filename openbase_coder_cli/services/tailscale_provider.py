@@ -239,40 +239,186 @@ def serve_status_json() -> dict[str, Any]:
     return _parsed([tsc, "serve", "status", "--json"])
 
 
-def apply_serve(rules: list[dict[str, Any]]) -> None:
-    """Apply serve rules: ``[{"proto":"http"|"tcp","port":int,"target":str}]``.
+def _validated_rule(rule: dict[str, Any]) -> dict[str, Any]:
+    """Validate the narrow Openbase rule vocabulary before it reaches a provider."""
+    kind = rule.get("kind")
+    if kind in {"openbase-console", "openbase-livekit"}:
+        if set(rule) != {"kind"}:
+            raise ValueError(f"{kind} does not accept caller-supplied targets.")
+        return {"kind": kind}
+    if kind == "published-dynamic":
+        if set(rule) != {"kind", "tailnet_port", "proxy_port"}:
+            raise ValueError("Dynamic publication accepts only validated port fields.")
+        tailnet_port = int(rule["tailnet_port"])
+        proxy_port = int(rule["proxy_port"])
+        if not 49152 <= tailnet_port <= 65535 or not 49152 <= proxy_port <= 65535:
+            raise ValueError("Dynamic publication ports must be in 49152-65535.")
+        return {
+            "kind": kind,
+            "tailnet_port": tailnet_port,
+            "proxy_port": proxy_port,
+        }
+    if kind == "portless-dispatcher":
+        if set(rule) != {"kind", "proxy_port"}:
+            raise ValueError("Portless publication accepts only a dispatcher port.")
+        proxy_port = int(rule["proxy_port"])
+        if not 49152 <= proxy_port <= 65535:
+            raise ValueError("The dispatcher port must be in 49152-65535.")
+        return {"kind": kind, "proxy_port": proxy_port}
+    raise ValueError(f"Unsupported Openbase Serve rule kind: {kind!r}.")
+
+
+def _validated_rules(rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    validated = [_validated_rule(rule) for rule in rules]
+    kinds = [rule["kind"] for rule in validated]
+    for singleton in ("openbase-console", "openbase-livekit", "portless-dispatcher"):
+        if kinds.count(singleton) > 1:
+            raise ValueError(f"Duplicate {singleton} Serve rule.")
+    return validated
+
+
+def portless_serve_capability() -> dict[str, Any]:
+    """Return the hardened helper's declared portless/CAS capability."""
+    if is_netmesh_tsnet():
+        return {"supported": False, "error": "Openbase Direct is not a host VPN."}
+    if not is_netmesh() or netmesh_uses_stock_tailscale():
+        return {
+            "supported": False,
+            "error": "This Openbase VPN client lacks the signed atomic Serve helper.",
+        }
+    ctl = netmesh_ctl_bin()
+    if not ctl:
+        return {"supported": False, "error": "netmesh-ctl was not found."}
+    payload = _parsed([ctl, "serve-capabilities"])
+    if payload.get("error"):
+        return {"supported": False, "error": str(payload["error"])}
+    return payload
+
+
+def serve_snapshot() -> dict[str, Any]:
+    if not is_netmesh() or is_netmesh_tsnet() or netmesh_uses_stock_tailscale():
+        raise RuntimeError(
+            "Atomic Serve snapshots require the hardened Openbase VPN helper."
+        )
+    ctl = netmesh_ctl_bin()
+    if not ctl:
+        raise RuntimeError("netmesh-ctl was not found.")
+    payload = _parsed([ctl, "serve-snapshot"])
+    if payload.get("error"):
+        raise RuntimeError(str(payload["error"]))
+    if not isinstance(payload.get("etag"), str) or not isinstance(
+        payload.get("hash"), str
+    ):
+        raise RuntimeError("netmesh-ctl returned an invalid Serve snapshot.")
+    return payload
+
+
+def plan_serve(rules: list[dict[str, Any]]) -> dict[str, Any]:
+    validated = _validated_rules(rules)
+    if not is_netmesh() or is_netmesh_tsnet() or netmesh_uses_stock_tailscale():
+        raise RuntimeError(
+            "Atomic Serve planning requires the hardened Openbase VPN helper."
+        )
+    ctl = netmesh_ctl_bin()
+    if not ctl:
+        raise RuntimeError("netmesh-ctl was not found.")
+    payload = _parsed([ctl, "serve-plan", json.dumps(validated, separators=(",", ":"))])
+    if payload.get("error") or not isinstance(payload.get("hash"), str):
+        raise RuntimeError(str(payload.get("error") or "Invalid Serve plan response."))
+    return payload
+
+
+def _legacy_cli_rule(rule: dict[str, Any]) -> tuple[str, int, str]:
+    kind = rule["kind"]
+    if kind == "openbase-console":
+        return "http", 18080, "http://127.0.0.1:7999"
+    if kind == "openbase-livekit":
+        return "tcp", 7880, "tcp://127.0.0.1:7880"
+    if kind == "published-dynamic":
+        return (
+            "http",
+            int(rule["tailnet_port"]),
+            f"http://127.0.0.1:{rule['proxy_port']}",
+        )
+    raise RuntimeError("Portless publication is unavailable through this provider.")
+
+
+def apply_serve_legacy(rules: list[dict[str, Any]]) -> None:
+    """Compatibility path for the pre-CAS signed helper, never for portless rules."""
+    if not is_netmesh() or is_netmesh_tsnet() or netmesh_uses_stock_tailscale():
+        raise RuntimeError(
+            "Legacy Serve replacement is only available to Openbase VPN."
+        )
+    ctl = netmesh_ctl_bin()
+    if not ctl:
+        raise RuntimeError("netmesh-ctl was not found.")
+    legacy_rules = []
+    for rule in _validated_rules(rules):
+        proto, port, target = _legacy_cli_rule(rule)
+        legacy_rules.append({"proto": proto, "port": port, "target": target})
+    result = _run([ctl, "serve-set", json.dumps(legacy_rules, separators=(",", ":"))])
+    if result.returncode != 0:
+        raise RuntimeError(
+            result.stderr.strip()
+            or result.stdout.strip()
+            or "Legacy Openbase VPN serve-set failed."
+        )
+
+
+def apply_serve(
+    rules: list[dict[str, Any]],
+    *,
+    expected_etag: str | None = None,
+    expected_hash: str | None = None,
+) -> dict[str, Any]:
+    """Apply validated Openbase Serve rules.
 
     Raises ``RuntimeError`` on failure.
     """
+    validated = _validated_rules(rules)
     if is_netmesh_tsnet():
         # The daemon forwards 18080/7880/7881 itself; "applying serve" means
         # making sure it is running and logged in.
         from openbase_coder_cli.services.tunneld import ensure_tunneld_running
 
         ensure_tunneld_running()
-        return
+        return {}
     if is_netmesh() and not netmesh_uses_stock_tailscale():
+        if expected_etag is None or expected_hash is None:
+            raise RuntimeError(
+                "Atomic Serve apply requires an ETag and expected config hash."
+            )
         ctl = netmesh_ctl_bin()
         if not ctl:
             raise RuntimeError("netmesh-ctl was not found.")
-        result = _run([ctl, "serve-set", json.dumps(rules)])
-        if result.returncode != 0:
+        payload = _parsed(
+            [
+                ctl,
+                "serve-apply",
+                json.dumps(validated, separators=(",", ":")),
+                expected_etag,
+                expected_hash,
+            ]
+        )
+        if payload.get("error") or not isinstance(payload.get("hash"), str):
             raise RuntimeError(
-                result.stderr.strip() or result.stdout.strip() or "serve-set failed."
+                str(payload.get("error") or "Atomic Serve apply failed.")
             )
-        return
+        return payload
     tsc = tailscale_bin()
     if not tsc:
         raise RuntimeError("tailscale was not found.")
-    for rule in rules:
-        flag = f"--{rule['proto']}={rule['port']}"
-        result = _run([tsc, "serve", "--bg", flag, rule["target"]])
+    for rule in validated:
+        proto, port, target = _legacy_cli_rule(rule)
+        flag = f"--{proto}={port}"
+        result = _run([tsc, "serve", "--bg", flag, target])
         if result.returncode != 0:
             raise RuntimeError(
                 result.stderr.strip()
                 or result.stdout.strip()
                 or "tailscale serve failed."
             )
+    return {}
 
 
 def remove_serve(proto: str, port: int) -> None:

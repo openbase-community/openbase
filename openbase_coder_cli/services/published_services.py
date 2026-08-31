@@ -11,12 +11,15 @@ import socket
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import httpx
 
+from openbase_coder_cli.file_lock import LOCK_EX, LOCK_UN, flock
 from openbase_coder_cli.paths import (
     DEFAULT_LOG_DIR,
     LAUNCHD_WRAPPER_DIR,
@@ -31,6 +34,14 @@ NAME_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
 RESERVED_NAMES = {"api", "livekit", "openbase", "service", "services"}
 LAUNCHD_LABEL_PREFIX = "com.openbase.coder.published-service"
 HEALTH_PATH = "/.openbase-service-health"
+MODE_DYNAMIC = "dynamic"
+MODE_PORTLESS = "portless"
+PORTLESS_TAILNET_PORT = 80
+PORTLESS_PATH_PREFIX = "/services/"
+PORTLESS_LAUNCHD_NAME = "portless-dispatcher"
+_REGISTRY_LOCK_DEPTH: ContextVar[int] = ContextVar(
+    "published_service_registry_lock_depth", default=0
+)
 
 
 @dataclass(frozen=True)
@@ -41,13 +52,32 @@ class PublishedService:
     proxy_port: int
     persistent: bool = False
     pid: int | None = None
+    mode: str = MODE_DYNAMIC
 
     @property
     def target(self) -> str:
         return f"http://127.0.0.1:{self.proxy_port}"
 
     def serve_rule(self) -> dict[str, Any]:
-        return {"proto": "http", "port": self.tailnet_port, "target": self.target}
+        if self.mode == MODE_PORTLESS:
+            return {"kind": "portless-dispatcher", "proxy_port": self.proxy_port}
+        return {
+            "kind": "published-dynamic",
+            "tailnet_port": self.tailnet_port,
+            "proxy_port": self.proxy_port,
+        }
+
+    @property
+    def base_path(self) -> str:
+        if self.mode == MODE_PORTLESS:
+            return f"{PORTLESS_PATH_PREFIX}{self.name}/"
+        return f"/{self.name}/"
+
+
+@dataclass(frozen=True)
+class ServiceRegistry:
+    services: tuple[PublishedService, ...] = ()
+    last_applied_serve_hash: str | None = None
 
 
 def validate_name(value: str) -> str:
@@ -81,14 +111,53 @@ def validate_tailnet_port(port: int) -> int:
     return port
 
 
+def validate_mode(value: str) -> str:
+    mode = value.strip().lower()
+    if mode not in {MODE_DYNAMIC, MODE_PORTLESS}:
+        raise ValueError("Publication mode must be 'dynamic' or 'portless'.")
+    return mode
+
+
 def _registry_path() -> Path:
     return PUBLISHED_SERVICES_PATH
 
 
-def load_services() -> list[PublishedService]:
+def _registry_lock_path() -> Path:
+    return _registry_path().with_suffix(".lock")
+
+
+@contextmanager
+def registry_lock() -> Iterator[None]:
+    depth = _REGISTRY_LOCK_DEPTH.get()
+    token = _REGISTRY_LOCK_DEPTH.set(depth + 1)
+    if depth:
+        try:
+            yield
+        finally:
+            _REGISTRY_LOCK_DEPTH.reset(token)
+        return
+    try:
+        path = _registry_lock_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        with os.fdopen(descriptor, "a+b") as handle:
+            if path.stat().st_size == 0:
+                handle.write(b"0")
+                handle.flush()
+            path.chmod(0o600)
+            flock(handle, LOCK_EX)
+            try:
+                yield
+            finally:
+                flock(handle, LOCK_UN)
+    finally:
+        _REGISTRY_LOCK_DEPTH.reset(token)
+
+
+def load_registry() -> ServiceRegistry:
     path = _registry_path()
     if not path.is_file():
-        return []
+        return ServiceRegistry()
     payload = json.loads(path.read_text(encoding="utf-8"))
     rows = payload.get("services", []) if isinstance(payload, dict) else []
     if not isinstance(rows, list):
@@ -97,32 +166,58 @@ def load_services() -> list[PublishedService]:
     for row in rows:
         if not isinstance(row, dict):
             raise ValueError("Published service registry contains an invalid entry.")
+        mode = validate_mode(str(row.get("mode", MODE_DYNAMIC)))
+        tailnet_port = int(row.get("tailnet_port", PORTLESS_TAILNET_PORT))
+        if mode == MODE_DYNAMIC:
+            tailnet_port = validate_tailnet_port(tailnet_port)
+        elif tailnet_port != PORTLESS_TAILNET_PORT:
+            raise ValueError("Portless services must use tailnet HTTP port 80.")
         services.append(
             PublishedService(
                 name=validate_name(str(row["name"])),
                 local_port=validate_local_port(int(row["local_port"])),
-                tailnet_port=validate_tailnet_port(int(row["tailnet_port"])),
+                tailnet_port=tailnet_port,
                 proxy_port=validate_tailnet_port(int(row["proxy_port"])),
                 persistent=bool(row.get("persistent", False)),
                 pid=int(row["pid"]) if row.get("pid") is not None else None,
+                mode=mode,
             )
         )
-    return services
+    applied_hash = payload.get("last_applied_serve_hash")
+    if applied_hash is not None and not isinstance(applied_hash, str):
+        raise ValueError("Published service registry has an invalid Serve hash.")
+    return ServiceRegistry(tuple(services), applied_hash or None)
 
 
-def save_services(services: list[PublishedService]) -> None:
+def load_services() -> list[PublishedService]:
+    return list(load_registry().services)
+
+
+def save_registry(registry: ServiceRegistry) -> None:
     path = _registry_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(
-        json.dumps(
-            {"version": 1, "services": [asdict(item) for item in services]}, indent=2
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    temporary.chmod(0o600)
-    temporary.replace(path)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    payload = {
+        "version": 2,
+        "services": [asdict(item) for item in registry.services],
+        "last_applied_serve_hash": registry.last_applied_serve_hash,
+    }
+    with registry_lock():
+        with temporary.open("w", encoding="utf-8") as stream:
+            json.dump(payload, stream, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.chmod(0o600)
+        os.replace(temporary, path)
+
+
+def save_services(
+    services: list[PublishedService], *, last_applied_serve_hash: str | None = None
+) -> None:
+    if last_applied_serve_hash is None and _registry_path().is_file():
+        last_applied_serve_hash = load_registry().last_applied_serve_hash
+    save_registry(ServiceRegistry(tuple(services), last_applied_serve_hash))
 
 
 def find_service(name: str) -> PublishedService | None:
@@ -131,11 +226,17 @@ def find_service(name: str) -> PublishedService | None:
 
 
 def published_serve_rules(*, persistent_only: bool = False) -> list[dict[str, Any]]:
-    return [
-        item.serve_rule()
-        for item in load_services()
-        if item.persistent or not persistent_only
-    ]
+    rules: list[dict[str, Any]] = []
+    portless_added = False
+    for item in load_services():
+        if persistent_only and not item.persistent:
+            continue
+        if item.mode == MODE_PORTLESS:
+            if portless_added:
+                continue
+            portless_added = True
+        rules.append(item.serve_rule())
+    return rules
 
 
 def local_service_available(port: int, timeout: float = 0.35) -> bool:
@@ -182,6 +283,15 @@ def allocate_ports(tailnet_port: int | None = None) -> tuple[int, int]:
     return published, proxy
 
 
+def allocate_portless_proxy() -> int:
+    services = load_services()
+    existing = next((item for item in services if item.mode == MODE_PORTLESS), None)
+    if existing is not None:
+        return existing.proxy_port
+    used = {port for item in services for port in (item.tailnet_port, item.proxy_port)}
+    return choose_uncommon_port(used)
+
+
 def service_url(service: PublishedService) -> str:
     from openbase_coder_cli.services import tailscale_provider as tp
 
@@ -200,7 +310,9 @@ def service_url(service: PublishedService) -> str:
         )
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
-    return f"http://{host}:{service.tailnet_port}/{service.name}/"
+    if service.mode == MODE_PORTLESS:
+        return f"http://{host}{service.base_path}"
+    return f"http://{host}:{service.tailnet_port}{service.base_path}"
 
 
 def _runtime_python() -> str:
@@ -228,6 +340,16 @@ def _launchctl(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _gateway_name(service: PublishedService) -> str:
+    return PORTLESS_LAUNCHD_NAME if service.mode == MODE_PORTLESS else service.name
+
+
+def _gateway_arguments(service: PublishedService) -> tuple[str, ...]:
+    if service.mode == MODE_PORTLESS:
+        return ("--dispatcher", "--port", str(service.proxy_port))
+    return ("--name", service.name)
+
+
 def install_launchd_service(service: PublishedService) -> None:
     if platform.system() != "Darwin":
         raise RuntimeError(
@@ -236,39 +358,39 @@ def install_launchd_service(service: PublishedService) -> None:
     DEFAULT_LOG_DIR.mkdir(parents=True, exist_ok=True)
     LAUNCHD_WRAPPER_DIR.mkdir(parents=True, exist_ok=True)
     PLIST_DIR.mkdir(parents=True, exist_ok=True)
-    wrapper = _wrapper_path(service.name)
+    gateway_name = _gateway_name(service)
+    wrapper = _wrapper_path(gateway_name)
     command = " ".join(
         shlex.quote(part)
         for part in (
             _runtime_python(),
             "-m",
             "openbase_coder_cli.services.service_gateway",
-            "--name",
-            service.name,
+            *_gateway_arguments(service),
         )
     )
     wrapper.write_text(f"#!/bin/sh\nexec {command}\n", encoding="utf-8")
     wrapper.chmod(0o700)
-    plist = _plist_path(service.name)
+    plist = _plist_path(gateway_name)
     with plist.open("wb") as stream:
         plistlib.dump(
             {
-                "Label": _label(service.name),
+                "Label": _label(gateway_name),
                 "ProgramArguments": [str(wrapper)],
                 "RunAtLoad": True,
                 "KeepAlive": True,
                 "ThrottleInterval": 5,
                 "StandardOutPath": str(
-                    DEFAULT_LOG_DIR / f"published-service-{service.name}.log"
+                    DEFAULT_LOG_DIR / f"published-service-{gateway_name}.log"
                 ),
                 "StandardErrorPath": str(
-                    DEFAULT_LOG_DIR / f"published-service-{service.name}.log"
+                    DEFAULT_LOG_DIR / f"published-service-{gateway_name}.log"
                 ),
             },
             stream,
         )
     domain = f"gui/{os.getuid()}"
-    _launchctl("bootout", f"{domain}/{_label(service.name)}")
+    _launchctl("bootout", f"{domain}/{_label(gateway_name)}")
     result = _launchctl("bootstrap", domain, str(plist))
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "launchctl bootstrap failed.")
@@ -276,15 +398,15 @@ def install_launchd_service(service: PublishedService) -> None:
 
 def start_ephemeral_gateway(service: PublishedService) -> int:
     DEFAULT_LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log = (DEFAULT_LOG_DIR / f"published-service-{service.name}.log").open("ab")
+    gateway_name = _gateway_name(service)
+    log = (DEFAULT_LOG_DIR / f"published-service-{gateway_name}.log").open("ab")
     try:
         process = subprocess.Popen(
             [
                 _runtime_python(),
                 "-m",
                 "openbase_coder_cli.services.service_gateway",
-                "--name",
-                service.name,
+                *_gateway_arguments(service),
             ],
             stdin=subprocess.DEVNULL,
             stdout=log,
@@ -310,10 +432,11 @@ def gateway_healthy(service: PublishedService, timeout: float = 3.0) -> bool:
 
 
 def stop_gateway(service: PublishedService) -> None:
+    gateway_name = _gateway_name(service)
     if service.persistent and platform.system() == "Darwin":
         domain = f"gui/{os.getuid()}"
-        _launchctl("bootout", f"{domain}/{_label(service.name)}")
-        for path in (_plist_path(service.name), _wrapper_path(service.name)):
+        _launchctl("bootout", f"{domain}/{_label(gateway_name)}")
+        for path in (_plist_path(gateway_name), _wrapper_path(gateway_name)):
             path.unlink(missing_ok=True)
         return
     if service.pid and _pid_is_gateway(service):
@@ -333,35 +456,11 @@ def _pid_is_gateway(service: PublishedService) -> bool:
         check=False,
     )
     command = result.stdout.strip()
-    return (
-        result.returncode == 0
-        and "openbase_coder_cli.services.service_gateway" in command
-        and f"--name {service.name}" in command
-    )
-
-
-def apply_route(service: PublishedService) -> None:
-    from openbase_coder_cli.services import tailscale_provider as tp
-
-    if tp.is_netmesh_tsnet():
-        raise RuntimeError(
-            "Openbase Direct cannot publish arbitrary host services. "
-            "Switch this computer to Openbase VPN first."
-        )
-    if tp.is_netmesh() and not tp.netmesh_uses_stock_tailscale():
-        from openbase_coder_cli.services.tailscale_serve import openbase_serve_rules
-
-        tp.apply_serve([*openbase_serve_rules(), *published_serve_rules()])
-    else:
-        tp.apply_serve([service.serve_rule()])
-
-
-def remove_route(service: PublishedService) -> None:
-    from openbase_coder_cli.services import tailscale_provider as tp
-
-    if tp.is_netmesh() and not tp.netmesh_uses_stock_tailscale():
-        from openbase_coder_cli.services.tailscale_serve import openbase_serve_rules
-
-        tp.apply_serve([*openbase_serve_rules(), *published_serve_rules()])
-    else:
-        tp.remove_serve("http", service.tailnet_port)
+    if (
+        result.returncode != 0
+        or "openbase_coder_cli.services.service_gateway" not in command
+    ):
+        return False
+    if service.mode == MODE_PORTLESS:
+        return "--dispatcher" in command and f"--port {service.proxy_port}" in command
+    return f"--name {service.name}" in command

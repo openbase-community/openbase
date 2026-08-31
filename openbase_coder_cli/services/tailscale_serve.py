@@ -56,26 +56,54 @@ class TailscaleServeHealth:
 def openbase_serve_rules() -> list[dict[str, Any]]:
     """Canonical built-in Serve rules, kept separate from user publications."""
     return [
-        {
-            "proto": "http",
-            "port": OPENBASE_CODER_TAILNET_PORT,
-            "target": f"http://127.0.0.1:{OPENBASE_CODER_LOCAL_PORT}",
-        },
-        {
-            "proto": "tcp",
-            "port": LIVEKIT_TAILNET_PORT,
-            "target": f"tcp://127.0.0.1:{LIVEKIT_LOCAL_PORT}",
-        },
+        {"kind": "openbase-console"},
+        {"kind": "openbase-livekit"},
     ]
 
 
 def configure_tailscale_serve() -> None:
     from openbase_coder_cli.services import tailscale_provider as tp
-    from openbase_coder_cli.services.published_services import published_serve_rules
-
-    tp.apply_serve(
-        [*openbase_serve_rules(), *published_serve_rules(persistent_only=True)]
+    from openbase_coder_cli.services.published_services import (
+        ServiceRegistry,
+        load_registry,
+        published_serve_rules,
+        save_registry,
     )
+
+    rules = [*openbase_serve_rules(), *published_serve_rules(persistent_only=True)]
+    if (
+        tp.is_netmesh()
+        and not tp.is_netmesh_tsnet()
+        and not tp.netmesh_uses_stock_tailscale()
+    ):
+        capability = tp.portless_serve_capability()
+        if not capability.get("supported"):
+            tp.apply_serve_legacy(rules)
+            return
+        registry = load_registry()
+        snapshot = tp.serve_snapshot()
+        previous_rules = [*openbase_serve_rules(), *published_serve_rules()]
+        expected_hash = registry.last_applied_serve_hash or str(
+            tp.plan_serve(previous_rules)["hash"]
+        )
+        if snapshot.get("hash") != expected_hash:
+            raise RuntimeError(
+                "Openbase VPN Serve configuration drifted from the last known "
+                "desired state; refusing to overwrite unknown routes."
+            )
+        result = tp.apply_serve(
+            rules,
+            expected_etag=str(snapshot["etag"]),
+            expected_hash=expected_hash,
+        )
+        save_registry(
+            ServiceRegistry(
+                registry.services,
+                str(result["hash"]),
+            )
+        )
+        return
+    tp.apply_serve(rules)
 
 
 def tailscale_serve_health() -> TailscaleServeHealth:
