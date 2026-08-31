@@ -247,3 +247,53 @@ def test_machine_token_manager_mints_and_persists_token(machine_token_path):
     saved = json.loads(machine_token_path.read_text())
     assert saved["token"] == "obmt_new"
     assert saved["install_id"].startswith("openbase-coder-")
+
+
+def test_machine_token_manager_stores_exact_bootstrap_scopes(machine_token_path):
+    manager = MachineTokenManager("https://backend.example.com")
+
+    manager.store_bootstrap_token(
+        token="obmt_workspace",
+        token_prefix="obmt_workspace",
+        install_id="maritime-devspace-123",
+        scopes=["llm_proxy", "audio_proxy"],
+    )
+
+    saved = json.loads(machine_token_path.read_text())
+    assert saved == {
+        "web_backend_url": "https://backend.example.com",
+        "install_id": "maritime-devspace-123",
+        "token": "obmt_workspace",
+        "token_prefix": "obmt_workspace",
+        "scopes": ["llm_proxy", "audio_proxy"],
+    }
+    assert machine_token_path.stat().st_mode & 0o777 == 0o600
+    assert manager.has_cached_token()
+
+
+def test_machine_token_manager_rejects_broader_bootstrap_scopes(machine_token_path):
+    manager = MachineTokenManager("https://backend.example.com")
+
+    with pytest.raises(mt_module.MachineTokenError):
+        manager.store_bootstrap_token(
+            token="obmt_workspace",
+            token_prefix="obmt_workspace",
+            install_id="maritime-devspace-123",
+            scopes=["llm_proxy", "audio_proxy", "owner"],
+        )
+
+    assert not machine_token_path.exists()
+
+
+def test_owner_identity_falls_back_to_bootstrap_pin(
+    manager, auth_path, tmp_path, monkeypatch
+):
+    owner_path = tmp_path / "owner-identity.json"
+    owner_path.write_text('{"sub":"7","email":"owner@example.com"}')
+    monkeypatch.setattr(tm_module, "OWNER_IDENTITY_JSON_PATH", owner_path)
+
+    assert manager.get_owner_identity() == {
+        "sub": "7",
+        "email": "owner@example.com",
+    }
+    assert not auth_path.exists()

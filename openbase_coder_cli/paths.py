@@ -1,6 +1,9 @@
+import os
 from pathlib import Path
 
-OPENBASE_BASE_DIR = Path.home() / ".openbase"
+OPENBASE_BASE_DIR = Path(
+    os.environ.get("OPENBASE_CODER_CLI_DATA_DIR", Path.home() / ".openbase")
+).expanduser()
 # Backend CLI binaries (codex, claude) installed on demand by setup.
 OPENBASE_BIN_DIR = OPENBASE_BASE_DIR / "bin"
 # Standalone runtime package releases activated by the desktop app/install.sh.
@@ -13,10 +16,12 @@ OPENBASE_INSTRUCTIONS_DIR = OPENBASE_BASE_DIR / "instructions"
 # terminal, the desktop apps, and Openbase voice all live in one store per
 # backend. Openbase-specific posture (permissions, instructions) is passed
 # per session, never written into these homes' defaults.
-CODEX_HOME_DIR = Path.home() / ".codex"
+CODEX_HOME_DIR = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
 CODEX_AGENTS_MD_PATH = CODEX_HOME_DIR / "AGENTS.md"
 CODEX_CONFIG_PATH = CODEX_HOME_DIR / "config.toml"
-CLAUDE_CONFIG_DIR = Path.home() / ".claude"
+CLAUDE_CONFIG_DIR = Path(
+    os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")
+).expanduser()
 CLAUDE_SETTINGS_PATH = CLAUDE_CONFIG_DIR / "settings.json"
 CLAUDE_STATE_PATH = Path.home() / ".claude.json"
 # Rendered Openbase base agent instructions, delivered per session (Codex
@@ -50,6 +55,7 @@ TASK_SCHEDULER_DIR = OPENBASE_BASE_DIR / "tasks"
 TASK_SCHEDULER_FOLDER = r"\OpenbaseCoder"
 LAUNCHD_DOMAIN = "com.openbase.coder"
 AUTH_JSON_PATH = OPENBASE_BASE_DIR / "auth.json"
+OWNER_IDENTITY_JSON_PATH = OPENBASE_BASE_DIR / "owner-identity.json"
 SYNC_CONFIG_PATH = OPENBASE_BASE_DIR / "sync-config.json"
 CODE_SYNC_DIR = OPENBASE_BASE_DIR / "code-sync"
 CODE_SYNC_CONFLICTS_PATH = CODE_SYNC_DIR / "conflicts.json"

@@ -209,19 +209,19 @@ def _ensure_openbase_cloud_machine_token(env_file: Path) -> None:
         DEFAULT_WEB_BACKEND_URL,
     )
     token_manager = TokenManager(web_backend_url)
-    if not token_manager.has_refresh_token:
-        click.echo(
-            "Openbase Cloud backend selected. Run `openbase-coder login` before "
-            "starting services so setup can create the cloud proxy machine token."
-        )
-        return
     try:
         MachineTokenManager(web_backend_url, token_manager).get_machine_token()
     except AuthLoginRequiredError:
-        click.echo(
-            "Openbase Cloud backend selected, but your Openbase login needs to be "
-            "refreshed. Run `openbase-coder login` before starting services."
-        )
+        if token_manager.has_refresh_token:
+            click.echo(
+                "Openbase Cloud backend selected, but your Openbase login needs to be "
+                "refreshed. Run `openbase-coder login` before starting services."
+            )
+        else:
+            click.echo(
+                "Openbase Cloud backend selected. Run `openbase-coder login` before "
+                "starting services so setup can create the cloud proxy machine token."
+            )
     except (AuthTransientError, MachineTokenError) as exc:
         click.echo(
             click.style(

@@ -18,6 +18,7 @@
 # so `docker run <image> openbase-coder --help` and `docker run <image> bash`
 # behave as expected.
 set -euo pipefail
+umask 077
 
 if [ "$#" -gt 0 ]; then
     exec "$@"
@@ -28,11 +29,39 @@ ENV_FILE="$DATA_DIR/.env"
 WRAPPER_DIR="$DATA_DIR/launchd"
 RUN_DIR="$DATA_DIR/run"
 NETWORK_MODE="${OPENBASE_CODER_NETWORK_MODE:-tailscale}"
+MARITIME_MODE=0
+if [ "${OPENBASE_CODER_RUNTIME:-}" = "maritime" ]; then
+    MARITIME_MODE=1
+    if [ "$(id -u)" = "0" ]; then
+        echo "[entrypoint] Refusing to run the Maritime workspace as root." >&2
+        exit 1
+    fi
+    case "$DATA_DIR" in
+        /data/*) ;;
+        *)
+            echo "[entrypoint] Maritime state must live below /data." >&2
+            exit 1
+            ;;
+    esac
+    PROJECTS_DIR="${OPENBASE_CODER_PROJECTS_DIR:-/data/workspace}"
+    case "$PROJECTS_DIR" in
+        /data/*) ;;
+        *)
+            echo "[entrypoint] Maritime projects must live below /data." >&2
+            exit 1
+            ;;
+    esac
+fi
 
 # Tell the runtime the entrypoint (not launchd/systemd) supervises services;
 # status checks then read the $RUN_DIR/<name>.pid files maintained below.
 export OPENBASE_CODER_SERVICE_SUPERVISOR=external
-mkdir -p "$RUN_DIR"
+mkdir -p "$DATA_DIR" "$RUN_DIR"
+if [ "$MARITIME_MODE" = "1" ]; then
+    mkdir -p "$PROJECTS_DIR"
+    chmod 0700 "$PROJECTS_DIR"
+fi
+chmod 0700 "$DATA_DIR"
 rm -f "$RUN_DIR"/*.pid
 
 # `codex login` writes ~/.codex (which setup symlinks the service auth to);
@@ -132,22 +161,27 @@ fi
 # --- First-run setup ---------------------------------------------------------
 if [ ! -f "$DATA_DIR/installation.json" ]; then
     echo "[entrypoint] First run: setting up Openbase Coder in $DATA_DIR ..."
-    setup_args=(
-        --backend "${OPENBASE_CODER_BACKEND:-openbase-cloud}"
-        --audio-provider "${OPENBASE_CODER_AUDIO_PROVIDER:-openbase-cloud}"
-        --skip-services
-        --json-progress
-    )
-    if [ -n "${OPENBASE_CODER_WORKSPACE_DIR:-}" ]; then
-        setup_args+=(--workspace-dir "$OPENBASE_CODER_WORKSPACE_DIR")
+    if [ "$MARITIME_MODE" = "1" ]; then
+        openbase-coder provision --kind container
+        unset OPENBASE_CODER_BOOTSTRAP_TOKEN
+    else
+        setup_args=(
+            --backend "${OPENBASE_CODER_BACKEND:-openbase-cloud}"
+            --audio-provider "${OPENBASE_CODER_AUDIO_PROVIDER:-openbase-cloud}"
+            --skip-services
+            --json-progress
+        )
+        if [ -n "${OPENBASE_CODER_WORKSPACE_DIR:-}" ]; then
+            setup_args+=(--workspace-dir "$OPENBASE_CODER_WORKSPACE_DIR")
+        fi
+        if [ -n "${ASSEMBLY_AI_API_KEY:-}" ]; then
+            setup_args+=(--assembly-ai-api-key "$ASSEMBLY_AI_API_KEY")
+        fi
+        if [ -n "${CARTESIA_API_KEY:-}" ]; then
+            setup_args+=(--cartesia-api-key "$CARTESIA_API_KEY")
+        fi
+        openbase-coder setup "${setup_args[@]}"
     fi
-    if [ -n "${ASSEMBLY_AI_API_KEY:-}" ]; then
-        setup_args+=(--assembly-ai-api-key "$ASSEMBLY_AI_API_KEY")
-    fi
-    if [ -n "${CARTESIA_API_KEY:-}" ]; then
-        setup_args+=(--cartesia-api-key "$CARTESIA_API_KEY")
-    fi
-    openbase-coder setup "${setup_args[@]}"
 fi
 
 # --- Container env overrides -------------------------------------------------
@@ -160,9 +194,18 @@ awk '/^# BEGIN docker overrides/{skip=1} !skip{print} /^# END docker overrides/{
     "$ENV_FILE" >"$tmp_env"
 {
     echo "# BEGIN docker overrides"
-    echo "LIVEKIT_NETWORK_MODE=$NETWORK_MODE"
-    echo "OPENBASE_CODER_CLI_HOST=${OPENBASE_CODER_CLI_HOST:-0.0.0.0}"
-    echo "OPENBASE_CODER_CLI_ALLOWED_HOSTS=${OPENBASE_CODER_CLI_ALLOWED_HOSTS:-*}"
+    if [ "$NETWORK_MODE" = "netmesh-tsnet" ]; then
+        echo "LIVEKIT_NETWORK_MODE=local"
+    else
+        echo "LIVEKIT_NETWORK_MODE=$NETWORK_MODE"
+    fi
+    if [ "$MARITIME_MODE" = "1" ]; then
+        echo "OPENBASE_CODER_CLI_HOST=${OPENBASE_CODER_CLI_HOST:-127.0.0.1}"
+        echo "OPENBASE_CODER_CLI_ALLOWED_HOSTS=${OPENBASE_CODER_CLI_ALLOWED_HOSTS:-localhost,127.0.0.1,.netmesh.openbase.cloud}"
+    else
+        echo "OPENBASE_CODER_CLI_HOST=${OPENBASE_CODER_CLI_HOST:-0.0.0.0}"
+        echo "OPENBASE_CODER_CLI_ALLOWED_HOSTS=${OPENBASE_CODER_CLI_ALLOWED_HOSTS:-*}"
+    fi
     if [ "$NETWORK_MODE" = "local" ]; then
         echo "LIVEKIT_BIND_IP=${LIVEKIT_BIND_IP:-0.0.0.0}"
     elif [ "$manage_tailscaled" = "1" ] && [ "$(id -u)" != "0" ]; then
@@ -204,6 +247,9 @@ fi
 
 # --- Runtime services ----------------------------------------------------------
 default_services="livekit-server livekit-agent django-cli sync-workers openbase-routines"
+if [ "$NETWORK_MODE" = "netmesh-tsnet" ]; then
+    default_services="openbase-tunneld $default_services"
+fi
 if [ -f "$WRAPPER_DIR/codex-app-server.sh" ]; then
     default_services="$default_services codex-app-server"
 fi
@@ -214,6 +260,12 @@ if [ -f "$WRAPPER_DIR/code-sync.sh" ] \
     default_services="$default_services code-sync"
 fi
 services="${OPENBASE_CODER_SERVICES:-$default_services}"
+netmesh_authkey=""
+if [ "$NETWORK_MODE" = "netmesh-tsnet" ] \
+    && [ -f "$DATA_DIR/bootstrap-netmesh-authkey" ]; then
+    netmesh_authkey="$(/bin/cat "$DATA_DIR/bootstrap-netmesh-authkey")"
+    rm -f "$DATA_DIR/bootstrap-netmesh-authkey"
+fi
 
 for name in $services; do
     wrapper="$WRAPPER_DIR/$name.sh"
@@ -221,7 +273,14 @@ for name in $services; do
         echo "[entrypoint] WARN: no wrapper for $name at $wrapper; skipping"
         continue
     fi
-    start_supervised "$name" bash "$wrapper"
+    if [ "$name" = "openbase-tunneld" ] && [ -n "$netmesh_authkey" ]; then
+        export TS_AUTHKEY="$netmesh_authkey"
+        start_supervised "$name" bash "$wrapper"
+        unset TS_AUTHKEY
+        netmesh_authkey=""
+    else
+        start_supervised "$name" bash "$wrapper"
+    fi
 done
 
 echo "[entrypoint] Supervising services: $services"
@@ -233,6 +292,8 @@ if [ "$NETWORK_MODE" = "tailscale" ]; then
         echo "[entrypoint] Tailnet API: http://$ts_host:18080/api/health/"
     fi
 fi
-echo "[entrypoint] To authenticate with Openbase Cloud, run:"
-echo "[entrypoint]   docker exec -it <container> openbase-coder login"
+if [ "$MARITIME_MODE" != "1" ]; then
+    echo "[entrypoint] To authenticate with Openbase Cloud, run:"
+    echo "[entrypoint]   docker exec -it <container> openbase-coder login"
+fi
 wait

@@ -82,6 +82,29 @@ on the tailnet (the entrypoint logs the exact URL) and at
 Any arguments to `docker run` bypass the supervisor and exec directly, e.g.
 `docker run --rm openbase-coder:local openbase-coder --help`.
 
+## Maritime-managed mode
+
+Openbase Cloud can run this image as a private Maritime Workspace. This is a
+control-plane-managed mode, not a manual `docker run` login flow:
+
+- Cloud sets `OPENBASE_CODER_RUNTIME=maritime`, mounts the durable provider
+  disk at `/data`, and sets `OPENBASE_CODER_CLI_DATA_DIR=/data/openbase`.
+- The image refuses Maritime startup as root or with state outside `/data`.
+- Cloud supplies a short-lived, single-use bootstrap grant. The runtime
+  exchanges it for an installation-scoped machine token with only
+  `llm_proxy` and `audio_proxy` scopes and a non-reusable Netmesh key.
+- The runtime never receives a host `auth.json`, owner access/refresh token,
+  reusable Tailscale key, or Maritime provider token.
+- The API remains on loopback and `publicWeb` remains disabled. Embedded
+  `openbase-tunneld` is the only private-network forwarder.
+- Stopping preserves `/data`. Explicit Workspace termination revokes the
+  machine/Netmesh identities before Cloud deletes the provider agent and disk.
+
+Do not set the bootstrap variable manually or copy credential files into a
+Maritime volume. The complete control-plane contract, threat model, and safe
+migration procedure are in `specs/secure-maritime-workspaces/README.md` at the
+workspace root.
+
 ## Environment variables
 
 | Variable | Default | Purpose |
@@ -90,6 +113,8 @@ Any arguments to `docker run` bypass the supervisor and exec directly, e.g.
 | `TS_HOSTNAME` | `openbase-coder` | Tailnet device hostname. |
 | `TS_SOCKET` | — | Use an external tailscaled (sidecar) socket instead of starting one in-container. |
 | `OPENBASE_CODER_NETWORK_MODE` | `tailscale` | Set `local` for loopback-only testing with no Tailscale. |
+| `OPENBASE_CODER_RUNTIME` | — | Cloud sets `maritime` only for a managed private Maritime Workspace. |
+| `OPENBASE_CODER_CLI_DATA_DIR` | `~/.openbase` | Durable state root; managed Maritime mode requires a path below `/data`. |
 | `OPENBASE_CODER_BACKEND` | `openbase-cloud` | Coding backend for first-run setup (`codex`, `claude-code`, `openbase-cloud`). |
 | `OPENBASE_CODER_AUDIO_PROVIDER` | `openbase-cloud` | Voice audio provider for first-run setup (`openbase-cloud`, `cartesia`; `local` is Apple-Silicon-only). |
 | `ASSEMBLY_AI_API_KEY` / `CARTESIA_API_KEY` | — | Bring-your-own audio keys for the `cartesia` audio provider. |

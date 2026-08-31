@@ -42,6 +42,17 @@ RUN printf 'packages:\n  - console\n  - coder-react\n  - multi-react\n  - boiler
     && pnpm install \
     && pnpm --dir console build
 
+# --- Embedded private-network daemon -----------------------------------------
+# Build from the source in this checkout so the runtime and its authenticated
+# loopback control API always ship together.
+FROM golang:1.26.5-bookworm AS tunneld-build
+WORKDIR /build/tunneld
+COPY tunneld/go.mod tunneld/go.sum ./
+RUN go mod download
+COPY tunneld/*.go ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
+    -o /out/openbase-tunneld .
+
 # --- Runtime image ------------------------------------------------------------
 FROM python:3.13-slim-bookworm
 
@@ -107,13 +118,14 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && node --version && npm --version
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=tunneld-build /out/openbase-tunneld /usr/local/bin/openbase-tunneld
 
 COPY docker/entrypoint.sh /usr/local/bin/openbase-coder-entrypoint
 # Pre-create the state dir so the named volume inherits openbase ownership.
 RUN chmod 0755 /usr/local/bin/openbase-coder-entrypoint \
     && useradd --create-home --uid 1000 openbase \
-    && mkdir -p /home/openbase/.openbase \
-    && chown openbase:openbase /home/openbase/.openbase \
+    && mkdir -p /home/openbase/.openbase /data \
+    && chown openbase:openbase /home/openbase/.openbase /data \
     && mkdir -p /opt/openbase-coder/workspace \
     && chown -R openbase:openbase /opt/openbase-coder
 
@@ -162,7 +174,7 @@ ENV PATH="/home/openbase/.openbase/bin:/opt/openbase-coder/workspace/cli/.venv/b
 
 # All state (env file, sqlite DB, downloaded backend binaries, logs) lives in
 # ~/.openbase; keep it on a volume so logins and setup survive restarts.
-VOLUME ["/home/openbase/.openbase"]
+VOLUME ["/home/openbase/.openbase", "/data"]
 
 # 7999 Django API, 7880 LiveKit signaling, 7881/7882 LiveKit media.
 EXPOSE 7999 7880 7881 7882/udp

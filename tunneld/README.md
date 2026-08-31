@@ -119,14 +119,15 @@ Interpretation:
   UDP-vs-TCP comparison (the real ICE-TCP question) requires two physical
   devices; the harness is ready for that run.
 
-## Prototype limitations
+## Limitations
 
 - The voicetest harness quantifies transport quality, but a real LiveKit
   room join with forced ICE-TCP through the forwards (and the client-SDK
   wiring to prefer `127.0.0.1:17881`) is still to be proven.
 - Same-host node pairs pin to DERP (no hairpin); cross-device runs are the
   meaningful benchmark.
-- The daemon binds the control API to loopback without auth; production needs
-  a local auth story (unix socket or token) before shipping.
+- The daemon binds its control API to loopback and requires a bearer capability
+  stored in `<statedir>/control.token` with mode `0600`. Processes running as
+  the same Unix user remain inside the same local trust boundary.
 - Electron (`desktop/electron/main.cjs`) still shells out to the Tailscale
   binary for its own identity display; wiring it to `/status` is a follow-up.
