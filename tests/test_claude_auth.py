@@ -115,5 +115,3 @@ def test_read_credential_expiry_from_credentials_file(monkeypatch, tmp_path) -> 
 
     monkeypatch.setattr(claude_auth, "CLAUDE_CONFIG_DIR", tmp_path / "missing")
     assert claude_auth.read_claude_credential_expiry() is None
-
-
