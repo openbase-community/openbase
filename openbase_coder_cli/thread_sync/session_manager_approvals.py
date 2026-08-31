@@ -16,6 +16,7 @@ from super_agents.app_server_client import (
 )
 
 from .session_manager_base import (
+    _ensure_client_connected,
     _find_shared_permission_request,
     logger,
 )
@@ -35,7 +36,7 @@ class SessionManagerApprovalsMixin:
             if request.get("id") is not None
         }
         try:
-            await self._client.ensure_connected()
+            await _ensure_client_connected(self._client)
             for request in self._client.pending_permission_requests():
                 payload = _approval_request_payload(request)
                 if payload.get("id") is not None:
@@ -52,7 +53,7 @@ class SessionManagerApprovalsMixin:
         decision: Literal["accept", "decline", "cancel"],
     ) -> dict[str, Any]:
         """Answer one pending app-server approval request."""
-        await self._client.ensure_connected()
+        await _ensure_client_connected(self._client)
         request = self._find_pending_approval_request(request_id)
         if request is None:
             shared_request = _find_shared_permission_request(request_id)

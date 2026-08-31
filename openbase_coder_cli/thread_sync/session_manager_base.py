@@ -60,7 +60,6 @@ class ThreadListPage:
 
 
 class _SuperAgentsClient(Protocol):
-    async def ensure_connected(self) -> None: ...
     async def list_threads(
         self,
         use_state_db_only: bool = True,
@@ -113,6 +112,18 @@ class _SuperAgentsClient(Protocol):
         clear_fields: list[str] | None = None,
     ) -> None: ...
     async def get_session(self, thread_id: str) -> Any: ...
+
+
+async def _ensure_client_connected(client: Any) -> None:
+    """Connect app-server clients while allowing local SDK backends.
+
+    Codex app-server clients expose ``ensure_connected``. Local backends such
+    as ``ClaudeAgentSdkClient`` do not have a transport to connect, so their
+    in-process approval queues are ready immediately.
+    """
+    ensure_connected = getattr(client, "ensure_connected", None)
+    if callable(ensure_connected):
+        await ensure_connected()
 
 
 class _RoutineClient(Protocol):

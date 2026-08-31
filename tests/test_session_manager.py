@@ -583,6 +583,29 @@ def test_answer_approval_request_queues_shared_decision_for_external_owner(
     assert '"decision": "decline"' in approvals_path.read_text(encoding="utf-8")
 
 
+def test_answer_shared_approval_without_app_server_connection_method(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    approvals_path = tmp_path / "approvals.json"
+    approvals_path.write_text(
+        '{"requests":{"gmail-cli:1":{"id":"gmail-cli:1","method":"exec/requestApproval","params":{}}},"decisions":{}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SUPER_AGENTS_APPROVAL_REQUESTS_FILE", str(approvals_path))
+    client = SimpleNamespace(
+        pending_permission_requests=lambda: [],
+        answer_request=None,
+    )
+
+    result = asyncio.run(
+        _manager(client).answer_approval_request("gmail-cli:1", "accept")
+    )
+
+    assert result["queued"] is True
+    assert '"decision": "accept"' in approvals_path.read_text(encoding="utf-8")
+
+
 def test_answer_approval_request_queues_elicitation_action_for_external_owner(
     tmp_path: Path,
     monkeypatch,
