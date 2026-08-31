@@ -44,7 +44,7 @@ resets onboarding. Remove both when fully uninstalling (see
 | `~/.openbase/instructions/DISPATCHER_INSTRUCTIONS.md` | `openbase-coder setup` | Generated default dispatcher-only instructions |
 | `~/.openbase/instructions/SUPER_AGENT_INSTRUCTIONS.md` | `openbase-coder setup` | Generated default Super Agent thread instructions |
 | `~/.openbase/dispatcher-config.json` | `openbase-coder setup`, `openbase-coder defaults`, settings API | Dispatcher runtime settings, including default reasoning and backend-specific model defaults |
-| `~/.openbase/hooks/inject-session-id.sh` | `openbase-coder setup` | Bundled SessionStart hook script, registered in both shared agent homes (`~/.codex/config.toml` and `~/.claude/settings.json`); injects the session's thread/session ID into the conversation, along with the instructions to stamp commits with it as the `Agent-Thread-Id` trailer |
+| `~/.openbase/hooks/inject-session-id.sh` | `openbase-coder setup` | Bundled SessionStart hook script, registered in both shared agent homes (`~/.codex/config.toml` and `~/.claude/settings.json`); injects the session's thread/session ID into the conversation, includes the instructions to stamp commits with it as the `Agent-Thread-Id` trailer, and exports it as `OPENBASE_AGENT_ID` for subsequent Claude Code commands |
 | `~/.openbase/packages/standalone/previous` | `openbase-coder self-update` | Symlink to the prior release, kept for rollback |
 | `~/.openbase/update-check.json` | `openbase-coder self-update` / update API | Cached result of the last update check (no-network status reads) |
 | `~/.openbase/logs/self-update.log` | `POST /api/update/apply/` | Output of UI-triggered detached self-updates |
