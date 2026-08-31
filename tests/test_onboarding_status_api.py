@@ -104,6 +104,11 @@ def test_onboarding_status_payload_composes_checks(monkeypatch, tmp_path) -> Non
     )
     monkeypatch.setattr(
         onboarding,
+        "tailnet_experience_payload",
+        lambda: {"provider": "netmesh", "options": [{"name": "Openbase VPN"}]},
+    )
+    monkeypatch.setattr(
+        onboarding,
         "backend_auth_status",
         lambda *, authenticated: {"backend": "codex", "ready": authenticated},
     )
@@ -127,6 +132,7 @@ def test_onboarding_status_payload_composes_checks(monkeypatch, tmp_path) -> Non
     }
     assert payload["backend_auth"] == {"backend": "codex", "ready": True}
     assert payload["tailscale_self"]["dns_name"] == "mac.tailnet.ts.net"
+    assert payload["tailnet"]["provider"] == "netmesh"
     assert payload["tailscale_serve"] == {"healthy": True}
     assert payload["cloud"] == {"last_register": {"ok": True}}
     assert payload["audio"] == {

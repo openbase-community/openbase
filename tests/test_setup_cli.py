@@ -1033,7 +1033,9 @@ def test_ensure_bundled_sounds_preserves_custom_existing_file(
     assert target.read_bytes() == b"custom sound"
 
 
-def test_setup_configures_tailscale_serve(tmp_path, monkeypatch) -> None:
+def test_setup_configures_routes_and_defers_netmesh_until_login(
+    tmp_path, monkeypatch
+) -> None:
     calls = []
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -1138,6 +1140,49 @@ def test_setup_configures_tailscale_serve(tmp_path, monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     assert calls == ["thread-sync", "sounds", "claude-md", "configure"]
     assert "Claude Code is not logged in" in result.output
+
+    tailnet_cli = importlib.import_module("openbase_coder_cli.cli.tailnet")
+
+    calls.clear()
+    monkeypatch.setattr(
+        tailnet_cli,
+        "_provision_netmesh_companion",
+        lambda: calls.append("provision-netmesh"),
+    )
+
+    def unavailable_before_login():
+        calls.append("configure")
+        raise RuntimeError("netmesh control socket is not ready")
+
+    _patch_setup(
+        monkeypatch,
+        "configure_tailscale_serve",
+        unavailable_before_login,
+    )
+    result = runner.invoke(
+        setup_cli.setup,
+        [
+            "--workspace-dir",
+            str(workspace),
+            "--env-file",
+            str(env_file),
+            "--backend",
+            "claude-code",
+            "--tailnet-provider",
+            "netmesh",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Setup complete." in result.output
+    assert "networking choice was saved" in result.output
+    assert calls == [
+        "thread-sync",
+        "sounds",
+        "claude-md",
+        "provision-netmesh",
+        "configure",
+    ]
 
 
 def test_ensure_local_audio_dependencies_installs_into_runtime_python(
@@ -1400,6 +1445,37 @@ def test_require_backend_choice_keeps_existing_env(tmp_path, monkeypatch) -> Non
 
     assert (
         setup_cli._require_backend_choice(str(env_file), None, interactive=True) is None
+    )
+
+
+def test_require_tailnet_provider_choice_restores_existing_netmesh(
+    tmp_path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER=netmesh\n",
+        encoding="utf-8",
+    )
+
+    assert (
+        setup_cli._require_tailnet_provider_choice(
+            str(env_file), None, interactive=False
+        )
+        == "netmesh"
+    )
+
+
+def test_require_tailnet_provider_choice_defaults_legacy_env_to_tailscale(
+    tmp_path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENBASE_CODING_BACKEND=codex\n", encoding="utf-8")
+
+    assert (
+        setup_cli._require_tailnet_provider_choice(
+            str(env_file), None, interactive=False
+        )
+        == "tailscale"
     )
 
 

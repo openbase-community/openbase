@@ -35,6 +35,7 @@ from openbase_coder_cli.services.installation import InstallationConfig
 from openbase_coder_cli.services.launchd import launchctl_status
 from openbase_coder_cli.services.selection import configured_default_services
 from openbase_coder_cli.services.tailnet_devices import tailscale_self_identity
+from openbase_coder_cli.services.tailnet_experience import tailnet_experience_payload
 from openbase_coder_cli.services.tailscale_serve import tailscale_serve_health
 
 
@@ -194,6 +195,7 @@ def onboarding_status_payload() -> dict[str, Any]:
         "auth_status": auth_status,
         "backend_auth": backend_auth_status(authenticated=authenticated),
         "audio": audio_status(),
+        "tailnet": tailnet_experience_payload(),
         "tailscale_self": tailscale_self_identity(),
         "tailscale_serve": tailscale_serve_health().to_dict(),
         # Last-report hint only; live pairing facts come from the cloud

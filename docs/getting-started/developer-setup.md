@@ -1,6 +1,11 @@
 # Developer Setup
 
-Installing from a workspace checkout is a fully supported install path, with
+Openbase is designed for founders, contractors, and small-company developers
+who need their coding environment available on the go. The GitHub repository
+is the developer entry point; the setup script below owns the installation.
+
+Installing from the GitHub workspace is the strongly recommended, fully
+supported install path, with
 an interactive terminal flow: run `./scripts/setup` with no flags and it
 picks your coding backend and voice audio provider, walks you through
 Openbase Cloud login, and verifies the install. Use it when you want to
@@ -65,6 +70,29 @@ Setup never clones or git-updates a workspace itself. When run without
 the workspace from the one recorded in `~/.openbase/installation.json`, then
 from the checkout behind an editable CLI install; otherwise it errors and asks
 you to clone the workspace or use the standalone install.
+
+## Optional visual developer apps
+
+The services and browser console are complete without Electron. On macOS,
+interactive `./scripts/setup` offers to launch two optional visual surfaces;
+you can launch either later:
+
+```bash
+./scripts/dev-launch --electron  # dashboard/status only; setup is disabled
+./scripts/dev-launch --menu-bar  # native Swift Openbase networking status UI
+./scripts/dev-launch --all       # both
+```
+
+The Electron developer launch requires the private `desktop` checkout (run
+`multi sync --install-set dev` if you have access). It sets an explicit
+dashboard-only mode, and Electron also detects the development installation in
+`installation.json`; either way, it does not expose the installer bridge.
+Never use the Electron onboarding wizard for a development install:
+`./scripts/setup` is the only setup authority.
+
+The same launchers are available as VS Code tasks. React/Electron runs from
+`tasks.json`; the Swift UI is built with Xcode tools and opened as a menu-bar
+app.
 
 ## After Setup
 

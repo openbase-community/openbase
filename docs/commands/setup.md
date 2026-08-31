@@ -39,8 +39,9 @@ runtime automatically, and its guided flow runs `openbase-coder setup` for
 you. To run setup yourself from a terminal instead, follow
 [Manual Setup for the Desktop App](../manual-installation.md).
 
-For development, run the workspace script from your checkout root; it runs
-`multi sync --install-set default` and then
+For development, run the workspace script from your checkout root. It preserves
+the checkout's Multi shape (`dev` when a dev-only repo is already present,
+otherwise `default`) and then runs
 `openbase-coder setup --workspace-dir <workspace-root>`:
 
 ```bash

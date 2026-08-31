@@ -1,15 +1,16 @@
 # Mac App Download
 
-The desktop app is the production install path: it bundles the
+The desktop app is the production, no-terminal install path. Release builds
+are coordinated from `main`; the app bundles the
 complete CLI runtime and walks you through setup in the app — no terminal
 required — including your coding backend, managed voice audio, and iPhone
 pairing. (Prefer working from source? See
 [Developer Setup](developer-setup.md). On Windows, see
 [Run in Docker](../docker.md).)
 
-Before you start, check the shared [prerequisites](index.md#prerequisites) —
-in particular, install and sign in to Tailscale if you want iPhone-to-Mac
-voice networking.
+Before you start, check the shared [prerequisites](index.md#prerequisites).
+You do not need to install Tailscale: onboarding asks whether the environment
+can support a VPN, then configures Openbase VPN or Openbase Direct.
 
 ## Download and Open
 

@@ -19,11 +19,11 @@ Download the Apple Silicon DMG from [Downloads](downloads.md) and open the
 app. On first run it shows a guided setup flow:
 
 1. **Welcome** — overview of the steps ahead.
-2. **Check prerequisites** — verifies macOS, the bundled CLI (activated
-   automatically), and Tailscale. You can install Tailscale from here if it
-   is missing (the app links the Mac App Store variant; see
-   [Troubleshooting](troubleshooting.md#tailscale-login-loops-or-cli-errors-after-an-update-macos)
-   for why).
+2. **Check prerequisites and choose private networking** — verifies macOS and
+   the bundled CLI, then asks the important constraint: **Can this environment
+   support a VPN?** Choose **Openbase VPN** (recommended) when it can, or
+   **Openbase Direct** when a managed/restricted environment cannot install a
+   VPN. Electron onboarding never offers the separate Tailscale app.
 3. **Set up Openbase Cloud** — starts the normal managed path: Cloud-proxied
    Claude Code plus managed speech-to-text and voice output, with free
    Openbase Cloud monthly allowances and no third-party provider keys.
@@ -34,9 +34,15 @@ app. On first run it shows a guided setup flow:
    detected when `~/.openbase/auth.json` is written.
 6. **Get Openbase on iPhone** — scan a QR code to install the iOS app and
    sign in with the same account. You can skip phone setup.
-7. **Pair devices over Tailscale** — install Tailscale on both devices in the
-   same tailnet, then click **Register this Mac** so the phone can find it.
-   You can skip pairing.
+7. **Pair devices privately** — connect the selected Openbase transport on the
+   Mac and phone, then register the Mac so the phone can find it. Openbase VPN
+   bundles Netmesh (Openbase-operated Headscale plus Tailscale-compatible
+   open-source clients), needs no Tailscale account, collects no VPN traffic or
+   usage analytics, and sends no VPN analytics
+   to Tailscale. Its full-device route enables every feature, including opening
+   agent-created websites in the phone browser. Openbase Direct is the no-VPN
+   alternative; it carries Openbase app traffic but cannot expose those sites
+   to other phone apps. You can skip pairing.
 8. **Verify** — health-checks the local API, shows CLI and app versions, and
    confirms voice configuration and login.
 
@@ -178,7 +184,7 @@ browser.
 
 ### Devices
 
-Scans your tailnet and lists Openbase hosts (name, OS, Tailscale IP, Openbase
+Scans your private network and lists Openbase hosts (name, OS, private IP, Openbase
 URL, online status) alongside other tailnet devices.
 
 **On iPhone:** Settings → Backend Host has a matching **Discover Tailnet

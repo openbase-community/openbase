@@ -43,7 +43,7 @@ def _configured_provider() -> str:
 
 @click.group()
 def tailnet() -> None:
-    """Select the tailnet transport (Tailscale, netmesh VPN, or embedded)."""
+    """Select the transport (Openbase VPN, Direct, or expert Tailscale)."""
 
 
 @tailnet.command("set-provider")

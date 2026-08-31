@@ -147,6 +147,7 @@ from openbase_coder_cli.services.cloud_registration import register_and_report
 from openbase_coder_cli.services.installation import InstallationConfig
 from openbase_coder_cli.services.launchd import install_all_services
 from openbase_coder_cli.services.onboarding import compute_cli_configured
+from openbase_coder_cli.services.tailnet_experience import TAILNET_EXPERIENCES
 from openbase_coder_cli.services.tailscale_provider import (
     PROVIDER_NETMESH,
     PROVIDER_NETMESH_TSNET,
@@ -590,24 +591,9 @@ _AUDIO_PROVIDER_PICKER_OPTIONS = (
 )
 
 
-_TAILNET_PROVIDER_PICKER_OPTIONS = (
-    (
-        PROVIDER_TAILSCALE,
-        "Tailscale",
-        "official Tailscale client + Tailscale Serve (default)",
-    ),
-    (
-        PROVIDER_NETMESH,
-        "Openbase Netmesh (VPN)",
-        "self-hosted headscale + the Openbase VPN client (device-wide tunnel; "
-        "lowest-latency voice)",
-    ),
-    (
-        PROVIDER_NETMESH_TSNET,
-        "Openbase Netmesh (no VPN)",
-        "self-hosted headscale joined by an in-process embedded node — no VPN or "
-        "system extension on either side (embedded daemon staged separately)",
-    ),
+_TAILNET_PROVIDER_PICKER_OPTIONS = tuple(
+    (option["provider"], option["name"], option["summary"])
+    for option in TAILNET_EXPERIENCES
 )
 
 
@@ -623,15 +609,22 @@ def _require_tailnet_provider_choice(
     is passed. New installs pick interactively; non-interactive fresh installs
     keep the tailscale default.
     """
-    if tailnet_provider is not None or Path(env_file).is_file():
+    if tailnet_provider is not None:
         return tailnet_provider
+    env_path = Path(env_file)
+    if env_path.is_file():
+        configured = _env_file_values(env_path).get(
+            "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER",
+            PROVIDER_TAILSCALE,
+        )
+        return configured if configured in PROVIDER_VALUES else PROVIDER_TAILSCALE
     if interactive:
         return _prompt_pick(
             "Tailnet transport:",
             _TAILNET_PROVIDER_PICKER_OPTIONS,
             default=PROVIDER_TAILSCALE,
         )
-    return tailnet_provider
+    return None
 
 
 def _require_backend_choice(
@@ -862,9 +855,9 @@ def _run_setup_phases(
         progress.step("services", "ok", "skipped (--skip-services)")
 
     # --- Provision the netmesh VPN (macOS Openbase VPN companion) ---
-    # Makes `netmesh` a first-class setup choice: build + register + connect
-    # the companion, instead of leaving the user with the provider value set
-    # but no VPN. (tunneld for netmesh-tsnet is installed by install_all_services.)
+    # Build/register the selected Openbase VPN companion. Connection may be
+    # deferred until after Openbase login, when an enrollment key can be minted.
+    # (tunneld for netmesh-tsnet is installed by install_all_services.)
     if (
         not skip_services
         and tailnet_provider == PROVIDER_NETMESH
@@ -885,30 +878,40 @@ def _run_setup_phases(
             )
 
     click.echo()
-    click.echo("Configuring Tailscale Serve routes...")
+    click.echo("Configuring private-network routes...")
     progress.step("tailscale_serve", "start")
     serve_healthy = False
     try:
         configure_tailscale_serve()
     except Exception as exc:
-        if not skip_services:
-            # Tailscale is a hard prerequisite: without it the phone cannot
-            # reach this machine, so a "successful" setup would be broken.
-            # progress.abort() reports this step as errored on the way out.
+        managed_transport = tailnet_provider in {
+            PROVIDER_NETMESH,
+            PROVIDER_NETMESH_TSNET,
+        }
+        if not skip_services and not managed_transport:
+            # The expert official-Tailscale developer path still expects an
+            # already-connected client. Electron never selects this provider.
             raise click.ClickException(
                 f"Tailscale Serve could not be configured: {exc}\n"
                 "Tailscale is required — install it, sign in, and connect "
                 "(https://tailscale.com/download), then re-run "
                 "'openbase-coder setup'."
             ) from exc
-        # --skip-services installs (e.g. image bakes) configure Tailscale on
-        # first boot instead; leave the manual commands as a breadcrumb.
         click.echo(click.style(f"  WARN  {exc}", fg="yellow"))
-        click.echo(
-            "  Run these manually after Tailscale is installed and connected:\n"
-            "    tailscale serve --bg --http=18080 http://127.0.0.1:7999\n"
-            "    tailscale serve --bg --tcp=7880 tcp://127.0.0.1:7880"
-        )
+        if managed_transport:
+            click.echo(
+                "  The Openbase networking choice was saved. Sign in, then "
+                "connect it during pairing; that step enrolls the device and "
+                "applies its routes."
+            )
+        else:
+            # --skip-services image bakes configure official Tailscale on first
+            # boot; leave the manual commands as a breadcrumb.
+            click.echo(
+                "  Run these manually after Tailscale is installed and connected:\n"
+                "    tailscale serve --bg --http=18080 http://127.0.0.1:7999\n"
+                "    tailscale serve --bg --tcp=7880 tcp://127.0.0.1:7880"
+            )
         progress.step("tailscale_serve", "warn", str(exc))
     else:
         health = tailscale_serve_health()
@@ -940,7 +943,7 @@ def _run_setup_phases(
         else:
             click.echo(
                 click.style(
-                    "  WARN  Tailscale Serve was configured, but the external "
+                    "  WARN  Private-network routes were configured, but the external "
                     "Openbase health check is not passing.",
                     fg="yellow",
                 )
