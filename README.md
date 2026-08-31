@@ -48,9 +48,9 @@ Core workflows are:
 Openbase Coder has several user-facing surfaces backed by the local
 `openbase-coder` runtime:
 
-* **Mac app**: the recommended starting point. It bundles the CLI, runs guided
-  setup, hosts the dashboard, manages updates, and can share your screen into
-  the active voice room.
+* **Mac app**: the production, no-terminal path. It bundles the CLI, runs
+  guided setup, hosts the dashboard, manages updates, and can share your
+  screen into the active voice room.
 * **iOS app**: the voice and review client. Start calls, transfer voice to
   agents, follow threads, handle approvals, read reports, and inspect diffs
   from your phone.
@@ -69,13 +69,20 @@ agent instructions, skills, and console assets.
 
 ### 💾 Installation
 
-Most users should install the Mac app first:
+When you can use a terminal, the recommended path is the editable
+[Developer Setup](docs/getting-started/developer-setup.md): clone the workspace
+and run its interactive `./scripts/setup`. The Electron dashboard and Swift
+menu-bar app are optional visual surfaces after setup; Electron never owns a
+development install.
+
+For a production install with no terminal:
 
 1. Download Openbase Coder for macOS from
    [openbase.cloud/downloads](https://openbase.cloud/downloads).
 2. Open the app and follow guided setup. The app activates the bundled CLI,
    checks prerequisites, lets you choose a coding backend and voice provider,
-   signs you in, and helps pair your iPhone over Tailscale.
+   signs you in, and helps pair your phone over Openbase VPN or Openbase
+   Direct.
 3. Install the iOS beta or the Android APK from the Downloads page if you want
    the phone control surface for voice calls, approvals, reports, and diffs.
 

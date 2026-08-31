@@ -34,10 +34,12 @@ Setup supports exactly two deployment modes and picks one automatically:
   `openbase-coder-workspace` (and run its `./scripts/setup`), pass
   `--workspace-dir`, or use the standalone install instead.
 
-For normal macOS installs, prefer the desktop app: it activates the bundled
-runtime automatically, and its guided flow runs `openbase-coder setup` for
-you. To run setup yourself from a terminal instead, follow
-[Manual Setup for the Desktop App](../manual-installation.md).
+For a production macOS install with no terminal, use the desktop app: it
+activates the bundled runtime automatically, and its guided flow runs
+`openbase-coder setup` for you. To operate that same standalone install from a
+terminal, follow [Manual Setup for the Desktop App](../manual-installation.md).
+When a terminal and source checkout are available, the workspace developer
+setup below is the recommended path.
 
 For development, run the workspace script from your checkout root. It preserves
 the checkout's Multi shape (`dev` when a dev-only repo is already present,
@@ -64,11 +66,11 @@ a terminal, since it always injects `--workspace-dir` itself.
 
 After the phases complete, interactive runs also offer to run
 `openbase-coder login` (browser OAuth; skipped if already logged in), then
-verify the device registered with Openbase Cloud and that Tailscale Serve is
-exposing the local API and LiveKit, and print a terminal QR code linking the
-phone app downloads page. Non-interactive runs — including the desktop
-app's `--json-progress` onboarding, which renders its own sign-in step —
-end with the plain login hint, unchanged.
+verify the device registered with Openbase Cloud and that the selected
+private-network transport exposes the local API and LiveKit, and print a
+terminal QR code linking the phone app downloads page. Non-interactive runs —
+including the desktop app's `--json-progress` onboarding, which renders its own
+sign-in step — end with the plain login hint, unchanged.
 
 ## Backend Selection
 
@@ -161,9 +163,10 @@ to keep local audio available.
 15. Writes Codex app-server defaults like `CODEX_MODEL_REASONING_EFFORT=high`, `CODEX_SERVICE_TIER=standard`, `CODEX_APP_SERVER_URL=unix://` on macOS/Linux, and `LIVEKIT_CODEX_THREAD_CWD` into the shared `.env`. Existing default `ws://127.0.0.1:4500` installations migrate to the standard socket; explicit custom WebSocket endpoints are preserved. Backend model/provider configuration is applied by the service as `codex app-server -c` launch overrides, never written into `~/.codex/config.toml`. The visible `openbase_cloud` backend bypasses `codex-app-server`; the legacy Codex proxy path remains internal as `openbase_cloud_codex`.
 16. Uses the bundled console build, or builds `console` in development mode.
 17. Installs background services (launchd on macOS, systemd user units on Linux) unless skipped. Services gated to other backends (e.g. `codex-app-server` under `claude-code` or `openbase-cloud`) are not installed.
-18. Configures Tailscale Serve routes for the iOS app:
-    - `tailscale serve --bg --http=18080 http://127.0.0.1:7999`
-    - `tailscale serve --bg --tcp=7880 tcp://127.0.0.1:7880`
+18. Configures the selected transport's private routes for the phone apps.
+    The expert `tailscale` provider applies Tailscale Serve routes immediately.
+    Openbase VPN and Openbase Direct save the choice during setup, then enroll
+    and apply routes during the signed-in pairing flow.
 19. Leaves Openbase Cloud registration to the later login/pairing flow. Use
     `openbase-coder onboarding report` after `openbase-coder login` when you
     need to register this device for iOS pairing. See
@@ -211,7 +214,9 @@ openbase-coder setup \
 - Existing skill symlinks in `~/.codex/skills` and `~/.claude/skills` are updated to the bundled or workspace source. Real skill directories or files are left unchanged.
 - Setup registers exactly two things in each shared agent home: the `super-agents` MCP server (`~/.codex/config.toml`, `~/.claude.json`) and the session-ID hook (`~/.codex/config.toml`, `~/.claude/settings.json`). It never touches your own model, sandbox, approval, or permission settings — Openbase's session posture (`SUPER_AGENTS_CODEX_APPROVAL_POLICY=never`, `SUPER_AGENTS_CODEX_SANDBOX_POLICY=danger-full-access`) is passed per session by super-agents via env. You may remove the entries; an explicit setup re-run restores them.
 - If `npm` or `uv` are missing in development mode, related steps are skipped with messages.
-- If Tailscale is missing or disconnected, setup prints the manual Serve
-  commands and continues. `openbase-coder doctor` and `openbase-coder services
-  status` fail until the Tailscale Serve routes and external Openbase health
-  check pass.
+- With the expert `tailscale` provider, setup fails with install/connect
+  guidance when it cannot configure Serve. With Openbase VPN or Openbase
+  Direct, setup saves the networking choice and pairing completes enrollment
+  after login. `openbase-coder doctor` and `openbase-coder services status`
+  remain unhealthy until the selected transport's routes and external
+  Openbase health check pass.

@@ -56,9 +56,9 @@ the audio provider to `openbase-cloud`. See [setup](../commands/setup.md)
 for the full flag list and the `--interactive` override.
 
 Interactive runs finish by offering `openbase-coder login` (browser OAuth),
-then confirm the device is registered with Openbase Cloud and that Tailscale
-Serve is exposing the local API and LiveKit, and print a QR code for the
-[phone app downloads page](https://openbase.cloud/downloads.html).
+then confirm the device is registered with Openbase Cloud and that the selected
+private-network transport exposes the local API and LiveKit, and print a QR
+code for the [phone app downloads page](https://openbase.cloud/downloads.html).
 Non-interactive runs end with the login hint instead, exactly as before.
 
 If a standalone desktop/CLI install, or a different development workspace
