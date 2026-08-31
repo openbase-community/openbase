@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.resources as importlib_resources
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -45,6 +46,40 @@ def test_hook_script_stays_silent_without_session_id() -> None:
             check=True,
         )
     assert result.stdout == ""
+
+
+def test_hook_script_exports_session_id_for_claude_bash_commands(
+    tmp_path: Path,
+) -> None:
+    script = importlib_resources.files(hooks.BUNDLED_HOOKS_PACKAGE).joinpath(
+        hooks.SESSION_ID_HOOK_FILENAME
+    )
+    claude_env_file = tmp_path / "claude-session-env"
+    session_id = "abc-123"
+
+    with importlib_resources.as_file(script) as script_path:
+        subprocess.run(
+            ["bash", str(script_path)],
+            input=json.dumps({"session_id": session_id}),
+            capture_output=True,
+            text=True,
+            check=True,
+            env={**os.environ, "CLAUDE_ENV_FILE": str(claude_env_file)},
+        )
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; printf "%s" "$AGENT_SESSION_ID"',
+            "bash",
+            str(claude_env_file),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout == session_id
 
 
 def test_trusted_hash_matches_codex_fingerprint() -> None:
