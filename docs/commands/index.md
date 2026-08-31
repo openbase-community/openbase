@@ -30,6 +30,7 @@ openbase-coder [OPTIONS] COMMAND [ARGS]
 | [`defaults`](defaults.md) | Manage default dispatcher and Super Agents model/reasoning settings |
 | [`setup`](setup.md) | Full local bootstrap flow |
 | [`server`](server.md) | Run local Django/ASGI server |
+| [`service`](service.md) | Publish a local HTTP service privately over the Openbase VPN |
 | [`restart`](restart.md) | Restart Openbase-managed services |
 | [`self-update`](self-update.md) | Update a standalone install to the latest release |
 | [`version`](self-update.md) | Print CLI and package versions plus update availability |
@@ -53,6 +54,9 @@ openbase-coder server --host 0.0.0.0 --port 7999
 
 # Check service states
 openbase-coder services status
+
+# Share a local development site with other tailnet devices
+openbase-coder service publish docs-preview 3000
 
 # Switch coding backend
 openbase-coder backend use codex

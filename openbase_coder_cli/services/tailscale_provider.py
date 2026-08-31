@@ -273,3 +273,25 @@ def apply_serve(rules: list[dict[str, Any]]) -> None:
                 or result.stdout.strip()
                 or "tailscale serve failed."
             )
+
+
+def remove_serve(proto: str, port: int) -> None:
+    """Remove one official/stock Tailscale Serve listener.
+
+    Hardened Netmesh replaces its whole vetted Serve configuration through
+    ``apply_serve`` instead, so callers must rebuild that provider's rules.
+    """
+    if is_netmesh_tsnet():
+        raise RuntimeError("Openbase Direct does not expose arbitrary Serve routes.")
+    if is_netmesh() and not netmesh_uses_stock_tailscale():
+        raise RuntimeError("Hardened Netmesh Serve routes must be replaced as a set.")
+    tsc = tailscale_bin()
+    if not tsc:
+        raise RuntimeError("tailscale was not found.")
+    result = _run([tsc, "serve", f"--{proto}={port}", "off"])
+    if result.returncode != 0:
+        raise RuntimeError(
+            result.stderr.strip()
+            or result.stdout.strip()
+            or "tailscale serve off failed."
+        )

@@ -53,22 +53,28 @@ class TailscaleServeHealth:
         }
 
 
+def openbase_serve_rules() -> list[dict[str, Any]]:
+    """Canonical built-in Serve rules, kept separate from user publications."""
+    return [
+        {
+            "proto": "http",
+            "port": OPENBASE_CODER_TAILNET_PORT,
+            "target": f"http://127.0.0.1:{OPENBASE_CODER_LOCAL_PORT}",
+        },
+        {
+            "proto": "tcp",
+            "port": LIVEKIT_TAILNET_PORT,
+            "target": f"tcp://127.0.0.1:{LIVEKIT_LOCAL_PORT}",
+        },
+    ]
+
+
 def configure_tailscale_serve() -> None:
     from openbase_coder_cli.services import tailscale_provider as tp
+    from openbase_coder_cli.services.published_services import published_serve_rules
 
     tp.apply_serve(
-        [
-            {
-                "proto": "http",
-                "port": OPENBASE_CODER_TAILNET_PORT,
-                "target": f"http://127.0.0.1:{OPENBASE_CODER_LOCAL_PORT}",
-            },
-            {
-                "proto": "tcp",
-                "port": LIVEKIT_TAILNET_PORT,
-                "target": f"tcp://127.0.0.1:{LIVEKIT_LOCAL_PORT}",
-            },
-        ]
+        [*openbase_serve_rules(), *published_serve_rules(persistent_only=True)]
     )
 
 

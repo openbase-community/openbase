@@ -40,9 +40,11 @@ app. On first run it shows a guided setup flow:
    open-source clients), needs no Tailscale account, collects no VPN traffic or
    usage analytics, and sends no VPN analytics
    to Tailscale. Its full-device route enables every feature, including opening
-   agent-created websites in the phone browser. Openbase Direct is the no-VPN
-   alternative; it carries Openbase app traffic but cannot expose those sites
-   to other phone apps. You can skip pairing.
+   agent-created websites in the phone browser. Publish those sites with
+   `openbase-coder service publish <name> <port>` so the agent gives you a
+   tailnet URL instead of unusable phone-side `localhost`. Openbase Direct is
+   the no-VPN alternative; it carries Openbase app traffic but cannot expose
+   those sites to other phone apps. You can skip pairing.
 8. **Verify** — health-checks the local API, shows CLI and app versions, and
    confirms voice configuration and login.
 

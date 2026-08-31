@@ -74,3 +74,7 @@ PLUGIN_SOURCES_DIR = PLUGIN_BASE_DIR / "sources"
 PLUGIN_CONSOLE_REGISTRY_PATH = PLUGIN_BASE_DIR / "console" / "registry.json"
 PLUGIN_CONSOLE_ASSETS_DIR = PLUGIN_BASE_DIR / "console-assets"
 PLUGIN_SKILLS_OWNERSHIP_PATH = PLUGIN_BASE_DIR / "skills_ownership.json"
+
+# User-published, tailnet-only development services. The registry contains
+# names and local ports, never credentials.
+PUBLISHED_SERVICES_PATH = OPENBASE_BASE_DIR / "published-services.json"
