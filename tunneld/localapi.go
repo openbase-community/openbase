@@ -10,14 +10,18 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"tailscale.com/client/local"
 	"tailscale.com/ipn"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
 )
 
@@ -140,20 +144,40 @@ func (a *localAPI) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 // handleProbe dials a tailnet peer through the embedded node and relays the
 // response, because the host network stack can no longer reach tailnet IPs.
-// Example: /probe?host=phone.tailxxxx.ts.net&port=18080&path=/api/health/
+// The destination must be a peer in the node's current tailnet status. The
+// fixed port and path keep this authenticated loopback endpoint from becoming
+// a general-purpose proxy with the node's network identity.
 func (a *localAPI) handleProbe(w http.ResponseWriter, r *http.Request) {
-	host := r.URL.Query().Get("host")
-	if host == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "missing host parameter"})
+	host, err := canonicalProbeHost(r.URL.Query().Get("host"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "missing or invalid host parameter"})
 		return
 	}
 	port := r.URL.Query().Get("port")
 	if port == "" {
 		port = strconv.Itoa(openbaseTailnetPort)
 	}
+	if port != strconv.Itoa(openbaseTailnetPort) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unsupported probe port"})
+		return
+	}
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		path = "/api/health/"
+	}
+	if path != "/api/health/" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unsupported probe path"})
+		return
+	}
+
+	status, err := a.lc.Status(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "tailnet status unavailable"})
+		return
+	}
+	if !statusContainsProbePeer(status, host) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "probe host is not a current tailnet peer"})
+		return
 	}
 
 	client := &http.Client{
@@ -164,22 +188,71 @@ func (a *localAPI) handleProbe(w http.ResponseWriter, r *http.Request) {
 			},
 		},
 	}
-	url := fmt.Sprintf("http://%s:%s%s", host, port, path)
+	target := (&url.URL{
+		Scheme: "http",
+		Host:   net.JoinHostPort(host, port),
+		Path:   path,
+	}).String()
+	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid probe target"})
+		return
+	}
 	start := time.Now()
-	resp, err := client.Get(url)
+	resp, err := client.Do(request)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"url": url, "ok": false, "error": err.Error(),
+			"url": target, "ok": false, "error": err.Error(),
 		})
 		return
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	writeJSON(w, http.StatusOK, map[string]any{
-		"url":         url,
+		"url":         target,
 		"ok":          resp.StatusCode == http.StatusOK,
 		"status_code": resp.StatusCode,
 		"body":        string(body),
 		"elapsed_ms":  time.Since(start).Milliseconds(),
 	})
+}
+
+func canonicalProbeHost(raw string) (string, error) {
+	host := strings.TrimSpace(raw)
+	if host == "" {
+		return "", fmt.Errorf("empty host")
+	}
+	if addr, err := netip.ParseAddr(strings.Trim(host, "[]")); err == nil {
+		return addr.Unmap().String(), nil
+	}
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	if host == "" || strings.ContainsAny(host, "/\\:@") {
+		return "", fmt.Errorf("invalid host")
+	}
+	return host, nil
+}
+
+func statusContainsProbePeer(status *ipnstate.Status, host string) bool {
+	if status == nil {
+		return false
+	}
+	requestedIP, requestedIPErr := netip.ParseAddr(host)
+	for _, peer := range status.Peer {
+		if peer == nil {
+			continue
+		}
+		if requestedIPErr == nil {
+			for _, peerIP := range peer.TailscaleIPs {
+				if peerIP.Unmap() == requestedIP.Unmap() {
+					return true
+				}
+			}
+			continue
+		}
+		peerDNSName := strings.ToLower(strings.TrimSuffix(peer.DNSName, "."))
+		if host == peerDNSName {
+			return true
+		}
+	}
+	return false
 }

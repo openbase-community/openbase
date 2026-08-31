@@ -17,6 +17,9 @@ plan in Notion for the full architecture.
 
 The `/status` payload is `ipnstate.Status`, the same JSON schema that
 `tailscale status --json` prints, so existing CLI parsers work unchanged.
+The authenticated `/probe` endpoint is intentionally limited to the Openbase
+health path on port `18080` of peers present in the node's current tailnet
+status; it is not a general-purpose tailnet proxy.
 
 ## Build
 
