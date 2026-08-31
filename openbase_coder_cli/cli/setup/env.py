@@ -12,6 +12,10 @@ from openbase_coder_cli.backend_config import (
     DEFAULT_CODING_BACKEND,
     normalize_backend,
 )
+from openbase_coder_cli.codex_control_plane import (
+    CODEX_APP_SERVER_ENDPOINT_ENV,
+    managed_codex_app_server_endpoint,
+)
 from openbase_coder_cli.config.machine_token_manager import (
     MachineTokenError,
     MachineTokenManager,
@@ -136,7 +140,7 @@ def _ensure_env_file(
         "CODEX_SERVICE_TIER=standard",
         "DISPATCHER_SERVICE_TIER=fast",
         "SUPER_AGENTS_SERVICE_TIER=standard",
-        "CODEX_APP_SERVER_URL=ws://127.0.0.1:4500",
+        f"{CODEX_APP_SERVER_ENDPOINT_ENV}={managed_codex_app_server_endpoint({}).value}",
         "LIVEKIT_CODEX_THREAD_CWD=~",
         "# Cartesia voice used by the LiveKit agent TTS.",
         "CARTESIA_VOICE_ID=9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
@@ -240,8 +244,7 @@ def _drop_managed_claude_config_dir(path: Path) -> None:
         line
         for line in lines
         if not (
-            line.split("=", 1)[0].strip() == "CLAUDE_CONFIG_DIR"
-            and retired_dir in line
+            line.split("=", 1)[0].strip() == "CLAUDE_CONFIG_DIR" and retired_dir in line
         )
     ]
     if kept != lines:
@@ -252,6 +255,9 @@ def _drop_managed_claude_config_dir(path: Path) -> None:
 def _missing_livekit_client_credential_values(path: Path) -> dict[str, str]:
     existing = _env_file_values(path)
     updates: dict[str, str] = {}
+    resolved_endpoint = managed_codex_app_server_endpoint(existing)
+    if existing.get(CODEX_APP_SERVER_ENDPOINT_ENV) != resolved_endpoint.value:
+        updates[CODEX_APP_SERVER_ENDPOINT_ENV] = resolved_endpoint.value
     if not existing.get("SUPER_AGENTS_CODEX_APPROVAL_POLICY"):
         updates["SUPER_AGENTS_CODEX_APPROVAL_POLICY"] = "never"
     if not existing.get("SUPER_AGENTS_CODEX_SANDBOX_POLICY"):

@@ -49,8 +49,8 @@ SERVICES: list[ServiceDefinition] = [
         description="Codex App Server",
         command_template="codex-app-server",
         workdir_template="{workspace}",
-        port=4500,
         backends=(CODEX_BACKEND, OPENBASE_CLOUD_CODEX_BACKEND),
+        restart_dependents=("openbase-routines", "livekit-agent", "django-cli"),
     ),
     ServiceDefinition(
         name="sync-workers",

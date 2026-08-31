@@ -17,6 +17,12 @@ def test_codex_app_server_service_sets_model_defaults():
     service = next(svc for svc in SERVICES if svc.name == "codex-app-server")
 
     assert service.command_template == "codex-app-server"
+    assert service.port is None
+    assert service.restart_dependents == (
+        "openbase-routines",
+        "livekit-agent",
+        "django-cli",
+    )
 
 
 def test_livekit_agent_service_does_not_export_dispatcher_instructions_path():

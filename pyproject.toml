@@ -46,7 +46,7 @@ dependencies = [
     "aiohttp>=3.13.3",
     "psutil>=6.1.0",
     "multi-workspace>=3.2.3",
-    "super-agents[claude]>=0.1.13",
+    "super-agents[claude]>=0.1.14",
     "websockets>=16.0",
     "numpy>=2.3.0",
 ]

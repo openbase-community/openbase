@@ -105,6 +105,12 @@ Managed services:
 - `livekit-agent`
 - `django-cli`
 
+On macOS and Linux, `codex-app-server` listens at
+`$CODEX_HOME/app-server-control/app-server-control.sock`. Openbase pins its
+managed server and clients to the shared `~/.codex` home; the socket is runtime
+state and is never committed. A stale socket is removed only after it is
+confirmed not to have a live owner.
+
 ## Runtime Data
 
 | Path | Written By | Purpose |

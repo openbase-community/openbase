@@ -837,6 +837,7 @@ def test_ensure_env_file_documents_coding_backend_default(tmp_path) -> None:
     assert f"SUPER_AGENTS_BASE_INSTRUCTIONS_PATH={OPENBASE_AGENTS_MD_PATH}" in content
     assert "CLAUDE_CODE_ENABLE_TELEMETRY=0" in content
     assert "CODEX_MODEL=" not in content
+    assert "CODEX_APP_SERVER_URL=unix://" in content
 
 
 def test_ensure_env_file_migrates_existing_env_to_shared_homes(tmp_path) -> None:
@@ -864,6 +865,30 @@ def test_ensure_env_file_migrates_existing_env_to_shared_homes(tmp_path) -> None
     assert "SUPER_AGENTS_CODEX_SANDBOX_POLICY=danger-full-access" in content
     assert f"SUPER_AGENTS_BASE_INSTRUCTIONS_PATH={OPENBASE_AGENTS_MD_PATH}" in content
     assert "SUPER_AGENTS_DEFAULT_CONFIG_PATH=" in content
+    assert "CODEX_APP_SERVER_URL=unix://" in content
+
+
+def test_ensure_env_file_migrates_legacy_app_server_but_preserves_custom_endpoint(
+    tmp_path,
+) -> None:
+    legacy = tmp_path / "legacy.env"
+    legacy.write_text("CODEX_APP_SERVER_URL=ws://127.0.0.1:4500\n", encoding="utf-8")
+    custom = tmp_path / "custom.env"
+    custom.write_text(
+        "CODEX_APP_SERVER_URL=wss://codex.example/rpc\n", encoding="utf-8"
+    )
+
+    for env_file in (legacy, custom):
+        setup_cli._ensure_env_file(
+            str(env_file),
+            assembly_ai_api_key="",
+            cartesia_api_key="",
+        )
+
+    assert "CODEX_APP_SERVER_URL=unix://" in legacy.read_text(encoding="utf-8")
+    assert "CODEX_APP_SERVER_URL=wss://codex.example/rpc" in custom.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_ensure_env_file_keeps_user_claude_config_dir_override(tmp_path) -> None:

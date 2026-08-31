@@ -275,6 +275,22 @@ def _cleanup_lingering_processes(svc: ServiceDefinition) -> None:
         process_utils.terminate(pid, force=True)
 
 
+def _cleanup_service_endpoint(svc: ServiceDefinition) -> None:
+    if svc.name != "codex-app-server" or _is_windows():
+        return
+    from openbase_coder_cli.codex_control_plane import (
+        cleanup_stale_codex_app_server_socket,
+        managed_codex_app_server_endpoint,
+    )
+    from openbase_coder_cli.paths import CODEX_HOME_DIR
+
+    endpoint = managed_codex_app_server_endpoint(
+        {"CODEX_HOME": str(CODEX_HOME_DIR)},
+        platform=sys.platform,
+    )
+    cleanup_stale_codex_app_server_socket(endpoint)
+
+
 def _ensure_launchd_paths() -> None:
     DEFAULT_LOG_DIR.mkdir(parents=True, exist_ok=True)
     LAUNCHD_WRAPPER_DIR.mkdir(parents=True, exist_ok=True)
@@ -460,6 +476,7 @@ def launchctl_bootout(svc: ServiceDefinition) -> bool:
     label = _service_label(svc)
     result = _launchctl("bootout", f"gui/{_uid()}/{label}", check=False)
     _cleanup_lingering_processes(svc)
+    _cleanup_service_endpoint(svc)
     return result.returncode == 0
 
 
@@ -600,6 +617,7 @@ def remove_service(svc: ServiceDefinition) -> bool:
     if launchctl_status(svc).get("installed"):
         launchctl_bootout(svc)
         existed = True
+    _cleanup_service_endpoint(svc)
     for path in (plist, wrapper):
         if path.exists():
             path.unlink()

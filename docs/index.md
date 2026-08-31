@@ -75,6 +75,7 @@ Setup and operations:
 - [Run in Docker](docker.md)
 - [Cloud DevSpace](cloud-devspace.md)
 - [Local-Only Mode](local-only.md)
+- [Steering Codex TUI Sessions](codex-tui-steering.md)
 - [Troubleshooting](troubleshooting.md)
 - [Uninstall](uninstall.md)
 

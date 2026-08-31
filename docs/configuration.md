@@ -54,7 +54,7 @@ Useful keys:
 | `LIVEKIT_API_KEY`          | Yes      | LiveKit server auth          |
 | `LIVEKIT_API_SECRET`       | Yes      | LiveKit server auth          |
 | `LIVEKIT_URL`              | Yes      | LiveKit websocket URL        |
-| `CODEX_APP_SERVER_URL`     | Yes      | Codex app-server websocket URL |
+| `CODEX_APP_SERVER_URL`     | Yes      | Codex app-server endpoint (`unix://` by default on macOS/Linux; WebSocket compatibility URL on Windows or explicit deployments) |
 | `LIVEKIT_CODEX_THREAD_CWD` | Yes      | Shared Codex thread working directory |
 | `ASSEMBLY_AI_API_KEY`      | Optional | Speech-to-text provider      |
 | `CARTESIA_API_KEY`         | Optional | Text-to-speech provider      |

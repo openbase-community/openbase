@@ -12,6 +12,12 @@ from rest_framework import serializers, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+from openbase_coder_cli.codex_control_plane import (
+    codex_app_server_ready as _check_codex_app_server,
+)
+from openbase_coder_cli.codex_control_plane import (
+    managed_codex_app_server_endpoint,
+)
 from openbase_coder_cli.codex_home_instructions import (
     refresh_openbase_instruction_files_from_installation,
 )
@@ -399,7 +405,8 @@ def service_status(request):
         "django": {"name": "Django (Coder CLI)", "port": 7999, "optional": False},
         "codex_app_server": {
             "name": "Codex App Server",
-            "port": 4500,
+            "port": None,
+            "transport": managed_codex_app_server_endpoint().transport,
             "optional": False,
         },
         "livekit_server": {"name": "LiveKit Server", "port": 7880, "optional": False},
@@ -445,6 +452,8 @@ def service_status(request):
                 svc["running"] = _check_tailscale()
             elif key == "web_backend":
                 svc["running"] = _check_web_backend()
+            elif key == "codex_app_server":
+                svc["running"] = _check_codex_app_server()
             else:
                 svc["running"] = _check_port(svc["port"])
         logger.info(

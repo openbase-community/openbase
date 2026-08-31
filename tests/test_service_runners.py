@@ -82,8 +82,9 @@ def test_codex_app_server_builds_default_backend_argv(tmp_path, monkeypatch):
         "-c",
         'model="gpt-5.5"',
     ]
-    assert argv[-2:] == ["--listen", "ws://127.0.0.1:4500"]
+    assert argv[-2:] == ["--listen", "unix://"]
     assert out_env["CODEX_HOME"] == str(codex_home)
+    assert out_env["CODEX_APP_SERVER_URL"] == "unix://"
     assert out_env["DISABLE_AUTOUPDATER"] == "1"
     assert codex_home.is_dir()
 
@@ -295,4 +296,8 @@ def test_load_env_without_env_file_returns_process_env(monkeypatch):
     monkeypatch.setattr(runners.os, "environ", {"PATH": "/bin"})
     config = InstallationConfig(env_file="")
 
-    assert runners._load_env(config) == {"PATH": "/bin"}
+    assert runners._load_env(config) == {
+        "PATH": "/bin",
+        "CODEX_APP_SERVER_URL": "unix://",
+        "CODEX_HOME": str(runners.Path.home() / ".codex"),
+    }

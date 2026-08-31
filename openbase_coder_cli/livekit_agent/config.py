@@ -7,6 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from openbase_coder_cli.brain_score import brain_score_token_file
+from openbase_coder_cli.codex_control_plane import managed_codex_app_server_endpoint
 from openbase_coder_cli.codex_session_defaults import (
     CODEX_APPROVAL_POLICY_ENV,
     CODEX_SANDBOX_ENV,
@@ -54,7 +55,7 @@ def _load_openbase_env(*, override: bool = False) -> None:
 _load_openbase_env()
 
 os.environ.setdefault("LIVEKIT_URL", "ws://localhost:7880")
-os.environ.setdefault("CODEX_APP_SERVER_URL", "ws://127.0.0.1:4500")
+os.environ["CODEX_APP_SERVER_URL"] = managed_codex_app_server_endpoint().value
 os.environ.setdefault("LIVEKIT_CODEX_THREAD_CWD", str(Path.home()))
 
 CODEX_APP_SERVER_URL = os.environ["CODEX_APP_SERVER_URL"]

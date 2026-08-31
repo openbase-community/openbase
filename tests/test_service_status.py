@@ -25,6 +25,7 @@ def test_service_status_includes_background_openbase_services(monkeypatch) -> No
     monkeypatch.setattr(services_views, "_check_port", lambda port: True)
     monkeypatch.setattr(services_views, "_check_tailscale", lambda: True)
     monkeypatch.setattr(services_views, "_check_web_backend", lambda: True)
+    monkeypatch.setattr(services_views, "_check_codex_app_server", lambda: True)
     monkeypatch.setattr(
         services_views,
         "keep_awake_status_payload",
@@ -86,6 +87,8 @@ def test_service_status_includes_background_openbase_services(monkeypatch) -> No
         "last_exit_code": None,
         "optional": False,
     }
+    assert response.data["services"]["codex_app_server"]["port"] is None
+    assert response.data["services"]["codex_app_server"]["transport"] == "unix"
     assert response.data["services"]["tailscale_serve"] == {
         "name": "Tailscale Serve",
         "port": 18080,

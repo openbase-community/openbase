@@ -7,6 +7,7 @@ import os
 from datetime import UTC, datetime
 from typing import Any, Callable
 
+from super_agents.app_endpoint import default_app_server_endpoint
 from super_agents.app_models import LabelQueryInput
 from super_agents.app_server_client import (
     extract_notification_thread_id,
@@ -135,7 +136,7 @@ class CodexAppServerSessionManager(
         execution_backend: str | None = None,
     ) -> None:
         self._ws_url = ws_url or os.environ.get(
-            "CODEX_APP_SERVER_URL", "ws://127.0.0.1:4500"
+            "CODEX_APP_SERVER_URL", default_app_server_endpoint()
         )
         self._uses_external_client = client is not None
         self._execution_backend = execution_backend or _configured_execution_backend()

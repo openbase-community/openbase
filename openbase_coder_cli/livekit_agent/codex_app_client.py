@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import websockets  # noqa: F401
+from super_agents.app_endpoint import parse_app_server_endpoint
 
 from openbase_coder_cli.codex_session_defaults import (
     DEFAULT_CODEX_APPROVAL_POLICY,
@@ -94,6 +94,7 @@ class CodexAppServerClient(CodexTransportMixin):
         use_super_agent_reasoning: bool = False,
     ) -> None:
         self._ws_url = ws_url
+        self._endpoint = parse_app_server_endpoint(ws_url)
         self._cwd = cwd
         self._state_path = (
             Path(state_path or Path.home() / ".openbase" / "livekit-voice-route.json")

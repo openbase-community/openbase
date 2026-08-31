@@ -126,10 +126,15 @@ def test_restart_optional_device_sync_can_be_targeted_explicitly(monkeypatch):
     assert "sync-workers" not in command
 
 
-def test_restart_codex_app_server_only_targets_codex_service():
+def test_restart_codex_app_server_restarts_control_plane_consumers():
     plan = build_restart_plan(RestartRequest(services=("codex-app-server",)))
 
-    assert plan.services == ("codex-app-server",)
+    assert plan.services == (
+        "codex-app-server",
+        "openbase-routines",
+        "livekit-agent",
+        "django-cli",
+    )
 
 
 def test_restart_livekit_server_includes_agent_dependent():
@@ -230,9 +235,7 @@ def test_execute_restart_plan_stops_dependents_first(monkeypatch):
     monkeypatch.setattr(
         restart_module,
         "require_installation",
-        lambda: InstallationConfig(
-            workspace_path="workspace", env_file=".env"
-        ),
+        lambda: InstallationConfig(workspace_path="workspace", env_file=".env"),
     )
     monkeypatch.setattr(
         restart_module, "launchctl_status", lambda _svc: {"installed": True}

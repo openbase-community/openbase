@@ -139,6 +139,9 @@ def build_codex_app_server(
 ) -> RunnerArgvEnv:
     from openbase_coder_cli.backend_config import normalize_backend
     from openbase_coder_cli.codex_backend_config import codex_backend_cli_overrides
+    from openbase_coder_cli.codex_control_plane import (
+        apply_managed_codex_app_server_endpoint,
+    )
     from openbase_coder_cli.paths import CODEX_HOME_DIR
 
     CODEX_HOME_DIR.mkdir(parents=True, exist_ok=True)
@@ -146,6 +149,7 @@ def build_codex_app_server(
     # The shared ~/.codex is the default home, but pin it so a stray
     # CODEX_HOME in the service environment can't retarget the service.
     env["CODEX_HOME"] = str(CODEX_HOME_DIR)
+    env, endpoint = apply_managed_codex_app_server_endpoint(env)
     env.setdefault("DISABLE_AUTOUPDATER", "1")
     backend = env.get("OPENBASE_CODING_BACKEND", "codex")
     reasoning_effort = env.get("CODEX_MODEL_REASONING_EFFORT", "high")
@@ -186,7 +190,7 @@ def build_codex_app_server(
         f'service_tier="{service_tier}"',
         *backend_overrides,
         "--listen",
-        "ws://127.0.0.1:4500",
+        endpoint.value,
     ]
     return argv, env
 
@@ -369,6 +373,13 @@ def _load_env(config: InstallationConfig) -> dict[str, str]:
     env = dict(os.environ)
     if config.env_file:
         env.update(env_file_values(Path(config.env_file).expanduser()))
+    from openbase_coder_cli.codex_control_plane import (
+        apply_managed_codex_app_server_endpoint,
+    )
+    from openbase_coder_cli.paths import CODEX_HOME_DIR
+
+    env, _endpoint = apply_managed_codex_app_server_endpoint(env)
+    env["CODEX_HOME"] = str(CODEX_HOME_DIR)
     return env
 
 
@@ -383,6 +394,16 @@ def run(name: str) -> None:
     binaries = _resolve_binaries(name, config)
     build, _ = RUNNERS[name]
     argv, env = build(_load_env(config), binaries)
+    if name == "codex-app-server":
+        from openbase_coder_cli.codex_control_plane import (
+            managed_codex_app_server_endpoint,
+            prepare_codex_app_server_start,
+        )
+
+        prepare_codex_app_server_start(
+            managed_codex_app_server_endpoint(env),
+            binaries["codex"],
+        )
     os.execvpe(argv[0], argv, env)
 
 

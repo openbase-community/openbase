@@ -85,7 +85,7 @@ Whichever path you choose, `openbase-coder setup`:
 5. Generates Openbase instruction files from bundled or workspace templates — including the Openbase base instructions at `~/.openbase/instructions/AGENTS.md`, delivered to each Openbase session — and keeps `~/.claude/CLAUDE.md` linked to `~/.codex/AGENTS.md`.
 6. Registers the super-agents MCP server and the session-ID hook in your shared agent homes (`~/.codex/config.toml`, `~/.claude.json`, `~/.claude/settings.json`) and symlinks bundled or workspace skills into `~/.codex/skills` and `~/.claude/skills`. Nothing else in the shared homes is touched — Openbase sessions use your own Codex and Claude Code logins and settings.
 7. Downloads LiveKit agent model files (VAD, turn detector) in both modes, and initializes the CLI venv with `uv sync` in development mode.
-8. Writes Codex app-server defaults such as `CODEX_MODEL=gpt-5.5`, `CODEX_MODEL_REASONING_EFFORT=high`, `CODEX_SERVICE_TIER=standard`, `CODEX_APP_SERVER_URL`, and `LIVEKIT_CODEX_THREAD_CWD`.
+8. Writes Codex app-server defaults such as `CODEX_MODEL_REASONING_EFFORT=high`, `CODEX_SERVICE_TIER=standard`, the standard Unix `CODEX_APP_SERVER_URL` on macOS/Linux, and `LIVEKIT_CODEX_THREAD_CWD`.
 9. Uses the bundled console build, or builds `console` in development mode.
 10. Installs background services — launchd on macOS, systemd user units on Linux (unless `--skip-services`). Backend-specific services such as `codex-app-server` are only installed for the backends that use them; visible Openbase Cloud uses Cloud-proxied Claude Code and does not install `codex-app-server`.
 11. Configures the selected private-network transport and its API/LiveKit
