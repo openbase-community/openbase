@@ -37,17 +37,9 @@ These docs cover the whole product, not just the CLI:
 
 ## Quick Start
 
-The easiest path is the desktop app: [download the Mac app](downloads.md),
-open it, and follow the guided setup. It installs the bundled CLI, walks you
-through the Openbase Cloud managed setup path, signs you in on the free plan,
-and pairs your iPhone over Tailscale.
-
-Prefer to drive the terminal yourself? Install and open the desktop app —
-it activates the bundled CLI runtime automatically — then follow
-[Manual Setup for the Desktop App](manual-installation.md) to run the same
-setup, login, and service steps by hand.
-
-For source development, clone the workspace repo and run its setup script:
+When you can use a terminal, start with the recommended
+[Developer Setup](getting-started/developer-setup.md): clone the workspace repo
+and run its interactive setup script:
 
 ```bash
 git clone --branch main --single-branch \
@@ -55,6 +47,14 @@ git clone --branch main --single-branch \
 cd openbase-coder-workspace
 ./scripts/setup
 ```
+
+The Electron dashboard and Swift menu-bar app are optional visual surfaces
+after developer setup. For a production install with no terminal, instead
+[download the Mac app](downloads.md) and follow its guided setup. It installs
+the bundled CLI, signs you in, and pairs your phone over Openbase VPN or
+Openbase Direct. [Manual Setup for the Desktop App](manual-installation.md)
+documents the same standalone setup when you want to operate it from a
+terminal.
 
 ## Documentation
 

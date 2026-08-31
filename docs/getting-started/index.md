@@ -53,8 +53,8 @@ deployment modes:
 
 Both paths run the same `openbase-coder setup` underneath and end in the same
 place: a local runtime serving the console at `http://127.0.0.1:7999`,
-background services managed by launchd/systemd, and Tailscale routes for the
-iOS app.
+background services managed by launchd/systemd, and private-network routes for
+the phone apps.
 
 ## Prerequisites
 
