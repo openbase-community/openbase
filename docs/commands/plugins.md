@@ -22,6 +22,7 @@ openbase-coder plugins COMMAND [ARGS]
 | `remove PLUGIN_ID` | Uninstall a plugin |
 | `update [PLUGIN_ID] [--ref REF]` | Update one plugin or all plugins |
 | `bootstrappers` | List all discovered bootstrapper names |
+| `rebuild-site` | Rebuild the stable plugin site directory from the plugin registry |
 
 ## Source Types
 
@@ -46,14 +47,11 @@ openbase-coder plugins add https://github.com/org/openbase-plugin --ref main
 
 ## Where Plugin Packages Install
 
-In development installs, plugin Python packages install into the workspace CLI
-venv, which persists on its own.
-
-In standalone installs, the versioned runtime package is replaced wholesale on
-upgrade, so plugin packages install into the stable plugin site directory
-`~/.openbase/plugins/site` instead. Every Openbase Coder process adds that
-directory to `sys.path` at startup, so desktop package upgrades do not lose
-installed plugins.
+Plugin Python packages install into the stable plugin site directory
+`~/.openbase/plugins/site` in both development and standalone installs. Every
+Openbase Coder process adds that directory to `sys.path` at startup, so
+desktop package upgrades and development `uv sync` runs do not lose installed
+plugins.
 
 ## What Happens on Add/Update/Remove
 
