@@ -355,5 +355,3 @@ def claude_thread_snapshot_status(
         "conflict_count": len(conflicts),
         "conflicts": conflicts,
     }
-
-
