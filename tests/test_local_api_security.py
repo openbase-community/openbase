@@ -16,6 +16,10 @@ django.setup()
 
 from openbase_coder_cli.config import authentication  # noqa: E402
 from openbase_coder_cli.openbase_coder_cli_app import auth as auth_views  # noqa: E402
+from openbase_coder_cli.openbase_coder_cli_app import (
+    onboarding as onboarding_views,  # noqa: E402
+)
+from openbase_coder_cli.openbase_coder_cli_app import plugins_tools  # noqa: E402
 
 CAPABILITY = "local-capability-with-at-least-forty-characters-123"
 
@@ -96,6 +100,41 @@ def test_installation_capability_authorizes_intended_local_api_path(monkeypatch)
         "validated": True,
         "detail": "",
     }
+
+
+@override_settings(ALLOWED_HOSTS=["testserver", ".ts.net"])
+def test_adjacent_owner_state_and_logout_are_not_anonymous(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        auth_views,
+        "get_token_manager",
+        lambda: SimpleNamespace(
+            clear=lambda: calls.append("logout"),
+            login_status=lambda: calls.append("session"),
+        ),
+    )
+    monkeypatch.setattr(
+        onboarding_views,
+        "onboarding_status_payload",
+        lambda: calls.append("onboarding"),
+    )
+    monkeypatch.setattr(
+        plugins_tools,
+        "get_console_registry_payload",
+        lambda: calls.append("plugins"),
+    )
+    client = _client(remote_addr="100.64.0.20")
+
+    responses = [
+        client.get("/api/auth/session/"),
+        client.post("/api/auth/logout/", format="json"),
+        client.get("/api/onboarding/status/"),
+        client.get("/api/onboarding/cloud-state/"),
+        client.get("/api/plugins/console-registry/"),
+    ]
+
+    assert all(response.status_code in {401, 403} for response in responses)
+    assert calls == []
 
 
 def test_local_capability_file_is_rotatable_and_owner_only(tmp_path):
