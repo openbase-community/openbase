@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 
 import httpx
 from django.conf import settings
@@ -16,14 +15,6 @@ from openbase_coder_cli.config.jwt_validation import InvalidTokenError, JWKSVali
 logger = logging.getLogger(__name__)
 
 
-def _allow_any_subject() -> bool:
-    """Whether the single-owner identity check is disabled (opt-in)."""
-    return (
-        os.environ.get("OPENBASE_CODER_CLI_ALLOW_ANY_SUBJECT", "false").strip().lower()
-        == "true"
-    )
-
-
 def is_owner_identity(claims: dict) -> bool:
     """Return whether ``claims`` identify the machine owner.
 
@@ -33,14 +24,10 @@ def is_owner_identity(claims: dict) -> bool:
     authorization. We pin the server to the account that ran
     ``openbase-coder login`` and reject every other subject.
 
-    Returns ``True`` (check disabled) when
-    ``OPENBASE_CODER_CLI_ALLOW_ANY_SUBJECT=true`` — only for trusted
-    multi-user setups that intentionally share one server. Returns ``False``
-    when no owner is logged in (the server has no authorized identity yet).
+    Returns ``False`` when no owner is logged in (the server has no authorized
+    identity yet). This authorization boundary is unconditional: a local
+    server cannot be shared across cloud identities.
     """
-    if _allow_any_subject():
-        return True
-
     # Imported lazily to avoid import-time settings access.
     from openbase_coder_cli.config.token_manager import get_token_manager
 
@@ -60,7 +47,7 @@ def enforce_owner_identity(claims: dict) -> None:
     """Raise ``AuthenticationFailed`` unless ``claims`` are the owner's."""
     if is_owner_identity(claims):
         return
-    if not _allow_any_subject() and not get_token_manager_owner():
+    if not get_token_manager_owner():
         raise exceptions.AuthenticationFailed(
             "This server has no logged-in owner. Run 'openbase-coder login'."
         )
