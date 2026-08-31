@@ -57,6 +57,7 @@ def _ensure_env_file(
     if coding_backend:
         coding_backend = normalize_backend(coding_backend)
     if path.is_file():
+        path.chmod(0o600)
         _drop_managed_claude_config_dir(path)
         updates = _missing_livekit_client_credential_values(path)
         if coding_backend:
@@ -165,6 +166,7 @@ def _ensure_env_file(
     )
 
     path.write_text("\n".join(lines) + "\n")
+    path.chmod(0o600)
     click.echo(f"Generated .env at {path}")
 
 

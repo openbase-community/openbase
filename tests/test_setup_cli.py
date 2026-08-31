@@ -838,6 +838,7 @@ def test_ensure_env_file_documents_coding_backend_default(tmp_path) -> None:
     assert "CLAUDE_CODE_ENABLE_TELEMETRY=0" in content
     assert "CODEX_MODEL=" not in content
     assert "CODEX_APP_SERVER_URL=unix://" in content
+    assert env_file.stat().st_mode & 0o777 == 0o600
 
 
 def test_ensure_env_file_migrates_existing_env_to_shared_homes(tmp_path) -> None:
@@ -851,6 +852,7 @@ def test_ensure_env_file_migrates_existing_env_to_shared_homes(tmp_path) -> None
         "LIVEKIT_CLIENT_API_SECRET=client-secret\n",
         encoding="utf-8",
     )
+    env_file.chmod(0o644)
 
     setup_cli._ensure_env_file(
         str(env_file),
@@ -866,6 +868,7 @@ def test_ensure_env_file_migrates_existing_env_to_shared_homes(tmp_path) -> None
     assert f"SUPER_AGENTS_BASE_INSTRUCTIONS_PATH={OPENBASE_AGENTS_MD_PATH}" in content
     assert "SUPER_AGENTS_DEFAULT_CONFIG_PATH=" in content
     assert "CODEX_APP_SERVER_URL=unix://" in content
+    assert env_file.stat().st_mode & 0o777 == 0o600
 
 
 def test_ensure_env_file_migrates_legacy_app_server_but_preserves_custom_endpoint(
