@@ -565,3 +565,109 @@ def test_agent_home_skills_check_reports_dangling_and_healthy(monkeypatch, tmp_p
     assert any(
         level == "ok" and "1 entries resolve" in message for level, message in messages
     )
+
+
+def _collect_service_runtime_paths(monkeypatch, wrapper_dir, current_dir):
+    messages = []
+
+    def ok(message):
+        messages.append(("ok", message))
+
+    def warn(message):
+        messages.append(("warn", message))
+
+    def fail(message):
+        messages.append(("fail", message))
+
+    monkeypatch.setattr(doctor_cli, "LAUNCHD_WRAPPER_DIR", wrapper_dir)
+    monkeypatch.setattr(doctor_cli, "STANDALONE_CURRENT_DIR", current_dir)
+    doctor_cli._check_service_runtime_paths(ok, warn, fail)
+    return messages
+
+
+def _make_package(root, *, with_interpreter=True):
+    (root / "bin").mkdir(parents=True, exist_ok=True)
+    binary = root / "bin" / "openbase-coder"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    if with_interpreter:
+        (root / "python" / "bin").mkdir(parents=True, exist_ok=True)
+        interpreter = root / "python" / "bin" / "python"
+        interpreter.write_text("#!/bin/sh\n")
+        interpreter.chmod(0o755)
+    return root
+
+
+def _write_wrapper(wrapper_dir, name, target):
+    wrapper_dir.mkdir(parents=True, exist_ok=True)
+    wrapper = wrapper_dir / f"{name}.sh"
+    wrapper.write_text(f'#!/bin/bash\ncd "/tmp"\nexec {target} server --port 7999\n')
+    return wrapper
+
+
+def test_service_runtime_paths_ok_when_wrappers_resolve(monkeypatch, tmp_path):
+    package = _make_package(tmp_path / "release")
+    current = tmp_path / "current"
+    current.symlink_to(package)
+    wrappers = tmp_path / "launchd"
+    _write_wrapper(wrappers, "django-cli", current / "bin" / "openbase-coder")
+
+    messages = _collect_service_runtime_paths(monkeypatch, wrappers, current)
+
+    assert not [m for m in messages if m[0] == "fail"]
+    assert any("service wrappers resolve" in m[1] for m in messages)
+
+
+def test_service_runtime_paths_flags_dangling_wrapper_target(monkeypatch, tmp_path):
+    package = _make_package(tmp_path / "release")
+    current = tmp_path / "current"
+    current.symlink_to(package)
+    wrappers = tmp_path / "launchd"
+    _write_wrapper(wrappers, "livekit-agent", tmp_path / "gone" / "python")
+
+    messages = _collect_service_runtime_paths(monkeypatch, wrappers, current)
+
+    failures = [m[1] for m in messages if m[0] == "fail"]
+    assert any("livekit-agent" in f for f in failures)
+    assert any("services regenerate" in f for f in failures)
+
+
+def test_service_runtime_paths_flags_package_missing_interpreter(monkeypatch, tmp_path):
+    """The exact production failure: 'current' resolves, but its Python does not.
+
+    The wrapper execs bin/openbase-coder, which exists and is executable, so
+    checking only the wrapper target reports healthy. The launcher then execs
+    the package interpreter, whose symlink dangles into a renamed app bundle,
+    and every service dies on start.
+    """
+    package = _make_package(tmp_path / "release", with_interpreter=False)
+    (package / "python" / "bin").mkdir(parents=True)
+    (package / "python" / "bin" / "python").symlink_to(tmp_path / "renamed-away")
+    current = tmp_path / "current"
+    current.symlink_to(package)
+    wrappers = tmp_path / "launchd"
+    _write_wrapper(wrappers, "django-cli", current / "bin" / "openbase-coder")
+
+    messages = _collect_service_runtime_paths(monkeypatch, wrappers, current)
+
+    failures = [m[1] for m in messages if m[0] == "fail"]
+    assert any("no usable interpreter" in f for f in failures)
+
+
+def test_service_runtime_paths_flags_dangling_current_alias(monkeypatch, tmp_path):
+    current = tmp_path / "current"
+    current.symlink_to(tmp_path / "deleted-release")
+    wrappers = tmp_path / "launchd"
+    _write_wrapper(wrappers, "django-cli", current / "bin" / "openbase-coder")
+
+    messages = _collect_service_runtime_paths(monkeypatch, wrappers, current)
+
+    failures = [m[1] for m in messages if m[0] == "fail"]
+    assert any("dangling" in f for f in failures)
+
+
+def test_service_runtime_paths_silent_without_wrapper_dir(monkeypatch, tmp_path):
+    messages = _collect_service_runtime_paths(
+        monkeypatch, tmp_path / "absent", tmp_path / "current"
+    )
+    assert messages == []

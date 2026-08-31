@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import time
 
 from click.testing import CliRunner
 
@@ -148,3 +149,72 @@ def test_oauth_success_page_announces_success_and_returns_to_desktop():
     assert "openbase-coder://open?source=cli-auth&amp;intent=login-complete" in html
     assert '"openbase-coder://open?source=cli-auth&intent=login-complete"' in html
     assert "window.location.href" in html
+
+
+def _free_port():
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def test_wait_for_callback_gives_up_and_releases_the_port(monkeypatch):
+    """An abandoned browser flow must not pin the callback port forever.
+
+    The listener used to loop with no deadline, so a login the user never
+    completed kept 127.0.0.1:52807 bound for the life of the process. Every
+    later login then failed to bind and silently degraded to manual paste.
+    """
+    import socket
+
+    port = _free_port()
+    monkeypatch.setattr(
+        auth_cli, "_prompt_for_pasted_callback", lambda state: {"code": "pasted"}
+    )
+
+    result = auth_cli._wait_for_callback(
+        f"http://127.0.0.1:{port}/oauth/callback",
+        expected_state="state-123",
+        timeout_seconds=0.1,
+    )
+
+    assert result == {"code": "pasted"}
+
+    # The port is bindable again only if the listener was actually closed.
+    with socket.socket() as after:
+        after.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        after.bind(("127.0.0.1", port))
+
+
+def test_wait_for_callback_still_accepts_a_real_redirect():
+    """The timeout must not break the normal success path."""
+    import threading
+    import urllib.request
+
+    port = _free_port()
+    captured = {}
+
+    def run():
+        captured["result"] = auth_cli._wait_for_callback(
+            f"http://127.0.0.1:{port}/oauth/callback",
+            expected_state="state-123",
+            timeout_seconds=30,
+        )
+
+    listener = threading.Thread(target=run, daemon=True)
+    listener.start()
+
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        try:
+            urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/oauth/callback?code=the-code&state=state-123",
+                timeout=5,
+            ).read()
+            break
+        except OSError:
+            time.sleep(0.05)
+
+    listener.join(timeout=15)
+    assert captured["result"]["code"] == "the-code"

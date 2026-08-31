@@ -6,6 +6,7 @@ import html
 import json
 import os
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
@@ -33,6 +34,9 @@ DEFAULT_WEB_BACKEND_URL = "https://app.openbase.cloud"
 DESKTOP_LOGIN_COMPLETE_URL = (
     "openbase-coder://open?source=cli-auth&intent=login-complete"
 )
+# How long the local OAuth callback listener waits for the browser redirect
+# before giving up and releasing the port.
+LOGIN_CALLBACK_TIMEOUT_SECONDS = 300.0
 
 
 def _oauth_success_html(*, desktop_url: str = DESKTOP_LOGIN_COMPLETE_URL) -> bytes:
@@ -177,8 +181,20 @@ def _parse_pasted_oauth_callback(pasted: str, expected_state: str) -> dict[str, 
     return {"code": pasted, "state": expected_state}
 
 
+def _prompt_for_pasted_callback(expected_state: str) -> dict[str, str]:
+    click.echo(
+        "Please complete the sign-in in your browser, then copy the full redirect URL\n"
+        "(e.g. http://127.0.0.1:52807/oauth/callback?code=...&state=...) from your browser's address bar and paste it below:\n"
+    )
+    pasted = click.prompt("Redirect URL or code").strip()
+    return _parse_pasted_oauth_callback(pasted, expected_state)
+
+
 def _wait_for_callback(
-    redirect_uri: str, *, expected_state: str = ""
+    redirect_uri: str,
+    *,
+    expected_state: str = "",
+    timeout_seconds: float = LOGIN_CALLBACK_TIMEOUT_SECONDS,
 ) -> dict[str, str]:
     parsed = urlparse(redirect_uri)
     try:
@@ -193,23 +209,36 @@ def _wait_for_callback(
                 fg="yellow",
             )
         )
-        click.echo(
-            "Please complete the sign-in in your browser, then copy the full redirect URL\n"
-            "(e.g. http://127.0.0.1:52807/oauth/callback?code=...&state=...) from your browser's address bar and paste it below:\n"
-        )
-        pasted = click.prompt("Redirect URL or code").strip()
-        return _parse_pasted_oauth_callback(pasted, expected_state)
+        return _prompt_for_pasted_callback(expected_state)
 
     server.timeout = 1
     server.done = threading.Event()
     server.result = {}
     server.callback_path = parsed.path or "/oauth/callback"
     server.expected_state = expected_state
+    # Bounded: an abandoned browser flow must not pin the callback port
+    # forever. A listener that never returns keeps the port bound for the
+    # life of the process, and every later login attempt then falls back to
+    # manual paste because it cannot bind.
+    deadline = time.monotonic() + timeout_seconds
     try:
         while not server.done.wait(timeout=0):
+            if time.monotonic() >= deadline:
+                break
             server.handle_request()
     finally:
         server.server_close()
+
+    if not server.done.is_set():
+        click.echo(
+            click.style(
+                f"\nTimed out after {int(timeout_seconds)}s waiting for the browser "
+                "callback; released the callback port.",
+                fg="yellow",
+            )
+        )
+        return _prompt_for_pasted_callback(expected_state)
+
     return server.result
 
 
