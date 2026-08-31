@@ -204,6 +204,36 @@ def test_remove_legacy_openbase_folder_is_not_blocked_by_add_guard(
     )
 
 
+def test_add_folder_preserves_legacy_openbase_folder(tmp_path: Path) -> None:
+    config_path = tmp_path / "sync-config.json"
+    legacy_entry = {
+        "relpath": ".openbase/legacy-managed/skills",
+        "extra_ignores": ["*.tmp"],
+    }
+    config_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "folders": [
+                    {"relpath": "Projects", "extra_ignores": []},
+                    legacy_entry,
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    added = sync_config.add_sync_folder("Developer/loops/reviewer", config_path)
+
+    assert added.relpath == "Developer/loops/reviewer"
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    assert payload["folders"] == [
+        {"relpath": "Projects", "extra_ignores": []},
+        legacy_entry,
+        {"relpath": "Developer/loops/reviewer", "extra_ignores": []},
+    ]
+
+
 def test_relpath_for_path_guard_toggle() -> None:
     home = Path.home()
     legacy = home / ".openbase" / "legacy-managed" / "skills"

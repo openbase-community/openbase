@@ -240,10 +240,20 @@ def set_sync_folders(
 
 def add_sync_folder(relpath: str, path: Path | None = None) -> SyncFolder:
     normalized = validate_relpath(relpath)
-    existing = list(sync_folders(path))
-    if all(folder.relpath != normalized for folder in existing):
-        existing.append(SyncFolder(relpath=normalized))
-    set_sync_folders(existing, path)
+    config_path = path or SYNC_CONFIG_PATH
+    payload = read_sync_config(config_path)
+    raw_folders = payload.get(FOLDERS_KEY)
+    existing = list(raw_folders) if isinstance(raw_folders, list) else []
+    if not any(
+        isinstance(entry, dict)
+        and isinstance(entry.get("relpath"), str)
+        and normalize_relpath(entry["relpath"]) == normalized
+        for entry in existing
+    ):
+        existing.append(
+            {"relpath": normalized, "extra_ignores": []}
+        )
+        _write_sync_config({**payload, FOLDERS_KEY: existing}, config_path)
     return SyncFolder(relpath=normalized)
 
 
