@@ -33,7 +33,7 @@ if [ -z "$SESSION_ID" ]; then
 fi
 
 if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
-    printf 'export OPENBASE_AGENT_ID=%q\n' "$SESSION_ID" >> "$CLAUDE_ENV_FILE"
+    printf 'export AGENT_SESSION_ID=%q\n' "$SESSION_ID" >> "$CLAUDE_ENV_FILE"
 fi
 
 CONTEXT="Current agent thread/session ID: ${SESSION_ID}. When committing, add a git commit message trailer named Agent-Thread-Id with this exact value so the commit is tied to the agent session that produced it. This value is authoritative for the current session: do not query Super Agents or any other tool to discover your own thread ID."

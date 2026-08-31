@@ -71,7 +71,7 @@ def test_hook_script_exports_session_id_for_claude_bash_commands(
         [
             "bash",
             "-c",
-            'source "$1"; printf "%s" "$OPENBASE_AGENT_ID"',
+            'source "$1"; printf "%s" "$AGENT_SESSION_ID"',
             "bash",
             str(claude_env_file),
         ],
