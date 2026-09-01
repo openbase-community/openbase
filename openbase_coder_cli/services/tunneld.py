@@ -267,7 +267,19 @@ def tunneld_login(auth_key: str) -> bool:
     return response.status_code == 200
 
 
-def ensure_tunneld_running(auth_key: str | None = None) -> None:
+def _managed_service_installed() -> bool:
+    """Whether the platform service manager owns the tunneld process."""
+    from openbase_coder_cli.services.definitions import TUNNELD_SERVICE
+    from openbase_coder_cli.services.launchd import launchctl_status
+
+    return bool(launchctl_status(TUNNELD_SERVICE).get("installed"))
+
+
+def ensure_tunneld_running(
+    auth_key: str | None = None,
+    *,
+    managed_service: bool | None = None,
+) -> None:
     """Start openbase-tunneld if needed and wait until it forwards traffic.
 
     ``auth_key`` (a netmesh headscale pre-auth key when available) is
@@ -275,30 +287,33 @@ def ensure_tunneld_running(auth_key: str | None = None) -> None:
     daemon's interactive login URL is surfaced in the raised error.
     """
     health = tunneld_health()
+    if managed_service is None:
+        managed_service = _managed_service_installed()
     if not health.get("reachable"):
-        binary = tunneld_binary()
-        if not binary:
-            raise RuntimeError(
-                "openbase-tunneld is not running and no binary was found "
-                "(set OPENBASE_TUNNELD_BIN or add openbase-tunneld to PATH)."
+        if not managed_service:
+            binary = tunneld_binary()
+            if not binary:
+                raise RuntimeError(
+                    "openbase-tunneld is not running and no binary was found "
+                    "(set OPENBASE_TUNNELD_BIN or add openbase-tunneld to PATH)."
+                )
+            from openbase_coder_cli.services.tailnet_hostname import (
+                TSNET_HOSTNAME_ENV_KEY,
+                netmesh_hostname,
             )
-        from openbase_coder_cli.services.tailnet_hostname import (
-            TSNET_HOSTNAME_ENV_KEY,
-            netmesh_hostname,
-        )
 
-        # The node name must match what the VPN companion would use — peers
-        # store it (phone backend host, syncthing addresses), so both
-        # transports enroll under the one canonical name.
-        env = dict(os.environ)
-        env.setdefault(TSNET_HOSTNAME_ENV_KEY, netmesh_hostname())
-        subprocess.Popen(
-            [binary, "serve"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-            env=env,
-        )
+            # Manual/standalone callers have no service supervisor to start
+            # tunneld. Managed installs must wait for their single owner
+            # instead of racing it for the control port.
+            env = dict(os.environ)
+            env.setdefault(TSNET_HOSTNAME_ENV_KEY, netmesh_hostname())
+            subprocess.Popen(
+                [binary, "serve"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                env=env,
+            )
 
     login_submitted = False
     enroll_attempted = False
@@ -333,8 +348,9 @@ def ensure_tunneld_running(auth_key: str | None = None) -> None:
                     f"{health['auth_url']} or restart it with an auth key (TS_AUTHKEY)."
                 )
         if time.monotonic() >= deadline:
+            owner = "managed service" if managed_service else "standalone process"
             raise RuntimeError(
-                "openbase-tunneld did not reach Running state "
+                f"openbase-tunneld {owner} did not reach Running state "
                 f"(state: {health.get('backend_state') or health.get('error')})."
             )
         time.sleep(0.5)

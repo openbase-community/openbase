@@ -159,7 +159,10 @@ from openbase_coder_cli.services.tailscale_serve import (
     configure_tailscale_serve,
     tailscale_serve_health,
 )
-from openbase_coder_cli.services.tunneld import install_tunneld_binary
+from openbase_coder_cli.services.tunneld import (
+    ensure_tunneld_running,
+    install_tunneld_binary,
+)
 from openbase_coder_cli.stt_providers import (
     ASSEMBLYAI_STT_PROVIDER_ID,  # noqa: F401
     LOCAL_MLX_WHISPER_STT_PROVIDER_ID,  # noqa: F401
@@ -863,6 +866,13 @@ def _run_setup_phases(
         if tailnet_provider == PROVIDER_NETMESH_TSNET:
             click.echo("  Installing openbase-tunneld service...")
             install_service(config, TUNNELD_SERVICE)
+            click.echo("  Waiting for openbase-tunneld to join the private network...")
+            try:
+                ensure_tunneld_running(managed_service=True)
+            except RuntimeError as exc:
+                raise click.ClickException(
+                    f"Openbase VPN daemon did not become ready: {exc}"
+                ) from exc
         progress.step("services", "ok")
     else:
         click.echo("Skipped service installation (--skip-services).")
@@ -898,6 +908,10 @@ def _run_setup_phases(
     try:
         configure_tailscale_serve()
     except Exception as exc:
+        if not skip_services and tailnet_provider == PROVIDER_NETMESH_TSNET:
+            raise click.ClickException(
+                f"Openbase VPN route setup did not complete: {exc}"
+            ) from exc
         managed_transport = tailnet_provider in {
             PROVIDER_NETMESH,
             PROVIDER_NETMESH_TSNET,

@@ -1172,6 +1172,11 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
         "install_service",
         lambda _config, service: calls.append(f"service:{service.name}"),
     )
+    _patch_setup(
+        monkeypatch,
+        "ensure_tunneld_running",
+        lambda **_kwargs: calls.append("tunneld-ready"),
+    )
     _patch_setup(monkeypatch, "compute_cli_configured", lambda: True)
     monkeypatch.setattr(
         setup_cli.InstallationConfig,
@@ -1261,6 +1266,11 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
         "configure",
     ]
 
+    _patch_setup(
+        monkeypatch,
+        "configure_tailscale_serve",
+        fake_configure_tailscale_serve,
+    )
     calls.clear()
     result = runner.invoke(
         setup_cli.setup,
@@ -1283,8 +1293,73 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
         "claude-md",
         "tunneld-binary",
         "service:openbase-tunneld",
+        "tunneld-ready",
         "configure",
     ]
+
+    _patch_setup(
+        monkeypatch,
+        "configure_tailscale_serve",
+        unavailable_before_login,
+    )
+    calls.clear()
+    result = runner.invoke(
+        setup_cli.setup,
+        [
+            "--workspace-dir",
+            str(workspace),
+            "--env-file",
+            str(env_file),
+            "--backend",
+            "claude-code",
+            "--tailnet-provider",
+            "netmesh-tsnet",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Openbase VPN route setup did not complete" in result.output
+    assert "netmesh control socket is not ready" in result.output
+
+    def tunneld_never_becomes_ready(**_kwargs):
+        raise RuntimeError("managed service control API timed out")
+
+    _patch_setup(
+        monkeypatch,
+        "ensure_tunneld_running",
+        tunneld_never_becomes_ready,
+    )
+    calls.clear()
+    result = runner.invoke(
+        setup_cli.setup,
+        [
+            "--workspace-dir",
+            str(workspace),
+            "--env-file",
+            str(env_file),
+            "--backend",
+            "claude-code",
+            "--tailnet-provider",
+            "netmesh-tsnet",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Openbase VPN daemon did not become ready" in result.output
+    assert "managed service control API timed out" in result.output
+    assert calls == [
+        "thread-sync",
+        "sounds",
+        "claude-md",
+        "tunneld-binary",
+        "service:openbase-tunneld",
+    ]
+
+    _patch_setup(
+        monkeypatch,
+        "ensure_tunneld_running",
+        lambda **_kwargs: calls.append("tunneld-ready"),
+    )
 
     def unavailable_tunneld(_config):
         raise RuntimeError("Go is unavailable")

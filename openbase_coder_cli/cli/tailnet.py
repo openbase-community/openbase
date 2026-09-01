@@ -406,7 +406,7 @@ def _bring_up_transport(name: str) -> None:
     last_error: RuntimeError | None = None
     for _attempt in range(2):
         try:
-            ensure_tunneld_running()
+            ensure_tunneld_running(managed_service=True)
             click.echo("openbase-tunneld is running and joined the tailnet.")
             return
         except RuntimeError as exc:

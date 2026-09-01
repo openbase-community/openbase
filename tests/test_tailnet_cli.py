@@ -179,7 +179,9 @@ def test_bring_up_embedded_transport_installs_binary_before_service(monkeypatch)
         lambda service: calls.append(("kickstart", service.name)),
     )
     monkeypatch.setattr(
-        tunneld, "ensure_tunneld_running", lambda: calls.append(("running",))
+        tunneld,
+        "ensure_tunneld_running",
+        lambda **kwargs: calls.append(("running", kwargs)),
     )
 
     tailnet_cli._bring_up_transport("netmesh-tsnet")
@@ -188,7 +190,7 @@ def test_bring_up_embedded_transport_installs_binary_before_service(monkeypatch)
         ("binary", config),
         ("service", config, "openbase-tunneld"),
         ("kickstart", "openbase-tunneld"),
-        ("running",),
+        ("running", {"managed_service": True}),
     ]
 
 
