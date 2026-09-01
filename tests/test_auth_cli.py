@@ -80,6 +80,7 @@ def test_login_password_stdin_reissues_and_stores_jwts_without_echo(monkeypatch)
 
     assert result.exit_code == 0, result.output
     assert "stdin-only-password" not in result.output
+    assert "openbase-coder auth open-console" in result.output
     assert stored == {
         "backend": "https://backend.example",
         "access_token": "access",

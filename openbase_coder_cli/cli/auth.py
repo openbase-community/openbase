@@ -328,6 +328,9 @@ def _complete_login(
         )
 
     click.echo(f"Logged in successfully. Tokens saved to {AUTH_JSON_PATH}")
+    click.echo(
+        "Open the authenticated local console with: openbase-coder auth open-console"
+    )
 
 
 @click.command()
