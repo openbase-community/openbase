@@ -22,7 +22,6 @@ from openbase_coder_cli.services import tailscale_provider as tp
 PROVIDER_ENV_KEY = "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"
 ALLOWED_HOSTS_ENV_KEY = "OPENBASE_CODER_CLI_ALLOWED_HOSTS"
 NETMESH_ALLOWED_SUFFIX = ".netmesh.openbase.cloud"
-LIVEKIT_MODE_ENV_KEY = "LIVEKIT_NETWORK_MODE"
 
 # Pre-integration LaunchAgent label for tunneld; superseded by the managed
 # openbase-tunneld service, cleaned up on any provider switch.
@@ -141,9 +140,7 @@ def _apply_provider(name: str, *, push_cloud: bool) -> None:
     # the loopback candidate is never sent, the phone never installs a TURN
     # permission for 127.0.0.1, and the server's host-local checks (which
     # arrive with a loopback source) are all dropped by the relay.
-    values[LIVEKIT_MODE_ENV_KEY] = (
-        "local" if name == tp.PROVIDER_NETMESH_TSNET else "tailscale"
-    )
+    values[tp.LIVEKIT_NETWORK_MODE_ENV_KEY] = tp.livekit_network_mode(name)
     # A pinned LIVEKIT_NODE_IP from the previous transport is stale after a
     # switch (each transport is a different node/IP). Blank it so the service
     # runner derives the address from the ACTIVE provider instead.

@@ -37,6 +37,13 @@ PROVIDER_NETMESH = "netmesh"
 PROVIDER_NETMESH_TSNET = "netmesh-tsnet"
 
 PROVIDER_VALUES = (PROVIDER_TAILSCALE, PROVIDER_NETMESH, PROVIDER_NETMESH_TSNET)
+LIVEKIT_NETWORK_MODE_ENV_KEY = "LIVEKIT_NETWORK_MODE"
+
+
+def livekit_network_mode(provider_name: str) -> str:
+    """Return the LiveKit network mode required by a tailnet transport."""
+    return "local" if provider_name == PROVIDER_NETMESH_TSNET else "tailscale"
+
 
 # Last-resort netmesh-ctl location: the legacy standalone Openbase Netmesh app
 # (retired). The shipping companion (nested in the desktop app) and the dev

@@ -39,6 +39,10 @@ from openbase_coder_cli.paths import (
     CODEX_DISPATCHER_CONFIG_PATH,
     OPENBASE_AGENTS_MD_PATH,
 )
+from openbase_coder_cli.services.tailscale_provider import (
+    LIVEKIT_NETWORK_MODE_ENV_KEY,
+    livekit_network_mode,
+)
 
 TAILNET_PROVIDER_ENV_KEY = "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"
 ALLOWED_HOSTS_ENV_KEY = "OPENBASE_CODER_CLI_ALLOWED_HOSTS"
@@ -94,8 +98,8 @@ def _ensure_env_file(
         "# Client-facing token issuer. LiveKit JWTs expose this key in the issuer claim.",
         f"LIVEKIT_CLIENT_API_KEY={livekit_client_api_key}",
         f"LIVEKIT_CLIENT_API_SECRET={livekit_client_api_secret}",
-        "# Use tailscale for phone-to-computer voice calls; use local for loopback-only testing.",
-        "LIVEKIT_NETWORK_MODE=tailscale",
+        "# Embedded netmesh uses local mode; system VPN transports use tailscale mode.",
+        f"{LIVEKIT_NETWORK_MODE_ENV_KEY}={livekit_network_mode(selected_provider)}",
         "LIVEKIT_URL=ws://localhost:7880",
         "# In tailscale mode, the managed service rewrites localhost LIVEKIT_URL to the Tailscale IPv4 address.",
         "# The local Python agent still registers over localhost unless LIVEKIT_AGENT_URL is set.",
@@ -183,9 +187,14 @@ def _allowed_hosts_for(provider: str) -> str:
 
 
 def _tailnet_provider_updates(path: Path, provider: str) -> dict[str, str]:
-    """Env updates to switch an existing .env to ``provider``: the provider key,
-    plus the netmesh MagicDNS suffix in allowed hosts for the netmesh transports."""
-    updates: dict[str, str] = {TAILNET_PROVIDER_ENV_KEY: provider}
+    """Return every env value whose meaning depends on the tailnet provider."""
+    updates: dict[str, str] = {
+        TAILNET_PROVIDER_ENV_KEY: provider,
+        LIVEKIT_NETWORK_MODE_ENV_KEY: livekit_network_mode(provider),
+        # A pinned address belongs to the previous transport. Let the active
+        # provider derive a current address when its LiveKit mode needs one.
+        "LIVEKIT_NODE_IP": "",
+    }
     if provider in ("netmesh", "netmesh-tsnet"):
         hosts = _env_file_values(path).get(
             ALLOWED_HOSTS_ENV_KEY, _DEFAULT_ALLOWED_HOSTS

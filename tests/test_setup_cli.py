@@ -930,6 +930,45 @@ def test_ensure_env_file_can_select_backend(tmp_path) -> None:
     )
 
 
+def test_ensure_env_file_selects_embedded_livekit_mode_for_fresh_setup(
+    tmp_path,
+) -> None:
+    env_file = tmp_path / ".env"
+
+    setup_cli._ensure_env_file(
+        str(env_file),
+        assembly_ai_api_key="",
+        cartesia_api_key="",
+        tailnet_provider="netmesh-tsnet",
+    )
+
+    values = setup_cli._env_file_values(env_file)
+    assert values["OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"] == "netmesh-tsnet"
+    assert values["LIVEKIT_NETWORK_MODE"] == "local"
+
+
+def test_ensure_env_file_updates_livekit_mode_with_existing_provider(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER=tailscale\n"
+        "LIVEKIT_NETWORK_MODE=tailscale\n"
+        "LIVEKIT_NODE_IP=100.64.0.9\n",
+        encoding="utf-8",
+    )
+
+    setup_cli._ensure_env_file(
+        str(env_file),
+        assembly_ai_api_key="",
+        cartesia_api_key="",
+        tailnet_provider="netmesh-tsnet",
+    )
+
+    values = setup_cli._env_file_values(env_file)
+    assert values["OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"] == "netmesh-tsnet"
+    assert values["LIVEKIT_NETWORK_MODE"] == "local"
+    assert values["LIVEKIT_NODE_IP"] == ""
+
+
 def test_ensure_openbase_cloud_machine_token_uses_env_backend_url(
     tmp_path,
     monkeypatch,
