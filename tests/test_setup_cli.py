@@ -1123,6 +1123,16 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
     _patch_setup(monkeypatch, "_install_cli_shim", lambda _workspace_dir: None)
     _patch_setup(monkeypatch, "_build_console", lambda _workspace_dir: None)
     _patch_setup(monkeypatch, "install_all_services", lambda _config: None)
+    _patch_setup(
+        monkeypatch,
+        "install_tunneld_binary",
+        lambda _config: calls.append("tunneld-binary") or tmp_path / "openbase-tunneld",
+    )
+    _patch_setup(
+        monkeypatch,
+        "install_service",
+        lambda _config, service: calls.append(f"service:{service.name}"),
+    )
     _patch_setup(monkeypatch, "compute_cli_configured", lambda: True)
     monkeypatch.setattr(
         setup_cli.InstallationConfig,
@@ -1211,6 +1221,54 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
         "provision-netmesh",
         "configure",
     ]
+
+    calls.clear()
+    result = runner.invoke(
+        setup_cli.setup,
+        [
+            "--workspace-dir",
+            str(workspace),
+            "--env-file",
+            str(env_file),
+            "--backend",
+            "claude-code",
+            "--tailnet-provider",
+            "netmesh-tsnet",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        "thread-sync",
+        "sounds",
+        "claude-md",
+        "tunneld-binary",
+        "service:openbase-tunneld",
+        "configure",
+    ]
+
+    def unavailable_tunneld(_config):
+        raise RuntimeError("Go is unavailable")
+
+    _patch_setup(monkeypatch, "install_tunneld_binary", unavailable_tunneld)
+    calls.clear()
+    result = runner.invoke(
+        setup_cli.setup,
+        [
+            "--workspace-dir",
+            str(workspace),
+            "--env-file",
+            str(env_file),
+            "--backend",
+            "claude-code",
+            "--tailnet-provider",
+            "netmesh-tsnet",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Openbase VPN daemon installation failed: Go is unavailable" in result.output
+    assert "configure" not in calls
 
 
 def test_ensure_local_audio_dependencies_installs_into_runtime_python(

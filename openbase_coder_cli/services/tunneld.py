@@ -17,16 +17,90 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
 import httpx
 
+from openbase_coder_cli.paths import OPENBASE_BIN_DIR
+from openbase_coder_cli.services.installation import InstallationConfig
+
 TUNNELD_LOCAL_API = os.environ.get("OPENBASE_TUNNELD_URL", "http://127.0.0.1:7998")
 TUNNELD_TIMEOUT_SECONDS = 5
 TUNNELD_PROBE_TIMEOUT_SECONDS = 8
 TUNNELD_START_WAIT_SECONDS = 15
+
+
+def _go_binary() -> str | None:
+    return shutil.which("go") or (
+        "/opt/homebrew/bin/go" if os.access("/opt/homebrew/bin/go", os.X_OK) else None
+    )
+
+
+def install_tunneld_binary(config: InstallationConfig) -> Path:
+    """Install the tunneld executable into Openbase's stable user bin dir.
+
+    Development installs build the checked-out Go source so service wrappers
+    never depend on an ignored workspace build artifact. Packaged installs
+    copy the bundled executable into the same stable location.
+    """
+    target = OPENBASE_BIN_DIR / "openbase-tunneld"
+    workspace = (
+        Path(config.workspace_path).expanduser() if config.workspace_path else None
+    )
+    source_dir = workspace / "cli" / "tunneld" if workspace else None
+
+    source_binary: Path | None = None
+    build_command: list[str] | None = None
+    if source_dir and (source_dir / "go.mod").is_file():
+        go = _go_binary()
+        if not go:
+            raise RuntimeError(
+                "the Go toolchain is required to build openbase-tunneld; "
+                "install Go and re-run setup"
+            )
+        build_command = [go, "build"]
+    else:
+        packaged = _packaged_binary()
+        if packaged:
+            source_binary = Path(packaged)
+        elif target.is_file() and os.access(target, os.X_OK):
+            return target
+        else:
+            raise RuntimeError(
+                "openbase-tunneld source or a packaged executable was not found"
+            )
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary_name = tempfile.mkstemp(
+        prefix=".openbase-tunneld-", dir=target.parent
+    )
+    os.close(handle)
+    temporary = Path(temporary_name)
+    try:
+        if build_command is not None:
+            temporary.unlink()
+            result = subprocess.run(  # noqa: S603 - resolved Go executable, fixed args
+                [*build_command, "-o", str(temporary), "."],
+                cwd=source_dir,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout).strip()
+                suffix = f": {detail}" if detail else ""
+                raise RuntimeError(f"openbase-tunneld build failed{suffix}")
+        else:
+            assert source_binary is not None
+            shutil.copy2(source_binary, temporary)
+        temporary.chmod(0o755)
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return target
 
 
 def _state_dir() -> Path:

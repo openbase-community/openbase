@@ -388,19 +388,20 @@ def _bring_up_transport(name: str) -> None:
         install_service,
         launchctl_kickstart,
     )
-    from openbase_coder_cli.services.tunneld import ensure_tunneld_running
+    from openbase_coder_cli.services.tunneld import (
+        ensure_tunneld_running,
+        install_tunneld_binary,
+    )
 
     try:
         config = InstallationConfig.load()
+        install_tunneld_binary(config)
         install_service(config, TUNNELD_SERVICE)
         launchctl_kickstart(TUNNELD_SERVICE)
-    except Exception as exc:  # noqa: BLE001 - surface, don't crash the switch
-        click.echo(
-            click.style(
-                f"Warning: could not install openbase-tunneld: {exc}", fg="yellow"
-            )
-        )
-        return
+    except Exception as exc:
+        raise click.ClickException(
+            f"Could not install openbase-tunneld: {exc}"
+        ) from exc
     # Waits for Running + forwards; mints a netmesh key with the user's
     # cloud login if the node still needs one. The first attempt right after
     # a transport switch can catch tunneld mid-startup in NeedsLogin (its old

@@ -144,8 +144,9 @@ from openbase_coder_cli.runtime import (
     packaged_skills_dir,  # noqa: F401
 )
 from openbase_coder_cli.services.cloud_registration import register_and_report
+from openbase_coder_cli.services.definitions import TUNNELD_SERVICE
 from openbase_coder_cli.services.installation import InstallationConfig
-from openbase_coder_cli.services.launchd import install_all_services
+from openbase_coder_cli.services.launchd import install_all_services, install_service
 from openbase_coder_cli.services.onboarding import compute_cli_configured
 from openbase_coder_cli.services.tailnet_experience import TAILNET_EXPERIENCES
 from openbase_coder_cli.services.tailscale_provider import (
@@ -158,6 +159,7 @@ from openbase_coder_cli.services.tailscale_serve import (
     configure_tailscale_serve,
     tailscale_serve_health,
 )
+from openbase_coder_cli.services.tunneld import install_tunneld_binary
 from openbase_coder_cli.stt_providers import (
     ASSEMBLYAI_STT_PROVIDER_ID,  # noqa: F401
     LOCAL_MLX_WHISPER_STT_PROVIDER_ID,  # noqa: F401
@@ -848,7 +850,19 @@ def _run_setup_phases(
     if not skip_services:
         click.echo()
         click.echo(f"Installing {service_manager_name()} services...")
+        if tailnet_provider == PROVIDER_NETMESH_TSNET:
+            click.echo("  Building and installing openbase-tunneld...")
+            try:
+                installed_tunneld = install_tunneld_binary(config)
+            except RuntimeError as exc:
+                raise click.ClickException(
+                    f"Openbase VPN daemon installation failed: {exc}"
+                ) from exc
+            click.echo(f"    Installed {installed_tunneld}")
         install_all_services(config)
+        if tailnet_provider == PROVIDER_NETMESH_TSNET:
+            click.echo("  Installing openbase-tunneld service...")
+            install_service(config, TUNNELD_SERVICE)
         progress.step("services", "ok")
     else:
         click.echo("Skipped service installation (--skip-services).")
@@ -857,7 +871,7 @@ def _run_setup_phases(
     # --- Provision the netmesh VPN (macOS Openbase VPN companion) ---
     # Build/register the selected Openbase VPN companion. Connection may be
     # deferred until after Openbase login, when an enrollment key can be minted.
-    # (tunneld for netmesh-tsnet is installed by install_all_services.)
+    # The embedded tunneld transport is installed above before enrollment.
     if (
         not skip_services
         and tailnet_provider == PROVIDER_NETMESH

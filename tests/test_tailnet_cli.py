@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
+import click
 import pytest
 from click.testing import CliRunner
 
@@ -153,6 +154,63 @@ def test_netmesh_routes_through_stock_tailscale_off_macos(monkeypatch):
     assert tp.netmesh_uses_stock_tailscale() is False
     monkeypatch.setattr(tp, "netmesh_ctl_bin", lambda: "/n/netmesh-ctl")
     assert tp.tool_path() == "/n/netmesh-ctl"
+
+
+def test_bring_up_embedded_transport_installs_binary_before_service(monkeypatch):
+    from openbase_coder_cli.services import launchd, tunneld
+    from openbase_coder_cli.services.installation import InstallationConfig
+
+    config = InstallationConfig(workspace_path="workspace")
+    calls = []
+    monkeypatch.setattr(InstallationConfig, "load", lambda: config)
+    monkeypatch.setattr(
+        tunneld,
+        "install_tunneld_binary",
+        lambda received: calls.append(("binary", received)),
+    )
+    monkeypatch.setattr(
+        launchd,
+        "install_service",
+        lambda received, service: calls.append(("service", received, service.name)),
+    )
+    monkeypatch.setattr(
+        launchd,
+        "launchctl_kickstart",
+        lambda service: calls.append(("kickstart", service.name)),
+    )
+    monkeypatch.setattr(
+        tunneld, "ensure_tunneld_running", lambda: calls.append(("running",))
+    )
+
+    tailnet_cli._bring_up_transport("netmesh-tsnet")
+
+    assert calls == [
+        ("binary", config),
+        ("service", config, "openbase-tunneld"),
+        ("kickstart", "openbase-tunneld"),
+        ("running",),
+    ]
+
+
+def test_bring_up_embedded_transport_fails_when_binary_install_fails(monkeypatch):
+    from openbase_coder_cli.services import tunneld
+    from openbase_coder_cli.services.installation import InstallationConfig
+
+    monkeypatch.setattr(
+        InstallationConfig,
+        "load",
+        lambda: InstallationConfig(workspace_path="workspace"),
+    )
+
+    def fail_install(_config):
+        raise RuntimeError("Go toolchain unavailable")
+
+    monkeypatch.setattr(tunneld, "install_tunneld_binary", fail_install)
+
+    with pytest.raises(
+        click.ClickException, match="Could not install openbase-tunneld"
+    ):
+        tailnet_cli._bring_up_transport("netmesh-tsnet")
 
 
 def test_tailnet_status_renders_state_and_peer_paths(monkeypatch):
