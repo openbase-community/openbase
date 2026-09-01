@@ -163,7 +163,11 @@ def test_divergent_commit_is_preserved_before_manifest_convergence(
     _copy_without_git(source, local)
 
     action = repositories.converge_repository_to_manifest(
-        local, manifest, remote_urls=(str(source),)
+        local,
+        manifest,
+        remote_urls=(str(source),),
+        folder_id="cs-test",
+        repo_relpath="repo",
     )
 
     assert action.startswith("converged; backup=refs/openbase-code-sync/backups/")
