@@ -34,6 +34,8 @@ from openbase_coder_cli.config.token_manager import (
 from openbase_coder_cli.paths import AUTH_JSON_PATH, MACHINE_TOKEN_JSON_PATH
 from openbase_coder_cli.services.cloud_registration import register_and_report
 
+from .password_auth import exchange_password_for_jwts
+
 DEFAULT_WEB_BACKEND_URL = "https://app.openbase.cloud"
 DESKTOP_LOGIN_COMPLETE_URL = (
     "openbase-coder://open?source=cli-auth&intent=login-complete"
@@ -292,10 +294,80 @@ def _exchange_oauth_token_for_jwts(
     return access_token, refresh_token, expires_in
 
 
+def _complete_login(
+    *, web_backend_url: str, access_token: str, refresh_token: str, expires_in: int
+) -> None:
+    manager = TokenManager(web_backend_url)
+    manager.store_tokens(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_in=expires_in,
+    )
+    try:
+        MachineTokenManager(web_backend_url, manager).get_machine_token(rotate=True)
+    except (
+        AuthLoginRequiredError,
+        AuthTransientError,
+        MachineTokenError,
+        httpx.HTTPError,
+    ) as exc:
+        click.echo(
+            click.style(
+                f"Warning: logged in, but could not create an Openbase Cloud machine token: {exc}",
+                fg="yellow",
+            )
+        )
+
+    report = register_and_report()
+    if not report.ok and report.supported:
+        click.echo(
+            click.style(
+                f"Warning: logged in, but could not register this device with Openbase Cloud: {report.error}",
+                fg="yellow",
+            )
+        )
+
+    click.echo(f"Logged in successfully. Tokens saved to {AUTH_JSON_PATH}")
+
+
 @click.command()
-def login() -> None:
-    """Log in to Openbase Coder using browser-based OAuth."""
+@click.option("--email", help="Email address for a non-browser password login.")
+@click.option(
+    "--password-stdin",
+    is_flag=True,
+    help="Read the password from standard input instead of process arguments.",
+)
+def login(email: str | None, password_stdin: bool) -> None:
+    """Log in with browser OAuth or an explicitly requested stdin password."""
     web_backend_url = _get_web_backend_url()
+    if bool(email) != password_stdin:
+        raise click.UsageError("--email and --password-stdin must be used together")
+    if email and password_stdin:
+        password = click.get_text_stream("stdin").read()
+        if password.endswith("\n"):
+            password = password[:-1]
+            if password.endswith("\r"):
+                password = password[:-1]
+        if not password:
+            raise click.UsageError("No password was received on standard input")
+        try:
+            access_token, refresh_token, expires_in = exchange_password_for_jwts(
+                web_backend_url=web_backend_url,
+                email=email,
+                password=password,
+            )
+        except httpx.HTTPStatusError as exc:
+            raise click.ClickException(
+                f"Password login failed with status {exc.response.status_code}."
+            ) from None
+        _complete_login(
+            web_backend_url=web_backend_url,
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_in=expires_in,
+        )
+        return
+
     redirect_uri = _get_oauth_redirect_uri()
     state = os.urandom(24).hex()
     code_verifier = create_pkce_verifier()
@@ -356,38 +428,12 @@ def login() -> None:
             f"OAuth login failed: {exc.response.status_code} — {detail}"
         ) from None
 
-    # Store tokens
-    mgr = TokenManager(web_backend_url)
-    mgr.store_tokens(
+    _complete_login(
+        web_backend_url=web_backend_url,
         access_token=access_token,
         refresh_token=refresh_token,
         expires_in=expires_in,
     )
-    try:
-        MachineTokenManager(web_backend_url, mgr).get_machine_token(rotate=True)
-    except (
-        AuthLoginRequiredError,
-        AuthTransientError,
-        MachineTokenError,
-        httpx.HTTPError,
-    ) as exc:
-        click.echo(
-            click.style(
-                f"Warning: logged in, but could not create an Openbase Cloud machine token: {exc}",
-                fg="yellow",
-            )
-        )
-
-    report = register_and_report()
-    if not report.ok and report.supported:
-        click.echo(
-            click.style(
-                f"Warning: logged in, but could not register this device with Openbase Cloud: {report.error}",
-                fg="yellow",
-            )
-        )
-
-    click.echo(f"Logged in successfully. Tokens saved to {AUTH_JSON_PATH}")
 
 
 @click.command()
