@@ -76,7 +76,7 @@ def configure_tailscale_serve() -> None:
         and not tp.is_netmesh_tsnet()
         and not tp.netmesh_uses_stock_tailscale()
     ):
-        capability = tp.portless_serve_capability()
+        capability = tp.serve_capability()
         if not capability.get("supported"):
             tp.apply_serve_legacy(rules)
             return

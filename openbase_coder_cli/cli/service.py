@@ -7,17 +7,19 @@ from functools import wraps
 import click
 
 from openbase_coder_cli.services.published_service_routes import (
+    HostnamePublicationUnavailable,
+    allocate_private_service_hostname,
     apply_route,
-    ensure_portless_capability,
+    release_private_service_hostname,
     remove_route,
 )
 from openbase_coder_cli.services.published_services import (
+    HOSTNAME_TAILNET_PORT,
     MODE_DYNAMIC,
-    MODE_PORTLESS,
-    PORTLESS_TAILNET_PORT,
+    MODE_HOSTNAME,
     PublishedService,
     ServiceRegistry,
-    allocate_portless_proxy,
+    allocate_hostname_proxy,
     allocate_ports,
     gateway_healthy,
     install_launchd_service,
@@ -31,6 +33,8 @@ from openbase_coder_cli.services.published_services import (
     validate_local_port,
     validate_name,
 )
+
+MODE_AUTO = "auto"
 
 
 @click.group()
@@ -74,14 +78,13 @@ def _registry_transaction(function):
 )
 @click.option(
     "--mode",
-    type=click.Choice([MODE_DYNAMIC, MODE_PORTLESS], case_sensitive=False),
-    default=None,
-    help="Publication mode; dynamic remains the default.",
-)
-@click.option(
-    "--portless",
-    is_flag=True,
-    help="Alias for --mode portless; publishes under /services/NAME/ on HTTP 80.",
+    type=click.Choice([MODE_AUTO, MODE_DYNAMIC, MODE_HOSTNAME], case_sensitive=False),
+    default=MODE_DYNAMIC,
+    show_default=True,
+    help=(
+        "Use an uncommon dynamic port (default), explicitly try a hostname with "
+        "fallback, or require hostname support."
+    ),
 )
 @_registry_transaction
 def publish(
@@ -89,14 +92,10 @@ def publish(
     port: int,
     persist: bool | None,
     tailnet_port: int | None,
-    mode: str | None,
-    portless: bool,
+    mode: str,
 ) -> None:
     """Publish loopback HTTP PORT at a memorable tailnet URL named NAME."""
     try:
-        if portless and mode == MODE_DYNAMIC:
-            raise ValueError("--portless conflicts with --mode dynamic.")
-        publication_mode = MODE_PORTLESS if portless else (mode or MODE_DYNAMIC)
         name = validate_name(name)
         port = validate_local_port(port)
         registry = load_registry()
@@ -107,56 +106,85 @@ def publish(
             raise ValueError(
                 f"No service is accepting connections on 127.0.0.1:{port}."
             )
-        if publication_mode == MODE_PORTLESS:
-            ensure_portless_capability()
+        publication_mode = mode.lower()
+        hostname = None
+        node_id = None
+        hostname_created = False
+        fallback_reason = None
+        if tailnet_port is not None and publication_mode == MODE_AUTO:
+            publication_mode = MODE_DYNAMIC
+        if publication_mode in {MODE_AUTO, MODE_HOSTNAME}:
             if tailnet_port is not None:
-                raise ValueError("--tailnet-port cannot be used with portless mode.")
-            published_port = PORTLESS_TAILNET_PORT
-            proxy_port = allocate_portless_proxy()
-        else:
+                raise ValueError("--tailnet-port cannot be used with hostname mode.")
+            published_port = HOSTNAME_TAILNET_PORT
+            proxy_port = allocate_hostname_proxy()
+        elif publication_mode == MODE_DYNAMIC:
             published_port, proxy_port = allocate_ports(tailnet_port)
+        else:  # Defensive: Click owns the public choice validation.
+            raise ValueError(f"Unsupported publication mode: {publication_mode}")
     except (OSError, ValueError, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
 
     persistent = _persistence_choice(persist)
-    existing_portless = next(
-        (item for item in services if item.mode == MODE_PORTLESS), None
-    )
-    if (
-        publication_mode == MODE_PORTLESS
-        and existing_portless is not None
-        and existing_portless.persistent != persistent
-    ):
-        raise click.ClickException(
-            "All services on the shared portless dispatcher must use the same "
-            "persistence setting. Republish with the existing setting."
-        )
+    if publication_mode in {MODE_AUTO, MODE_HOSTNAME}:
+        requested_mode = publication_mode
+        try:
+            allocation = allocate_private_service_hostname(name)
+            hostname = allocation.hostname
+            node_id = allocation.node_id
+            hostname_created = allocation.created
+            publication_mode = MODE_HOSTNAME
+        except HostnamePublicationUnavailable as exc:
+            if requested_mode == MODE_HOSTNAME:
+                raise click.ClickException(str(exc)) from exc
+            fallback_reason = str(exc)
+            publication_mode = MODE_DYNAMIC
+            published_port, proxy_port = allocate_ports(tailnet_port)
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise click.ClickException(str(exc)) from exc
     service_entry = PublishedService(
         name=name,
         local_port=port,
         tailnet_port=published_port,
         proxy_port=proxy_port,
         persistent=persistent,
-        pid=existing_portless.pid if existing_portless else None,
         mode=publication_mode,
+        hostname=hostname,
+        node_id=node_id,
     )
     desired_services = [*services, service_entry]
-    save_registry(
-        ServiceRegistry(tuple(desired_services), registry.last_applied_serve_hash)
-    )
     try:
-        if existing_portless is None or publication_mode == MODE_DYNAMIC:
-            if persistent:
-                install_launchd_service(service_entry)
-            else:
-                pid = start_ephemeral_gateway(service_entry)
-                service_entry = replace(service_entry, pid=pid)
-                desired_services[-1] = service_entry
-                save_registry(
-                    ServiceRegistry(
-                        tuple(desired_services), registry.last_applied_serve_hash
-                    )
+        # Resolve the display URL before any Serve mutation so a provider status
+        # failure cannot strand an applied route without durable registry state.
+        url = service_url(service_entry)
+    except RuntimeError as exc:
+        if hostname_created and node_id:
+            try:
+                release_private_service_hostname(name, node_id)
+            except RuntimeError as cleanup_exc:
+                raise click.ClickException(
+                    f"{exc} Private hostname cleanup also failed: {cleanup_exc}"
+                ) from exc
+        raise click.ClickException(str(exc)) from exc
+    route_applied = False
+    applied_hash = None
+    try:
+        save_registry(
+            ServiceRegistry(
+                tuple(desired_services), registry.last_applied_serve_hash
+            )
+        )
+        if persistent:
+            install_launchd_service(service_entry)
+        else:
+            pid = start_ephemeral_gateway(service_entry)
+            service_entry = replace(service_entry, pid=pid)
+            desired_services[-1] = service_entry
+            save_registry(
+                ServiceRegistry(
+                    tuple(desired_services), registry.last_applied_serve_hash
                 )
+            )
         if not gateway_healthy(service_entry):
             raise RuntimeError("The local publication gateway did not become healthy.")
         applied_hash = apply_route(
@@ -165,17 +193,46 @@ def publish(
             desired_services=desired_services,
             last_applied_hash=registry.last_applied_serve_hash,
         )
+        route_applied = True
         save_registry(ServiceRegistry(tuple(desired_services), applied_hash))
-        url = service_url(service_entry)
     except Exception as exc:
-        if existing_portless is None or publication_mode == MODE_DYNAMIC:
-            stop_gateway(service_entry)
-        save_registry(registry)
-        raise click.ClickException(str(exc)) from exc
+        compensation_errors = []
+        if route_applied:
+            try:
+                remove_route(
+                    service_entry,
+                    previous_services=desired_services,
+                    desired_services=services,
+                    last_applied_hash=applied_hash,
+                )
+            except Exception as compensation_exc:
+                compensation_errors.append(
+                    f"Serve compensation failed: {compensation_exc}"
+                )
+        stop_gateway(service_entry)
+        try:
+            save_registry(registry)
+        except OSError as registry_exc:
+            compensation_errors.append(
+                f"Registry restoration failed: {registry_exc}"
+            )
+        if hostname_created and node_id:
+            try:
+                release_private_service_hostname(name, node_id)
+            except RuntimeError as release_exc:
+                compensation_errors.append(
+                    f"Private hostname cleanup failed: {release_exc}"
+                )
+        message = str(exc)
+        if compensation_errors:
+            message += " " + " ".join(compensation_errors)
+        raise click.ClickException(message) from exc
 
     click.echo(f"Published {name}: {url}")
     click.echo(f"  Local target: http://127.0.0.1:{port}")
     click.echo(f"  Mode: {publication_mode}")
+    if fallback_reason:
+        click.echo(f"  Hostname unavailable: {fallback_reason}")
     click.echo("  Visibility: Openbase VPN/tailnet only (never Funnel/public internet)")
     if persistent:
         click.echo("  Persistence: launchd enabled by explicit opt-in")
@@ -197,7 +254,11 @@ def list_command() -> None:
         try:
             url = service_url(item)
         except RuntimeError:
-            url = f"tailnet :{item.tailnet_port}/{item.name}/"
+            url = (
+                f"http://{item.hostname}/"
+                if item.mode == MODE_HOSTNAME
+                else f"tailnet :{item.tailnet_port}/{item.name}/"
+            )
         mode = "launchd" if item.persistent else "session"
         health = "ready" if gateway_healthy(item, timeout=0.1) else "gateway stopped"
         click.echo(
@@ -220,27 +281,69 @@ def unpublish(name: str) -> None:
     target = next((item for item in services if item.name == name), None)
     if target is None:
         raise click.ClickException(f"Service '{name}' is not published.")
-    if target.mode == MODE_PORTLESS:
+    remaining = [item for item in services if item.name != name]
+    hostname_released = False
+    if target.mode == MODE_HOSTNAME:
+        if not target.node_id:
+            raise click.ClickException(
+                "Stored hostname publication is missing its Netmesh node ID."
+            )
         try:
-            ensure_portless_capability()
+            release_private_service_hostname(target.name, target.node_id)
+            hostname_released = True
         except RuntimeError as exc:
             raise click.ClickException(str(exc)) from exc
-    remaining = [item for item in services if item.name != name]
-    save_registry(ServiceRegistry(tuple(remaining), registry.last_applied_serve_hash))
+    route_applied = False
+    applied_hash = None
     try:
+        save_registry(
+            ServiceRegistry(tuple(remaining), registry.last_applied_serve_hash)
+        )
         applied_hash = remove_route(
             target,
             previous_services=services,
             desired_services=remaining,
             last_applied_hash=registry.last_applied_serve_hash,
         )
+        route_applied = True
+        save_registry(ServiceRegistry(tuple(remaining), applied_hash))
     except Exception as exc:
-        save_registry(registry)
-        raise click.ClickException(str(exc)) from exc
-    save_registry(ServiceRegistry(tuple(remaining), applied_hash))
-    shared_dispatcher_still_needed = target.mode == MODE_PORTLESS and any(
-        item.mode == MODE_PORTLESS for item in remaining
-    )
-    if not shared_dispatcher_still_needed:
-        stop_gateway(target)
+        compensation_errors = []
+        if hostname_released:
+            try:
+                allocation = allocate_private_service_hostname(target.name)
+                if (
+                    allocation.hostname != target.hostname
+                    or allocation.node_id != target.node_id
+                ):
+                    compensation_errors.append(
+                        "Cloud restored a different hostname allocation."
+                    )
+            except (RuntimeError, ValueError) as restore_exc:
+                compensation_errors.append(
+                    f"Private hostname restoration failed: {restore_exc}"
+                )
+        if route_applied:
+            try:
+                apply_route(
+                    target,
+                    previous_services=remaining,
+                    desired_services=services,
+                    last_applied_hash=applied_hash,
+                )
+            except Exception as compensation_exc:
+                compensation_errors.append(
+                    f"Serve compensation failed: {compensation_exc}"
+                )
+        try:
+            save_registry(registry)
+        except OSError as registry_exc:
+            compensation_errors.append(
+                f"Registry restoration failed: {registry_exc}"
+            )
+        message = str(exc)
+        if compensation_errors:
+            message += " " + " ".join(compensation_errors)
+        raise click.ClickException(message) from exc
+    stop_gateway(target)
     click.echo(f"Unpublished {name}.")

@@ -36,6 +36,10 @@ from openbase_coder_cli.services.tailscale_serve import tailscale_serve_health
 DEVICE_REGISTER_PATH = "/api/openbase/devices/register/"
 NETMESH_ENROLL_PATH = "/api/openbase/netmesh/enroll/"
 NETMESH_DEVICES_PATH = "/api/openbase/netmesh/devices/"
+NETMESH_SERVICE_HOSTNAMES_PATH = "/api/openbase/netmesh/service-hostnames/"
+NETMESH_SERVICE_HOSTNAME_CAPABILITIES_PATH = (
+    "/api/openbase/netmesh/service-hostnames/capabilities/"
+)
 TAILNET_PROVIDER_PATH = "/api/openbase/tailnet-provider/"
 REQUEST_TIMEOUT_SECONDS = 15
 
@@ -231,6 +235,31 @@ def revoke_netmesh_device(node_id: str) -> bool:
     """Delete one of this user's netmesh nodes. Never raises."""
     result = _post_to_cloud(f"{NETMESH_DEVICES_PATH}{node_id}/", {}, method="DELETE")
     return result.ok
+
+
+def netmesh_service_hostname_capabilities() -> CloudReportResult:
+    return _post_to_cloud(
+        NETMESH_SERVICE_HOSTNAME_CAPABILITIES_PATH, {}, method="GET"
+    )
+
+
+def allocate_netmesh_service_hostname(
+    *, node_id: str, service_name: str
+) -> CloudReportResult:
+    return _post_to_cloud(
+        NETMESH_SERVICE_HOSTNAMES_PATH,
+        {"node_id": node_id, "service_name": service_name},
+    )
+
+
+def release_netmesh_service_hostname(
+    *, node_id: str, service_name: str
+) -> CloudReportResult:
+    return _post_to_cloud(
+        NETMESH_SERVICE_HOSTNAMES_PATH,
+        {"node_id": node_id, "service_name": service_name},
+        method="DELETE",
+    )
 
 
 def push_tailnet_provider(provider: str) -> CloudReportResult:

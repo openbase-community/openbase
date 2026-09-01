@@ -6,11 +6,11 @@ service only inside your Openbase VPN/tailnet; it never enables Tailscale
 Funnel or exposes the service to the public internet.
 
 ```bash
-# Start the app locally, then give it a memorable tailnet URL.
+# Start the app locally, then publish it with the established dynamic URL.
 openbase-coder service publish docs-preview 3000
 
-# Explicitly opt in when the app supports a URL base path.
-openbase-coder service publish docs-preview 3000 --portless
+# Require a dedicated private hostname instead of allowing a port fallback.
+openbase-coder service publish docs-preview 3000 --mode hostname
 
 # See URLs and gateway health.
 openbase-coder service list
@@ -19,33 +19,39 @@ openbase-coder service list
 openbase-coder service unpublish docs-preview
 ```
 
-`publish` verifies that `127.0.0.1:3000` is accepting connections, chooses
-uncommon ports from the dynamic/private range `49152-65535`, and prints a URL
-similar to:
+`publish` verifies that `127.0.0.1:3000` is accepting connections. It defaults
+to the established uncommon-port mode so this new behavior cannot change an
+existing workflow. `--mode hostname` explicitly opts into a dedicated Openbase
+VPN hostname. The provider must advertise both private-hostname DNS allocation
+and hostname Serve routing, and the name must resolve to this computer's
+tailnet address before Openbase changes the registry or starts a gateway. A
+supported hostname looks like:
 
 ```text
-http://my-mac.example-tailnet:52807/docs-preview/
+http://docs-preview.gabes-mac-mini-openbase.netmesh.openbase.cloud/
 ```
 
-Prefer that URL over telling another device to use `localhost`: on a phone,
-`localhost` means the phone itself. Traffic stays encrypted by the tailnet even
-though the generated URL uses HTTP between tailnet peers.
-
-Dynamic-port publication remains the default because many web applications
-assume they are mounted at `/`. Applications configured for a base path can opt
-in with either `--portless` or `--mode portless`. Portless services share one
-Openbase-owned dispatcher and use URLs such as:
+The default dynamic/private mode uses a port from `49152-65535`:
 
 ```text
-http://my-mac.example-tailnet/services/docs-preview/
+http://gabes-mac-mini-openbase.netmesh.openbase.cloud:52807/docs-preview/
 ```
 
-Portless v1 uses tailnet HTTP port 80 because the Openbase VPN provider does not
-currently advertise certificate domains. The browser-to-node traffic is still
-encrypted by WireGuard. The gateway never binds `0.0.0.0:80`, `127.0.0.1:80`,
-or `127.0.0.1:443`; applications may continue using localhost ports 80 and 443.
-HTTPS port 443 will only be used after the provider can issue and report the
-matching certificates.
+Use `--mode auto` only when you explicitly want Openbase to try the hostname
+and safely fall back to a dynamic port when either capability is unavailable.
+Use `--mode hostname` to fail instead of falling back. Supplying
+`--tailnet-port` keeps the route dynamic and accepts only `49152-65535`.
+
+Dedicated-hostname publications are root-mounted and forward every path and
+query unchanged. Existing dynamic publications retain their established
+`/<name>/` URL and one-prefix stripping for compatibility. The retired shared
+`/services/<name>/` mode is unavailable. The local gateway and upstream target
+bind only to `127.0.0.1`; they never bind `0.0.0.0`, and publication never uses
+Funnel. Traffic between tailnet peers remains WireGuard-encrypted even when the
+printed URL uses HTTP.
+
+Prefer the printed URL over telling another device to use `localhost`: on a
+phone, `localhost` means the phone itself.
 
 ## Persistence is opt-in
 
@@ -57,33 +63,21 @@ session-only unless `--persist` is passed explicitly:
 openbase-coder service publish docs-preview 3000 --persist
 ```
 
-Persistent publications still use an automatically selected uncommon tailnet
-port in dynamic mode. If `--tailnet-port` is supplied, Openbase rejects common or registered
-ports and accepts only `49152-65535`. The local app may continue to use its
-normal port, such as `3000`; it remains bound to loopback.
-
-Persistence remains a separate explicit choice in portless mode. Because all
-portless services share one dispatcher, their persistence setting must match.
+Persistent dynamic publications still use an automatically selected uncommon
+tailnet port unless `--tailnet-port` is supplied. The local app may continue to
+use its normal port, such as `3000`; it remains bound to loopback.
 
 Openbase Direct cannot publish arbitrary host services because it carries only
-Openbase app traffic. Portless mode also rejects the official Tailscale provider
-and unknown providers before it writes the registry or starts a process. Switch
-the computer to **Openbase VPN** before using portless publication.
+Openbase app traffic. Dedicated private hostnames require **Openbase VPN**.
 
 ## Naming and DNS boundary
 
-Names use lowercase letters, numbers, and hyphens. Openbase puts the name in
-the URL path on the computer's existing MagicDNS address. It does not use
-`.local`, which is reserved for multicast DNS, and it does not claim to create
-control-plane DNS records.
-
-A dedicated hostname such as `docs-preview.example-tailnet` requires an
-administrator-managed DNS record. Headscale supports this through
-[`dns.extra_records`](https://headscale.net/stable/ref/dns/), while hosted
-Tailscale's named
-[`Services`](https://tailscale.com/docs/features/tailscale-services) require
-admin definition, tagged hosts, and approval. Those provider-side operations
-are intentionally outside this local command.
+Names use lowercase letters, numbers, and hyphens. `.local` remains reserved
+for multicast DNS. A dedicated hostname is used only when the Openbase VPN
+provider explicitly reports the `{service}.{node_dns_name}` allocation pattern,
+atomic hostname routing, and HTTP port 80, and local DNS confirms the result.
+The CLI never invents an unresolved hostname or treats the node's ordinary
+MagicDNS name as proof that a child name exists.
 
 The local proxy is based on private
 [`tailscale serve`](https://tailscale.com/docs/reference/tailscale-cli/serve)
@@ -94,7 +88,10 @@ Openbase VPN applies the complete desired Serve configuration atomically. The
 signed helper derives targets from a fixed Openbase rule vocabulary, preserves
 the built-in console and LiveKit routes, uses an ETag compare-and-swap, and
 refuses to overwrite an unexpected configuration. Funnel is not present in the
-desired state and cannot be requested through the helper surface.
+desired state and cannot be requested through the helper surface. Until the
+Openbase VPN helper and control plane advertise hostname routing and DNS
+allocation, explicit `--mode auto` remains on the dynamic-port fallback and
+`--mode hostname` fails closed. The default remains dynamic regardless.
 
 ## Docker and multiple ports
 

@@ -42,7 +42,7 @@ def test_registry_round_trip_uses_private_permissions(isolated_registry):
     assert published.load_services() == [item]
     assert isolated_registry.stat().st_mode & 0o777 == 0o600
     payload = json.loads(isolated_registry.read_text())
-    assert payload["version"] == 2
+    assert payload["version"] == 4
     assert payload["services"][0]["mode"] == "dynamic"
 
 
@@ -68,29 +68,74 @@ def test_registry_v1_is_loaded_as_dynamic_and_upgraded(isolated_registry):
     published.save_registry(registry)
 
     assert registry.services[0].mode == published.MODE_DYNAMIC
-    assert json.loads(isolated_registry.read_text())["version"] == 2
+    assert json.loads(isolated_registry.read_text())["version"] == 4
 
 
-def test_portless_url_uses_active_provider_hostname_without_a_port(monkeypatch):
+def test_service_urls_preserve_dynamic_prefix_and_root_mount_hostnames(monkeypatch):
     provider = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
     monkeypatch.setattr(
         provider,
         "status_json",
         lambda: {"Self": {"DNSName": "mac.openbase.test.", "TailscaleIPs": []}},
     )
-    service = PublishedService("docs", 3000, 80, 52808, mode="portless")
+    dynamic = PublishedService("docs", 3000, 52807, 52808)
+    hostname = PublishedService(
+        "crm",
+        4000,
+        80,
+        52809,
+        mode="hostname",
+        hostname="crm.mac.openbase.test",
+    )
 
-    assert published.service_url(service) == "http://mac.openbase.test/services/docs/"
-
-
-def test_gateway_strips_memorable_prefix_but_keeps_root_relative_paths():
-    assert gateway.upstream_path("/docs", "docs") == "/"
-    assert gateway.upstream_path("/docs/api?q=1", "docs") == "/api?q=1"
-    assert gateway.upstream_path("/assets/app.js", "docs") == "/assets/app.js"
+    assert published.service_url(dynamic) == "http://mac.openbase.test:52807/docs/"
+    assert published.service_url(hostname) == "http://crm.mac.openbase.test/"
 
 
 @pytest.mark.asyncio
-async def test_gateway_proxies_named_and_root_relative_paths(isolated_registry):
+async def test_hostname_gateway_preserves_raw_paths_and_queries(isolated_registry):
+    async def echo(request):
+        return web.Response(text=request.path_qs)
+
+    backend = web.Application()
+    backend.router.add_route("*", "/{path:.*}", echo)
+    backend_runner = web.AppRunner(backend)
+    await backend_runner.setup()
+    backend_site = web.TCPSite(backend_runner, "127.0.0.1", 0)
+    await backend_site.start()
+    backend_port = backend_site._server.sockets[0].getsockname()[1]
+    published.save_services(
+        [
+            PublishedService(
+                "docs",
+                backend_port,
+                80,
+                52808,
+                mode="hostname",
+                hostname="docs.mac.netmesh.openbase.cloud",
+                node_id="7",
+            )
+        ]
+    )
+
+    proxy_runner = web.AppRunner(gateway.create_app("docs"))
+    await proxy_runner.setup()
+    proxy_site = web.TCPSite(proxy_runner, "127.0.0.1", 0)
+    await proxy_site.start()
+    proxy_port = proxy_site._server.sockets[0].getsockname()[1]
+    try:
+        async with ClientSession() as client:
+            named = await client.get(f"http://127.0.0.1:{proxy_port}/docs/api?q=1")
+            root_relative = await client.get(f"http://127.0.0.1:{proxy_port}/")
+            assert await named.text() == "/docs/api?q=1"
+            assert await root_relative.text() == "/"
+    finally:
+        await proxy_runner.cleanup()
+        await backend_runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_gateway_keeps_legacy_name_prefix_contract(isolated_registry):
     async def echo(request):
         return web.Response(text=request.path_qs)
 
@@ -122,9 +167,7 @@ async def test_gateway_proxies_named_and_root_relative_paths(isolated_registry):
 
 
 @pytest.mark.asyncio
-async def test_shared_dispatcher_streams_routes_and_hardens_forwarded_headers(
-    isolated_registry,
-):
+async def test_gateway_streams_and_hardens_forwarded_headers(isolated_registry):
     seen_headers = {}
 
     async def stream(request):
@@ -156,12 +199,10 @@ async def test_shared_dispatcher_streams_routes_and_hardens_forwarded_headers(
     backend_site = web.TCPSite(backend_runner, "127.0.0.1", 0)
     await backend_site.start()
     backend_port = backend_site._server.sockets[0].getsockname()[1]
-    item = PublishedService(
-        "docs", backend_port, 80, 52808, mode=published.MODE_PORTLESS
-    )
+    item = PublishedService("docs", backend_port, 52807, 52808)
     published.save_services([item])
 
-    proxy_runner = web.AppRunner(gateway.create_app(dispatcher=True))
+    proxy_runner = web.AppRunner(gateway.create_app("docs"))
     await proxy_runner.setup()
     proxy_site = web.TCPSite(proxy_runner, "127.0.0.1", 0)
     await proxy_site.start()
@@ -169,7 +210,7 @@ async def test_shared_dispatcher_streams_routes_and_hardens_forwarded_headers(
     try:
         async with ClientSession() as client:
             response = await client.get(
-                f"http://127.0.0.1:{proxy_port}/docs/assets/app.js",
+                f"http://127.0.0.1:{proxy_port}/assets/app.js",
                 headers={
                     "Forwarded": "for=attacker",
                     "X-Forwarded-Host": "attacker.example",
@@ -185,13 +226,13 @@ async def test_shared_dispatcher_streams_routes_and_hardens_forwarded_headers(
                 "second=2; Path=/",
             ]
             uploaded = await client.post(
-                f"http://127.0.0.1:{proxy_port}/docs/upload", data=upload_body()
+                f"http://127.0.0.1:{proxy_port}/upload", data=upload_body()
             )
             assert await uploaded.text() == "3072"
-        assert seen_headers["X-Forwarded-Prefix"] == "/services/docs"
+        assert "X-Forwarded-Prefix" not in seen_headers
         assert seen_headers["X-Forwarded-Host"] == f"127.0.0.1:{proxy_port}"
         assert seen_headers["X-Forwarded-Proto"] == "http"
-        assert seen_headers["X-Forwarded-Port"] == "80"
+        assert seen_headers["X-Forwarded-Port"] == "52807"
         assert seen_headers["X-Forwarded-For"] == "127.0.0.1"
         assert "Forwarded" not in seen_headers
         assert "X-Remove-Me" not in seen_headers
@@ -201,7 +242,7 @@ async def test_shared_dispatcher_streams_routes_and_hardens_forwarded_headers(
 
 
 @pytest.mark.asyncio
-async def test_shared_dispatcher_forwards_websockets(isolated_registry):
+async def test_gateway_forwards_websockets_without_a_path_prefix(isolated_registry):
     async def websocket(request):
         response = web.WebSocketResponse()
         await response.prepare(request)
@@ -217,10 +258,8 @@ async def test_shared_dispatcher_forwards_websockets(isolated_registry):
     backend_site = web.TCPSite(backend_runner, "127.0.0.1", 0)
     await backend_site.start()
     backend_port = backend_site._server.sockets[0].getsockname()[1]
-    published.save_services(
-        [PublishedService("chat", backend_port, 80, 52808, mode="portless")]
-    )
-    proxy_runner = web.AppRunner(gateway.create_app(dispatcher=True))
+    published.save_services([PublishedService("chat", backend_port, 52807, 52808)])
+    proxy_runner = web.AppRunner(gateway.create_app("chat"))
     await proxy_runner.setup()
     proxy_site = web.TCPSite(proxy_runner, "127.0.0.1", 0)
     await proxy_site.start()
@@ -228,7 +267,7 @@ async def test_shared_dispatcher_forwards_websockets(isolated_registry):
     try:
         async with ClientSession() as client:
             async with client.ws_connect(
-                f"http://127.0.0.1:{proxy_port}/chat/socket"
+                f"http://127.0.0.1:{proxy_port}/socket"
             ) as connection:
                 await connection.send_str("hello")
                 message = await connection.receive(timeout=2)
@@ -236,42 +275,6 @@ async def test_shared_dispatcher_forwards_websockets(isolated_registry):
     finally:
         await proxy_runner.cleanup()
         await backend_runner.cleanup()
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "/docs/../private",
-        "/docs/%2e%2e/private",
-        "/docs/%252e%252e/private",
-        "/docs/a%2fb",
-        "/docs/a%5cb",
-        "/docs/a%252fb",
-    ],
-)
-def test_dispatcher_rejects_path_traversal_and_encoded_separators(
-    path, isolated_registry
-):
-    published.save_services(
-        [PublishedService("docs", 3000, 80, 52808, mode="portless")]
-    )
-    with pytest.raises(web.HTTPClientError):
-        gateway.dispatcher_service(path)
-
-
-def test_two_portless_services_share_one_dispatcher_rule(isolated_registry):
-    published.save_services(
-        [
-            PublishedService("docs", 3000, 80, 52808, mode="portless"),
-            PublishedService("crm", 4000, 80, 52808, mode="portless"),
-        ]
-    )
-
-    assert gateway.dispatcher_service("/docs/").local_port == 3000
-    assert gateway.dispatcher_service("/crm/").local_port == 4000
-    assert published.published_serve_rules() == [
-        {"kind": "portless-dispatcher", "proxy_port": 52808}
-    ]
 
 
 def test_publish_defaults_noninteractive_to_session_and_applies_route(
@@ -319,7 +322,8 @@ def test_publish_persistence_is_explicit(monkeypatch, isolated_registry):
     )
 
     result = CliRunner().invoke(
-        service_cli.service, ["publish", "docs", "3000", "--persist"]
+        service_cli.service,
+        ["publish", "docs", "3000", "--persist", "--mode", "dynamic"],
     )
 
     assert result.exit_code == 0, result.output
@@ -376,13 +380,53 @@ def test_publish_rolls_back_registry_and_gateway_on_route_failure(
     monkeypatch.setattr(service_cli, "stop_gateway", stopped.append)
 
     result = CliRunner().invoke(
-        service_cli.service, ["publish", "docs", "3000", "--no-persist"]
+        service_cli.service,
+        ["publish", "docs", "3000", "--no-persist", "--mode", "dynamic"],
     )
 
     assert result.exit_code != 0
     assert "no VPN" in result.output
     assert published.load_services() == []
     assert stopped[0].pid == 99
+
+
+def test_publish_compensates_serve_when_final_registry_save_fails(
+    monkeypatch, isolated_registry
+):
+    real_save = published.save_registry
+    save_calls = 0
+    compensated = []
+
+    def fail_final_save(registry):
+        nonlocal save_calls
+        save_calls += 1
+        if save_calls == 3:
+            raise OSError("forced final save failure")
+        real_save(registry)
+
+    monkeypatch.setattr(service_cli, "save_registry", fail_final_save)
+    monkeypatch.setattr(service_cli, "local_service_available", lambda _port: True)
+    monkeypatch.setattr(service_cli, "allocate_ports", lambda _port: (52807, 52808))
+    monkeypatch.setattr(service_cli, "service_url", lambda _item: "http://host:52807/docs/")
+    monkeypatch.setattr(service_cli, "start_ephemeral_gateway", lambda _item: 99)
+    monkeypatch.setattr(service_cli, "gateway_healthy", lambda _item: True)
+    monkeypatch.setattr(service_cli, "apply_route", lambda _item, **_kwargs: "new-hash")
+    monkeypatch.setattr(
+        service_cli,
+        "remove_route",
+        lambda _item, **kwargs: compensated.append(kwargs) or "old-hash",
+    )
+    monkeypatch.setattr(service_cli, "stop_gateway", lambda _item: None)
+
+    result = CliRunner().invoke(
+        service_cli.service,
+        ["publish", "docs", "3000", "--mode", "dynamic", "--no-persist"],
+    )
+
+    assert result.exit_code != 0
+    assert "forced final save failure" in result.output
+    assert compensated[0]["last_applied_hash"] == "new-hash"
+    assert published.load_services() == []
 
 
 def test_unpublish_removes_route_before_stopping(monkeypatch, isolated_registry):
@@ -401,6 +445,39 @@ def test_unpublish_removes_route_before_stopping(monkeypatch, isolated_registry)
     assert result.exit_code == 0, result.output
     assert events == ["route", "gateway"]
     assert published.load_services() == []
+
+
+def test_unpublish_compensates_serve_when_final_registry_save_fails(
+    monkeypatch, isolated_registry
+):
+    item = PublishedService("docs", 3000, 52807, 52808, False, 99)
+    published.save_services([item], last_applied_serve_hash="old-hash")
+    real_save = published.save_registry
+    save_calls = 0
+    compensated = []
+
+    def fail_final_save(registry):
+        nonlocal save_calls
+        save_calls += 1
+        if save_calls == 2:
+            raise OSError("forced final save failure")
+        real_save(registry)
+
+    monkeypatch.setattr(service_cli, "save_registry", fail_final_save)
+    monkeypatch.setattr(service_cli, "remove_route", lambda _item, **_kwargs: "removed-hash")
+    monkeypatch.setattr(
+        service_cli,
+        "apply_route",
+        lambda _item, **kwargs: compensated.append(kwargs) or "restored-hash",
+    )
+    monkeypatch.setattr(service_cli, "stop_gateway", lambda _item: None)
+
+    result = CliRunner().invoke(service_cli.service, ["unpublish", "docs"])
+
+    assert result.exit_code != 0
+    assert "forced final save failure" in result.output
+    assert compensated[0]["last_applied_hash"] == "removed-hash"
+    assert published.load_registry() == published.ServiceRegistry((item,), "old-hash")
 
 
 def test_only_persistent_rules_are_restored(isolated_registry):
@@ -441,18 +518,31 @@ def test_openbase_direct_is_rejected_without_applying_a_route(monkeypatch):
         routes.apply_route(PublishedService("docs", 3000, 52807, 52808))
 
 
-def test_portless_provider_gate_runs_before_registry_write(
+def test_portless_path_mode_is_retired(isolated_registry):
+    result = CliRunner().invoke(
+        service_cli.service, ["publish", "docs", "3000", "--portless"]
+    )
+
+    assert result.exit_code != 0
+    assert "No such option '--portless'" in result.output
+    assert not isolated_registry.exists()
+
+
+def test_hostname_provider_gate_runs_before_registry_write(
     monkeypatch, isolated_registry
 ):
     monkeypatch.setattr(service_cli, "local_service_available", lambda _port: True)
     monkeypatch.setattr(
         service_cli,
-        "ensure_portless_capability",
-        lambda: (_ for _ in ()).throw(RuntimeError("unsupported provider")),
+        "allocate_private_service_hostname",
+        lambda _name: (_ for _ in ()).throw(
+            routes.HostnamePublicationUnavailable("unsupported provider")
+        ),
     )
 
     result = CliRunner().invoke(
-        service_cli.service, ["publish", "docs", "3000", "--portless"]
+        service_cli.service,
+        ["publish", "docs", "3000", "--mode", "hostname"],
     )
 
     assert result.exit_code != 0
@@ -460,13 +550,111 @@ def test_portless_provider_gate_runs_before_registry_write(
     assert not isolated_registry.exists()
 
 
-def test_portless_publish_uses_http_80_and_shared_dispatcher(
+def test_private_hostname_allocation_must_resolve_to_this_node(monkeypatch):
+    provider = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
+    cloud = importlib.import_module("openbase_coder_cli.services.cloud_registration")
+    monkeypatch.setattr(provider, "is_netmesh_tsnet", lambda: False)
+    monkeypatch.setattr(provider, "is_netmesh", lambda: True)
+    monkeypatch.setattr(
+        provider,
+        "hostname_serve_capability",
+        lambda: {"supported": True, "http_port": 80},
+    )
+    monkeypatch.setattr(
+        provider,
+        "status_json",
+        lambda: {
+            "Self": {
+                "DNSName": "gabes-mac-mini-openbase.netmesh.openbase.cloud.",
+                "TailscaleIPs": ["100.64.0.10"],
+            }
+        },
+    )
+    monkeypatch.setattr(
+        routes.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (
+                routes.socket.AF_INET,
+                routes.socket.SOCK_STREAM,
+                6,
+                "",
+                ("100.64.0.10", 80),
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        cloud,
+        "list_netmesh_devices",
+        lambda: [
+            {
+                "id": "7",
+                "given_name": "gabes-mac-mini-openbase",
+                "ip_addresses": ["100.64.0.10"],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        cloud,
+        "allocate_netmesh_service_hostname",
+        lambda **_kwargs: cloud.CloudReportResult(
+            ok=True,
+            supported=True,
+            response={
+                "hostname": "crm.gabes-mac-mini-openbase.netmesh.openbase.cloud",
+                "node_id": "7",
+                "service_name": "crm",
+                "created": True,
+            },
+        ),
+    )
+    released = []
+    monkeypatch.setattr(
+        cloud,
+        "release_netmesh_service_hostname",
+        lambda **kwargs: released.append(kwargs)
+        or cloud.CloudReportResult(ok=True, supported=True),
+    )
+
+    assert routes.allocate_private_service_hostname("crm") == (
+        "crm.gabes-mac-mini-openbase.netmesh.openbase.cloud",
+        "7",
+        True,
+    )
+
+    monkeypatch.setattr(
+        routes.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (
+                routes.socket.AF_INET,
+                routes.socket.SOCK_STREAM,
+                6,
+                "",
+                ("100.64.0.99", 80),
+            )
+        ],
+    )
+    with pytest.raises(
+        routes.HostnamePublicationUnavailable, match="did not resolve it to this node"
+    ):
+        routes.allocate_private_service_hostname("crm")
+    assert released == [{"node_id": "7", "service_name": "crm"}]
+
+
+def test_hostname_publish_uses_root_hostname_and_its_own_gateway(
     monkeypatch, isolated_registry
 ):
     applied = []
     monkeypatch.setattr(service_cli, "local_service_available", lambda _port: True)
-    monkeypatch.setattr(service_cli, "ensure_portless_capability", lambda: None)
-    monkeypatch.setattr(service_cli, "allocate_portless_proxy", lambda: 52808)
+    monkeypatch.setattr(
+        service_cli,
+        "allocate_private_service_hostname",
+        lambda _name: routes.ServiceHostnameAllocation(
+            "docs.gabes-mac-mini-openbase.netmesh.openbase.cloud", "7", True
+        ),
+    )
+    monkeypatch.setattr(service_cli, "allocate_hostname_proxy", lambda: 52808)
     monkeypatch.setattr(service_cli, "start_ephemeral_gateway", lambda _item: 99)
     monkeypatch.setattr(service_cli, "gateway_healthy", lambda _item: True)
     monkeypatch.setattr(
@@ -477,22 +665,99 @@ def test_portless_publish_uses_http_80_and_shared_dispatcher(
     monkeypatch.setattr(
         service_cli,
         "service_url",
-        lambda _item: "http://mac.openbase/services/docs/",
+        lambda _item: "http://docs.gabes-mac-mini-openbase.netmesh.openbase.cloud/",
     )
 
     result = CliRunner().invoke(
         service_cli.service,
-        ["publish", "docs", "3000", "--portless", "--no-persist"],
+        ["publish", "docs", "3000", "--mode", "hostname", "--no-persist"],
     )
 
     assert result.exit_code == 0, result.output
     item = published.load_services()[0]
-    assert item.mode == "portless"
+    assert item.mode == "hostname"
     assert item.tailnet_port == 80
     assert item.proxy_port == 52808
+    assert item.hostname == "docs.gabes-mac-mini-openbase.netmesh.openbase.cloud"
+    assert item.node_id == "7"
     assert published.load_registry().last_applied_serve_hash == "new-hash"
-    assert "http://mac.openbase/services/docs/" in result.output
+    assert (
+        "http://docs.gabes-mac-mini-openbase.netmesh.openbase.cloud/" in result.output
+    )
     assert applied[0][1]["previous_services"] == []
+
+
+def test_hostname_publish_releases_new_dns_allocation_on_route_failure(
+    monkeypatch, isolated_registry
+):
+    released = []
+    monkeypatch.setattr(service_cli, "local_service_available", lambda _port: True)
+    monkeypatch.setattr(service_cli, "allocate_hostname_proxy", lambda: 52808)
+    monkeypatch.setattr(
+        service_cli,
+        "allocate_private_service_hostname",
+        lambda _name: routes.ServiceHostnameAllocation(
+            "docs.mac.netmesh.openbase.cloud", "7", True
+        ),
+    )
+    monkeypatch.setattr(service_cli, "start_ephemeral_gateway", lambda _item: 99)
+    monkeypatch.setattr(service_cli, "gateway_healthy", lambda _item: True)
+    monkeypatch.setattr(
+        service_cli,
+        "apply_route",
+        lambda _item, **_kwargs: (_ for _ in ()).throw(RuntimeError("route failed")),
+    )
+    monkeypatch.setattr(service_cli, "stop_gateway", lambda _item: None)
+    monkeypatch.setattr(
+        service_cli,
+        "release_private_service_hostname",
+        lambda name, node_id: released.append((name, node_id)),
+    )
+
+    result = CliRunner().invoke(
+        service_cli.service,
+        ["publish", "docs", "3000", "--mode", "hostname", "--no-persist"],
+    )
+
+    assert result.exit_code != 0
+    assert "route failed" in result.output
+    assert released == [("docs", "7")]
+    assert published.load_services() == []
+
+
+def test_hostname_unpublish_releases_dns_before_removing_route(
+    monkeypatch, isolated_registry
+):
+    item = PublishedService(
+        "docs",
+        3000,
+        80,
+        52808,
+        False,
+        99,
+        "hostname",
+        "docs.mac.netmesh.openbase.cloud",
+        "7",
+    )
+    published.save_services([item])
+    events = []
+    monkeypatch.setattr(
+        service_cli,
+        "release_private_service_hostname",
+        lambda _name, _node_id: events.append("dns"),
+    )
+    monkeypatch.setattr(
+        service_cli, "remove_route", lambda _item, **_kwargs: events.append("route")
+    )
+    monkeypatch.setattr(
+        service_cli, "stop_gateway", lambda _item: events.append("gateway")
+    )
+
+    result = CliRunner().invoke(service_cli.service, ["unpublish", "docs"])
+
+    assert result.exit_code == 0, result.output
+    assert events == ["dns", "route", "gateway"]
+    assert published.load_services() == []
 
 
 def test_reconcile_rejects_unknown_drift_and_preserves_builtin_rules(monkeypatch):
@@ -509,7 +774,16 @@ def test_reconcile_rejects_unknown_drift_and_preserves_builtin_rules(monkeypatch
     with pytest.raises(RuntimeError, match="drifted"):
         routes.reconcile_openbase_routes(
             [],
-            [PublishedService("docs", 3000, 80, 52808, mode="portless")],
+            [
+                PublishedService(
+                    "docs",
+                    3000,
+                    80,
+                    52808,
+                    mode="hostname",
+                    hostname="docs.mac.netmesh.openbase.cloud",
+                )
+            ],
             None,
         )
 
@@ -525,7 +799,16 @@ def test_reconcile_rejects_unknown_drift_and_preserves_builtin_rules(monkeypatch
 
     result = routes.reconcile_openbase_routes(
         [],
-        [PublishedService("docs", 3000, 80, 52808, mode="portless")],
+        [
+            PublishedService(
+                "docs",
+                3000,
+                80,
+                52808,
+                mode="hostname",
+                hostname="docs.mac.netmesh.openbase.cloud",
+            )
+        ],
         None,
     )
 
@@ -535,18 +818,17 @@ def test_reconcile_rejects_unknown_drift_and_preserves_builtin_rules(monkeypatch
         {"kind": "openbase-livekit"},
     ]
     assert applied[0][0][-1] == {
-        "kind": "portless-dispatcher",
+        "kind": "published-hostname",
+        "hostname": "docs.mac.netmesh.openbase.cloud",
         "proxy_port": 52808,
     }
 
 
 @pytest.mark.parametrize("occupied_port", [80, 443])
-def test_dispatcher_does_not_bind_localhost_default_ports(
+def test_gateway_binds_loopback_on_its_uncommon_proxy_port(
     occupied_port, isolated_registry, monkeypatch
 ):
-    published.save_services(
-        [PublishedService("docs", 3000, 80, 52808, mode="portless")]
-    )
+    published.save_services([PublishedService("docs", 3000, 52807, 52808)])
     invocation = {}
     monkeypatch.setattr(
         gateway.web,
@@ -558,7 +840,7 @@ def test_dispatcher_does_not_bind_localhost_default_ports(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["service_gateway", "--dispatcher", "--port", "52808"],
+        ["service_gateway", "--name", "docs"],
     )
 
     gateway.main()
