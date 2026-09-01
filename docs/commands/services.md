@@ -1,6 +1,6 @@
 # services
 
-Manage Openbase launchd background services.
+Manage Openbase background services.
 
 In the apps: the [desktop app](../desktop-app.md) and
 [console](../console.md) show the same services on their **Status** page and
@@ -17,13 +17,14 @@ openbase-coder services COMMAND [ARGS]
 
 | Subcommand | Description |
 |---|---|
-| [`install`](services-install.md) | Generate wrappers/plists and load default services |
+| [`install`](services-install.md) | Generate service files and load default services |
 | `up` | Alias for `install`; also configures Tailscale Serve routes |
 | [`start`](services-start.md) | Start default services or one named service |
 | [`stop`](services-stop.md) | Stop all or one service |
+| `uninstall` | Stop services and remove their generated supervisor files |
 | [`status`](services-status.md) | Show service state summary |
 | [`logs`](services-logs.md) | Tail one service's logs |
-| [`regenerate`](services-regenerate.md) | Rebuild wrappers/plists from `installation.json` |
+| [`regenerate`](services-regenerate.md) | Rebuild generated service files from `installation.json` |
 
 ## Managed Service Names
 
@@ -37,6 +38,9 @@ openbase-coder services COMMAND [ARGS]
 - `livekit-agent`
 - `django-cli` (port `7999`)
 - `code-sync` (optional; installed when code sync is enabled)
+- `openbase-cloud-auth-rehydrate` (optional one-shot cloud workspace auth refresh)
+- `openbase-cloud-heartbeat` (optional cloud workspace idle heartbeat)
+- `openbase-tunneld` (optional embedded tailnet transport, local API port `7998`)
 
 ## Examples
 
@@ -46,4 +50,5 @@ openbase-coder services up
 openbase-coder services status
 openbase-coder restart --service django-cli
 openbase-coder services logs codex-app-server
+openbase-coder services uninstall openbase-tunneld
 ```

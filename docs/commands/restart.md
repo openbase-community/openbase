@@ -13,9 +13,10 @@ openbase-coder restart [OPTIONS]
 openbase-coder self-restart [OPTIONS]
 ```
 
-With no options, this schedules a detached restart of every Openbase-managed launchd service:
+With no options, this schedules a detached restart of every default
+Openbase-managed service:
 
-- all Openbase launchd services
+- all default Openbase background services for the selected backend
 - the Openbase Coder API/MCP host through `django-cli`
 
 Dispatcher context is preserved by default. Use `--recreate-dispatcher` when

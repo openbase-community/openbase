@@ -1,6 +1,6 @@
 # services regenerate
 
-Recreate launchd wrappers and plists from current install config.
+Recreate generated service files from current install config.
 
 ## Usage
 
