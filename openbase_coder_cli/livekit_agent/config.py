@@ -50,12 +50,16 @@ def _load_openbase_env(*, override: bool = False) -> None:
     instead of crash-looping on a now-stale environment."""
     load_dotenv(".env", override=override)
     load_dotenv(_canonical_env_path(), override=override)
+    # The legacy loopback WebSocket endpoint is no longer the managed Codex
+    # owner on Unix. Per-job refreshes must preserve the same migration as
+    # setup; otherwise a stale on-disk value silently replaces the live Unix
+    # control socket and voice dispatcher warm-up fails at call start.
+    os.environ["CODEX_APP_SERVER_URL"] = managed_codex_app_server_endpoint().value
 
 
 _load_openbase_env()
 
 os.environ.setdefault("LIVEKIT_URL", "ws://localhost:7880")
-os.environ["CODEX_APP_SERVER_URL"] = managed_codex_app_server_endpoint().value
 os.environ.setdefault("LIVEKIT_CODEX_THREAD_CWD", str(Path.home()))
 
 CODEX_APP_SERVER_URL = os.environ["CODEX_APP_SERVER_URL"]
