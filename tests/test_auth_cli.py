@@ -180,6 +180,25 @@ def test_auth_print_machine_token_can_rotate(monkeypatch):
     assert result.output == "obmt_rotated\n"
 
 
+def test_auth_open_console_uses_localhost(monkeypatch):
+    opened: list[str] = []
+    monkeypatch.setattr(
+        auth_cli, "get_local_api_token", lambda: "local-owner-capability"
+    )
+    monkeypatch.setattr(
+        auth_cli.webbrowser,
+        "open",
+        lambda url: opened.append(url) or True,
+    )
+
+    result = CliRunner().invoke(main, ["auth", "open-console"])
+
+    assert result.exit_code == 0
+    assert opened == [
+        "http://localhost:7999/#openbase-local-token=local-owner-capability"
+    ]
+
+
 def _fake_status_token_manager(status, *, validated=True, email="user@example.com"):
     class FakeTokenManager:
         def __init__(self, web_backend_url):

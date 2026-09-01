@@ -473,7 +473,7 @@ def open_console(port: int | None) -> None:
     """Open a browser console with the local capability delivered in-fragment."""
     resolved_port = port or int(os.environ.get("OPENBASE_CODER_CLI_PORT", "7999"))
     fragment = urlencode({"openbase-local-token": get_local_api_token()})
-    url = f"http://127.0.0.1:{resolved_port}/#{fragment}"
+    url = f"http://localhost:{resolved_port}/#{fragment}"
     if not webbrowser.open(url):
         raise click.ClickException("Could not open the local browser console.")
     click.echo("Opened the authenticated local console.")
