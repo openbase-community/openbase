@@ -89,6 +89,20 @@ def test_formatter_splits_paths_filenames_and_identifier_styles():
     )
 
 
+def test_formatter_omits_commit_hashes_from_spoken_text():
+    text = (
+        "Cloud develop is at `051a9c2`, while staging is at 89351a3. "
+        "The word defaced remains ordinary prose, and `deadbee` is an "
+        "all-letter commit reference."
+    )
+
+    assert format_for_speech(text) == (
+        "Cloud develop is at commit reference omitted, while staging is at "
+        "commit reference omitted. The word defaced remains ordinary prose, "
+        "and commit reference omitted is an all letter commit reference."
+    )
+
+
 def test_formatter_pronounces_saas_and_sas_as_words():
     text = "SaaS billing, SAS analytics, SAAS metrics, and SaaSConfig.ts changed."
 

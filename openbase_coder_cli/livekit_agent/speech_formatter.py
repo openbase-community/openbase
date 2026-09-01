@@ -25,6 +25,14 @@ _ORDERED_RE = re.compile(r"^(\d+)[.)]$")
 _URL_RE = re.compile(r"https?://\S+")
 _LINK_RE = re.compile(r"!\[[^\]]*]\([^)]+\)|\[([^\]]+)]\([^)]+\)")
 _INLINE_CODE_RE = re.compile(r"`([^`]+)`")
+_COMMIT_HASH_RE = re.compile(
+    r"`[A-Fa-f0-9]{7,40}`|"
+    r"(?<![\w])"
+    r"(?=[A-Fa-f0-9]{7,40}(?![\w]))"
+    r"(?=[A-Fa-f0-9]*[A-Fa-f])"
+    r"(?=[A-Fa-f0-9]*\d)"
+    r"[A-Fa-f0-9]{7,40}(?![\w])"
+)
 _PATH_RE = re.compile(
     r"(?<![\w@])(?:~?/|\.{1,2}/)?(?:[\w@.+-]+/)+[\w@.+-]+|(?<![\w@.-])[\w@+-]+(?:[._-][\w@+-]+)*\.[A-Za-z0-9]{1,8}(?![\w@.-])"
 )
@@ -348,6 +356,7 @@ def _humanize_inline(text: str) -> str:
     replacements = current_tts_replacements()
     text = _replace_code_omission_narration(text)
     text = _LINK_RE.sub(lambda match: match.group(1) or "", text)
+    text = _COMMIT_HASH_RE.sub("commit reference omitted", text)
     text = _INLINE_CODE_RE.sub(lambda match: match.group(1), text)
     text = _URL_RE.sub("link omitted", text)
     text = _PATH_RE.sub(lambda match: _speak_path(match.group(0)), text)
