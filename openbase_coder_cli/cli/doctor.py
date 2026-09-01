@@ -5,6 +5,8 @@ Doctor command — verify service health and security configuration.
 from __future__ import annotations
 
 import json
+import os
+import shlex
 import subprocess
 import tomllib
 from pathlib import Path
@@ -30,6 +32,8 @@ from openbase_coder_cli.paths import (
     CODEX_CONFIG_PATH,
     CODEX_HOME_DIR,
     DEFAULT_ENV_FILE_PATH,
+    LAUNCHD_WRAPPER_DIR,
+    STANDALONE_CURRENT_DIR,
     STANDALONE_RELEASES_DIR,
 )
 from openbase_coder_cli.platforms import is_windows
@@ -333,6 +337,78 @@ def _check_path(
         ok(f"{label}: {path}")
     else:
         fail(f"{label}: missing at {path}")
+
+
+def _wrapper_exec_target(wrapper: Path) -> str | None:
+    """Return the binary a generated service wrapper execs, if any."""
+    try:
+        lines = wrapper.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.startswith("exec "):
+            continue
+        parts = shlex.split(stripped[len("exec ") :])
+        if parts:
+            return parts[0]
+    return None
+
+
+def _check_service_runtime_paths(ok, warn, fail) -> None:
+    """Verify the runtime paths the *installed services* actually execute.
+
+    ``_check_installation_config`` only validates the package this CLI
+    process was launched from. Services run from the generated launchd
+    wrappers instead, which route through the ``packages/standalone/current``
+    alias — so a healthy CLI can report all-clear while every service is
+    executing a dangling path (for example after the app bundle it points
+    into is renamed or removed by an update).
+    """
+    if not LAUNCHD_WRAPPER_DIR.is_dir():
+        return
+
+    package_root: Path | None = None
+    if STANDALONE_CURRENT_DIR.is_symlink() or STANDALONE_CURRENT_DIR.exists():
+        try:
+            package_root = STANDALONE_CURRENT_DIR.resolve(strict=True)
+        except OSError:
+            fail(
+                f"standalone 'current' alias is dangling: "
+                f"{STANDALONE_CURRENT_DIR} -> "
+                f"{os.readlink(STANDALONE_CURRENT_DIR)} "
+                "— run 'openbase-coder services regenerate'"
+            )
+            return
+
+    if package_root is not None:
+        # The alias can resolve to a directory that still exists while the
+        # interpreter inside it points into a deleted prefix, which is what
+        # actually takes the services down.
+        interpreter = STANDALONE_CURRENT_DIR / "python" / "bin" / "python"
+        if not interpreter.exists():
+            fail(
+                f"standalone 'current' package has no usable interpreter at "
+                f"{interpreter} (resolves to {package_root}) "
+                "— run 'openbase-coder services regenerate'"
+            )
+        else:
+            ok(f"standalone 'current' package usable: {package_root}")
+
+    dangling: list[str] = []
+    for wrapper in sorted(LAUNCHD_WRAPPER_DIR.glob("*.sh")):
+        target = _wrapper_exec_target(wrapper)
+        if target is None:
+            continue
+        if not os.access(target, os.X_OK):
+            dangling.append(f"{wrapper.name} -> {target}")
+
+    if dangling:
+        for entry in dangling:
+            fail(f"service wrapper points at a missing executable: {entry}")
+        fail("run 'openbase-coder services regenerate' to repair service wrappers")
+    else:
+        ok("service wrappers resolve to executable runtime paths")
 
 
 def _check_agent_auth(env: dict[str, str], ok, warn, fail, action=None) -> None:
@@ -648,6 +724,7 @@ def doctor() -> None:
     click.echo()
     click.echo(click.style("Installation", bold=True))
     _check_installation_config(ok, warn, fail)
+    _check_service_runtime_paths(ok, warn, fail)
 
     # --- Service health ---
     click.echo()

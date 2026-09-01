@@ -236,6 +236,16 @@ class TokenManager:
             )
         except httpx.HTTPError as exc:
             raise AuthTransientError(f"Token refresh failed: {exc}") from exc
+        except OSError as exc:
+            # Raised before the request leaves the process — most often
+            # ssl.create_default_context() failing to read the CA bundle
+            # because the interpreter's prefix no longer exists (a
+            # long-running process whose install directory was renamed or
+            # replaced by an update). It is environmental, not a rejected
+            # token, so callers must not treat it as "logged out".
+            raise AuthTransientError(
+                f"Token refresh could not be attempted: {exc}"
+            ) from exc
 
         if resp.status_code in (400, 401, 403):
             # The refresh token was rotated away or expired; only a new
