@@ -20,8 +20,23 @@ def test_livekit_server_local_mode_binds_loopback(monkeypatch):
     assert argv[argv.index("--node-ip") + 1] == "127.0.0.1"
     assert argv[argv.index("--keys") + 1] == "key: secret"
     config_body = argv[argv.index("--config-body") + 1]
+    assert "tcp_port: 0" in config_body
     assert "interfaces:" in config_body
     assert "lo" in config_body
+
+
+def test_livekit_server_local_mode_cannot_enable_wildcard_ice_tcp(monkeypatch):
+    monkeypatch.setattr(runners.platform, "system", lambda: "Darwin")
+    env = {
+        "LIVEKIT_NETWORK_MODE": "local",
+        "LIVEKIT_TCP_PORT": "7881",
+    }
+
+    argv, _ = runners.build_livekit_server(env, {"livekit": "livekit-server"})
+
+    config_body = argv[argv.index("--config-body") + 1]
+    assert "tcp_port: 0" in config_body
+    assert "tcp_port: 7881" not in config_body
 
 
 def test_livekit_server_tailscale_mode_resolves_node_ip_and_interface(monkeypatch):
@@ -39,6 +54,7 @@ def test_livekit_server_tailscale_mode_resolves_node_ip_and_interface(monkeypatc
 
     assert argv[argv.index("--node-ip") + 1] == "100.64.1.2"
     config_body = argv[argv.index("--config-body") + 1]
+    assert "tcp_port: 7881" in config_body
     assert "en0" in config_body
     assert "100.64.1.2/32" in config_body
 

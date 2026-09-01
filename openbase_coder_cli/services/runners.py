@@ -61,15 +61,20 @@ def build_livekit_server(
     env: dict[str, str], binaries: dict[str, str]
 ) -> RunnerArgvEnv:
     mode = env.get("LIVEKIT_NETWORK_MODE", "tailscale")
-    tcp_port = env.get("LIVEKIT_TCP_PORT", "7881")
     udp_port = env.get("LIVEKIT_UDP_PORT", "7882")
     loopback_iface = "lo0" if platform.system() == "Darwin" else "lo"
 
     if mode == "local":
+        # LiveKit's RTC TCP mux ignores the HTTP bind address and candidate
+        # filters: any non-zero tcp_port listens on every host interface.
+        # Embedded Netmesh sends media through its authenticated tailnet TURN
+        # relay, so local mode must not open an unnecessary LAN-facing socket.
+        tcp_port = "0"
         bind_ip = env.get("LIVEKIT_BIND_IP", "127.0.0.1")
         node_ip_args = ["--node-ip", bind_ip]
         config_body = _livekit_config_body(tcp_port, udp_port, loopback_iface, [], [])
     elif mode == "tailscale":
+        tcp_port = env.get("LIVEKIT_TCP_PORT", "7881")
         node_ip = env.get("LIVEKIT_NODE_IP") or network.tailscale_ip("4") or ""
         node_ip_v6 = env.get("LIVEKIT_NODE_IP_V6") or network.tailscale_ip("6") or ""
         if node_ip and not _is_ip_version(node_ip, 4):
