@@ -8,11 +8,15 @@ import pytest
 from openbase_coder_cli.services import netmesh_companion as nc
 
 
-def test_app_candidates_prefer_shipping_then_in_repo_dev(tmp_path: Path) -> None:
+def test_app_candidates_prefer_in_repo_dev_then_shipping(tmp_path: Path) -> None:
     workspace = tmp_path / "openbase-coder-workspace"
     candidates = [str(c) for c in nc._companion_app_candidates(workspace)]
-    # Shipping (installed desktop app) is first.
-    assert candidates[0] == (
+    # Developer installs use the recorded workspace's matching control shim.
+    assert candidates[0].endswith(
+        "desktop/companion-build/OpenbaseNetmeshCompanion.app"
+    )
+    # The installed desktop app remains the final fallback.
+    assert candidates[-1] == (
         "/Applications/Openbase.app/Contents/Resources/OpenbaseNetmeshCompanion.app"
     )
     # Dev fallbacks point at the in-repo desktop/ project (not headscale-clients).
@@ -131,7 +135,9 @@ def test_netmesh_ctl_path_none_when_absent(tmp_path: Path) -> None:
     assert nc.netmesh_ctl_path(tmp_path / "empty-ws") is None
 
 
-def test_capability_error_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_capability_error_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     import importlib
 
     t = importlib.import_module("openbase_coder_cli.cli.tailnet")
@@ -139,7 +145,9 @@ def test_capability_error_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 
     # tailscale: blocked without a client binary.
     monkeypatch.setattr(tp, "tailscale_bin", lambda: None)
-    assert "Tailscale client is not installed" in (t._capability_error("tailscale") or "")
+    assert "Tailscale client is not installed" in (
+        t._capability_error("tailscale") or ""
+    )
     monkeypatch.setattr(tp, "tailscale_bin", lambda: "/usr/bin/tailscale")
     assert t._capability_error("tailscale") is None
 

@@ -53,10 +53,7 @@ class CompanionStatus:
 
 
 def _companion_app_candidates(workspace_dir: Path | None) -> list[Path]:
-    candidates: list[Path] = [
-        # Shipping layout: nested in the installed desktop app.
-        Path("/Applications/Openbase.app/Contents/Resources/" + _APP_NAME),
-    ]
+    candidates: list[Path] = []
     if workspace_dir is not None:
         desktop = workspace_dir / "desktop"
         candidates += [
@@ -76,6 +73,13 @@ def _companion_app_candidates(workspace_dir: Path | None) -> list[Path]:
             / "Debug"
             / _APP_NAME,
         ]
+    # A developer install must use the companion built from its recorded
+    # workspace. The installed Electron app can legitimately lag develop, and
+    # selecting its older control shim against a newly installed development
+    # helper makes supported commands appear to be missing.
+    candidates.append(
+        Path("/Applications/Openbase.app/Contents/Resources/" + _APP_NAME)
+    )
     return candidates
 
 
