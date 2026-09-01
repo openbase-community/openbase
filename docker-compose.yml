@@ -1,0 +1,30 @@
+services:
+  openbase-coder:
+    build: .
+    image: openbase-coder:local
+    container_name: openbase-coder
+    # Tailscale uses the container hostname as the default node name when
+    # joining interactively (docker exec ... tailscale up).
+    hostname: openbase-coder
+    restart: unless-stopped
+    environment:
+      OPENBASE_CODER_BACKEND: ${OPENBASE_CODER_BACKEND:-openbase-cloud}
+      OPENBASE_CODER_AUDIO_PROVIDER: ${OPENBASE_CODER_AUDIO_PROVIDER:-openbase-cloud}
+      # Tailscale is the networking layer; set local for loopback-only testing.
+      OPENBASE_CODER_NETWORK_MODE: ${OPENBASE_CODER_NETWORK_MODE:-tailscale}
+      # Provide an auth key (https://login.tailscale.com/admin/settings/keys)
+      # for unattended joins; otherwise `docker exec -it openbase-coder tailscale up`.
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_HOSTNAME: ${TS_HOSTNAME:-openbase-coder}
+    ports:
+      # Loopback/debug access; tailnet traffic arrives via tailscaled inside
+      # the container, not via these mappings.
+      - "7999:7999"
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+    volumes:
+      - openbase-data:/home/openbase/.openbase
+
+volumes:
+  openbase-data:

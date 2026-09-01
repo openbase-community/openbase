@@ -51,6 +51,14 @@ class FakeThreadManager:
         )
 
 
+class UnreadableThreadManager(FakeThreadManager):
+    async def get_thread_state(self, thread_id: str) -> ThreadInfo | None:
+        raise RuntimeError(
+            '{"code": -32603, "message": "failed to read thread: '
+            'failed to read session metadata private-rollout-location"}'
+        )
+
+
 def _thread(index: int) -> ThreadInfo:
     now = datetime(2026, 5, 28, 12, tzinfo=timezone.utc)
     updated_at = now - timedelta(minutes=index)
@@ -95,6 +103,24 @@ def test_thread_list_returns_default_first_page(monkeypatch) -> None:
     assert len(response.data["threads"]) == 25
     assert response.data["threads"][0]["thread_id"] == "thread-000"
     assert manager.page_calls == [{"limit": 25, "cursor": None}]
+
+
+def test_thread_detail_returns_conflict_for_unreadable_rollout(monkeypatch) -> None:
+    monkeypatch.setattr(
+        thread_views,
+        "get_session_manager",
+        lambda: UnreadableThreadManager([]),
+    )
+    factory = APIRequestFactory()
+    request = factory.get("/api/threads/thread-newer/")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+
+    response = thread_views.thread_detail(request, "thread-newer")
+
+    assert response.status_code == 409
+    assert response.data["code"] == "thread_data_unavailable"
+    assert "current Codex version" in response.data["error"]
+    assert "private-rollout-location" not in response.data["error"]
 
 
 def test_thread_list_slices_requested_page(monkeypatch) -> None:

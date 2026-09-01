@@ -6,7 +6,6 @@ The `urlpatterns` list routes URLs to views.
 
 import logging
 
-from django.contrib import admin
 from django.urls import include, path, re_path
 
 from openbase_coder_cli.config.proxy import serve_console
@@ -18,7 +17,6 @@ from openbase_coder_cli.plugins.store import load_registry
 logger = logging.getLogger(__name__)
 
 urlpatterns = [
-    path("admin/", admin.site.urls),
     path("api/", include("openbase_coder_cli.openbase_coder_cli_app.urls")),
     re_path(
         r"^openbase-plugin-assets/(?P<plugin_id>[^/]+)/(?P<page_key>[^/]+)/(?P<path>.*)$",

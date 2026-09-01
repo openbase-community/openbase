@@ -1,7 +1,6 @@
 """LiveKit LLM bridge that runs user turns against the Codex app-server."""
 
 import asyncio
-import contextlib
 import hashlib
 import logging
 import uuid
@@ -12,8 +11,6 @@ from livekit.agents.llm.chat_context import ChatMessage
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 from openbase_coder_cli.livekit_agent.config import (
-    LIVEKIT_CODEX_ACK_DELAY_SECONDS,
-    LIVEKIT_CODEX_ACK_MESSAGE,
     load_direct_livekit_developer_instructions,
 )
 from openbase_coder_cli.livekit_agent.spoken_commands import (
@@ -26,6 +23,7 @@ from openbase_coder_cli.livekit_agent.turn_detection import (
     latest_user_turn_signals_from_chat_ctx,
 )
 from openbase_coder_cli.onboarding_reminder import append_onboarding_reminder
+from openbase_coder_cli.voice_tags import wrap_voice_prompt
 
 if TYPE_CHECKING:
     from openbase_coder_cli.livekit_agent.voice_routing import LiveKitVoiceRouter
@@ -53,7 +51,6 @@ class CodexLLMStream(llm.LLMStream):
         self._message_id = f"codex-{uuid.uuid4()}"
         self._voice_router = livekit_llm.voice_router
         self._turn_signal_tracker = livekit_llm.turn_signal_tracker
-        self._emitted_text = False
 
     def _latest_user_text(self) -> str:
         for item in reversed(self._chat_ctx.items):
@@ -142,24 +139,15 @@ class CodexLLMStream(llm.LLMStream):
             self._emit_delta("Back to dispatch.")
             return
 
+        prompt = wrap_voice_prompt(prompt)
         if self._voice_router.is_dispatcher_active:
             prompt = append_onboarding_reminder(prompt)
 
-        ack_task: asyncio.Task[None] | None = None
-        if LIVEKIT_CODEX_ACK_DELAY_SECONDS > 0 and LIVEKIT_CODEX_ACK_MESSAGE:
-            ack_task = asyncio.create_task(self._emit_ack_after_delay())
-
-        try:
-            voice_client = self._voice_router.active_client
-            result = await voice_client.run_turn(
-                prompt,
-                developer_instructions=load_direct_livekit_developer_instructions(),
-            )
-        finally:
-            if ack_task is not None:
-                ack_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await ack_task
+        voice_client = self._voice_router.active_client
+        result = await voice_client.run_turn(
+            prompt,
+            developer_instructions=load_direct_livekit_developer_instructions(),
+        )
 
         speech_text = result.get("_livekit_speech_text", "")
         turn_id = result.get("_livekit_turn_id", "")
@@ -249,7 +237,6 @@ class CodexLLMStream(llm.LLMStream):
                 delta=llm.ChoiceDelta(role="assistant", content=text),
             )
         )
-        self._emitted_text = True
         logger.info(
             "dispatch_timing stage=livekit_llm_delta_emitted message_id=%s "
             "text_len=%d text_hash=%s text_excerpt=%r",
@@ -258,18 +245,6 @@ class CodexLLMStream(llm.LLMStream):
             hashlib.sha256(text.encode("utf-8")).hexdigest()[:12],
             text[:160],
         )
-
-    async def _emit_ack_after_delay(self) -> None:
-        await asyncio.sleep(LIVEKIT_CODEX_ACK_DELAY_SECONDS)
-        if self._emitted_text:
-            return
-        try:
-            self._emit_delta(LIVEKIT_CODEX_ACK_MESSAGE)
-        except Exception:
-            logger.debug(
-                "Skipped LiveKit Codex acknowledgement after channel close",
-                exc_info=True,
-            )
 
 
 class CodexLiveKitLLM(llm.LLM):

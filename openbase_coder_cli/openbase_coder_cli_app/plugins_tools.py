@@ -8,8 +8,7 @@ from pathlib import Path
 import click
 from django.http import FileResponse, Http404, HttpRequest, HttpResponse
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from openbase_coder_cli.paths import PLUGIN_CONSOLE_ASSETS_DIR
@@ -46,7 +45,6 @@ def plugin_detail(request, plugin_id):
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
 def plugin_console_registry(request):
     """Return generated console registry payload."""
     return Response(get_console_registry_payload())

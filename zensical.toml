@@ -17,7 +17,8 @@ nav = [
   { "Getting Started" = [
     "getting-started/index.md",
     { "Mac App Download" = "getting-started/mac-app.md" },
-    { "Developer Setup" = "getting-started/developer-setup.md" }
+    { "Developer Setup" = "getting-started/developer-setup.md" },
+    { "Windows & Docker" = "docker.md" }
   ]},
   { "Downloads" = "downloads.md" },
   { "Manual Setup" = "manual-installation.md" },
@@ -31,6 +32,7 @@ nav = [
     { "bootstrap" = "commands/bootstrap.md" },
     { "claude" = "commands/claude.md" },
     { "claude-sync" = "commands/claude-sync.md" },
+    { "codex-sync" = "commands/codex-sync.md" },
     { "defaults" = "commands/defaults.md" },
     { "doctor" = "commands/doctor.md" },
     { "login" = "commands/login.md" },

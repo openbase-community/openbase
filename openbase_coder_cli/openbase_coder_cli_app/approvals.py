@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from asgiref.sync import async_to_sync
-from django.views.decorators.csrf import csrf_exempt
 from rest_framework import serializers, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -33,21 +32,24 @@ class SkillApprovalRequestCreateSerializer(serializers.Serializer):
     timeout_seconds = serializers.FloatField(required=False, min_value=0)
 
 
+async def pending_approval_requests() -> list[dict]:
+    """Return pending thread and skill approvals from the native queue."""
+    manager = get_session_manager()
+    return [
+        approval_request
+        for approval_request in await manager.list_approval_requests()
+        if not is_skill_approval_request(approval_request)
+        or is_pending_skill_approval_request(approval_request)
+    ]
+
+
 @api_view(["GET"])
 def approval_requests(request):
     """List currently pending approval requests across threads and skills."""
-    manager = get_session_manager()
-    requests = []
-    for approval_request in async_to_sync(manager.list_approval_requests)():
-        if is_skill_approval_request(
-            approval_request
-        ) and not is_pending_skill_approval_request(approval_request):
-            continue
-        requests.append(approval_request)
+    requests = async_to_sync(pending_approval_requests)()
     return Response({"requests": requests}, status=status.HTTP_200_OK)
 
 
-@csrf_exempt
 @api_view(["POST"])
 def approval_request_detail(request, request_id):
     """Approve or deny one pending approval request."""
@@ -72,7 +74,6 @@ def approval_request_detail(request, request_id):
     return Response({"success": True, "result": result}, status=status.HTTP_200_OK)
 
 
-@csrf_exempt
 @api_view(["POST"])
 def skill_approval_requests(request):
     """Create a skill-originated approval request."""
@@ -114,7 +115,6 @@ def skill_approval_request_detail(request, request_id):
     )
 
 
-@csrf_exempt
 @api_view(["POST"])
 def skill_approval_request_consume(request, request_id):
     """Consume an answered skill approval decision after the caller observes it."""

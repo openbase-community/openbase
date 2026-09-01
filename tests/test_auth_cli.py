@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import time
 
 from click.testing import CliRunner
 
@@ -9,6 +10,106 @@ from openbase_coder_cli.cli import main
 from openbase_coder_cli.config.token_manager import AuthLoginRequiredError
 
 auth_cli = importlib.import_module("openbase_coder_cli.cli.auth")
+password_auth = importlib.import_module("openbase_coder_cli.cli.password_auth")
+
+
+def test_login_password_stdin_reissues_and_stores_jwts_without_echo(monkeypatch):
+    requests = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            return None
+
+    def fake_post(url, **kwargs):
+        requests.append((url, kwargs))
+        if url.endswith("/_allauth/app/v1/auth/login"):
+            return FakeResponse(
+                {"meta": {"is_authenticated": True, "session_token": "session"}}
+            )
+        return FakeResponse(
+            {
+                "access_token": "access",
+                "refresh_token": "refresh",
+                "access_token_expires_in": 600,
+            }
+        )
+
+    stored = {}
+
+    class FakeTokenManager:
+        def __init__(self, web_backend_url):
+            stored["backend"] = web_backend_url
+
+        def store_tokens(self, **kwargs):
+            stored.update(kwargs)
+
+    class FakeMachineTokenManager:
+        def __init__(self, web_backend_url, manager):
+            pass
+
+        def get_machine_token(self, *, rotate):
+            assert rotate is True
+            return "machine"
+
+    monkeypatch.setattr(password_auth.httpx, "post", fake_post)
+    monkeypatch.setattr(auth_cli, "TokenManager", FakeTokenManager)
+    monkeypatch.setattr(auth_cli, "MachineTokenManager", FakeMachineTokenManager)
+    monkeypatch.setattr(
+        auth_cli,
+        "register_and_report",
+        lambda: type("Report", (), {"ok": True, "supported": True})(),
+    )
+    monkeypatch.setenv("OPENBASE_CODER_CLI_WEB_BACKEND_URL", "https://backend.example")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "login",
+            "--email",
+            "openbase-field@example.com",
+            "--password-stdin",
+        ],
+        input="stdin-only-password\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "stdin-only-password" not in result.output
+    assert "openbase-coder auth open-console" in result.output
+    assert stored == {
+        "backend": "https://backend.example",
+        "access_token": "access",
+        "refresh_token": "refresh",
+        "expires_in": 600,
+    }
+    assert requests[0] == (
+        "https://backend.example/_allauth/app/v1/auth/login",
+        {
+            "json": {
+                "email": "openbase-field@example.com",
+                "password": "stdin-only-password",
+            },
+            "headers": {
+                "Accept": "application/json",
+                "User-Agent": "openbase-coder-cli",
+            },
+            "timeout": 30,
+        },
+    )
+    assert requests[1][0] == "https://backend.example/api/openbase/auth/tokens/reissue/"
+    assert requests[1][1]["headers"] == {"X-Session-Token": "session"}
+
+
+def test_login_password_stdin_requires_email():
+    result = CliRunner().invoke(main, ["login", "--password-stdin"], input="secret\n")
+
+    assert result.exit_code != 0
+    assert "must be used together" in result.output
 
 
 def test_auth_print_access_token_outputs_token(monkeypatch):
@@ -77,6 +178,25 @@ def test_auth_print_machine_token_can_rotate(monkeypatch):
 
     assert result.exit_code == 0
     assert result.output == "obmt_rotated\n"
+
+
+def test_auth_open_console_uses_localhost(monkeypatch):
+    opened: list[str] = []
+    monkeypatch.setattr(
+        auth_cli, "get_local_api_token", lambda: "local-owner-capability"
+    )
+    monkeypatch.setattr(
+        auth_cli.webbrowser,
+        "open",
+        lambda url: opened.append(url) or True,
+    )
+
+    result = CliRunner().invoke(main, ["auth", "open-console"])
+
+    assert result.exit_code == 0
+    assert opened == [
+        "http://localhost:7999/#openbase-local-token=local-owner-capability"
+    ]
 
 
 def _fake_status_token_manager(status, *, validated=True, email="user@example.com"):
@@ -148,3 +268,72 @@ def test_oauth_success_page_announces_success_and_returns_to_desktop():
     assert "openbase-coder://open?source=cli-auth&amp;intent=login-complete" in html
     assert '"openbase-coder://open?source=cli-auth&intent=login-complete"' in html
     assert "window.location.href" in html
+
+
+def _free_port():
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def test_wait_for_callback_gives_up_and_releases_the_port(monkeypatch):
+    """An abandoned browser flow must not pin the callback port forever.
+
+    The listener used to loop with no deadline, so a login the user never
+    completed kept 127.0.0.1:52807 bound for the life of the process. Every
+    later login then failed to bind and silently degraded to manual paste.
+    """
+    import socket
+
+    port = _free_port()
+    monkeypatch.setattr(
+        auth_cli, "_prompt_for_pasted_callback", lambda state: {"code": "pasted"}
+    )
+
+    result = auth_cli._wait_for_callback(
+        f"http://127.0.0.1:{port}/oauth/callback",
+        expected_state="state-123",
+        timeout_seconds=0.1,
+    )
+
+    assert result == {"code": "pasted"}
+
+    # The port is bindable again only if the listener was actually closed.
+    with socket.socket() as after:
+        after.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        after.bind(("127.0.0.1", port))
+
+
+def test_wait_for_callback_still_accepts_a_real_redirect():
+    """The timeout must not break the normal success path."""
+    import threading
+    import urllib.request
+
+    port = _free_port()
+    captured = {}
+
+    def run():
+        captured["result"] = auth_cli._wait_for_callback(
+            f"http://127.0.0.1:{port}/oauth/callback",
+            expected_state="state-123",
+            timeout_seconds=30,
+        )
+
+    listener = threading.Thread(target=run, daemon=True)
+    listener.start()
+
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        try:
+            urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/oauth/callback?code=the-code&state=state-123",
+                timeout=5,
+            ).read()
+            break
+        except OSError:
+            time.sleep(0.05)
+
+    listener.join(timeout=15)
+    assert captured["result"]["code"] == "the-code"

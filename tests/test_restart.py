@@ -126,10 +126,21 @@ def test_restart_optional_device_sync_can_be_targeted_explicitly(monkeypatch):
     assert "sync-workers" not in command
 
 
-def test_restart_codex_app_server_only_targets_codex_service():
+def test_restart_codex_app_server_restarts_control_plane_consumers():
     plan = build_restart_plan(RestartRequest(services=("codex-app-server",)))
 
-    assert plan.services == ("codex-app-server",)
+    assert plan.services == (
+        "codex-app-server",
+        "openbase-routines",
+        "livekit-agent",
+        "django-cli",
+    )
+
+
+def test_restart_livekit_server_includes_agent_dependent():
+    plan = build_restart_plan(RestartRequest(services=("livekit-server",)))
+
+    assert plan.services == ("livekit-server", "livekit-agent")
 
 
 def test_restart_super_agents_mcp_is_not_a_valid_target():
@@ -216,4 +227,43 @@ def test_execute_recreate_dispatcher_warms_thread_after_services_start(monkeypat
         "stop:livekit-agent",
         "start:livekit-agent",
         "warm:fresh=True",
+    ]
+
+
+def test_execute_restart_plan_stops_dependents_first(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        restart_module,
+        "require_installation",
+        lambda: InstallationConfig(workspace_path="workspace", env_file=".env"),
+    )
+    monkeypatch.setattr(
+        restart_module, "launchctl_status", lambda _svc: {"installed": True}
+    )
+    monkeypatch.setattr(
+        restart_module,
+        "launchctl_bootout",
+        lambda svc: calls.append(f"stop:{svc.name}"),
+    )
+    monkeypatch.setattr(
+        restart_module,
+        "install_service",
+        lambda _config, svc: calls.append(f"start:{svc.name}"),
+    )
+    monkeypatch.setattr(restart_module.time, "sleep", lambda _seconds: None)
+
+    execute_restart_plan(
+        RestartPlan(
+            services=("livekit-server", "livekit-agent"),
+            recreate_dispatcher=False,
+            interrupts_voice=False,
+            delay_seconds=0,
+        )
+    )
+
+    assert calls == [
+        "stop:livekit-agent",
+        "stop:livekit-server",
+        "start:livekit-server",
+        "start:livekit-agent",
     ]

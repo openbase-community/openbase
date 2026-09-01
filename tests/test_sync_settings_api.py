@@ -310,3 +310,64 @@ def test_sync_versions_purge_reports_freed_bytes(monkeypatch, tmp_path: Path) ->
     assert response.status_code == 200
     assert response.data["freed_bytes"] == 100
     assert not (versions_dir / "cs-demo").exists()
+
+
+def test_sync_status_surfaces_folder_errors_and_reconcile_summary(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_path = _patch_environment(monkeypatch, tmp_path)
+    sync_config.set_code_sync_enabled(True, config_path)
+    sync_config.set_sync_folders([{"relpath": "Projects/demo"}], config_path)
+    monkeypatch.setattr(
+        conflicts_module, "CODE_SYNC_CONFLICTS_PATH", tmp_path / "conflicts.json"
+    )
+    monkeypatch.setattr(sync_settings, "local_activity_recent", lambda: False)
+    monkeypatch.setattr(
+        sync_settings,
+        "read_reconcile_state",
+        lambda: {
+            "last_reconcile_at": "2026-08-17T22:00:00Z",
+            "last_summary": {"repo_count": 3, "fast_forwarded": 1, "errors": 0},
+        },
+    )
+
+    class FakeClient:
+        def folder_status(self, folder_id: str) -> dict:
+            return {
+                "state": "stopped",
+                "error": "insufficient space on disk for database",
+            }
+
+        def folder_completion(self, folder_id: str) -> dict:
+            return {"completion": 42}
+
+        def folder_config(self, folder_id: str) -> dict:
+            return {"type": "sendreceive"}
+
+        def system_errors(self) -> list[dict]:
+            return [
+                {
+                    "when": "2026-08-17T21:59:00Z",
+                    "message": "folder stopped: out of disk",
+                }
+            ]
+
+    monkeypatch.setattr(sync_settings, "SyncthingClient", FakeClient)
+
+    response = sync_settings.sync_status(
+        _authenticated_request("GET", "/api/sync/status/")
+    )
+
+    assert response.status_code == 200
+    folder = response.data["folders"][0]
+    assert folder["state"] == "stopped"
+    assert folder["error"] == "insufficient space on disk for database"
+    assert response.data["syncthing_errors"] == [
+        {"when": "2026-08-17T21:59:00Z", "message": "folder stopped: out of disk"}
+    ]
+    assert response.data["last_reconcile"] == {
+        "at": "2026-08-17T22:00:00Z",
+        "repo_count": 3,
+        "fast_forwarded": 1,
+        "errors": 0,
+    }

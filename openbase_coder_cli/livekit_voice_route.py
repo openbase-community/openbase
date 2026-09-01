@@ -13,6 +13,9 @@ import livekit.api as livekit_api
 
 from openbase_coder_cli.cli.utils import get_data_dir
 from openbase_coder_cli.codex_session_defaults import codex_permission_defaults
+from openbase_coder_cli.direct_voice_instructions import (
+    DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS,
+)
 from openbase_coder_cli.dispatcher_config import (
     dispatcher_voice,
     selected_tts_provider_id,
@@ -51,18 +54,6 @@ DIRECT_LIVEKIT_INSTRUCTIONS_PATH_ENV = (
     "LIVEKIT_DIRECT_CODEX_DEVELOPER_INSTRUCTIONS_PATH"
 )
 DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV = "LIVEKIT_DIRECT_CODEX_DEVELOPER_INSTRUCTIONS"
-DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS = """
-You are receiving direct user speech from a LiveKit voice session.
-Keep final spoken responses concise and directly useful.
-If a transcript clearly appears to be background conversation and the user is not addressing Openbase Coder, immediately run `openbase-coder user ios mute` and do not otherwise respond to the transcript. Do not auto-mute ambiguous transcripts.
-Do not read code, logs, stack traces, JSON, diffs, or long file paths aloud unless explicitly asked.
-When code or logs matter, summarize their practical meaning in plain English.
-If transcription is unclear, ask the user to confirm the intended request before acting.
-When the user asks to return to dispatch, or you need to hand the voice session
-back to dispatch, run:
-openbase-coder exit-to-dispatch
-Do not assume dispatcher responsibilities, delegation policy, or Super Agents coordination rules from these instructions.
-""".strip()
 DISPATCHER_BUILTIN_DEVELOPER_INSTRUCTIONS = """
 You are the Openbase Coder LiveKit dispatcher for a private voice session.
 Route voice sessions when the user asks to speak with an agent.

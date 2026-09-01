@@ -34,6 +34,13 @@ from openbase_coder_cli.services.tailnet_devices import tailscale_self_identity
 from openbase_coder_cli.services.tailscale_serve import tailscale_serve_health
 
 DEVICE_REGISTER_PATH = "/api/openbase/devices/register/"
+NETMESH_ENROLL_PATH = "/api/openbase/netmesh/enroll/"
+NETMESH_DEVICES_PATH = "/api/openbase/netmesh/devices/"
+NETMESH_SERVICE_HOSTNAMES_PATH = "/api/openbase/netmesh/service-hostnames/"
+NETMESH_SERVICE_HOSTNAME_CAPABILITIES_PATH = (
+    "/api/openbase/netmesh/service-hostnames/capabilities/"
+)
+TAILNET_PROVIDER_PATH = "/api/openbase/tailnet-provider/"
 REQUEST_TIMEOUT_SECONDS = 15
 
 
@@ -43,7 +50,7 @@ class CloudReportResult:
     supported: bool
     error: str | None = None
     status_code: int | None = None
-    response: dict[str, Any] | None = None
+    response: dict[str, Any] | list[Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -202,6 +209,79 @@ def register_and_report(
     return report_cli_state(cli_configured=cli_configured, serve_healthy=serve_healthy)
 
 
+def netmesh_enroll() -> dict[str, Any] | None:
+    """Mint a netmesh pre-auth key for the signed-in user. Never raises.
+
+    Returns the enroll payload ({control_url, auth_key, ...}) or None when the
+    user is not logged in, the cloud errors, or netmesh is not deployed there.
+    """
+    result = _post_to_cloud(NETMESH_ENROLL_PATH, {})
+    if not result.ok or not isinstance(result.response, dict):
+        return None
+    if not result.response.get("auth_key") or not result.response.get("control_url"):
+        return None
+    return result.response
+
+
+def list_netmesh_devices() -> list[dict[str, Any]]:
+    """This user's netmesh (headscale) nodes. Never raises; [] on any failure."""
+    result = _post_to_cloud(NETMESH_DEVICES_PATH, {}, method="GET")
+    if not result.ok or not isinstance(result.response, list):
+        return []
+    return [entry for entry in result.response if isinstance(entry, dict)]
+
+
+def revoke_netmesh_device(node_id: str) -> bool:
+    """Delete one of this user's netmesh nodes. Never raises."""
+    result = _post_to_cloud(f"{NETMESH_DEVICES_PATH}{node_id}/", {}, method="DELETE")
+    return result.ok
+
+
+def netmesh_service_hostname_capabilities() -> CloudReportResult:
+    return _post_to_cloud(
+        NETMESH_SERVICE_HOSTNAME_CAPABILITIES_PATH, {}, method="GET"
+    )
+
+
+def allocate_netmesh_service_hostname(
+    *, node_id: str, service_name: str
+) -> CloudReportResult:
+    return _post_to_cloud(
+        NETMESH_SERVICE_HOSTNAMES_PATH,
+        {"node_id": node_id, "service_name": service_name},
+    )
+
+
+def release_netmesh_service_hostname(
+    *, node_id: str, service_name: str
+) -> CloudReportResult:
+    return _post_to_cloud(
+        NETMESH_SERVICE_HOSTNAMES_PATH,
+        {"node_id": node_id, "service_name": service_name},
+        method="DELETE",
+    )
+
+
+def push_tailnet_provider(provider: str) -> CloudReportResult:
+    """Record the account-level tailnet transport in openbase-cloud.
+
+    The three providers are three different networks, so the whole device
+    fleet must converge on this value (other devices read it from onboarding
+    state). Never raises; ``supported=False`` when the cloud predates the
+    endpoint.
+    """
+    return _post_to_cloud(TAILNET_PROVIDER_PATH, {"provider": provider})
+
+
+def fetch_tailnet_provider() -> str | None:
+    """The account-level tailnet transport, or None when unavailable."""
+    result = _post_to_cloud(TAILNET_PROVIDER_PATH, {}, method="GET")
+    if not result.ok or not isinstance(result.response, dict):
+        return None
+    provider = result.response.get("provider")
+    return provider if isinstance(provider, str) and provider else None
+
+
 def _post_to_cloud(
     path: str, payload: dict[str, Any], *, method: str = "POST"
 ) -> CloudReportResult:
@@ -250,7 +330,11 @@ def _post_to_cloud(
         ok=True,
         supported=True,
         status_code=response.status_code,
-        response=response_payload if isinstance(response_payload, dict) else None,
+        # dict for object endpoints, list for collection endpoints (e.g.
+        # the netmesh devices list); anything else is dropped.
+        response=response_payload
+        if isinstance(response_payload, (dict, list))
+        else None,
     )
 
 

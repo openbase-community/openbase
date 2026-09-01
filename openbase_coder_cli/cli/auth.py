@@ -6,6 +6,7 @@ import html
 import json
 import os
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse
@@ -13,6 +14,10 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 import click
 import httpx
 
+from openbase_coder_cli.config.local_api_token import (
+    get_local_api_token,
+    rotate_local_api_token,
+)
 from openbase_coder_cli.config.machine_token_manager import (
     MachineTokenError,
     MachineTokenManager,
@@ -29,10 +34,15 @@ from openbase_coder_cli.config.token_manager import (
 from openbase_coder_cli.paths import AUTH_JSON_PATH, MACHINE_TOKEN_JSON_PATH
 from openbase_coder_cli.services.cloud_registration import register_and_report
 
+from .password_auth import exchange_password_for_jwts
+
 DEFAULT_WEB_BACKEND_URL = "https://app.openbase.cloud"
 DESKTOP_LOGIN_COMPLETE_URL = (
     "openbase-coder://open?source=cli-auth&intent=login-complete"
 )
+# How long the local OAuth callback listener waits for the browser redirect
+# before giving up and releasing the port.
+LOGIN_CALLBACK_TIMEOUT_SECONDS = 300.0
 
 
 def _oauth_success_html(*, desktop_url: str = DESKTOP_LOGIN_COMPLETE_URL) -> bytes:
@@ -143,24 +153,98 @@ class _OAuthCallbackServer(HTTPServer):
     allow_reuse_address = True
 
 
+def _parse_pasted_oauth_callback(pasted: str, expected_state: str) -> dict[str, str]:
+    pasted = pasted.strip()
+    if "://" in pasted or "?" in pasted or "code=" in pasted:
+        if "?" in pasted:
+            query = pasted.split("?", 1)[1]
+        elif "://" in pasted:
+            query = urlparse(pasted).query
+        else:
+            query = pasted
+        q = parse_qs(query)
+        code = q.get("code", [""])[0]
+        state = q.get("state", [""])[0]
+        error = q.get("error", [""])[0]
+        error_desc = q.get("error_description", [""])[0]
+        if code:
+            return {
+                "code": code,
+                "state": state,
+                "error": error,
+                "error_description": error_desc,
+            }
+
+    if "&state=" in pasted:
+        parts = pasted.split("&state=", 1)
+        code_part = parts[0]
+        if code_part.startswith("code="):
+            code_part = code_part[5:]
+        return {"code": code_part, "state": parts[1]}
+
+    if pasted.startswith("code="):
+        pasted = pasted[5:]
+    return {"code": pasted, "state": expected_state}
+
+
+def _prompt_for_pasted_callback(expected_state: str) -> dict[str, str]:
+    click.echo(
+        "Please complete the sign-in in your browser, then copy the full redirect URL\n"
+        "(e.g. http://127.0.0.1:52807/oauth/callback?code=...&state=...) from your browser's address bar and paste it below:\n"
+    )
+    pasted = click.prompt("Redirect URL or code").strip()
+    return _parse_pasted_oauth_callback(pasted, expected_state)
+
+
 def _wait_for_callback(
-    redirect_uri: str, *, expected_state: str = ""
+    redirect_uri: str,
+    *,
+    expected_state: str = "",
+    timeout_seconds: float = LOGIN_CALLBACK_TIMEOUT_SECONDS,
 ) -> dict[str, str]:
     parsed = urlparse(redirect_uri)
-    server = _OAuthCallbackServer(
-        (parsed.hostname or "127.0.0.1", parsed.port or 80),
-        _OAuthCallbackHandler,
-    )
+    try:
+        server = _OAuthCallbackServer(
+            (parsed.hostname or "127.0.0.1", parsed.port or 80),
+            _OAuthCallbackHandler,
+        )
+    except OSError as exc:
+        click.echo(
+            click.style(
+                f"\nWarning: Could not bind callback listener on {redirect_uri} ({exc}).",
+                fg="yellow",
+            )
+        )
+        return _prompt_for_pasted_callback(expected_state)
+
     server.timeout = 1
     server.done = threading.Event()
     server.result = {}
     server.callback_path = parsed.path or "/oauth/callback"
     server.expected_state = expected_state
+    # Bounded: an abandoned browser flow must not pin the callback port
+    # forever. A listener that never returns keeps the port bound for the
+    # life of the process, and every later login attempt then falls back to
+    # manual paste because it cannot bind.
+    deadline = time.monotonic() + timeout_seconds
     try:
         while not server.done.wait(timeout=0):
+            if time.monotonic() >= deadline:
+                break
             server.handle_request()
     finally:
         server.server_close()
+
+    if not server.done.is_set():
+        click.echo(
+            click.style(
+                f"\nTimed out after {int(timeout_seconds)}s waiting for the browser "
+                "callback; released the callback port.",
+                fg="yellow",
+            )
+        )
+        return _prompt_for_pasted_callback(expected_state)
+
     return server.result
 
 
@@ -210,10 +294,83 @@ def _exchange_oauth_token_for_jwts(
     return access_token, refresh_token, expires_in
 
 
+def _complete_login(
+    *, web_backend_url: str, access_token: str, refresh_token: str, expires_in: int
+) -> None:
+    manager = TokenManager(web_backend_url)
+    manager.store_tokens(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_in=expires_in,
+    )
+    try:
+        MachineTokenManager(web_backend_url, manager).get_machine_token(rotate=True)
+    except (
+        AuthLoginRequiredError,
+        AuthTransientError,
+        MachineTokenError,
+        httpx.HTTPError,
+    ) as exc:
+        click.echo(
+            click.style(
+                f"Warning: logged in, but could not create an Openbase Cloud machine token: {exc}",
+                fg="yellow",
+            )
+        )
+
+    report = register_and_report()
+    if not report.ok and report.supported:
+        click.echo(
+            click.style(
+                f"Warning: logged in, but could not register this device with Openbase Cloud: {report.error}",
+                fg="yellow",
+            )
+        )
+
+    click.echo(f"Logged in successfully. Tokens saved to {AUTH_JSON_PATH}")
+    click.echo(
+        "Open the authenticated local console with: openbase-coder auth open-console"
+    )
+
+
 @click.command()
-def login() -> None:
-    """Log in to Openbase Coder using browser-based OAuth."""
+@click.option("--email", help="Email address for a non-browser password login.")
+@click.option(
+    "--password-stdin",
+    is_flag=True,
+    help="Read the password from standard input instead of process arguments.",
+)
+def login(email: str | None, password_stdin: bool) -> None:
+    """Log in with browser OAuth or an explicitly requested stdin password."""
     web_backend_url = _get_web_backend_url()
+    if bool(email) != password_stdin:
+        raise click.UsageError("--email and --password-stdin must be used together")
+    if email and password_stdin:
+        password = click.get_text_stream("stdin").read()
+        if password.endswith("\n"):
+            password = password[:-1]
+            if password.endswith("\r"):
+                password = password[:-1]
+        if not password:
+            raise click.UsageError("No password was received on standard input")
+        try:
+            access_token, refresh_token, expires_in = exchange_password_for_jwts(
+                web_backend_url=web_backend_url,
+                email=email,
+                password=password,
+            )
+        except httpx.HTTPStatusError as exc:
+            raise click.ClickException(
+                f"Password login failed with status {exc.response.status_code}."
+            ) from None
+        _complete_login(
+            web_backend_url=web_backend_url,
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_in=expires_in,
+        )
+        return
+
     redirect_uri = _get_oauth_redirect_uri()
     state = os.urandom(24).hex()
     code_verifier = create_pkce_verifier()
@@ -274,38 +431,12 @@ def login() -> None:
             f"OAuth login failed: {exc.response.status_code} — {detail}"
         ) from None
 
-    # Store tokens
-    mgr = TokenManager(web_backend_url)
-    mgr.store_tokens(
+    _complete_login(
+        web_backend_url=web_backend_url,
         access_token=access_token,
         refresh_token=refresh_token,
         expires_in=expires_in,
     )
-    try:
-        MachineTokenManager(web_backend_url, mgr).get_machine_token(rotate=True)
-    except (
-        AuthLoginRequiredError,
-        AuthTransientError,
-        MachineTokenError,
-        httpx.HTTPError,
-    ) as exc:
-        click.echo(
-            click.style(
-                f"Warning: logged in, but could not create an Openbase Cloud machine token: {exc}",
-                fg="yellow",
-            )
-        )
-
-    report = register_and_report()
-    if not report.ok and report.supported:
-        click.echo(
-            click.style(
-                f"Warning: logged in, but could not register this device with Openbase Cloud: {report.error}",
-                fg="yellow",
-            )
-        )
-
-    click.echo(f"Logged in successfully. Tokens saved to {AUTH_JSON_PATH}")
 
 
 @click.command()
@@ -323,6 +454,29 @@ def logout() -> None:
 @click.group()
 def auth() -> None:
     """Authentication helpers."""
+
+
+@auth.command("print-local-api-token")
+@click.option(
+    "--rotate",
+    is_flag=True,
+    help="Invalidate the current installation capability and print a new one.",
+)
+def print_local_api_token(rotate: bool) -> None:
+    """Print the owner-only capability for this local Coder runtime."""
+    click.echo(rotate_local_api_token() if rotate else get_local_api_token())
+
+
+@auth.command("open-console")
+@click.option("--port", type=int, default=None, help="Override the local API port.")
+def open_console(port: int | None) -> None:
+    """Open a browser console with the local capability delivered in-fragment."""
+    resolved_port = port or int(os.environ.get("OPENBASE_CODER_CLI_PORT", "7999"))
+    fragment = urlencode({"openbase-local-token": get_local_api_token()})
+    url = f"http://localhost:{resolved_port}/#{fragment}"
+    if not webbrowser.open(url):
+        raise click.ClickException("Could not open the local browser console.")
+    click.echo("Opened the authenticated local console.")
 
 
 @auth.command("status")

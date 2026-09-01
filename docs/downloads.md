@@ -17,6 +17,9 @@ What each one is for:
   [Manual Setup for the Desktop App](manual-installation.md).
 - The **iOS app** is the phone client for voice calls, threads, approvals,
   reports, and diffs. See [iOS App](ios-tabs.md).
+- The **Android app** is the same phone client for Android (Kotlin/Compose),
+  mirroring the iOS workflow: voice calls, threads, approvals, reports, diffs,
+  and screen-share viewing. Install the APK linked above.
 
 Developers who want to work from source should clone
 `openbase-coder-workspace` and run its `./scripts/setup` instead — see

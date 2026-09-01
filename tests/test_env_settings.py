@@ -51,6 +51,7 @@ def test_env_settings_reads_active_values(monkeypatch, tmp_path: Path) -> None:
         {"key": "CODEX_MODEL", "value": "gpt-5.5", "secret": False},
         {"key": "CARTESIA_API_KEY", "value": "secret-value", "secret": True},
     ]
+    assert "SUPER_AGENTS_CLAUDE_PERMISSION_MODE" in response.data["common_keys"]
 
 
 def test_env_settings_updates_adds_renames_and_deletes(

@@ -17,7 +17,6 @@ import subprocess
 from pathlib import Path
 
 from django.http import HttpResponse, JsonResponse
-from django.views.decorators.csrf import csrf_exempt
 from rest_framework import exceptions
 
 from openbase_coder_cli.config.authentication import JWTAuthentication
@@ -82,7 +81,6 @@ def _split_repo_request(subpath: str) -> tuple[str, str] | None:
     return None
 
 
-@csrf_exempt
 def git_http_backend(request, folder_id: str, subpath: str):
     """Serve one git smart-HTTP request via the git http-backend CGI."""
     auth_error = _authenticate(request)

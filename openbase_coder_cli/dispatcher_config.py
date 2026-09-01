@@ -11,6 +11,7 @@ from openbase_coder_cli.backend_config import (
     CODEX_BACKEND,
     CODING_BACKEND_ENV_KEY,
     OPENBASE_CLOUD_BACKEND,
+    OPENBASE_CLOUD_CODEX_BACKEND,
     execution_backend_for_configured_backend,
     normalize_backend,
 )
@@ -38,11 +39,12 @@ DISPATCHER_CONFIG_SCHEMA_VERSION = 1
 REASONING_EFFORTS = {"low", "medium", "high", "xhigh"}
 DISPATCHER_REASONING_EFFORT_KEY = "dispatcher_reasoning_effort"
 SUPER_AGENTS_REASONING_EFFORT_KEY = "super_agents_reasoning_effort"
-# Reasoning levels are Codex-only; on Claude Code, effort follows the
-# service tier (Fast mode). Shared by the settings API and defaults CLI.
-CLAUDE_BACKEND_REASONING_ERROR = (
-    "Reasoning levels are not configurable on the Claude Code backend. "
-    "Use Fast mode to control Claude reasoning effort."
+# Service tiers are Codex-only; Claude Code turns always run at the standard
+# tier, with reasoning levels as the Claude speed/quality knob.
+CLAUDE_BACKEND_SERVICE_TIER_ERROR = (
+    "Fast mode is not configurable on the Claude Code backend. "
+    "Claude turns always run at the standard tier; use Reasoning levels "
+    "to control Claude reasoning effort."
 )
 DISPATCHER_SERVICE_TIER_KEY = "dispatcher_service_tier"
 SUPER_AGENTS_SERVICE_TIER_KEY = "super_agents_service_tier"
@@ -107,6 +109,99 @@ BACKEND_MODEL_OPTIONS = {
     OPENBASE_CLOUD_BACKEND: OPENBASE_CLOUD_CLAUDE_MODEL_OPTIONS,
 }
 CLAUDE_CODE_MODEL_ALIASES = {option["id"] for option in CLAUDE_CODE_MODEL_OPTIONS}
+CODEX_MODEL_OPTIONS = (
+    {
+        "id": "gpt-5.5",
+        "label": "GPT-5.5",
+        "description": "Codex default model (speed is controlled by the service tier setting).",
+    },
+)
+
+# Where code executes; the user-facing backend choice. Locally both engines
+# (Claude Code and Codex) are available and the MODEL picks the engine; on
+# Openbase Cloud, Claude Code is the execution engine and Codex threads are
+# read-only.
+LOCATION_LOCAL = "local"
+LOCATION_CLOUD = "cloud"
+CLOUD_BACKENDS = {OPENBASE_CLOUD_BACKEND, OPENBASE_CLOUD_CODEX_BACKEND}
+CLAUDE_ENGINE = "claude"
+CODEX_ENGINE = "codex"
+ROLE_MODELS_KEY = "role_models"
+
+
+def model_engine(model: str | None) -> str | None:
+    """Which engine a model id/alias belongs to, or None if unknown.
+
+    Delegates to super-agents' classifier — the same one that routes new
+    threads by model — so the CLI and the runtime can never disagree about
+    which engine a model implies.
+    """
+    from super_agents.backend_config import (
+        CLAUDE_CODE_BACKEND as SA_CLAUDE_CODE_BACKEND,
+    )
+    from super_agents.backend_config import (
+        CODEX_BACKEND as SA_CODEX_BACKEND,
+    )
+    from super_agents.backend_config import (
+        execution_backend_for_model,
+    )
+
+    family = execution_backend_for_model(model)
+    if family == SA_CLAUDE_CODE_BACKEND:
+        return CLAUDE_ENGINE
+    if family == SA_CODEX_BACKEND:
+        return CODEX_ENGINE
+    return None
+
+
+def backend_location(backend: str | None = None) -> str:
+    selected = normalize_backend(backend or _configured_backend_from_environment())
+    return LOCATION_CLOUD if selected in CLOUD_BACKENDS else LOCATION_LOCAL
+
+
+def identity_for_model(model: str, location: str) -> str:
+    """The backend identity that runs `model` at `location`."""
+    engine = model_engine(model)
+    if location == LOCATION_CLOUD:
+        return (
+            OPENBASE_CLOUD_CODEX_BACKEND
+            if engine == CODEX_ENGINE
+            else OPENBASE_CLOUD_BACKEND
+        )
+    return CODEX_BACKEND if engine == CODEX_ENGINE else CLAUDE_CODE_BACKEND
+
+
+def combined_model_options(location: str) -> tuple[dict[str, Any], ...]:
+    """Every selectable model across both engines, engine-labeled.
+
+    On Openbase Cloud, Codex models are listed but unavailable (Codex threads
+    are read-only there; only Claude Code executes).
+    """
+    claude_options = (
+        OPENBASE_CLOUD_CLAUDE_MODEL_OPTIONS
+        if location == LOCATION_CLOUD
+        else CLAUDE_CODE_MODEL_OPTIONS
+    )
+    combined: list[dict[str, Any]] = []
+    for option in claude_options:
+        combined.append({**option, "engine": CLAUDE_ENGINE, "available": True})
+    for option in CODEX_MODEL_OPTIONS:
+        combined.append(
+            {
+                **option,
+                "engine": CODEX_ENGINE,
+                "available": location != LOCATION_CLOUD,
+            }
+        )
+    return tuple(combined)
+
+
+def is_known_combined_model(model: str, location: str) -> bool:
+    normalized = " ".join(model.split()).lower()
+    return any(
+        normalized == option["id"].lower() and option["available"]
+        for option in combined_model_options(location)
+    )
 TTS_PROVIDER_KEY = "tts_provider"
 STT_PROVIDER_KEY = "stt_provider"
 DISPATCHER_VOICE_ID_KEY = "dispatcher_voice_id"
@@ -243,6 +338,13 @@ def backend_model(
         backend or _configured_backend_from_environment()
     )
     payload = read_dispatcher_config(path)
+    # Backend-independent role choice (the model implies the engine); wins
+    # over the legacy per-backend map when present.
+    role_models = payload.get(ROLE_MODELS_KEY)
+    if isinstance(role_models, dict):
+        chosen = _optional_str(role_models.get(role))
+        if chosen:
+            return chosen
     backend_models = payload.get(BACKEND_MODELS_KEY)
     if not isinstance(backend_models, dict):
         return None
@@ -289,10 +391,16 @@ def set_backend_model(
     if not isinstance(model_config, dict):
         model_config = {}
     backend_models[selected_backend] = {**model_config, role: normalized}
+    role_models = payload.get(ROLE_MODELS_KEY)
+    if not isinstance(role_models, dict):
+        role_models = {}
     _write_dispatcher_config(
         {
             **payload,
             BACKEND_MODELS_KEY: backend_models,
+            # The authoritative, backend-independent choice; the legacy
+            # per-backend map above is kept for older readers.
+            ROLE_MODELS_KEY: {**role_models, role: normalized},
         },
         config_path,
     )

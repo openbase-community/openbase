@@ -15,6 +15,12 @@ SUPPORTED_BACKENDS = (
 )
 DEFAULT_CODING_BACKEND = "codex"
 CODING_BACKEND_ENV_KEY = "OPENBASE_CODING_BACKEND"
+# Opt-in to mixed-backend mode: a comma-separated list (e.g. "codex,claude_code")
+# of backends this install runs SIMULTANEOUSLY — threads from every listed
+# backend appear together and the dispatcher can manage super-agents on each.
+# Unset = the single OPENBASE_CODING_BACKEND rules everything, as before.
+CODING_BACKENDS_ENV_KEY = "OPENBASE_CODING_BACKENDS"
+SUPER_AGENTS_DEFAULT_BACKEND_ENV_KEY = "SUPER_AGENTS_DEFAULT_BACKEND"
 BACKEND_ALIASES = {
     "codex": CODEX_BACKEND,
     "codecs": CODEX_BACKEND,
@@ -78,3 +84,42 @@ def configured_execution_backend(
     from super_agents.backend_clients import backend_from_environment
 
     return backend_from_environment()
+
+
+def configured_execution_backends(
+    environment_backend: Callable[[], str] | None = None,
+) -> list[str]:
+    """Every execution backend this install runs, primary first.
+
+    ``OPENBASE_CODING_BACKENDS`` (comma-separated) opts a machine into
+    mixed-backend mode: threads from every listed backend show together and
+    the dispatcher can manage super-agents on each. Unset, the single
+    configured backend rules everything, exactly as before. Invalid entries
+    are skipped rather than failing thread listing.
+    """
+    import os
+
+    primary = configured_execution_backend(environment_backend)
+    raw = os.environ.get(CODING_BACKENDS_ENV_KEY, "").strip()
+    if not raw:
+        return [primary]
+
+    backends: list[str] = []
+    for chunk in raw.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            configured = normalize_backend(chunk)
+        except ValueError:
+            continue
+        execution = execution_backend_for_configured_backend(configured)
+        if execution not in backends:
+            backends.append(execution)
+    if not backends:
+        return [primary]
+    # Keep the configured single backend as the primary (first) entry so
+    # creation defaults and delegated behavior stay stable.
+    if primary in backends:
+        backends.remove(primary)
+    return [primary, *backends]

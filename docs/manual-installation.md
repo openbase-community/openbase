@@ -36,13 +36,10 @@ there because it may include app-selected options such as the coding backend.
 
 ## Install Prerequisites
 
-Install Tailscale before continuing if you want iPhone-to-Mac voice
-networking. On macOS, use the Mac App Store variant (see
-[Getting Started](getting-started/index.md#prerequisites)):
-
-```bash
-open https://apps.apple.com/us/app/tailscale/id1475387142
-```
+Choose private networking in the desktop app before running its pinned setup
+command. Openbase VPN is recommended when the environment can support a VPN;
+Openbase Direct is the no-VPN alternative. Standalone Electron onboarding does
+not require or offer a separate Tailscale app.
 
 The desktop app's bundled runtime package includes Python, Openbase Coder
 dependencies, the console build, and LiveKit server. Source-development setup
@@ -72,7 +69,8 @@ openbase-coder setup
 
 The setup command writes `~/.openbase/installation.json`, creates
 `~/.openbase/.env` if it is missing, uses the bundled console, installs
-background services, and configures Tailscale Serve routes.
+background services, and records the selected private-network transport. The
+later login and pairing steps enroll that transport and apply its routes.
 
 If `~/.openbase/.env` already existed before setup, the CLI leaves it unchanged.
 Add the voice keys manually:
@@ -115,12 +113,16 @@ openbase-coder services status
 curl -fsS http://127.0.0.1:7999/api/health/
 ```
 
-If Tailscale Serve was not configured during setup, run:
+Check the selected private-network transport and its routes with:
 
 ```bash
-tailscale serve --bg --http=18080 http://127.0.0.1:7999
-tailscale serve --bg --tcp=7880 tcp://127.0.0.1:7880
+openbase-coder tailnet show
+openbase-coder tailnet status
 ```
+
+If it is not connected yet, return to the desktop app's pairing step after
+login. That flow enrolls Openbase VPN or Openbase Direct without asking you to
+run provider-specific networking commands.
 
 ## Open the Desktop App
 

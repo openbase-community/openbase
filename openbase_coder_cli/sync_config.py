@@ -32,15 +32,12 @@ FOLDER_ID_PREFIX = "cs-"
 FOLDER_ID_HEX_DIGITS = 16
 
 # Product state that syncs between a user's devices as a first-class part
-# of code sync: the thread-sync transport and the Openbase-managed agent
-# homes' skills for BOTH backends (codex/claude parity). These are the only
-# paths allowed inside ~/.openbase — everything else there is machine-local
-# (auth, device identity, databases, logs, packages) and must never sync.
-PRODUCT_STATE_RELPATHS = (
-    ".openbase/thread-sync",
-    ".openbase/codex_home/skills",
-    ".openbase/claude_config/skills",
-)
+# of code sync: the thread-sync transport. It is the only path allowed
+# inside ~/.openbase — everything else there is machine-local (auth, device
+# identity, databases, logs, packages) and must never sync. The shared agent
+# homes (~/.codex, ~/.claude) are the user's own and never sync either;
+# skill symlinks in them are machine-local and self-heal at service start.
+PRODUCT_STATE_RELPATHS = (".openbase/thread-sync",)
 
 
 @dataclass(frozen=True)
@@ -71,8 +68,13 @@ def folder_id_for_relpath(relpath: str) -> str:
     return FOLDER_ID_PREFIX + digest[:FOLDER_ID_HEX_DIGITS]
 
 
-def validate_relpath(relpath: str) -> str:
-    """Validate and normalize a home-relative sync folder path."""
+def normalize_relpath(relpath: str) -> str:
+    """Sanitize a home-relative sync folder path (no policy guard).
+
+    Shared by add and remove so an already-registered folder can always be
+    removed by the same relpath it was stored under, even when a policy guard
+    (below) would now reject *adding* it.
+    """
     if not isinstance(relpath, str):
         raise ValueError("Sync folder path must be a string.")
     normalized = relpath.strip().strip("/")
@@ -85,7 +87,13 @@ def validate_relpath(relpath: str) -> str:
     parts = PurePosixPath(normalized).parts
     if any(part == ".." for part in parts):
         raise ValueError("Sync folder paths cannot contain '..'.")
-    canonical = str(PurePosixPath(*parts))
+    return str(PurePosixPath(*parts))
+
+
+def validate_relpath(relpath: str) -> str:
+    """Normalize a home-relative sync folder path and enforce the add guard."""
+    canonical = normalize_relpath(relpath)
+    parts = PurePosixPath(canonical).parts
     if parts[0] == ".openbase" and canonical not in PRODUCT_STATE_RELPATHS:
         raise ValueError(
             "Folders inside ~/.openbase cannot be synced (machine-local state)."
@@ -93,18 +101,24 @@ def validate_relpath(relpath: str) -> str:
     return canonical
 
 
-def relpath_for_path(path: Path | str) -> str:
-    """Convert an absolute path under ``$HOME`` to a validated relpath."""
+def relpath_for_path(path: Path | str, *, guard: bool = True) -> str:
+    """Convert an absolute path under ``$HOME`` to a relpath.
+
+    ``guard`` applies the add-time policy (rejecting ``~/.openbase`` state);
+    pass ``guard=False`` for removal, which must accept any already-registered
+    folder.
+    """
+    convert = validate_relpath if guard else normalize_relpath
     resolved = Path(path).expanduser()
     if not resolved.is_absolute():
-        return validate_relpath(str(resolved))
+        return convert(str(resolved))
     try:
         relative = resolved.relative_to(Path.home())
     except ValueError:
         raise ValueError(
             f"Only paths under your home directory can be synced: {resolved}"
         ) from None
-    return validate_relpath(str(relative))
+    return convert(str(relative))
 
 
 def read_sync_config(path: Path | None = None) -> dict[str, Any]:
@@ -226,20 +240,49 @@ def set_sync_folders(
 
 def add_sync_folder(relpath: str, path: Path | None = None) -> SyncFolder:
     normalized = validate_relpath(relpath)
-    existing = list(sync_folders(path))
-    if all(folder.relpath != normalized for folder in existing):
-        existing.append(SyncFolder(relpath=normalized))
-    set_sync_folders(existing, path)
+    config_path = path or SYNC_CONFIG_PATH
+    payload = read_sync_config(config_path)
+    raw_folders = payload.get(FOLDERS_KEY)
+    existing = list(raw_folders) if isinstance(raw_folders, list) else []
+    if not any(
+        isinstance(entry, dict)
+        and isinstance(entry.get("relpath"), str)
+        and normalize_relpath(entry["relpath"]) == normalized
+        for entry in existing
+    ):
+        existing.append(
+            {"relpath": normalized, "extra_ignores": []}
+        )
+        _write_sync_config({**payload, FOLDERS_KEY: existing}, config_path)
     return SyncFolder(relpath=normalized)
 
 
 def remove_sync_folder(relpath: str, path: Path | None = None) -> bool:
-    normalized = validate_relpath(relpath)
-    existing = list(sync_folders(path))
-    remaining = [folder for folder in existing if folder.relpath != normalized]
-    if len(remaining) == len(existing):
+    """Remove a registered folder by relpath.
+
+    Prunes the persisted list directly rather than round-tripping through
+    ``set_sync_folders`` so a folder that was grandfathered in (or predates a
+    later add-guard) is always removable — removal must never be blocked by
+    the rules that gate *adding* a folder.
+    """
+    normalized = normalize_relpath(relpath)
+    config_path = path or SYNC_CONFIG_PATH
+    payload = read_sync_config(config_path)
+    raw_folders = payload.get(FOLDERS_KEY)
+    if not isinstance(raw_folders, list):
         return False
-    set_sync_folders(remaining, path)
+    remaining = [
+        entry
+        for entry in raw_folders
+        if not (
+            isinstance(entry, dict)
+            and isinstance(entry.get("relpath"), str)
+            and normalize_relpath(entry["relpath"]) == normalized
+        )
+    ]
+    if len(remaining) == len(raw_folders):
+        return False
+    _write_sync_config({**payload, FOLDERS_KEY: remaining}, config_path)
     return True
 
 

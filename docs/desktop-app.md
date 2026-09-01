@@ -19,14 +19,14 @@ Download the Apple Silicon DMG from [Downloads](downloads.md) and open the
 app. On first run it shows a guided setup flow:
 
 1. **Welcome** — overview of the steps ahead.
-2. **Check prerequisites** — verifies macOS, the bundled CLI (activated
-   automatically), and Tailscale. You can install Tailscale from here if it
-   is missing (the app links the Mac App Store variant; see
-   [Troubleshooting](troubleshooting.md#tailscale-login-loops-or-cli-errors-after-an-update-macos)
-   for why).
+2. **Check prerequisites and choose private networking** — verifies macOS and
+   the bundled CLI, then asks the important constraint: **Can this environment
+   support a VPN?** Choose **Openbase VPN** (recommended) when it can, or
+   **Openbase Direct** when a managed/restricted environment cannot install a
+   VPN. Electron onboarding never offers the separate Tailscale app.
 3. **Set up Openbase Cloud** — starts the normal managed path: Cloud-proxied
-   Claude Code plus managed speech-to-text and voice output, with a generous
-   Openbase Cloud free trial and no third-party provider keys.
+   Claude Code plus managed speech-to-text and voice output, with free
+   Openbase Cloud monthly allowances and no third-party provider keys.
 4. **Voice configuration** — the normal Openbase Cloud path is already
    configured; developer/provider-key audio remains available later in
    settings.
@@ -34,9 +34,17 @@ app. On first run it shows a guided setup flow:
    detected when `~/.openbase/auth.json` is written.
 6. **Get Openbase on iPhone** — scan a QR code to install the iOS app and
    sign in with the same account. You can skip phone setup.
-7. **Pair devices over Tailscale** — install Tailscale on both devices in the
-   same tailnet, then click **Register this Mac** so the phone can find it.
-   You can skip pairing.
+7. **Pair devices privately** — connect the selected Openbase transport on the
+   Mac and phone, then register the Mac so the phone can find it. Openbase VPN
+   bundles Netmesh (Openbase-operated Headscale plus Tailscale-compatible
+   open-source clients), needs no Tailscale account, collects no VPN traffic or
+   usage analytics, and sends no VPN analytics
+   to Tailscale. Its full-device route enables every feature, including opening
+   agent-created websites in the phone browser. Publish those sites with
+   `openbase-coder service publish <name> <port>` so the agent gives you a
+   tailnet URL instead of unusable phone-side `localhost`. Openbase Direct is
+   the no-VPN alternative; it carries Openbase app traffic but cannot expose
+   those sites to other phone apps. You can skip pairing.
 8. **Verify** — health-checks the local API, shows CLI and app versions, and
    confirms voice configuration and login.
 
@@ -118,7 +126,9 @@ Call tab is where you actually speak to it. See
 ### Approvals
 
 Pending permission requests from running agents (commands, tool calls) with
-Accept and Decline buttons. Auto-refreshes every 5 seconds.
+Accept and Decline buttons. The page receives authenticated live snapshots
+from the local approval queue and falls back to 5-second HTTP refreshes when
+the WebSocket is unavailable.
 
 **On iPhone:** the Approvals tab shows the same queue with approve/deny
 buttons, and approval push notifications deep-link straight to it — so you
@@ -137,10 +147,22 @@ app, the console, or `openbase-coder routines ...`.
 
 ### Skills
 
-Browse installed agent skills and the Printing Press skill catalog. You can
-search, view skill metadata (version, targets, MCP tool details), install
-catalog skills to one or more targets, edit skill sources, and enable
-auto-linking of personal skills into the Openbase agent homes.
+Browse installed agent skills, the Openbase catalog, and the Printing Press
+catalog. An Openbase catalog skill is installable only when its Django-admin
+registry entry pins a GitHub repository, full commit SHA, safe subdirectory,
+and optional `SKILL.md` digest. The confirmation dialog shows that provenance
+and the selected agent homes; installation never runs catalog dependencies or
+scripts. Existing skills with the same name are treated as conflicts rather
+than overwritten.
+
+The Routine templates tab is browse-only. It shows prompts, commands,
+schedules, and required skills from the managed registry, but never creates or
+schedules a routine. Create a routine explicitly from the Routines page after
+reviewing a template.
+
+You can also edit installed skill sources and enable auto-linking of personal
+skills (`~/.agents/skills`, the `home` scope) into the shared agent homes at
+`~/.codex/skills` and `~/.claude/skills`.
 
 **On iPhone:** skills are not managed from the iOS app.
 
@@ -164,7 +186,7 @@ browser.
 
 ### Devices
 
-Scans your tailnet and lists Openbase hosts (name, OS, Tailscale IP, Openbase
+Scans your private network and lists Openbase hosts (name, OS, private IP, Openbase
 URL, online status) alongside other tailnet devices.
 
 **On iPhone:** Settings → Backend Host has a matching **Discover Tailnet
@@ -172,9 +194,12 @@ Hosts** action for picking which Mac the phone talks to.
 
 ### Instructions
 
-Edit the agent instruction documents (AGENTS.md / CLAUDE.md variants) for
-each environment: voice Codex home, normal Codex home, Claude config, direct
-LiveKit voice sessions, Super Agents, and the dispatcher.
+Edit the agent instruction documents for each target: the Openbase base
+instructions (`~/.openbase/instructions/AGENTS.md`, delivered to every
+Openbase session on both backends), your own Codex home `AGENTS.md`
+(`~/.codex/AGENTS.md`, which applies to all Codex sessions including
+Openbase's), direct LiveKit voice sessions, Super Agents, and the
+dispatcher.
 
 **On iPhone:** not available.
 
@@ -204,9 +229,10 @@ The Settings page groups configuration into sections:
   before changing it, then restarts Openbase services and recreates the
   dispatcher automatically.
 - **Backend Model**, **Service Tier**, **Reasoning** — model and reasoning
-  defaults for agents (same as `openbase-coder defaults ...`). Reasoning
-  levels apply to the Codex backend only; on Claude Code, reasoning effort
-  follows the Service Tier (Fast mode) and cannot be set directly.
+  defaults for agents (same as `openbase-coder defaults ...`). Service tiers
+  (Fast mode) apply to the Codex backend only; on Claude Code the tier
+  cannot be set and turns always run at the standard tier. Reasoning levels
+  apply to both backends and are the Claude speed/quality knob.
 - **LiveKit Companion Screen Sharing** (desktop app only) — see below.
 - **Dispatcher Voice** — TTS/STT provider and voice selection, voice API
   keys, local model downloads, and a "Recreate LiveKit thread" action.

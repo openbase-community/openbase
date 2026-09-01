@@ -3,8 +3,10 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
+from openbase_coder_cli.code_sync import CodeSyncError, reconciler
 from openbase_coder_cli.code_sync import conflicts as conflicts_module
-from openbase_coder_cli.code_sync import reconciler
 
 GIT_IDENTITY = [
     "-c",
@@ -260,6 +262,22 @@ def test_resolve_keep_local_leaves_repo_alone(tmp_path: Path) -> None:
     assert resolved["resolution"] == "keep_local"
 
 
+def test_branch_conflict_requires_sync_folder_id(tmp_path: Path) -> None:
+    conflicts_path = tmp_path / "conflicts.json"
+
+    with pytest.raises(CodeSyncError, match="without a sync folder id"):
+        conflicts_module.record_branch_conflict(
+            folder_id="",
+            repo_relpath="repo",
+            branch="main",
+            local_sha="a" * 40,
+            remote_sha="b" * 40,
+            path=conflicts_path,
+        )
+
+    assert conflicts_module.read_conflicts(conflicts_path) == []
+
+
 def test_discover_git_repos_respects_depth_and_skips_noise(tmp_path: Path) -> None:
     root = tmp_path / "folder"
     _init_repo(root / "repo-a")
@@ -474,3 +492,159 @@ def test_extra_untracked_files_do_not_block_fast_forward(tmp_path: Path) -> None
     # The in-flight file survives, still untracked.
     assert (local / "wip-notes.md").read_text(encoding="utf-8") == "uncommitted work\n"
     assert "?? wip-notes.md" in _git(local, "status", "--porcelain")
+
+
+def test_discover_git_repos_skips_trash_dirs(tmp_path: Path) -> None:
+    """Trash never syncs (Syncthing-ignored), so it must never reconcile."""
+    root = tmp_path / "folder"
+    _init_repo(root / "repo-a")
+    _init_repo(root / "trash" / "old-project")
+    _init_repo(root / "Trash" / "older-project")
+
+    repos = reconciler.discover_git_repos(root)
+
+    assert repos == [root / "repo-a"]
+
+
+def test_one_broken_repo_does_not_abort_the_tick(tmp_path: Path, monkeypatch) -> None:
+    from openbase_coder_cli import sync_config
+    from openbase_coder_cli.code_sync import repositories
+
+    home = tmp_path / "home"
+    alpha = _init_repo(home / "Projects" / "alpha")
+    _commit(alpha, "a.py", "print('a')\n", "initial")
+    beta = _init_repo(home / "Projects" / "beta")
+    _commit(beta, "b.py", "print('b')\n", "initial")
+    config_path = tmp_path / "sync-config.json"
+    sync_config.set_sync_folders([{"relpath": "Projects"}], config_path)
+    monkeypatch.setattr(
+        reconciler, "RECONCILE_STATE_PATH", tmp_path / "reconcile-state.json"
+    )
+    real_sync_checkout_manifest = repositories.sync_checkout_manifest
+
+    def broken_for_alpha(repo: Path, **kwargs):
+        if repo.name == "alpha":
+            raise subprocess.TimeoutExpired(cmd="git", timeout=60)
+        return real_sync_checkout_manifest(repo, **kwargs)
+
+    monkeypatch.setattr(repositories, "sync_checkout_manifest", broken_for_alpha)
+
+    summary = reconciler.run_reconcile_once(
+        config_path=config_path,
+        home=home,
+        conflicts_path=tmp_path / "conflicts.json",
+        peers=(),
+    )
+
+    assert any(
+        "alpha" in error and "TimeoutExpired" in error for error in summary["errors"]
+    )
+    assert {"path": "beta", "action": "published"} in summary["repository_manifests"]
+
+
+def test_trash_branch_conflicts_are_retired(tmp_path: Path, monkeypatch) -> None:
+    from openbase_coder_cli import sync_config
+
+    home = tmp_path / "home"
+    _init_repo(home / "Projects" / "trash" / "junk")
+    config_path = tmp_path / "sync-config.json"
+    conflicts_path = tmp_path / "conflicts.json"
+    sync_config.set_sync_folders([{"relpath": "Projects"}], config_path)
+    folder = sync_config.sync_folders(config_path)[0]
+    conflicts_module.record_branch_conflict(
+        folder_id=folder.folder_id,
+        repo_relpath="trash/junk",
+        branch="main",
+        local_sha="a" * 40,
+        remote_sha="b" * 40,
+        path=conflicts_path,
+    )
+    monkeypatch.setattr(
+        reconciler, "RECONCILE_STATE_PATH", tmp_path / "reconcile-state.json"
+    )
+
+    summary = reconciler.run_reconcile_once(
+        config_path=config_path,
+        home=home,
+        conflicts_path=conflicts_path,
+        peers=(),
+    )
+
+    assert summary["conflicts_retired_skipped"] == 1
+    assert conflicts_module.unresolved_conflicts(conflicts_path) == []
+    assert summary.get("repository_manifests", []) == []
+
+
+def test_run_reconcile_once_persists_last_summary(tmp_path: Path, monkeypatch) -> None:
+    from openbase_coder_cli import sync_config
+
+    home = tmp_path / "home"
+    repo = _init_repo(home / "Projects" / "demo")
+    _commit(repo, "app.py", "print('v1')\n", "initial")
+    config_path = tmp_path / "sync-config.json"
+    state_path = tmp_path / "reconcile-state.json"
+    sync_config.set_sync_folders([{"relpath": "Projects/demo"}], config_path)
+    monkeypatch.setattr(reconciler, "RECONCILE_STATE_PATH", state_path)
+
+    reconciler.run_reconcile_once(
+        config_path=config_path,
+        home=home,
+        conflicts_path=tmp_path / "conflicts.json",
+        peers=(),
+    )
+
+    state = reconciler.read_reconcile_state(state_path)
+    last_summary = state["last_summary"]
+    assert last_summary["repo_count"] == 0
+    assert last_summary["published"] == 1
+    assert last_summary["errors"] == 1  # no syncable peers advertised
+    assert last_summary["error_details"] == ["no syncable peers advertised"]
+    # Flat legacy keys remain for older readers.
+    assert state["fast_forwarded"] == 0
+    assert state["diverged"] == 0
+
+
+def test_auth_header_is_resolved_per_repo(tmp_path: Path, monkeypatch) -> None:
+    """Long sweeps outlive one access token; each repo must re-resolve it."""
+    from openbase_coder_cli import sync_config
+    from openbase_coder_cli.code_sync.eligibility import SyncPeer
+
+    home = tmp_path / "home"
+    for name in ("alpha", "beta"):
+        repo = _init_repo(home / "Projects" / name)
+        _commit(repo, "app.py", "print('v1')\n", "initial")
+        peer_clone = tmp_path / f"{name}-peer"
+        subprocess.run(
+            ["git", "clone", "--quiet", str(repo), str(peer_clone)],
+            capture_output=True,
+            check=True,
+        )
+    config_path = tmp_path / "sync-config.json"
+    sync_config.set_sync_folders([{"relpath": "Projects"}], config_path)
+    monkeypatch.setattr(
+        reconciler, "RECONCILE_STATE_PATH", tmp_path / "reconcile-state.json"
+    )
+    token_calls = {"count": 0}
+
+    def counting_token(_self) -> str:
+        token_calls["count"] += 1
+        return f"token-{token_calls['count']}"
+
+    monkeypatch.setattr(reconciler.TokenManager, "get_access_token", counting_token)
+    monkeypatch.setattr(
+        reconciler,
+        "peer_git_url",
+        lambda _peer, _folder_id, relpath: str(tmp_path / f"{Path(relpath).name}-peer"),
+    )
+    peer = SyncPeer("peer", "peer", "desktop", "peer.test", "engine")
+
+    summary = reconciler.run_reconcile_once(
+        config_path=config_path,
+        home=home,
+        conflicts_path=tmp_path / "conflicts.json",
+        peers=(peer,),
+    )
+
+    assert summary["errors"] == []
+    # One initial probe plus at least one resolution per repo.
+    assert token_calls["count"] >= 3

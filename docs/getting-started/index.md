@@ -1,19 +1,52 @@
 # Getting Started
 
-Openbase Coder runs on your Mac (or a Linux machine) as the `openbase-coder`
-CLI runtime. There are two supported ways to install it:
+Openbase Coder runs as the `openbase-coder` CLI runtime on your own machine.
+The recommended path starts from the GitHub workspace and keeps every part of
+the install visible and editable:
 
-- **[Mac App Download](mac-app.md)** — download the desktop app and let its
-  guided setup install everything: the bundled CLI runtime, managed Claude
-  Code, managed voice audio, and iPhone pairing. The fastest path for most
-  users.
-- **[Developer Setup](developer-setup.md)** — clone the
-  `openbase-coder-workspace` repo and install from source with its setup
-  script. Fully supported; choose it when you want to develop Openbase Coder
-  itself, run the runtime from a checkout, or set up a machine without the
-  desktop app (for example a headless Linux box).
+### Developer Setup (recommended)
 
-These correspond to Openbase Coder's two deployment modes:
+This path is designed for founders, contractors, and small-company developers
+who want to keep building from anywhere with a local, inspectable Openbase
+installation.
+
+**[Developer Setup](developer-setup.md)** — start from the
+[`openbase-coder-workspace`](https://github.com/openbase-community/openbase-coder-workspace)
+GitHub repo and run its interactive `./scripts/setup`
+from a terminal: pickers choose your coding backend and voice audio provider,
+then the script walks you through Openbase Cloud login and verifies your
+install. This is the strongly recommended path when you can use a terminal.
+The Electron dashboard and Swift menu-bar UI are optional visual developer
+surfaces after setup; Electron is never required and never owns a development
+install.
+
+### Mac App (production, no terminal)
+
+**[Mac App Download](mac-app.md)** — use the signed Electron app released from
+`main` when you want a guided production install with no terminal. It carries
+the bundled CLI runtime, runs its own onboarding, and hosts the dashboard.
+
+The developer path is fully supported: clone the
+`openbase-coder-workspace` repo and run its interactive `./scripts/setup`
+when you want to develop Openbase Coder itself, run from a checkout, or set
+up a machine without the desktop app (for example a headless Linux box).
+
+### Windows & Docker
+
+On Windows, Openbase Coder runs **natively (beta)**: `./scripts/setup` works
+from a Windows checkout, supervising services through the Windows service
+backend instead of launchd/systemd (installer/packaging details are still
+firming up). See [Developer Setup](developer-setup.md).
+
+**[Run in Docker](../docker.md)** — the full runtime in a single Linux
+container, joined to your tailnet as its own device, on any Docker engine
+(macOS, Windows, or Linux). On Windows it is the most battle-tested option
+today.
+
+---
+
+The Mac app and developer paths correspond to Openbase Coder's two
+deployment modes:
 
 - **Standalone (production)**: a bundled runtime package, shipped inside the
   desktop app, containing Python, the CLI, LiveKit server, a prebuilt
@@ -25,22 +58,19 @@ These correspond to Openbase Coder's two deployment modes:
 
 Both paths run the same `openbase-coder setup` underneath and end in the same
 place: a local runtime serving the console at `http://127.0.0.1:7999`,
-background services managed by launchd/systemd, and Tailscale routes for the
-iOS app.
+background services managed by launchd/systemd, and private-network routes for
+the phone apps.
 
 ## Prerequisites
 
-Common to both install paths:
+Common to the Mac app and developer paths (the Docker path lists its own on
+[Run in Docker](../docker.md#prerequisites)):
 
 - macOS (`setup` and `services` use launchd) or Linux (systemd user services). The `computer-use` CLI is Linux-only for Openbase DevSpace Xorg/DCV desktops; macOS agents use native Computer Use tooling.
-- Tailscale, signed in and connected, for iOS app access to the local CLI.
-  On macOS, install the
-  [Mac App Store variant](https://apps.apple.com/us/app/tailscale/id1475387142):
-  it avoids the site-download variant's system-extension problems after
-  updates (see
-  [Troubleshooting](../troubleshooting.md#tailscale-login-loops-or-cli-errors-after-an-update-macos)),
-  and it supports everything Openbase needs. Never install both variants at
-  once.
+- Private networking for phone access. Production Electron onboarding offers
+  **Openbase VPN** (recommended) or **Openbase Direct** when the environment
+  cannot support a VPN. Developer/headless CLI installs can also use the
+  expert Tailscale transport.
 - Openbase Cloud login for the normal `openbase_cloud` backend
 
 Local Kokoro/MLX audio is optional in both paths. When setup is run with
@@ -51,21 +81,19 @@ Apple Silicon Mac and a Python 3.12 runtime — see
 
 ## What Setup Does
 
-Whichever path you choose, `openbase-coder setup`:
+Whichever path you choose, `openbase-coder setup` detects standalone vs.
+development mode, writes `~/.openbase/installation.json`, generates
+`~/.openbase/.env` (with the first-run backend and audio-provider pickers),
+installs the selected backend's CLI if missing, renders the Openbase
+instruction files, registers **only** the Super Agents MCP server and the
+session-ID hook in your shared `~/.codex`/`~/.claude` homes (nothing else
+there is touched), downloads the LiveKit model files, builds or uses the
+console, installs the launchd/systemd services, and configures the selected
+private-network transport (Openbase VPN, Openbase Direct, or the expert
+Tailscale transport).
 
-1. Detects the bundled runtime package (standalone mode), or locates your workspace checkout (development mode).
-2. Writes `~/.openbase/installation.json`.
-3. Generates `~/.openbase/.env` (if it does not already exist). On a fresh interactive install, numbered pickers choose the coding backend (when `--backend` is omitted) and the voice audio provider (when `--audio-provider` is omitted): Cloud TTS/STT, bring-your-own-keys, or local models.
-4. Installs the selected backend's CLI on demand if missing (codex from GitHub release binaries into `~/.openbase/bin`, claude via Anthropic's official installer).
-5. Generates Openbase instruction files from bundled or workspace templates, links Openbase Claude instructions to the generated Openbase AGENTS file, and keeps normal Claude linked to normal Codex AGENTS.
-6. Symlinks bundled or workspace skills into both Openbase Codex and Claude config skill homes.
-7. Downloads LiveKit agent model files (VAD, turn detector) in both modes, and initializes the CLI venv with `uv sync` in development mode.
-8. Writes Codex app-server defaults such as `CODEX_MODEL=gpt-5.5`, `CODEX_MODEL_REASONING_EFFORT=high`, `CODEX_SERVICE_TIER=standard`, `CODEX_APP_SERVER_URL`, and `LIVEKIT_CODEX_THREAD_CWD`.
-9. Uses the bundled console build, or builds `console` in development mode.
-10. Installs background services — launchd on macOS, systemd user units on Linux (unless `--skip-services`). Backend-specific services such as `codex-app-server` are only installed for the backends that use them; visible Openbase Cloud uses Cloud-proxied Claude Code and does not install `codex-app-server`.
-11. Configures Tailscale Serve routes for iOS access to the local CLI API and LiveKit:
-    - `tailscale serve --bg --http=18080 http://127.0.0.1:7999`
-    - `tailscale serve --bg --tcp=7880 tcp://127.0.0.1:7880`
+For the authoritative step-by-step phase list, every flag, and backend/audio
+details, see [setup](../commands/setup.md).
 
 ## Authenticate With Openbase Cloud
 
@@ -88,7 +116,7 @@ openbase-coder onboarding status
 ```
 
 `onboarding status` summarizes the state the desktop/iOS onboarding flow
-cares about: CLI configured, login, Tailscale identity, and Tailscale Serve
+cares about: CLI configured, login, private-network identity, and route
 health. See [onboarding](../commands/onboarding.md).
 
 ## Uninstalling Openbase

@@ -6,6 +6,7 @@ from click.testing import CliRunner
 from openbase_coder_cli.cli.doctor import (
     _check_agent_auth,
     _check_livekit_client_credentials,
+    _check_local_livekit_tcp_listener,
 )
 
 doctor_cli = importlib.import_module("openbase_coder_cli.cli.doctor")
@@ -114,6 +115,53 @@ def test_livekit_client_credential_check_accepts_separate_credentials():
     ]
 
 
+def test_local_livekit_tcp_check_accepts_disabled_listener():
+    messages = []
+
+    _check_local_livekit_tcp_listener(
+        {"LIVEKIT_NETWORK_MODE": "local"},
+        [("127.0.0.1", 7880)],
+        lambda message: messages.append(("ok", message)),
+        lambda message: messages.append(("fail", message)),
+    )
+
+    assert messages == [
+        ("ok", "port 7881 (LiveKit ICE-TCP): disabled in local Netmesh mode")
+    ]
+
+
+def test_local_livekit_tcp_check_rejects_any_listener():
+    messages = []
+
+    _check_local_livekit_tcp_listener(
+        {"LIVEKIT_NETWORK_MODE": "local"},
+        [("*", 7881)],
+        lambda message: messages.append(("ok", message)),
+        lambda message: messages.append(("fail", message)),
+    )
+
+    assert messages == [
+        (
+            "fail",
+            "port 7881 (LiveKit ICE-TCP): must not listen in local Netmesh "
+            "mode (found *)",
+        )
+    ]
+
+
+def test_livekit_tcp_check_leaves_kernel_vpn_mode_unchanged():
+    messages = []
+
+    _check_local_livekit_tcp_listener(
+        {"LIVEKIT_NETWORK_MODE": "tailscale"},
+        [("*", 7881)],
+        lambda message: messages.append(("ok", message)),
+        lambda message: messages.append(("fail", message)),
+    )
+
+    assert messages == []
+
+
 def test_agent_auth_requires_codex_login_for_codex_backend(monkeypatch, tmp_path):
     messages = _collect_auth_check(
         {"OPENBASE_CODING_BACKEND": "codex"}, monkeypatch, tmp_path
@@ -191,7 +239,7 @@ def test_doctor_allows_optional_stopped_services(monkeypatch, tmp_path):
             workspace_path=str(tmp_path),
         ),
     )
-    monkeypatch.setattr(doctor_cli, "configured_coding_backend", lambda: "codex")
+    monkeypatch.setattr(doctor_cli, "configured_coding_backends", lambda: ["codex"])
     monkeypatch.setattr(
         doctor_cli,
         "SERVICES",
@@ -248,8 +296,6 @@ def test_doctor_allows_optional_stopped_services(monkeypatch, tmp_path):
     )
     codex_home = tmp_path / "codex_home"
     codex_home.mkdir()
-    (tmp_path / ".codex").mkdir()
-    (tmp_path / ".codex" / "auth.json").write_text("{}", encoding="utf-8")
     (codex_home / "auth.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(
         doctor_cli.Path,
@@ -281,7 +327,9 @@ def test_doctor_skips_backend_scoped_services_on_other_backends(monkeypatch, tmp
             console_build_dir="",
         ),
     )
-    monkeypatch.setattr(doctor_cli, "configured_coding_backend", lambda: "claude_code")
+    monkeypatch.setattr(
+        doctor_cli, "configured_coding_backends", lambda: ["claude_code"]
+    )
     monkeypatch.setattr(
         doctor_cli,
         "SERVICES",
@@ -364,7 +412,7 @@ def test_doctor_reports_missing_tailscale_as_setup_action(monkeypatch, tmp_path)
             workspace_path=str(tmp_path),
         ),
     )
-    monkeypatch.setattr(doctor_cli, "configured_coding_backend", lambda: "codex")
+    monkeypatch.setattr(doctor_cli, "configured_coding_backends", lambda: ["codex"])
     monkeypatch.setattr(doctor_cli, "SERVICES", [])
     monkeypatch.setattr(doctor_cli, "_get_listening_sockets", lambda: [])
     monkeypatch.setattr(doctor_cli, "DEFAULT_ENV_FILE_PATH", env_file)
@@ -402,8 +450,6 @@ def test_doctor_reports_missing_tailscale_as_setup_action(monkeypatch, tmp_path)
     )
     codex_home = tmp_path / "codex_home"
     codex_home.mkdir()
-    (tmp_path / ".codex").mkdir()
-    (tmp_path / ".codex" / "auth.json").write_text("{}", encoding="utf-8")
     (codex_home / "auth.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(
         doctor_cli.Path,
@@ -465,19 +511,10 @@ def test_check_code_sync_fails_when_managed_stignore_lacks_git(monkeypatch, tmp_
 
 def _patch_agent_home_paths(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        doctor_cli, "NORMAL_CODEX_CONFIG_PATH", tmp_path / "codex" / "config.toml"
+        doctor_cli, "CODEX_CONFIG_PATH", tmp_path / "codex" / "config.toml"
     )
-    monkeypatch.setattr(
-        doctor_cli, "NORMAL_CLAUDE_STATE_PATH", tmp_path / ".claude.json"
-    )
-    monkeypatch.setattr(
-        doctor_cli,
-        "OPENBASE_CLAUDE_JSON_PATH",
-        tmp_path / "claude_config" / ".claude.json",
-    )
-    monkeypatch.setattr(
-        doctor_cli, "OPENBASE_CLAUDE_CONFIG_DIR", tmp_path / "claude_config"
-    )
+    monkeypatch.setattr(doctor_cli, "CLAUDE_STATE_PATH", tmp_path / ".claude.json")
+    monkeypatch.setattr(doctor_cli, "CLAUDE_CONFIG_DIR", tmp_path / "claude_config")
     monkeypatch.setattr(doctor_cli, "STANDALONE_RELEASES_DIR", tmp_path / "releases")
 
 
@@ -523,12 +560,11 @@ def test_mcp_registration_check_fails_on_dangling_command(monkeypatch, tmp_path)
     )
 
     assert any(
-        level == "fail" and "normal Codex config" in message and str(gone) in message
+        level == "fail" and "Codex config" in message and str(gone) in message
         for level, message in messages
     )
     assert any(
-        level == "ok" and "normal Claude config" in message
-        for level, message in messages
+        level == "ok" and "Claude config" in message for level, message in messages
     )
 
 
@@ -550,7 +586,7 @@ def test_mcp_registration_check_warns_on_version_pinned_command(monkeypatch, tmp
 
     assert any(
         level == "warn"
-        and "normal Claude config" in message
+        and "Claude config" in message
         and "pinned to versioned release" in message
         for level, message in messages
     )
@@ -577,3 +613,109 @@ def test_agent_home_skills_check_reports_dangling_and_healthy(monkeypatch, tmp_p
     assert any(
         level == "ok" and "1 entries resolve" in message for level, message in messages
     )
+
+
+def _collect_service_runtime_paths(monkeypatch, wrapper_dir, current_dir):
+    messages = []
+
+    def ok(message):
+        messages.append(("ok", message))
+
+    def warn(message):
+        messages.append(("warn", message))
+
+    def fail(message):
+        messages.append(("fail", message))
+
+    monkeypatch.setattr(doctor_cli, "LAUNCHD_WRAPPER_DIR", wrapper_dir)
+    monkeypatch.setattr(doctor_cli, "STANDALONE_CURRENT_DIR", current_dir)
+    doctor_cli._check_service_runtime_paths(ok, warn, fail)
+    return messages
+
+
+def _make_package(root, *, with_interpreter=True):
+    (root / "bin").mkdir(parents=True, exist_ok=True)
+    binary = root / "bin" / "openbase-coder"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    if with_interpreter:
+        (root / "python" / "bin").mkdir(parents=True, exist_ok=True)
+        interpreter = root / "python" / "bin" / "python"
+        interpreter.write_text("#!/bin/sh\n")
+        interpreter.chmod(0o755)
+    return root
+
+
+def _write_wrapper(wrapper_dir, name, target):
+    wrapper_dir.mkdir(parents=True, exist_ok=True)
+    wrapper = wrapper_dir / f"{name}.sh"
+    wrapper.write_text(f'#!/bin/bash\ncd "/tmp"\nexec {target} server --port 7999\n')
+    return wrapper
+
+
+def test_service_runtime_paths_ok_when_wrappers_resolve(monkeypatch, tmp_path):
+    package = _make_package(tmp_path / "release")
+    current = tmp_path / "current"
+    current.symlink_to(package)
+    wrappers = tmp_path / "launchd"
+    _write_wrapper(wrappers, "django-cli", current / "bin" / "openbase-coder")
+
+    messages = _collect_service_runtime_paths(monkeypatch, wrappers, current)
+
+    assert not [m for m in messages if m[0] == "fail"]
+    assert any("service wrappers resolve" in m[1] for m in messages)
+
+
+def test_service_runtime_paths_flags_dangling_wrapper_target(monkeypatch, tmp_path):
+    package = _make_package(tmp_path / "release")
+    current = tmp_path / "current"
+    current.symlink_to(package)
+    wrappers = tmp_path / "launchd"
+    _write_wrapper(wrappers, "livekit-agent", tmp_path / "gone" / "python")
+
+    messages = _collect_service_runtime_paths(monkeypatch, wrappers, current)
+
+    failures = [m[1] for m in messages if m[0] == "fail"]
+    assert any("livekit-agent" in f for f in failures)
+    assert any("services regenerate" in f for f in failures)
+
+
+def test_service_runtime_paths_flags_package_missing_interpreter(monkeypatch, tmp_path):
+    """The exact production failure: 'current' resolves, but its Python does not.
+
+    The wrapper execs bin/openbase-coder, which exists and is executable, so
+    checking only the wrapper target reports healthy. The launcher then execs
+    the package interpreter, whose symlink dangles into a renamed app bundle,
+    and every service dies on start.
+    """
+    package = _make_package(tmp_path / "release", with_interpreter=False)
+    (package / "python" / "bin").mkdir(parents=True)
+    (package / "python" / "bin" / "python").symlink_to(tmp_path / "renamed-away")
+    current = tmp_path / "current"
+    current.symlink_to(package)
+    wrappers = tmp_path / "launchd"
+    _write_wrapper(wrappers, "django-cli", current / "bin" / "openbase-coder")
+
+    messages = _collect_service_runtime_paths(monkeypatch, wrappers, current)
+
+    failures = [m[1] for m in messages if m[0] == "fail"]
+    assert any("no usable interpreter" in f for f in failures)
+
+
+def test_service_runtime_paths_flags_dangling_current_alias(monkeypatch, tmp_path):
+    current = tmp_path / "current"
+    current.symlink_to(tmp_path / "deleted-release")
+    wrappers = tmp_path / "launchd"
+    _write_wrapper(wrappers, "django-cli", current / "bin" / "openbase-coder")
+
+    messages = _collect_service_runtime_paths(monkeypatch, wrappers, current)
+
+    failures = [m[1] for m in messages if m[0] == "fail"]
+    assert any("dangling" in f for f in failures)
+
+
+def test_service_runtime_paths_silent_without_wrapper_dir(monkeypatch, tmp_path):
+    messages = _collect_service_runtime_paths(
+        monkeypatch, tmp_path / "absent", tmp_path / "current"
+    )
+    assert messages == []

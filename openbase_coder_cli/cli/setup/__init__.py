@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import platform
 import sys
 import time
 from pathlib import Path
@@ -31,43 +30,28 @@ from openbase_coder_cli.backend_config import (
 from openbase_coder_cli.claude_auth import (
     claude_auth_status,  # noqa: F401
     run_claude_login,  # noqa: F401
-    sync_normal_claude_state,  # noqa: F401
 )
 from openbase_coder_cli.cli.node import run_workspace_package_command  # noqa: F401
 from openbase_coder_cli.cli.setup.claude import (
-    CLAUDE_CODE_PERMISSION_MODE,  # noqa: F401
-    OPENBASE_CLAUDE_SETTINGS_DEFAULTS,  # noqa: F401
-    _ensure_claude_auth_bridge,
-    _ensure_claude_config,
-    _ensure_claude_settings,  # noqa: F401
-    _ensure_normal_claude_mcp,
-    _ensure_normal_claude_md_symlink,
-    _merge_claude_md_excludes,  # noqa: F401
-    _merge_claude_settings,  # noqa: F401
+    _ensure_claude_hooks,
+    _ensure_claude_mcp,
+    _ensure_claude_md_symlink,
     _read_json_object,  # noqa: F401
 )
 from openbase_coder_cli.cli.setup.codex import (
-    CODEX_HOME_DEFAULT_FILES,  # noqa: F401
     CODEX_HOME_DEFAULT_SOURCE_DIR,  # noqa: F401
-    CODEX_HOME_PERMISSION_VALUES,  # noqa: F401
     CODEX_HOME_SKILLS_SOURCE_DIR,  # noqa: F401
     SUPER_AGENTS_MCP_COMMAND,  # noqa: F401
     SUPER_AGENTS_MCP_TABLE,  # noqa: F401
     _default_instructions_dir,  # noqa: F401
     _default_skills_dir,  # noqa: F401
-    _ensure_codex_home_config,
-    _ensure_codex_home_default_files,
-    _ensure_matching_symlink_or_file,  # noqa: F401
-    _ensure_normal_codex_mcp,
-    _ensure_toml_root_values,  # noqa: F401
+    _ensure_codex_config,
+    _ensure_openbase_instruction_files,
     _replace_toml_table,  # noqa: F401
     _super_agents_mcp_command,  # noqa: F401
-    _symlink_codex_auth,
-    _symlink_codex_home_config,  # noqa: F401
     _symlink_codex_home_skills,
     _symlink_skills_to_root,  # noqa: F401
     _toml_args_line,  # noqa: F401
-    _toml_root_key,  # noqa: F401
     _workspace_skill_sources,  # noqa: F401
 )
 from openbase_coder_cli.cli.setup.dispatcher import (
@@ -116,12 +100,8 @@ from openbase_coder_cli.cli.setup.workspace import (
     _syncthing_global_ignore_path,  # noqa: F401
     resolve_dev_workspace_dir,
 )
-from openbase_coder_cli.codex_backend_config import (
-    apply_backend_to_codex_config,  # noqa: F401
-)
 from openbase_coder_cli.codex_home_instructions import (
     ensure_openbase_agents_md,  # noqa: F401
-    ensure_openbase_claude_md_symlink,  # noqa: F401
     ensure_rendered_instruction_file,  # noqa: F401
 )
 from openbase_coder_cli.config.machine_token_manager import (
@@ -129,10 +109,10 @@ from openbase_coder_cli.config.machine_token_manager import (
     MachineTokenManager,  # noqa: F401
 )
 from openbase_coder_cli.config.token_manager import (
-    DEFAULT_WEB_BACKEND_URL,  # noqa: F401
+    DEFAULT_WEB_BACKEND_URL,
     AuthLoginRequiredError,  # noqa: F401
     AuthTransientError,  # noqa: F401
-    TokenManager,  # noqa: F401
+    TokenManager,
 )
 from openbase_coder_cli.dispatcher_config import (
     DISPATCHER_VOICE_ID_KEY,  # noqa: F401
@@ -143,33 +123,45 @@ from openbase_coder_cli.dispatcher_config import (
 )
 from openbase_coder_cli.livekit_install import ensure_pinned_livekit_server
 from openbase_coder_cli.paths import (
+    CLAUDE_CONFIG_DIR,  # noqa: F401
     CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH,  # noqa: F401
     CODEX_DISPATCHER_CONFIG_PATH,
     CODEX_DISPATCHER_INSTRUCTIONS_PATH,  # noqa: F401
     CODEX_HOME_DIR,  # noqa: F401
     CODEX_SUPER_AGENT_INSTRUCTIONS_PATH,  # noqa: F401
     DEFAULT_ENV_FILE_PATH,
-    NORMAL_CLAUDE_CONFIG_DIR,  # noqa: F401
-    NORMAL_CLAUDE_SETTINGS_PATH,  # noqa: F401
-    NORMAL_CODEX_AGENTS_MD_PATH,  # noqa: F401
-    NORMAL_CODEX_CONFIG_PATH,  # noqa: F401
     OPENBASE_BASE_DIR,
-    OPENBASE_CLAUDE_CONFIG_DIR,  # noqa: F401
-    OPENBASE_CLAUDE_JSON_PATH,  # noqa: F401
-    OPENBASE_CLAUDE_SETTINGS_PATH,  # noqa: F401
     OPENBASE_SOUNDS_DIR,  # noqa: F401
+)
+from openbase_coder_cli.platforms import (
+    SUPPORTED_SYSTEMS,
+    is_supported,
+    service_manager_name,
 )
 from openbase_coder_cli.runtime import (
     current_runtime_package,
     packaged_instructions_dir,  # noqa: F401
     packaged_skills_dir,  # noqa: F401
 )
+from openbase_coder_cli.services.cloud_registration import register_and_report
+from openbase_coder_cli.services.definitions import TUNNELD_SERVICE
 from openbase_coder_cli.services.installation import InstallationConfig
-from openbase_coder_cli.services.launchd import install_all_services
+from openbase_coder_cli.services.launchd import install_all_services, install_service
 from openbase_coder_cli.services.onboarding import compute_cli_configured
+from openbase_coder_cli.services.tailnet_experience import TAILNET_EXPERIENCES
+from openbase_coder_cli.services.tailscale_provider import (
+    PROVIDER_NETMESH,
+    PROVIDER_NETMESH_TSNET,
+    PROVIDER_TAILSCALE,
+    PROVIDER_VALUES,
+)
 from openbase_coder_cli.services.tailscale_serve import (
     configure_tailscale_serve,
     tailscale_serve_health,
+)
+from openbase_coder_cli.services.tunneld import (
+    ensure_tunneld_running,
+    install_tunneld_binary,
 )
 from openbase_coder_cli.stt_providers import (
     ASSEMBLYAI_STT_PROVIDER_ID,  # noqa: F401
@@ -295,18 +287,6 @@ class _SetupProgress:
     help="Skip background service installation.",
 )
 @click.option(
-    "--link-codex-config",
-    is_flag=True,
-    help=(
-        "Symlink Openbase's service Codex config to the normal ~/.codex/config.toml."
-    ),
-)
-@click.option(
-    "--link-claude-config",
-    is_flag=True,
-    help=("Symlink Openbase's Claude settings to the normal ~/.claude/settings.json."),
-)
-@click.option(
     "--fast-mode/--no-fast-mode",
     "fast_mode",
     default=True,
@@ -339,6 +319,18 @@ class _SetupProgress:
     ),
 )
 @click.option(
+    "--tailnet-provider",
+    type=click.Choice(list(PROVIDER_VALUES)),
+    default=None,
+    help=(
+        "Tailnet transport: 'tailscale' (official), 'netmesh' (self-hosted "
+        "headscale + Openbase VPN client), or 'netmesh-tsnet' (netmesh via an "
+        "in-process embedded node — no VPN on either side). Interactive runs "
+        "pick it for a new env file if omitted; otherwise new files default to "
+        "tailscale. Existing env files are only changed when this is provided."
+    ),
+)
+@click.option(
     "--json-progress",
     is_flag=True,
     help=(
@@ -365,11 +357,10 @@ def setup(
     assembly_ai_api_key: str,
     cartesia_api_key: str,
     skip_services: bool,
-    link_codex_config: bool,
-    link_claude_config: bool,
     fast_mode: bool,
     coding_backend: str | None,
     audio_provider: str | None,
+    tailnet_provider: str | None,
     json_progress: bool,
     interactive_mode: bool | None,
 ) -> None:
@@ -381,8 +372,9 @@ def setup(
     require --backend and default the audio provider to openbase-cloud. Pass
     --interactive to combine flags with the pickers.
     """
-    if platform.system() not in ("Darwin", "Linux"):
-        raise click.ClickException("Setup is only supported on macOS and Linux.")
+    if not is_supported():
+        supported = ", ".join(SUPPORTED_SYSTEMS)
+        raise click.ClickException(f"Setup is only supported on {supported}.")
     interactive = _resolve_interactive_mode(interactive_mode, json_progress)
     if coding_backend is not None:
         try:
@@ -394,6 +386,9 @@ def setup(
     )
     audio_provider = _require_audio_provider_choice(
         audio_provider, interactive=interactive
+    )
+    tailnet_provider = _require_tailnet_provider_choice(
+        env_file, tailnet_provider, interactive=interactive
     )
     assembly_ai_api_key, cartesia_api_key = _require_byok_audio_keys(
         env_file,
@@ -412,11 +407,10 @@ def setup(
             assembly_ai_api_key=assembly_ai_api_key,
             cartesia_api_key=cartesia_api_key,
             skip_services=skip_services,
-            link_codex_config=link_codex_config,
-            link_claude_config=link_claude_config,
             fast_mode=fast_mode,
             coding_backend=coding_backend,
             audio_provider=audio_provider,
+            tailnet_provider=tailnet_provider,
         )
     except Exception as exc:
         progress.abort(str(exc))
@@ -429,10 +423,90 @@ def setup(
     click.echo()
     click.echo("Setup complete.")
     click.echo()
-    click.echo(
-        "To enable remote authentication, run 'openbase-coder login' "
-        "and ensure OPENBASE_CODER_CLI_WEB_BACKEND_URL is set in your .env."
+    if interactive:
+        _interactive_cloud_login_and_checks(env_file, cli_configured=cli_configured)
+        _print_app_download_qr()
+    else:
+        click.echo(
+            "To enable remote authentication, run 'openbase-coder login' "
+            "and ensure OPENBASE_CODER_CLI_WEB_BACKEND_URL is set in your .env."
+        )
+
+
+APP_DOWNLOADS_URL = "https://openbase.cloud/downloads.html"
+
+
+def _interactive_cloud_login_and_checks(env_file: str, *, cli_configured: bool) -> None:
+    """Interactive setup tail: login, then verify cloud registration and Serve.
+
+    Only ever called on interactive runs; non-interactive runs (including the
+    desktop app's --json-progress onboarding, which renders its own sign-in
+    step) keep the plain login hint instead.
+    """
+    web_backend_url = (
+        _env_file_values(Path(env_file)).get("OPENBASE_CODER_CLI_WEB_BACKEND_URL")
+        or DEFAULT_WEB_BACKEND_URL
     )
+    if TokenManager(web_backend_url).has_refresh_token:
+        click.echo("Already logged in to Openbase Cloud.")
+    elif click.confirm(
+        "Log in to Openbase Cloud now? (required for iPhone pairing and "
+        "cloud onboarding)",
+        default=True,
+    ):
+        from openbase_coder_cli.cli import auth as _auth
+
+        click.get_current_context().invoke(_auth.login)
+    else:
+        click.echo(
+            "Skipping login. Run 'openbase-coder login' later; iPhone pairing "
+            "and cloud onboarding need it."
+        )
+        return
+
+    # Login already registers the device; re-report with the freshest facts
+    # so the cloud sees this install as configured, and surface the result.
+    serve_health = tailscale_serve_health()
+    report = register_and_report(
+        cli_configured=cli_configured,
+        serve_healthy=serve_health.healthy,
+    )
+    if report.ok:
+        click.echo("Device registered with Openbase Cloud.")
+    elif report.supported:
+        click.echo(
+            click.style(
+                "Warning: could not register this device with Openbase "
+                f"Cloud: {report.error}",
+                fg="yellow",
+            )
+        )
+    if serve_health.healthy:
+        click.echo("Tailscale Serve is exposing the local API and LiveKit.")
+    else:
+        click.echo(
+            click.style(
+                "Warning: Tailscale Serve is not fully healthy: "
+                f"{serve_health.error or 'routes not configured'}",
+                fg="yellow",
+            )
+        )
+        click.echo(
+            "  Re-check with 'openbase-coder onboarding status' once "
+            "Tailscale is signed in and connected."
+        )
+
+
+def _print_app_download_qr() -> None:
+    """Terminal QR code pointing at the phone app downloads page."""
+    import qrcode
+
+    click.echo()
+    click.echo("Scan to get the Openbase iOS/Android app:")
+    qr = qrcode.QRCode(border=1)
+    qr.add_data(APP_DOWNLOADS_URL)
+    qr.print_ascii(invert=True)
+    click.echo(APP_DOWNLOADS_URL)
 
 
 def _resolve_interactive_mode(
@@ -520,6 +594,42 @@ _AUDIO_PROVIDER_PICKER_OPTIONS = (
         "3.12 only (not recommended)",
     ),
 )
+
+
+_TAILNET_PROVIDER_PICKER_OPTIONS = tuple(
+    (option["provider"], option["name"], option["summary"])
+    for option in TAILNET_EXPERIENCES
+)
+
+
+def _require_tailnet_provider_choice(
+    env_file: str,
+    tailnet_provider: str | None,
+    *,
+    interactive: bool,
+) -> str | None:
+    """Pick the tailnet transport for a fresh install.
+
+    Existing env files keep their configured provider unless --tailnet-provider
+    is passed. New installs pick interactively; non-interactive fresh installs
+    keep the tailscale default.
+    """
+    if tailnet_provider is not None:
+        return tailnet_provider
+    env_path = Path(env_file)
+    if env_path.is_file():
+        configured = _env_file_values(env_path).get(
+            "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER",
+            PROVIDER_TAILSCALE,
+        )
+        return configured if configured in PROVIDER_VALUES else PROVIDER_TAILSCALE
+    if interactive:
+        return _prompt_pick(
+            "Tailnet transport:",
+            _TAILNET_PROVIDER_PICKER_OPTIONS,
+            default=PROVIDER_TAILSCALE,
+        )
+    return None
 
 
 def _require_backend_choice(
@@ -625,11 +735,10 @@ def _run_setup_phases(
     assembly_ai_api_key: str,
     cartesia_api_key: str,
     skip_services: bool,
-    link_codex_config: bool,
-    link_claude_config: bool,
     fast_mode: bool,
     coding_backend: str | None,
     audio_provider: str | None,
+    tailnet_provider: str | None = None,
 ) -> bool:
     """Run the setup phases, returning whether Tailscale Serve is healthy."""
     progress.step("workspace", "start")
@@ -668,6 +777,7 @@ def _run_setup_phases(
         assembly_ai_api_key=assembly_ai_api_key,
         cartesia_api_key=cartesia_api_key,
         coding_backend=coding_backend,
+        tailnet_provider=tailnet_provider,
     )
     selected_coding_backend = _selected_coding_backend(Path(env_file), coding_backend)
     if selected_coding_backend == OPENBASE_CLOUD_BACKEND:
@@ -681,10 +791,8 @@ def _run_setup_phases(
         # Standalone packages bundle the pinned engine; dev installs download
         # the same pin so both pathways exercise one livekit-server.
         ensure_pinned_livekit_server()
-    if selected_coding_backend == CODEX_BACKEND:
-        _symlink_codex_auth()
-    _ensure_normal_claude_md_symlink()
-    _ensure_codex_home_default_files(workspace_dir if use_dev_workspace else "")
+    _ensure_claude_md_symlink()
+    _ensure_openbase_instruction_files(workspace_dir if use_dev_workspace else "")
     _ensure_codex_home_dispatcher_config(audio_provider=audio_provider)
     set_dispatcher_service_tier("fast" if fast_mode else "standard")
     click.echo(
@@ -698,39 +806,31 @@ def _run_setup_phases(
 
     # --- Initialize runtime assets ---
     if use_dev_workspace:
-        _init_cli_workspace(workspace_dir)
+        _init_cli_workspace(
+            workspace_dir,
+            include_local_audio=audio_provider == AUDIO_PROVIDER_LOCAL,
+        )
     else:
         _init_standalone_runtime(runtime_package)
 
-    # --- Configure the service CODEX_HOME ---
+    # --- Register super-agents MCP + hooks in the shared agent homes ---
     _ensure_session_id_hook_script()
-    if link_codex_config:
-        _ensure_codex_home_config(
-            workspace_dir if use_dev_workspace else "",
-            coding_backend=selected_coding_backend,
-            link_codex_config=True,
-        )
-    else:
-        _ensure_codex_home_config(
-            workspace_dir if use_dev_workspace else "",
-            coding_backend=selected_coding_backend,
-        )
-    _ensure_claude_config(
+    _ensure_codex_config(
         workspace_dir if use_dev_workspace else "",
-        link_claude_config=link_claude_config,
+        coding_backend=selected_coding_backend,
     )
-    # UI-driven setup (--json-progress) must never block on an interactive
-    # browser OAuth flow; the desktop app renders a dedicated backend sign-in
-    # step after setup instead (see specs/onboarding).
-    _ensure_claude_auth_bridge(
-        login_if_needed=selected_coding_backend == CLAUDE_CODE_BACKEND
-        and not progress.enabled,
-        required=selected_coding_backend == CLAUDE_CODE_BACKEND,
+    _ensure_claude_mcp(
+        workspace_dir if use_dev_workspace else "",
+        coding_backend=selected_coding_backend,
     )
-
-    # --- Register super-agents MCP in the user's normal agent homes ---
-    _ensure_normal_codex_mcp(workspace_dir if use_dev_workspace else "")
-    _ensure_normal_claude_mcp(workspace_dir if use_dev_workspace else "")
+    _ensure_claude_hooks()
+    if selected_coding_backend == CLAUDE_CODE_BACKEND:
+        status = claude_auth_status()
+        if not status.logged_in:
+            click.echo(
+                "Claude Code is not logged in. Run `claude login` before using "
+                "the Claude Code backend."
+            )
 
     # --- Install/update user-facing CLI shim ---
     _install_cli_shim(workspace_dir if use_dev_workspace else "")
@@ -752,39 +852,94 @@ def _run_setup_phases(
     progress.step("services", "start")
     if not skip_services:
         click.echo()
-        service_manager = "launchd" if platform.system() == "Darwin" else "systemd"
-        click.echo(f"Installing {service_manager} services...")
+        click.echo(f"Installing {service_manager_name()} services...")
+        if tailnet_provider == PROVIDER_NETMESH_TSNET:
+            click.echo("  Building and installing openbase-tunneld...")
+            try:
+                installed_tunneld = install_tunneld_binary(config)
+            except RuntimeError as exc:
+                raise click.ClickException(
+                    f"Openbase VPN daemon installation failed: {exc}"
+                ) from exc
+            click.echo(f"    Installed {installed_tunneld}")
         install_all_services(config)
+        if tailnet_provider == PROVIDER_NETMESH_TSNET:
+            click.echo("  Installing openbase-tunneld service...")
+            install_service(config, TUNNELD_SERVICE)
+            click.echo("  Waiting for openbase-tunneld to join the private network...")
+            try:
+                ensure_tunneld_running(managed_service=True)
+            except RuntimeError as exc:
+                raise click.ClickException(
+                    f"Openbase VPN daemon did not become ready: {exc}"
+                ) from exc
         progress.step("services", "ok")
     else:
         click.echo("Skipped service installation (--skip-services).")
         progress.step("services", "ok", "skipped (--skip-services)")
 
+    # --- Provision the netmesh VPN (macOS Openbase VPN companion) ---
+    # Build/register the selected Openbase VPN companion. Connection may be
+    # deferred until after Openbase login, when an enrollment key can be minted.
+    # The embedded tunneld transport is installed above before enrollment.
+    if (
+        not skip_services
+        and tailnet_provider == PROVIDER_NETMESH
+        and sys.platform == "darwin"
+    ):
+        from openbase_coder_cli.cli.tailnet import _provision_netmesh_companion
+
+        click.echo()
+        click.echo("Provisioning the Openbase VPN (netmesh)...")
+        try:
+            _provision_netmesh_companion()
+        except Exception as exc:  # noqa: BLE001 - VPN issues must not fail setup
+            click.echo(
+                click.style(
+                    f"Warning: Openbase VPN provisioning did not complete: {exc}",
+                    fg="yellow",
+                )
+            )
+
     click.echo()
-    click.echo("Configuring Tailscale Serve routes...")
+    click.echo("Configuring private-network routes...")
     progress.step("tailscale_serve", "start")
     serve_healthy = False
     try:
         configure_tailscale_serve()
     except Exception as exc:
-        if not skip_services:
-            # Tailscale is a hard prerequisite: without it the phone cannot
-            # reach this machine, so a "successful" setup would be broken.
-            # progress.abort() reports this step as errored on the way out.
+        if not skip_services and tailnet_provider == PROVIDER_NETMESH_TSNET:
+            raise click.ClickException(
+                f"Openbase VPN route setup did not complete: {exc}"
+            ) from exc
+        managed_transport = tailnet_provider in {
+            PROVIDER_NETMESH,
+            PROVIDER_NETMESH_TSNET,
+        }
+        if not skip_services and not managed_transport:
+            # The expert official-Tailscale developer path still expects an
+            # already-connected client. Electron never selects this provider.
             raise click.ClickException(
                 f"Tailscale Serve could not be configured: {exc}\n"
                 "Tailscale is required — install it, sign in, and connect "
                 "(https://tailscale.com/download), then re-run "
                 "'openbase-coder setup'."
             ) from exc
-        # --skip-services installs (e.g. image bakes) configure Tailscale on
-        # first boot instead; leave the manual commands as a breadcrumb.
         click.echo(click.style(f"  WARN  {exc}", fg="yellow"))
-        click.echo(
-            "  Run these manually after Tailscale is installed and connected:\n"
-            "    tailscale serve --bg --http=18080 http://127.0.0.1:7999\n"
-            "    tailscale serve --bg --tcp=7880 tcp://127.0.0.1:7880"
-        )
+        if managed_transport:
+            click.echo(
+                "  The Openbase networking choice was saved. Sign in, then "
+                "connect it during pairing; that step enrolls the device and "
+                "applies its routes."
+            )
+        else:
+            # --skip-services image bakes configure official Tailscale on first
+            # boot; leave the manual commands as a breadcrumb.
+            click.echo(
+                "  Run these manually after Tailscale is installed and connected:\n"
+                "    tailscale serve --bg --http=18080 http://127.0.0.1:7999\n"
+                "    tailscale serve --bg --tcp=7880 tcp://127.0.0.1:7880"
+            )
         progress.step("tailscale_serve", "warn", str(exc))
     else:
         health = tailscale_serve_health()
@@ -816,7 +971,7 @@ def _run_setup_phases(
         else:
             click.echo(
                 click.style(
-                    "  WARN  Tailscale Serve was configured, but the external "
+                    "  WARN  Private-network routes were configured, but the external "
                     "Openbase health check is not passing.",
                     fg="yellow",
                 )

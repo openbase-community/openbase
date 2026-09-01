@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 from urllib.parse import parse_qs
 
 import httpx
@@ -11,6 +12,7 @@ from django.conf import settings
 
 from openbase_coder_cli.config.authentication import is_owner_identity
 from openbase_coder_cli.config.jwt_validation import InvalidTokenError, JWKSValidator
+from openbase_coder_cli.config.local_api_token import get_local_api_token
 from openbase_coder_cli.config.token_manager import decode_jwt_claims_unverified
 
 logger = logging.getLogger(__name__)
@@ -118,7 +120,10 @@ class TokenAuthMiddleware(BaseMiddleware):
 
         scope["user"] = None
 
-        if token and token.count(".") == 2:
+        if token and token.count(".") != 2:
+            if secrets.compare_digest(token, get_local_api_token()):
+                scope["user"] = "authenticated"
+        elif token:
             validator = _get_ws_validator()
             if validator:
                 claims: dict | None = None

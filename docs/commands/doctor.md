@@ -25,10 +25,15 @@ openbase-coder doctor
 - External Openbase health check through the tailnet `:18080` address
 - Required credentials in `.env`
 - Detection of known insecure defaults for some keys
-- Auth readiness for the selected coding backend:
-  - Codex: normal `codex login` plus the Openbase service auth bridge
+- Auth readiness for the selected coding backend (Openbase uses the shared
+  agent homes directly):
+  - Codex: `codex login` (auth at `~/.codex/auth.json`)
   - Openbase Cloud: `openbase-coder login`
   - Claude Code: `claude auth login`
+- Super Agents MCP registration in the shared agent homes
+  (`~/.codex/config.toml` and `~/.claude.json`), including that the
+  registered MCP command still resolves
+- Skill symlinks in `~/.codex/skills` and `~/.claude/skills`
 - Local audio model readiness when Kokoro or local MLX Whisper is selected
 
 Optional services such as `code-sync` are allowed to be stopped or absent

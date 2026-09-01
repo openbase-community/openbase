@@ -98,7 +98,7 @@ def _invalidate_project_cache(path: str | None = None) -> None:
 
 def _project_metadata(project_path: str) -> dict[str, Any]:
     metadata: dict[str, Any] = {
-        "git_status": _git_status(project_path),
+        "git_status": _aggregate_git_status(project_path),
         "stack": _project_stack(project_path),
     }
     metadata.update(_reports_summary(project_path))
@@ -523,3 +523,31 @@ def _get_subrepos(directory: str) -> list[dict]:
             }
         )
     return results
+
+
+# Ordered worst-last so max() picks the most alarming status across a workspace.
+_GIT_STATUS_SEVERITY = {"clean": 0, "out-of-sync": 1, "dirty": 2}
+
+
+def _aggregate_git_status(directory: str) -> str:
+    """Git status for a project, accounting for multi.json sub-repos.
+
+    A multi workspace root can be clean while its declared sub-repos hold
+    uncommitted work (or the root may not be a git repo at all). Report the
+    worst status across the root and every sub-repo — dirty > out-of-sync >
+    clean — so the console never shows "clean" over real changes. Non-status
+    values ('missing'/'no_git'/'unknown') are ignored when any real status is
+    present, and otherwise the root's value is returned unchanged.
+    """
+    root_status = _git_status(directory)
+    sub_statuses = [sub["git_status"] for sub in _get_subrepos(directory)]
+    if not sub_statuses:
+        return root_status
+    ranked = [
+        status
+        for status in (root_status, *sub_statuses)
+        if status in _GIT_STATUS_SEVERITY
+    ]
+    if not ranked:
+        return root_status
+    return max(ranked, key=_GIT_STATUS_SEVERITY.__getitem__)

@@ -131,6 +131,27 @@ def test_run_workspace_package_command_requires_pnpm_for_workspace(
         node.run_workspace_package_command(workspace_dir, package_dir, "install")
 
 
+def test_which_node_binary_finds_newest_nvm_install(monkeypatch, tmp_path: Path):
+    nvm_root = tmp_path / ".nvm" / "versions" / "node"
+    old_pnpm = nvm_root / "v9.9.0" / "bin" / "pnpm"
+    new_pnpm = nvm_root / "v24.15.0" / "bin" / "pnpm"
+    for executable in (old_pnpm, new_pnpm):
+        executable.parent.mkdir(parents=True)
+        executable.write_text("stub\n")
+        executable.chmod(0o755)
+
+    monkeypatch.delenv("PNPM_HOME", raising=False)
+    monkeypatch.setattr(node.Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(node.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(
+        node.os,
+        "access",
+        lambda path, _mode: str(path).startswith(str(tmp_path)),
+    )
+
+    assert node._which_node_binary("pnpm") == str(new_pnpm)
+
+
 def test_run_workspace_package_command_allows_pnpm_install_without_lockfile(
     monkeypatch,
     tmp_path: Path,

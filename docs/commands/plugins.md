@@ -60,7 +60,7 @@ installed plugins.
 Mutating plugin commands will:
 
 1. Update plugin registry and requirements under `~/.openbase/plugins/`
-2. Sync plugin-declared Claude skills into `${CLAUDE_CONFIG_DIR:-~/.claude}/skills`
+2. Sync plugin-declared Claude skills into `~/.claude/skills`
 3. Copy each console page's `asset_dir` into `~/.openbase/plugins/console-assets/`
    and regenerate the runtime console page registry
 4. Restart managed launchd services

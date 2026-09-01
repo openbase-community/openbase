@@ -109,7 +109,11 @@ openbase-coder user say "Lucy" "I finished the documentation update."
 
 The first argument is the speaking agent name. The remaining words are the
 message to speak. This is useful for Super Agent introductions, plan-mode
-questions, completion notices, and brief requests for user attention.
+questions, completion notices, and brief requests for user attention. If no
+voice room is active, the command sends the same message as an iPhone alert
+that opens the speaking agent's thread. This fallback requires an Openbase
+Cloud login and an iPhone registered for notifications; if either delivery
+path fails, the command exits with an error instead of claiming success.
 
 For local audio cues:
 
@@ -117,6 +121,28 @@ For local audio cues:
 openbase-coder user play success
 openbase-coder user play /path/to/sound.wav
 ```
+
+## Ring The User For An Urgent Voice Handoff
+
+Use an inbound call only when the user explicitly asked to be called or the
+task is urgent enough to justify ringing their phone:
+
+```bash
+openbase-coder user call "Lucy"
+```
+
+The agent name must resolve to an existing resumable thread. Openbase Coder
+stores that route locally, asks Openbase Cloud to send a short-lived VoIP
+invitation to the user's registered iPhones, and reports how many devices
+accepted the invitation. The push does not contain a thread ID, local path,
+LiveKit credential, or room-routing instruction. If the user answers, the app
+connects to the local dispatcher room first and activates the stored agent
+route only after that room is connected.
+
+Command success means Cloud accepted the ring request; it does not prove that
+an iPhone displayed or answered it. The command requires Cloud login, a signed
+iOS app with PushKit enabled, a registered device, and a reachable local
+Openbase Coder runtime. A declined or expired invitation cannot be reused.
 
 ## Typical Voice Handoff
 
@@ -153,4 +179,7 @@ openbase-coder user play /path/to/sound.wav
 - `openbase-coder exit-to-dispatch`: top-level alias for returning to the
   dispatcher.
 - `openbase-coder user say AGENT_NAME MESSAGE`: speak a short announcement in
-  the active room.
+  the active room, or send a thread-linked iPhone notification when no room is
+  active.
+- `openbase-coder user call AGENT_NAME`: explicitly ring registered iPhones for
+  an urgent, short-lived handoff to an existing agent thread.

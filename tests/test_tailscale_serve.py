@@ -2,19 +2,23 @@ from __future__ import annotations
 
 import subprocess
 
+from openbase_coder_cli.services import tailscale_provider as tp
 from openbase_coder_cli.services import tailscale_serve
 
 
 def test_configure_tailscale_serve_installs_openbase_and_livekit_routes(monkeypatch):
+    # Default (official tailscale) provider: serve is applied through the
+    # provider abstraction, which shells out to the tailscale CLI.
+    monkeypatch.delenv("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", raising=False)
     commands = []
 
-    monkeypatch.setattr(tailscale_serve, "_tailscale_bin", lambda: "/usr/bin/tailscale")
+    monkeypatch.setattr(tp, "tailscale_bin", lambda: "/usr/bin/tailscale")
 
     def fake_run(command, **kwargs):
         commands.append((command, kwargs))
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-    monkeypatch.setattr(tailscale_serve.subprocess, "run", fake_run)
+    monkeypatch.setattr(tp.subprocess, "run", fake_run)
 
     tailscale_serve.configure_tailscale_serve()
 
@@ -37,20 +41,22 @@ def test_configure_tailscale_serve_installs_openbase_and_livekit_routes(monkeypa
 
 
 def test_tailscale_serve_health_requires_routes_and_external_health(monkeypatch):
-    monkeypatch.setattr(tailscale_serve, "_tailscale_bin", lambda: "/usr/bin/tailscale")
+    monkeypatch.delenv("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", raising=False)
+    monkeypatch.setattr(tp, "tool_path", lambda: "/usr/bin/tailscale")
     monkeypatch.setattr(
-        tailscale_serve,
-        "_tailscale_status",
-        lambda _bin: {
+        tp,
+        "status_json",
+        lambda: {
             "Self": {
                 "DNSName": "mac.tailnet.ts.net.",
+                "TailscaleIPs": ["100.64.0.9", "fd7a:115c:a1e0::9"],
             }
         },
     )
     monkeypatch.setattr(
-        tailscale_serve,
-        "_tailscale_serve_status",
-        lambda _bin: {
+        tp,
+        "serve_status_json",
+        lambda: {
             "TCP": {
                 "18080": {"HTTP": True},
                 "7880": {"TCPForward": "127.0.0.1:7880"},
@@ -64,10 +70,16 @@ def test_tailscale_serve_health_requires_routes_and_external_health(monkeypatch)
             },
         },
     )
+    # Reachability is probed via the tailnet IP with the MagicDNS name in the
+    # Host header (DNS-independent, but still matches the name-based serve mount).
     monkeypatch.setattr(
         tailscale_serve,
         "_openbase_reachable",
-        lambda url: (url == "http://mac.tailnet.ts.net:18080", None),
+        lambda url, host_header=None: (
+            url == "http://100.64.0.9:18080"
+            and host_header == "mac.tailnet.ts.net:18080",
+            None,
+        ),
     )
 
     health = tailscale_serve.tailscale_serve_health()

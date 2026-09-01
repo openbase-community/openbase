@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import platform
@@ -77,6 +78,7 @@ def main() -> int:
         channel=args.channel,
         repo_shas=parse_repo_shas(args.repo_shas),
     )
+    prune_rebuildable_bytecode(python_dir)
     ad_hoc_sign_macos_package(package_dir)
     validate_package(package_dir, args.version)
 
@@ -132,7 +134,15 @@ def create_runtime_python(python_dir: Path, python_executable: Path) -> None:
         runtime_python(python_dir).stat().st_mode | stat.S_IXUSR
     )
     subprocess.run(
-        [str(runtime_python(python_dir)), "-m", "pip", "install", "--upgrade", "pip"],
+        [
+            str(runtime_python(python_dir)),
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            "--no-compile",
+            "pip",
+        ],
         check=True,
         env=_runtime_pip_env(),
     )
@@ -153,6 +163,7 @@ def install_cli_package(python_dir: Path) -> None:
             "-m",
             "pip",
             "install",
+            "--no-compile",
             f"{SUPER_AGENTS_ROOT}[claude]",
         ],
         check=True,
@@ -164,6 +175,7 @@ def install_cli_package(python_dir: Path) -> None:
             "-m",
             "pip",
             "install",
+            "--no-compile",
             str(CLI_ROOT),
         ],
         check=True,
@@ -236,6 +248,47 @@ def _python_script_body(raw: bytes) -> bytes | None:
 
 def _is_relocatable_trampoline(exec_line: str) -> bool:
     return "$(dirname -- " in exec_line
+
+
+def prune_rebuildable_bytecode(python_dir: Path) -> tuple[int, int]:
+    """Remove only bytecode whose Python source ships in the runtime.
+
+    Source-backed ``.pyc`` files are disposable caches that Python can rebuild
+    lazily. Bytecode-only modules are deliberately preserved: treating every
+    ``__pycache__`` directory as dead weight could remove their only runnable
+    implementation.
+    """
+    bytecode_files = tuple(_rebuildable_bytecode_files(python_dir))
+    freed_bytes = sum(path.stat().st_size for path in bytecode_files)
+    for path in bytecode_files:
+        path.unlink()
+
+    cache_dirs = sorted(
+        (path for path in python_dir.rglob("__pycache__") if path.is_dir()),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    )
+    for cache_dir in cache_dirs:
+        if not any(cache_dir.iterdir()):
+            cache_dir.rmdir()
+
+    print(
+        "Pruned rebuildable bytecode: "
+        f"{len(bytecode_files)} files, {freed_bytes / 1024 / 1024:.1f} MiB"
+    )
+    return len(bytecode_files), freed_bytes
+
+
+def _rebuildable_bytecode_files(python_dir: Path):
+    for path in sorted(python_dir.rglob("__pycache__/*.pyc")):
+        try:
+            source = Path(importlib.util.source_from_cache(str(path)))
+        except ValueError:
+            # Preserve non-standard cache names rather than guessing at their
+            # source relationship.
+            continue
+        if source.is_file():
+            yield path
 
 
 def relocate_macos_python(python_dir: Path) -> None:
@@ -380,12 +433,14 @@ def validate_package(package_dir: Path, version: str) -> None:
         [str(package_dir / "python" / "bin" / "pip"), "--version"],
         check=True,
         capture_output=True,
+        env=_runtime_validation_env(),
     )
     result = subprocess.run(
         [str(package_dir / "bin" / "openbase-coder"), "--version"],
         check=True,
         capture_output=True,
         text=True,
+        env=_runtime_validation_env(),
     )
     reported = result.stdout.strip()
     print(reported)
@@ -394,6 +449,7 @@ def validate_package(package_dir: Path, version: str) -> None:
             f"Packaged CLI reports {reported!r}, expected version {version!r}: "
             "the release version stamp did not reach the build."
         )
+    _validate_no_rebuildable_bytecode(package_dir)
 
 
 def write_archive(package_dir: Path, archive_path: Path, *, force: bool) -> None:
@@ -426,7 +482,15 @@ def runtime_python(python_dir: Path) -> Path:
 
 
 def _runtime_pip_env() -> dict[str, str]:
-    return {**os.environ, "PIP_BREAK_SYSTEM_PACKAGES": "1"}
+    return {
+        **os.environ,
+        "PIP_BREAK_SYSTEM_PACKAGES": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+
+
+def _runtime_validation_env() -> dict[str, str]:
+    return {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
 
 
 def _uv_managed_python(version: str) -> Path | None:
@@ -469,6 +533,15 @@ def _validate_no_build_path_shebangs(package_dir: Path) -> None:
                     "Package validation failed; script has a non-relocatable "
                     f"build-path reference: {path} -> {line.strip()}"
                 )
+
+
+def _validate_no_rebuildable_bytecode(package_dir: Path) -> None:
+    first = next(_rebuildable_bytecode_files(package_dir / "python"), None)
+    if first is not None:
+        raise RuntimeError(
+            "Package validation failed; source-backed bytecode was generated "
+            f"after pruning: {first}"
+        )
 
 
 def _validate_no_external_python_links(package_dir: Path) -> None:

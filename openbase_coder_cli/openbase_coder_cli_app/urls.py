@@ -23,14 +23,13 @@ from openbase_coder_cli.openbase_coder_cli_app.update import (
     update_status,
 )
 from openbase_coder_cli.openbase_coder_cli_app.views import (
-    agents_generation_settings,
     agents_md,
     all_project_reports,
     apple_music_playback_entitlement,
     approval_request_detail,
     approval_requests,
     auth_logout,
-    auth_refresh_jwt,
+    auth_refresh_jwt_removed,
     auth_session,
     backend_model_settings,
     boilersync_templates,
@@ -48,6 +47,8 @@ from openbase_coder_cli.openbase_coder_cli_app.views import (
     git_diff,
     global_reports_projects,
     health_check,
+    inbound_call_activate,
+    inbound_call_decline,
     ios_app_control,
     ios_logs_upload,
     keep_awake_settings,
@@ -62,6 +63,9 @@ from openbase_coder_cli.openbase_coder_cli_app.views import (
     livekit_voice_route_exit,
     livekit_voice_route_transfer,
     local_stt_download,
+    marketplace_routines,
+    marketplace_skill_install,
+    marketplace_skills,
     onboarding_cloud_state,
     onboarding_status,
     openbase_restart,
@@ -110,6 +114,7 @@ from openbase_coder_cli.openbase_coder_cli_app.views import (
     thread_sync_conflicts,
     thread_tags,
     tts_settings,
+    user_call,
     user_play,
     user_say,
     uv_tool_detail,
@@ -121,7 +126,11 @@ router = DefaultRouter()
 
 urlpatterns = [
     path("auth/session/", auth_session, name="auth-session"),
-    path("auth/refresh-jwt/", auth_refresh_jwt, name="auth-refresh-jwt"),
+    path(
+        "auth/refresh-jwt/",
+        auth_refresh_jwt_removed,
+        name="auth-refresh-jwt-removed",
+    ),
     path("auth/logout/", auth_logout, name="auth-logout"),
     path("agents-md/", agents_md, name="agents-md"),
     path("health/", health_check, name="health-check"),
@@ -199,7 +208,18 @@ urlpatterns = [
     path("routines/run-due/", routines_run_due, name="routines-run-due"),
     path("routines/<str:name>/", routine_detail, name="routine-detail"),
     path("user/say/", user_say, name="user-say"),
+    path("user/call/", user_call, name="user-call"),
     path("user/play/", user_play, name="user-play"),
+    path(
+        "inbound-call/activate/",
+        inbound_call_activate,
+        name="inbound-call-activate",
+    ),
+    path(
+        "inbound-call/decline/",
+        inbound_call_decline,
+        name="inbound-call-decline",
+    ),
     path("projects/recent/", recent_projects, name="recent-projects"),
     path("projects/status/", project_status, name="project-status"),
     path("tags/", tag_options, name="tag-options"),
@@ -231,6 +251,21 @@ urlpatterns = [
         name="project-reports-download",
     ),
     path("skills/", skills_list, name="skills-list"),
+    path(
+        "marketplace/skills/",
+        marketplace_skills,
+        name="marketplace-skills",
+    ),
+    path(
+        "marketplace/skills/install/",
+        marketplace_skill_install,
+        name="marketplace-skill-install",
+    ),
+    path(
+        "marketplace/routines/",
+        marketplace_routines,
+        name="marketplace-routines",
+    ),
     path(
         "skills/auto-link-personal/",
         skills_auto_link_settings,
@@ -268,11 +303,6 @@ urlpatterns = [
         "settings/launchctl-ignored/",
         launchctl_ignored_settings,
         name="launchctl-ignored-settings",
-    ),
-    path(
-        "settings/agents-generation/",
-        agents_generation_settings,
-        name="agents-generation-settings",
     ),
     path(
         "settings/dangerous-confirmation/",

@@ -7,6 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from openbase_coder_cli.brain_score import brain_score_token_file
+from openbase_coder_cli.codex_control_plane import managed_codex_app_server_endpoint
 from openbase_coder_cli.codex_session_defaults import (
     CODEX_APPROVAL_POLICY_ENV,
     CODEX_SANDBOX_ENV,
@@ -14,6 +15,9 @@ from openbase_coder_cli.codex_session_defaults import (
     DEFAULT_CODEX_SANDBOX,
 )
 from openbase_coder_cli.config.token_manager import DEFAULT_WEB_BACKEND_URL
+from openbase_coder_cli.direct_voice_instructions import (
+    DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS,
+)
 from openbase_coder_cli.paths import (
     CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH,
     CODEX_DISPATCHER_CONFIG_PATH,
@@ -49,12 +53,16 @@ def _load_openbase_env(*, override: bool = False) -> None:
     instead of crash-looping on a now-stale environment."""
     load_dotenv(".env", override=override)
     load_dotenv(_canonical_env_path(), override=override)
+    # The legacy loopback WebSocket endpoint is no longer the managed Codex
+    # owner on Unix. Per-job refreshes must preserve the same migration as
+    # setup; otherwise a stale on-disk value silently replaces the live Unix
+    # control socket and voice dispatcher warm-up fails at call start.
+    os.environ["CODEX_APP_SERVER_URL"] = managed_codex_app_server_endpoint().value
 
 
 _load_openbase_env()
 
 os.environ.setdefault("LIVEKIT_URL", "ws://localhost:7880")
-os.environ.setdefault("CODEX_APP_SERVER_URL", "ws://127.0.0.1:4500")
 os.environ.setdefault("LIVEKIT_CODEX_THREAD_CWD", str(Path.home()))
 
 CODEX_APP_SERVER_URL = os.environ["CODEX_APP_SERVER_URL"]
@@ -109,19 +117,6 @@ DIRECT_LIVEKIT_INSTRUCTIONS_PATH_ENV = (
 )
 DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV = "LIVEKIT_DIRECT_CODEX_DEVELOPER_INSTRUCTIONS"
 DEFAULT_DIRECT_LIVEKIT_INSTRUCTIONS_PATH = CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH
-DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS = """
-You are receiving direct user speech from a LiveKit voice session.
-Keep final spoken responses concise and directly useful.
-Avoid bulleted or itemized lists in spoken responses because text-to-speech reads repeated item markers badly. Prefer brief plain prose. When a list is genuinely clearer, use a short numbered list instead of bullets.
-If a transcript clearly appears to be background conversation and the user is not addressing Openbase Coder, immediately run `openbase-coder user ios mute` and do not otherwise respond to the transcript. Do not auto-mute ambiguous transcripts.
-Do not read code, logs, stack traces, JSON, diffs, or long file paths aloud unless explicitly asked.
-When code or logs matter, summarize their practical meaning in plain English.
-If transcription is unclear, ask the user to confirm the intended request before acting.
-When the user asks to return to dispatch, or you need to hand the voice session
-back to dispatch, run:
-openbase-coder exit-to-dispatch
-Do not assume dispatcher responsibilities, delegation policy, or Super Agents coordination rules from these instructions.
-""".strip()
 DISPATCHER_BUILTIN_DEVELOPER_INSTRUCTIONS = """
 You are the Openbase Coder LiveKit dispatcher for a private voice session.
 Route voice sessions when the user asks to speak with an agent.
@@ -151,10 +146,6 @@ LIVEKIT_VERBOSE_LOGGING = os.getenv("LIVEKIT_VERBOSE_LOGGING", "").strip().lower
     "yes",
     "on",
 }
-LIVEKIT_CODEX_ACK_DELAY_SECONDS = float(
-    os.getenv("LIVEKIT_CODEX_ACK_DELAY_SECONDS", "0") or 0
-)
-LIVEKIT_CODEX_ACK_MESSAGE = os.getenv("LIVEKIT_CODEX_ACK_MESSAGE", "Okay.").strip()
 BRAIN_SCORE_ENABLED = os.getenv(
     "OPENBASE_BRAIN_SCORE_ENABLED", "1"
 ).strip().lower() in {

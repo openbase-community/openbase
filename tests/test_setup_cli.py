@@ -10,9 +10,11 @@ from types import SimpleNamespace
 import pytest
 from click.testing import CliRunner
 
-from openbase_coder_cli import claude_auth
 from openbase_coder_cli.cli.setup.hooks import session_start_hook_trusted_hash
-from openbase_coder_cli.paths import INJECT_SESSION_ID_HOOK_PATH
+from openbase_coder_cli.paths import (
+    INJECT_SESSION_ID_HOOK_PATH,
+    OPENBASE_AGENTS_MD_PATH,
+)
 
 setup_cli = importlib.import_module("openbase_coder_cli.cli.setup")
 codex_home_instructions = importlib.import_module(
@@ -32,42 +34,24 @@ def _patch_setup(monkeypatch, name, value):
 
 
 def _patch_openbase_agent_paths(monkeypatch, tmp_path: Path) -> tuple[Path, Path]:
+    """Point the shared agent homes (~/.codex, ~/.claude, ~/.claude.json) and
+    the Openbase instructions dir (~/.openbase/instructions) into tmp_path."""
     codex_home = tmp_path / "codex_home"
     claude_config = tmp_path / "claude_config"
     instructions = tmp_path / "openbase" / "instructions"
     _patch_setup(monkeypatch, "CODEX_HOME_DIR", codex_home)
-    _patch_setup(monkeypatch, "OPENBASE_CLAUDE_CONFIG_DIR", claude_config)
-    monkeypatch.setattr(codex_home_instructions, "CODEX_HOME_DIR", codex_home)
+    _patch_setup(monkeypatch, "CODEX_CONFIG_PATH", codex_home / "config.toml")
+    _patch_setup(monkeypatch, "CODEX_AGENTS_MD_PATH", codex_home / "AGENTS.md")
+    _patch_setup(monkeypatch, "CLAUDE_CONFIG_DIR", claude_config)
+    _patch_setup(monkeypatch, "CLAUDE_SETTINGS_PATH", claude_config / "settings.json")
+    _patch_setup(monkeypatch, "CLAUDE_STATE_PATH", tmp_path / ".claude.json")
+    _patch_setup(monkeypatch, "OPENBASE_AGENTS_MD_PATH", instructions / "AGENTS.md")
     monkeypatch.setattr(
         codex_home_instructions,
-        "OPENBASE_CLAUDE_MD_PATH",
-        claude_config / "CLAUDE.md",
+        "OPENBASE_AGENTS_MD_PATH",
+        instructions / "AGENTS.md",
     )
-    _patch_setup(
-        monkeypatch,
-        "OPENBASE_CLAUDE_SETTINGS_PATH",
-        claude_config / "settings.json",
-    )
-    _patch_setup(
-        monkeypatch,
-        "NORMAL_CLAUDE_SETTINGS_PATH",
-        tmp_path / "normal_claude" / "settings.json",
-    )
-    _patch_setup(
-        monkeypatch,
-        "NORMAL_CLAUDE_CONFIG_DIR",
-        tmp_path / "normal_claude",
-    )
-    _patch_setup(
-        monkeypatch,
-        "NORMAL_CODEX_AGENTS_MD_PATH",
-        tmp_path / "normal_codex" / "AGENTS.md",
-    )
-    monkeypatch.setattr(
-        codex_home_instructions,
-        "NORMAL_CODEX_AGENTS_MD_PATH",
-        tmp_path / "normal_codex" / "AGENTS.md",
-    )
+    monkeypatch.setattr(codex_home_instructions, "is_standalone_runtime", lambda: False)
     _patch_setup(
         monkeypatch,
         "CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH",
@@ -83,6 +67,18 @@ def _patch_openbase_agent_paths(monkeypatch, tmp_path: Path) -> tuple[Path, Path
         "CODEX_SUPER_AGENT_INSTRUCTIONS_PATH",
         instructions / "SUPER_AGENT_INSTRUCTIONS.md",
     )
+    _patch_setup(
+        monkeypatch,
+        "OPENBASE_INSTRUCTION_FILES",
+        (
+            ("VOICE_INSTRUCTIONS.md", instructions / "VOICE_INSTRUCTIONS.md"),
+            ("DISPATCHER_INSTRUCTIONS.md", instructions / "DISPATCHER_INSTRUCTIONS.md"),
+            (
+                "SUPER_AGENT_INSTRUCTIONS.md",
+                instructions / "SUPER_AGENT_INSTRUCTIONS.md",
+            ),
+        ),
+    )
     return codex_home, claude_config
 
 
@@ -90,6 +86,34 @@ def _make_workspace_checkout(root):
     (root / "cli").mkdir(parents=True)
     (root / "multi.json").write_text("{}", encoding="utf-8")
     return root
+
+
+def test_setup_windows_proceeds_past_os_guard(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "openbase_coder_cli.platforms.current_system", lambda: "Windows"
+    )
+    sentinel = RuntimeError("reached backend resolution")
+
+    def _raise(*_args, **_kwargs):
+        raise sentinel
+
+    monkeypatch.setattr(setup_cli, "_require_backend_choice", _raise)
+
+    runner = CliRunner()
+    result = runner.invoke(setup_cli.setup, ["--backend", "claude-code"])
+
+    assert "Setup is only supported" not in (result.output or "")
+    assert result.exception is sentinel
+
+
+def test_setup_rejects_unsupported_os(monkeypatch) -> None:
+    monkeypatch.setattr("openbase_coder_cli.platforms.current_system", lambda: "SunOS")
+
+    runner = CliRunner()
+    result = runner.invoke(setup_cli.setup, ["--backend", "claude-code"])
+
+    assert result.exit_code != 0
+    assert "Setup is only supported" in result.output
 
 
 def test_resolve_dev_workspace_dir_prefers_explicit_dir(tmp_path) -> None:
@@ -167,68 +191,66 @@ def test_resolve_dev_workspace_dir_errors_without_any_workspace(
         setup_cli.resolve_dev_workspace_dir(None)
 
 
-def test_ensure_codex_home_default_files_links_missing_files(
+def test_ensure_openbase_instruction_files_renders_role_files(
     tmp_path, monkeypatch
 ) -> None:
     workspace = tmp_path / "workspace"
     instructions = workspace / "instructions"
     instructions.mkdir(parents=True)
-    codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    codex_home, claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
     shared_instructions = tmp_path / "openbase" / "instructions"
-    targets = (
-        ("VOICE_INSTRUCTIONS.md", shared_instructions / "VOICE_INSTRUCTIONS.md"),
-        (
-            "DISPATCHER_INSTRUCTIONS.md",
-            shared_instructions / "DISPATCHER_INSTRUCTIONS.md",
-        ),
-        (
-            "SUPER_AGENT_INSTRUCTIONS.md",
-            shared_instructions / "SUPER_AGENT_INSTRUCTIONS.md",
-        ),
+    names = (
+        "VOICE_INSTRUCTIONS.md",
+        "DISPATCHER_INSTRUCTIONS.md",
+        "SUPER_AGENT_INSTRUCTIONS.md",
     )
-    for resource_name, _target_path in targets:
+    (instructions / "AGENTS.md").write_text("- Openbase rule\n", encoding="utf-8")
+    for resource_name in names:
         (instructions / resource_name).write_text(
-            f"default {resource_name}\n",
-            encoding="utf-8",
+            f"default {resource_name}\n", encoding="utf-8"
         )
-    _patch_setup(monkeypatch, "CODEX_HOME_DEFAULT_FILES", targets)
 
-    setup_cli._ensure_codex_home_default_files(str(workspace))
+    setup_cli._ensure_openbase_instruction_files(str(workspace))
 
-    for resource_name, target_path in targets:
-        source_path = instructions / resource_name
+    for resource_name in names:
+        target_path = shared_instructions / resource_name
         assert target_path.is_file()
         assert not target_path.is_symlink()
         assert target_path.read_text(encoding="utf-8") == (
-            f"<!-- Generated from {source_path}; edit the source template instead. -->\n\n"
+            f"<!-- Generated from {instructions / resource_name}; "
+            "edit the source template instead. -->\n\n"
             f"default {resource_name}\n"
         )
+    agents_path = shared_instructions / "AGENTS.md"
+    assert agents_path.read_text(encoding="utf-8") == (
+        "## Openbase Coder Instructions\n\n"
+        f"- These instructions are auto generated from {instructions / 'AGENTS.md'}."
+        "\n\n"
+        "- Openbase rule\n"
+    )
+    # The shared agent homes are never generated into.
+    assert not codex_home.exists()
+    assert not claude_config.exists()
 
 
-def test_ensure_codex_home_default_files_renders_template_files(
+def test_ensure_openbase_instruction_files_renders_template_variables(
     tmp_path, monkeypatch
 ) -> None:
     workspace = tmp_path / "workspace"
     instructions = workspace / "instructions"
     instructions.mkdir(parents=True)
-    codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
-    shared_instructions = tmp_path / "openbase" / "instructions"
-    target = shared_instructions / "SUPER_AGENT_INSTRUCTIONS.md"
+    _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    target = tmp_path / "openbase" / "instructions" / "SUPER_AGENT_INSTRUCTIONS.md"
     (instructions / "SUPER_AGENT_INSTRUCTIONS.md").write_text(
         'Require "${dangerous_confirmation_phrase}".\n',
         encoding="utf-8",
-    )
-    _patch_setup(
-        monkeypatch,
-        "CODEX_HOME_DEFAULT_FILES",
-        (("SUPER_AGENT_INSTRUCTIONS.md", target),),
     )
     monkeypatch.setattr(
         "openbase_coder_cli.instruction_templates.get_dangerous_confirmation_phrase",
         lambda: "ship it",
     )
 
-    setup_cli._ensure_codex_home_default_files(str(workspace))
+    setup_cli._ensure_openbase_instruction_files(str(workspace))
 
     assert target.is_file()
     assert not target.is_symlink()
@@ -238,271 +260,167 @@ def test_ensure_codex_home_default_files_renders_template_files(
     )
 
 
-def test_ensure_codex_home_default_files_preserves_custom_existing_files(
+def test_ensure_openbase_instruction_files_preserves_custom_role_file(
     tmp_path, monkeypatch
 ) -> None:
     workspace = tmp_path / "workspace"
     instructions = workspace / "instructions"
     instructions.mkdir(parents=True)
-    codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
-    shared_instructions = tmp_path / "openbase" / "instructions"
-    existing_path = codex_home / "AGENTS.md"
-    missing_path = shared_instructions / "VOICE_INSTRUCTIONS.md"
-    existing_path.parent.mkdir(parents=True)
-    existing_path.write_text("custom instructions\n", encoding="utf-8")
-    (instructions / "AGENTS.md").write_text("default agents\n", encoding="utf-8")
+    _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    target = tmp_path / "openbase" / "instructions" / "VOICE_INSTRUCTIONS.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("custom voice instructions\n", encoding="utf-8")
     (instructions / "VOICE_INSTRUCTIONS.md").write_text(
-        "default voice\n",
+        "default voice\n", encoding="utf-8"
+    )
+
+    setup_cli._ensure_openbase_instruction_files(str(workspace))
+
+    assert target.read_text(encoding="utf-8") == "custom voice instructions\n"
+
+
+def test_ensure_openbase_instruction_files_rewrites_generated_role_file(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    instructions = workspace / "instructions"
+    instructions.mkdir(parents=True)
+    _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    target = tmp_path / "openbase" / "instructions" / "VOICE_INSTRUCTIONS.md"
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        "<!-- Generated from /old/source/VOICE_INSTRUCTIONS.md; "
+        "edit the source template instead. -->\n\nstale voice\n",
         encoding="utf-8",
     )
-    _patch_setup(
-        monkeypatch,
-        "CODEX_HOME_DEFAULT_FILES",
-        (
-            ("AGENTS.md", existing_path),
-            ("VOICE_INSTRUCTIONS.md", missing_path),
-        ),
+    (instructions / "VOICE_INSTRUCTIONS.md").write_text(
+        "default voice\n", encoding="utf-8"
     )
 
-    setup_cli._ensure_codex_home_default_files(str(workspace))
+    setup_cli._ensure_openbase_instruction_files(str(workspace))
 
-    assert not existing_path.is_symlink()
-    updated_agents = existing_path.read_text(encoding="utf-8")
-    assert updated_agents == (
-        "## Openbase Coder Instructions\n\n"
-        f"- These instructions are auto generated from {instructions / 'AGENTS.md'}."
-        "\n\n"
-        "default agents\n"
-    )
-    assert missing_path.is_file()
-    assert not missing_path.is_symlink()
-    assert missing_path.read_text(encoding="utf-8") == (
+    assert target.read_text(encoding="utf-8") == (
         f"<!-- Generated from {instructions / 'VOICE_INSTRUCTIONS.md'}; "
         "edit the source template instead. -->\n\n"
         "default voice\n"
     )
 
 
-def test_ensure_codex_home_default_files_rewrites_matching_agents_file(
+def test_ensure_openbase_instruction_files_replaces_stale_agents_symlink(
     tmp_path, monkeypatch
 ) -> None:
     workspace = tmp_path / "workspace"
     instructions = workspace / "instructions"
+    stale_dir = tmp_path / "stale-instructions"
     instructions.mkdir(parents=True)
-    codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
-    target_path = codex_home / "AGENTS.md"
-    target_path.parent.mkdir(parents=True)
-    (instructions / "AGENTS.md").write_text("default agents\n", encoding="utf-8")
-    target_path.write_text("default agents\n", encoding="utf-8")
-    _patch_setup(
-        monkeypatch,
-        "CODEX_HOME_DEFAULT_FILES",
-        (("AGENTS.md", target_path),),
-    )
-
-    setup_cli._ensure_codex_home_default_files(str(workspace))
-
-    assert not target_path.is_symlink()
-    assert target_path.read_text(encoding="utf-8") == (
-        "## Openbase Coder Instructions\n\n"
-        f"- These instructions are auto generated from {instructions / 'AGENTS.md'}."
-        "\n\n"
-        "default agents\n"
-    )
-
-
-def test_ensure_codex_home_default_files_converts_stale_agents_symlink(
-    tmp_path, monkeypatch
-) -> None:
-    workspace = tmp_path / "workspace"
-    instructions = workspace / "instructions"
-    stale_instructions = tmp_path / "stale-instructions"
-    instructions.mkdir(parents=True)
-    stale_instructions.mkdir()
-    codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
-    target_path = codex_home / "AGENTS.md"
-    target_path.parent.mkdir(parents=True)
-    (instructions / "AGENTS.md").write_text("default agents\n", encoding="utf-8")
-    (stale_instructions / "AGENTS.md").write_text("stale agents\n", encoding="utf-8")
-    target_path.symlink_to(stale_instructions / "AGENTS.md")
-    _patch_setup(
-        monkeypatch,
-        "CODEX_HOME_DEFAULT_FILES",
-        (("AGENTS.md", target_path),),
-    )
-
-    setup_cli._ensure_codex_home_default_files(str(workspace))
-
-    assert not target_path.is_symlink()
-    updated = target_path.read_text(encoding="utf-8")
-    assert updated == (
-        "## Openbase Coder Instructions\n\n"
-        f"- These instructions are auto generated from {instructions / 'AGENTS.md'}."
-        "\n\n"
-        "default agents\n"
-    )
-
-
-def test_ensure_codex_home_default_files_converts_current_agents_symlink(
-    tmp_path, monkeypatch
-) -> None:
-    workspace = tmp_path / "workspace"
-    instructions = workspace / "instructions"
-    instructions.mkdir(parents=True)
-    codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
-    target_path = codex_home / "AGENTS.md"
-    target_path.parent.mkdir(parents=True)
-    source_path = instructions / "AGENTS.md"
-    source_path.write_text("default agents\n", encoding="utf-8")
-    target_path.symlink_to(source_path)
-    _patch_setup(
-        monkeypatch,
-        "CODEX_HOME_DEFAULT_FILES",
-        (("AGENTS.md", target_path),),
-    )
-
-    setup_cli._ensure_codex_home_default_files(str(workspace))
-
-    assert not target_path.is_symlink()
-    assert target_path.read_text(encoding="utf-8") == (
-        "## Openbase Coder Instructions\n\n"
-        f"- These instructions are auto generated from {source_path}.\n\n"
-        "default agents\n"
-    )
-
-
-def test_ensure_codex_home_default_files_honors_excluding_normal_agents(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    from openbase_coder_cli.services import console_settings
-
-    workspace = tmp_path / "workspace"
-    instructions = workspace / "instructions"
-    normal_agents = tmp_path / "normal_codex" / "AGENTS.md"
-    instructions.mkdir(parents=True)
-    normal_agents.parent.mkdir(parents=True)
-    codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    stale_dir.mkdir()
+    _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    stale_agents = stale_dir / "AGENTS.md"
+    stale_agents.write_text("- Stale rule\n", encoding="utf-8")
     (instructions / "AGENTS.md").write_text("- Openbase rule\n", encoding="utf-8")
-    normal_agents.write_text("- Normal rule\n", encoding="utf-8")
-    _patch_setup(monkeypatch, "CODEX_HOME_DEFAULT_FILES", ())
-    monkeypatch.setattr(
-        console_settings,
-        "CONSOLE_SETTINGS_JSON_PATH",
-        tmp_path / "console-settings.json",
-    )
-    console_settings.set_include_normal_codex_agents_in_openbase_agents(False)
+    agents_path = tmp_path / "openbase" / "instructions" / "AGENTS.md"
+    agents_path.parent.mkdir(parents=True)
+    agents_path.symlink_to(stale_agents)
 
-    setup_cli._ensure_codex_home_default_files(str(workspace))
+    setup_cli._ensure_openbase_instruction_files(str(workspace))
 
-    content = (codex_home / "AGENTS.md").read_text(encoding="utf-8")
-    assert content == (
+    assert not agents_path.is_symlink()
+    assert agents_path.read_text(encoding="utf-8") == (
         "## Openbase Coder Instructions\n\n"
         f"- These instructions are auto generated from {instructions / 'AGENTS.md'}."
         "\n\n"
         "- Openbase rule\n"
     )
-    assert "Non-Openbase Instructions" not in content
-    assert "Normal rule" not in content
+    assert stale_agents.read_text(encoding="utf-8") == "- Stale rule\n"
 
 
-def test_ensure_codex_home_default_files_replaces_stale_openbase_claude_symlink(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    workspace = tmp_path / "workspace"
-    instructions = workspace / "instructions"
-    stale_dir = tmp_path / "stale-openbase-codex"
-    instructions.mkdir(parents=True)
-    stale_dir.mkdir()
-    codex_home, claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
-    stale_agents = stale_dir / "AGENTS.md"
-    stale_agents.write_text("- Stale rule\n", encoding="utf-8")
-    (instructions / "AGENTS.md").write_text("- Openbase rule\n", encoding="utf-8")
-    claude_md = claude_config / "CLAUDE.md"
-    claude_md.parent.mkdir(parents=True)
-    claude_md.symlink_to(stale_agents)
-    _patch_setup(monkeypatch, "CODEX_HOME_DEFAULT_FILES", ())
-
-    setup_cli._ensure_codex_home_default_files(str(workspace))
-
-    assert claude_md.is_symlink()
-    assert claude_md.resolve() == (codex_home / "AGENTS.md").resolve()
-    assert claude_md.readlink() == Path(
-        os.path.relpath(codex_home / "AGENTS.md", claude_config)
-    )
-
-
-def test_ensure_codex_home_default_files_skips_missing_sources(
+def test_ensure_openbase_instruction_files_skips_missing_sources(
     tmp_path, monkeypatch
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
-    target_path = codex_home / "AGENTS.md"
-    _patch_setup(
-        monkeypatch,
-        "CODEX_HOME_DEFAULT_FILES",
-        (("AGENTS.md", target_path),),
+    _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    shared_instructions = tmp_path / "openbase" / "instructions"
+
+    setup_cli._ensure_openbase_instruction_files(str(workspace))
+
+    assert not shared_instructions.exists()
+
+
+def test_ensure_claude_md_symlink_links_claude_md_to_codex_agents(
+    tmp_path, monkeypatch
+) -> None:
+    codex_home, claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    agents_path = codex_home / "AGENTS.md"
+    agents_path.parent.mkdir(parents=True)
+    agents_path.write_text("shared instructions\n", encoding="utf-8")
+
+    setup_cli._ensure_claude_md_symlink()
+
+    claude_md_path = claude_config / "CLAUDE.md"
+    assert claude_md_path.is_symlink()
+    assert claude_md_path.readlink() == Path(
+        os.path.relpath(agents_path, claude_config)
     )
-
-    setup_cli._ensure_codex_home_default_files(str(workspace))
-
-    assert not target_path.exists()
+    assert claude_md_path.resolve() == agents_path.resolve()
 
 
-def test_ensure_normal_claude_md_symlink_links_to_normal_codex_agents(
-    tmp_path,
-    monkeypatch,
+def test_ensure_claude_md_symlink_migrates_existing_claude_file(
+    tmp_path, monkeypatch
 ) -> None:
-    _patch_openbase_agent_paths(monkeypatch, tmp_path)
-    normal_agents_path = setup_cli.NORMAL_CODEX_AGENTS_MD_PATH
-    normal_agents_path.parent.mkdir(parents=True)
-    normal_agents_path.write_text("normal codex\n", encoding="utf-8")
-
-    setup_cli._ensure_normal_claude_md_symlink()
-
-    claude_md_path = setup_cli.NORMAL_CLAUDE_CONFIG_DIR / "CLAUDE.md"
-    assert claude_md_path.is_symlink()
-    assert claude_md_path.resolve() == normal_agents_path.resolve()
-
-
-def test_ensure_normal_claude_md_symlink_migrates_existing_claude_file(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    _patch_openbase_agent_paths(monkeypatch, tmp_path)
-    claude_md_path = setup_cli.NORMAL_CLAUDE_CONFIG_DIR / "CLAUDE.md"
+    codex_home, claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    claude_md_path = claude_config / "CLAUDE.md"
     claude_md_path.parent.mkdir(parents=True)
-    claude_md_path.write_text("normal claude\n", encoding="utf-8")
+    claude_md_path.write_text("user claude instructions\n", encoding="utf-8")
 
-    setup_cli._ensure_normal_claude_md_symlink()
+    setup_cli._ensure_claude_md_symlink()
 
-    normal_agents_path = setup_cli.NORMAL_CODEX_AGENTS_MD_PATH
-    assert normal_agents_path.read_text(encoding="utf-8") == "normal claude\n"
+    agents_path = codex_home / "AGENTS.md"
+    assert agents_path.read_text(encoding="utf-8") == "user claude instructions\n"
     assert claude_md_path.is_symlink()
-    assert claude_md_path.resolve() == normal_agents_path.resolve()
+    assert claude_md_path.resolve() == agents_path.resolve()
 
 
-def test_ensure_normal_claude_md_symlink_backs_up_different_file(
-    tmp_path,
-    monkeypatch,
+def test_ensure_claude_md_symlink_backs_up_different_file(
+    tmp_path, monkeypatch
 ) -> None:
-    _patch_openbase_agent_paths(monkeypatch, tmp_path)
-    normal_agents_path = setup_cli.NORMAL_CODEX_AGENTS_MD_PATH
-    claude_md_path = setup_cli.NORMAL_CLAUDE_CONFIG_DIR / "CLAUDE.md"
-    normal_agents_path.parent.mkdir(parents=True)
+    codex_home, claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    agents_path = codex_home / "AGENTS.md"
+    claude_md_path = claude_config / "CLAUDE.md"
+    agents_path.parent.mkdir(parents=True)
     claude_md_path.parent.mkdir(parents=True)
-    normal_agents_path.write_text("normal codex\n", encoding="utf-8")
-    claude_md_path.write_text("normal claude\n", encoding="utf-8")
+    agents_path.write_text("codex agents\n", encoding="utf-8")
+    claude_md_path.write_text("different claude\n", encoding="utf-8")
 
-    setup_cli._ensure_normal_claude_md_symlink()
+    setup_cli._ensure_claude_md_symlink()
 
     backups = list(claude_md_path.parent.glob("CLAUDE.md.backup-openbase-coder-*"))
     assert len(backups) == 1
-    assert backups[0].read_text(encoding="utf-8") == "normal claude\n"
+    assert backups[0].read_text(encoding="utf-8") == "different claude\n"
     assert claude_md_path.is_symlink()
-    assert claude_md_path.resolve() == normal_agents_path.resolve()
+    assert claude_md_path.resolve() == agents_path.resolve()
+    assert agents_path.read_text(encoding="utf-8") == "codex agents\n"
+
+
+def test_ensure_claude_md_symlink_repoints_stale_symlink(tmp_path, monkeypatch) -> None:
+    codex_home, claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    stale_target = tmp_path / "stale" / "AGENTS.md"
+    stale_target.parent.mkdir(parents=True)
+    stale_target.write_text("stale\n", encoding="utf-8")
+    agents_path = codex_home / "AGENTS.md"
+    agents_path.parent.mkdir(parents=True)
+    agents_path.write_text("codex agents\n", encoding="utf-8")
+    claude_md_path = claude_config / "CLAUDE.md"
+    claude_md_path.parent.mkdir(parents=True)
+    claude_md_path.symlink_to(stale_target)
+
+    setup_cli._ensure_claude_md_symlink()
+
+    assert claude_md_path.is_symlink()
+    assert claude_md_path.readlink() == Path(
+        os.path.relpath(agents_path, claude_config)
+    )
+    assert claude_md_path.resolve() == agents_path.resolve()
 
 
 def test_ensure_codex_home_dispatcher_config_creates_default(
@@ -638,9 +556,10 @@ def test_symlink_codex_home_skills_preserves_real_directories(
     assert (target / "SKILL.md").read_text(encoding="utf-8") == "# Custom\n"
 
 
-def _expected_session_id_hook_suffix(codex_home: Path) -> str:
+def _expected_session_id_hook_suffix(config_path: Path) -> str:
     hook_command = str(INJECT_SESSION_ID_HOOK_PATH)
-    state_key = f"{codex_home.resolve() / 'config.toml'}:session_start:0:0"
+    resolved_path = config_path.parent.resolve() / config_path.name
+    state_key = f"{resolved_path}:session_start:0:0"
     return (
         "\n"
         "[[hooks.SessionStart]]\n"
@@ -649,39 +568,49 @@ def _expected_session_id_hook_suffix(codex_home: Path) -> str:
         'type = "command"\n'
         f"command = {json.dumps(hook_command)}\n"
         "\n"
-        f'[hooks.state."{state_key}"]\n'
+        f"[hooks.state.{json.dumps(state_key)}]\n"
         f"trusted_hash = {json.dumps(session_start_hook_trusted_hash(hook_command))}\n"
         "enabled = true\n"
     )
 
 
-def test_ensure_codex_home_config_creates_config(tmp_path, monkeypatch) -> None:
+# Openbase passes its permission posture per session through the MCP env, so
+# it never has to write sandbox/approval values into the user's config.
+SUPER_AGENTS_PERMISSION_ENV_SUFFIX = (
+    'SUPER_AGENTS_CODEX_APPROVAL_POLICY = "never", '
+    'SUPER_AGENTS_CODEX_SANDBOX_POLICY = "danger-full-access"'
+)
+
+
+def test_ensure_codex_config_registers_super_agents_mcp(tmp_path, monkeypatch) -> None:
     workspace = tmp_path / "workspace"
     command = workspace / ".venv" / "bin" / "super-agents-mcp"
-    codex_home = tmp_path / "codex_home"
+    codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
     command.parent.mkdir(parents=True)
     command.write_text("#!/bin/sh\n", encoding="utf-8")
-    _patch_setup(monkeypatch, "CODEX_HOME_DIR", codex_home)
 
-    setup_cli._ensure_codex_home_config(str(workspace))
+    setup_cli._ensure_codex_config(str(workspace))
 
-    assert (codex_home / "config.toml").read_text(encoding="utf-8") == (
-        'sandbox_mode = "danger-full-access"\n'
-        "approval_policy = { granular = { sandbox_approval = false, rules = false, "
-        "mcp_elicitations = false, request_permissions = false, "
-        "skill_approval = false } }\n"
-        'model = "gpt-5.5"\n'
-        "\n"
+    config_path = codex_home / "config.toml"
+    assert config_path.read_text(encoding="utf-8") == (
         "[mcp_servers.super-agents]\n"
         f"command = {json.dumps(str(command))}\n"
-        + _expected_session_id_hook_suffix(codex_home)
+        'env = { SUPER_AGENTS_DEFAULT_BACKEND = "codex", '
+        + SUPER_AGENTS_PERMISSION_ENV_SUFFIX
+        + " }\n"
+        + _expected_session_id_hook_suffix(config_path)
     )
 
 
-def test_ensure_codex_home_config_replaces_stale_values(tmp_path, monkeypatch) -> None:
+def test_ensure_codex_config_preserves_user_config_values(
+    tmp_path, monkeypatch
+) -> None:
+    """The shared ~/.codex/config.toml keeps the user's own settings; only the
+    super-agents table is managed and no root sandbox/approval values are
+    ever written."""
     workspace = tmp_path / "workspace"
     command = workspace / ".venv" / "bin" / "super-agents-mcp"
-    codex_home = tmp_path / "codex_home"
+    codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
     config_path = codex_home / "config.toml"
     command.parent.mkdir(parents=True)
     command.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -691,12 +620,13 @@ def test_ensure_codex_home_config_replaces_stale_values(tmp_path, monkeypatch) -
             [
                 'sandbox_mode = "workspace-write"',
                 'approval_policy = "on-request"',
+                'model = "gpt-5.5-mini"',
                 "",
-                '[projects."/Users/gabemontague"]',
+                '[projects."/Users/example"]',
                 'trust_level = "trusted"',
                 "",
                 "[mcp_servers.super-agents]",
-                'command = "/Users/gabemontague/.local/bin/uv"',
+                'command = "/Users/example/.local/bin/uv"',
                 'args = ["--directory", "/bad", "run", "super-agents-mcp"]',
                 "",
                 "[mcp_servers.playwright]",
@@ -706,57 +636,70 @@ def test_ensure_codex_home_config_replaces_stale_values(tmp_path, monkeypatch) -
         ),
         encoding="utf-8",
     )
-    _patch_setup(monkeypatch, "CODEX_HOME_DIR", codex_home)
 
-    setup_cli._ensure_codex_home_config(str(workspace))
+    setup_cli._ensure_codex_config(str(workspace))
 
     updated = config_path.read_text(encoding="utf-8")
-    assert 'sandbox_mode = "workspace-write"' not in updated
-    assert 'approval_policy = "on-request"' not in updated
-    assert 'sandbox_mode = "danger-full-access"' in updated
-    assert (
-        "approval_policy = { granular = { sandbox_approval = false, rules = false, "
-        "mcp_elicitations = false, request_permissions = false, "
-        "skill_approval = false } }"
-    ) in updated
+    assert 'sandbox_mode = "workspace-write"' in updated
+    assert 'approval_policy = "on-request"' in updated
+    assert 'model = "gpt-5.5-mini"' in updated
+    assert 'sandbox_mode = "danger-full-access"' not in updated
     assert updated.count("[mcp_servers.super-agents]") == 1
-    assert "/Users/gabemontague/.local/bin/uv" not in updated
+    assert "/Users/example/.local/bin/uv" not in updated
     assert "args =" not in updated
-    assert '[projects."/Users/gabemontague"]\ntrust_level = "trusted"' in updated
+    assert '[projects."/Users/example"]\ntrust_level = "trusted"' in updated
     assert f"command = {json.dumps(str(command))}" in updated
     assert '[mcp_servers.playwright]\ncommand = "npx"' in updated
+    assert SUPER_AGENTS_PERMISSION_ENV_SUFFIX in updated
 
 
-def test_ensure_codex_home_config_falls_back_to_resolved_uv(
+def test_ensure_codex_config_preserves_cloud_codex_child_default(
     tmp_path, monkeypatch
 ) -> None:
     workspace = tmp_path / "workspace"
+    command = workspace / ".venv" / "bin" / "super-agents-mcp"
+    codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    command.parent.mkdir(parents=True)
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    setup_cli._ensure_codex_config(
+        str(workspace),
+        coding_backend="openbase_cloud_codex",
+    )
+
+    assert (
+        'env = { SUPER_AGENTS_DEFAULT_BACKEND = "openbase_cloud_codex", '
+        + SUPER_AGENTS_PERMISSION_ENV_SUFFIX
+        + " }"
+    ) in (codex_home / "config.toml").read_text(encoding="utf-8")
+
+
+def test_ensure_codex_config_falls_back_to_resolved_uv(tmp_path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
     cli_dir = workspace / "cli"
-    codex_home = tmp_path / "codex_home"
     uv_bin = tmp_path / "homebrew" / "bin" / "uv"
+    codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
     cli_dir.mkdir(parents=True)
     uv_bin.parent.mkdir(parents=True)
     uv_bin.write_text("#!/bin/sh\n", encoding="utf-8")
-    _patch_setup(monkeypatch, "CODEX_HOME_DIR", codex_home)
+    _patch_setup(monkeypatch, "current_runtime_package", lambda: None)
     _patch_setup(
         monkeypatch,
         "which",
         lambda command: str(uv_bin) if command == "uv" else None,
     )
 
-    setup_cli._ensure_codex_home_config(str(workspace))
+    setup_cli._ensure_codex_config(str(workspace))
 
-    assert (codex_home / "config.toml").read_text(encoding="utf-8") == (
-        'sandbox_mode = "danger-full-access"\n'
-        "approval_policy = { granular = { sandbox_approval = false, rules = false, "
-        "mcp_elicitations = false, request_permissions = false, "
-        "skill_approval = false } }\n"
-        'model = "gpt-5.5"\n'
-        "\n"
+    config_path = codex_home / "config.toml"
+    assert config_path.read_text(encoding="utf-8") == (
         "[mcp_servers.super-agents]\n"
         f"command = {json.dumps(str(uv_bin))}\n"
         f"args = {json.dumps(['--directory', str(cli_dir), 'run', 'super-agents-mcp'])}\n"
-        + _expected_session_id_hook_suffix(codex_home)
+        'env = { SUPER_AGENTS_DEFAULT_BACKEND = "codex", '
+        + SUPER_AGENTS_PERMISSION_ENV_SUFFIX
+        + " }\n"
+        + _expected_session_id_hook_suffix(config_path)
     )
 
 
@@ -783,16 +726,16 @@ def test_super_agents_mcp_command_prefers_packaged_python_bin(
     assert args == []
 
 
-def test_ensure_claude_config_installs_super_agents_mcp(tmp_path, monkeypatch) -> None:
+def test_ensure_claude_mcp_installs_super_agents(tmp_path, monkeypatch) -> None:
     workspace = tmp_path / "workspace"
     command = workspace / ".venv" / "bin" / "super-agents-mcp"
     dispatcher_config = tmp_path / "dispatcher-config.json"
     _codex_home, claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
-    claude_json = claude_config / ".claude.json"
+    instructions = tmp_path / "openbase" / "instructions"
+    state_path = tmp_path / ".claude.json"
     command.parent.mkdir(parents=True)
     command.write_text("#!/bin/sh\n", encoding="utf-8")
-    claude_json.parent.mkdir(parents=True)
-    claude_json.write_text(
+    state_path.write_text(
         json.dumps(
             {
                 "firstStartTime": "2026-06-18T00:00:00.000Z",
@@ -801,75 +744,63 @@ def test_ensure_claude_config_installs_super_agents_mcp(tmp_path, monkeypatch) -
         ),
         encoding="utf-8",
     )
-    _patch_setup(monkeypatch, "OPENBASE_CLAUDE_JSON_PATH", claude_json)
     _patch_setup(monkeypatch, "CODEX_DISPATCHER_CONFIG_PATH", dispatcher_config)
 
-    setup_cli._ensure_claude_config(str(workspace))
+    setup_cli._ensure_claude_mcp(str(workspace))
 
-    payload = json.loads(claude_json.read_text(encoding="utf-8"))
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
     assert payload["firstStartTime"] == "2026-06-18T00:00:00.000Z"
     assert payload["mcpServers"]["playwright"] == {"command": "npx"}
     assert payload["mcpServers"]["super-agents"] == {
         "type": "stdio",
         "command": str(command),
         "env": {
-            "CLAUDE_CONFIG_DIR": str(claude_config),
             "SUPER_AGENTS_DEFAULT_CONFIG_PATH": str(dispatcher_config),
             "CODEX_SUPER_AGENT_INSTRUCTIONS_PATH": str(
-                setup_cli.CODEX_SUPER_AGENT_INSTRUCTIONS_PATH
+                instructions / "SUPER_AGENT_INSTRUCTIONS.md"
             ),
+            "SUPER_AGENTS_BASE_INSTRUCTIONS_PATH": str(instructions / "AGENTS.md"),
+            "SUPER_AGENTS_DEFAULT_BACKEND": "claude_code",
         },
     }
-    settings = json.loads((claude_config / "settings.json").read_text(encoding="utf-8"))
-    assert settings["permissions"]["defaultMode"] == "bypassPermissions"
-    assert settings["skipDangerousModePermissionPrompt"] is True
-    assert settings["skipAutoPermissionPrompt"] is True
-    assert settings["claudeMdExcludes"] == [
-        str(setup_cli.NORMAL_CLAUDE_CONFIG_DIR / "CLAUDE.md")
-    ]
+    # The user's Claude settings are never touched by MCP registration.
+    assert not (claude_config / "settings.json").exists()
 
 
-def test_ensure_claude_settings_seeds_from_normal_claude_settings(
-    tmp_path,
-    monkeypatch,
-) -> None:
+def test_ensure_claude_mcp_preserves_cloud_child_default(tmp_path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    command = workspace / ".venv" / "bin" / "super-agents-mcp"
+    _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    state_path = tmp_path / ".claude.json"
+    command.parent.mkdir(parents=True)
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    setup_cli._ensure_claude_mcp(
+        str(workspace),
+        coding_backend="openbase_cloud",
+    )
+
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert (
+        payload["mcpServers"]["super-agents"]["env"]["SUPER_AGENTS_DEFAULT_BACKEND"]
+        == "openbase_cloud"
+    )
+
+
+def test_ensure_claude_hooks_registers_session_id_hook(tmp_path, monkeypatch) -> None:
     _codex_home, claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
-    normal_settings = setup_cli.NORMAL_CLAUDE_SETTINGS_PATH
-    normal_settings.parent.mkdir(parents=True)
-    normal_settings.write_text(
-        json.dumps(
-            {
-                "model": "sonnet",
-                "theme": "light",
-                "permissions": {
-                    "allow": ["Bash(git status:*)"],
-                    "deny": [],
-                    "defaultMode": "auto",
-                },
-                "skipDangerousModePermissionPrompt": False,
-                "skipAutoPermissionPrompt": False,
-                "claudeMdExcludes": ["/tmp/other-team/CLAUDE.md"],
-            }
-        ),
+    settings_path = claude_config / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(
+        json.dumps({"model": "sonnet", "permissions": {"defaultMode": "auto"}}),
         encoding="utf-8",
     )
 
-    setup_cli._ensure_claude_settings()
+    setup_cli._ensure_claude_hooks()
 
-    settings = json.loads((claude_config / "settings.json").read_text(encoding="utf-8"))
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
     assert settings["model"] == "sonnet"
-    assert settings["theme"] == "light"
-    assert settings["permissions"] == {
-        "allow": ["Bash(git status:*)"],
-        "deny": [],
-        "defaultMode": "bypassPermissions",
-    }
-    assert settings["skipDangerousModePermissionPrompt"] is True
-    assert settings["skipAutoPermissionPrompt"] is True
-    assert settings["claudeMdExcludes"] == [
-        "/tmp/other-team/CLAUDE.md",
-        str(setup_cli.NORMAL_CLAUDE_CONFIG_DIR / "CLAUDE.md"),
-    ]
+    assert settings["permissions"] == {"defaultMode": "auto"}
     assert settings["hooks"]["SessionStart"] == [
         {
             "matcher": "",
@@ -878,187 +809,11 @@ def test_ensure_claude_settings_seeds_from_normal_claude_settings(
     ]
 
 
-def test_ensure_claude_auth_bridge_runs_login_when_requested(monkeypatch) -> None:
-    _patch_setup(monkeypatch, "copy_normal_claude_keychain", lambda: False)
-    statuses = iter(
-        [
-            claude_auth.ClaudeAuthStatus(
-                logged_in=False, raw_output="{}", returncode=0
-            ),
-            claude_auth.ClaudeAuthStatus(logged_in=True, raw_output="{}", returncode=0),
-        ]
-    )
-    login_calls = []
-    _patch_setup(monkeypatch, "claude_auth_status", lambda: next(statuses))
-    _patch_setup(
-        monkeypatch,
-        "sync_normal_claude_state",
-        lambda: claude_auth.ClaudeAuthBridgeResult(
-            state_updated=False,
-            message="already synced",
-        ),
-    )
-    _patch_setup(
-        monkeypatch,
-        "run_claude_login",
-        lambda: login_calls.append(True) or 0,
-    )
-
-    setup_cli._ensure_claude_auth_bridge(login_if_needed=True)
-
-    assert login_calls == [True]
-
-
-def test_ensure_claude_auth_bridge_syncs_before_status(monkeypatch) -> None:
-    calls = []
-    _patch_setup(
-        monkeypatch,
-        "sync_normal_claude_state",
-        lambda: (
-            calls.append("sync")
-            or claude_auth.ClaudeAuthBridgeResult(
-                state_updated=True,
-                message="synced normal state",
-            )
-        ),
-    )
-    _patch_setup(
-        monkeypatch,
-        "copy_normal_claude_keychain",
-        lambda: calls.append("copy-keychain") or True,
-    )
-    _patch_setup(
-        monkeypatch,
-        "claude_auth_status",
-        lambda: (
-            calls.append("status")
-            or claude_auth.ClaudeAuthStatus(
-                logged_in=True, raw_output="{}", returncode=0
-            )
-        ),
-    )
-
-    setup_cli._ensure_claude_auth_bridge(login_if_needed=False)
-
-    assert calls == ["sync", "copy-keychain", "status"]
-
-
-def test_ensure_claude_auth_bridge_does_not_login_unless_requested(monkeypatch) -> None:
-    _patch_setup(monkeypatch, "copy_normal_claude_keychain", lambda: False)
-    login_calls = []
-    _patch_setup(
-        monkeypatch,
-        "claude_auth_status",
-        lambda: claude_auth.ClaudeAuthStatus(
-            logged_in=False,
-            raw_output="{}",
-            returncode=0,
-        ),
-    )
-    _patch_setup(
-        monkeypatch,
-        "sync_normal_claude_state",
-        lambda: claude_auth.ClaudeAuthBridgeResult(
-            state_updated=False,
-            message="already synced",
-        ),
-    )
-    _patch_setup(
-        monkeypatch,
-        "run_claude_login",
-        lambda: login_calls.append(True) or 0,
-    )
-
-    setup_cli._ensure_claude_auth_bridge(login_if_needed=False)
-
-    assert login_calls == []
-
-
 def test_selected_coding_backend_reads_existing_env(tmp_path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text("OPENBASE_CODING_BACKEND=claude_code\n", encoding="utf-8")
 
     assert setup_cli._selected_coding_backend(env_file, None) == "claude_code"
-
-
-def test_symlink_codex_auth_links_before_codex_login(tmp_path, monkeypatch) -> None:
-    """The service auth symlink dangles until `codex login` writes auth.json."""
-    codex_module = importlib.import_module("openbase_coder_cli.cli.setup.codex")
-    codex_home = tmp_path / "openbase" / "codex_home"
-    monkeypatch.setattr(codex_module, "CODEX_HOME_DIR", codex_home)
-    monkeypatch.setattr(codex_module.Path, "home", classmethod(lambda cls: tmp_path))
-
-    setup_cli._symlink_codex_auth()
-
-    service_auth = codex_home / "auth.json"
-    assert service_auth.is_symlink()
-    assert not service_auth.is_file()
-
-    normal_auth = tmp_path / ".codex" / "auth.json"
-    normal_auth.parent.mkdir(parents=True)
-    normal_auth.write_text('{"tokens": {}}', encoding="utf-8")
-    assert service_auth.is_file()
-
-    # Re-running keeps the existing link.
-    setup_cli._symlink_codex_auth()
-    assert service_auth.resolve() == normal_auth.resolve()
-
-
-def test_ensure_codex_home_config_can_link_normal_codex_config(
-    tmp_path, monkeypatch
-) -> None:
-    workspace = tmp_path / "custom-workspace"
-    command = workspace / "cli" / ".venv" / "bin" / "super-agents-mcp"
-    codex_home = tmp_path / "openbase" / "codex_home"
-    normal_config = tmp_path / "codex" / "config.toml"
-    command.parent.mkdir(parents=True)
-    command.write_text("#!/bin/sh\n", encoding="utf-8")
-    normal_config.parent.mkdir(parents=True)
-    normal_config.write_text(
-        "\n".join(
-            [
-                '[projects."/repo"]',
-                'trust_level = "trusted"',
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    _patch_setup(monkeypatch, "CODEX_HOME_DIR", codex_home)
-    _patch_setup(monkeypatch, "NORMAL_CODEX_CONFIG_PATH", normal_config)
-
-    setup_cli._ensure_codex_home_config(
-        str(workspace),
-        link_codex_config=True,
-    )
-
-    service_config = codex_home / "config.toml"
-    updated = normal_config.read_text(encoding="utf-8")
-    assert service_config.is_symlink()
-    assert service_config.resolve() == normal_config.resolve()
-    assert service_config.read_text(encoding="utf-8") == updated
-    assert f"command = {json.dumps(str(command))}" in updated
-    assert '[projects."/repo"]\ntrust_level = "trusted"' in updated
-
-
-def test_symlink_codex_home_config_preserves_existing_service_config(
-    tmp_path, monkeypatch
-) -> None:
-    codex_home = tmp_path / "openbase" / "codex_home"
-    service_config = codex_home / "config.toml"
-    normal_config = tmp_path / "codex" / "config.toml"
-    service_config.parent.mkdir(parents=True)
-    service_config.write_text('sandbox_mode = "danger-full-access"\n', encoding="utf-8")
-    _patch_setup(monkeypatch, "CODEX_HOME_DIR", codex_home)
-    _patch_setup(monkeypatch, "NORMAL_CODEX_CONFIG_PATH", normal_config)
-
-    setup_cli._symlink_codex_home_config()
-
-    assert service_config.is_symlink()
-    assert service_config.resolve() == normal_config.resolve()
-    assert normal_config.read_text(encoding="utf-8") == (
-        'sandbox_mode = "danger-full-access"\n'
-    )
 
 
 def test_ensure_env_file_documents_coding_backend_default(tmp_path) -> None:
@@ -1075,9 +830,89 @@ def test_ensure_env_file_documents_coding_backend_default(tmp_path) -> None:
     assert "# openbase_cloud runs Cloud-proxied Claude Code" in content
     assert "CODEX_CLAUDE_" not in content
     assert "SUPER_AGENTS_CLAUDE_TUI_CMD" not in content
-    assert "CLAUDE_CONFIG_DIR=" in content
+    assert "CLAUDE_CONFIG_DIR" not in content
     assert "SUPER_AGENTS_DEFAULT_CONFIG_PATH=" in content
+    assert "SUPER_AGENTS_CODEX_APPROVAL_POLICY=never" in content
+    assert "SUPER_AGENTS_CODEX_SANDBOX_POLICY=danger-full-access" in content
+    assert f"SUPER_AGENTS_BASE_INSTRUCTIONS_PATH={OPENBASE_AGENTS_MD_PATH}" in content
+    assert "CLAUDE_CODE_ENABLE_TELEMETRY=0" in content
     assert "CODEX_MODEL=" not in content
+    assert "CODEX_APP_SERVER_URL=unix://" in content
+    assert env_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_ensure_env_file_migrates_existing_env_to_shared_homes(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "KEEP_ME=1\n"
+        "CLAUDE_CONFIG_DIR=/Users/dev/.openbase/claude_config\n"
+        "LIVEKIT_API_KEY=APIkeyServer\n"
+        "LIVEKIT_API_SECRET=server-secret\n"
+        "LIVEKIT_CLIENT_API_KEY=APIkeyClient\n"
+        "LIVEKIT_CLIENT_API_SECRET=client-secret\n",
+        encoding="utf-8",
+    )
+    env_file.chmod(0o644)
+
+    setup_cli._ensure_env_file(
+        str(env_file),
+        assembly_ai_api_key="",
+        cartesia_api_key="",
+    )
+
+    content = env_file.read_text(encoding="utf-8")
+    assert "KEEP_ME=1" in content
+    assert "CLAUDE_CONFIG_DIR" not in content
+    assert "SUPER_AGENTS_CODEX_APPROVAL_POLICY=never" in content
+    assert "SUPER_AGENTS_CODEX_SANDBOX_POLICY=danger-full-access" in content
+    assert f"SUPER_AGENTS_BASE_INSTRUCTIONS_PATH={OPENBASE_AGENTS_MD_PATH}" in content
+    assert "SUPER_AGENTS_DEFAULT_CONFIG_PATH=" in content
+    assert "CODEX_APP_SERVER_URL=unix://" in content
+    assert env_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_ensure_env_file_migrates_legacy_app_server_but_preserves_custom_endpoint(
+    tmp_path,
+) -> None:
+    legacy = tmp_path / "legacy.env"
+    legacy.write_text("CODEX_APP_SERVER_URL=ws://127.0.0.1:4500\n", encoding="utf-8")
+    custom = tmp_path / "custom.env"
+    custom.write_text(
+        "CODEX_APP_SERVER_URL=wss://codex.example/rpc\n", encoding="utf-8"
+    )
+
+    for env_file in (legacy, custom):
+        setup_cli._ensure_env_file(
+            str(env_file),
+            assembly_ai_api_key="",
+            cartesia_api_key="",
+        )
+
+    assert "CODEX_APP_SERVER_URL=unix://" in legacy.read_text(encoding="utf-8")
+    assert "CODEX_APP_SERVER_URL=wss://codex.example/rpc" in custom.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_ensure_env_file_keeps_user_claude_config_dir_override(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "CLAUDE_CONFIG_DIR=/Users/dev/.claude-alt\n"
+        "LIVEKIT_API_KEY=APIkeyServer\n"
+        "LIVEKIT_API_SECRET=server-secret\n"
+        "LIVEKIT_CLIENT_API_KEY=APIkeyClient\n"
+        "LIVEKIT_CLIENT_API_SECRET=client-secret\n",
+        encoding="utf-8",
+    )
+
+    setup_cli._ensure_env_file(
+        str(env_file),
+        assembly_ai_api_key="",
+        cartesia_api_key="",
+    )
+
+    content = env_file.read_text(encoding="utf-8")
+    assert "CLAUDE_CONFIG_DIR=/Users/dev/.claude-alt" in content
 
 
 def test_ensure_env_file_can_select_backend(tmp_path) -> None:
@@ -1093,6 +928,45 @@ def test_ensure_env_file_can_select_backend(tmp_path) -> None:
     assert "OPENBASE_CODING_BACKEND=openbase_cloud" in env_file.read_text(
         encoding="utf-8"
     )
+
+
+def test_ensure_env_file_selects_embedded_livekit_mode_for_fresh_setup(
+    tmp_path,
+) -> None:
+    env_file = tmp_path / ".env"
+
+    setup_cli._ensure_env_file(
+        str(env_file),
+        assembly_ai_api_key="",
+        cartesia_api_key="",
+        tailnet_provider="netmesh-tsnet",
+    )
+
+    values = setup_cli._env_file_values(env_file)
+    assert values["OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"] == "netmesh-tsnet"
+    assert values["LIVEKIT_NETWORK_MODE"] == "local"
+
+
+def test_ensure_env_file_updates_livekit_mode_with_existing_provider(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER=tailscale\n"
+        "LIVEKIT_NETWORK_MODE=tailscale\n"
+        "LIVEKIT_NODE_IP=100.64.0.9\n",
+        encoding="utf-8",
+    )
+
+    setup_cli._ensure_env_file(
+        str(env_file),
+        assembly_ai_api_key="",
+        cartesia_api_key="",
+        tailnet_provider="netmesh-tsnet",
+    )
+
+    values = setup_cli._env_file_values(env_file)
+    assert values["OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"] == "netmesh-tsnet"
+    assert values["LIVEKIT_NETWORK_MODE"] == "local"
+    assert values["LIVEKIT_NODE_IP"] == ""
 
 
 def test_ensure_openbase_cloud_machine_token_uses_env_backend_url(
@@ -1226,7 +1100,9 @@ def test_ensure_bundled_sounds_preserves_custom_existing_file(
     assert target.read_bytes() == b"custom sound"
 
 
-def test_setup_configures_tailscale_serve(tmp_path, monkeypatch) -> None:
+def test_setup_configures_routes_and_defers_netmesh_until_login(
+    tmp_path, monkeypatch
+) -> None:
     calls = []
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -1234,10 +1110,15 @@ def test_setup_configures_tailscale_serve(tmp_path, monkeypatch) -> None:
 
     (workspace / "cli").mkdir()
     (workspace / "multi.json").write_text("{}", encoding="utf-8")
+    _patch_setup(monkeypatch, "OPENBASE_BASE_DIR", tmp_path / "openbase")
+    _patch_setup(monkeypatch, "current_runtime_package", lambda: None)
     _patch_setup(monkeypatch, "ensure_backend_binary", lambda _backend: None)
-    _patch_setup(monkeypatch, "_ensure_normal_codex_mcp", lambda _workspace_dir: None)
-    _patch_setup(monkeypatch, "_ensure_normal_claude_mcp", lambda _workspace_dir: None)
-    _patch_setup(monkeypatch, "_ensure_claude_auth_bridge", lambda **_kwargs: None)
+    _patch_setup(monkeypatch, "ensure_pinned_livekit_server", lambda: None)
+    _patch_setup(
+        monkeypatch,
+        "claude_auth_status",
+        lambda: SimpleNamespace(logged_in=False, raw_output="{}", returncode=0),
+    )
     _patch_setup(
         monkeypatch,
         "_ensure_thread_sync_exchange_dir",
@@ -1247,34 +1128,56 @@ def test_setup_configures_tailscale_serve(tmp_path, monkeypatch) -> None:
         setup_cli, "_ensure_bundled_sounds", lambda: calls.append("sounds")
     )
     _patch_setup(monkeypatch, "_ensure_env_file", lambda *_args, **_kwargs: None)
-    _patch_setup(monkeypatch, "_symlink_codex_auth", lambda: None)
     _patch_setup(
         monkeypatch,
-        "_ensure_normal_claude_md_symlink",
-        lambda: calls.append("normal-claude"),
+        "_ensure_claude_md_symlink",
+        lambda: calls.append("claude-md"),
     )
     _patch_setup(
         monkeypatch,
-        "_ensure_codex_home_default_files",
+        "_ensure_openbase_instruction_files",
         lambda _workspace_dir: None,
     )
     monkeypatch.setattr(
         setup_cli, "_ensure_codex_home_dispatcher_config", lambda **_kwargs: None
     )
+    _patch_setup(monkeypatch, "set_dispatcher_service_tier", lambda _tier: None)
     _patch_setup(monkeypatch, "_download_local_audio_models", lambda: None)
     monkeypatch.setattr(
         setup_cli, "_symlink_codex_home_skills", lambda _workspace_dir: None
     )
-    _patch_setup(monkeypatch, "_init_cli_workspace", lambda _workspace_dir: None)
+    _patch_setup(
+        monkeypatch,
+        "_init_cli_workspace",
+        lambda _workspace_dir, **_kwargs: None,
+    )
+    _patch_setup(monkeypatch, "_ensure_session_id_hook_script", lambda: None)
     monkeypatch.setattr(
-        setup_cli, "_ensure_codex_home_config", lambda *_args, **_kwargs: None
+        setup_cli, "_ensure_codex_config", lambda *_args, **_kwargs: None
     )
     _patch_setup(
-        monkeypatch, "_ensure_claude_config", lambda _workspace_dir, **_kwargs: None
+        monkeypatch, "_ensure_claude_mcp", lambda _workspace_dir, **_kwargs: None
     )
+    _patch_setup(monkeypatch, "_ensure_claude_hooks", lambda: None)
     _patch_setup(monkeypatch, "_install_cli_shim", lambda _workspace_dir: None)
     _patch_setup(monkeypatch, "_build_console", lambda _workspace_dir: None)
     _patch_setup(monkeypatch, "install_all_services", lambda _config: None)
+    _patch_setup(
+        monkeypatch,
+        "install_tunneld_binary",
+        lambda _config: calls.append("tunneld-binary") or tmp_path / "openbase-tunneld",
+    )
+    _patch_setup(
+        monkeypatch,
+        "install_service",
+        lambda _config, service: calls.append(f"service:{service.name}"),
+    )
+    _patch_setup(
+        monkeypatch,
+        "ensure_tunneld_running",
+        lambda **_kwargs: calls.append("tunneld-ready"),
+    )
+    _patch_setup(monkeypatch, "compute_cli_configured", lambda: True)
     monkeypatch.setattr(
         setup_cli.InstallationConfig,
         "save",
@@ -1317,7 +1220,169 @@ def test_setup_configures_tailscale_serve(tmp_path, monkeypatch) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    assert calls == ["thread-sync", "sounds", "normal-claude", "configure"]
+    assert calls == ["thread-sync", "sounds", "claude-md", "configure"]
+    assert "Claude Code is not logged in" in result.output
+
+    tailnet_cli = importlib.import_module("openbase_coder_cli.cli.tailnet")
+
+    calls.clear()
+    monkeypatch.setattr(
+        tailnet_cli,
+        "_provision_netmesh_companion",
+        lambda: calls.append("provision-netmesh"),
+    )
+
+    def unavailable_before_login():
+        calls.append("configure")
+        raise RuntimeError("netmesh control socket is not ready")
+
+    _patch_setup(
+        monkeypatch,
+        "configure_tailscale_serve",
+        unavailable_before_login,
+    )
+    result = runner.invoke(
+        setup_cli.setup,
+        [
+            "--workspace-dir",
+            str(workspace),
+            "--env-file",
+            str(env_file),
+            "--backend",
+            "claude-code",
+            "--tailnet-provider",
+            "netmesh",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Setup complete." in result.output
+    assert "networking choice was saved" in result.output
+    assert calls == [
+        "thread-sync",
+        "sounds",
+        "claude-md",
+        "provision-netmesh",
+        "configure",
+    ]
+
+    _patch_setup(
+        monkeypatch,
+        "configure_tailscale_serve",
+        fake_configure_tailscale_serve,
+    )
+    calls.clear()
+    result = runner.invoke(
+        setup_cli.setup,
+        [
+            "--workspace-dir",
+            str(workspace),
+            "--env-file",
+            str(env_file),
+            "--backend",
+            "claude-code",
+            "--tailnet-provider",
+            "netmesh-tsnet",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        "thread-sync",
+        "sounds",
+        "claude-md",
+        "tunneld-binary",
+        "service:openbase-tunneld",
+        "tunneld-ready",
+        "configure",
+    ]
+
+    _patch_setup(
+        monkeypatch,
+        "configure_tailscale_serve",
+        unavailable_before_login,
+    )
+    calls.clear()
+    result = runner.invoke(
+        setup_cli.setup,
+        [
+            "--workspace-dir",
+            str(workspace),
+            "--env-file",
+            str(env_file),
+            "--backend",
+            "claude-code",
+            "--tailnet-provider",
+            "netmesh-tsnet",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Openbase VPN route setup did not complete" in result.output
+    assert "netmesh control socket is not ready" in result.output
+
+    def tunneld_never_becomes_ready(**_kwargs):
+        raise RuntimeError("managed service control API timed out")
+
+    _patch_setup(
+        monkeypatch,
+        "ensure_tunneld_running",
+        tunneld_never_becomes_ready,
+    )
+    calls.clear()
+    result = runner.invoke(
+        setup_cli.setup,
+        [
+            "--workspace-dir",
+            str(workspace),
+            "--env-file",
+            str(env_file),
+            "--backend",
+            "claude-code",
+            "--tailnet-provider",
+            "netmesh-tsnet",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Openbase VPN daemon did not become ready" in result.output
+    assert "managed service control API timed out" in result.output
+    assert calls == [
+        "thread-sync",
+        "sounds",
+        "claude-md",
+        "tunneld-binary",
+        "service:openbase-tunneld",
+    ]
+
+    _patch_setup(
+        monkeypatch,
+        "ensure_tunneld_running",
+        lambda **_kwargs: calls.append("tunneld-ready"),
+    )
+
+    def unavailable_tunneld(_config):
+        raise RuntimeError("Go is unavailable")
+
+    _patch_setup(monkeypatch, "install_tunneld_binary", unavailable_tunneld)
+    calls.clear()
+    result = runner.invoke(
+        setup_cli.setup,
+        [
+            "--workspace-dir",
+            str(workspace),
+            "--env-file",
+            str(env_file),
+            "--backend",
+            "claude-code",
+            "--tailnet-provider",
+            "netmesh-tsnet",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Openbase VPN daemon installation failed: Go is unavailable" in result.output
+    assert "configure" not in calls
 
 
 def test_ensure_local_audio_dependencies_installs_into_runtime_python(
@@ -1366,6 +1431,37 @@ def test_ensure_local_audio_dependencies_rejects_python_313(
 
     with pytest.raises(Exception, match="requires a Python 3.12"):
         setup_cli._ensure_local_audio_dependencies(runtime_package)
+
+
+def test_init_cli_workspace_retains_selected_local_audio_extra(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    cli_dir = workspace / "cli"
+    cli_dir.mkdir(parents=True)
+    commands = []
+
+    _patch_setup(monkeypatch, "which", lambda _name: "uv")
+    _patch_setup(
+        monkeypatch,
+        "_download_livekit_model_files",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def fake_run(command, **kwargs):
+        commands.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0)
+
+    _patch_setup(monkeypatch, "subprocess", SimpleNamespace(run=fake_run))
+
+    setup_cli._init_cli_workspace(str(workspace), include_local_audio=True)
+
+    assert commands == [
+        (
+            ["uv", "sync", "--extra", "local-audio"],
+            {"cwd": str(cli_dir), "check": True},
+        )
+    ]
 
 
 def test_workspace_skill_sources_supports_direct_skill_dirs(tmp_path) -> None:
@@ -1552,6 +1648,37 @@ def test_require_backend_choice_keeps_existing_env(tmp_path, monkeypatch) -> Non
     )
 
 
+def test_require_tailnet_provider_choice_restores_existing_netmesh(
+    tmp_path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER=netmesh\n",
+        encoding="utf-8",
+    )
+
+    assert (
+        setup_cli._require_tailnet_provider_choice(
+            str(env_file), None, interactive=False
+        )
+        == "netmesh"
+    )
+
+
+def test_require_tailnet_provider_choice_defaults_legacy_env_to_tailscale(
+    tmp_path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENBASE_CODING_BACKEND=codex\n", encoding="utf-8")
+
+    assert (
+        setup_cli._require_tailnet_provider_choice(
+            str(env_file), None, interactive=False
+        )
+        == "tailscale"
+    )
+
+
 def test_require_audio_provider_choice_picker_maps_numbers(
     tmp_path, monkeypatch
 ) -> None:
@@ -1709,3 +1836,54 @@ def test_resolve_interactive_mode_non_tty_disables_prompts(monkeypatch) -> None:
     ctx = setup_cli.setup.make_context("setup", [])
     with ctx:
         assert setup_cli._resolve_interactive_mode(None, False) is False
+
+
+def test_interactive_login_checks_skip_when_declined(tmp_path, monkeypatch) -> None:
+    class _LoggedOut:
+        def __init__(self, url):
+            self.has_refresh_token = False
+
+    calls = []
+    monkeypatch.setattr(setup_cli, "TokenManager", _LoggedOut)
+    monkeypatch.setattr(setup_cli, "register_and_report", lambda **kw: calls.append(kw))
+    _fake_tty_stdin(monkeypatch, "n\n")
+
+    setup_cli._interactive_cloud_login_and_checks(
+        str(tmp_path / ".env"), cli_configured=True
+    )
+
+    assert calls == []
+
+
+def test_interactive_login_checks_report_when_logged_in(tmp_path, monkeypatch) -> None:
+    class _LoggedIn:
+        def __init__(self, url):
+            self.has_refresh_token = True
+
+    reports = []
+    monkeypatch.setattr(setup_cli, "TokenManager", _LoggedIn)
+    monkeypatch.setattr(
+        setup_cli,
+        "tailscale_serve_health",
+        lambda: SimpleNamespace(healthy=True, error=None),
+    )
+
+    def fake_report(**kwargs):
+        reports.append(kwargs)
+        return SimpleNamespace(ok=True, supported=True, error=None)
+
+    monkeypatch.setattr(setup_cli, "register_and_report", fake_report)
+
+    setup_cli._interactive_cloud_login_and_checks(
+        str(tmp_path / ".env"), cli_configured=True
+    )
+
+    assert reports == [{"cli_configured": True, "serve_healthy": True}]
+
+
+def test_print_app_download_qr_outputs_url(capsys) -> None:
+    setup_cli._print_app_download_qr()
+
+    out = capsys.readouterr().out
+    assert "https://openbase.cloud/downloads.html" in out
+    assert "█" in out or "▀" in out or "▄" in out

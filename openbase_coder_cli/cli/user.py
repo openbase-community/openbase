@@ -5,6 +5,14 @@ from pathlib import Path
 import click
 
 from openbase_coder_cli.cli.local_server import local_server_request
+from openbase_coder_cli.config.cloud_notifications import (
+    UserSayNotificationError,
+    send_user_say_fallback,
+)
+from openbase_coder_cli.config.token_manager import (
+    AuthLoginRequiredError,
+    AuthTransientError,
+)
 from openbase_coder_cli.livekit_announcer import (
     MAX_ANNOUNCER_TEXT_LENGTH,
     SUPPORTED_AUDIO_EXTENSIONS,
@@ -16,6 +24,32 @@ from openbase_coder_cli.skill_approvals import request_approval
 @click.group()
 def user() -> None:
     """Commands for the active Openbase Coder user session."""
+
+
+@user.command()
+@click.argument("agent_name")
+@click.option(
+    "--caller-name",
+    default="",
+    help="Name shown by CallKit. Defaults to the resolved agent name.",
+)
+def call(agent_name: str, caller_name: str) -> None:
+    """Ring the iPhone and connect it to a known local agent."""
+    normalized_agent_name = " ".join(agent_name.split())
+    normalized_caller_name = " ".join(caller_name.split())
+    if not normalized_agent_name:
+        raise click.ClickException("Agent name is required and cannot be blank.")
+    payload = {"agent_name": normalized_agent_name}
+    if normalized_caller_name:
+        payload["caller_name"] = normalized_caller_name
+    response = local_server_request("POST", "/api/user/call/", json=payload)
+    data = response.json()
+    device_count = data.get("device_count")
+    resolved_agent = data.get("agent_name") or normalized_agent_name
+    click.echo(
+        f"Inbound call for {resolved_agent} accepted for "
+        f"{device_count} registered device(s)."
+    )
 
 
 @user.command()
@@ -54,6 +88,33 @@ def say(
     response = local_server_request("POST", "/api/user/say/", json=payload)
 
     data = response.json()
+    if data.get("status") == "no_active_room":
+        thread_id = str(data.get("thread_id") or "").strip()
+        detail = str(data.get("detail") or "No active voice session was found.")
+        if not thread_id:
+            raise click.ClickException(
+                f"{detail} No agent thread was available for a linked notification."
+            )
+        click.echo(
+            "No active voice session; sending a linked iPhone notification.",
+            err=True,
+        )
+        try:
+            send_user_say_fallback(
+                agent_name=normalized_agent_name,
+                message=text,
+                thread_id=thread_id,
+            )
+        except (
+            AuthLoginRequiredError,
+            AuthTransientError,
+            UserSayNotificationError,
+        ) as exc:
+            raise click.ClickException(
+                f"{detail} The iPhone notification also failed: {exc}"
+            ) from exc
+        click.echo("Linked iPhone notification accepted by Openbase Cloud.")
+        return
     target_room = data.get("room_name") or "active room"
     click.echo(f"Announcer message sent to {target_room}.")
 

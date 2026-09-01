@@ -21,11 +21,7 @@ from openbase_coder_cli.backend_config import (
     SELECTABLE_BACKENDS,
     normalize_backend,
 )
-from openbase_coder_cli.claude_auth import (
-    claude_auth_status,
-    copy_normal_claude_keychain,
-    sync_normal_claude_state,
-)
+from openbase_coder_cli.claude_auth import verified_claude_auth_status
 from openbase_coder_cli.cli.backend import read_backend, write_backend
 from openbase_coder_cli.paths import CODEX_HOME_DIR, DEFAULT_ENV_FILE_PATH
 
@@ -101,7 +97,15 @@ def _set_claude_plugin_enabled(plugin_name: str, enabled: bool) -> bool:
 
 
 class CodingBackendSerializer(serializers.Serializer):
-    backend = serializers.ChoiceField(choices=SELECTABLE_BACKENDS)
+    backend = serializers.ChoiceField(choices=SELECTABLE_BACKENDS, required=False)
+    location = serializers.ChoiceField(choices=("local", "cloud"), required=False)
+
+    def validate(self, attrs):
+        if not attrs.get("backend") and not attrs.get("location"):
+            raise serializers.ValidationError(
+                "Provide either 'location' (local|cloud) or a legacy 'backend'."
+            )
+        return attrs
 
 
 class CodexPluginToggleSerializer(serializers.Serializer):
@@ -126,40 +130,49 @@ def _backend_note(backend: str) -> str | None:
     return None
 
 
-def _claude_auth_payload(
-    *, sync: bool = False, sync_if_logged_out: bool = False
-) -> dict:
-    state_updated = False
-    keychain_copied = False
-    message = None
-    if sync_if_logged_out and not sync:
-        sync = not claude_auth_status().logged_in
-    if sync:
-        sync_result = sync_normal_claude_state()
-        state_updated = sync_result.state_updated
-        message = sync_result.message
-        keychain_copied = copy_normal_claude_keychain()
-
-    status_result = claude_auth_status()
-    if sync and not status_result.logged_in and keychain_copied:
-        status_result = claude_auth_status()
-
+def _claude_auth_payload(*, verify: bool = False) -> dict:
+    # Sessions share the user's own ~/.claude login; there is nothing to
+    # bridge or sync — just report whether that login works.
+    status_result = verified_claude_auth_status()
     return {
-        "command": "openbase-coder claude sync-state",
+        "command": "claude login",
         "logged_in": status_result.logged_in,
         "raw_output": status_result.raw_output,
         "returncode": status_result.returncode,
-        "state_updated": state_updated,
-        "keychain_copied": keychain_copied,
-        "message": message,
+        "verified": verify,
     }
 
 
 def _backend_payload(*, changed: bool = False, sync_claude_auth: bool = False) -> dict:
+    from openbase_coder_cli.dispatcher_config import backend_location
+
     configured_backend = read_backend(DEFAULT_ENV_FILE_PATH)
     payload = {
         "backend": configured_backend,
         "configured_backend": configured_backend,
+        # Where code runs is the user-facing choice; the engine (Claude Code
+        # vs Codex) follows the model picked per role, not a global setting.
+        "location": backend_location(configured_backend),
+        "location_options": [
+            {
+                "id": "local",
+                "label": "Local CLI",
+                "description": (
+                    "Agents run on this machine. Both engines (Claude Code "
+                    "and Codex) are available; each launch's model picks the "
+                    "engine."
+                ),
+            },
+            {
+                "id": "cloud",
+                "label": "Openbase Cloud",
+                "description": (
+                    "Agents run through Openbase Cloud with your Openbase "
+                    "login (Claude Code engine). Existing local Codex threads "
+                    "stay visible read-only."
+                ),
+            },
+        ],
         "execution_backend": CLAUDE_CODE_BACKEND
         if configured_backend == OPENBASE_CLOUD_BACKEND
         else CODEX_BACKEND
@@ -186,11 +199,7 @@ def _backend_payload(*, changed: bool = False, sync_claude_auth: bool = False) -
         "restart_hint": _restart_hint(configured_backend),
     }
     if configured_backend == CLAUDE_CODE_BACKEND:
-        # Saving the backend from settings should repair a dead bridged login
-        # (stranded refresh token) instead of just reporting it.
-        payload["claude_auth"] = _claude_auth_payload(
-            sync_if_logged_out=sync_claude_auth
-        )
+        payload["claude_auth"] = _claude_auth_payload(verify=sync_claude_auth)
     return payload
 
 
@@ -292,14 +301,23 @@ def coding_backend_settings(request):
     serializer = CodingBackendSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     previous_backend = read_backend(DEFAULT_ENV_FILE_PATH)
-    next_backend = normalize_backend(serializer.validated_data["backend"])
+    location = serializer.validated_data.get("location")
     try:
-        write_backend(DEFAULT_ENV_FILE_PATH, next_backend)
+        if location:
+            from openbase_coder_cli.cli.backend import write_backend_location
+
+            write_backend_location(DEFAULT_ENV_FILE_PATH, location)
+        else:
+            write_backend(
+                DEFAULT_ENV_FILE_PATH,
+                normalize_backend(serializer.validated_data["backend"]),
+            )
     except ValueError as exc:
         return Response(
             {"error": str(exc)},
             status=status.HTTP_400_BAD_REQUEST,
         )
+    next_backend = read_backend(DEFAULT_ENV_FILE_PATH)
     return Response(
         _backend_payload(
             changed=previous_backend != next_backend,
@@ -349,7 +367,7 @@ def _claude_plugins_payload(*, changed_plugin: str | None = None) -> dict:
         )
     return {
         "backend": read_backend(DEFAULT_ENV_FILE_PATH),
-        "claude_config_dir": str(claude_plugins.OPENBASE_CLAUDE_JSON_PATH.parent),
+        "claude_config_dir": str(claude_plugins.CLAUDE_STATE_PATH.parent),
         "plugins": plugins,
         "changed": changed_plugin is not None,
         "changed_plugin": changed_plugin,
@@ -389,4 +407,4 @@ def claude_auth_settings(request):
             },
             status=status.HTTP_400_BAD_REQUEST,
         )
-    return Response(_claude_auth_payload(sync=request.method == "POST"))
+    return Response(_claude_auth_payload(verify=request.method == "POST"))

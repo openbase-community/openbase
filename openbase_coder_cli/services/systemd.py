@@ -40,12 +40,25 @@ def unit_path(svc: ServiceDefinition) -> Path:
 
 
 def _systemctl(*args: str, check: bool = False) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["systemctl", "--user", *args],
-        capture_output=True,
-        text=True,
-        check=check,
-    )
+    argv = ["systemctl", "--user", *args]
+    try:
+        return subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            check=check,
+        )
+    except FileNotFoundError as exc:
+        # Containers and minimal Linux hosts have no systemd; degrade to the
+        # same shape as a failed systemctl call so status checks report
+        # "not installed" instead of crashing.
+        if check:
+            raise subprocess.CalledProcessError(
+                127, argv, output="", stderr="systemctl not found"
+            ) from exc
+        return subprocess.CompletedProcess(
+            argv, returncode=127, stdout="", stderr="systemctl not found"
+        )
 
 
 def _show_properties(unit: str, properties: tuple[str, ...]) -> dict[str, str]:
@@ -132,12 +145,16 @@ def _unit_loaded(unit: str) -> bool:
 
 
 def systemd_bootout(svc: ServiceDefinition) -> bool:
-    from openbase_coder_cli.services.launchd import _cleanup_lingering_processes
+    from openbase_coder_cli.services.launchd import (
+        _cleanup_lingering_processes,
+        _cleanup_service_endpoint,
+    )
 
     unit = _unit_name(svc)
     loaded = _unit_loaded(unit)
     _systemctl("disable", "--now", unit)
     _cleanup_lingering_processes(svc)
+    _cleanup_service_endpoint(svc)
     return loaded
 
 

@@ -7,6 +7,7 @@ import os
 from datetime import UTC, datetime
 from typing import Any, Callable
 
+from super_agents.app_endpoint import default_app_server_endpoint
 from super_agents.app_models import LabelQueryInput
 from super_agents.app_server_client import (
     extract_notification_thread_id,
@@ -132,12 +133,13 @@ class CodexAppServerSessionManager(
         client: _SuperAgentsClient | None = None,
         routine_client: _RoutineClient | None = None,
         model_for_role: Callable[[str], str | None] | None = None,
+        execution_backend: str | None = None,
     ) -> None:
         self._ws_url = ws_url or os.environ.get(
-            "CODEX_APP_SERVER_URL", "ws://127.0.0.1:4500"
+            "CODEX_APP_SERVER_URL", default_app_server_endpoint()
         )
         self._uses_external_client = client is not None
-        self._execution_backend = _configured_execution_backend()
+        self._execution_backend = execution_backend or _configured_execution_backend()
         self._client: _SuperAgentsClient = client or self._default_client(
             self._execution_backend
         )
@@ -457,14 +459,39 @@ class CodexAppServerSessionManager(
         )
 
 
-_session_manager: CodexAppServerSessionManager | None = None
+_session_manager: Any = None
 
 
 def get_session_manager() -> CodexAppServerSessionManager:
-    """Get the singleton thread manager instance."""
+    """Get the singleton thread manager instance.
+
+    With multiple configured backends (OPENBASE_CODING_BACKENDS) this returns
+    a MultiBackendSessionManager facade — same surface, threads from every
+    backend merged and thread-scoped calls routed to the owning backend — so
+    the whole app becomes mixed-backend through this one accessor.
+    """
     global _session_manager
-    execution_backend = _configured_execution_backend()
-    if _session_manager is None or (
+    from openbase_coder_cli.backend_config import configured_execution_backends
+
+    backends = configured_execution_backends()
+    if len(backends) > 1:
+        from .multi_backend import MultiBackendSessionManager
+
+        if (
+            isinstance(_session_manager, MultiBackendSessionManager)
+            and _session_manager.execution_backends == backends
+        ):
+            return _session_manager
+        _session_manager = MultiBackendSessionManager(
+            {
+                backend: CodexAppServerSessionManager(execution_backend=backend)
+                for backend in backends
+            }
+        )
+        return _session_manager
+
+    execution_backend = backends[0]
+    if not isinstance(_session_manager, CodexAppServerSessionManager) or (
         not _session_manager._uses_external_client
         and _session_manager._execution_backend != execution_backend
     ):

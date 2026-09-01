@@ -47,9 +47,10 @@ after downloads can still take longer while models warm up.
 
 ## Run the Coding Agent Locally With Codex
 
-Openbase uses the Codex app-server for the `codex` backend. To run that coding
-agent against a local Ollama model, configure Codex for Ollama and make sure the
-Openbase service Codex home uses that config.
+Openbase uses the Codex app-server for the `codex` backend, running against
+your own `~/.codex` home. To run that coding agent against a local Ollama
+model, configure Codex for Ollama and point Openbase's model override at the
+same model.
 
 Install and start Ollama, then confirm the model exists:
 
@@ -90,35 +91,50 @@ codex debug models | jq '.models[] | select(.slug=="qwen3-coder:30b-a3b-q4_K_M")
 codex --strict-config doctor --summary --ascii
 ```
 
-Then make Openbase use the Codex backend and the same Codex config:
+Then make Openbase use the Codex backend:
 
 ```bash
 openbase-coder backend use codex
-openbase-coder setup --link-codex-config
-openbase-coder services restart codex-app-server
 ```
 
-`--link-codex-config` points Openbase's service Codex config at the normal Codex
-config under `~/.codex/config.toml`. If you prefer separate configs, apply the
-same Ollama `model`, `model_provider`, and `model_catalog_json` settings in
-`~/.openbase/codex_home/config.toml` instead.
+Because Openbase runs the Codex app-server against your own
+`~/.codex/config.toml`, the Ollama `model_provider` and `model_catalog_json`
+settings above already apply to Openbase sessions. The service does pass the
+backend model as a launch override (`codex app-server -c model=...`, from
+`CODEX_MODEL`, default `gpt-5.5`), so also point that at the Ollama model in
+`~/.openbase/.env`:
+
+```bash
+CODEX_MODEL=qwen3-coder:30b-a3b-q4_K_M
+```
+
+Then restart Openbase services:
+
+```bash
+openbase-coder restart
+```
 
 ## Revert to Managed Models
 
-To switch the coding agent back to OpenAI-backed Codex, update the active Codex
-config so the Ollama lines are commented out and the managed model is selected:
+To switch the coding agent back to OpenAI-backed Codex, update
+`~/.codex/config.toml` so the Ollama lines are commented out:
 
 ```toml
 # model = "qwen3-coder:30b-a3b-q4_K_M"
 # model_provider = "ollama-launch"
 # model_catalog_json = "~/.codex/ollama-launch-models.json"
-model = "gpt-5.5"
 ```
 
-Then restart the Codex service:
+Restore the managed model in `~/.openbase/.env`:
 
 ```bash
-openbase-coder services restart codex-app-server
+CODEX_MODEL=gpt-5.5
+```
+
+Then restart Openbase services:
+
+```bash
+openbase-coder restart
 ```
 
 To switch voice audio back, use `Settings` in the GUI and choose Openbase Cloud

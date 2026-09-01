@@ -3,24 +3,50 @@
 from __future__ import annotations
 
 import logging
-import os
+import secrets
 
 import httpx
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError, transaction
 from rest_framework import authentication, exceptions
 
 from openbase_coder_cli.config.jwt_validation import InvalidTokenError, JWKSValidator
+from openbase_coder_cli.config.local_api_token import get_local_api_token
 
 logger = logging.getLogger(__name__)
 
 
-def _allow_any_subject() -> bool:
-    """Whether the single-owner identity check is disabled (opt-in)."""
-    return (
-        os.environ.get("OPENBASE_CODER_CLI_ALLOW_ANY_SUBJECT", "false").strip().lower()
-        == "true"
-    )
+class LocalAPIAuthentication(authentication.BaseAuthentication):
+    """Authenticate an out-of-band installation capability.
+
+    The token is stored owner-readable on the host and delivered by trusted
+    native/CLI launch paths. Network reachability, source IP, Host, Origin,
+    and forwarded headers are intentionally irrelevant to this check.
+    """
+
+    keyword = "Bearer"
+
+    def authenticate(self, request):
+        auth_header = authentication.get_authorization_header(request)
+        try:
+            auth_parts = auth_header.decode("utf-8").split()
+        except UnicodeDecodeError:
+            return None
+        if len(auth_parts) != 2 or auth_parts[0].lower() != self.keyword.lower():
+            return None
+
+        token = auth_parts[1]
+        if token.count(".") == 2:
+            return None
+        if not secrets.compare_digest(token, get_local_api_token()):
+            raise exceptions.AuthenticationFailed("Invalid local API capability.")
+
+        user = _get_or_create_user(sub="local-installation")
+        return (user, {"auth_type": "local_installation"})
+
+    def authenticate_header(self, request):
+        return self.keyword
 
 
 def is_owner_identity(claims: dict) -> bool:
@@ -32,14 +58,10 @@ def is_owner_identity(claims: dict) -> bool:
     authorization. We pin the server to the account that ran
     ``openbase-coder login`` and reject every other subject.
 
-    Returns ``True`` (check disabled) when
-    ``OPENBASE_CODER_CLI_ALLOW_ANY_SUBJECT=true`` — only for trusted
-    multi-user setups that intentionally share one server. Returns ``False``
-    when no owner is logged in (the server has no authorized identity yet).
+    Returns ``False`` when no owner is logged in (the server has no authorized
+    identity yet). This authorization boundary is unconditional: a local
+    server cannot be shared across cloud identities.
     """
-    if _allow_any_subject():
-        return True
-
     # Imported lazily to avoid import-time settings access.
     from openbase_coder_cli.config.token_manager import get_token_manager
 
@@ -59,7 +81,7 @@ def enforce_owner_identity(claims: dict) -> None:
     """Raise ``AuthenticationFailed`` unless ``claims`` are the owner's."""
     if is_owner_identity(claims):
         return
-    if not _allow_any_subject() and not get_token_manager_owner():
+    if not get_token_manager_owner():
         raise exceptions.AuthenticationFailed(
             "This server has no logged-in owner. Run 'openbase-coder login'."
         )
@@ -157,14 +179,24 @@ def _get_or_create_user(*, sub: str):
     email = f"{sub}@jwt"
     manager = User.objects
 
-    if hasattr(manager, "create_user"):
-        return manager.create_user(username=sub, email=email, password=None)
+    try:
+        with transaction.atomic():
+            if hasattr(manager, "create_user"):
+                return manager.create_user(username=sub, email=email, password=None)
 
-    user = User(username=sub, email=email)
-    if hasattr(user, "set_unusable_password"):
-        user.set_unusable_password()
-    user.save()
-    return user
+            user = User(username=sub, email=email)
+            if hasattr(user, "set_unusable_password"):
+                user.set_unusable_password()
+            user.save()
+            return user
+    except IntegrityError:
+        # A device's first contact fires several API requests at once, all
+        # racing to create the same user; losers re-fetch the winner's row
+        # instead of surfacing 500s.
+        user = User.objects.filter(username=sub).first()
+        if user is not None:
+            return user
+        raise
 
 
 class JWTAuthentication(authentication.BaseAuthentication):
@@ -193,7 +225,7 @@ class JWTAuthentication(authentication.BaseAuthentication):
 
         token = auth_parts[1]
 
-        # Static bearer tokens don't contain '.'; JWTs have exactly two.
+        # The local capability authentication class handles non-JWT bearers.
         if token.count(".") != 2:
             return None
 

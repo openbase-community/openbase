@@ -35,6 +35,9 @@ CONFIG_XML_FILENAME = "config.xml"
 CERT_FILENAME = "cert.pem"
 # Staggered versioning: history thins automatically; bound is time (30 days).
 VERSIONS_MAX_AGE_SECONDS = 30 * 24 * 3600
+# Absolute pause floor for folders and the config/index home. Overrides
+# Syncthing's percentage default, which scales with disk size.
+MIN_DISK_FREE_MB = 2048
 REST_TIMEOUT_SECONDS = 10
 # v1 prints "Device ID: <id>"; v2 prints "... (device=<id> log.pkg=...)".
 _DEVICE_ID_RE = re.compile(r"(?:Device ID:\s*|device=)([A-Z2-7]{7}(?:-[A-Z2-7]{7}){7})")
@@ -155,6 +158,21 @@ def existing_folder_types(config_dir: Path = CODE_SYNC_DIR) -> dict[str, str]:
     }
 
 
+def configured_device_names(config_dir: Path = CODE_SYNC_DIR) -> dict[str, str]:
+    """Device names keyed by Syncthing ID from the managed configuration."""
+    config_path = config_dir / CONFIG_XML_FILENAME
+    try:
+        root = ET.parse(config_path).getroot()
+    except (FileNotFoundError, OSError, ET.ParseError):
+        return {}
+    return {
+        device_id: name
+        for element in root.findall("./device")
+        if (device_id := (element.get("id") or "").strip())
+        and (name := (element.get("name") or "").strip())
+    }
+
+
 def render_config_xml(
     *,
     self_device_id: str,
@@ -198,6 +216,9 @@ def render_config_xml(
         )
         for device_id in [self_device_id, *(peer.device_id for peer in peers)]:
             ET.SubElement(folder_element, "device", id=device_id)
+        ET.SubElement(folder_element, "minDiskFree", unit="MB").text = str(
+            MIN_DISK_FREE_MB
+        )
         versioning = ET.SubElement(folder_element, "versioning", type="staggered")
         ET.SubElement(
             versioning, "param", key="maxAge", val=str(VERSIONS_MAX_AGE_SECONDS)
@@ -239,6 +260,10 @@ def render_config_xml(
         ("startBrowser", "false"),
     ):
         ET.SubElement(options, key).text = value
+    # Syncthing's default floor is 1% of the disk, which pauses sync with
+    # ~18 GiB still free on a 2 TB drive; the home floor guards the index
+    # database and is the one that stalled folders in practice.
+    ET.SubElement(options, "minHomeDiskFree", unit="MB").text = str(MIN_DISK_FREE_MB)
 
     ET.indent(root)
     return ET.tostring(root, encoding="unicode", xml_declaration=True) + "\n"
@@ -355,6 +380,12 @@ class SyncthingClient:
         """Folders peers offered that are not in our config yet."""
         payload = self._request("GET", "/rest/cluster/pending/folders")
         return payload if isinstance(payload, dict) else {}
+
+    def system_errors(self) -> list[dict[str, Any]]:
+        """Recent engine-level errors (e.g. disk-full folder stalls)."""
+        payload = self._request("GET", "/rest/system/error") or {}
+        errors = payload.get("errors") if isinstance(payload, dict) else None
+        return [entry for entry in errors or [] if isinstance(entry, dict)]
 
     def latest_event_time(self, event_type: str) -> str | None:
         """RFC3339 time of the most recent buffered event of a type, if any."""

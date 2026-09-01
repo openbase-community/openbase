@@ -247,3 +247,28 @@ def test_machine_token_manager_mints_and_persists_token(machine_token_path):
     saved = json.loads(machine_token_path.read_text())
     assert saved["token"] == "obmt_new"
     assert saved["install_id"].startswith("openbase-coder-")
+
+
+def test_ssl_context_oserror_raises_transient_not_login_required(manager, auth_path):
+    """A refresh that cannot even be attempted is environmental, not a bad token.
+
+    ssl.create_default_context() raises FileNotFoundError when the running
+    interpreter's prefix has been renamed or deleted underneath it. That is
+    not an httpx.HTTPError, so it used to escape as an opaque exception and
+    the console surfaced it as a hard failure instead of a retryable one.
+    """
+    write_auth(auth_path, access="stale", expires_at=0)
+    with mock.patch.object(
+        httpx, "post", side_effect=FileNotFoundError(2, "No such file or directory")
+    ):
+        with pytest.raises(AuthTransientError):
+            manager.get_access_token()
+
+
+def test_ssl_context_failure_does_not_mark_refresh_rejected(manager, auth_path):
+    """An environmental failure must not persist a 'logged out' marker."""
+    write_auth(auth_path, access="stale", expires_at=0)
+    with mock.patch.object(httpx, "post", side_effect=FileNotFoundError()):
+        with pytest.raises(AuthTransientError):
+            manager.get_access_token()
+    assert "refresh_rejected_at" not in json.loads(auth_path.read_text())

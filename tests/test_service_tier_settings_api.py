@@ -44,12 +44,17 @@ def test_service_tier_settings_reads_config(monkeypatch, tmp_path: Path) -> None
     )
     monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
     monkeypatch.setattr(service_tier_settings, "DEFAULT_ENV_FILE_PATH", env_file)
+    monkeypatch.setattr(
+        service_tier_settings, "configured_execution_backend", lambda: "codex"
+    )
 
     response = service_tier_settings.service_tier_settings(
         _authenticated_request("GET", "/api/settings/service-tier/")
     )
 
     assert response.status_code == 200
+    assert response.data["editable"] is True
+    assert response.data["not_editable_reason"] is None
     assert response.data["dispatcher_service_tier"] == "standard"
     assert response.data["super_agents_service_tier"] == "fast"
     assert response.data["effective"] == {
@@ -77,6 +82,9 @@ def test_service_tier_settings_persists_config_and_env(
     monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
     monkeypatch.setattr(dispatcher_config, "DEFAULT_ENV_FILE_PATH", env_file)
     monkeypatch.setattr(service_tier_settings, "DEFAULT_ENV_FILE_PATH", env_file)
+    monkeypatch.setattr(
+        service_tier_settings, "configured_execution_backend", lambda: "codex"
+    )
 
     response = service_tier_settings.service_tier_settings(
         _authenticated_request(
@@ -113,6 +121,9 @@ def test_service_tier_settings_rejects_invalid_tier(
     env_file = tmp_path / ".env"
     monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
     monkeypatch.setattr(service_tier_settings, "DEFAULT_ENV_FILE_PATH", env_file)
+    monkeypatch.setattr(
+        service_tier_settings, "configured_execution_backend", lambda: "codex"
+    )
 
     response = service_tier_settings.service_tier_settings(
         _authenticated_request(
@@ -124,5 +135,59 @@ def test_service_tier_settings_rejects_invalid_tier(
 
     assert response.status_code == 400
     assert "dispatcher_service_tier" in response.data
+    assert not config_path.exists()
+    assert not env_file.exists()
+
+
+def test_service_tier_settings_not_editable_on_claude_backend(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "dispatcher-config.json"
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
+    monkeypatch.setattr(service_tier_settings, "DEFAULT_ENV_FILE_PATH", env_file)
+    monkeypatch.setattr(
+        service_tier_settings, "configured_execution_backend", lambda: "claude_code"
+    )
+
+    response = service_tier_settings.service_tier_settings(
+        _authenticated_request("GET", "/api/settings/service-tier/")
+    )
+
+    assert response.status_code == 200
+    assert response.data["editable"] is False
+    assert (
+        response.data["not_editable_reason"]
+        == service_tier_settings.CLAUDE_BACKEND_SERVICE_TIER_ERROR
+    )
+
+
+def test_service_tier_settings_rejects_writes_on_claude_backend(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "dispatcher-config.json"
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
+    monkeypatch.setattr(service_tier_settings, "DEFAULT_ENV_FILE_PATH", env_file)
+    monkeypatch.setattr(
+        service_tier_settings, "configured_execution_backend", lambda: "claude_code"
+    )
+
+    response = service_tier_settings.service_tier_settings(
+        _authenticated_request(
+            "PUT",
+            "/api/settings/service-tier/",
+            {
+                "dispatcher_service_tier": "fast",
+                "super_agents_service_tier": "fast",
+            },
+        )
+    )
+
+    assert response.status_code == 400
+    assert (
+        response.data["error"]
+        == service_tier_settings.CLAUDE_BACKEND_SERVICE_TIER_ERROR
+    )
     assert not config_path.exists()
     assert not env_file.exists()

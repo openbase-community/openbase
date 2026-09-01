@@ -11,14 +11,18 @@ feature enabled.
 from __future__ import annotations
 
 import calendar
+import shutil
 import time
-from typing import Callable
+from typing import Any, Callable
 
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 RECONCILE_STALE_SECONDS = 10 * 60
+# Warn while there is still room to act; the engine's hard pause floor is
+# MIN_DISK_FREE_MB (2 GiB) in the rendered Syncthing config.
+SYNC_DISK_LOW_BYTES = 5 * 1024 * 1024 * 1024
 
 # Conditional services: expected exactly when the callable returns True.
 # Services not listed here are expected iff install_by_default.
@@ -52,15 +56,36 @@ def _warning(
     }
 
 
+def _disconnected_peer_warnings(
+    connections: dict[str, Any], device_names: dict[str, str]
+) -> list[dict[str, str]]:
+    warnings: list[dict[str, str]] = []
+    for device_id, conn in connections.items():
+        if not conn.get("connected") and not conn.get("paused"):
+            peer_name = device_names.get(device_id) or f"{device_id[:7]}…"
+            warnings.append(
+                _warning(
+                    f"sync-peer-disconnected:{device_id[:7]}",
+                    "critical",
+                    f"Sync peer {peer_name} is not connected; file sync "
+                    "between your machines is stopped.",
+                    "Check the peer machine is on and on the tailnet; "
+                    "see the file-sync skill for half-open connections.",
+                )
+            )
+    return warnings
+
+
 def _service_warnings() -> list[dict[str, str]]:
     from openbase_coder_cli.services.definitions import SERVICES
     from openbase_coder_cli.services.launchd import launchctl_status
-    from openbase_coder_cli.services.selection import configured_coding_backend
+    from openbase_coder_cli.services.selection import (
+        service_supports_configured_backends,
+    )
 
     warnings: list[dict[str, str]] = []
-    coding_backend = configured_coding_backend()
     for service in SERVICES:
-        if not service.supports_backend(coding_backend):
+        if not service_supports_configured_backends(service):
             # Backend-scoped services are intentionally absent when another
             # coding backend is selected.
             continue
@@ -110,27 +135,41 @@ def _sync_warnings() -> list[dict[str, str]]:
     from openbase_coder_cli.code_sync import manager as sync_manager
     from openbase_coder_cli.code_sync.ignores import STIGNORE_FILENAME
     from openbase_coder_cli.code_sync.reconciler import read_reconcile_state
-    from openbase_coder_cli.code_sync.syncthing import SyncthingClient
+    from openbase_coder_cli.code_sync.syncthing import (
+        SyncthingClient,
+        configured_device_names,
+    )
+    from openbase_coder_cli.paths import CODE_SYNC_DIR
     from openbase_coder_cli.services.tailnet_devices import tailscale_self_identity
     from openbase_coder_cli.sync_config import sync_folders
 
     warnings: list[dict[str, str]] = []
 
-    # Engine reachable + peers connected.
+    # Engine reachable + peers connected + folders actually syncing.
     try:
         client = SyncthingClient()
-        for device_id, conn in client.connections().items():
-            if not conn.get("connected") and not conn.get("paused"):
-                warnings.append(
-                    _warning(
-                        f"sync-peer-disconnected:{device_id[:7]}",
-                        "critical",
-                        f"Sync peer {device_id[:7]}… is not connected; file "
-                        "sync between your machines is stopped.",
-                        "Check the peer machine is on and on the tailnet; "
-                        "see the file-sync skill for half-open connections.",
-                    )
+        warnings.extend(
+            _disconnected_peer_warnings(client.connections(), configured_device_names())
+        )
+        # A folder in error state (e.g. "insufficient space on disk") stops
+        # syncing while the engine stays up — historically invisible. One
+        # warning per distinct error message, not per folder.
+        seen_folder_errors: dict[str, str] = {}
+        for folder in sync_folders():
+            folder_status = client.folder_status(folder.folder_id)
+            error = str(folder_status.get("error") or "")
+            if error and error not in seen_folder_errors:
+                seen_folder_errors[error] = folder.relpath
+        for error, relpath in seen_folder_errors.items():
+            warnings.append(
+                _warning(
+                    f"sync-folder-error:{relpath}",
+                    "critical",
+                    f"Sync folder '{relpath}' has stopped syncing: {error[:200]}",
+                    "Free disk space on this Mac, then restart Openbase "
+                    "services; see the code-sync docs troubleshooting.",
                 )
+            )
     except CodeSyncError as exc:
         warnings.append(
             _warning(
@@ -140,6 +179,47 @@ def _sync_warnings() -> list[dict[str, str]]:
                 "Run 'openbase-coder restart' or 'openbase-coder sync enable'.",
             )
         )
+
+    # Low disk pauses Syncthing folders (absolute floor MIN_DISK_FREE_MB in
+    # the rendered config); warn before that line is crossed.
+    try:
+        free_bytes = shutil.disk_usage(str(CODE_SYNC_DIR)).free
+    except OSError:
+        free_bytes = None
+    if free_bytes is not None and free_bytes < SYNC_DISK_LOW_BYTES:
+        warnings.append(
+            _warning(
+                "sync-disk-low",
+                "warning",
+                f"Only {free_bytes // (1024 * 1024 * 1024)} GiB of disk is "
+                "free; below 2 GiB file sync pauses entirely.",
+                "Free disk space on this Mac.",
+            )
+        )
+
+    # Paused divergent branches: automation never picks a winner between two
+    # real histories, so an unresolved branch conflict means sync is holding
+    # a repo's ref until the user decides. Loud by design (2026-08-25).
+    from openbase_coder_cli.code_sync.conflicts import unresolved_conflicts
+
+    try:
+        for conflict in unresolved_conflicts():
+            if conflict.get("kind") != "branch":
+                continue
+            repo = conflict.get("repo_relpath") or "."
+            branch = conflict.get("branch") or "?"
+            warnings.append(
+                _warning(
+                    f"sync-branch-diverged:{conflict.get('id')}",
+                    "critical",
+                    f"Sync is paused for {repo}@{branch}: this machine and a "
+                    "peer have divergent git history for the same branch.",
+                    "Pick a side with 'openbase-coder sync resolve "
+                    f"{conflict.get('id')} --keep-local' or '--use-remote'.",
+                )
+            )
+    except Exception:  # noqa: BLE001 - conflicts file may be absent/corrupt
+        logger.debug("Unable to read sync conflicts", exc_info=True)
 
     # This device must advertise a tailscale identity or peers will drop it.
     identity = tailscale_self_identity()
@@ -179,7 +259,7 @@ def _sync_warnings() -> list[dict[str, str]]:
                     "warning",
                     f"Git-state reconciliation last ran {int(stale // 60)} "
                     "minutes ago; commits are not propagating.",
-                    "Check the openbase-routines service.",
+                    "Check the sync-workers service.",
                 )
             )
 

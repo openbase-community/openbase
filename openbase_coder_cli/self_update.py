@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import fcntl
 import hashlib
 import json
 import logging
@@ -26,6 +25,7 @@ from packaging.version import InvalidVersion, Version
 
 from openbase_coder_cli._version import __version__
 from openbase_coder_cli.backend_binaries import refresh_openbase_bin_codex
+from openbase_coder_cli.file_lock import LOCK_EX, LOCK_NB, LOCK_UN, flock
 from openbase_coder_cli.paths import (
     DEFAULT_LOG_DIR,
     OPENBASE_BASE_DIR,
@@ -188,7 +188,7 @@ def run_self_update(*, force: bool = False, report=print) -> SelfUpdateResult:
     lock_path = STANDALONE_PACKAGES_DIR / ".self-update.lock"
     lock_handle = lock_path.open("w")
     try:
-        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        flock(lock_handle, LOCK_EX | LOCK_NB)
     except OSError:
         lock_handle.close()
         return SelfUpdateResult(
@@ -200,7 +200,7 @@ def run_self_update(*, force: bool = False, report=print) -> SelfUpdateResult:
     try:
         return _run_self_update_locked(package, force=force, report=report)
     finally:
-        fcntl.flock(lock_handle, fcntl.LOCK_UN)
+        flock(lock_handle, LOCK_UN)
         lock_handle.close()
 
 

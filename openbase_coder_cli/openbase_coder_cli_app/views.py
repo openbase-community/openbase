@@ -6,8 +6,6 @@ so existing URL imports and tests can continue importing from `.views`.
 
 from __future__ import annotations
 
-from django.views.decorators.csrf import csrf_exempt
-
 from openbase_coder_cli.dispatcher_config import (
     dispatcher_voice,
     set_dispatcher_voice,
@@ -33,7 +31,7 @@ from openbase_coder_cli.openbase_coder_cli_app.approvals import (
 )
 from openbase_coder_cli.openbase_coder_cli_app.auth import (
     auth_logout,
-    auth_refresh_jwt,
+    auth_refresh_jwt_removed,
     auth_session,
 )
 from openbase_coder_cli.openbase_coder_cli_app.backend_settings import (
@@ -48,6 +46,11 @@ from openbase_coder_cli.openbase_coder_cli_app.diagnostics import (
     health_check,
 )
 from openbase_coder_cli.openbase_coder_cli_app.env_settings import env_settings
+from openbase_coder_cli.openbase_coder_cli_app.inbound_calls import (
+    inbound_call_activate,  # noqa: F401
+    inbound_call_decline,  # noqa: F401
+    user_call,  # noqa: F401
+)
 from openbase_coder_cli.openbase_coder_cli_app.ios_app_control import ios_app_control
 from openbase_coder_cli.openbase_coder_cli_app.livekit import (
     apple_music_playback_entitlement,  # noqa: F401
@@ -55,6 +58,11 @@ from openbase_coder_cli.openbase_coder_cli_app.livekit import (
     livekit_voice_route,
     livekit_voice_route_exit,
     livekit_voice_route_transfer,
+)
+from openbase_coder_cli.openbase_coder_cli_app.marketplace import (
+    marketplace_routines,
+    marketplace_skill_install,
+    marketplace_skills,
 )
 from openbase_coder_cli.openbase_coder_cli_app.model_settings import (
     backend_model_settings,  # noqa: F401
@@ -99,7 +107,6 @@ from openbase_coder_cli.openbase_coder_cli_app.service_tier_settings import (
     service_tier_settings,
 )
 from openbase_coder_cli.openbase_coder_cli_app.services_views import (
-    agents_generation_settings,
     dangerous_confirmation_settings,
     keep_awake_settings,
     launchctl_ignored_settings,
@@ -130,16 +137,15 @@ from openbase_coder_cli.openbase_coder_cli_app.threads import (
     thread_tags,
 )
 from openbase_coder_cli.paths import (
+    CLAUDE_CONFIG_DIR,
     CODEX_AGENTS_MD_PATH,
     CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH,
     CODEX_DISPATCHER_INSTRUCTIONS_PATH,
     CODEX_HOME_DIR,
     CODEX_SUPER_AGENT_INSTRUCTIONS_PATH,
     DEFAULT_LOG_DIR,
-    NORMAL_CODEX_AGENTS_MD_PATH,
-    NORMAL_CODEX_HOME_DIR,
-    OPENBASE_CLAUDE_CONFIG_DIR,
-    OPENBASE_CLAUDE_MD_PATH,
+    OPENBASE_AGENTS_MD_PATH,
+    OPENBASE_INSTRUCTIONS_DIR,
 )
 
 
@@ -151,10 +157,8 @@ def _sync_agents_md_compat_globals() -> None:
     _agents_md.CODEX_DISPATCHER_INSTRUCTIONS_PATH = CODEX_DISPATCHER_INSTRUCTIONS_PATH
     _agents_md.CODEX_HOME_DIR = CODEX_HOME_DIR
     _agents_md.CODEX_SUPER_AGENT_INSTRUCTIONS_PATH = CODEX_SUPER_AGENT_INSTRUCTIONS_PATH
-    _agents_md.NORMAL_CODEX_AGENTS_MD_PATH = NORMAL_CODEX_AGENTS_MD_PATH
-    _agents_md.NORMAL_CODEX_HOME_DIR = NORMAL_CODEX_HOME_DIR
-    _agents_md.OPENBASE_CLAUDE_CONFIG_DIR = OPENBASE_CLAUDE_CONFIG_DIR
-    _agents_md.OPENBASE_CLAUDE_MD_PATH = OPENBASE_CLAUDE_MD_PATH
+    _agents_md.OPENBASE_AGENTS_MD_PATH = OPENBASE_AGENTS_MD_PATH
+    _agents_md.OPENBASE_INSTRUCTIONS_DIR = OPENBASE_INSTRUCTIONS_DIR
 
 
 def _sync_livekit_compat_globals() -> None:
@@ -172,113 +176,95 @@ def _sync_livekit_compat_globals() -> None:
 
 def _sync_skills_compat_globals() -> None:
     _skills.CODEX_HOME_DIR = CODEX_HOME_DIR
-    _skills.OPENBASE_CLAUDE_CONFIG_DIR = OPENBASE_CLAUDE_CONFIG_DIR
+    _skills.CLAUDE_CONFIG_DIR = CLAUDE_CONFIG_DIR
     _skills._home_skills_dir = _home_skills_dir
 
 
-@csrf_exempt
 def agents_md(request):
     _sync_agents_md_compat_globals()
     return _agents_md.agents_md(request)
 
 
-@csrf_exempt
 def ios_logs_upload(request):
     _diagnostics.DEFAULT_LOG_DIR = DEFAULT_LOG_DIR
     return _diagnostics.ios_logs_upload(request)
 
 
-@csrf_exempt
 def user_say(request):
     _sync_livekit_compat_globals()
     return _livekit.user_say(request)
 
 
-@csrf_exempt
 def user_play(request):
     _sync_livekit_compat_globals()
     return _livekit.user_play(request)
 
 
-@csrf_exempt
 def cartesia_voice_settings(request):
     _sync_livekit_compat_globals()
     return _livekit.cartesia_voice_settings(request)
 
 
-@csrf_exempt
 def tts_settings(request):
     _sync_livekit_compat_globals()
     return _livekit.tts_settings(request)
 
 
-@csrf_exempt
 def kokoro_tts_download(request):
     _sync_livekit_compat_globals()
     return _livekit.kokoro_tts_download(request)
 
 
-@csrf_exempt
 def stt_settings(request):
     _sync_livekit_compat_globals()
     return _livekit.stt_settings(request)
 
 
-@csrf_exempt
 def local_stt_download(request):
     _sync_livekit_compat_globals()
     return _livekit.local_stt_download(request)
 
 
-@csrf_exempt
 def dispatcher_voice_settings(request):
     _sync_livekit_compat_globals()
     return _livekit.dispatcher_voice_settings(request)
 
 
-@csrf_exempt
 def livekit_companion_session(request):
     _sync_livekit_compat_globals()
     return _livekit.livekit_companion_session(request)
 
 
-@csrf_exempt
 def livekit_companion_start(request):
     _sync_livekit_compat_globals()
     return _livekit.livekit_companion_start(request)
 
 
-@csrf_exempt
 def skills_list(request):
     _sync_skills_compat_globals()
     return _skills.skills_list(request)
 
 
-@csrf_exempt
 def skills_symlink(request):
     _sync_skills_compat_globals()
     return _skills.skills_symlink(request)
 
 
-@csrf_exempt
 def skills_auto_link_settings(request):
     _sync_skills_compat_globals()
     return _skills.skills_auto_link_settings(request)
 
 
-@csrf_exempt
 def printing_press_catalog(request):
     _sync_skills_compat_globals()
     return _skills.printing_press_catalog(request)
 
 
-@csrf_exempt
 def printing_press_install(request):
     _sync_skills_compat_globals()
     return _skills.printing_press_install(request)
 
 
-@csrf_exempt
 def skill_detail(request, skill_name):
     _sync_skills_compat_globals()
     return _skills.skill_detail(request, skill_name)
@@ -286,12 +272,11 @@ def skill_detail(request, skill_name):
 
 __all__ = [
     "agents_md",
-    "agents_generation_settings",
     "all_project_reports",
     "approval_request_detail",
     "approval_requests",
     "auth_logout",
-    "auth_refresh_jwt",
+    "auth_refresh_jwt_removed",
     "auth_session",
     "boilersync_templates",
     "bootstrap_run",
@@ -322,6 +307,9 @@ __all__ = [
     "livekit_voice_route_exit",
     "livekit_voice_route_transfer",
     "local_stt_download",
+    "marketplace_skill_install",
+    "marketplace_skills",
+    "marketplace_routines",
     "onboarding_cloud_state",
     "onboarding_status",
     "openbase_restart",

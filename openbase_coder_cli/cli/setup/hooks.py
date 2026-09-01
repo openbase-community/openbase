@@ -64,6 +64,41 @@ def merge_session_id_hook_into_claude_hooks(value: object) -> dict[str, object]:
     return hooks
 
 
+def ensure_claude_session_id_hook(settings_path: Path) -> bool:
+    """Register the session-ID hook in one Claude settings file."""
+    if settings_path.is_file():
+        try:
+            value = json.loads(settings_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise click.ClickException(
+                f"Could not read Claude settings at {settings_path}: {exc}"
+            ) from exc
+        if not isinstance(value, dict):
+            raise click.ClickException(
+                f"Claude settings must contain a JSON object: {settings_path}"
+            )
+        existing = value
+    else:
+        existing = {}
+
+    updated = {
+        **existing,
+        "hooks": merge_session_id_hook_into_claude_hooks(existing.get("hooks")),
+    }
+    if updated == existing:
+        click.echo(f"Claude session-ID hook already configured in {settings_path}")
+        return False
+
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        json.dumps(updated, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    settings_path.chmod(0o600)
+    click.echo(f"Configured Claude session-ID hook in {settings_path}")
+    return True
+
+
 def _claude_group_has_command(group: object, command: str) -> bool:
     if not isinstance(group, dict):
         return False
@@ -99,10 +134,24 @@ def ensure_codex_session_id_hook(config_path: Path | None = None) -> bool:
     """
     path = config_path or CODEX_HOME_DIR / "config.toml"
     command = str(INJECT_SESSION_ID_HOOK_PATH)
+    existing = path.read_text(encoding="utf-8") if path.is_file() else ""
+    existing_groups = _session_start_hook_commands(existing)
+    try:
+        group_index = next(
+            index
+            for index, commands in enumerate(existing_groups)
+            if command in commands
+        )
+        hook_is_present = True
+    except StopIteration:
+        group_index = len(existing_groups)
+        hook_is_present = False
+
     # Codex keys hook state by the canonicalized source path plus the hook's
-    # position within it; our group is the only SessionStart group we write.
+    # position within it. Preserve user-defined groups and trust our actual
+    # array index rather than assuming the managed hook is first.
     resolved_path = path.parent.resolve() / path.name
-    state_key = f"{resolved_path}:session_start:0:0"
+    state_key = f"{resolved_path}:session_start:{group_index}:0"
 
     hook_lines = [
         "[[hooks.SessionStart]]",
@@ -111,23 +160,28 @@ def ensure_codex_session_id_hook(config_path: Path | None = None) -> bool:
         'type = "command"',
         f"command = {json.dumps(command)}",
     ]
+    # TOML basic strings share JSON's escaping rules, so json.dumps is what
+    # keeps Windows path separators from being read as escape sequences.
     state_lines = [
-        f'[hooks.state."{state_key}"]',
+        f"[hooks.state.{json.dumps(state_key)}]",
         f"trusted_hash = {json.dumps(session_start_hook_trusted_hash(command))}",
         "enabled = true",
     ]
 
-    existing = path.read_text(encoding="utf-8") if path.is_file() else ""
+    trusted_hash = session_start_hook_trusted_hash(command)
     stripped = _remove_toml_sections(
         existing,
         {
-            "[[hooks.SessionStart]]",
-            "[[hooks.SessionStart.hooks]]",
             state_lines[0],
+            *_state_headers_with_trusted_hash(existing, trusted_hash),
+            # Installs written before the key was escaped left an invalid
+            # header behind; drop that form too instead of orphaning it.
+            f'[hooks.state."{state_key}"]',
         },
     )
     blocks = [stripped.rstrip("\n")] if stripped.strip() else []
-    blocks.append("\n".join(hook_lines))
+    if not hook_is_present:
+        blocks.append("\n".join(hook_lines))
     blocks.append("\n".join(state_lines))
     updated = "\n\n".join(blocks) + "\n"
     if updated == existing:
@@ -138,6 +192,59 @@ def ensure_codex_session_id_hook(config_path: Path | None = None) -> bool:
     path.write_text(updated, encoding="utf-8")
     click.echo(f"Configured codex session-ID hook in {path}")
     return True
+
+
+def _session_start_hook_commands(text: str) -> list[list[str]]:
+    groups: list[list[str]] = []
+    active_group: list[str] | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == "[[hooks.SessionStart]]":
+            active_group = []
+            groups.append(active_group)
+            continue
+        if (
+            stripped.startswith("[")
+            and stripped.endswith("]")
+            and stripped != "[[hooks.SessionStart.hooks]]"
+        ):
+            active_group = None
+            continue
+        if active_group is None or not stripped.startswith("command ="):
+            continue
+        raw_value = stripped.partition("=")[2].strip()
+        try:
+            value = json.loads(raw_value)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, str):
+            active_group.append(value)
+    return groups
+
+
+def _state_headers_with_trusted_hash(text: str, trusted_hash: str) -> set[str]:
+    lines = text.splitlines()
+    matches: set[str] = set()
+    index = 0
+    while index < len(lines):
+        header = lines[index].strip()
+        if not header.startswith('[hooks.state."'):
+            index += 1
+            continue
+        section_end = index + 1
+        while section_end < len(lines):
+            candidate = lines[section_end].strip()
+            if candidate.startswith("[") and candidate.endswith("]"):
+                break
+            section_end += 1
+        expected_line = f"trusted_hash = {json.dumps(trusted_hash)}"
+        if any(
+            lines[offset].strip() == expected_line
+            for offset in range(index + 1, section_end)
+        ):
+            matches.add(header)
+        index = section_end
+    return matches
 
 
 def _remove_toml_sections(text: str, headers: set[str]) -> str:

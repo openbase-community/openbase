@@ -60,12 +60,20 @@ every minute:
   status goes clean, nothing moves twice. This only happens when it is
   provably safe: no merge/rebase in progress, your head is an ancestor of the
   peer's, and your working tree already matches the peer's commit exactly.
-- When branch histories diverge, the synced manifest deterministically brings
-  both active branch pointers back to one history. A commit displaced by that
-  move is retained under `refs/openbase-code-sync/backups/` for recovery; it
-  is never discarded. A repo sync conflict remains visible only while safe
-  convergence is blocked (for example, by staged changes or an in-progress
-  rebase), and clears after the branch heads agree.
+- When the peer's manifest is **stale** — its head is an ancestor of yours —
+  your local history wins: nothing moves, this machine republishes its own
+  state, and the peer fast-forwards to you on its next pass. A branch is
+  never rewound.
+- When branch histories **truly diverge** (both machines committed different
+  history to the same branch), sync pauses that branch instead of picking a
+  winner: the local pointer stays put, the divergence is recorded as a repo
+  sync conflict, and it surfaces in health warnings until you decide with
+  `openbase-coder sync resolve <id> --keep-local` or `--use-remote`
+  (`--use-remote` safety-stashes your working tree first). Since the files
+  themselves have already synced, a paused branch does not hold up day-to-day
+  work. Setting `OPENBASE_CODE_SYNC_AUTO_DISPLACE=1` restores the old
+  behavior of automatically converging to the manifest, with the displaced
+  commit retained under `refs/openbase-code-sync/backups/`.
 - Uncommitted work needs no reconciliation at all — it syncs as files and
   simply shows as a dirty tree on both sides.
 
@@ -142,3 +150,46 @@ List and resolve them with `openbase-coder sync conflicts` and
 `openbase-coder sync resolve`, or from the console/iOS conflict pages.
 
 See the [`sync` command reference](commands/sync.md) for the full CLI.
+
+## Troubleshooting
+
+### File sync stalled (folder in error state)
+
+When free disk drops below the engine's floor, Syncthing keeps running but
+its folders enter an error state (typically `insufficient space on disk for
+database`) and **nothing syncs** — the peer's working trees go stale, deleted
+files can echo back from the peer as untracked copies, and branch switches
+stop propagating (repository manifests ride the same folder).
+
+Where the stall surfaces:
+
+- a red banner on the dashboard (health warnings), plus a low-disk warning
+  before the hard floor is hit,
+- the Sync page: a "File sync is stalled" callout and a red state badge with
+  the error on each affected folder row,
+- `openbase-coder sync status`: an `ERROR:` line under the affected folder,
+- `/api/sync/status/`: `folders[].error` and `syncthing_errors`.
+
+The managed config pins an absolute floor of 2 GiB (`minDiskFree` per folder
+and `minHomeDiskFree` for the engine's database) instead of Syncthing's 1%
+default, which on large disks pauses sync with tens of GiB still free. Fix:
+free disk space, then restart Openbase services (`openbase-coder services
+stop code-sync && openbase-coder services start code-sync`); the folders
+recover on the next scan.
+
+### Reading the reconcile heartbeat
+
+Every reconcile tick logs one summary line to the sync-workers log:
+
+```
+code_sync tick_complete repos=41 up_to_date=39 fast_forwarded=1
+awaiting_files=1 remote_behind=0 diverged=0 skipped=0 fetch_failed=0
+converged=0 published=1 conflicts=0 errors=0 lease=noop
+```
+
+`awaiting_files` climbing without draining means git state is ready but file
+delivery is behind — check for a Syncthing stall. Per-repo failures are
+isolated (one broken repo cannot abort the tick) and named in a
+`code_sync tick_errors` warning line. The same counts appear in
+`openbase-coder sync status` (`Reconcile:` line) and in
+`/api/sync/status/` under `last_reconcile`.

@@ -35,6 +35,47 @@ class FakeRoutinesClient:
         return {"count": 1, "results": [{"name": name or "daily"}]}
 
 
+def test_doctor_reports_stale_routines_and_missing_runner(
+    monkeypatch, tmp_path
+) -> None:
+    import json
+
+    class DoctorClient(FakeRoutinesClient):
+        async def list_routines(self) -> dict[str, Any]:
+            self.calls.append(("list_routines", {}))
+            return {
+                "count": 1,
+                "routines": [
+                    {
+                        "name": "daily-report",
+                        "enabled": True,
+                        "scheduleType": "daily",
+                        "lastStatus": "stale",
+                        "lastError": "Routine run stuck in started; marked stale.",
+                        "lastRunDate": "2020-01-01",
+                        "lastStartedAt": "2020-01-01T00:00:00.000Z",
+                        "nextRunAt": "2020-01-02T00:00:00.000Z",
+                    }
+                ],
+            }
+
+    FakeRoutinesClient.instances = []
+    monkeypatch.setattr(routines_cli, "CodexAppServerClient", DoctorClient)
+    paths = importlib.import_module("openbase_coder_cli.paths")
+    monkeypatch.setattr(paths, "DEFAULT_LOG_DIR", tmp_path)
+
+    result = CliRunner().invoke(routines_cli.routines, ["doctor"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["healthy"] is False
+    routine = payload["routines"][0]
+    assert routine["lastStatus"] == "stale"
+    assert any("stale" in warning for warning in routine["warnings"])
+    assert any("No run recorded" in warning for warning in routine["warnings"])
+    assert "may not be running" in payload["runner"]["warning"]
+
+
 def test_create_routine_calls_super_agents_library(monkeypatch) -> None:
     FakeRoutinesClient.instances = []
     monkeypatch.setattr(routines_cli, "CodexAppServerClient", FakeRoutinesClient)

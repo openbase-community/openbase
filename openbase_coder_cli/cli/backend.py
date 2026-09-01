@@ -8,14 +8,11 @@ from openbase_coder_cli.backend_config import (
     CLAUDE_CODE_BACKEND,
     CODEX_BACKEND,
     CODING_BACKEND_ENV_KEY,
+    CODING_BACKENDS_ENV_KEY,
     DEFAULT_CODING_BACKEND,
     OPENBASE_CLOUD_BACKEND,
     SELECTABLE_BACKENDS,
     normalize_backend,
-)
-from openbase_coder_cli.codex_backend_config import (
-    apply_backend_to_codex_config,
-    codex_config_path_for_env_file,
 )
 from openbase_coder_cli.env_file import (
     active_env_key,
@@ -98,9 +95,53 @@ def read_backend(env_file: Path) -> str:
         return f"unsupported:{raw_value}"
 
 
+def write_backend_location(env_file: Path, location: str) -> None:
+    """Materialize a Local-CLI vs Openbase-Cloud choice into the env file.
+
+    The user picks WHERE code runs; the engines are not a user choice. Local
+    engages both local engines (mixed threads, model picks the engine per
+    launch); Cloud makes the Openbase Cloud proxy primary while local Codex
+    threads stay visible (read-only in practice: creation follows the
+    primary).
+    """
+    from openbase_coder_cli.dispatcher_config import (
+        LOCATION_CLOUD,
+        LOCATION_LOCAL,
+        identity_for_model,
+        super_agents_model,
+    )
+
+    if location not in {LOCATION_LOCAL, LOCATION_CLOUD}:
+        raise ValueError("Location must be 'local' or 'cloud'.")
+    if location == LOCATION_CLOUD:
+        values = {
+            BACKEND_ENV_KEY: OPENBASE_CLOUD_BACKEND,
+            CODING_BACKENDS_ENV_KEY: f"{OPENBASE_CLOUD_BACKEND},{CODEX_BACKEND}",
+        }
+    else:
+        model = super_agents_model() or ""
+        primary = identity_for_model(model, LOCATION_LOCAL) if model else CODEX_BACKEND
+        values = {
+            BACKEND_ENV_KEY: primary,
+            CODING_BACKENDS_ENV_KEY: f"{CODEX_BACKEND},{CLAUDE_CODE_BACKEND}",
+        }
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    if env_file.is_file():
+        upsert_env_file_values(env_file, values)
+    else:
+        env_file.write_text(
+            "".join(
+                f"{key}={format_env_value(value)}\n" for key, value in values.items()
+            ),
+            encoding="utf-8",
+        )
+
+
 def write_backend(env_file: Path, backend_name: str) -> None:
+    # Backend model/provider choices reach Codex as app-server launch
+    # overrides (services/runners.py), so persisting the env value is enough;
+    # the service restart picks it up.
     normalized = normalize_backend(backend_name)
-    values = read_env_values(env_file) if env_file.is_file() else {}
     env_file.parent.mkdir(parents=True, exist_ok=True)
     if env_file.is_file():
         upsert_env_file_values(env_file, {BACKEND_ENV_KEY: normalized})
@@ -108,11 +149,6 @@ def write_backend(env_file: Path, backend_name: str) -> None:
         env_file.write_text(
             f"{BACKEND_ENV_KEY}={format_env_value(normalized)}\n", encoding="utf-8"
         )
-    apply_backend_to_codex_config(
-        normalized,
-        config_path=codex_config_path_for_env_file(env_file),
-        web_backend_url=values.get("OPENBASE_CODER_CLI_WEB_BACKEND_URL"),
-    )
 
 
 def read_env_values(env_file: Path) -> dict[str, str]:

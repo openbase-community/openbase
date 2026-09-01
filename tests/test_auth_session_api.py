@@ -9,7 +9,7 @@ os.environ.setdefault("OPENBASE_CODER_CLI_SECRET_KEY", "test-secret")
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "openbase_coder_cli.config.settings")
 
 import django  # noqa: E402
-from rest_framework.test import APIRequestFactory  # noqa: E402
+from rest_framework.test import APIRequestFactory, force_authenticate  # noqa: E402
 
 django.setup()
 
@@ -23,6 +23,7 @@ def _get_session(monkeypatch, status_dict):
         lambda: SimpleNamespace(login_status=lambda: status_dict),
     )
     request = APIRequestFactory().get("/api/auth/session/")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
     return auth_views.auth_session(request)
 
 

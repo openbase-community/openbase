@@ -132,6 +132,58 @@ CACHE_PATTERNS = (
     "(?d)**/.local/logs",
     "(?d)**/logs/launchd",
 )
+# Bare directory names from the pattern tuples above that never sync on any
+# folder. The reconciler must skip the same names during repo discovery: a
+# repo whose files never reach the peer can only produce junk divergence
+# conflicts. Keep this in step with the (?d) directory entries above.
+ALWAYS_IGNORED_DIR_NAMES = frozenset(
+    {
+        "node_modules",
+        ".venv",
+        "venv",
+        "dist",
+        "build",
+        ".build",
+        "Build",
+        "Builds",
+        "out",
+        "release",
+        "target",
+        "__pycache__",
+        ".next",
+        ".nuxt",
+        ".svelte-kit",
+        ".expo",
+        ".turbo",
+        ".vite",
+        ".parcel-cache",
+        ".gradle",
+        "DerivedData",
+        ".derivedData",
+        "xcuserdata",
+        "companion-build",
+        ".cache",
+        "trash",
+        "Trash",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".mypy_cache",
+        ".tox",
+        ".nox",
+        ".hypothesis",
+        ".terraform",
+        ".stversions",
+        "htmlcov",
+        "coverage",
+        ".nyc_output",
+        "test-results",
+        ".vscode-test",
+        ".vscode-test-web",
+        ".playwright",
+        "playwright-report",
+    }
+)
+
 DATABASE_PATTERNS = (
     "// Local database clusters and bulky generated data",
     "(?d)*.sqlite",

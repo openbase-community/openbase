@@ -1,12 +1,17 @@
 # Mac App Download
 
-The desktop app is the production install path: it bundles the complete CLI
-runtime and walks you through setup, including managed Claude Code, managed
-voice audio, and iPhone pairing.
+The desktop app is the production, no-terminal install path. Release builds
+are coordinated from `main`; the app bundles the
+complete CLI runtime and walks you through setup in the app — no terminal
+required — including your coding backend, managed voice audio, and iPhone
+pairing. (Prefer working from source? See
+[Developer Setup](developer-setup.md). On Windows, `./scripts/setup` runs
+natively in beta — or use the [Docker image](../docker.md), the most
+battle-tested Windows option today.)
 
-Before you start, check the shared [prerequisites](index.md#prerequisites) —
-in particular, install and sign in to Tailscale if you want iPhone-to-Mac
-voice networking.
+Before you start, check the shared [prerequisites](index.md#prerequisites).
+You do not need to install Tailscale: onboarding asks whether the environment
+can support a VPN, then configures Openbase VPN or Openbase Direct.
 
 ## Download and Open
 

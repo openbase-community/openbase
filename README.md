@@ -6,6 +6,7 @@
   <a href="https://docs.openbase.cloud"><img src="https://img.shields.io/badge/read%20the-docs-blue" alt="Documentation"></a>
   <a href="https://discord.gg/nYzsn3Vh6y"><img src="https://img.shields.io/badge/discord-join%20chat-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://openbase.cloud/downloads"><img src="https://img.shields.io/badge/download-macOS-black?logo=apple&logoColor=white" alt="Download for macOS"></a>
+  <a href="https://knock-knock.mxcl.dev/openbase-community/openbase"><img src="https://knock-knock.mxcl.dev/badge.svg" alt="Knock Knock"></a>
 </p>
 <br>
 
@@ -16,8 +17,8 @@ surface.
 
 This repository is the main open-source entry point for Openbase Coder. It
 contains the local `openbase-coder` runtime, the public product docs, the
-developer setup path, and the service layer used by the Mac app, iOS app, web
-console, and Openbase Cloud.
+developer setup path, and the service layer used by the Mac app, iOS app,
+Android app, web console, and Openbase Cloud.
 
 ### ✏️ What You Can Do
 
@@ -30,15 +31,15 @@ Core workflows are:
 * Start and steer coding work by voice through a dispatcher agent.
 * Route an active voice call between the dispatcher and individual Super Agents.
 * Track running, waiting, completed, and failed coding threads.
-* Continue threads from the Mac app, browser console, iOS app, or CLI.
+* Continue threads from the Mac app, browser console, iOS app, Android app, or CLI.
 * Approve or deny agent permission requests without babysitting a terminal.
 * Review live output, generated Markdown reports, and git diffs.
 * Browse projects, reports, routines, skills, templates, devices, service
   health, and runtime settings from the shared dashboard.
-* Use your iPhone as the remote control for calls, approvals, reports, diffs,
-  and thread follow-up.
-* Run the local runtime on your Mac, a Linux machine, or an Openbase Cloud
-  DevSpace.
+* Use your iPhone or Android phone as the remote control for calls, approvals,
+  reports, diffs, and thread follow-up.
+* Run the local runtime on your Mac, a Linux machine, Windows (natively — in
+  beta — or via the Docker image), or an Openbase Cloud DevSpace.
 * Extend the runtime with plugins, skills, routines, bootstrap commands, and
   console pages.
 
@@ -47,12 +48,15 @@ Core workflows are:
 Openbase Coder has several user-facing surfaces backed by the local
 `openbase-coder` runtime:
 
-* **Mac app**: the recommended starting point. It bundles the CLI, runs guided
-  setup, hosts the dashboard, manages updates, and can share your screen into
-  the active voice room.
+* **Mac app**: the production, no-terminal path. It bundles the CLI, runs
+  guided setup, hosts the dashboard, manages updates, and can share your
+  screen into the active voice room.
 * **iOS app**: the voice and review client. Start calls, transfer voice to
   agents, follow threads, handle approvals, read reports, and inspect diffs
   from your phone.
+* **Android app**: the same phone client for Android (Kotlin/Compose),
+  mirroring the iOS workflow — calls, threads, approvals, reports, diffs, and
+  screen-share viewing.
 * **Web console**: the same dashboard served in a browser by the local runtime.
 * **CLI**: the local service manager and automation surface for setup, login,
   services, plugins, routines, voice routing, diagnostics, and development.
@@ -65,15 +69,31 @@ agent instructions, skills, and console assets.
 
 ### 💾 Installation
 
-Most users should install the Mac app first:
+When you can use a terminal, the recommended path is the editable
+[Developer Setup](docs/getting-started/developer-setup.md): clone the workspace
+and run its interactive `./scripts/setup`. The Electron dashboard and Swift
+menu-bar app are optional visual surfaces after setup; Electron never owns a
+development install.
+
+For a production install with no terminal:
 
 1. Download Openbase Coder for macOS from
    [openbase.cloud/downloads](https://openbase.cloud/downloads).
 2. Open the app and follow guided setup. The app activates the bundled CLI,
    checks prerequisites, lets you choose a coding backend and voice provider,
-   signs you in, and helps pair your iPhone over Tailscale.
-3. Install the iOS beta from the Downloads page if you want the phone control
-   surface for voice calls, approvals, reports, and diffs.
+   signs you in, and helps pair your phone over Openbase VPN or Openbase
+   Direct.
+3. Install the iOS beta or the Android APK from the Downloads page if you want
+   the phone control surface for voice calls, approvals, reports, and diffs.
+
+Prefer a container? Run the `openbaseai/openbase` Docker image instead of the
+Mac app — it runs the full runtime in a Linux container (with Docker Desktop
+on Windows). See [Run in Docker](docs/docker.md).
+
+On Windows you can also run the runtime natively (beta): `./scripts/setup`
+works from a Windows checkout, and services are supervised without launchd or
+systemd through the Windows service backend, with Task Scheduler starting them
+at login. The Docker image remains the most battle-tested Windows path.
 
 ### 🛠️ Developer Setup
 
@@ -141,6 +161,8 @@ The product docs live in this repository under `docs/` and are published at
 
 [Web Console and Openbase Cloud](docs/console.md)
 
+[Run in Docker](docs/docker.md)
+
 [Commands](docs/commands/index.md)
 
 [Configuration](docs/configuration.md)
@@ -152,6 +174,13 @@ The product docs live in this repository under `docs/` and are published at
 Openbase Coder is in beta. Please help shape the product by opening a
 [GitHub issue](https://github.com/openbase-community/openbase/issues/new)
 or joining the community on [Discord](https://discord.gg/nYzsn3Vh6y).
+
+Special thanks to our Peruvian hackathon participants
+[@rivacortez](https://github.com/rivacortez) and
+[@Diego22rct](https://github.com/Diego22rct), whose fork work is the
+foundation of native Windows support — the cross-platform service runners,
+the Windows service backend, cross-platform file locking, and the Windows
+setup path all draw on their contributions.
 
 ### ⚖️ License
 

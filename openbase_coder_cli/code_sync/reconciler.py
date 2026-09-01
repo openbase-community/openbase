@@ -11,9 +11,11 @@ branch ONLY when it is provably safe:
 - the local working tree already matches the fetched commit's tree
   (Syncthing has delivered the files, so nothing moves twice).
 
-Divergence is normally converged through a synced repository manifest while
-preserving displaced commits under recovery refs. Unsafe states remain
-untouched and surface as conflict records for the product UI.
+Branch pointers follow a synced repository manifest, but only through
+provably-safe moves: fast-forwards converge, a stale manifest (its head an
+ancestor of local) loses to local history, and true divergence pauses as a
+recorded conflict for `openbase-coder sync resolve` — automation never picks
+a winner between two real histories.
 """
 
 from __future__ import annotations
@@ -40,6 +42,7 @@ from openbase_coder_cli.code_sync.eligibility import (
     current_eligibility,
     syncable_peers,
 )
+from openbase_coder_cli.code_sync.ignores import ALWAYS_IGNORED_DIR_NAMES
 from openbase_coder_cli.config.token_manager import (
     AuthLoginRequiredError,
     AuthTransientError,
@@ -57,28 +60,12 @@ MAX_REPO_DEPTH = 5
 PEER_API_PORT = 18080  # Django CLI server exposed on the tailnet.
 GIT_TIMEOUT_SECONDS = 60
 RECONCILE_STATE_PATH = CODE_SYNC_DIR / "reconcile-state.json"
-SKIP_DIR_NAMES = {
-    "node_modules",
-    ".venv",
-    "venv",
-    "__pycache__",
-    "DerivedData",
-    ".local",
-    "companion-build",
-    "dist",
-    "build",
-    "out",
-    "release",
-    "target",
-    ".next",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".mypy_cache",
-    ".terraform",
-    # Version copies from a (legacy) in-folder Syncthing versioner are
-    # archives, not live conflicts.
-    ".stversions",
-}
+# Bump when render_config_xml output changes so existing installs re-render
+# on upgrade even when the peer set is unchanged.
+RENDERED_CONFIG_VERSION = 2
+# Everything Syncthing always ignores, plus machine-local dirs that are not
+# ignored but hold nothing worth reconciling.
+SKIP_DIR_NAMES = ALWAYS_IGNORED_DIR_NAMES | {".local"}
 SKIP_FILE_CONFLICT_PATH_SEGMENTS = (
     ("logs", "launchd"),
     ("data", "db"),
@@ -397,14 +384,26 @@ def run_reconcile_once(
     if not peers:
         summary["errors"].append("no syncable peers advertised")
 
-    auth_header = None
-    if peers:
+    # A full sweep can outlive one access token (hundreds of repos, minutes
+    # of fetches), so resolve the header per use — the manager returns its
+    # cached token while valid and refreshes mid-sweep when it expires.
+    token_manager = TokenManager(web_backend_url()) if peers else None
+    auth_error_logged = False
+
+    def current_auth_header() -> str | None:
+        nonlocal auth_error_logged
+        if token_manager is None:
+            return None
         try:
-            token = TokenManager(web_backend_url()).get_access_token()
-            auth_header = f"Bearer {token}"
+            return f"Bearer {token_manager.get_access_token()}"
         except (AuthLoginRequiredError, AuthTransientError) as exc:
-            summary["errors"].append(f"auth: {exc}")
-            peers = ()
+            if not auth_error_logged:
+                summary["errors"].append(f"auth: {exc}")
+                auth_error_logged = True
+            return None
+
+    if peers and current_auth_header() is None:
+        peers = ()
 
     from openbase_coder_cli.code_sync.repositories import (
         adopt_repository,
@@ -422,11 +421,61 @@ def run_reconcile_once(
         previous_repo_states = {}
     next_repo_states: dict[str, dict[str, str]] = {}
 
+    def reconcile_one_repo(
+        folder: SyncFolder, folder_root: Path, repo: Path, repo_relpath: str
+    ) -> None:
+        auth_header = current_auth_header()
+        try:
+            is_worktree = ensure_worktree_manifest(repo, home)
+        except (OSError, subprocess.TimeoutExpired):
+            is_worktree = False
+        state_key = f"{folder.folder_id}:{repo_relpath}"
+        previous_state = previous_repo_states.get(state_key)
+        manifest_action = sync_checkout_manifest(
+            repo,
+            is_worktree=is_worktree,
+            home=home,
+            previous_state=(
+                previous_state if isinstance(previous_state, dict) else None
+            ),
+            remote_urls=(
+                peer_git_url(peer, folder.folder_id, repo_relpath) for peer in peers
+            ),
+            auth_header=auth_header,
+            folder_id=folder.folder_id,
+            repo_relpath=repo_relpath,
+            conflicts_path=conflicts_path,
+        )
+        manifest_summary_key = (
+            "worktree_manifests" if is_worktree else "repository_manifests"
+        )
+        summary.setdefault(manifest_summary_key, []).append(
+            {"path": repo_relpath, "action": manifest_action}
+        )
+        for peer in peers:
+            outcome = reconcile_repo(
+                repo,
+                folder_id=folder.folder_id,
+                repo_relpath=repo_relpath,
+                remote_url=peer_git_url(peer, folder.folder_id, repo_relpath),
+                auth_header=auth_header,
+                conflicts_path=conflicts_path,
+            )
+            summary["repos"].append({"peer": peer.name, **asdict(outcome)})
+        final_state = repository_state(repo)
+        if final_state is not None:
+            next_repo_states[state_key] = final_state
+
     for folder in sync_folders(config_path):
         folder_root = folder.absolute_path(home)
-        summary["file_conflicts"].extend(
-            scan_file_conflicts(folder, home, conflicts_path)
-        )
+        try:
+            summary["file_conflicts"].extend(
+                scan_file_conflicts(folder, home, conflicts_path)
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            summary["errors"].append(
+                f"{folder.folder_id}: file-conflict scan: {type(exc).__name__}: {exc}"
+            )
         repos, worktree_candidates, repo_candidates = discover_repos_and_candidates(
             folder_root
         )
@@ -435,7 +484,10 @@ def run_reconcile_once(
             remote = peer_git_url(peers[0], folder.folder_id, rel) if peers else None
             try:
                 action = adopt_worktree(
-                    candidate, home=home, remote_url=remote, auth_header=auth_header
+                    candidate,
+                    home=home,
+                    remote_url=remote,
+                    auth_header=current_auth_header(),
                 )
             except (OSError, subprocess.TimeoutExpired) as exc:
                 action = f"adopt_error: {exc}"
@@ -450,7 +502,7 @@ def run_reconcile_once(
                     remote_urls=(
                         peer_git_url(peer, folder.folder_id, rel) for peer in peers
                     ),
-                    auth_header=auth_header,
+                    auth_header=current_auth_header(),
                 )
             except (OSError, subprocess.TimeoutExpired) as exc:
                 action = f"adopt_error: {exc}"
@@ -460,67 +512,66 @@ def run_reconcile_once(
         if repo_candidates:
             repos = discover_git_repos(folder_root)
         for repo in repos:
-            try:
-                is_worktree = ensure_worktree_manifest(repo, home)
-            except (OSError, subprocess.TimeoutExpired):
-                is_worktree = False
             repo_relpath = str(repo.relative_to(folder_root))
             if repo_relpath == ".":
                 repo_relpath = ""
-            state_key = f"{folder.folder_id}:{repo_relpath}"
-            previous_state = previous_repo_states.get(state_key)
-            manifest_action = sync_checkout_manifest(
-                repo,
-                is_worktree=is_worktree,
-                home=home,
-                previous_state=(
-                    previous_state if isinstance(previous_state, dict) else None
-                ),
-                remote_urls=(
-                    peer_git_url(peer, folder.folder_id, repo_relpath) for peer in peers
-                ),
-                auth_header=auth_header,
-            )
-            manifest_summary_key = (
-                "worktree_manifests" if is_worktree else "repository_manifests"
-            )
-            summary.setdefault(manifest_summary_key, []).append(
-                {"path": repo_relpath, "action": manifest_action}
-            )
-            for peer in peers:
-                try:
-                    outcome = reconcile_repo(
-                        repo,
-                        folder_id=folder.folder_id,
-                        repo_relpath=repo_relpath,
-                        remote_url=peer_git_url(peer, folder.folder_id, repo_relpath),
-                        auth_header=auth_header,
-                        conflicts_path=conflicts_path,
-                    )
-                except subprocess.TimeoutExpired:
-                    # One hung repo must not abort the rest of the tick.
-                    summary["errors"].append(
-                        f"git timed out in {folder.folder_id}/{repo_relpath}"
-                    )
-                    continue
-                summary["repos"].append({"peer": peer.name, **asdict(outcome)})
-            final_state = repository_state(repo)
-            if final_state is not None:
-                next_repo_states[state_key] = final_state
+            try:
+                reconcile_one_repo(folder, folder_root, repo, repo_relpath)
+            except (OSError, subprocess.SubprocessError) as exc:
+                # One hung or broken repo must not abort the rest of the tick;
+                # deeper surprises still bubble to the job wrapper.
+                summary["errors"].append(
+                    f"{folder.folder_id}/{repo_relpath or '.'}: "
+                    f"{type(exc).__name__}: {exc}"
+                )
 
+    summary["conflicts_retired_skipped"] = _retire_skipped_dir_conflicts(conflicts_path)
     # Keep the ledger bounded once per tick: resolved records are audit history
     # and must not accumulate forever.
     summary["conflicts_compacted"] = compact_conflicts(conflicts_path)
     summary["conflicts_count"] = len(unresolved_conflicts(conflicts_path))
+    counts = reconcile_counts(summary)
     write_reconcile_state(
         {
             **reconcile_state,
             "last_reconcile_at": _timestamp(),
             "repo_states": next_repo_states,
-            **_counts(summary),
+            # Flat legacy keys stay for older readers of the state file.
+            "repo_count": counts["repo_count"],
+            "fast_forwarded": counts["fast_forwarded"],
+            "diverged": counts["diverged"],
+            "last_summary": {
+                **counts,
+                "conflicts": summary["conflicts_count"],
+                "error_details": [str(error)[:200] for error in summary["errors"][:10]],
+            },
         }
     )
     return summary
+
+
+def _retire_skipped_dir_conflicts(conflicts_path: Path | None) -> int:
+    """Resolve branch conflicts recorded for repos discovery now skips.
+
+    Repos under always-ignored dirs (``trash`` etc.) never sync, so their
+    divergence records are junk left over from before those dirs were
+    excluded from discovery.
+    """
+    retired = 0
+    for record in unresolved_conflicts(conflicts_path):
+        if record.get("kind") != "branch":
+            continue
+        rel_parts = Path(str(record.get("repo_relpath") or "")).parts
+        if not any(part in SKIP_DIR_NAMES for part in rel_parts):
+            continue
+        retired += mark_branch_conflicts_resolved(
+            folder_id=str(record.get("folder_id") or ""),
+            repo_relpath=str(record.get("repo_relpath") or ""),
+            branch=str(record.get("branch") or ""),
+            resolution="skipped_dir",
+            path=conflicts_path,
+        )
+    return retired
 
 
 def run_tick_if_enabled() -> dict[str, Any] | None:
@@ -565,23 +616,37 @@ def run_tick_if_enabled() -> dict[str, Any] | None:
 def _refresh_config_if_peers_changed(eligibility, peers) -> None:
     """Re-render the Syncthing config when the syncable peer set changes.
 
-    New devices register their ``syncthing_device_id`` capability after this
-    device last rendered config.xml (e.g. a freshly provisioned DevSpace);
-    this picks them up without requiring a settings mutation.
+    The fingerprint covers device ids AND their tailnet DNS names: a peer
+    that switches tailnet transport keeps its device id but changes its
+    MagicDNS name, and the rendered config pins that name as the peer's
+    address — so a name change must re-render too, or every reconnect dials
+    a dead host. New devices (fresh ``syncthing_device_id`` capability) are
+    picked up the same way, without requiring a settings mutation.
     """
     from openbase_coder_cli.code_sync import CodeSyncError
     from openbase_coder_cli.code_sync import manager as sync_manager
 
-    rendered_ids = sorted(peer.syncthing_device_id for peer in peers)
+    rendered_ids = sorted(
+        f"{peer.syncthing_device_id}@{peer.tailscale_magic_dns}" for peer in peers
+    )
     state = read_reconcile_state()
-    if state.get("rendered_peer_ids") == rendered_ids:
+    if (
+        state.get("rendered_peer_ids") == rendered_ids
+        and state.get("rendered_config_version") == RENDERED_CONFIG_VERSION
+    ):
         return
     try:
         sync_manager.render_configuration(eligibility)
         sync_manager.restart_service_if_installed()
     except (CodeSyncError, OSError):
         return
-    write_reconcile_state({**state, "rendered_peer_ids": rendered_ids})
+    write_reconcile_state(
+        {
+            **state,
+            "rendered_peer_ids": rendered_ids,
+            "rendered_config_version": RENDERED_CONFIG_VERSION,
+        }
+    )
 
 
 def read_reconcile_state(path: Path | None = None) -> dict[str, Any]:
@@ -605,14 +670,35 @@ def write_reconcile_state(state: dict[str, Any], path: Path | None = None) -> No
     os.replace(tmp_path, state_path)
 
 
-def _counts(summary: dict[str, Any]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for entry in summary["repos"]:
-        counts[entry["action"]] = counts.get(entry["action"], 0) + 1
+def reconcile_counts(summary: dict[str, Any]) -> dict[str, int]:
+    """Per-action counts for tick logs and the sync status API."""
+    by_action: dict[str, int] = {}
+    for entry in summary.get("repos", []):
+        by_action[entry["action"]] = by_action.get(entry["action"], 0) + 1
+    manifest_actions = [
+        str(entry.get("action", ""))
+        for key in ("repository_manifests", "worktree_manifests")
+        for entry in summary.get(key, [])
+    ]
     return {
-        "repo_count": len(summary["repos"]),
-        "fast_forwarded": counts.get(ACTION_FAST_FORWARDED, 0),
-        "diverged": counts.get(ACTION_DIVERGED, 0),
+        "repo_count": len(summary.get("repos", [])),
+        "up_to_date": by_action.get(ACTION_UP_TO_DATE, 0),
+        "fast_forwarded": by_action.get(ACTION_FAST_FORWARDED, 0),
+        "awaiting_files": by_action.get(ACTION_AWAITING_FILES, 0),
+        "remote_behind": by_action.get(ACTION_REMOTE_BEHIND, 0),
+        "diverged": by_action.get(ACTION_DIVERGED, 0),
+        "skipped": (
+            by_action.get(ACTION_SKIPPED_IN_PROGRESS, 0)
+            + by_action.get(ACTION_SKIPPED_DETACHED, 0)
+        ),
+        "fetch_failed": by_action.get(ACTION_FETCH_FAILED, 0),
+        "converged": sum(
+            1 for action in manifest_actions if action.startswith("converged")
+        ),
+        "published": sum(
+            1 for action in manifest_actions if action.startswith("published")
+        ),
+        "errors": len(summary.get("errors", [])),
     }
 
 

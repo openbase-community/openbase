@@ -17,6 +17,7 @@ dependencies = [
     "whitenoise>=6.8.0",
     "channels>=4.2.0",
     "pydantic>=2.12.5",
+    "qrcode>=8.0",
     "PyJWT>=2.9.0",
     "cryptography>=43.0.0",
     "anyio>=4.13.0",
@@ -43,8 +44,9 @@ dependencies = [
     "livekit-plugins-deepgram==1.5.4",
     "livekit-plugins-noise-cancellation>=0.2.5",
     "aiohttp>=3.13.3",
+    "psutil>=6.1.0",
     "multi-workspace>=3.2.3",
-    "super-agents[claude]>=0.1.13",
+    "super-agents[claude]>=0.1.14",
     "websockets>=16.0",
     "numpy>=2.3.0",
 ]

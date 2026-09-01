@@ -32,11 +32,13 @@ from .restart import restart, self_restart
 from .routines import routines
 from .self_update import self_update, version_command
 from .server import server
+from .service import service
 from .services import services
 from .setup import setup
 from .super_agent_name import super_agent_name
 from .sync import sync
 from .sync_workers import sync_workers
+from .tailnet import tailnet
 from .user import exit_to_dispatch, user
 from .vibes import vibes
 
@@ -66,10 +68,12 @@ def main():
 
 
 main.add_command(server)
+main.add_command(service)
 main.add_command(setup)
 main.add_command(backend)
 main.add_command(services)
 main.add_command(doctor)
+main.add_command(tailnet)
 main.add_command(onboarding)
 main.add_command(desktop)
 main.add_command(login)

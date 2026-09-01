@@ -1001,10 +1001,11 @@ async def test_super_agents_livekit_client_passes_dispatcher_reasoning_to_steer(
 
     assert turn_id == "turn-1"
     assert backend.steer_turn_inputs[0]["reasoningEffort"] == "low"
+    assert backend.started_turns[0][1]["serviceTier"] == "standard"
 
 
 @pytest.mark.asyncio
-async def test_super_agents_livekit_client_omits_reasoning_on_claude_backend(
+async def test_super_agents_livekit_client_forwards_reasoning_without_tier_on_claude(
     tmp_path: Path,
 ) -> None:
     backend = FakeLongRunningSuperAgentsBackend()
@@ -1035,8 +1036,9 @@ async def test_super_agents_livekit_client_omits_reasoning_on_claude_backend(
     await first
 
     assert turn_id == "turn-1"
-    assert "reasoningEffort" not in backend.started_turns[0][1]
-    assert "reasoningEffort" not in backend.steer_turn_inputs[0]
+    assert backend.started_turns[0][1]["reasoningEffort"] == "low"
+    assert backend.steer_turn_inputs[0]["reasoningEffort"] == "low"
+    assert "serviceTier" not in backend.started_turns[0][1]
 
 
 @pytest.mark.asyncio
@@ -1419,76 +1421,59 @@ def test_speech_text_from_progress_prefers_scoped_turn_over_session_preview() ->
     assert _speech_text_from_progress(progress) == "The requested turn answer."
 
 
-def test_claude_auth_heal_scheduled_on_auth_failure_speech(monkeypatch) -> None:
-    healed: list[str] = []
+def test_claude_auth_warning_logged_on_auth_failure_speech(monkeypatch, caplog) -> None:
+    import logging
+
     monkeypatch.setattr(
-        super_agents_client_module,
-        "heal_claude_auth",
-        lambda: healed.append("heal")
-        or SimpleNamespace(state_updated=True, message="ok"),
+        super_agents_client_module, "_last_claude_auth_warn_monotonic", None
     )
-
-    class InlineThread:
-        def __init__(self, *, target, name=None, daemon=None) -> None:
-            self._target = target
-
-        def start(self) -> None:
-            self._target()
-
-    monkeypatch.setattr(super_agents_client_module.threading, "Thread", InlineThread)
-    monkeypatch.setattr(
-        super_agents_client_module, "_last_claude_auth_heal_monotonic", None
-    )
+    caplog.set_level(logging.WARNING)
 
     super_agents_client_module._maybe_schedule_claude_auth_heal(
         "Failed to authenticate: OAuth session expired and could not be refreshed"
     )
-    assert healed == ["heal"]
+    assert caplog.text.count("claude login") == 1
 
-    # Debounced: an immediate repeat must not trigger a second heal.
+    # Debounced: an immediate repeat must not warn again.
     super_agents_client_module._maybe_schedule_claude_auth_heal(
         "Failed to authenticate: OAuth session expired and could not be refreshed"
     )
-    assert healed == ["heal"]
+    assert caplog.text.count("claude login") == 1
 
 
-def test_claude_auth_heal_not_scheduled_for_normal_speech(monkeypatch) -> None:
-    def _no_heal():
-        raise AssertionError("heal must not run for normal speech")
+def test_claude_auth_warning_not_logged_for_normal_speech(monkeypatch, caplog) -> None:
+    import logging
 
-    monkeypatch.setattr(super_agents_client_module, "heal_claude_auth", _no_heal)
     monkeypatch.setattr(
-        super_agents_client_module, "_last_claude_auth_heal_monotonic", None
+        super_agents_client_module, "_last_claude_auth_warn_monotonic", None
     )
+    caplog.set_level(logging.WARNING)
 
     super_agents_client_module._maybe_schedule_claude_auth_heal(
         "The build passed and I pushed the fix."
     )
     super_agents_client_module._maybe_schedule_claude_auth_heal("")
 
+    assert "claude login" not in caplog.text
+
 
 @pytest.mark.asyncio
-async def test_preflight_heal_runs_for_logged_out_claude_backend(
-    monkeypatch, tmp_path: Path
+async def test_preflight_warns_for_logged_out_claude_backend(
+    monkeypatch, tmp_path: Path, caplog
 ) -> None:
+    import logging
+
     backend = FakeSuperAgentsBackend()
     backend.backend = "claude_code"
-    calls: list[str] = []
+    caplog.set_level(logging.WARNING)
     monkeypatch.setattr(
         super_agents_client_module,
         "verified_claude_auth_status",
-        lambda: calls.append("status")
-        or SimpleNamespace(
+        lambda: SimpleNamespace(
             logged_in=False,
             raw_output="Not logged in · Please run /login",
             returncode=0,
         ),
-    )
-    monkeypatch.setattr(
-        super_agents_client_module,
-        "heal_claude_auth",
-        lambda: calls.append("heal")
-        or SimpleNamespace(state_updated=True, message="ok"),
     )
 
     client = SuperAgentsLiveKitClient(
@@ -1499,19 +1484,18 @@ async def test_preflight_heal_runs_for_logged_out_claude_backend(
     result = await client.run_turn("hello dispatch")
 
     assert result["_livekit_turn_id"] == "turn-1"
-    assert calls == ["status", "heal"]
+    assert "claude login" in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_preflight_heal_skipped_when_claude_logged_in(
-    monkeypatch, tmp_path: Path
+async def test_preflight_quiet_when_claude_logged_in(
+    monkeypatch, tmp_path: Path, caplog
 ) -> None:
+    import logging
+
     backend = FakeSuperAgentsBackend()
     backend.backend = "claude_code"
-
-    def _no_heal():
-        raise AssertionError("heal must not run for a healthy login")
-
+    caplog.set_level(logging.WARNING)
     monkeypatch.setattr(
         super_agents_client_module,
         "verified_claude_auth_status",
@@ -1519,7 +1503,6 @@ async def test_preflight_heal_skipped_when_claude_logged_in(
             logged_in=True, raw_output='{"loggedIn": true}', returncode=0
         ),
     )
-    monkeypatch.setattr(super_agents_client_module, "heal_claude_auth", _no_heal)
 
     client = SuperAgentsLiveKitClient(
         cwd="/tmp/project",
@@ -1529,6 +1512,7 @@ async def test_preflight_heal_skipped_when_claude_logged_in(
     result = await client.run_turn("hello dispatch")
 
     assert result["_livekit_turn_id"] == "turn-1"
+    assert "claude login" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -1548,3 +1532,60 @@ async def test_preflight_heal_skipped_for_non_claude_backends(
         backend_client=FakeSuperAgentsBackend(),
     )
     await client.prepare()
+
+
+class FakeEventDrivenBackend(FakeSuperAgentsBackend):
+    """Backend that pushes turn completion via wait_for_turn_update instead of
+    forcing the poll loop to re-query on a fixed interval."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._completed = False
+        self.wait_calls = 0
+
+    async def progress_by_label(self, input_data) -> dict[str, Any]:
+        self.progress_calls += 1
+        if not self._completed:
+            return {
+                "status": "running",
+                "threadId": input_data.thread_id,
+                "turnId": input_data.turn_id,
+            }
+        return {
+            "status": "completed",
+            "threadId": input_data.thread_id,
+            "turnId": input_data.turn_id,
+            "lastUsefulMessage": "The event driven answer is ready.",
+        }
+
+    async def wait_for_turn_update(
+        self, thread_id: str, turn_id: str, timeout: float
+    ) -> None:
+        # Stand in for a pushed turn/completed notification arriving.
+        self.wait_calls += 1
+        self._completed = True
+
+
+@pytest.mark.asyncio
+async def test_super_agents_livekit_client_awaits_pushed_turn_completion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A big fixed interval would make this test hang for seconds if the loop
+    # fell back to sleeping; awaiting the push must return promptly instead.
+    monkeypatch.setattr(super_agents_client_module, "TURN_POLL_INTERVAL_SECONDS", 30.0)
+    backend = FakeEventDrivenBackend()
+    state_path = tmp_path / "livekit-voice-route.json"
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(state_path),
+        backend_client=backend,
+    )
+
+    result = await asyncio.wait_for(client.run_turn("what's the answer?"), timeout=2.0)
+
+    # The loop awaited the pushed completion (wait_calls) rather than sleeping
+    # out the 30s fixed interval, and re-read progress once the push landed.
+    assert backend.wait_calls == 1
+    assert backend.progress_calls >= 2
+    assert result["_livekit_speech_text"] == "The event driven answer is ready."

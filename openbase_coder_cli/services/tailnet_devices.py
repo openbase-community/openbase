@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
@@ -47,32 +45,15 @@ def _tailscale_status_payload() -> tuple[bool, dict[str, Any] | None, str | None
     Returns ``(tailscale_available, status_payload, error)``; ``status_payload``
     is ``None`` whenever ``error`` is set.
     """
-    from openbase_coder_cli.services.tailscale_serve import _tailscale_bin
+    from openbase_coder_cli.services import tailscale_provider as tp
 
-    tailscale_bin = _tailscale_bin()
-    if not tailscale_bin:
-        return False, None, "tailscale was not found on PATH."
+    if tp.tool_path() is None:
+        return False, None, f"{tp.provider()} control tool was not found."
 
-    try:
-        result = subprocess.run(
-            [tailscale_bin, "status", "--json"],
-            capture_output=True,
-            text=True,
-            timeout=TAILSCALE_STATUS_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return True, None, f"Unable to run tailscale status: {exc}"
-
-    if result.returncode != 0:
-        detail = (
-            result.stderr.strip() or result.stdout.strip() or "tailscale status failed."
-        )
-        return True, None, detail
-
-    try:
-        return True, json.loads(result.stdout), None
-    except json.JSONDecodeError as exc:
-        return True, None, f"Unable to parse tailscale status JSON: {exc}"
+    status = tp.status_json()
+    if "error" in status:
+        return True, None, str(status["error"])
+    return True, status, None
 
 
 def tailscale_self_identity() -> dict[str, Any]:

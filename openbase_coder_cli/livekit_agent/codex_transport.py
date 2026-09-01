@@ -6,6 +6,8 @@ import logging
 import time
 from typing import Any
 
+from super_agents.app_endpoint import open_app_server_connection
+
 from openbase_coder_cli.livekit_agent.codex_turns import _ActiveTurn, _speech_excerpt
 
 logger = logging.getLogger("openbase_coder_cli.livekit_agent.codex_app_client")
@@ -17,13 +19,12 @@ class CodexTransportMixin:
         if self._ws is not None:
             return
 
-        from openbase_coder_cli.livekit_agent import codex_app_client
-
-        self._ws = await codex_app_client.websockets.connect(
-            self._ws_url,
+        self._ws = await open_app_server_connection(
+            self._endpoint,
             max_size=None,
             ping_interval=20,
             ping_timeout=20,
+            **({"open_timeout": 5} if self._endpoint.is_unix else {}),
         )
         self._reader_task = asyncio.create_task(self._reader_loop())
 
@@ -39,7 +40,11 @@ class CodexTransportMixin:
             },
         )
         await self._send_notification_locked("initialized", {})
-        logger.info("Connected to Codex app-server at %s", self._ws_url)
+        logger.info(
+            "Connected to Codex app-server over %s at %s",
+            self._endpoint.transport,
+            self._endpoint.description,
+        )
 
     async def _reader_loop(self) -> None:
         assert self._ws is not None

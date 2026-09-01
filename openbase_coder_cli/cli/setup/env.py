@@ -12,6 +12,10 @@ from openbase_coder_cli.backend_config import (
     DEFAULT_CODING_BACKEND,
     normalize_backend,
 )
+from openbase_coder_cli.codex_control_plane import (
+    CODEX_APP_SERVER_ENDPOINT_ENV,
+    managed_codex_app_server_endpoint,
+)
 from openbase_coder_cli.config.machine_token_manager import (
     MachineTokenError,
     MachineTokenManager,
@@ -33,8 +37,16 @@ from openbase_coder_cli.env_file import (
 )
 from openbase_coder_cli.paths import (
     CODEX_DISPATCHER_CONFIG_PATH,
-    OPENBASE_CLAUDE_CONFIG_DIR,
+    OPENBASE_AGENTS_MD_PATH,
 )
+from openbase_coder_cli.services.tailscale_provider import (
+    LIVEKIT_NETWORK_MODE_ENV_KEY,
+    livekit_network_mode,
+)
+
+TAILNET_PROVIDER_ENV_KEY = "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"
+ALLOWED_HOSTS_ENV_KEY = "OPENBASE_CODER_CLI_ALLOWED_HOSTS"
+NETMESH_ALLOWED_SUFFIX = ".netmesh.openbase.cloud"
 
 
 def _ensure_env_file(
@@ -43,18 +55,25 @@ def _ensure_env_file(
     assembly_ai_api_key: str,
     cartesia_api_key: str,
     coding_backend: str | None = None,
+    tailnet_provider: str | None = None,
 ) -> None:
     path = Path(env_file)
     if coding_backend:
         coding_backend = normalize_backend(coding_backend)
     if path.is_file():
+        path.chmod(0o600)
+        _drop_managed_claude_config_dir(path)
         updates = _missing_livekit_client_credential_values(path)
         if coding_backend:
             updates[CODING_BACKEND_ENV_KEY] = coding_backend
+        if tailnet_provider:
+            updates.update(_tailnet_provider_updates(path, tailnet_provider))
         if updates:
             _upsert_env_file_values(path, updates)
             if coding_backend:
                 click.echo(f"Updated {CODING_BACKEND_ENV_KEY} in {path}.")
+            if tailnet_provider:
+                click.echo(f"Updated {TAILNET_PROVIDER_ENV_KEY} in {path}.")
             if any(key.startswith("LIVEKIT_CLIENT_") for key in updates):
                 click.echo(
                     f"Updated client-facing LiveKit token credentials in {path}."
@@ -64,6 +83,7 @@ def _ensure_env_file(
         return
 
     path.parent.mkdir(parents=True, exist_ok=True)
+    selected_provider = tailnet_provider or "tailscale"
     secret_key = secrets.token_urlsafe(50)
     livekit_api_key = "APIkey" + secrets.token_urlsafe(12)
     livekit_api_secret = secrets.token_urlsafe(32)
@@ -78,8 +98,8 @@ def _ensure_env_file(
         "# Client-facing token issuer. LiveKit JWTs expose this key in the issuer claim.",
         f"LIVEKIT_CLIENT_API_KEY={livekit_client_api_key}",
         f"LIVEKIT_CLIENT_API_SECRET={livekit_client_api_secret}",
-        "# Use tailscale for phone-to-computer voice calls; use local for loopback-only testing.",
-        "LIVEKIT_NETWORK_MODE=tailscale",
+        "# Embedded netmesh uses local mode; system VPN transports use tailscale mode.",
+        f"{LIVEKIT_NETWORK_MODE_ENV_KEY}={livekit_network_mode(selected_provider)}",
         "LIVEKIT_URL=ws://localhost:7880",
         "# In tailscale mode, the managed service rewrites localhost LIVEKIT_URL to the Tailscale IPv4 address.",
         "# The local Python agent still registers over localhost unless LIVEKIT_AGENT_URL is set.",
@@ -101,20 +121,31 @@ def _ensure_env_file(
         "# Override the CLI API listener. Keep this on localhost when using Tailscale Serve.",
         "# OPENBASE_CODER_CLI_HOST=127.0.0.1",
         "# Allow localhost and Tailscale Serve hostnames.",
-        "OPENBASE_CODER_CLI_ALLOWED_HOSTS=localhost,127.0.0.1,.ts.net",
+        f"OPENBASE_CODER_CLI_ALLOWED_HOSTS={_allowed_hosts_for(selected_provider)}",
+        "# Tailnet provider: 'tailscale' (official Tailscale), 'netmesh'",
+        "# (self-hosted headscale + Openbase VPN client), or 'netmesh-tsnet'",
+        "# (netmesh via an in-process embedded node — no VPN on either side).",
+        "# Switch later with: openbase-coder tailnet set-provider <name>",
+        f"OPENBASE_CODER_CLI_TAILSCALE_PROVIDER={selected_provider}",
         "# Coding backend used by Super Agents and the managed service.",
         f"# Set {CODING_BACKEND_ENV_KEY} to codex, openbase_cloud, or claude_code.",
         f"{CODING_BACKEND_ENV_KEY}={coding_backend or DEFAULT_CODING_BACKEND}",
         "# openbase_cloud runs Cloud-proxied Claude Code; codex uses codex-app-server.",
-        f"CLAUDE_CONFIG_DIR={OPENBASE_CLAUDE_CONFIG_DIR}",
         f"SUPER_AGENTS_DEFAULT_CONFIG_PATH={CODEX_DISPATCHER_CONFIG_PATH}",
+        "# Openbase sessions run in the shared agent homes with their own",
+        "# per-session posture: native gating off (Openbase approvals layer",
+        "# handles approvals) and the Openbase base instructions.",
+        "SUPER_AGENTS_CODEX_APPROVAL_POLICY=never",
+        "SUPER_AGENTS_CODEX_SANDBOX_POLICY=danger-full-access",
+        f"SUPER_AGENTS_BASE_INSTRUCTIONS_PATH={OPENBASE_AGENTS_MD_PATH}",
+        "CLAUDE_CODE_ENABLE_TELEMETRY=0",
         "CODEX_MODEL_REASONING_EFFORT=high",
         "# App-server ambient tier follows the Super Agents lane; the voice",
         "# dispatcher passes its (fast by default) tier explicitly per turn.",
         "CODEX_SERVICE_TIER=standard",
         "DISPATCHER_SERVICE_TIER=fast",
         "SUPER_AGENTS_SERVICE_TIER=standard",
-        "CODEX_APP_SERVER_URL=ws://127.0.0.1:4500",
+        f"{CODEX_APP_SERVER_ENDPOINT_ENV}={managed_codex_app_server_endpoint({}).value}",
         "LIVEKIT_CODEX_THREAD_CWD=~",
         "# Cartesia voice used by the LiveKit agent TTS.",
         "CARTESIA_VOICE_ID=9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
@@ -139,7 +170,40 @@ def _ensure_env_file(
     )
 
     path.write_text("\n".join(lines) + "\n")
+    path.chmod(0o600)
     click.echo(f"Generated .env at {path}")
+
+
+_DEFAULT_ALLOWED_HOSTS = "localhost,127.0.0.1,.ts.net"
+
+
+def _allowed_hosts_for(provider: str) -> str:
+    """Allowed-hosts list for a fresh .env, adding the netmesh MagicDNS suffix
+    for either netmesh transport (served requests arrive with a netmesh Host)."""
+    hosts = [h for h in _DEFAULT_ALLOWED_HOSTS.split(",") if h]
+    if provider in ("netmesh", "netmesh-tsnet") and NETMESH_ALLOWED_SUFFIX not in hosts:
+        hosts.append(NETMESH_ALLOWED_SUFFIX)
+    return ",".join(hosts)
+
+
+def _tailnet_provider_updates(path: Path, provider: str) -> dict[str, str]:
+    """Return every env value whose meaning depends on the tailnet provider."""
+    updates: dict[str, str] = {
+        TAILNET_PROVIDER_ENV_KEY: provider,
+        LIVEKIT_NETWORK_MODE_ENV_KEY: livekit_network_mode(provider),
+        # A pinned address belongs to the previous transport. Let the active
+        # provider derive a current address when its LiveKit mode needs one.
+        "LIVEKIT_NODE_IP": "",
+    }
+    if provider in ("netmesh", "netmesh-tsnet"):
+        hosts = _env_file_values(path).get(
+            ALLOWED_HOSTS_ENV_KEY, _DEFAULT_ALLOWED_HOSTS
+        )
+        host_list = [h.strip() for h in hosts.split(",") if h.strip()]
+        if NETMESH_ALLOWED_SUFFIX not in host_list:
+            host_list.append(NETMESH_ALLOWED_SUFFIX)
+            updates[ALLOWED_HOSTS_ENV_KEY] = ",".join(host_list)
+    return updates
 
 
 def _selected_coding_backend(env_file: Path, requested_backend: str | None) -> str:
@@ -178,11 +242,39 @@ def _ensure_openbase_cloud_machine_token(env_file: Path) -> None:
         click.echo("Openbase Cloud machine token is configured.")
 
 
+def _drop_managed_claude_config_dir(path: Path) -> None:
+    """Remove a CLAUDE_CONFIG_DIR pointing at the retired managed dir.
+
+    Sessions run against the user's real ~/.claude now; a leftover env value
+    from an older install would silently retarget every Claude session at the
+    abandoned ~/.openbase/claude_config.
+    """
+    retired_dir = ".openbase/claude_config"
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    kept = [
+        line
+        for line in lines
+        if not (
+            line.split("=", 1)[0].strip() == "CLAUDE_CONFIG_DIR" and retired_dir in line
+        )
+    ]
+    if kept != lines:
+        path.write_text("".join(kept), encoding="utf-8")
+        click.echo(f"Removed retired CLAUDE_CONFIG_DIR from {path}.")
+
+
 def _missing_livekit_client_credential_values(path: Path) -> dict[str, str]:
     existing = _env_file_values(path)
     updates: dict[str, str] = {}
-    if not existing.get("CLAUDE_CONFIG_DIR"):
-        updates["CLAUDE_CONFIG_DIR"] = str(OPENBASE_CLAUDE_CONFIG_DIR)
+    resolved_endpoint = managed_codex_app_server_endpoint(existing)
+    if existing.get(CODEX_APP_SERVER_ENDPOINT_ENV) != resolved_endpoint.value:
+        updates[CODEX_APP_SERVER_ENDPOINT_ENV] = resolved_endpoint.value
+    if not existing.get("SUPER_AGENTS_CODEX_APPROVAL_POLICY"):
+        updates["SUPER_AGENTS_CODEX_APPROVAL_POLICY"] = "never"
+    if not existing.get("SUPER_AGENTS_CODEX_SANDBOX_POLICY"):
+        updates["SUPER_AGENTS_CODEX_SANDBOX_POLICY"] = "danger-full-access"
+    if not existing.get("SUPER_AGENTS_BASE_INSTRUCTIONS_PATH"):
+        updates["SUPER_AGENTS_BASE_INSTRUCTIONS_PATH"] = str(OPENBASE_AGENTS_MD_PATH)
     if not existing.get("SUPER_AGENTS_DEFAULT_CONFIG_PATH"):
         updates["SUPER_AGENTS_DEFAULT_CONFIG_PATH"] = str(CODEX_DISPATCHER_CONFIG_PATH)
     if not existing.get("LIVEKIT_CLIENT_API_KEY") or existing.get(

@@ -1,11 +1,11 @@
-"""Managed Claude Code plugin toggles for Openbase's CLAUDE_CONFIG_DIR.
+"""Claude Code plugin toggles for Openbase sessions.
 
 Claude Code's built-in `computer-use` MCP server is interactive-only and never
 attaches to headless Agent SDK sessions, so the Claude backend gets computer
 use through an Openbase-provided MCP server instead: a stdio shim
 (`openbase-coder claude computer-use-mcp`) that proxies to the desktop app's
 control server. Toggling a plugin here adds or removes the corresponding
-`mcpServers` entry in the managed `.claude.json`; new Super Agents sessions
+`mcpServers` entry in the shared ~/.claude.json; new Super Agents sessions
 pick the change up on the next dispatcher recreate.
 """
 
@@ -18,7 +18,7 @@ from pathlib import Path
 from shutil import which
 
 from openbase_coder_cli.env_file import env_file_values, upsert_env_file_values
-from openbase_coder_cli.paths import DEFAULT_ENV_FILE_PATH, OPENBASE_CLAUDE_JSON_PATH
+from openbase_coder_cli.paths import CLAUDE_STATE_PATH, DEFAULT_ENV_FILE_PATH
 from openbase_coder_cli.runtime import current_runtime_package, stable_package_path
 
 COMPUTER_USE_SERVER_NAME = "openbase-computer-use"
@@ -55,18 +55,18 @@ def computer_use_server_entry() -> dict[str, object]:
 
 
 def computer_use_enabled() -> bool:
-    servers = _mcp_servers(_read_json_object(OPENBASE_CLAUDE_JSON_PATH))
+    servers = _mcp_servers(_read_json_object(CLAUDE_STATE_PATH))
     return COMPUTER_USE_SERVER_NAME in servers
 
 
 def set_computer_use_enabled(enabled: bool) -> bool:
     """Add or remove the managed computer-use MCP entry.
 
-    Returns True when the managed config changed. The entry name is
-    Openbase-prefixed so `sync_normal_claude_state`'s mcpServers union never
-    resurrects a removed entry from the user's normal Claude config.
+    Returns True when the shared config changed. The entry name is
+    Openbase-prefixed so it is clearly Openbase-managed in the user's
+    ~/.claude.json.
     """
-    existing = _read_json_object(OPENBASE_CLAUDE_JSON_PATH)
+    existing = _read_json_object(CLAUDE_STATE_PATH)
     mcp_servers = dict(_mcp_servers(existing))
     if enabled:
         entry = computer_use_server_entry()
@@ -79,7 +79,7 @@ def set_computer_use_enabled(enabled: bool) -> bool:
         del mcp_servers[COMPUTER_USE_SERVER_NAME]
 
     _write_json_object(
-        OPENBASE_CLAUDE_JSON_PATH, {**existing, "mcpServers": mcp_servers}
+        CLAUDE_STATE_PATH, {**existing, "mcpServers": mcp_servers}
     )
     return True
 
