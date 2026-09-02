@@ -136,6 +136,22 @@ class _RoutineClient(Protocol):
         name: str | None = None,
         force: bool = False,
     ) -> dict[str, Any]: ...
+    async def add_routine_trigger(self, name: str, trigger_input: dict[str, Any]) -> dict[str, Any]: ...
+    async def remove_routine_trigger(self, name: str, trigger_id: str) -> dict[str, Any]: ...
+    async def deliver_webhook_event(
+        self,
+        token: str,
+        *,
+        headers: dict[str, Any] | None = None,
+        body: bytes | str = b"",
+        origin: str = "external",
+    ) -> dict[str, Any]: ...
+    async def emit_routine_event(
+        self,
+        name: str,
+        payload: dict[str, Any] | None = None,
+        event_id: str | None = None,
+    ) -> dict[str, Any]: ...
 
 
 def _read_instruction_file(path: Path) -> str | None:
@@ -257,6 +273,10 @@ def _supports_routine_methods(client: Any) -> bool:
             "read_routine",
             "delete_routine",
             "run_due_routines",
+            "add_routine_trigger",
+            "remove_routine_trigger",
+            "deliver_webhook_event",
+            "emit_routine_event",
         )
     )
 

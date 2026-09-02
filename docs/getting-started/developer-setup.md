@@ -84,8 +84,10 @@ you can launch either later:
 ./scripts/dev-launch --all       # both
 ```
 
-The Electron developer launch requires the private `desktop` checkout (run
-`multi sync --install-set dev` if you have access). It sets an explicit
+The Electron developer launch requires the `desktop` checkout (part of the
+default install set; run `multi sync` to fetch it). Its closed-source netmesh
+companion is fetched as a prebuilt signed artifact during the desktop build,
+so the open `desktop` sources build without it. It sets an explicit
 dashboard-only mode, and Electron also detects the development installation in
 `installation.json`; either way, it does not expose the installer bridge.
 Never use the Electron onboarding wizard for a development install:

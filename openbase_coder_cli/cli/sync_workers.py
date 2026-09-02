@@ -37,6 +37,7 @@ DEFAULT_MAX_AGE_DAYS = 15
 DEFAULT_STABILITY_DELAY_SECONDS = 0.2
 CODE_SYNC_TICK_SECONDS = 60.0
 CLOUD_REGISTER_INTERVAL_SECONDS = 3600.0
+CLOUD_WEBHOOK_POLL_INTERVAL_SECONDS = 30.0
 LIVEKIT_POOL_WATCHDOG_TICK_SECONDS = 30.0
 
 
@@ -243,6 +244,57 @@ def _code_sync_reconcile_tick() -> None:
         logger.warning("code_sync tick_errors %s", summary["errors"])
 
 
+def _cloud_webhook_events_tick() -> None:
+    from openbase_coder_cli.config.token_manager import (
+        DEFAULT_WEB_BACKEND_URL,
+        TokenManager,
+    )
+    from openbase_coder_cli.services import cloud_webhook_events
+
+    if not TokenManager(DEFAULT_WEB_BACKEND_URL).has_refresh_token:
+        logger.debug("cloud_webhook_events skipped no_login")
+        return
+    result = cloud_webhook_events.fetch_pending_relay_events()
+    if not result.ok:
+        if not result.supported:
+            logger.debug("cloud_webhook_events endpoint_unsupported")
+        else:
+            logger.warning(
+                "cloud_webhook_events poll_failed error=%s status=%s",
+                result.error,
+                result.status_code,
+            )
+        return
+    events = []
+    if isinstance(result.response, dict):
+        raw_events = result.response.get("events")
+        if isinstance(raw_events, list):
+            events = [event for event in raw_events if isinstance(event, dict)]
+    if not events:
+        logger.debug("cloud_webhook_events sweep_complete fetched=0")
+        return
+
+    import asyncio
+
+    from super_agents.app_server_client import CodexAppServerClient
+
+    async def deliver() -> dict:
+        client = CodexAppServerClient()
+        try:
+            return await cloud_webhook_events.deliver_relay_events(client, events)
+        finally:
+            await client.close()
+
+    summary = asyncio.run(deliver())
+    logger.info(
+        "cloud_webhook_events sweep_complete fetched=%s matched=%s delivered=%s acked=%s",
+        summary["fetched"],
+        summary["matched"],
+        summary["delivered"],
+        summary["acked"],
+    )
+
+
 def build_jobs() -> list[SyncJob]:
     """The full job set; gating happens inside each tick, not here."""
     return [
@@ -262,7 +314,9 @@ def build_jobs() -> list[SyncJob]:
         ),
         SyncJob(
             name="claude_app_index",
-            interval=_env_float("CLAUDE_APP_INDEX_SYNC_INTERVAL", DEFAULT_INTERVAL_SECONDS),
+            interval=_env_float(
+                "CLAUDE_APP_INDEX_SYNC_INTERVAL", DEFAULT_INTERVAL_SECONDS
+            ),
             tick=_claude_app_index_tick,
         ),
         SyncJob(
@@ -276,6 +330,14 @@ def build_jobs() -> list[SyncJob]:
                 "OPENBASE_CLOUD_REGISTER_INTERVAL", CLOUD_REGISTER_INTERVAL_SECONDS
             ),
             tick=_cloud_registration_tick,
+        ),
+        SyncJob(
+            name="cloud_webhook_events",
+            interval=_env_float(
+                "OPENBASE_CLOUD_WEBHOOK_POLL_INTERVAL",
+                CLOUD_WEBHOOK_POLL_INTERVAL_SECONDS,
+            ),
+            tick=_cloud_webhook_events_tick,
         ),
         SyncJob(
             name="livekit_pool_watchdog",

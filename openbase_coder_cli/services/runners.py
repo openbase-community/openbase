@@ -261,13 +261,21 @@ def build_django_cli(env: dict[str, str], binaries: dict[str, str]) -> RunnerArg
             env["LIVEKIT_NODE_IP"] = node_ip
         if existing_url == "" or existing_url.startswith(_LOCALHOST_URL_PREFIXES):
             if not node_ip:
+                # Netmesh enrollment is deferred until pairing, so a fresh
+                # install legitimately has no tailnet IP yet. The local API
+                # must still come up — onboarding's sign-in and pairing gates
+                # read it, and pairing is what later connects the VPN (a hard
+                # exit here bricks onboarding in a circular dependency).
+                # Calls cannot work in this window anyway; services restart
+                # with the real tailnet URL once enrollment applies routes.
                 print(
-                    "LIVEKIT_NODE_IP is required to derive LIVEKIT_URL in "
-                    "Tailscale mode.",
+                    "No tailnet IP yet (VPN not enrolled); starting with a "
+                    "localhost LIVEKIT_URL until enrollment restarts services.",
                     file=sys.stderr,
                 )
-                raise SystemExit(1)
-            env["LIVEKIT_URL"] = f"ws://{node_ip}:7880"
+                env["LIVEKIT_URL"] = "ws://localhost:7880"
+            else:
+                env["LIVEKIT_URL"] = f"ws://{node_ip}:7880"
     elif mode == "local":
         env["LIVEKIT_URL"] = existing_url or "ws://localhost:7880"
     elif mode == "lan":
