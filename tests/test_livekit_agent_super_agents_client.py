@@ -1495,6 +1495,50 @@ def test_backend_auth_failure_ignores_normal_speech(monkeypatch, caplog) -> None
     assert "voice_turn_backend_auth_failure" not in caplog.text
 
 
+def test_safe_spoken_answer_replaces_auth_failure_with_graceful_line() -> None:
+    fallback = super_agents_client_module.BACKEND_ERROR_SPOKEN_FALLBACK
+    assert (
+        super_agents_client_module._safe_spoken_answer(
+            "Not logged in · Please run /login.", auth_failed=True
+        )
+        == fallback
+    )
+
+
+def test_safe_spoken_answer_suppresses_raw_proxy_error_body(caplog) -> None:
+    import logging
+
+    caplog.set_level(logging.ERROR)
+    # A 403/500 proxy body arrives as the answer text; auth_failed is False
+    # because it is not the login sentinel, but it must still not be spoken.
+    raw = 'Failed to authenticate. API Error: 403 {"detail":"Model \'claude opus 4 8\' is not available"}'
+    spoken = super_agents_client_module._safe_spoken_answer(
+        raw, auth_failed=False, backend="openbase_cloud", turn_id="t_1"
+    )
+    assert spoken == super_agents_client_module.BACKEND_ERROR_SPOKEN_FALLBACK
+    assert raw not in spoken
+    # The raw payload is still captured for debugging.
+    assert "voice_turn_backend_error" in caplog.text
+
+
+def test_safe_spoken_answer_passes_through_normal_speech() -> None:
+    answer = "I pushed the fix and the build is green."
+    assert (
+        super_agents_client_module._safe_spoken_answer(answer, auth_failed=False)
+        == answer
+    )
+
+
+def test_looks_like_raw_backend_error_detection() -> None:
+    m = super_agents_client_module._looks_like_raw_backend_error
+    assert m("Not logged in · Please run /login.")
+    assert m("Failed to authenticate. API Error: 500 internal error")
+    assert m("Something went wrong — API Error: 429 rate limited")
+    assert not m("The tests pass and I committed the change.")
+    assert not m("")
+    assert not m(None)
+
+
 @pytest.mark.asyncio
 async def test_preflight_warns_for_logged_out_claude_backend(
     monkeypatch, tmp_path: Path, caplog
