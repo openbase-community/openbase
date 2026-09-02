@@ -1,6 +1,6 @@
 # services status
 
-Show launchd install/running state for all managed services.
+Show install/running state for all managed services.
 
 ## Usage
 
@@ -13,6 +13,10 @@ Output includes whether each service is:
 - `not installed`
 - `running (pid ...)`
 - `loaded (not running, last exit: ...)`
+
+Service state comes from launchd on macOS, systemd user units on Linux,
+Windows Task Scheduler on Windows, or the external supervisor state used by
+container installs.
 
 The command also verifies the Tailscale Serve routes that the iOS app uses:
 
