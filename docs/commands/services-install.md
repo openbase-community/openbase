@@ -1,6 +1,6 @@
 # services install
 
-Generate wrappers/plists and bootstrap default launchd services.
+Generate service definitions and bootstrap default services.
 
 ## Usage
 
@@ -11,9 +11,10 @@ openbase-coder services install
 ## What It Does
 
 1. Reads `~/.openbase/installation.json`.
-2. Generates shell wrappers in `~/.openbase/launchd/`.
-3. Generates plists in `~/Library/LaunchAgents/`.
-4. Bootstraps each default service with `launchctl`.
+2. Generates shell wrappers in `~/.openbase/launchd/` on macOS/Linux.
+3. Generates platform service definitions: launchd plists on macOS, systemd
+   user units on Linux, or Windows Task Scheduler XML on Windows.
+4. Bootstraps each default service with the platform supervisor.
 5. Configures the Tailscale Serve routes used by the iOS app:
    - `:18080 -> http://127.0.0.1:7999`
    - `:7880 -> tcp://127.0.0.1:7880`
