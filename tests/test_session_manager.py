@@ -293,6 +293,45 @@ class FakeSuperAgentsClient:
         self.calls.append(("run_due_routines", {"name": name, "force": force}))
         return self._pop("run_due_routines")
 
+    async def add_routine_trigger(
+        self, name: str, trigger_input: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.calls.append(("add_routine_trigger", {"name": name, **trigger_input}))
+        return self._pop("add_routine_trigger")
+
+    async def remove_routine_trigger(
+        self, name: str, trigger_id: str
+    ) -> dict[str, Any]:
+        self.calls.append(
+            ("remove_routine_trigger", {"name": name, "triggerId": trigger_id})
+        )
+        return self._pop("remove_routine_trigger")
+
+    async def deliver_webhook_event(
+        self,
+        token: str,
+        *,
+        headers: dict[str, Any] | None = None,
+        body: bytes | str = b"",
+        origin: str = "external",
+    ) -> dict[str, Any]:
+        self.calls.append(("deliver_webhook_event", {"token": token, "origin": origin}))
+        return self._pop("deliver_webhook_event")
+
+    async def emit_routine_event(
+        self,
+        name: str,
+        payload: dict[str, Any] | None = None,
+        event_id: str | None = None,
+    ) -> dict[str, Any]:
+        self.calls.append(
+            (
+                "emit_routine_event",
+                {"name": name, "payload": payload, "eventId": event_id},
+            )
+        )
+        return self._pop("emit_routine_event")
+
     async def request(
         self,
         method: str,
@@ -2317,4 +2356,38 @@ def test_agent_message_item_boundaries_are_preserved_in_live_output(
         "plus console.",
         "\n\nThe new agent is Cindy. ",
         "I'm starting her now.",
+    ]
+
+
+def test_trigger_and_event_methods_delegate_to_super_agents_client() -> None:
+    client = FakeSuperAgentsClient(
+        {
+            "add_routine_trigger": [{"trigger": {"id": "trg-1"}}],
+            "remove_routine_trigger": [{"deleted": True}],
+            "deliver_webhook_event": [{"status": "delivered"}],
+            "emit_routine_event": [{"status": "delivered"}],
+        }
+    )
+    manager = _manager(client)
+
+    assert asyncio.run(
+        manager.add_routine_trigger("daily", {"senderPath": "sender.id"})
+    ) == {"trigger": {"id": "trg-1"}}
+    assert asyncio.run(manager.remove_routine_trigger("daily", "trg-1")) == {
+        "deleted": True
+    }
+    assert asyncio.run(manager.deliver_webhook_event("tok", body=b"{}")) == {
+        "status": "delivered"
+    }
+    assert asyncio.run(manager.emit_routine_event("daily", {"a": 1}, "evt-1")) == {
+        "status": "delivered"
+    }
+    assert client.calls[-4:] == [
+        ("add_routine_trigger", {"name": "daily", "senderPath": "sender.id"}),
+        ("remove_routine_trigger", {"name": "daily", "triggerId": "trg-1"}),
+        ("deliver_webhook_event", {"token": "tok", "origin": "external"}),
+        (
+            "emit_routine_event",
+            {"name": "daily", "payload": {"a": 1}, "eventId": "evt-1"},
+        ),
     ]
