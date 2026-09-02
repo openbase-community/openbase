@@ -12,6 +12,11 @@ from openbase_coder_cli.backend_config import (
     DEFAULT_CODING_BACKEND,
     normalize_backend,
 )
+from openbase_coder_cli.cloud_environment import (
+    PRODUCTION_WEB_BACKEND_URL,
+    WEB_BACKEND_ENV_KEY,
+    default_web_backend_url,
+)
 from openbase_coder_cli.codex_control_plane import (
     CODEX_APP_SERVER_ENDPOINT_ENV,
     managed_codex_app_server_endpoint,
@@ -64,6 +69,13 @@ def _ensure_env_file(
         path.chmod(0o600)
         _drop_managed_claude_config_dir(path)
         updates = _missing_livekit_client_credential_values(path)
+        current_values = _env_file_values(path)
+        release_backend_url = default_web_backend_url()
+        if (
+            release_backend_url != PRODUCTION_WEB_BACKEND_URL
+            and WEB_BACKEND_ENV_KEY not in current_values
+        ):
+            updates[WEB_BACKEND_ENV_KEY] = release_backend_url
         if coding_backend:
             updates[CODING_BACKEND_ENV_KEY] = coding_backend
         if tailnet_provider:
@@ -152,6 +164,10 @@ def _ensure_env_file(
         "OPENBASE_CODER_CLI_OAUTH_CLIENT_ID=openbase-coder-cli",
     ]
 
+    release_backend_url = default_web_backend_url()
+    if release_backend_url != PRODUCTION_WEB_BACKEND_URL:
+        lines.append(f"{WEB_BACKEND_ENV_KEY}={release_backend_url}")
+
     if assembly_ai_api_key:
         lines.append(f"ASSEMBLY_AI_API_KEY={assembly_ai_api_key}")
     if cartesia_api_key:
@@ -159,7 +175,7 @@ def _ensure_env_file(
 
     lines.extend(
         [
-            "# Override the web backend URL (defaults to https://app.openbase.cloud):",
+            "# Override the web backend URL selected by the release channel:",
             "# OPENBASE_CODER_CLI_WEB_BACKEND_URL=https://app.openbase.cloud",
             "# Override JWT key/session endpoints if your backend routes differ:",
             "# OPENBASE_CODER_CLI_JWT_JWKS_URL=https://app.openbase.cloud/.well-known/jwks.json",

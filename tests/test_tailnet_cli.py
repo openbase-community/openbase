@@ -263,10 +263,10 @@ def test_tailnet_status_errors_when_provider_unreachable(monkeypatch):
 
 
 def test_provider_reads_env_file_as_single_source_of_truth(
-    monkeypatch, _isolated_default_env_file
+    monkeypatch, _isolated_host_state
 ):
     tp = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
-    env_path = _isolated_default_env_file
+    env_path = _isolated_host_state
     env_path.write_text("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER=netmesh\n")
 
     monkeypatch.delenv("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", raising=False)

@@ -112,6 +112,17 @@ def test_login_password_stdin_requires_email():
     assert "must be used together" in result.output
 
 
+def test_staging_package_login_defaults_to_staging_cloud(monkeypatch):
+    monkeypatch.delenv("OPENBASE_CODER_CLI_WEB_BACKEND_URL", raising=False)
+    monkeypatch.setattr(
+        auth_cli,
+        "configured_web_backend_url",
+        lambda: "https://app-staging.openbase.cloud",
+    )
+
+    assert auth_cli._get_web_backend_url() == "https://app-staging.openbase.cloud"
+
+
 def test_auth_print_access_token_outputs_token(monkeypatch):
     class FakeTokenManager:
         def __init__(self, web_backend_url):

@@ -841,6 +841,61 @@ def test_ensure_env_file_documents_coding_backend_default(tmp_path) -> None:
     assert env_file.stat().st_mode & 0o777 == 0o600
 
 
+def test_ensure_env_file_persists_staging_release_backend(
+    tmp_path, monkeypatch
+) -> None:
+    env_file = tmp_path / ".env"
+    _patch_setup(
+        monkeypatch,
+        "default_web_backend_url",
+        lambda: "https://app-staging.openbase.cloud",
+    )
+
+    setup_cli._ensure_env_file(
+        str(env_file),
+        assembly_ai_api_key="",
+        cartesia_api_key="",
+    )
+
+    assert (
+        setup_cli._env_file_values(env_file)["OPENBASE_CODER_CLI_WEB_BACKEND_URL"]
+        == "https://app-staging.openbase.cloud"
+    )
+
+
+def test_ensure_env_file_adds_staging_backend_without_overriding_explicit_url(
+    tmp_path, monkeypatch
+) -> None:
+    missing = tmp_path / "missing.env"
+    missing.write_text("KEEP_ME=1\n", encoding="utf-8")
+    explicit = tmp_path / "explicit.env"
+    explicit.write_text(
+        "OPENBASE_CODER_CLI_WEB_BACKEND_URL=https://custom.example\n",
+        encoding="utf-8",
+    )
+    _patch_setup(
+        monkeypatch,
+        "default_web_backend_url",
+        lambda: "https://app-staging.openbase.cloud",
+    )
+
+    for env_file in (missing, explicit):
+        setup_cli._ensure_env_file(
+            str(env_file),
+            assembly_ai_api_key="",
+            cartesia_api_key="",
+        )
+
+    assert (
+        setup_cli._env_file_values(missing)["OPENBASE_CODER_CLI_WEB_BACKEND_URL"]
+        == "https://app-staging.openbase.cloud"
+    )
+    assert (
+        setup_cli._env_file_values(explicit)["OPENBASE_CODER_CLI_WEB_BACKEND_URL"]
+        == "https://custom.example"
+    )
+
+
 def test_ensure_env_file_migrates_existing_env_to_shared_homes(tmp_path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
