@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 import click
 import httpx
 
+from openbase_coder_cli.cloud_environment import configured_web_backend_url
 from openbase_coder_cli.config.local_api_token import (
     get_local_api_token,
     rotate_local_api_token,
@@ -36,7 +37,6 @@ from openbase_coder_cli.services.cloud_registration import register_and_report
 
 from .password_auth import exchange_password_for_jwts
 
-DEFAULT_WEB_BACKEND_URL = "https://app.openbase.cloud"
 DESKTOP_LOGIN_COMPLETE_URL = (
     "openbase-coder://open?source=cli-auth&intent=login-complete"
 )
@@ -87,9 +87,7 @@ def _oauth_success_html(*, desktop_url: str = DESKTOP_LOGIN_COMPLETE_URL) -> byt
 
 
 def _get_web_backend_url() -> str:
-    return os.environ.get(
-        "OPENBASE_CODER_CLI_WEB_BACKEND_URL", DEFAULT_WEB_BACKEND_URL
-    ).rstrip("/")
+    return configured_web_backend_url()
 
 
 def _get_oauth_client_id() -> str:
