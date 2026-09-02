@@ -34,7 +34,7 @@ def user() -> None:
     help="Name shown by CallKit. Defaults to the resolved agent name.",
 )
 def call(agent_name: str, caller_name: str) -> None:
-    """Ring the iPhone and connect it to a known local agent."""
+    """Ring the user's phone and connect it to a known local agent."""
     normalized_agent_name = " ".join(agent_name.split())
     normalized_caller_name = " ".join(caller_name.split())
     if not normalized_agent_name:
@@ -96,7 +96,7 @@ def say(
                 f"{detail} No agent thread was available for a linked notification."
             )
         click.echo(
-            "No active voice session; sending a linked iPhone notification.",
+            "No active voice session; sending a linked phone notification.",
             err=True,
         )
         try:
@@ -111,9 +111,9 @@ def say(
             UserSayNotificationError,
         ) as exc:
             raise click.ClickException(
-                f"{detail} The iPhone notification also failed: {exc}"
+                f"{detail} The phone notification also failed: {exc}"
             ) from exc
-        click.echo("Linked iPhone notification accepted by Openbase Cloud.")
+        click.echo("Linked phone notification accepted by Openbase Cloud.")
         return
     target_room = data.get("room_name") or "active room"
     click.echo(f"Announcer message sent to {target_room}.")
