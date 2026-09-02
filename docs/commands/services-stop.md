@@ -8,7 +8,9 @@ Stop all services or one named service.
 openbase-coder services stop [NAME]
 ```
 
-This performs `launchctl bootout` and keeps jobs unloaded until restarted.
+This stops the platform-managed job and keeps it unloaded or disabled until
+restarted. On macOS it uses `launchctl bootout`; on Linux it disables and stops
+the systemd user unit; on Windows it ends and deletes the scheduled task.
 
 ## Example
 
