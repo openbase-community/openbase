@@ -38,6 +38,16 @@ CODEX_HOME_DEFAULT_DISPATCHER_CONFIG = {
     "backend_models": {
         "codex": {"dispatcher": "gpt-5.5", "super_agents": "gpt-5.5"},
         "claude_code": {"dispatcher": "opus", "super_agents": "opus"},
+        # Managed Cloud backends resolve by CONFIGURED backend first (see
+        # dispatcher_config.get_backend_model), so they must NOT inherit the
+        # personal claude_code "opus": the Openbase Cloud proxy rejects
+        # claude-opus-4-8 for free/trial accounts (403) — pin the trial-safe
+        # sonnet. openbase_cloud_codex keeps the cloud codex default.
+        "openbase_cloud": {"dispatcher": "sonnet", "super_agents": "sonnet"},
+        "openbase_cloud_codex": {
+            "dispatcher": "gpt-5.5",
+            "super_agents": "gpt-5.5",
+        },
     },
 }
 AUDIO_PROVIDER_OPENBASE_CLOUD = "openbase-cloud"
