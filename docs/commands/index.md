@@ -38,6 +38,7 @@ openbase-coder [OPTIONS] COMMAND [ARGS]
 | [`doctor`](doctor.md) | Verify install, service health, and secrets |
 | [`onboarding`](onboarding.md) | Inspect onboarding state and report it to Openbase cloud |
 | [`login`](login.md) | Email-code login to Openbase cloud |
+| [`loops`](loops.md) | Manage loops: scheduled or event-triggered agent prompts and commands (alias: `routines`) |
 | [`logout`](logout.md) | Remove saved auth tokens |
 | [`plugins`](plugins.md) | Install and manage Openbase plugins |
 | [`bootstrap`](bootstrap.md) | Run plugin-provided bootstrap commands |

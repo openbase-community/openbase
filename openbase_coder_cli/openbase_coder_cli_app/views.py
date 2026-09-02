@@ -99,7 +99,11 @@ from openbase_coder_cli.openbase_coder_cli_app.reports import (
     project_reports_tags,
 )
 from openbase_coder_cli.openbase_coder_cli_app.routines import (
+    hooks_ingest,
     routine_detail,
+    routine_emit,
+    routine_trigger_detail,
+    routine_triggers,
     routines_list,
     routines_run_due,
 )
@@ -328,7 +332,11 @@ __all__ = [
     "project_status",
     "recent_projects",
     "reasoning_settings",
+    "hooks_ingest",
     "routine_detail",
+    "routine_emit",
+    "routine_trigger_detail",
+    "routine_triggers",
     "routines_list",
     "routines_run_due",
     "service_status",
