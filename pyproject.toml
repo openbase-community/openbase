@@ -8,6 +8,7 @@ requires-python = ">=3.12,<3.14"
 dynamic = ["version"]
 dependencies = [
     "click>=8.2.0",
+    "multi-workspace>=3.2.18",
     "Django==5.2.6",
     "djangorestframework==3.16.1",
     "django-cors-headers>=4.6.0",
