@@ -216,6 +216,23 @@ def test_django_cli_tailscale_mode_derives_livekit_url(monkeypatch):
     ]
 
 
+def test_django_cli_tailscale_mode_degrades_to_localhost_before_enrollment(
+    monkeypatch, capsys
+):
+    # Fresh installs defer netmesh enrollment to pairing: no tailnet IP
+    # exists yet, but the local API must still start (onboarding reads it).
+    monkeypatch.setattr(runners.network, "tailscale_ip", lambda family: None)
+    env = {"LIVEKIT_NETWORK_MODE": "tailscale"}
+    binaries = {"openbase_coder": "/bin/openbase-coder"}
+
+    argv, out_env = runners.build_django_cli(env, binaries)
+
+    assert out_env["LIVEKIT_URL"] == "ws://localhost:7880"
+    assert "LIVEKIT_NODE_IP" not in out_env
+    assert argv[0] == "/bin/openbase-coder"
+    assert "No tailnet IP yet" in capsys.readouterr().err
+
+
 def test_django_cli_local_mode_preserves_custom_url(monkeypatch):
     monkeypatch.setattr(runners.network, "tailscale_ip", lambda family: None)
     env = {"LIVEKIT_NETWORK_MODE": "local", "LIVEKIT_URL": "ws://custom:9999"}
