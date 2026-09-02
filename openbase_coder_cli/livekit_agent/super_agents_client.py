@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import time
 import uuid
@@ -20,12 +21,15 @@ from super_agents.app_protocol import (
 
 from openbase_coder_cli.backend_config import (
     CLAUDE_CODE_BACKEND,
+    CODEX_BACKEND,
+    OPENBASE_CLOUD_BACKEND,
+    OPENBASE_CLOUD_CODEX_BACKEND,
 )
 from openbase_coder_cli.backend_config import (
     configured_execution_backend as _configured_execution_backend,
 )
 from openbase_coder_cli.claude_auth import (
-    is_claude_auth_failure_text,
+    is_backend_auth_failure_text,
     verified_claude_auth_status,
 )
 from openbase_coder_cli.codex_session_defaults import (
@@ -111,28 +115,123 @@ TURN_POLL_COMPLETED_EMPTY_SPEECH_GRACE_SECONDS = 2.0
 # as orphaned (no voice dispatch consumed it) and handing it to the orphaned
 # result handler to be spoken directly.
 ORPHANED_RESULT_GRACE_SECONDS = 1.5
-# Claude Code answers turns with a "Failed to authenticate ..." string
-# instead of erroring when the login dies. Sessions share the user's own
-# ~/.claude login, so there is nothing to re-bridge — surface the failure
-# loudly (debounced) and direct the user to `claude login`.
-CLAUDE_AUTH_WARN_DEBOUNCE_SECONDS = 300.0
-_last_claude_auth_warn_monotonic: float | None = None
+# A coding backend answers turns with a "Not logged in ..." / "Failed to
+# authenticate ..." string instead of erroring when its login dies. That text
+# then flows through speech extraction and is spoken as if it were a real
+# answer, and the turn is still logged status=completed — so an auth failure is
+# indistinguishable from a working turn in the logs and telemetry. Surface it
+# as an explicit, un-debounced ERROR marker (so field tests and monitoring can
+# never mistake it for success) plus a debounced, backend-correct human hint.
+BACKEND_AUTH_WARN_DEBOUNCE_SECONDS = 300.0
+# Kept under the old name too so existing patch targets keep working.
+CLAUDE_AUTH_WARN_DEBOUNCE_SECONDS = BACKEND_AUTH_WARN_DEBOUNCE_SECONDS
+_last_backend_auth_warn_monotonic: float | None = None
 
 
-def _maybe_schedule_claude_auth_heal(speech_text: str) -> None:
-    """Log a debounced warning when a turn spoke a Claude login failure."""
-    global _last_claude_auth_warn_monotonic
-    if not is_claude_auth_failure_text(speech_text):
-        return
-    now = time.monotonic()
-    last = _last_claude_auth_warn_monotonic
-    if last is not None and now - last < CLAUDE_AUTH_WARN_DEBOUNCE_SECONDS:
-        return
-    _last_claude_auth_warn_monotonic = now
-    logger.warning(
-        "Claude auth failure surfaced in a spoken answer; run `claude login` "
-        "to restore the Claude Code login."
+def _auth_failure_remediation(backend: str | None) -> str:
+    """Backend-correct instruction for restoring a dead coding-backend login."""
+    if backend == CLAUDE_CODE_BACKEND:
+        return "run `claude login` to restore the Claude Code login"
+    if backend == CODEX_BACKEND:
+        return "run `codex login` to restore the Codex login"
+    if backend in (OPENBASE_CLOUD_BACKEND, OPENBASE_CLOUD_CODEX_BACKEND):
+        return (
+            "the Openbase Cloud model proxy did not authenticate this turn — "
+            "verify the machine token (`openbase-coder auth print-machine-token`) "
+            "and that the dispatcher model's engine matches the configured "
+            "cloud backend"
+        )
+    return "sign the coding backend back in"
+
+
+def _flag_backend_auth_failure(
+    speech_text: str,
+    *,
+    backend: str | None = None,
+    turn_id: str | None = None,
+) -> bool:
+    """Surface a coding-backend auth failure that came back as a turn answer.
+
+    Returns True when ``speech_text`` is a backend auth-failure sentinel (not a
+    real answer). Always emits a structured ERROR marker so an auth failure can
+    never look like a successful completed turn; additionally logs a debounced,
+    backend-correct human-readable hint.
+    """
+    global _last_backend_auth_warn_monotonic
+    if not is_backend_auth_failure_text(speech_text):
+        return False
+    remediation = _auth_failure_remediation(backend)
+    # Never debounced: the structured marker must fire on every failed turn so
+    # monitoring and field tests catch it even inside the warning's debounce.
+    logger.error(
+        "%s stage=voice_turn_backend_auth_failure backend=%s turn_id=%s "
+        "text_hash=%s remediation=%s",
+        DISPATCH_TIMING_LOG,
+        backend or "unknown",
+        turn_id or "",
+        hashlib.sha256(speech_text.strip().encode("utf-8")).hexdigest()[:12],
+        remediation,
     )
+    now = time.monotonic()
+    last = _last_backend_auth_warn_monotonic
+    if last is None or now - last >= BACKEND_AUTH_WARN_DEBOUNCE_SECONDS:
+        _last_backend_auth_warn_monotonic = now
+        logger.warning(
+            "Coding backend auth failure surfaced in a spoken answer (backend=%s); %s.",
+            backend or "unknown",
+            remediation,
+        )
+    return True
+
+
+# Spoken to the user in place of a raw backend error payload. A dead login or a
+# proxy/API error arrives as the turn's "answer" text (e.g. "Not logged in ·
+# Please run /login", "Failed to authenticate. API Error: 403 {...}", a 500
+# body); speaking that verbatim reads backend internals aloud. Replace it with a
+# short, calm line — the raw text still goes to the logs.
+BACKEND_ERROR_SPOKEN_FALLBACK = (
+    "Sorry, I'm having trouble reaching the coding service right now. "
+    "Please try again in a moment."
+)
+
+
+def _looks_like_raw_backend_error(text: str | None) -> bool:
+    """Whether a turn answer is a raw backend/proxy error that must not be spoken."""
+    if is_backend_auth_failure_text(text):
+        return True
+    if not text:
+        return False
+    # The Claude/Codex SDKs surface HTTP/proxy failures (403 model-not-available,
+    # 500s, rate limits) as an answer beginning "... API Error: <code> {json}".
+    return "api error:" in text.lower()
+
+
+def _safe_spoken_answer(
+    speech_text: str,
+    *,
+    auth_failed: bool,
+    backend: str | None = None,
+    turn_id: str | None = None,
+) -> str:
+    """Return text safe to speak: a graceful line for any backend error answer.
+
+    ``auth_failed`` is the result of :func:`_flag_backend_auth_failure` (already
+    logged). This additionally catches non-auth proxy/API error bodies so the
+    dispatcher never reads a 403/500 payload aloud.
+    """
+    if auth_failed:
+        return BACKEND_ERROR_SPOKEN_FALLBACK
+    if not _looks_like_raw_backend_error(speech_text):
+        return speech_text
+    logger.error(
+        "%s stage=voice_turn_backend_error backend=%s turn_id=%s text_hash=%s raw=%r",
+        DISPATCH_TIMING_LOG,
+        backend or "unknown",
+        turn_id or "",
+        hashlib.sha256((speech_text or "").strip().encode("utf-8")).hexdigest()[:12],
+        (speech_text or "")[:200],
+    )
+    return BACKEND_ERROR_SPOKEN_FALLBACK
 
 
 def _model_name_for_role(
@@ -356,24 +455,37 @@ class SuperAgentsLiveKitClient(
         try:
             result = await self._wait_for_turn(thread_id, turn_id)
             speech_text = _speech_text_from_progress(result)
-            _maybe_schedule_claude_auth_heal(speech_text)
+            backend = getattr(self._backend_client, "backend", None)
+            auth_failed = _flag_backend_auth_failure(
+                speech_text,
+                backend=backend,
+                turn_id=turn_id,
+            )
+            spoken_text = _safe_spoken_answer(
+                speech_text,
+                auth_failed=auth_failed,
+                backend=backend,
+                turn_id=turn_id,
+            )
             completed_turn = {
                 "id": turn_id,
                 "status": result.get("status")
                 or result.get("summary", {}).get("status"),
-                "_livekit_speech_text": speech_text,
+                "_livekit_speech_text": spoken_text,
                 "_livekit_turn_id": turn_id,
+                "_livekit_backend_auth_failure": auth_failed,
                 "progress": result,
             }
             logger.info(
                 "%s stage=voice_turn_result dispatch_id=%s turn_id=%s status=%s "
-                "elapsed_ms=%d speech_chars=%d",
+                "elapsed_ms=%d speech_chars=%d backend_auth_failure=%s",
                 DISPATCH_TIMING_LOG,
                 dispatch_id,
                 turn_id,
                 completed_turn.get("status"),
                 int((time.monotonic() - dispatch_started) * 1000),
                 len(speech_text),
+                auth_failed,
             )
             return completed_turn
         except asyncio.CancelledError:
@@ -420,15 +532,23 @@ class SuperAgentsLiveKitClient(
             and handler is not None
         ):
             speech_text = _speech_text_from_progress(wait_task.result())
-            _maybe_schedule_claude_auth_heal(speech_text)
-            if speech_text:
+            backend = getattr(self._backend_client, "backend", None)
+            auth_failed = _flag_backend_auth_failure(
+                speech_text,
+                backend=backend,
+                turn_id=turn_id,
+            )
+            spoken_text = _safe_spoken_answer(
+                speech_text, auth_failed=auth_failed, backend=backend, turn_id=turn_id
+            )
+            if spoken_text:
                 logger.info(
                     "%s stage=completed_turn_handoff turn_id=%s speech_chars=%d",
                     DISPATCH_TIMING_LOG,
                     turn_id,
-                    len(speech_text),
+                    len(spoken_text),
                 )
-                handler(self, turn_id, speech_text)
+                handler(self, turn_id, spoken_text)
         self._clear_active_turn_state()
 
     async def _wait_for_queued_turn_to_start(
@@ -485,16 +605,24 @@ class SuperAgentsLiveKitClient(
         if not turn_id or handler is None or turn_id in self._claimed_speech_turns:
             return
         speech_text = _speech_text_from_progress(wait_task.result())
-        _maybe_schedule_claude_auth_heal(speech_text)
-        if not speech_text:
+        backend = getattr(self._backend_client, "backend", None)
+        auth_failed = _flag_backend_auth_failure(
+            speech_text,
+            backend=backend,
+            turn_id=turn_id,
+        )
+        spoken_text = _safe_spoken_answer(
+            speech_text, auth_failed=auth_failed, backend=backend, turn_id=turn_id
+        )
+        if not spoken_text:
             return
         logger.info(
             "%s stage=orphaned_turn_result_detected turn_id=%s speech_chars=%d",
             DISPATCH_TIMING_LOG,
             turn_id,
-            len(speech_text),
+            len(spoken_text),
         )
-        handler(self, turn_id, speech_text)
+        handler(self, turn_id, spoken_text)
 
     async def _poll_turn_until_ready(
         self,

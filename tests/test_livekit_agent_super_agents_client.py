@@ -1421,40 +1421,122 @@ def test_speech_text_from_progress_prefers_scoped_turn_over_session_preview() ->
     assert _speech_text_from_progress(progress) == "The requested turn answer."
 
 
-def test_claude_auth_warning_logged_on_auth_failure_speech(monkeypatch, caplog) -> None:
+def test_backend_auth_failure_warning_debounced_and_backend_specific(
+    monkeypatch, caplog
+) -> None:
     import logging
 
     monkeypatch.setattr(
-        super_agents_client_module, "_last_claude_auth_warn_monotonic", None
+        super_agents_client_module, "_last_backend_auth_warn_monotonic", None
     )
     caplog.set_level(logging.WARNING)
 
-    super_agents_client_module._maybe_schedule_claude_auth_heal(
-        "Failed to authenticate: OAuth session expired and could not be refreshed"
+    assert (
+        super_agents_client_module._flag_backend_auth_failure(
+            "Failed to authenticate: OAuth session expired and could not be refreshed",
+            backend="claude_code",
+            turn_id="t_1",
+        )
+        is True
     )
-    assert caplog.text.count("claude login") == 1
+    # The human-readable WARNING fires once and names the Claude-specific fix.
+    assert caplog.text.count("surfaced in a spoken answer") == 1
+    assert "claude login" in caplog.text
 
-    # Debounced: an immediate repeat must not warn again.
-    super_agents_client_module._maybe_schedule_claude_auth_heal(
-        "Failed to authenticate: OAuth session expired and could not be refreshed"
+    # Debounced: an immediate repeat must not emit a second WARNING.
+    super_agents_client_module._flag_backend_auth_failure(
+        "Failed to authenticate: OAuth session expired and could not be refreshed",
+        backend="claude_code",
+        turn_id="t_2",
     )
-    assert caplog.text.count("claude login") == 1
+    assert caplog.text.count("surfaced in a spoken answer") == 1
 
 
-def test_claude_auth_warning_not_logged_for_normal_speech(monkeypatch, caplog) -> None:
+def test_backend_auth_failure_always_emits_error_marker(monkeypatch, caplog) -> None:
     import logging
 
+    # Warning is debounced already, but the structured ERROR marker must fire on
+    # every failed turn so an auth failure never looks like a completed success.
     monkeypatch.setattr(
-        super_agents_client_module, "_last_claude_auth_warn_monotonic", None
+        super_agents_client_module, "_last_backend_auth_warn_monotonic", 10_000_000.0
     )
-    caplog.set_level(logging.WARNING)
+    caplog.set_level(logging.ERROR)
 
-    super_agents_client_module._maybe_schedule_claude_auth_heal(
-        "The build passed and I pushed the fix."
-    )
-    super_agents_client_module._maybe_schedule_claude_auth_heal("")
+    for turn_id in ("t_1", "t_2"):
+        super_agents_client_module._flag_backend_auth_failure(
+            "Not logged in · Please run /login.",
+            backend="openbase_cloud",
+            turn_id=turn_id,
+        )
 
+    assert caplog.text.count("stage=voice_turn_backend_auth_failure") == 2
+    # Codex/openbase_cloud remediation must NOT tell the user to run `claude login`.
     assert "claude login" not in caplog.text
+    assert "machine token" in caplog.text
+
+
+def test_backend_auth_failure_ignores_normal_speech(monkeypatch, caplog) -> None:
+    import logging
+
+    monkeypatch.setattr(
+        super_agents_client_module, "_last_backend_auth_warn_monotonic", None
+    )
+    caplog.set_level(logging.WARNING)
+
+    assert (
+        super_agents_client_module._flag_backend_auth_failure(
+            "The build passed and I pushed the fix.", backend="codex"
+        )
+        is False
+    )
+    assert super_agents_client_module._flag_backend_auth_failure("") is False
+
+    assert "auth failure" not in caplog.text
+    assert "voice_turn_backend_auth_failure" not in caplog.text
+
+
+def test_safe_spoken_answer_replaces_auth_failure_with_graceful_line() -> None:
+    fallback = super_agents_client_module.BACKEND_ERROR_SPOKEN_FALLBACK
+    assert (
+        super_agents_client_module._safe_spoken_answer(
+            "Not logged in · Please run /login.", auth_failed=True
+        )
+        == fallback
+    )
+
+
+def test_safe_spoken_answer_suppresses_raw_proxy_error_body(caplog) -> None:
+    import logging
+
+    caplog.set_level(logging.ERROR)
+    # A 403/500 proxy body arrives as the answer text; auth_failed is False
+    # because it is not the login sentinel, but it must still not be spoken.
+    raw = 'Failed to authenticate. API Error: 403 {"detail":"Model \'claude opus 4 8\' is not available"}'
+    spoken = super_agents_client_module._safe_spoken_answer(
+        raw, auth_failed=False, backend="openbase_cloud", turn_id="t_1"
+    )
+    assert spoken == super_agents_client_module.BACKEND_ERROR_SPOKEN_FALLBACK
+    assert raw not in spoken
+    # The raw payload is still captured for debugging.
+    assert "voice_turn_backend_error" in caplog.text
+
+
+def test_safe_spoken_answer_passes_through_normal_speech() -> None:
+    answer = "I pushed the fix and the build is green."
+    assert (
+        super_agents_client_module._safe_spoken_answer(answer, auth_failed=False)
+        == answer
+    )
+
+
+def test_looks_like_raw_backend_error_detection() -> None:
+    m = super_agents_client_module._looks_like_raw_backend_error
+    assert m("Not logged in · Please run /login.")
+    assert m("Failed to authenticate. API Error: 500 internal error")
+    assert m("Something went wrong — API Error: 429 rate limited")
+    assert not m("The tests pass and I committed the change.")
+    assert not m("")
+    assert not m(None)
 
 
 @pytest.mark.asyncio
