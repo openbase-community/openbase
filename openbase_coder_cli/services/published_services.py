@@ -10,6 +10,7 @@ import signal
 import socket
 import subprocess
 import sys
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
@@ -456,13 +457,18 @@ def start_ephemeral_gateway(service: PublishedService) -> int:
 
 
 def gateway_healthy(service: PublishedService, timeout: float = 3.0) -> bool:
-    try:
-        with socket.create_connection(
-            ("127.0.0.1", service.proxy_port), timeout=timeout
-        ):
-            return True
-    except OSError:
-        return False
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        try:
+            with socket.create_connection(
+                ("127.0.0.1", service.proxy_port), timeout=min(0.2, remaining)
+            ):
+                return True
+        except OSError:
+            time.sleep(min(0.05, max(0.0, remaining)))
 
 
 def stop_gateway(service: PublishedService) -> None:

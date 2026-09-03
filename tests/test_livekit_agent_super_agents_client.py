@@ -112,6 +112,54 @@ class FakeCodexSuperAgentsBackend(FakeSuperAgentsBackend):
         }
 
 
+def test_speech_text_from_progress_preserves_multiple_final_answers() -> None:
+    progress = {
+        "status": "completed",
+        "summary": {
+            "items": [
+                {
+                    "type": "agentMessage",
+                    "phase": "final_answer",
+                    "text": "The planning agent did not appear to send LinkedIn messages, but it did read and import LinkedIn conversations into the CRM.",
+                },
+                {
+                    "type": "agentMessage",
+                    "phase": "final_answer",
+                    "text": "Yes, the session I found is the AI Tinkerers one.",
+                },
+            ]
+        },
+    }
+
+    speech = _speech_text_from_progress(progress)
+
+    assert "did not appear to send linked in messages" in speech
+    assert "read and import linked in conversations into the crm" in speech
+    assert "Yes, the session I found is the ai Tinkerers one." in speech
+
+
+def test_speech_text_from_progress_prefers_final_answer_over_commentary() -> None:
+    progress = {
+        "status": "completed",
+        "summary": {
+            "items": [
+                {
+                    "type": "agentMessage",
+                    "phase": "commentary",
+                    "text": "I am checking the recent planning session now.",
+                },
+                {
+                    "type": "agentMessage",
+                    "phase": "final_answer",
+                    "text": "The session did not send messages.",
+                },
+            ]
+        },
+    }
+
+    assert _speech_text_from_progress(progress) == "The session did not send messages."
+
+
 def test_configured_execution_backend_prefers_installed_env_file(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

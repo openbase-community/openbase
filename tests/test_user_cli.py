@@ -568,7 +568,7 @@ def test_user_say_falls_back_to_linked_notification(monkeypatch):
     result = CliRunner().invoke(user_cli.user, ["say", "Dottie", "review", "ready"])
 
     assert result.exit_code == 0
-    assert "sending a linked iPhone notification" in result.output
+    assert "sending a linked phone notification" in result.output
     assert "accepted by Openbase Cloud" in result.output
     assert notifications == [
         {

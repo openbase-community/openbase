@@ -56,7 +56,7 @@ def send_user_say_fallback(
 
     if response.status_code == 401:
         raise AuthLoginRequiredError(
-            "Openbase Cloud login is required to notify your iPhone."
+            "Openbase Cloud login is required to notify your phone."
         )
     if response.status_code >= 500:
         raise AuthTransientError(
