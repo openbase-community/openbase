@@ -405,6 +405,16 @@ class TokenManager:
                     return identity
             return {}
 
+    @property
+    def access_expires_at(self) -> float:
+        """Epoch seconds when the current in-memory access token expires.
+
+        0 when no access token is loaded. Read this after
+        :meth:`get_access_token` to report expiry alongside the token.
+        """
+        with self._lock:
+            return self._access_expires_at
+
     def get_access_token_payload(self) -> dict[str, Any]:
         with self._lock:
             token = self.get_access_token()

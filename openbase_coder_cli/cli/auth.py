@@ -512,6 +512,51 @@ def auth_status(as_json: bool) -> None:
         raise click.ClickException("Not logged in. Run 'openbase-coder login'.")
 
 
+# Exit code for "login required" from `auth access-token`, so sibling tools
+# can distinguish "run login" from transient failures without parsing text.
+ACCESS_TOKEN_LOGIN_REQUIRED_EXIT_CODE = 4
+
+
+@auth.command("access-token")
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help='Print {"access_token", "access_expires_at"} as JSON.',
+)
+def auth_access_token(as_json: bool) -> None:
+    """Print a valid Openbase Cloud JWT access token, refreshing if needed.
+
+    This is the supported way for sibling tools (e.g. the `openbase` PaaS
+    CLI) to obtain a valid access token without reimplementing refresh: the
+    coder CLI's TokenManager holds the cross-process file lock on
+    ~/.openbase/auth.json, re-reads after acquiring it, and refreshes at
+    most once — so concurrent callers never race a single-use refresh
+    token. Exits 4 when a new login is required (message on stderr), and 1
+    for transient failures such as network errors.
+    """
+    manager = TokenManager(_get_web_backend_url())
+    try:
+        token = manager.get_access_token()
+    except AuthLoginRequiredError as exc:
+        click.echo(str(exc), err=True)
+        raise SystemExit(ACCESS_TOKEN_LOGIN_REQUIRED_EXIT_CODE) from exc
+    except AuthTransientError as exc:
+        click.echo(f"Unable to refresh Openbase token: {exc}", err=True)
+        raise SystemExit(1) from exc
+    if as_json:
+        click.echo(
+            json.dumps(
+                {
+                    "access_token": token,
+                    "access_expires_at": manager.access_expires_at,
+                }
+            )
+        )
+    else:
+        click.echo(token)
+
+
 @auth.command("print-access-token")
 def print_access_token() -> None:
     """Print a fresh Openbase JWT access token for command-backed auth."""

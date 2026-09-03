@@ -156,6 +156,86 @@ def test_auth_print_access_token_reports_login_required(monkeypatch):
     assert "openbase-coder login" in result.output
 
 
+def test_auth_access_token_prints_cached_token(monkeypatch):
+    class FakeTokenManager:
+        access_expires_at = 1_900_000_000.0
+
+        def __init__(self, web_backend_url):
+            self.web_backend_url = web_backend_url
+
+        def get_access_token(self):
+            return "jwt.cached.token"
+
+    monkeypatch.setattr(auth_cli, "TokenManager", FakeTokenManager)
+    monkeypatch.setenv("OPENBASE_CODER_CLI_WEB_BACKEND_URL", "https://backend.example")
+
+    result = CliRunner().invoke(main, ["auth", "access-token"])
+
+    assert result.exit_code == 0, result.output
+    assert result.output == "jwt.cached.token\n"
+
+
+def test_auth_access_token_json_shape(monkeypatch):
+    class FakeTokenManager:
+        access_expires_at = 1_900_000_000.5
+
+        def __init__(self, web_backend_url):
+            pass
+
+        def get_access_token(self):
+            return "jwt.cached.token"
+
+    monkeypatch.setattr(auth_cli, "TokenManager", FakeTokenManager)
+
+    result = CliRunner().invoke(main, ["auth", "access-token", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload == {
+        "access_token": "jwt.cached.token",
+        "access_expires_at": 1_900_000_000.5,
+    }
+
+
+def test_auth_access_token_login_required_exit_code(monkeypatch):
+    class FakeTokenManager:
+        def __init__(self, web_backend_url):
+            pass
+
+        def get_access_token(self):
+            raise AuthLoginRequiredError(
+                "No refresh token available. Run 'openbase-coder login' first."
+            )
+
+    monkeypatch.setattr(auth_cli, "TokenManager", FakeTokenManager)
+
+    result = CliRunner().invoke(main, ["auth", "access-token"])
+
+    assert result.exit_code == auth_cli.ACCESS_TOKEN_LOGIN_REQUIRED_EXIT_CODE
+    assert "openbase-coder login" in result.stderr
+    # The token stream (stdout) must stay empty so callers never mistake
+    # the error message for a token.
+    assert result.stdout == ""
+
+
+def test_auth_access_token_transient_error_exits_one(monkeypatch):
+    from openbase_coder_cli.config.token_manager import AuthTransientError
+
+    class FakeTokenManager:
+        def __init__(self, web_backend_url):
+            pass
+
+        def get_access_token(self):
+            raise AuthTransientError("backend 503")
+
+    monkeypatch.setattr(auth_cli, "TokenManager", FakeTokenManager)
+
+    result = CliRunner().invoke(main, ["auth", "access-token"])
+
+    assert result.exit_code == 1
+    assert "backend 503" in result.stderr
+
+
 def test_auth_print_machine_token_outputs_token(monkeypatch):
     class FakeMachineTokenManager:
         def __init__(self, web_backend_url):
