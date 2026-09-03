@@ -38,8 +38,8 @@ Core workflows are:
   health, and runtime settings from the shared dashboard.
 * Use your iPhone or Android phone as the remote control for calls, approvals,
   reports, diffs, and thread follow-up.
-* Run the local runtime on your Mac, a Linux machine, Windows (natively — in
-  beta — or via the Docker image), or an Openbase Cloud DevSpace.
+* Run the local runtime on your Mac, a Linux machine, native Windows (beta), an
+  Openbase Cloud DevSpace, or the `openbaseai/openbase` Linux container image.
 * Extend the runtime with plugins, skills, routines, bootstrap commands, and
   console pages.
 
@@ -87,13 +87,13 @@ For a production install with no terminal:
    the phone control surface for voice calls, approvals, reports, and diffs.
 
 Prefer a container? Run the `openbaseai/openbase` Docker image instead of the
-Mac app — it runs the full runtime in a Linux container (with Docker Desktop
-on Windows). See [Run in Docker](docs/docker.md).
+Mac app — it runs the full runtime in a Linux container. See
+[Run in Docker](docs/docker.md).
 
-On Windows you can also run the runtime natively (beta): `./scripts/setup`
+On Windows, run the runtime natively (beta): `./scripts/setup`
 works from a Windows checkout, and services are supervised without launchd or
-systemd through the Windows service backend, with Task Scheduler starting them
-at login. The Docker image remains the most battle-tested Windows path.
+systemd through the Windows Task Scheduler backend. Use Docker only when you
+deliberately want the Linux-container deployment.
 
 ### 🛠️ Developer Setup
 
@@ -121,8 +121,8 @@ git checkout develop
 ```
 
 After cloning the workspace, use
-[`DEV_RUNBOOK.md`](../DEV_RUNBOOK.md) for the full developer install,
-authentication, verification, and iteration flow.
+`dev-docs/DEV_RUNBOOK.md` for the full developer install, authentication,
+verification, and iteration flow.
 
 The workspace setup syncs the public development repos with `multi`, builds the
 console from source, and runs `openbase-coder setup --workspace-dir` against the
@@ -179,8 +179,8 @@ Special thanks to our Peruvian hackathon participants
 [@rivacortez](https://github.com/rivacortez) and
 [@Diego22rct](https://github.com/Diego22rct), whose fork work is the
 foundation of native Windows support — the cross-platform service runners,
-the Windows service backend, cross-platform file locking, and the Windows
-setup path all draw on their contributions.
+the Windows Task Scheduler backend, cross-platform file locking, and the
+Windows setup path all draw on their contributions.
 
 ### ⚖️ License
 
