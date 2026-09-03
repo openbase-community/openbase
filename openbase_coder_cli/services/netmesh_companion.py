@@ -92,6 +92,9 @@ def _find_companion_app(workspace_dir: Path | None) -> Path | None:
 
 def _workspace_dir_quiet() -> Path | None:
     """The dev workspace dir without emitting the usual "Using workspace" line."""
+    source_checkout = _source_checkout_workspace_dir()
+    if source_checkout is not None:
+        return source_checkout
     try:
         from openbase_coder_cli.cli.setup.workspace import (
             _editable_install_workspace_dir,
@@ -106,6 +109,18 @@ def _workspace_dir_quiet() -> Path | None:
             found = None
         if found is not None:
             return Path(found)
+    return None
+
+
+def _source_checkout_workspace_dir() -> Path | None:
+    """Infer the multi workspace when this module is imported from a checkout."""
+    try:
+        module_path = Path(__file__).resolve()
+    except OSError:
+        return None
+    for parent in module_path.parents:
+        if (parent / "multi.json").is_file() and (parent / "cli").is_dir():
+            return parent
     return None
 
 
@@ -291,6 +306,23 @@ class NetmeshCompanion:
 
     def register(self) -> CompanionStatus:
         return self._parse_status(self._request("POST", "/register"))
+
+    def replace_helper_if_needed(self) -> CompanionStatus:
+        try:
+            raw = self._request("POST", "/replace-helper", timeout=20.0)
+        except urllib.error.HTTPError as exc:
+            try:
+                payload = json.loads(exc.read().decode() or "{}")
+            except (OSError, json.JSONDecodeError):
+                payload = {}
+            raise NetmeshCompanionError(
+                str(payload.get("error") or exc.reason or "helper replacement failed")
+            ) from exc
+        if raw.get("ok") is False:
+            raise NetmeshCompanionError(
+                str(raw.get("error") or "helper replacement failed")
+            )
+        return self._parse_status(raw)
 
     def disconnect(self) -> CompanionStatus:
         """Stop the VPN tunnel (the root daemon stays registered)."""

@@ -310,6 +310,33 @@ def test_publish_defaults_noninteractive_to_session_and_applies_route(
     assert published.load_services() == applied
 
 
+def test_gateway_health_retries_until_proxy_accepts(monkeypatch):
+    item = PublishedService("docs", 3000, 52807, 52808)
+    attempts = 0
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+    def connect(address, timeout):
+        nonlocal attempts
+        attempts += 1
+        assert address == ("127.0.0.1", 52808)
+        assert timeout <= 0.2
+        if attempts < 3:
+            raise ConnectionRefusedError("starting")
+        return Connection()
+
+    monkeypatch.setattr(published.socket, "create_connection", connect)
+    monkeypatch.setattr(published.time, "sleep", lambda _seconds: None)
+
+    assert published.gateway_healthy(item)
+    assert attempts == 3
+
+
 def test_publish_persistence_is_explicit(monkeypatch, isolated_registry):
     installed: list[PublishedService] = []
     monkeypatch.setattr(service_cli, "local_service_available", lambda _port: True)

@@ -131,6 +131,26 @@ def test_netmesh_ctl_path_finds_dev_companion_shim(tmp_path: Path) -> None:
     assert nc.netmesh_ctl_path(workspace) == str(shim)
 
 
+def test_workspace_quiet_infers_source_checkout_before_install_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "openbase-coder-workspace"
+    module_path = (
+        workspace
+        / "cli"
+        / "openbase_coder_cli"
+        / "services"
+        / "netmesh_companion.py"
+    )
+    module_path.parent.mkdir(parents=True)
+    module_path.write_text("")
+    (workspace / "multi.json").write_text("{}")
+
+    monkeypatch.setattr(nc, "__file__", str(module_path))
+
+    assert nc._workspace_dir_quiet() == workspace
+
+
 def test_netmesh_ctl_path_none_when_absent(tmp_path: Path) -> None:
     assert nc.netmesh_ctl_path(tmp_path / "empty-ws") is None
 
@@ -164,6 +184,44 @@ def test_capability_error_paths(
 
     # tsnet: never blocked.
     assert t._capability_error("netmesh-tsnet") is None
+
+
+def test_netmesh_provisioning_replaces_stale_enabled_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
+
+    t = importlib.import_module("openbase_coder_cli.cli.tailnet")
+
+    calls: list[str] = []
+
+    class Companion:
+        def __init__(self, workspace_dir=None):
+            calls.append(f"init:{workspace_dir}")
+
+        def ensure_running(self):
+            calls.append("ensure")
+            return nc.CompanionStatus("Running", "enabled", "100.64.0.21", "mac", {})
+
+        def replace_helper_if_needed(self):
+            calls.append("replace")
+            return nc.CompanionStatus(
+                "Running",
+                "enabled",
+                "100.64.0.21",
+                "mac",
+                {"helperReplaced": True},
+            )
+
+        def connect(self, **_kwargs):
+            calls.append("connect")
+
+    monkeypatch.setattr(t, "_dev_workspace_dir_or_none", lambda: "/workspace")
+    monkeypatch.setattr(nc, "NetmeshCompanion", Companion)
+
+    t._provision_netmesh_companion()
+
+    assert calls == ["init:/workspace", "ensure", "replace"]
 
 
 def test_revoke_old_node_matches_offline_by_captured_name(
