@@ -105,6 +105,13 @@ class CompanionStatus:
         return self.helper == "enabled"
 
 
+# Overridable in tests: machines with the desktop app installed would
+# otherwise satisfy "companion absent" lookups through this fallback.
+_INSTALLED_APP_COMPANION = Path(
+    "/Applications/Openbase.app/Contents/Resources/" + _APP_NAME
+)
+
+
 def _companion_app_candidates(workspace_dir: Path | None) -> list[Path]:
     candidates: list[Path] = []
     if workspace_dir is not None:
@@ -130,9 +137,7 @@ def _companion_app_candidates(workspace_dir: Path | None) -> list[Path]:
     # workspace. The installed Electron app can legitimately lag develop, and
     # selecting its older control shim against a newly installed development
     # helper makes supported commands appear to be missing.
-    candidates.append(
-        Path("/Applications/Openbase.app/Contents/Resources/" + _APP_NAME)
-    )
+    candidates.append(_INSTALLED_APP_COMPANION)
     return candidates
 
 

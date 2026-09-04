@@ -441,6 +441,14 @@ def test_ensure_codex_home_dispatcher_config_creates_default(
                 "dispatcher": "gpt-5.5",
                 "super_agents": "gpt-5.5",
             },
+            "openbase_cloud": {
+                "dispatcher": "sonnet",
+                "super_agents": "sonnet",
+            },
+            "openbase_cloud_codex": {
+                "dispatcher": "gpt-5.5",
+                "super_agents": "gpt-5.5",
+            },
         },
         "dispatcher_voice_id": "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
         "dispatcher_voice_name": "Jacqueline",

@@ -39,7 +39,10 @@ def test_find_companion_app_returns_existing(tmp_path: Path) -> None:
     assert nc._find_companion_app(workspace) == built
 
 
-def test_find_companion_app_missing_returns_none(tmp_path: Path) -> None:
+def test_find_companion_app_missing_returns_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(nc, "_INSTALLED_APP_COMPANION", tmp_path / "no-installed-app")
     assert nc._find_companion_app(tmp_path) is None
 
 
@@ -147,7 +150,10 @@ def test_workspace_quiet_infers_source_checkout_before_install_metadata(
     assert nc._workspace_dir_quiet() == workspace
 
 
-def test_netmesh_ctl_path_none_when_absent(tmp_path: Path) -> None:
+def test_netmesh_ctl_path_none_when_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(nc, "_INSTALLED_APP_COMPANION", tmp_path / "no-installed-app")
     assert nc.netmesh_ctl_path(tmp_path / "empty-ws") is None
 
 
