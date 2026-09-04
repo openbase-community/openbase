@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from types import SimpleNamespace
 
+import pytest
+
 os.environ.setdefault("OPENBASE_CODER_CLI_SECRET_KEY", "test-secret")
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "openbase_coder_cli.config.settings")
 
@@ -15,6 +17,76 @@ from openbase_coder_cli.openbase_coder_cli_app import (  # noqa: E402
     services_views,
     views,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_tailnet_status_cache():
+    # service_status caches its tailnet probe in module state (stale-while-
+    # revalidate in production). Reset it around each test so a test sees its own
+    # mocks rather than a previous test's cached snapshot.
+    services_views._tailnet_snapshot["value"] = None
+    services_views._tailnet_snapshot["monotonic"] = 0.0
+    yield
+    services_views._tailnet_snapshot["value"] = None
+    services_views._tailnet_snapshot["monotonic"] = 0.0
+
+
+def test_service_status_caches_tailnet_probe_across_polls(monkeypatch) -> None:
+    """Repeated /api/status/ polls must not re-run the (possibly wedged)
+    netmesh-ctl probes; the first poll computes, later polls serve the cache."""
+    calls = {"tailscale": 0, "serve": 0}
+
+    def counting_check() -> bool:
+        calls["tailscale"] += 1
+        return True
+
+    def counting_serve():
+        calls["serve"] += 1
+        return SimpleNamespace(
+            healthy=True,
+            host="mac.tailnet.ts.net",
+            openbase_url="http://mac.tailnet.ts.net:18080",
+            openbase_configured=True,
+            livekit_configured=True,
+            openbase_reachable=True,
+            error=None,
+        )
+
+    monkeypatch.setattr(
+        services_views, "service_supports_configured_backends", lambda service: True
+    )
+    monkeypatch.setattr(services_views, "_check_port", lambda port: True)
+    monkeypatch.setattr(services_views, "_check_web_backend", lambda: True)
+    monkeypatch.setattr(services_views, "_check_codex_app_server", lambda: True)
+    monkeypatch.setattr(services_views, "_check_tailscale", counting_check)
+    monkeypatch.setattr(services_views, "tailscale_serve_health", counting_serve)
+    monkeypatch.setattr(
+        services_views,
+        "keep_awake_status_payload",
+        lambda: {
+            "name": "Keep Awake",
+            "port": None,
+            "running": True,
+            "optional": False,
+        },
+    )
+    monkeypatch.setattr(
+        services_views,
+        "launchctl_status",
+        lambda service: {"installed": True, "pid": "1", "last_exit_code": None},
+    )
+
+    request = APIRequestFactory().get("/api/status/")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+
+    for _ in range(3):
+        response = views.service_status(request)
+        assert response.status_code == 200
+        assert response.data["services"]["tailscale"]["running"] is True
+        assert response.data["services"]["tailscale_serve"]["running"] is True
+
+    # Three polls, but each netmesh-ctl probe ran exactly once (cache hit after).
+    assert calls == {"tailscale": 1, "serve": 1}
 
 
 def test_service_status_includes_background_openbase_services(monkeypatch) -> None:
