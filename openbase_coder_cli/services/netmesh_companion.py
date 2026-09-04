@@ -116,17 +116,19 @@ def _companion_app_candidates(workspace_dir: Path | None) -> list[Path]:
     candidates: list[Path] = []
     if workspace_dir is not None:
         desktop = workspace_dir / "desktop"
+        # netmesh-macos is a sibling checkout since its 2026-09-03 extraction
+        # from desktop; public checkouts without it use the signed prebuilt
+        # staged into desktop/companion-build.
+        netmesh_macos = workspace_dir / "netmesh-macos"
         candidates += [
             desktop / "companion-build" / _APP_NAME,
-            desktop
-            / "netmesh-macos"
+            netmesh_macos
             / "DerivedData"
             / "Build"
             / "Products"
             / "Release"
             / _APP_NAME,
-            desktop
-            / "netmesh-macos"
+            netmesh_macos
             / "DerivedData"
             / "Build"
             / "Products"
@@ -221,12 +223,12 @@ def _missing_build_tools(workspace_dir: Path) -> list[str]:
         missing.append(
             "Xcode (install from the App Store, then `xcodebuild -runFirstLaunch`)"
         )
-    vendor = workspace_dir / "desktop" / "netmesh-macos" / "vendor" / "tailscale-bin"
+    vendor = workspace_dir / "netmesh-macos" / "vendor" / "tailscale-bin"
     engine_staged = (vendor / "tailscaled").exists() and (vendor / "tailscale").exists()
     if not engine_staged and shutil.which("go") is None:
         missing.append(
             "go (`brew install go`) — builds the pinned tailscale engine; or "
-            "stage prebuilt binaries into desktop/netmesh-macos/vendor/tailscale-bin/"
+            "stage prebuilt binaries into netmesh-macos/vendor/tailscale-bin/"
         )
     return missing
 

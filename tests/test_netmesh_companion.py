@@ -24,7 +24,8 @@ def test_app_candidates_prefer_in_repo_dev_then_shipping(tmp_path: Path) -> None
         c.endswith("desktop/companion-build/OpenbaseNetmeshCompanion.app")
         for c in candidates
     )
-    assert any("desktop/netmesh-macos/DerivedData" in c for c in candidates)
+    assert any("/netmesh-macos/DerivedData" in c for c in candidates)
+    assert not any("desktop/netmesh-macos" in c for c in candidates)
     assert not any("headscale-clients" in c for c in candidates)
 
 
@@ -93,7 +94,7 @@ def test_missing_build_tools_lists_absent_and_skips_go_when_staged(
     assert any(m.startswith("go") for m in missing)  # engine not staged -> go needed
 
     # Stage the tailscale engine -> go no longer required.
-    vendor = workspace / "desktop" / "netmesh-macos" / "vendor" / "tailscale-bin"
+    vendor = workspace / "netmesh-macos" / "vendor" / "tailscale-bin"
     vendor.mkdir(parents=True)
     (vendor / "tailscaled").write_text("")
     (vendor / "tailscale").write_text("")
