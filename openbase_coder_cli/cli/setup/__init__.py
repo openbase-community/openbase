@@ -851,6 +851,26 @@ def _run_setup_phases(
     # --- Install services ---
     progress.step("services", "start")
     if not skip_services:
+        if tailnet_provider == PROVIDER_NETMESH and sys.platform == "darwin":
+            # A crash-looping registered helper makes every helper query hang
+            # (netmesh-ctl, the companion, LiveKit's node-IP lookup), so
+            # restarting services now would put livekit-server into a crash
+            # loop and take live calls down. Stop before touching anything.
+            from openbase_coder_cli.services.netmesh_companion import (
+                HELPER_LAUNCHD_LABEL,
+                helper_launchd_health,
+            )
+
+            helper_health = helper_launchd_health()
+            if not helper_health.healthy:
+                raise click.ClickException(
+                    "The Openbase VPN helper "
+                    f"({HELPER_LAUNCHD_LABEL}) is {helper_health.detail}. "
+                    "In this state every helper query hangs, so restarting "
+                    "services would break LiveKit calls. Re-register the "
+                    "helper (open the Openbase desktop app, or restage the "
+                    "companion build), then re-run 'openbase-coder setup'."
+                )
         click.echo()
         click.echo(f"Installing {service_manager_name()} services...")
         if tailnet_provider == PROVIDER_NETMESH_TSNET:

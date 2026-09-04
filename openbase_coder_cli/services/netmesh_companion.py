@@ -16,6 +16,7 @@ companion long enough to issue control operations.
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import subprocess
 import sys
@@ -27,10 +28,62 @@ from pathlib import Path
 
 _IPC_SECRET_HEADER = "X-Openbase-Companion-Secret"
 _APP_NAME = "OpenbaseNetmeshCompanion.app"
+HELPER_LAUNCHD_LABEL = "cloud.openbase.netmesh.helper"
 
 
 class NetmeshCompanionError(RuntimeError):
     """The netmesh companion could not be provisioned."""
+
+
+@dataclass(frozen=True)
+class HelperLaunchdHealth:
+    registered: bool
+    healthy: bool
+    detail: str
+
+
+def helper_launchd_health() -> HelperLaunchdHealth:
+    """Probe the root helper's launchd job without touching its XPC endpoint.
+
+    A registered helper whose binary launchd cannot spawn (e.g. its bundle was
+    replaced or re-signed underneath the SMAppService registration) crash-loops
+    while launchd keeps the Mach endpoint alive, so every XPC question —
+    ``netmesh-ctl``, the companion, LiveKit's node-IP lookup — hangs instead of
+    erroring. ``launchctl print`` is the only side-effect-free view of that
+    state. An *unregistered* helper is a normal pre-pairing state and reports
+    healthy.
+    """
+    if sys.platform != "darwin":
+        return HelperLaunchdHealth(False, True, "not macOS")
+    try:
+        result = subprocess.run(  # noqa: S603,S607 - fixed argv
+            ["launchctl", "print", f"system/{HELPER_LAUNCHD_LABEL}"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return HelperLaunchdHealth(False, True, f"launchctl unavailable: {exc}")
+    if result.returncode != 0:
+        return HelperLaunchdHealth(
+            False, True, "helper is not registered (pre-pairing state)"
+        )
+    text = result.stdout
+    if re.search(r"^\s*state = running\b", text, re.MULTILINE):
+        return HelperLaunchdHealth(True, True, "running")
+    exit_match = re.search(r"^\s*last exit code = (.+)$", text, re.MULTILINE)
+    last_exit = exit_match.group(1).strip() if exit_match else None
+    runs_match = re.search(r"^\s*runs = (\d+)", text, re.MULTILINE)
+    runs = runs_match.group(1) if runs_match else "?"
+    if last_exit and last_exit not in {"0", "(never exited)"}:
+        return HelperLaunchdHealth(
+            True,
+            False,
+            f"registered but failing to launch (last exit code {last_exit}, "
+            f"{runs} attempts)",
+        )
+    return HelperLaunchdHealth(True, True, "registered, not currently running")
 
 
 @dataclass(frozen=True)
