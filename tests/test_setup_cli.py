@@ -1950,3 +1950,49 @@ def test_print_app_download_qr_outputs_url(capsys) -> None:
     out = capsys.readouterr().out
     assert "https://openbase.cloud/downloads.html" in out
     assert "█" in out or "▀" in out or "▄" in out
+
+
+def test_default_tailnet_provider_detection(monkeypatch) -> None:
+    from openbase_coder_cli.services import tailscale_provider as tp
+
+    monkeypatch.setattr(tp, "tailscale_bin", lambda: "/usr/local/bin/tailscale")
+    assert tp.default_tailnet_provider() == tp.PROVIDER_TAILSCALE
+
+    monkeypatch.setattr(tp, "tailscale_bin", lambda: None)
+    assert tp.default_tailnet_provider() == tp.PROVIDER_NETMESH
+
+
+def test_ensure_env_file_defaults_to_netmesh_without_tailscale(
+    monkeypatch, tmp_path
+) -> None:
+    from openbase_coder_cli.services import tailscale_provider as tp
+
+    monkeypatch.setattr(tp, "tailscale_bin", lambda: None)
+    env_file = tmp_path / ".env"
+
+    setup_cli._ensure_env_file(
+        str(env_file),
+        assembly_ai_api_key="",
+        cartesia_api_key="",
+    )
+
+    content = env_file.read_text(encoding="utf-8")
+    assert "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER=netmesh\n" in content
+
+
+def test_ensure_env_file_defaults_to_tailscale_when_detected(
+    monkeypatch, tmp_path
+) -> None:
+    from openbase_coder_cli.services import tailscale_provider as tp
+
+    monkeypatch.setattr(tp, "tailscale_bin", lambda: "/opt/homebrew/bin/tailscale")
+    env_file = tmp_path / ".env"
+
+    setup_cli._ensure_env_file(
+        str(env_file),
+        assembly_ai_api_key="",
+        cartesia_api_key="",
+    )
+
+    content = env_file.read_text(encoding="utf-8")
+    assert "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER=tailscale\n" in content

@@ -95,7 +95,11 @@ def _ensure_env_file(
         return
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    selected_provider = tailnet_provider or "tailscale"
+    from openbase_coder_cli.services.tailscale_provider import (
+        default_tailnet_provider,
+    )
+
+    selected_provider = tailnet_provider or default_tailnet_provider()
     secret_key = secrets.token_urlsafe(50)
     livekit_api_key = "APIkey" + secrets.token_urlsafe(12)
     livekit_api_secret = secrets.token_urlsafe(32)

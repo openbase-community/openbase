@@ -326,8 +326,10 @@ class _SetupProgress:
         "Tailnet transport: 'tailscale' (official), 'netmesh' (self-hosted "
         "headscale + Openbase VPN client), or 'netmesh-tsnet' (netmesh via an "
         "in-process embedded node — no VPN on either side). Interactive runs "
-        "pick it for a new env file if omitted; otherwise new files default to "
-        "tailscale. Existing env files are only changed when this is provided."
+        "pick it for a new env file if omitted; otherwise new files default "
+        "to netmesh, or to tailscale when the official Tailscale CLI/app is "
+        "already installed. Existing env files are only changed when this is "
+        "provided."
     ),
 )
 @click.option(
@@ -612,7 +614,8 @@ def _require_tailnet_provider_choice(
 
     Existing env files keep their configured provider unless --tailnet-provider
     is passed. New installs pick interactively; non-interactive fresh installs
-    keep the tailscale default.
+    fall through to the detection default (netmesh, or tailscale when the
+    official Tailscale CLI/app is already installed).
     """
     if tailnet_provider is not None:
         return tailnet_provider
@@ -624,10 +627,14 @@ def _require_tailnet_provider_choice(
         )
         return configured if configured in PROVIDER_VALUES else PROVIDER_TAILSCALE
     if interactive:
+        from openbase_coder_cli.services.tailscale_provider import (
+            default_tailnet_provider,
+        )
+
         return _prompt_pick(
             "Tailnet transport:",
             _TAILNET_PROVIDER_PICKER_OPTIONS,
-            default=PROVIDER_TAILSCALE,
+            default=default_tailnet_provider(),
         )
     return None
 
