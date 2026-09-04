@@ -4,6 +4,9 @@ CLI entry point for openbase_coder_cli.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import click
 
 from openbase_coder_cli._version import __version__
@@ -43,6 +46,38 @@ from .user import exit_to_dispatch, user
 from .vibes import vibes
 
 
+def _load_installed_env() -> None:
+    """Load the installed ``~/.openbase/.env`` into the process environment
+    before any command runs.
+
+    Only the livekit-agent module ever loaded this file, so every *other* CLI
+    command (netmesh enroll, tailnet-provider, device registration, …) read
+    cloud config straight from ``os.environ`` — where
+    ``OPENBASE_CODER_CLI_WEB_BACKEND_URL`` is absent on a normal install.
+    ``web_backend_url()`` then silently fell back to the PRODUCTION default even
+    on a staging install, so those calls sent a staging-issued token to the prod
+    backend and got ``403 Invalid token`` — which left the Openbase VPN unable to
+    enroll, so the node never came online. ``override=False`` keeps an explicitly
+    exported value winning; failures never break the CLI.
+    """
+    try:
+        from dotenv import load_dotenv
+
+        from openbase_coder_cli.paths import OPENBASE_BASE_DIR
+
+        env_path = OPENBASE_BASE_DIR / ".env"
+        try:
+            from openbase_coder_cli.services.installation import InstallationConfig
+
+            if InstallationConfig.exists():
+                env_path = Path(InstallationConfig.load().env_file).expanduser()
+        except Exception:
+            pass
+        load_dotenv(env_path, override=False)
+    except Exception:
+        pass
+
+
 def print_version(ctx, param, value):
     if not value or ctx.resilient_parsing:
         return
@@ -64,6 +99,7 @@ def main():
 
     OpenBase Coder CLI with embedded server
     """
+    _load_installed_env()
     refresh_openbase_agents_md_from_installation()
 
 
