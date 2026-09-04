@@ -63,6 +63,9 @@ def openbase_serve_rules() -> list[dict[str, Any]]:
 
 def configure_tailscale_serve() -> None:
     from openbase_coder_cli.services import tailscale_provider as tp
+    from openbase_coder_cli.services.published_service_routes import (
+        expected_serve_base_hash,
+    )
     from openbase_coder_cli.services.published_services import (
         ServiceRegistry,
         load_registry,
@@ -83,8 +86,10 @@ def configure_tailscale_serve() -> None:
         registry = load_registry()
         snapshot = tp.serve_snapshot()
         previous_rules = [*openbase_serve_rules(), *published_serve_rules()]
-        expected_hash = registry.last_applied_serve_hash or str(
-            tp.plan_serve(previous_rules)["hash"]
+        expected_hash = expected_serve_base_hash(
+            str(snapshot.get("hash")),
+            previous_rules,
+            registry.last_applied_serve_hash,
         )
         if snapshot.get("hash") != expected_hash:
             raise RuntimeError(

@@ -40,6 +40,40 @@ def test_configure_tailscale_serve_installs_openbase_and_livekit_routes(monkeypa
     ]
 
 
+def test_configure_tailscale_serve_bootstraps_fresh_netmesh_helper(
+    monkeypatch, tmp_path
+):
+    # A brand-new hardened helper reports its empty config and no last-applied
+    # hash is recorded yet, so the first apply must go through instead of
+    # tripping the CAS drift guard.
+    from openbase_coder_cli.services import published_services as published
+
+    monkeypatch.setattr(
+        published, "PUBLISHED_SERVICES_PATH", tmp_path / "published-services.json"
+    )
+    monkeypatch.setattr(tp, "is_netmesh", lambda: True)
+    monkeypatch.setattr(tp, "is_netmesh_tsnet", lambda: False)
+    monkeypatch.setattr(tp, "netmesh_uses_stock_tailscale", lambda: False)
+    monkeypatch.setattr(tp, "serve_capability", lambda: {"supported": True})
+    monkeypatch.setattr(tp, "serve_snapshot", lambda: {"etag": "v1", "hash": "empty"})
+    monkeypatch.setattr(
+        tp,
+        "plan_serve",
+        lambda rules: {"hash": "empty" if rules == [] else "baseline"},
+    )
+    applied = []
+    monkeypatch.setattr(
+        tp,
+        "apply_serve",
+        lambda rules, **kwargs: applied.append((rules, kwargs)) or {"hash": "next"},
+    )
+
+    tailscale_serve.configure_tailscale_serve()
+
+    assert applied[0][1] == {"expected_etag": "v1", "expected_hash": "empty"}
+    assert published.load_registry().last_applied_serve_hash == "next"
+
+
 def test_tailscale_serve_health_requires_routes_and_external_health(monkeypatch):
     monkeypatch.delenv("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", raising=False)
     monkeypatch.setattr(tp, "tool_path", lambda: "/usr/bin/tailscale")
