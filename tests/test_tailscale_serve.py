@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import subprocess
 
+import pytest
+
 from openbase_coder_cli.services import tailscale_provider as tp
 from openbase_coder_cli.services import tailscale_serve
 
@@ -38,6 +40,80 @@ def test_configure_tailscale_serve_installs_openbase_and_livekit_routes(monkeypa
             "tcp://127.0.0.1:7880",
         ],
     ]
+
+
+def test_configure_tailscale_serve_bootstraps_fresh_netmesh_helper(
+    monkeypatch, tmp_path
+):
+    # A brand-new hardened helper reports its empty config and no last-applied
+    # hash is recorded yet, so the first apply must go through instead of
+    # tripping the CAS drift guard.
+    from openbase_coder_cli.services import published_services as published
+
+    monkeypatch.setattr(
+        published, "PUBLISHED_SERVICES_PATH", tmp_path / "published-services.json"
+    )
+    monkeypatch.setattr(tp, "is_netmesh", lambda: True)
+    monkeypatch.setattr(tp, "is_netmesh_tsnet", lambda: False)
+    monkeypatch.setattr(tp, "netmesh_uses_stock_tailscale", lambda: False)
+    monkeypatch.setattr(tp, "serve_capability", lambda: {"supported": True})
+    monkeypatch.setattr(tp, "serve_snapshot", lambda: {"etag": "v1", "hash": "empty"})
+    monkeypatch.setattr(
+        tp,
+        "plan_serve",
+        lambda rules: {"hash": "empty" if rules == [] else "baseline"},
+    )
+    applied = []
+    monkeypatch.setattr(
+        tp,
+        "apply_serve",
+        lambda rules, **kwargs: applied.append((rules, kwargs)) or {"hash": "next"},
+    )
+
+    tailscale_serve.configure_tailscale_serve()
+
+    assert applied[0][1] == {"expected_etag": "v1", "expected_hash": "empty"}
+    assert published.load_registry().last_applied_serve_hash == "next"
+
+
+def test_reset_tailscale_serve_recovers_from_drift_dead_end(monkeypatch, tmp_path):
+    """configure refuses when the live config drifted from the recorded hash;
+    reset must recover by re-applying over the LIVE snapshot as the CAS base."""
+    from openbase_coder_cli.services import published_services as published
+
+    monkeypatch.setattr(
+        published, "PUBLISHED_SERVICES_PATH", tmp_path / "published-services.json"
+    )
+    # A recorded last-applied hash the live config no longer matches -> drift.
+    published.save_registry(published.ServiceRegistry({}, "stale-recorded-hash"))
+
+    monkeypatch.setattr(tp, "is_netmesh", lambda: True)
+    monkeypatch.setattr(tp, "is_netmesh_tsnet", lambda: False)
+    monkeypatch.setattr(tp, "netmesh_uses_stock_tailscale", lambda: False)
+    monkeypatch.setattr(tp, "serve_capability", lambda: {"supported": True})
+    monkeypatch.setattr(
+        tp, "serve_snapshot", lambda: {"etag": "live-etag", "hash": "live-drifted"}
+    )
+    applied: list = []
+    monkeypatch.setattr(
+        tp,
+        "apply_serve",
+        lambda rules, **kwargs: applied.append((rules, kwargs))
+        or {"hash": "reset-hash"},
+    )
+
+    # The default path dead-ends on this drift...
+    with pytest.raises(RuntimeError, match="drifted"):
+        tailscale_serve.configure_tailscale_serve()
+
+    # ...but reset recovers, using the live snapshot (not the stale hash) as base.
+    tailscale_serve.reset_tailscale_serve()
+
+    assert applied[-1][1] == {
+        "expected_etag": "live-etag",
+        "expected_hash": "live-drifted",
+    }
+    assert published.load_registry().last_applied_serve_hash == "reset-hash"
 
 
 def test_tailscale_serve_health_requires_routes_and_external_health(monkeypatch):

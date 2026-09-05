@@ -434,7 +434,9 @@ def test_publish_compensates_serve_when_final_registry_save_fails(
     monkeypatch.setattr(service_cli, "save_registry", fail_final_save)
     monkeypatch.setattr(service_cli, "local_service_available", lambda _port: True)
     monkeypatch.setattr(service_cli, "allocate_ports", lambda _port: (52807, 52808))
-    monkeypatch.setattr(service_cli, "service_url", lambda _item: "http://host:52807/docs/")
+    monkeypatch.setattr(
+        service_cli, "service_url", lambda _item: "http://host:52807/docs/"
+    )
     monkeypatch.setattr(service_cli, "start_ephemeral_gateway", lambda _item: 99)
     monkeypatch.setattr(service_cli, "gateway_healthy", lambda _item: True)
     monkeypatch.setattr(service_cli, "apply_route", lambda _item, **_kwargs: "new-hash")
@@ -491,7 +493,9 @@ def test_unpublish_compensates_serve_when_final_registry_save_fails(
         real_save(registry)
 
     monkeypatch.setattr(service_cli, "save_registry", fail_final_save)
-    monkeypatch.setattr(service_cli, "remove_route", lambda _item, **_kwargs: "removed-hash")
+    monkeypatch.setattr(
+        service_cli, "remove_route", lambda _item, **_kwargs: "removed-hash"
+    )
     monkeypatch.setattr(
         service_cli,
         "apply_route",
@@ -577,9 +581,129 @@ def test_hostname_provider_gate_runs_before_registry_write(
     assert not isolated_registry.exists()
 
 
+def _fake_dns_clock(monkeypatch):
+    """Drive the DNS-propagation poll loop without real sleeping."""
+    clock = {"now": 0.0}
+    monkeypatch.setattr(routes.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(
+        routes.time,
+        "sleep",
+        lambda seconds: clock.__setitem__("now", clock["now"] + seconds),
+    )
+    return clock
+
+
+def _stub_hostname_allocation(monkeypatch):
+    """Provider and cloud stubs for a valid crm allocation on node 7."""
+    provider = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
+    cloud = importlib.import_module("openbase_coder_cli.services.cloud_registration")
+    monkeypatch.setattr(provider, "is_netmesh_tsnet", lambda: False)
+    monkeypatch.setattr(provider, "is_netmesh", lambda: True)
+    monkeypatch.setattr(
+        provider,
+        "hostname_serve_capability",
+        lambda: {"supported": True, "http_port": 80},
+    )
+    monkeypatch.setattr(
+        provider,
+        "status_json",
+        lambda: {
+            "Self": {
+                "DNSName": "gabes-mac-mini-openbase.netmesh.openbase.cloud.",
+                "TailscaleIPs": ["100.64.0.10"],
+            }
+        },
+    )
+    monkeypatch.setattr(
+        cloud,
+        "list_netmesh_devices",
+        lambda: [
+            {
+                "id": "7",
+                "given_name": "gabes-mac-mini-openbase",
+                "ip_addresses": ["100.64.0.10"],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        cloud,
+        "allocate_netmesh_service_hostname",
+        lambda **_kwargs: cloud.CloudReportResult(
+            ok=True,
+            supported=True,
+            response={
+                "hostname": "crm.gabes-mac-mini-openbase.netmesh.openbase.cloud",
+                "node_id": "7",
+                "service_name": "crm",
+                "created": True,
+            },
+        ),
+    )
+    released = []
+    monkeypatch.setattr(
+        cloud,
+        "release_netmesh_service_hostname",
+        lambda **kwargs: released.append(kwargs)
+        or cloud.CloudReportResult(ok=True, supported=True),
+    )
+    return released
+
+
+def test_private_hostname_allocation_waits_for_dns_propagation(monkeypatch):
+    released = _stub_hostname_allocation(monkeypatch)
+    clock = _fake_dns_clock(monkeypatch)
+    attempts = {"count": 0}
+
+    def fake_getaddrinfo(*_args, **_kwargs):
+        attempts["count"] += 1
+        if attempts["count"] < 6:
+            raise routes.socket.gaierror("no such host")
+        return [
+            (
+                routes.socket.AF_INET,
+                routes.socket.SOCK_STREAM,
+                6,
+                "",
+                ("100.64.0.10", 80),
+            )
+        ]
+
+    monkeypatch.setattr(routes.socket, "getaddrinfo", fake_getaddrinfo)
+
+    assert routes.allocate_private_service_hostname("crm") == (
+        "crm.gabes-mac-mini-openbase.netmesh.openbase.cloud",
+        "7",
+        True,
+    )
+    assert attempts["count"] == 6
+    assert clock["now"] == pytest.approx(10.0)
+    assert released == []
+
+
+def test_private_hostname_allocation_times_out_after_bounded_dns_wait(monkeypatch):
+    released = _stub_hostname_allocation(monkeypatch)
+    clock = _fake_dns_clock(monkeypatch)
+    monkeypatch.setattr(
+        routes.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            routes.socket.gaierror("no such host")
+        ),
+    )
+
+    with pytest.raises(
+        routes.HostnamePublicationUnavailable,
+        match="did not resolve it within 30s",
+    ):
+        routes.allocate_private_service_hostname("crm")
+    assert released == [{"node_id": "7", "service_name": "crm"}]
+    assert clock["now"] <= routes.HOSTNAME_DNS_TIMEOUT_SECONDS
+
+
 def test_private_hostname_allocation_must_resolve_to_this_node(monkeypatch):
     provider = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
     cloud = importlib.import_module("openbase_coder_cli.services.cloud_registration")
+    _fake_dns_clock(monkeypatch)
     monkeypatch.setattr(provider, "is_netmesh_tsnet", lambda: False)
     monkeypatch.setattr(provider, "is_netmesh", lambda: True)
     monkeypatch.setattr(
@@ -849,6 +973,63 @@ def test_reconcile_rejects_unknown_drift_and_preserves_builtin_rules(monkeypatch
         "hostname": "docs.mac.netmesh.openbase.cloud",
         "proxy_port": 52808,
     }
+
+
+def test_reconcile_accepts_fresh_helper_empty_config_as_initial_base(monkeypatch):
+    provider = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
+    applied = []
+    monkeypatch.setattr(
+        provider, "serve_snapshot", lambda: {"etag": "v1", "hash": "empty"}
+    )
+    monkeypatch.setattr(
+        provider,
+        "plan_serve",
+        lambda rules: {"hash": "empty" if rules == [] else "baseline"},
+    )
+    monkeypatch.setattr(
+        provider,
+        "apply_serve",
+        lambda rules, **kwargs: applied.append((rules, kwargs)) or {"hash": "next"},
+    )
+
+    result = routes.reconcile_openbase_routes(
+        [],
+        [
+            PublishedService(
+                "docs",
+                3000,
+                80,
+                52808,
+                mode="hostname",
+                hostname="docs.mac.netmesh.openbase.cloud",
+            )
+        ],
+        None,
+    )
+
+    assert result == "next"
+    assert applied[0][1] == {"expected_etag": "v1", "expected_hash": "empty"}
+
+
+def test_reconcile_keeps_drift_guard_once_a_hash_was_recorded(monkeypatch):
+    provider = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
+    applied = []
+    monkeypatch.setattr(
+        provider, "serve_snapshot", lambda: {"etag": "v1", "hash": "empty"}
+    )
+    monkeypatch.setattr(
+        provider,
+        "plan_serve",
+        lambda rules: {"hash": "empty" if rules == [] else "baseline"},
+    )
+    monkeypatch.setattr(
+        provider, "apply_serve", lambda rules, **kwargs: applied.append((rules, kwargs))
+    )
+
+    with pytest.raises(RuntimeError, match="drifted"):
+        routes.reconcile_openbase_routes([], [], "recorded")
+
+    assert applied == []
 
 
 @pytest.mark.parametrize("occupied_port", [80, 443])

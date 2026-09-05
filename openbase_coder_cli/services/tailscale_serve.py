@@ -63,6 +63,9 @@ def openbase_serve_rules() -> list[dict[str, Any]]:
 
 def configure_tailscale_serve() -> None:
     from openbase_coder_cli.services import tailscale_provider as tp
+    from openbase_coder_cli.services.published_service_routes import (
+        expected_serve_base_hash,
+    )
     from openbase_coder_cli.services.published_services import (
         ServiceRegistry,
         load_registry,
@@ -83,8 +86,10 @@ def configure_tailscale_serve() -> None:
         registry = load_registry()
         snapshot = tp.serve_snapshot()
         previous_rules = [*openbase_serve_rules(), *published_serve_rules()]
-        expected_hash = registry.last_applied_serve_hash or str(
-            tp.plan_serve(previous_rules)["hash"]
+        expected_hash = expected_serve_base_hash(
+            str(snapshot.get("hash")),
+            previous_rules,
+            registry.last_applied_serve_hash,
         )
         if snapshot.get("hash") != expected_hash:
             raise RuntimeError(
@@ -104,6 +109,51 @@ def configure_tailscale_serve() -> None:
         )
         return
     tp.apply_serve(rules)
+
+
+def reset_tailscale_serve() -> None:
+    """Force the Openbase VPN Serve config back to the canonical Openbase rules.
+
+    ``configure_tailscale_serve`` refuses when the live Serve config drifts from
+    the last-applied hash — the right default, so a routine re-apply never
+    clobbers routes we did not place. But the hardened tailscaled resets its own
+    Serve config on some restarts, which leaves the live hash permanently
+    mismatched with the recorded one and NO way back: the Openbase VPN has no
+    equivalent of ``tailscale serve reset`` (and we deliberately do not shell out
+    to the stock Tailscale client — the netmesh runs on our own headscale +
+    signed helper, using Tailscale only for DERP relays). This re-applies the
+    canonical rule set using the LIVE snapshot as the compare-and-swap base, so
+    it always succeeds regardless of drift while staying safe against a
+    concurrent writer, entirely through the signed netmesh helper.
+    """
+    from openbase_coder_cli.services import tailscale_provider as tp
+    from openbase_coder_cli.services.published_services import (
+        ServiceRegistry,
+        load_registry,
+        published_serve_rules,
+        save_registry,
+    )
+
+    rules = [*openbase_serve_rules(), *published_serve_rules(persistent_only=True)]
+    if not (
+        tp.is_netmesh()
+        and not tp.is_netmesh_tsnet()
+        and not tp.netmesh_uses_stock_tailscale()
+    ):
+        # tsnet forwards natively; stock/other providers have their own reset.
+        configure_tailscale_serve()
+        return
+    if not tp.serve_capability().get("supported"):
+        tp.apply_serve_legacy(rules)
+        return
+    snapshot = tp.serve_snapshot()
+    result = tp.apply_serve(
+        rules,
+        expected_etag=str(snapshot["etag"]),
+        expected_hash=str(snapshot["hash"]),
+    )
+    registry = load_registry()
+    save_registry(ServiceRegistry(registry.services, str(result["hash"])))
 
 
 def tailscale_serve_health() -> TailscaleServeHealth:

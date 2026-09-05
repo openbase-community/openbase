@@ -116,6 +116,18 @@ class CodexLLMStream(llm.LLMStream):
                     delivery_record,
                     reason="livekit_llm_stream_failed",
                 )
+            logger.exception(
+                "dispatch_timing stage=livekit_llm_backend_failed message_id=%s",
+                self._message_id,
+            )
+            # Speak the failure instead of leaving the room silent: emit a
+            # short fallback so TTS tells the user the backend is down.
+            if not self._event_ch.closed:
+                self._emit_delta(
+                    "Sorry, my coding backend isn't responding right now, so I "
+                    "couldn't handle that. Give it a moment and ask me again."
+                )
+                return
             raise
 
     async def _run_accepted_prompt(

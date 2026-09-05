@@ -326,8 +326,10 @@ class _SetupProgress:
         "Tailnet transport: 'tailscale' (official), 'netmesh' (self-hosted "
         "headscale + Openbase VPN client), or 'netmesh-tsnet' (netmesh via an "
         "in-process embedded node — no VPN on either side). Interactive runs "
-        "pick it for a new env file if omitted; otherwise new files default to "
-        "tailscale. Existing env files are only changed when this is provided."
+        "pick it for a new env file if omitted; otherwise new files default "
+        "to netmesh, or to tailscale when the official Tailscale CLI/app is "
+        "already installed. Existing env files are only changed when this is "
+        "provided."
     ),
 )
 @click.option(
@@ -612,7 +614,8 @@ def _require_tailnet_provider_choice(
 
     Existing env files keep their configured provider unless --tailnet-provider
     is passed. New installs pick interactively; non-interactive fresh installs
-    keep the tailscale default.
+    fall through to the detection default (netmesh, or tailscale when the
+    official Tailscale CLI/app is already installed).
     """
     if tailnet_provider is not None:
         return tailnet_provider
@@ -624,10 +627,14 @@ def _require_tailnet_provider_choice(
         )
         return configured if configured in PROVIDER_VALUES else PROVIDER_TAILSCALE
     if interactive:
+        from openbase_coder_cli.services.tailscale_provider import (
+            default_tailnet_provider,
+        )
+
         return _prompt_pick(
             "Tailnet transport:",
             _TAILNET_PROVIDER_PICKER_OPTIONS,
-            default=PROVIDER_TAILSCALE,
+            default=default_tailnet_provider(),
         )
     return None
 
@@ -851,6 +858,26 @@ def _run_setup_phases(
     # --- Install services ---
     progress.step("services", "start")
     if not skip_services:
+        if tailnet_provider == PROVIDER_NETMESH and sys.platform == "darwin":
+            # A crash-looping registered helper makes every helper query hang
+            # (netmesh-ctl, the companion, LiveKit's node-IP lookup), so
+            # restarting services now would put livekit-server into a crash
+            # loop and take live calls down. Stop before touching anything.
+            from openbase_coder_cli.services.netmesh_companion import (
+                HELPER_LAUNCHD_LABEL,
+                helper_launchd_health,
+            )
+
+            helper_health = helper_launchd_health()
+            if not helper_health.healthy:
+                raise click.ClickException(
+                    "The Openbase VPN helper "
+                    f"({HELPER_LAUNCHD_LABEL}) is {helper_health.detail}. "
+                    "In this state every helper query hangs, so restarting "
+                    "services would break LiveKit calls. Re-register the "
+                    "helper (open the Openbase desktop app, or restage the "
+                    "companion build), then re-run 'openbase-coder setup'."
+                )
         click.echo()
         click.echo(f"Installing {service_manager_name()} services...")
         if tailnet_provider == PROVIDER_NETMESH_TSNET:

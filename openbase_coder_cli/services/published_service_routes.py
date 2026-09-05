@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+import time
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from openbase_coder_cli.services import tailscale_provider as tp
 
 if TYPE_CHECKING:
     from openbase_coder_cli.services.published_services import PublishedService
+
+# A fresh allocation's MagicDNS record takes several seconds to propagate
+# (~10s observed on staging), so resolution is polled rather than checked once.
+HOSTNAME_DNS_TIMEOUT_SECONDS = 30.0
+HOSTNAME_DNS_POLL_SECONDS = 2.0
 
 
 class HostnamePublicationUnavailable(RuntimeError):
@@ -99,30 +105,54 @@ def allocate_private_service_hostname(name: str) -> ServiceHostnameAllocation:
         hostname = validate_hostname(str(allocation.get("hostname") or ""))
     except ValueError as exc:
         _rollback_hostname_allocation(name, node_id, created)
-        raise RuntimeError("Openbase Cloud returned an invalid private hostname.") from exc
+        raise RuntimeError(
+            "Openbase Cloud returned an invalid private hostname."
+        ) from exc
     if hostname != expected_hostname or str(allocation.get("node_id")) != node_id:
         _rollback_hostname_allocation(name, node_id, created)
         raise RuntimeError(
             "Openbase Cloud returned a private hostname outside this node's allocation."
         )
     try:
-        resolved_ips = {
-            str(ipaddress.ip_address(address[4][0]))
-            for address in socket.getaddrinfo(
-                hostname, HOSTNAME_TAILNET_PORT, type=socket.SOCK_STREAM
-            )
-        }
-    except (OSError, ValueError) as exc:
+        _await_hostname_resolution(hostname, node_ips)
+    except HostnamePublicationUnavailable:
         _rollback_hostname_allocation(name, node_id, created)
-        raise HostnamePublicationUnavailable(
-            f"Openbase VPN advertised {hostname}, but DNS did not resolve it: {exc}"
-        ) from exc
-    if node_ips.isdisjoint(resolved_ips):
-        _rollback_hostname_allocation(name, node_id, created)
-        raise HostnamePublicationUnavailable(
-            f"Openbase VPN advertised {hostname}, but DNS did not resolve it to this node."
-        )
+        raise
     return ServiceHostnameAllocation(hostname, node_id, created)
+
+
+def _await_hostname_resolution(hostname: str, node_ips: set[str]) -> None:
+    """Poll DNS until the freshly written record resolves to this node."""
+    from openbase_coder_cli.services.published_services import HOSTNAME_TAILNET_PORT
+
+    deadline = time.monotonic() + HOSTNAME_DNS_TIMEOUT_SECONDS
+    while True:
+        resolution_error: Exception | None = None
+        resolved_ips: set[str] = set()
+        try:
+            resolved_ips = {
+                str(ipaddress.ip_address(address[4][0]))
+                for address in socket.getaddrinfo(
+                    hostname, HOSTNAME_TAILNET_PORT, type=socket.SOCK_STREAM
+                )
+            }
+        except (OSError, ValueError) as exc:
+            resolution_error = exc
+        if resolved_ips and not node_ips.isdisjoint(resolved_ips):
+            return
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(HOSTNAME_DNS_POLL_SECONDS)
+    waited = f"within {HOSTNAME_DNS_TIMEOUT_SECONDS:.0f}s"
+    if resolution_error is not None:
+        raise HostnamePublicationUnavailable(
+            f"Openbase VPN advertised {hostname}, but DNS did not resolve it "
+            f"{waited}: {resolution_error}"
+        ) from resolution_error
+    raise HostnamePublicationUnavailable(
+        f"Openbase VPN advertised {hostname}, but DNS did not resolve it to this "
+        f"node {waited}."
+    )
 
 
 def verify_private_service_hostname(name: str, hostname: str) -> None:
@@ -194,6 +224,28 @@ def _desired_rules(services: list[PublishedService]) -> list[dict[str, Any]]:
     return rules
 
 
+def expected_serve_base_hash(
+    snapshot_hash: str,
+    previous_rules: list[dict[str, Any]],
+    last_applied_hash: str | None,
+) -> str:
+    """The helper config hash a CAS Serve apply must be based on.
+
+    With no recorded last-applied hash, a helper still reporting its initial
+    empty config (fresh install, nothing to overwrite) is as valid a base as
+    the baseline plan; the empty-config hash is the helper's own plan of zero
+    rules rather than a hardcoded digest.
+    """
+    if last_applied_hash:
+        return last_applied_hash
+    expected = str(tp.plan_serve(previous_rules)["hash"])
+    if snapshot_hash != expected:
+        empty_hash = str(tp.plan_serve([])["hash"])
+        if snapshot_hash == empty_hash:
+            return empty_hash
+    return expected
+
+
 def reconcile_openbase_routes(
     previous_services: list[PublishedService],
     desired_services: list[PublishedService],
@@ -201,8 +253,11 @@ def reconcile_openbase_routes(
 ) -> str:
     """CAS-replace the complete Openbase-owned Serve config on hardened Netmesh."""
     snapshot = tp.serve_snapshot()
-    previous_plan = tp.plan_serve(_desired_rules(previous_services))
-    expected_hash = last_applied_hash or str(previous_plan["hash"])
+    expected_hash = expected_serve_base_hash(
+        str(snapshot.get("hash")),
+        _desired_rules(previous_services),
+        last_applied_hash,
+    )
     if snapshot.get("hash") != expected_hash:
         raise RuntimeError(
             "Openbase VPN Serve configuration drifted from the last known desired "

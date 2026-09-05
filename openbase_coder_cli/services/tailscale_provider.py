@@ -115,6 +115,16 @@ def is_netmesh_tsnet() -> bool:
     return provider() == PROVIDER_NETMESH_TSNET
 
 
+def default_tailnet_provider() -> str:
+    """Fresh-install default transport.
+
+    Openbase VPN (netmesh) unless the official Tailscale CLI/app is already
+    installed — an existing Tailscale user keeps the compatibility transport
+    their machine is set up for.
+    """
+    return PROVIDER_TAILSCALE if tailscale_bin() else PROVIDER_NETMESH
+
+
 def tailscale_bin() -> str | None:
     """Locate the official ``tailscale`` CLI (PATH, then known install locations)."""
     found = shutil.which("tailscale")

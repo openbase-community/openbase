@@ -24,7 +24,8 @@ def test_app_candidates_prefer_in_repo_dev_then_shipping(tmp_path: Path) -> None
         c.endswith("desktop/companion-build/OpenbaseNetmeshCompanion.app")
         for c in candidates
     )
-    assert any("desktop/netmesh-macos/DerivedData" in c for c in candidates)
+    assert any("/netmesh-macos/DerivedData" in c for c in candidates)
+    assert not any("desktop/netmesh-macos" in c for c in candidates)
     assert not any("headscale-clients" in c for c in candidates)
 
 
@@ -39,7 +40,10 @@ def test_find_companion_app_returns_existing(tmp_path: Path) -> None:
     assert nc._find_companion_app(workspace) == built
 
 
-def test_find_companion_app_missing_returns_none(tmp_path: Path) -> None:
+def test_find_companion_app_missing_returns_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(nc, "_INSTALLED_APP_COMPANION", tmp_path / "no-installed-app")
     assert nc._find_companion_app(tmp_path) is None
 
 
@@ -90,7 +94,7 @@ def test_missing_build_tools_lists_absent_and_skips_go_when_staged(
     assert any(m.startswith("go") for m in missing)  # engine not staged -> go needed
 
     # Stage the tailscale engine -> go no longer required.
-    vendor = workspace / "desktop" / "netmesh-macos" / "vendor" / "tailscale-bin"
+    vendor = workspace / "netmesh-macos" / "vendor" / "tailscale-bin"
     vendor.mkdir(parents=True)
     (vendor / "tailscaled").write_text("")
     (vendor / "tailscale").write_text("")
@@ -136,11 +140,7 @@ def test_workspace_quiet_infers_source_checkout_before_install_metadata(
 ) -> None:
     workspace = tmp_path / "openbase-coder-workspace"
     module_path = (
-        workspace
-        / "cli"
-        / "openbase_coder_cli"
-        / "services"
-        / "netmesh_companion.py"
+        workspace / "cli" / "openbase_coder_cli" / "services" / "netmesh_companion.py"
     )
     module_path.parent.mkdir(parents=True)
     module_path.write_text("")
@@ -151,7 +151,10 @@ def test_workspace_quiet_infers_source_checkout_before_install_metadata(
     assert nc._workspace_dir_quiet() == workspace
 
 
-def test_netmesh_ctl_path_none_when_absent(tmp_path: Path) -> None:
+def test_netmesh_ctl_path_none_when_absent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(nc, "_INSTALLED_APP_COMPANION", tmp_path / "no-installed-app")
     assert nc.netmesh_ctl_path(tmp_path / "empty-ws") is None
 
 
@@ -262,3 +265,75 @@ def test_revoke_old_node_skips_official_tailscale(
     )
     # Leaving the official Tailscale network revokes nothing (no API call).
     t._revoke_old_node("tailscale", {"HostName": "x"})
+
+
+_LAUNCHCTL_CRASH_LOOP = """\
+system/cloud.openbase.netmesh.helper = {
+	active count = 0
+	state = spawn scheduled
+	runs = 140
+	last exit code = 78: EX_CONFIG
+}
+"""
+
+_LAUNCHCTL_RUNNING = """\
+system/cloud.openbase.netmesh.helper = {
+	active count = 1
+	state = running
+	runs = 1
+	last exit code = (never exited)
+}
+"""
+
+
+def _fake_launchctl(stdout: str, returncode: int = 0):
+    import subprocess
+
+    def run(argv, **kwargs):  # noqa: ANN001, ANN003
+        assert argv[:2] == ["launchctl", "print"]
+        return subprocess.CompletedProcess(argv, returncode, stdout=stdout, stderr="")
+
+    return run
+
+
+def test_helper_health_crash_loop_is_unhealthy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(nc.sys, "platform", "darwin")
+    monkeypatch.setattr(nc.subprocess, "run", _fake_launchctl(_LAUNCHCTL_CRASH_LOOP))
+    health = nc.helper_launchd_health()
+    assert health.registered is True
+    assert health.healthy is False
+    assert "78: EX_CONFIG" in health.detail
+    assert "140" in health.detail
+
+
+def test_helper_health_running_is_healthy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(nc.sys, "platform", "darwin")
+    monkeypatch.setattr(nc.subprocess, "run", _fake_launchctl(_LAUNCHCTL_RUNNING))
+    health = nc.helper_launchd_health()
+    assert health.registered is True
+    assert health.healthy is True
+
+
+def test_helper_health_unregistered_is_healthy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Pre-pairing state: no launchd job at all. Setup must not block on it.
+    monkeypatch.setattr(nc.sys, "platform", "darwin")
+    monkeypatch.setattr(nc.subprocess, "run", _fake_launchctl("", returncode=113))
+    health = nc.helper_launchd_health()
+    assert health.registered is False
+    assert health.healthy is True
+
+
+def test_helper_health_registered_idle_clean_exit_is_healthy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    idle = _LAUNCHCTL_RUNNING.replace("state = running", "state = waiting").replace(
+        "last exit code = (never exited)", "last exit code = 0"
+    )
+    monkeypatch.setattr(nc.sys, "platform", "darwin")
+    monkeypatch.setattr(nc.subprocess, "run", _fake_launchctl(idle))
+    health = nc.helper_launchd_health()
+    assert health.healthy is True

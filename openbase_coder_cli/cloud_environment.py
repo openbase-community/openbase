@@ -21,4 +21,18 @@ def default_web_backend_url() -> str:
 
 def configured_web_backend_url() -> str:
     """Return an explicit Cloud override or the package-channel default."""
-    return os.environ.get(WEB_BACKEND_ENV_KEY, default_web_backend_url()).rstrip("/")
+    override = os.environ.get(WEB_BACKEND_ENV_KEY) or _env_file_web_backend_url()
+    return (override or default_web_backend_url()).rstrip("/")
+
+
+def _env_file_web_backend_url() -> str | None:
+    """The install's persisted override, read at call time.
+
+    Managed services get the .env sourced by their launch wrappers, but bare
+    CLI commands (``openbase-coder login``) do not — without this fallback a
+    staging-configured install would silently target production.
+    """
+    from openbase_coder_cli import paths
+    from openbase_coder_cli.env_file import env_file_values
+
+    return env_file_values(paths.DEFAULT_ENV_FILE_PATH).get(WEB_BACKEND_ENV_KEY)

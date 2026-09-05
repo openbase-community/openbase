@@ -577,12 +577,25 @@ def _provision_netmesh_companion() -> None:
 
 
 def _apply_serve_best_effort() -> None:
-    from openbase_coder_cli.services.tailscale_serve import configure_tailscale_serve
+    from openbase_coder_cli.services.tailscale_serve import (
+        configure_tailscale_serve,
+        reset_tailscale_serve,
+    )
 
     try:
         configure_tailscale_serve()
     except Exception as exc:  # noqa: BLE001 - the doctor/health surfaces this too
-        click.echo(f"Note: serve rules not applied yet ({exc}).")
+        # A drifted Serve config (e.g. the hardened tailscaled reset its own
+        # config on restart) would otherwise dead-end here forever — the routes
+        # never get exposed and the phone can't reach the backend. set-provider
+        # is a deliberate "make this transport work" action, so recover by
+        # resetting Serve to the canonical Openbase rules over whatever is live.
+        click.echo(f"Note: serve config drifted ({exc}); resetting to Openbase rules…")
+        try:
+            reset_tailscale_serve()
+            click.echo("Reset Openbase VPN Serve rules.")
+        except Exception as reset_exc:  # noqa: BLE001
+            click.echo(f"Note: serve rules not applied yet ({reset_exc}).")
 
 
 def _restart_transport_services() -> None:
@@ -685,6 +698,24 @@ def sync(apply_: bool) -> None:
         )
         return
     _apply_provider(cloud, push_cloud=False)
+
+
+@tailnet.command("serve-reset")
+def serve_reset() -> None:
+    """Force the Openbase VPN Serve rules back to the canonical Openbase set.
+
+    Use when Serve says it "drifted from the last known desired state" and never
+    recovers (e.g. after the hardened tailscaled reset its own Serve config on a
+    restart), which leaves the backend unexposed on the tailnet. This overwrites
+    whatever is live with the canonical rules via the signed netmesh helper.
+    """
+    from openbase_coder_cli.services.tailscale_serve import reset_tailscale_serve
+
+    try:
+        reset_tailscale_serve()
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(f"Could not reset Openbase VPN Serve: {exc}")
+    click.echo("Reset Openbase VPN Serve rules to the canonical set.")
 
 
 @tailnet.command("show")
