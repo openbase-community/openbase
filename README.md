@@ -121,7 +121,9 @@ git checkout develop
 ```
 
 After cloning the workspace, use
-[`DEV_RUNBOOK.md`](../DEV_RUNBOOK.md) for the full developer install,
+the workspace repo's
+[`dev-docs/DEV_RUNBOOK.md`](https://github.com/openbase-community/openbase-coder-workspace/blob/develop/dev-docs/DEV_RUNBOOK.md)
+for the full developer install,
 authentication, verification, and iteration flow.
 
 The workspace setup syncs the public development repos with `multi`, builds the
