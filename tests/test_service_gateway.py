@@ -33,7 +33,7 @@ async def test_gateway_preserves_raw_paths_and_queries(isolated_registry, mode):
                 80 if mode == "hostname" else 52807,
                 52808,
                 mode=mode,
-                hostname="docs.mac.netmesh.openbase.cloud"
+                hostname="docs.mac.net.obs.so"
                 if mode == "hostname"
                 else None,
                 node_id="7" if mode == "hostname" else None,
@@ -221,7 +221,7 @@ async def test_gateway_forwards_websockets_without_rewriting_paths(
                 80 if mode == "hostname" else 52807,
                 52808,
                 mode=mode,
-                hostname="chat.mac.netmesh.openbase.cloud"
+                hostname="chat.mac.net.obs.so"
                 if mode == "hostname"
                 else None,
                 node_id="7" if mode == "hostname" else None,

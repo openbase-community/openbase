@@ -344,7 +344,7 @@ def hostname_serve_capability() -> dict[str, Any]:
         }
     helper_required = {
         "serve_routing": True,
-        "pattern": "{service}.{account_namespace}.svc.{base_domain}",
+        "pattern": "{service}.{account_namespace}.{service_domain}",
         "http_port": 80,
     }
     for key, expected in helper_required.items():
@@ -373,7 +373,7 @@ def hostname_serve_capability() -> dict[str, Any]:
     cloud_required = {
         "dns_allocation": True,
         "account_private_dns": True,
-        "pattern": "{service}.{account_namespace}.svc.{base_domain}",
+        "pattern": "{service}.{account_namespace}.{service_domain}",
         "http_port": 80,
     }
     for key, expected in cloud_required.items():
@@ -386,7 +386,7 @@ def hostname_serve_capability() -> dict[str, Any]:
         "supported": True,
         "dns_allocation": True,
         "serve_routing": True,
-        "pattern": "{service}.{account_namespace}.svc.{base_domain}",
+        "pattern": "{service}.{account_namespace}.{service_domain}",
         "http_port": 80,
     }
 

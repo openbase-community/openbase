@@ -21,7 +21,7 @@ from openbase_coder_cli.services import tailscale_provider as tp
 
 PROVIDER_ENV_KEY = "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"
 ALLOWED_HOSTS_ENV_KEY = "OPENBASE_CODER_CLI_ALLOWED_HOSTS"
-NETMESH_ALLOWED_SUFFIX = ".netmesh.openbase.cloud"
+NETMESH_ALLOWED_SUFFIX = ".net.obs.so"
 
 # Pre-integration LaunchAgent label for tunneld; superseded by the managed
 # openbase-tunneld service, cleaned up on any provider switch.

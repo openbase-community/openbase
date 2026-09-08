@@ -28,8 +28,13 @@ class ServiceHostnameAllocation(NamedTuple):
 
 def _validate_account_hostname(name: str, hostname: str, node_name: str) -> None:
     base_domain = node_name.partition(".")[2]
-    pattern = rf"{re.escape(name)}\.n[a-f0-9]{{32}}\.svc\.{re.escape(base_domain)}"
-    if not base_domain or re.fullmatch(pattern, hostname) is None:
+    labels = base_domain.split(".")
+    if len(labels) < 3 or labels[0] not in {"net", "net-staging"}:
+        raise ValueError("Unrecognized Netmesh device DNS zone.")
+    labels[0] = labels[0].replace("net", "vpn", 1)
+    service_domain = ".".join(labels)
+    pattern = rf"{re.escape(name)}\.n[a-f0-9]{{32}}\.{re.escape(service_domain)}"
+    if re.fullmatch(pattern, hostname) is None:
         raise ValueError("Private service hostname is outside the account namespace.")
 
 

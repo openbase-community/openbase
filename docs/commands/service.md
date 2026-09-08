@@ -8,7 +8,7 @@ openbase-coder service list
 openbase-coder service unpublish crm
 ```
 
-Publication has one supported shape: a dedicated hostname serving the application at its root. An illustrative URL is `http://crm.n11111111111111111111111111111111.svc.netmesh.openbase.cloud/`. Use the actual URL printed by the command, never an invented name. There is no explicit port, service-name path, personal name, or device name.
+Publication has one supported shape: a dedicated hostname serving the application at its root. An illustrative URL is `http://crm.n11111111111111111111111111111111.vpn.obs.so/`. Use the actual URL printed by the command, never an invented name. There is no explicit port, service-name path, personal name, or device name.
 
 ## Account namespace and private DNS
 

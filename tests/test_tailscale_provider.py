@@ -12,7 +12,7 @@ def test_rule_validation_rejects_arbitrary_targets_and_paths():
         provider._validated_rule(
             {
                 "kind": "published-hostname",
-                "hostname": "crm.mac.netmesh.openbase.cloud",
+                "hostname": "crm.mac.net.obs.so",
                 "proxy_port": 52808,
                 "target": "http://attacker.example",
             }
@@ -41,7 +41,7 @@ def test_atomic_apply_passes_validated_rules_etag_and_hash(monkeypatch):
             {"kind": "openbase-livekit"},
             {
                 "kind": "published-hostname",
-                "hostname": "crm.mac.netmesh.openbase.cloud",
+                "hostname": "crm.mac.net.obs.so",
                 "proxy_port": 52808,
             },
         ],
@@ -53,7 +53,7 @@ def test_atomic_apply_passes_validated_rules_etag_and_hash(monkeypatch):
     assert commands[0][0:2] == ["/signed/netmesh-ctl", "serve-apply"]
     assert json.loads(commands[0][2])[-1] == {
         "kind": "published-hostname",
-        "hostname": "crm.mac.netmesh.openbase.cloud",
+        "hostname": "crm.mac.net.obs.so",
         "proxy_port": 52808,
     }
     assert commands[0][3:] == ["v1", "before"]
@@ -93,7 +93,7 @@ def test_hostname_capability_honors_helper_kill_switch(monkeypatch):
         "supported": False,
         "dns_allocation": False,
         "serve_routing": True,
-        "pattern": "{service}.{account_namespace}.svc.{base_domain}",
+        "pattern": "{service}.{account_namespace}.{service_domain}",
         "http_port": 80,
     }
     monkeypatch.setattr(
@@ -116,7 +116,7 @@ def test_hostname_capability_honors_helper_kill_switch(monkeypatch):
                 "dns_allocation": True,
                 "account_private_dns": True,
                 "serve_routing": False,
-                "pattern": "{service}.{account_namespace}.svc.{base_domain}",
+                "pattern": "{service}.{account_namespace}.{service_domain}",
                 "http_port": 80,
             },
         ),
@@ -131,6 +131,6 @@ def test_hostname_capability_honors_helper_kill_switch(monkeypatch):
         "supported": True,
         "dns_allocation": True,
         "serve_routing": True,
-        "pattern": "{service}.{account_namespace}.svc.{base_domain}",
+        "pattern": "{service}.{account_namespace}.{service_domain}",
         "http_port": 80,
     }
