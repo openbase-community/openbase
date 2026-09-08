@@ -128,12 +128,7 @@ def _companion_app_candidates(workspace_dir: Path | None) -> list[Path]:
             / "Products"
             / "Release"
             / _APP_NAME,
-            netmesh_macos
-            / "DerivedData"
-            / "Build"
-            / "Products"
-            / "Debug"
-            / _APP_NAME,
+            netmesh_macos / "DerivedData" / "Build" / "Products" / "Debug" / _APP_NAME,
         ]
     # A developer install must use the companion built from its recorded
     # workspace. The installed Electron app can legitimately lag develop, and
@@ -368,6 +363,35 @@ class NetmeshCompanion:
         return self._parse_status(self._request("POST", "/register"))
 
     def replace_helper_if_needed(self) -> CompanionStatus:
+        status = self._replace_helper_request()
+        for _attempt in range(10):
+            if status.raw.get("helperReplacementPending") is not True:
+                return status
+            if status.helper != "notRegistered":
+                raise NetmeshCompanionError(
+                    "Helper replacement cannot continue in state " + status.helper
+                )
+            time.sleep(0.2)
+            registration = self.register()
+            if registration.raw.get("ok") is False:
+                raise NetmeshCompanionError(
+                    str(registration.raw.get("error") or "Helper registration failed.")
+                )
+            if registration.helper_enabled:
+                # Re-enter the version gate only after a successful registration.
+                verified = self._replace_helper_request()
+                if verified.raw.get("helperReplacementPending") is True:
+                    raise NetmeshCompanionError(
+                        "Helper replacement verification did not complete."
+                    )
+                return self._parse_status({**verified.raw, "helperReplaced": True})
+            if registration.helper != "notRegistered":
+                raise NetmeshCompanionError(
+                    "Helper replacement cannot continue in state " + registration.helper
+                )
+        raise NetmeshCompanionError("Helper replacement registration did not complete.")
+
+    def _replace_helper_request(self) -> CompanionStatus:
         try:
             raw = self._request("POST", "/replace-helper", timeout=20.0)
         except urllib.error.HTTPError as exc:
