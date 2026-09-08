@@ -72,14 +72,6 @@ class PublishedService:
             "proxy_port": self.proxy_port,
         }
 
-    @property
-    def base_path(self) -> str:
-        if self.mode == MODE_HOSTNAME:
-            return "/"
-        # Preserve the established dynamic publication URL contract. Existing
-        # gateways accept /NAME/... and strip that one prefix before proxying.
-        return f"/{self.name}/"
-
 
 @dataclass(frozen=True)
 class ServiceRegistry:
@@ -352,7 +344,7 @@ def service_url(service: PublishedService) -> str:
         )
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
-    return f"http://{host}:{service.tailnet_port}{service.base_path}"
+    return f"http://{host}:{service.tailnet_port}/"
 
 
 def _runtime_python() -> str:

@@ -7,8 +7,12 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-08-09T02:36:54.727105Z"
+exclude-newer = "2026-09-01T22:06:03.255963Z"
 exclude-newer-span = "P1W"
+
+[options.exclude-newer-package]
+multi-workspace = { timestamp = "2026-09-08T21:06:03.255967Z", span = "PT1H" }
+super-agents = { timestamp = "2026-09-08T21:06:03.255973Z", span = "PT1H" }
 
 [[package]]
 name = "addict"
@@ -1825,16 +1829,16 @@ wheels = [
 
 [[package]]
 name = "multi-workspace"
-version = "3.2.12"
+version = "3.2.18"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
     { name = "gitpython" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d6/2e/a74ded65c58664026c08dd2a82e30fd0986dc22979177a1cf5097daf68fd/multi_workspace-3.2.12.tar.gz", hash = "sha256:4171811e641fa3d046d3d8abd8516539e4525e2b3487004e01d455959d7c78e7", size = 48725, upload-time = "2026-07-14T20:03:34.277Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a2/2e/8f90b0b3f563872a108cc3a050ca680cefb341211becc01bf84153d583cb/multi_workspace-3.2.18.tar.gz", hash = "sha256:550946dc02ec771fc075e50c611c63631fce35966e476b7e6188eee4ee367b66", size = 50600, upload-time = "2026-09-02T17:06:16.962Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4b/3c/b6a799ade55b669dabe26444201e78cedd87a3cd30639cdacff6f008b6fa/multi_workspace-3.2.12-py3-none-any.whl", hash = "sha256:48dde78a678ed596b73a1c5bb82ebd42a98ed1a7023496431f946198b19a9655", size = 66554, upload-time = "2026-07-14T20:03:33.208Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/6c/e9b3563603733051ef57479bfefaa8e0fa9f96bdeb8d82a87b7b65f37f5b/multi_workspace-3.2.18-py3-none-any.whl", hash = "sha256:8493aba17db172c2bbb30bcbfaac828b0ab0e2910df7c58d67fe9ae534b4abd7", size = 68651, upload-time = "2026-09-02T17:06:15.675Z" },
 ]
 
 [[package]]
@@ -2254,6 +2258,7 @@ dependencies = [
     { name = "livekit-plugins-noise-cancellation" },
     { name = "multi-workspace" },
     { name = "numpy" },
+    { name = "psutil" },
     { name = "pydantic" },
     { name = "pyjwt" },
     { name = "python-dotenv" },
@@ -2315,8 +2320,9 @@ requires-dist = [
     { name = "livekit-plugins-deepgram", specifier = "==1.5.4" },
     { name = "livekit-plugins-noise-cancellation", specifier = ">=0.2.5" },
     { name = "mlx-whisper", marker = "extra == 'local-audio'", specifier = ">=0.4.3" },
-    { name = "multi-workspace", specifier = ">=3.2.3" },
+    { name = "multi-workspace", specifier = ">=3.2.18" },
     { name = "numpy", specifier = ">=2.3.0" },
+    { name = "psutil", specifier = ">=6.1.0" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pyinstaller", marker = "extra == 'dev'", specifier = ">=6.9.0" },
     { name = "pyjwt", specifier = ">=2.9.0" },

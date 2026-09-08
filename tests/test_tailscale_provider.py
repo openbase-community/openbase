@@ -93,7 +93,7 @@ def test_hostname_capability_honors_helper_kill_switch(monkeypatch):
         "supported": False,
         "dns_allocation": False,
         "serve_routing": True,
-        "pattern": "{service}.{node_dns_name}",
+        "pattern": "{service}.{account_namespace}.svc.{base_domain}",
         "http_port": 80,
     }
     monkeypatch.setattr(
@@ -114,8 +114,9 @@ def test_hostname_capability_honors_helper_kill_switch(monkeypatch):
             response={
                 "supported": True,
                 "dns_allocation": True,
+                "account_private_dns": True,
                 "serve_routing": False,
-                "pattern": "{service}.{node_dns_name}",
+                "pattern": "{service}.{account_namespace}.svc.{base_domain}",
                 "http_port": 80,
             },
         ),
@@ -130,6 +131,6 @@ def test_hostname_capability_honors_helper_kill_switch(monkeypatch):
         "supported": True,
         "dns_allocation": True,
         "serve_routing": True,
-        "pattern": "{service}.{node_dns_name}",
+        "pattern": "{service}.{account_namespace}.svc.{base_domain}",
         "http_port": 80,
     }

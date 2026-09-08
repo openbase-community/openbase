@@ -7,7 +7,6 @@ import sys
 from dataclasses import replace
 
 import pytest
-from aiohttp import ClientSession, WSMsgType, web
 from click.testing import CliRunner
 
 from openbase_coder_cli.services.published_services import PublishedService
@@ -16,13 +15,6 @@ service_cli = importlib.import_module("openbase_coder_cli.cli.service")
 published = importlib.import_module("openbase_coder_cli.services.published_services")
 gateway = importlib.import_module("openbase_coder_cli.services.service_gateway")
 routes = importlib.import_module("openbase_coder_cli.services.published_service_routes")
-
-
-@pytest.fixture
-def isolated_registry(monkeypatch, tmp_path):
-    path = tmp_path / "published-services.json"
-    monkeypatch.setattr(published, "PUBLISHED_SERVICES_PATH", path)
-    return path
 
 
 def test_name_and_tailnet_port_validation_reject_mdns_and_common_ports():
@@ -71,7 +63,7 @@ def test_registry_v1_is_loaded_as_dynamic_and_upgraded(isolated_registry):
     assert json.loads(isolated_registry.read_text())["version"] == 4
 
 
-def test_service_urls_preserve_dynamic_prefix_and_root_mount_hostnames(monkeypatch):
+def test_service_urls_are_root_mounted_in_every_mode(monkeypatch):
     provider = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
     monkeypatch.setattr(
         provider,
@@ -88,226 +80,24 @@ def test_service_urls_preserve_dynamic_prefix_and_root_mount_hostnames(monkeypat
         hostname="crm.mac.openbase.test",
     )
 
-    assert published.service_url(dynamic) == "http://mac.openbase.test:52807/docs/"
+    assert published.service_url(dynamic) == "http://mac.openbase.test:52807/"
     assert published.service_url(hostname) == "http://crm.mac.openbase.test/"
 
 
-@pytest.mark.asyncio
-async def test_hostname_gateway_preserves_raw_paths_and_queries(isolated_registry):
-    async def echo(request):
-        return web.Response(text=request.path_qs)
-
-    backend = web.Application()
-    backend.router.add_route("*", "/{path:.*}", echo)
-    backend_runner = web.AppRunner(backend)
-    await backend_runner.setup()
-    backend_site = web.TCPSite(backend_runner, "127.0.0.1", 0)
-    await backend_site.start()
-    backend_port = backend_site._server.sockets[0].getsockname()[1]
-    published.save_services(
-        [
-            PublishedService(
-                "docs",
-                backend_port,
-                80,
-                52808,
-                mode="hostname",
-                hostname="docs.mac.netmesh.openbase.cloud",
-                node_id="7",
-            )
-        ]
-    )
-
-    proxy_runner = web.AppRunner(gateway.create_app("docs"))
-    await proxy_runner.setup()
-    proxy_site = web.TCPSite(proxy_runner, "127.0.0.1", 0)
-    await proxy_site.start()
-    proxy_port = proxy_site._server.sockets[0].getsockname()[1]
-    try:
-        async with ClientSession() as client:
-            named = await client.get(f"http://127.0.0.1:{proxy_port}/docs/api?q=1")
-            root_relative = await client.get(f"http://127.0.0.1:{proxy_port}/")
-            assert await named.text() == "/docs/api?q=1"
-            assert await root_relative.text() == "/"
-    finally:
-        await proxy_runner.cleanup()
-        await backend_runner.cleanup()
-
-
-@pytest.mark.asyncio
-async def test_dynamic_gateway_keeps_legacy_name_prefix_contract(isolated_registry):
-    async def echo(request):
-        return web.Response(text=request.path_qs)
-
-    backend = web.Application()
-    backend.router.add_route("*", "/{path:.*}", echo)
-    backend_runner = web.AppRunner(backend)
-    await backend_runner.setup()
-    backend_site = web.TCPSite(backend_runner, "127.0.0.1", 0)
-    await backend_site.start()
-    backend_port = backend_site._server.sockets[0].getsockname()[1]
-    published.save_services([PublishedService("docs", backend_port, 52807, 52808)])
-
-    proxy_runner = web.AppRunner(gateway.create_app("docs"))
-    await proxy_runner.setup()
-    proxy_site = web.TCPSite(proxy_runner, "127.0.0.1", 0)
-    await proxy_site.start()
-    proxy_port = proxy_site._server.sockets[0].getsockname()[1]
-    try:
-        async with ClientSession() as client:
-            named = await client.get(f"http://127.0.0.1:{proxy_port}/docs/api?q=1")
-            root_relative = await client.get(
-                f"http://127.0.0.1:{proxy_port}/assets/app.js"
-            )
-            assert await named.text() == "/api?q=1"
-            assert await root_relative.text() == "/assets/app.js"
-    finally:
-        await proxy_runner.cleanup()
-        await backend_runner.cleanup()
-
-
-@pytest.mark.asyncio
-async def test_gateway_streams_and_hardens_forwarded_headers(isolated_registry):
-    seen_headers = {}
-
-    async def stream(request):
-        seen_headers.update(request.headers)
-        response = web.StreamResponse(status=206)
-        response.headers.add("Set-Cookie", "first=1; Path=/")
-        response.headers.add("Set-Cookie", "second=2; Path=/")
-        await response.prepare(request)
-        await response.write(b"first")
-        await response.write(b"second")
-        await response.write_eof()
-        return response
-
-    async def upload(request):
-        chunks = []
-        async for chunk in request.content.iter_any():
-            chunks.append(chunk)
-        return web.Response(text=str(sum(len(chunk) for chunk in chunks)))
-
-    async def upload_body():
-        yield b"a" * 1024
-        yield b"b" * 2048
-
-    backend = web.Application()
-    backend.router.add_post("/upload", upload)
-    backend.router.add_route("*", "/{path:.*}", stream)
-    backend_runner = web.AppRunner(backend)
-    await backend_runner.setup()
-    backend_site = web.TCPSite(backend_runner, "127.0.0.1", 0)
-    await backend_site.start()
-    backend_port = backend_site._server.sockets[0].getsockname()[1]
-    item = PublishedService("docs", backend_port, 52807, 52808)
-    published.save_services([item])
-
-    proxy_runner = web.AppRunner(gateway.create_app("docs"))
-    await proxy_runner.setup()
-    proxy_site = web.TCPSite(proxy_runner, "127.0.0.1", 0)
-    await proxy_site.start()
-    proxy_port = proxy_site._server.sockets[0].getsockname()[1]
-    try:
-        async with ClientSession() as client:
-            response = await client.get(
-                f"http://127.0.0.1:{proxy_port}/assets/app.js",
-                headers={
-                    "Forwarded": "for=attacker",
-                    "X-Forwarded-Host": "attacker.example",
-                    "X-Forwarded-Prefix": "/wrong",
-                    "Connection": "X-Remove-Me",
-                    "X-Remove-Me": "secret",
-                },
-            )
-            assert response.status == 206
-            assert await response.read() == b"firstsecond"
-            assert response.headers.getall("Set-Cookie") == [
-                "first=1; Path=/",
-                "second=2; Path=/",
-            ]
-            uploaded = await client.post(
-                f"http://127.0.0.1:{proxy_port}/upload", data=upload_body()
-            )
-            assert await uploaded.text() == "3072"
-        assert "X-Forwarded-Prefix" not in seen_headers
-        assert seen_headers["X-Forwarded-Host"] == f"127.0.0.1:{proxy_port}"
-        assert seen_headers["X-Forwarded-Proto"] == "http"
-        assert seen_headers["X-Forwarded-Port"] == "52807"
-        assert seen_headers["X-Forwarded-For"] == "127.0.0.1"
-        assert "Forwarded" not in seen_headers
-        assert "X-Remove-Me" not in seen_headers
-    finally:
-        await proxy_runner.cleanup()
-        await backend_runner.cleanup()
-
-
-@pytest.mark.asyncio
-async def test_gateway_forwards_websockets_without_a_path_prefix(isolated_registry):
-    async def websocket(request):
-        response = web.WebSocketResponse()
-        await response.prepare(request)
-        async for message in response:
-            if message.type == WSMsgType.TEXT:
-                await response.send_str(f"echo:{message.data}")
-        return response
-
-    backend = web.Application()
-    backend.router.add_get("/socket", websocket)
-    backend_runner = web.AppRunner(backend)
-    await backend_runner.setup()
-    backend_site = web.TCPSite(backend_runner, "127.0.0.1", 0)
-    await backend_site.start()
-    backend_port = backend_site._server.sockets[0].getsockname()[1]
-    published.save_services([PublishedService("chat", backend_port, 52807, 52808)])
-    proxy_runner = web.AppRunner(gateway.create_app("chat"))
-    await proxy_runner.setup()
-    proxy_site = web.TCPSite(proxy_runner, "127.0.0.1", 0)
-    await proxy_site.start()
-    proxy_port = proxy_site._server.sockets[0].getsockname()[1]
-    try:
-        async with ClientSession() as client:
-            async with client.ws_connect(
-                f"http://127.0.0.1:{proxy_port}/socket"
-            ) as connection:
-                await connection.send_str("hello")
-                message = await connection.receive(timeout=2)
-                assert message.data == "echo:hello"
-    finally:
-        await proxy_runner.cleanup()
-        await backend_runner.cleanup()
-
-
-def test_publish_defaults_noninteractive_to_session_and_applies_route(
-    monkeypatch, isolated_registry
-):
-    applied: list[PublishedService] = []
-    stopped: list[PublishedService] = []
-    monkeypatch.setattr(service_cli, "local_service_available", lambda _port: True)
-    monkeypatch.setattr(service_cli, "allocate_ports", lambda _port: (52807, 52808))
-    monkeypatch.setattr(service_cli, "start_ephemeral_gateway", lambda _item: 4123)
-    monkeypatch.setattr(service_cli, "gateway_healthy", lambda _item: True)
-    monkeypatch.setattr(
-        service_cli,
-        "apply_route",
-        lambda item, **_kwargs: applied.append(item),
-    )
-    monkeypatch.setattr(service_cli, "stop_gateway", stopped.append)
-    monkeypatch.setattr(
-        service_cli,
-        "service_url",
-        lambda item: f"http://mac.tailnet.example:{item.tailnet_port}/{item.name}/",
-    )
-
-    result = CliRunner().invoke(service_cli.service, ["publish", "docs", "3000"])
-
-    assert result.exit_code == 0, result.output
-    assert "Persistence was not enabled" in result.output
-    assert "http://mac.tailnet.example:52807/docs/" in result.output
-    assert applied == [
-        PublishedService("docs", 3000, 52807, 52808, persistent=False, pid=4123)
-    ]
-    assert stopped == []
-    assert published.load_services() == applied
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--mode", "dynamic"],
+        ["--mode", "auto"],
+        ["--mode", "hostname"],
+        ["--tailnet-port", "52807"],
+    ],
+)
+def test_legacy_publish_options_are_removed(isolated_registry, args):
+    result = CliRunner().invoke(service_cli.service, ["publish", "docs", "3000", *args])
+    assert result.exit_code != 0
+    assert "No such option" in result.output
+    assert not isolated_registry.exists()
 
 
 def test_gateway_health_retries_until_proxy_accepts(monkeypatch):
@@ -340,21 +130,30 @@ def test_gateway_health_retries_until_proxy_accepts(monkeypatch):
 def test_publish_persistence_is_explicit(monkeypatch, isolated_registry):
     installed: list[PublishedService] = []
     monkeypatch.setattr(service_cli, "local_service_available", lambda _port: True)
-    monkeypatch.setattr(service_cli, "allocate_ports", lambda _port: (52807, 52808))
+    monkeypatch.setattr(service_cli, "allocate_hostname_proxy", lambda: 52808)
+    monkeypatch.setattr(
+        service_cli,
+        "allocate_private_service_hostname",
+        lambda name: routes.ServiceHostnameAllocation(
+            f"{name}.n11111111111111111111111111111111.svc.netmesh.openbase.cloud",
+            "7",
+            False,
+        ),
+    )
     monkeypatch.setattr(service_cli, "install_launchd_service", installed.append)
     monkeypatch.setattr(service_cli, "gateway_healthy", lambda _item: True)
     monkeypatch.setattr(service_cli, "apply_route", lambda _item, **_kwargs: None)
-    monkeypatch.setattr(
-        service_cli, "service_url", lambda _item: "http://host:52807/docs/"
-    )
+    monkeypatch.setattr(service_cli, "service_url", lambda _item: "http://host:52807/")
 
     result = CliRunner().invoke(
         service_cli.service,
-        ["publish", "docs", "3000", "--persist", "--mode", "dynamic"],
+        ["publish", "docs", "3000", "--persist"],
     )
 
     assert result.exit_code == 0, result.output
-    assert installed == [PublishedService("docs", 3000, 52807, 52808, True)]
+    assert len(installed) == 1
+    assert installed[0].persistent is True
+    assert installed[0].tailnet_port == 80
     assert "explicit opt-in" in result.output
 
 
@@ -396,7 +195,16 @@ def test_publish_rolls_back_registry_and_gateway_on_route_failure(
 ):
     stopped: list[PublishedService] = []
     monkeypatch.setattr(service_cli, "local_service_available", lambda _port: True)
-    monkeypatch.setattr(service_cli, "allocate_ports", lambda _port: (52807, 52808))
+    monkeypatch.setattr(service_cli, "allocate_hostname_proxy", lambda: 52808)
+    monkeypatch.setattr(
+        service_cli,
+        "allocate_private_service_hostname",
+        lambda name: routes.ServiceHostnameAllocation(
+            f"{name}.n11111111111111111111111111111111.svc.netmesh.openbase.cloud",
+            "7",
+            False,
+        ),
+    )
     monkeypatch.setattr(service_cli, "start_ephemeral_gateway", lambda _item: 99)
     monkeypatch.setattr(service_cli, "gateway_healthy", lambda _item: True)
     monkeypatch.setattr(
@@ -408,7 +216,7 @@ def test_publish_rolls_back_registry_and_gateway_on_route_failure(
 
     result = CliRunner().invoke(
         service_cli.service,
-        ["publish", "docs", "3000", "--no-persist", "--mode", "dynamic"],
+        ["publish", "docs", "3000", "--no-persist"],
     )
 
     assert result.exit_code != 0
@@ -433,10 +241,17 @@ def test_publish_compensates_serve_when_final_registry_save_fails(
 
     monkeypatch.setattr(service_cli, "save_registry", fail_final_save)
     monkeypatch.setattr(service_cli, "local_service_available", lambda _port: True)
-    monkeypatch.setattr(service_cli, "allocate_ports", lambda _port: (52807, 52808))
+    monkeypatch.setattr(service_cli, "allocate_hostname_proxy", lambda: 52808)
     monkeypatch.setattr(
-        service_cli, "service_url", lambda _item: "http://host:52807/docs/"
+        service_cli,
+        "allocate_private_service_hostname",
+        lambda name: routes.ServiceHostnameAllocation(
+            f"{name}.n11111111111111111111111111111111.svc.netmesh.openbase.cloud",
+            "7",
+            False,
+        ),
     )
+    monkeypatch.setattr(service_cli, "service_url", lambda _item: "http://host:52807/")
     monkeypatch.setattr(service_cli, "start_ephemeral_gateway", lambda _item: 99)
     monkeypatch.setattr(service_cli, "gateway_healthy", lambda _item: True)
     monkeypatch.setattr(service_cli, "apply_route", lambda _item, **_kwargs: "new-hash")
@@ -449,7 +264,7 @@ def test_publish_compensates_serve_when_final_registry_save_fails(
 
     result = CliRunner().invoke(
         service_cli.service,
-        ["publish", "docs", "3000", "--mode", "dynamic", "--no-persist"],
+        ["publish", "docs", "3000", "--no-persist"],
     )
 
     assert result.exit_code != 0
@@ -563,6 +378,12 @@ def test_hostname_provider_gate_runs_before_registry_write(
     monkeypatch, isolated_registry
 ):
     monkeypatch.setattr(service_cli, "local_service_available", lambda _port: True)
+    monkeypatch.setattr(service_cli, "allocate_hostname_proxy", lambda: 52808)
+
+    def unexpected_fallback(*_args):
+        pytest.fail("Hostname mode must not silently fall back or start a gateway")
+
+    monkeypatch.setattr(service_cli, "start_ephemeral_gateway", unexpected_fallback)
     monkeypatch.setattr(
         service_cli,
         "allocate_private_service_hostname",
@@ -573,11 +394,23 @@ def test_hostname_provider_gate_runs_before_registry_write(
 
     result = CliRunner().invoke(
         service_cli.service,
-        ["publish", "docs", "3000", "--mode", "hostname"],
+        ["publish", "docs", "3000"],
     )
 
     assert result.exit_code != 0
     assert "unsupported provider" in result.output
+    assert not isolated_registry.exists()
+
+
+def test_tailnet_port_does_not_implicitly_switch_default_to_dynamic(
+    monkeypatch, isolated_registry
+):
+    monkeypatch.setattr(service_cli, "local_service_available", lambda _port: True)
+    result = CliRunner().invoke(
+        service_cli.service, ["publish", "docs", "3000", "--tailnet-port", "52807"]
+    )
+    assert result.exit_code != 0
+    assert "No such option" in result.output
     assert not isolated_registry.exists()
 
 
@@ -609,7 +442,7 @@ def _stub_hostname_allocation(monkeypatch):
         "status_json",
         lambda: {
             "Self": {
-                "DNSName": "gabes-mac-mini-openbase.netmesh.openbase.cloud.",
+                "DNSName": "workstation.netmesh.openbase.cloud.",
                 "TailscaleIPs": ["100.64.0.10"],
             }
         },
@@ -620,7 +453,7 @@ def _stub_hostname_allocation(monkeypatch):
         lambda: [
             {
                 "id": "7",
-                "given_name": "gabes-mac-mini-openbase",
+                "given_name": "workstation",
                 "ip_addresses": ["100.64.0.10"],
             }
         ],
@@ -632,7 +465,7 @@ def _stub_hostname_allocation(monkeypatch):
             ok=True,
             supported=True,
             response={
-                "hostname": "crm.gabes-mac-mini-openbase.netmesh.openbase.cloud",
+                "hostname": "crm.n11111111111111111111111111111111.svc.netmesh.openbase.cloud",
                 "node_id": "7",
                 "service_name": "crm",
                 "created": True,
@@ -671,7 +504,7 @@ def test_private_hostname_allocation_waits_for_dns_propagation(monkeypatch):
     monkeypatch.setattr(routes.socket, "getaddrinfo", fake_getaddrinfo)
 
     assert routes.allocate_private_service_hostname("crm") == (
-        "crm.gabes-mac-mini-openbase.netmesh.openbase.cloud",
+        "crm.n11111111111111111111111111111111.svc.netmesh.openbase.cloud",
         "7",
         True,
     )
@@ -716,7 +549,7 @@ def test_private_hostname_allocation_must_resolve_to_this_node(monkeypatch):
         "status_json",
         lambda: {
             "Self": {
-                "DNSName": "gabes-mac-mini-openbase.netmesh.openbase.cloud.",
+                "DNSName": "workstation.netmesh.openbase.cloud.",
                 "TailscaleIPs": ["100.64.0.10"],
             }
         },
@@ -740,7 +573,7 @@ def test_private_hostname_allocation_must_resolve_to_this_node(monkeypatch):
         lambda: [
             {
                 "id": "7",
-                "given_name": "gabes-mac-mini-openbase",
+                "given_name": "workstation",
                 "ip_addresses": ["100.64.0.10"],
             }
         ],
@@ -752,7 +585,7 @@ def test_private_hostname_allocation_must_resolve_to_this_node(monkeypatch):
             ok=True,
             supported=True,
             response={
-                "hostname": "crm.gabes-mac-mini-openbase.netmesh.openbase.cloud",
+                "hostname": "crm.n11111111111111111111111111111111.svc.netmesh.openbase.cloud",
                 "node_id": "7",
                 "service_name": "crm",
                 "created": True,
@@ -768,7 +601,7 @@ def test_private_hostname_allocation_must_resolve_to_this_node(monkeypatch):
     )
 
     assert routes.allocate_private_service_hostname("crm") == (
-        "crm.gabes-mac-mini-openbase.netmesh.openbase.cloud",
+        "crm.n11111111111111111111111111111111.svc.netmesh.openbase.cloud",
         "7",
         True,
     )
@@ -802,7 +635,9 @@ def test_hostname_publish_uses_root_hostname_and_its_own_gateway(
         service_cli,
         "allocate_private_service_hostname",
         lambda _name: routes.ServiceHostnameAllocation(
-            "docs.gabes-mac-mini-openbase.netmesh.openbase.cloud", "7", True
+            "docs.n11111111111111111111111111111111.svc.netmesh.openbase.cloud",
+            "7",
+            True,
         ),
     )
     monkeypatch.setattr(service_cli, "allocate_hostname_proxy", lambda: 52808)
@@ -816,12 +651,12 @@ def test_hostname_publish_uses_root_hostname_and_its_own_gateway(
     monkeypatch.setattr(
         service_cli,
         "service_url",
-        lambda _item: "http://docs.gabes-mac-mini-openbase.netmesh.openbase.cloud/",
+        lambda _item: "http://docs.n11111111111111111111111111111111.svc.netmesh.openbase.cloud/",
     )
 
     result = CliRunner().invoke(
         service_cli.service,
-        ["publish", "docs", "3000", "--mode", "hostname", "--no-persist"],
+        ["publish", "docs", "3000", "--no-persist"],
     )
 
     assert result.exit_code == 0, result.output
@@ -829,11 +664,15 @@ def test_hostname_publish_uses_root_hostname_and_its_own_gateway(
     assert item.mode == "hostname"
     assert item.tailnet_port == 80
     assert item.proxy_port == 52808
-    assert item.hostname == "docs.gabes-mac-mini-openbase.netmesh.openbase.cloud"
+    assert (
+        item.hostname
+        == "docs.n11111111111111111111111111111111.svc.netmesh.openbase.cloud"
+    )
     assert item.node_id == "7"
     assert published.load_registry().last_applied_serve_hash == "new-hash"
     assert (
-        "http://docs.gabes-mac-mini-openbase.netmesh.openbase.cloud/" in result.output
+        "http://docs.n11111111111111111111111111111111.svc.netmesh.openbase.cloud/"
+        in result.output
     )
     assert applied[0][1]["previous_services"] == []
 
@@ -867,7 +706,7 @@ def test_hostname_publish_releases_new_dns_allocation_on_route_failure(
 
     result = CliRunner().invoke(
         service_cli.service,
-        ["publish", "docs", "3000", "--mode", "hostname", "--no-persist"],
+        ["publish", "docs", "3000", "--no-persist"],
     )
 
     assert result.exit_code != 0

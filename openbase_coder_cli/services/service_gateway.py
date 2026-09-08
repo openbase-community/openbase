@@ -6,9 +6,9 @@ from collections.abc import AsyncIterator, Iterable
 
 from aiohttp import ClientSession, WSMsgType, web
 from multidict import CIMultiDict
+from yarl import URL
 
 from openbase_coder_cli.services.published_services import (
-    MODE_HOSTNAME,
     PublishedService,
     find_service,
 )
@@ -33,18 +33,6 @@ UNTRUSTED_FORWARDED_HEADERS = {
 }
 SERVICE_KEY = web.AppKey("service", PublishedService)
 CLIENT_KEY = web.AppKey("client", ClientSession)
-
-
-def upstream_path(path_qs: str, service: PublishedService) -> str:
-    """Preserve hostname paths; retain the established dynamic prefix contract."""
-    if service.mode == MODE_HOSTNAME:
-        return path_qs
-    prefix = f"/{service.name}"
-    if path_qs == prefix:
-        return "/"
-    if path_qs.startswith(f"{prefix}/"):
-        return path_qs[len(prefix) :]
-    return path_qs
 
 
 def _connection_headers(headers: Iterable[tuple[str, str]]) -> set[str]:
@@ -102,7 +90,7 @@ async def _proxy_websocket(
     await downstream.prepare(request)
     session = request.app[CLIENT_KEY]
     async with session.ws_connect(
-        upstream, headers=_forward_headers(request, service)
+        URL(upstream, encoded=True), headers=_forward_headers(request, service)
     ) as source:
         tasks = {
             asyncio.create_task(_relay_websocket(downstream, source)),
@@ -117,8 +105,8 @@ async def _proxy_websocket(
 
 async def proxy(request: web.Request) -> web.StreamResponse:
     service = request.app[SERVICE_KEY]
-    path = upstream_path(request.raw_path, service)
-    upstream = f"http://127.0.0.1:{service.local_port}{path}"
+    # Every publication owns a root ingress. Service names are not URL prefixes.
+    upstream = f"http://127.0.0.1:{service.local_port}{request.raw_path}"
     if request.headers.get("Upgrade", "").lower() == "websocket":
         # The externally visible tailnet leg is WireGuard-encrypted. This
         # WebSocket hop is hard-coded to loopback and never leaves this machine.
@@ -132,7 +120,7 @@ async def proxy(request: web.Request) -> web.StreamResponse:
     session = request.app[CLIENT_KEY]
     async with session.request(
         request.method,
-        upstream,
+        URL(upstream, encoded=True),
         headers=_forward_headers(request, service),
         data=request.content.iter_any(),
         allow_redirects=False,
