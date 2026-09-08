@@ -246,7 +246,8 @@ async def test_gateway_forwards_websockets_without_rewriting_paths(
     try:
         async with ClientSession() as client:
             async with client.ws_connect(
-                URL(f"http://127.0.0.1:{proxy_port}{path}", encoded=True)
+                URL(f"http://127.0.0.1:{proxy_port}{path}", encoded=True),
+                headers={"Host": "chat.mac.net.obs.so"},
             ) as connection:
                 await connection.send_str("hello")
                 message = await connection.receive(timeout=2)
