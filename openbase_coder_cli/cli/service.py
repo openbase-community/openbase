@@ -7,7 +7,6 @@ from functools import wraps
 import click
 
 from openbase_coder_cli.services.published_service_routes import (
-    HostnamePublicationUnavailable,
     allocate_private_service_hostname,
     apply_route,
     release_private_service_hostname,
@@ -15,12 +14,10 @@ from openbase_coder_cli.services.published_service_routes import (
 )
 from openbase_coder_cli.services.published_services import (
     HOSTNAME_TAILNET_PORT,
-    MODE_DYNAMIC,
     MODE_HOSTNAME,
     PublishedService,
     ServiceRegistry,
     allocate_hostname_proxy,
-    allocate_ports,
     gateway_healthy,
     install_launchd_service,
     load_registry,
@@ -33,8 +30,6 @@ from openbase_coder_cli.services.published_services import (
     validate_local_port,
     validate_name,
 )
-
-MODE_AUTO = "auto"
 
 
 @click.group()
@@ -71,28 +66,11 @@ def _registry_transaction(function):
     default=None,
     help="Opt in or out of restoring the proxy at login (interactive prompt by default).",
 )
-@click.option(
-    "--tailnet-port",
-    type=int,
-    help="Uncommon private port for explicit --mode dynamic (or auto).",
-)
-@click.option(
-    "--mode",
-    type=click.Choice([MODE_AUTO, MODE_DYNAMIC, MODE_HOSTNAME], case_sensitive=False),
-    default=MODE_HOSTNAME,
-    show_default=True,
-    help=(
-        "Require a private root hostname (default), explicitly use an uncommon "
-        "port, or try a hostname with port fallback. All modes serve at /."
-    ),
-)
 @_registry_transaction
 def publish(
     name: str,
     port: int,
     persist: bool | None,
-    tailnet_port: int | None,
-    mode: str,
 ) -> None:
     """Publish loopback HTTP PORT at a memorable tailnet URL named NAME."""
     try:
@@ -106,49 +84,25 @@ def publish(
             raise ValueError(
                 f"No service is accepting connections on 127.0.0.1:{port}."
             )
-        publication_mode = mode.lower()
-        hostname = None
-        node_id = None
-        hostname_created = False
-        fallback_reason = None
-        if tailnet_port is not None and publication_mode == MODE_AUTO:
-            publication_mode = MODE_DYNAMIC
-        if publication_mode in {MODE_AUTO, MODE_HOSTNAME}:
-            if tailnet_port is not None:
-                raise ValueError("--tailnet-port cannot be used with hostname mode.")
-            published_port = HOSTNAME_TAILNET_PORT
-            proxy_port = allocate_hostname_proxy()
-        elif publication_mode == MODE_DYNAMIC:
-            published_port, proxy_port = allocate_ports(tailnet_port)
-        else:  # Defensive: Click owns the public choice validation.
-            raise ValueError(f"Unsupported publication mode: {publication_mode}")
+        proxy_port = allocate_hostname_proxy()
     except (OSError, ValueError, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
 
     persistent = _persistence_choice(persist)
-    if publication_mode in {MODE_AUTO, MODE_HOSTNAME}:
-        requested_mode = publication_mode
-        try:
-            allocation = allocate_private_service_hostname(name)
-            hostname = allocation.hostname
-            node_id = allocation.node_id
-            hostname_created = allocation.created
-            publication_mode = MODE_HOSTNAME
-        except HostnamePublicationUnavailable as exc:
-            if requested_mode == MODE_HOSTNAME:
-                raise click.ClickException(str(exc)) from exc
-            fallback_reason = str(exc)
-            publication_mode = MODE_DYNAMIC
-            published_port, proxy_port = allocate_ports(tailnet_port)
-        except (OSError, ValueError, RuntimeError) as exc:
-            raise click.ClickException(str(exc)) from exc
+    try:
+        allocation = allocate_private_service_hostname(name)
+        hostname = allocation.hostname
+        node_id = allocation.node_id
+        hostname_created = allocation.created
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise click.ClickException(str(exc)) from exc
     service_entry = PublishedService(
         name=name,
         local_port=port,
-        tailnet_port=published_port,
+        tailnet_port=HOSTNAME_TAILNET_PORT,
         proxy_port=proxy_port,
         persistent=persistent,
-        mode=publication_mode,
+        mode=MODE_HOSTNAME,
         hostname=hostname,
         node_id=node_id,
     )
@@ -226,9 +180,7 @@ def publish(
 
     click.echo(f"Published {name}: {url}")
     click.echo(f"  Local target: http://127.0.0.1:{port}")
-    click.echo(f"  Mode: {publication_mode}")
-    if fallback_reason:
-        click.echo(f"  Hostname unavailable: {fallback_reason}")
+    click.echo("  Mode: account-private hostname")
     click.echo("  Visibility: Openbase VPN/tailnet only (never Funnel/public internet)")
     if persistent:
         click.echo("  Persistence: launchd enabled by explicit opt-in")

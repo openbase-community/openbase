@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
 import time
 from typing import TYPE_CHECKING, Any, NamedTuple
@@ -24,6 +25,13 @@ class ServiceHostnameAllocation(NamedTuple):
     hostname: str
     node_id: str
     created: bool
+
+
+def _validate_account_hostname(name: str, hostname: str, node_name: str) -> None:
+    base_domain = node_name.partition(".")[2]
+    pattern = rf"{re.escape(name)}\.n[a-f0-9]{{32}}\.svc\.{re.escape(base_domain)}"
+    if not base_domain or re.fullmatch(pattern, hostname) is None:
+        raise ValueError("Private service hostname is outside the account namespace.")
 
 
 def allocate_private_service_hostname(name: str) -> ServiceHostnameAllocation:
@@ -101,14 +109,14 @@ def allocate_private_service_hostname(name: str) -> ServiceHostnameAllocation:
         )
     created = allocation.get("created") is True
     try:
-        expected_hostname = validate_hostname(f"{name}.{node_name}")
         hostname = validate_hostname(str(allocation.get("hostname") or ""))
+        _validate_account_hostname(name, hostname, node_name)
     except ValueError as exc:
         _rollback_hostname_allocation(name, node_id, created)
         raise RuntimeError(
             "Openbase Cloud returned an invalid private hostname."
         ) from exc
-    if hostname != expected_hostname or str(allocation.get("node_id")) != node_id:
+    if str(allocation.get("node_id")) != node_id:
         _rollback_hostname_allocation(name, node_id, created)
         raise RuntimeError(
             "Openbase Cloud returned a private hostname outside this node's allocation."
@@ -138,7 +146,7 @@ def _await_hostname_resolution(hostname: str, node_ips: set[str]) -> None:
             }
         except (OSError, ValueError) as exc:
             resolution_error = exc
-        if resolved_ips and not node_ips.isdisjoint(resolved_ips):
+        if resolved_ips and resolved_ips <= node_ips:
             return
         if time.monotonic() >= deadline:
             break
@@ -159,15 +167,12 @@ def verify_private_service_hostname(name: str, hostname: str) -> None:
     node_name, node_ips = _self_node_identity()
     from openbase_coder_cli.services.published_services import validate_hostname
 
-    if validate_hostname(hostname) != validate_hostname(f"{name}.{node_name}"):
-        raise RuntimeError(
-            "The stored private service hostname does not belong to this VPN node."
-        )
+    _validate_account_hostname(name, validate_hostname(hostname), node_name)
     resolved_ips = {
         str(ipaddress.ip_address(address[4][0]))
         for address in socket.getaddrinfo(hostname, 80, type=socket.SOCK_STREAM)
     }
-    if node_ips.isdisjoint(resolved_ips):
+    if not resolved_ips or not resolved_ips <= node_ips:
         raise RuntimeError(
             "The stored private service hostname does not resolve to this VPN node."
         )
@@ -299,8 +304,9 @@ def apply_route(
         verify_private_service_hostname(service.name, service.hostname)
     if tp.is_netmesh() and not tp.netmesh_uses_stock_tailscale():
         if not tp.serve_capability().get("supported"):
-            tp.apply_serve_legacy(_desired_rules(desired_services or load_services()))
-            return None
+            raise HostnamePublicationUnavailable(
+                "Update the Openbase VPN helper; legacy Serve is not supported."
+            )
         return reconcile_openbase_routes(
             previous_services or [],
             desired_services or load_services(),
@@ -321,8 +327,9 @@ def remove_route(
 
     if tp.is_netmesh() and not tp.netmesh_uses_stock_tailscale():
         if not tp.serve_capability().get("supported"):
-            tp.apply_serve_legacy(_desired_rules(desired_services or load_services()))
-            return None
+            raise HostnamePublicationUnavailable(
+                "Update the Openbase VPN helper; legacy Serve is not supported."
+            )
         return reconcile_openbase_routes(
             previous_services or load_services(),
             desired_services or load_services(),
