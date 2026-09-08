@@ -16,6 +16,15 @@ machine.
 import pytest
 
 
+@pytest.fixture
+def isolated_registry(monkeypatch, tmp_path):
+    from openbase_coder_cli.services import published_services
+
+    path = tmp_path / "published-services.json"
+    monkeypatch.setattr(published_services, "PUBLISHED_SERVICES_PATH", path)
+    return path
+
+
 @pytest.fixture(autouse=True)
 def _isolated_host_state(monkeypatch, tmp_path):
     env_path = tmp_path / "openbase-test.env"
