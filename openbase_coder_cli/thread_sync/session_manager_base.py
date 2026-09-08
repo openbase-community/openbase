@@ -60,7 +60,6 @@ class ThreadListPage:
 
 
 class _SuperAgentsClient(Protocol):
-    async def ensure_connected(self) -> None: ...
     async def list_threads(
         self,
         use_state_db_only: bool = True,
@@ -115,6 +114,18 @@ class _SuperAgentsClient(Protocol):
     async def get_session(self, thread_id: str) -> Any: ...
 
 
+async def _ensure_client_connected(client: Any) -> None:
+    """Connect app-server clients while allowing local SDK backends.
+
+    Codex app-server clients expose ``ensure_connected``. Local backends such
+    as ``ClaudeAgentSdkClient`` do not have a transport to connect, so their
+    in-process approval queues are ready immediately.
+    """
+    ensure_connected = getattr(client, "ensure_connected", None)
+    if callable(ensure_connected):
+        await ensure_connected()
+
+
 class _RoutineClient(Protocol):
     async def save_routine(self, input_data: dict[str, Any]) -> dict[str, Any]: ...
     async def list_routines(self) -> dict[str, Any]: ...
@@ -124,6 +135,22 @@ class _RoutineClient(Protocol):
         self,
         name: str | None = None,
         force: bool = False,
+    ) -> dict[str, Any]: ...
+    async def add_routine_trigger(self, name: str, trigger_input: dict[str, Any]) -> dict[str, Any]: ...
+    async def remove_routine_trigger(self, name: str, trigger_id: str) -> dict[str, Any]: ...
+    async def deliver_webhook_event(
+        self,
+        token: str,
+        *,
+        headers: dict[str, Any] | None = None,
+        body: bytes | str = b"",
+        origin: str = "external",
+    ) -> dict[str, Any]: ...
+    async def emit_routine_event(
+        self,
+        name: str,
+        payload: dict[str, Any] | None = None,
+        event_id: str | None = None,
     ) -> dict[str, Any]: ...
 
 
@@ -246,6 +273,10 @@ def _supports_routine_methods(client: Any) -> bool:
             "read_routine",
             "delete_routine",
             "run_due_routines",
+            "add_routine_trigger",
+            "remove_routine_trigger",
+            "deliver_webhook_event",
+            "emit_routine_event",
         )
     )
 

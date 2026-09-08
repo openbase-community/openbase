@@ -8,15 +8,20 @@ browser, and Openbase Cloud hosts your account at
 ## Reaching the Console
 
 - **Desktop app** — the dashboard is the console; no browser needed.
-- **Local browser** — `http://127.0.0.1:7999` on the Mac running the
-  runtime, or `http://<tailscale-host>:18080` from any device on your
-  tailnet.
+- **Local browser** — run `openbase-coder auth open-console` on the computer
+  running the runtime. It opens `127.0.0.1:7999` with an owner-only,
+  installation-scoped capability and removes that capability from the address
+  bar immediately after launch.
+- **Another tailnet device** — use the iOS/Android app, which supplies your
+  owner JWT. Merely knowing the Tailscale, Netmesh, or Docker URL is
+  intentionally insufficient to authenticate to the runtime.
 - **From the iOS app** — the Console tab opens the local console in an
   embedded browser with your CLI auth token injected automatically; the Diff
   tab opens the mobile-optimized diff view at `/mobile/diff`.
 
-Authentication uses the local CLI token managed by `openbase-coder login`
-and the runtime; the iOS app and desktop app handle this for you.
+Authentication uses either the owner's Openbase JWT or the runtime's local
+installation capability. The iOS, Android, and desktop apps handle this for
+you; a browser launched manually without the capability remains unauthenticated.
 
 !!! tip "Managing Openbase Cloud from the terminal"
 
@@ -64,8 +69,20 @@ touch it for:
 Both apps link to it directly: the desktop sidebar's **Cloud** item and the
 iOS sidebar's **Cloud** tab.
 
-Openbase Cloud also hosts deployment tooling, which is outside the scope of
-these docs.
+### Deploying apps (Openbase Cloud PaaS)
+
+Openbase Cloud also runs a managed platform-as-a-service for deploying your
+own apps — a Heroku-style push-to-deploy flow, separate from the Coder coding
+runtime these docs cover. You connect a GitHub repository in the **Deployment**
+dashboard at `https://app.openbase.cloud`, and pushes to the tracked branch
+build and release automatically for both backend and frontend apps. Config
+vars, secrets, hostnames, logs, releases, and usage are all managed there.
+
+The same account drives it from the terminal with the separate `openbase`
+CLI (`openbase apps`, `openbase logs`, `openbase config`, …); it shares this
+sign-in, so `openbase login` runs `openbase-coder login`. See the
+[Openbase Cloud CLI docs](https://docs-cloud.openbase.cloud) for the full
+deploy workflow.
 
 **On iPhone:** the Cloud tab opens app.openbase.cloud in the embedded
 browser, and onboarding's "Start with Cloud" path uses it without any local

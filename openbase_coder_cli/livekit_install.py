@@ -20,17 +20,23 @@ import tarfile
 import tempfile
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 
 import click
 
 from openbase_coder_cli.livekit_version import LIVEKIT_SERVER_PINNED_VERSION
 from openbase_coder_cli.paths import OPENBASE_BIN_DIR
+from openbase_coder_cli.platforms import is_windows
 from openbase_coder_cli.self_update import RELEASE_REPO
 
 LIVEKIT_RELEASE_URL_TEMPLATE = (
     "https://github.com/livekit/livekit/releases/download/"
     "v{version}/livekit_{version}_linux_{arch}.tar.gz"
+)
+LIVEKIT_WINDOWS_RELEASE_URL_TEMPLATE = (
+    "https://github.com/livekit/livekit/releases/download/"
+    "v{version}/livekit_{version}_windows_{arch}.zip"
 )
 PACKAGE_ASSET_URL_TEMPLATE = (
     f"https://github.com/{RELEASE_REPO}/releases/latest/download/"
@@ -39,7 +45,8 @@ PACKAGE_ASSET_URL_TEMPLATE = (
 
 
 def installed_livekit_server_path() -> Path:
-    return OPENBASE_BIN_DIR / "livekit-server"
+    name = "livekit-server.exe" if is_windows() else "livekit-server"
+    return OPENBASE_BIN_DIR / name
 
 
 def ensure_pinned_livekit_server() -> Path | None:
@@ -60,10 +67,13 @@ def ensure_pinned_livekit_server() -> Path | None:
             return _install_binary(_download_from_livekit_release(pin), pin)
         if system == "Darwin":
             return _install_binary(_download_from_openbase_package(pin), pin)
+        if system == "Windows":
+            return _install_binary(_download_from_livekit_windows_release(pin), pin)
     except (
         OSError,
         urllib.error.URLError,
         tarfile.TarError,
+        zipfile.BadZipFile,
         subprocess.SubprocessError,
         RuntimeError,
     ) as exc:
@@ -110,6 +120,37 @@ def _download_from_livekit_release(pin: str) -> Path:
         raise RuntimeError(f"unsupported architecture {platform.machine()}")
     url = LIVEKIT_RELEASE_URL_TEMPLATE.format(version=pin, arch=arch)
     return _extract_livekit_server(url)
+
+
+def _download_from_livekit_windows_release(pin: str) -> Path:
+    # Unlike darwin, upstream does publish Windows builds, so take them
+    # directly instead of unpacking an Openbase standalone package.
+    arch = {
+        "arm64": "arm64",
+        "aarch64": "arm64",
+        "amd64": "amd64",
+        "x86_64": "amd64",
+    }.get(platform.machine().lower())
+    if arch is None:
+        raise RuntimeError(f"unsupported architecture {platform.machine()}")
+    url = LIVEKIT_WINDOWS_RELEASE_URL_TEMPLATE.format(version=pin, arch=arch)
+    staging = Path(tempfile.mkdtemp(prefix="openbase-livekit-"))
+    archive_path = staging / "archive.zip"
+    urllib.request.urlretrieve(url, archive_path)  # noqa: S310 — pinned https URL
+    with zipfile.ZipFile(archive_path) as archive:
+        member = next(
+            (
+                item
+                for item in archive.namelist()
+                if not item.endswith("/")
+                and Path(item).name.lower() == "livekit-server.exe"
+            ),
+            None,
+        )
+        if member is None:
+            raise RuntimeError(f"livekit-server.exe missing from {url}")
+        archive.extract(member, staging)
+    return staging / member
 
 
 def _download_from_openbase_package(pin: str) -> Path:

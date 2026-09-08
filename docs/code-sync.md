@@ -60,12 +60,20 @@ every minute:
   status goes clean, nothing moves twice. This only happens when it is
   provably safe: no merge/rebase in progress, your head is an ancestor of the
   peer's, and your working tree already matches the peer's commit exactly.
-- When branch histories diverge, the synced manifest deterministically brings
-  both active branch pointers back to one history. A commit displaced by that
-  move is retained under `refs/openbase-code-sync/backups/` for recovery; it
-  is never discarded. A repo sync conflict remains visible only while safe
-  convergence is blocked (for example, by staged changes or an in-progress
-  rebase), and clears after the branch heads agree.
+- When the peer's manifest is **stale** — its head is an ancestor of yours —
+  your local history wins: nothing moves, this machine republishes its own
+  state, and the peer fast-forwards to you on its next pass. A branch is
+  never rewound.
+- When branch histories **truly diverge** (both machines committed different
+  history to the same branch), sync pauses that branch instead of picking a
+  winner: the local pointer stays put, the divergence is recorded as a repo
+  sync conflict, and it surfaces in health warnings until you decide with
+  `openbase-coder sync resolve <id> --keep-local` or `--use-remote`
+  (`--use-remote` safety-stashes your working tree first). Since the files
+  themselves have already synced, a paused branch does not hold up day-to-day
+  work. Setting `OPENBASE_CODE_SYNC_AUTO_DISPLACE=1` restores the old
+  behavior of automatically converging to the manifest, with the displaced
+  commit retained under `refs/openbase-code-sync/backups/`.
 - Uncommitted work needs no reconciliation at all — it syncs as files and
   simply shows as a dirty tree on both sides.
 

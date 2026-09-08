@@ -371,6 +371,240 @@ def run_due_routines(name: str | None, force: bool) -> None:
     )
 
 
+@routines.command("add-webhook-trigger")
+@click.argument("name")
+@click.option("--description", help="What this trigger listens for.")
+@click.option(
+    "--sender-path",
+    help="Dot path to the sender identity in the event payload, e.g. sender.id.",
+)
+@click.option(
+    "--allow-sender",
+    "allow_senders",
+    multiple=True,
+    help="Sender identity allowed to trigger runs. Repeatable. Required for agent loops.",
+)
+@click.option(
+    "--filter",
+    "filters",
+    nargs=3,
+    multiple=True,
+    metavar="PATH OP VALUE",
+    help=(
+        "Payload filter, e.g. --filter comment.body startsWith /openbase. "
+        "Ops: equals, notEquals, contains, startsWith, endsWith, exists, regex."
+    ),
+)
+@click.option(
+    "--hmac-secret", help="Shared secret for provider HMAC signatures (SHA-256)."
+)
+@click.option(
+    "--hmac-header",
+    help="Header carrying the HMAC signature (default X-Hub-Signature-256).",
+)
+@click.option(
+    "--cloud",
+    is_flag=True,
+    help=(
+        "Also create an Openbase Cloud relay endpoint so external providers "
+        "get a public URL; cloud stores events durably and this machine "
+        "delivers them on its next poll."
+    ),
+)
+def add_webhook_trigger(
+    name: str,
+    description: str | None,
+    sender_path: str | None,
+    allow_senders: tuple[str, ...],
+    filters: tuple[tuple[str, str, str], ...],
+    hmac_secret: str | None,
+    hmac_header: str | None,
+    cloud: bool,
+) -> None:
+    """Add a webhook trigger to a loop and print its ingest token."""
+    trigger_input: dict[str, Any] = {}
+    if description:
+        trigger_input["description"] = description
+    if sender_path:
+        trigger_input["senderPath"] = sender_path
+    if allow_senders:
+        trigger_input["senderAllowlist"] = list(allow_senders)
+    if filters:
+        trigger_input["filters"] = [
+            {"path": path, "op": op, "value": value} for path, op, value in filters
+        ]
+    if hmac_secret:
+        trigger_input["hmacSecret"] = hmac_secret
+    if hmac_header:
+        trigger_input["hmacHeader"] = hmac_header
+    if cloud:
+        from openbase_coder_cli.services.cloud_webhook_events import (
+            create_relay_endpoint,
+        )
+
+        relay = create_relay_endpoint(description=description or f"loop:{name}")
+        if not relay.ok or not isinstance(relay.response, dict):
+            raise click.ClickException(
+                "Could not create the Openbase Cloud relay endpoint: "
+                f"{relay.error or 'unsupported by this cloud backend'}"
+            )
+        trigger_input["relayEndpointId"] = relay.response.get("id")
+        trigger_input["relayUrl"] = relay.response.get("url")
+    result = _run_client(lambda client: client.add_routine_trigger(name, trigger_input))
+    token = (result.get("trigger") or {}).get("token")
+    if token:
+        result["ingestPath"] = f"/api/hooks/t/{token}/"
+    relay_url = (result.get("trigger") or {}).get("relayUrl")
+    if relay_url:
+        result["providerUrl"] = relay_url
+    _json_echo(result)
+
+
+@routines.command("remove-trigger")
+@click.argument("name")
+@click.argument("trigger_id")
+def remove_trigger(name: str, trigger_id: str) -> None:
+    """Remove a trigger from a loop."""
+    _json_echo(
+        _run_client(lambda client: client.remove_routine_trigger(name, trigger_id))
+    )
+
+
+@routines.command("emit")
+@click.argument("name")
+@click.option("--data", help="JSON payload for the event.")
+@click.option("--event-id", help="Optional explicit event id.")
+def emit_event(name: str, data: str | None, event_id: str | None) -> None:
+    """Run a loop immediately with a locally emitted event."""
+    payload = None
+    if data:
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError as exc:
+            raise click.BadParameter(f"--data must be valid JSON: {exc}") from None
+    _json_echo(
+        _run_client(lambda client: client.emit_routine_event(name, payload, event_id))
+    )
+
+
+DOCTOR_SWEEP_FRESH_SECONDS = 300
+DOCTOR_LOG_TAIL_BYTES = 64 * 1024
+
+
+def _last_sweep_at(log_path: Path) -> str | None:
+    import re
+
+    try:
+        with log_path.open("rb") as handle:
+            handle.seek(0, 2)
+            size = handle.tell()
+            handle.seek(max(0, size - DOCTOR_LOG_TAIL_BYTES))
+            tail = handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    matches = re.findall(
+        r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+ \S+ routine_runner sweep_complete",
+        tail,
+    )
+    return matches[-1] if matches else None
+
+
+def _doctor_routine_report(routine: dict[str, Any], now: Any) -> dict[str, Any]:
+    from datetime import datetime
+
+    warnings: list[str] = []
+    name = routine.get("name")
+    last_status = routine.get("lastStatus")
+    last_started_at = routine.get("lastStartedAt")
+    if not routine.get("enabled", True):
+        warnings.append("Routine is disabled.")
+    if not routine.get("lastRunDate"):
+        warnings.append("Routine has never run.")
+    if last_status in {"starting", "started", "queued"} and last_started_at:
+        try:
+            started = datetime.fromisoformat(last_started_at.replace("Z", "+00:00"))
+            active_hours = (now - started).total_seconds() / 3600
+            if active_hours >= 1:
+                warnings.append(
+                    f"Run has been {last_status} for {active_hours:.1f} hours."
+                )
+        except ValueError:
+            warnings.append(f"Run is {last_status} with unparseable lastStartedAt.")
+    if last_status in {"failed", "stale"} and routine.get("lastError"):
+        warnings.append(f"Last run {last_status}: {routine['lastError']}")
+    last_run_date = routine.get("lastRunDate")
+    if routine.get("enabled", True) and last_run_date:
+        try:
+            days_since = (
+                now.date() - datetime.fromisoformat(last_run_date).date()
+            ).days
+            if routine.get("scheduleType") == "daily" and days_since > 1:
+                warnings.append(f"No run recorded for {days_since} days.")
+        except ValueError:
+            pass
+    return {
+        "name": name,
+        "enabled": routine.get("enabled", True),
+        "scheduleType": routine.get("scheduleType"),
+        "lastStatus": last_status,
+        "lastRunDate": last_run_date,
+        "lastStartedAt": last_started_at,
+        "nextRunAt": routine.get("nextRunAt"),
+        "warnings": warnings,
+    }
+
+
+@routines.command("doctor")
+def doctor_routines() -> None:
+    """Diagnose routine health: stuck runs, missed runs, and runner liveness.
+
+    Listing routines also reconciles stuck active statuses (terminal or
+    stale), so running doctor self-heals routines that a crashed or
+    restarted runner left permanently "started".
+    """
+    from datetime import datetime
+    from datetime import timezone as dt_timezone
+
+    from openbase_coder_cli.paths import DEFAULT_LOG_DIR
+
+    listed = _run_client(lambda client: client.list_routines())
+    now = datetime.now(dt_timezone.utc)
+    reports = [
+        _doctor_routine_report(routine, now) for routine in listed.get("routines", [])
+    ]
+
+    runner: dict[str, Any] = {"logPath": str(DEFAULT_LOG_DIR / "openbase-routines.log")}
+    last_sweep = _last_sweep_at(DEFAULT_LOG_DIR / "openbase-routines.log")
+    runner["lastSweepAt"] = last_sweep
+    if last_sweep is None:
+        runner["warning"] = (
+            "No recent sweep_complete found in the runner log; the "
+            "openbase-routines service may not be running on this machine."
+        )
+    else:
+        sweep_age = (
+            datetime.now() - datetime.strptime(last_sweep, "%Y-%m-%d %H:%M:%S")
+        ).total_seconds()
+        runner["sweepAgeSeconds"] = int(sweep_age)
+        if sweep_age > DOCTOR_SWEEP_FRESH_SECONDS:
+            runner["warning"] = (
+                f"Last runner sweep was {int(sweep_age)}s ago; the "
+                "openbase-routines service may be stopped or stuck."
+            )
+
+    warning_count = sum(len(report["warnings"]) for report in reports)
+    if "warning" in runner:
+        warning_count += 1
+    _json_echo(
+        {
+            "healthy": warning_count == 0,
+            "warningCount": warning_count,
+            "runner": runner,
+            "routines": reports,
+        }
+    )
+
+
 SKILLS_AUTO_LINK_SYNC_SECONDS = 300.0
 UPDATE_CHECK_SECONDS = 6 * 3600.0
 

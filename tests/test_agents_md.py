@@ -23,28 +23,22 @@ def test_agents_md_lists_all_instruction_targets(tmp_path: Path, monkeypatch) ->
 
     from openbase_coder_cli.openbase_coder_cli_app import views
 
-    voice_home = tmp_path / "openbase" / "codex_home"
-    normal_home = tmp_path / "codex"
-    claude_config = tmp_path / "openbase" / "claude_config"
-    voice_agents = voice_home / "AGENTS.md"
-    normal_agents = normal_home / "AGENTS.md"
-    claude_md = claude_config / "CLAUDE.md"
-    direct_instructions = voice_home / "VOICE_INSTRUCTIONS.md"
-    dispatcher_instructions = voice_home / "DISPATCHER_INSTRUCTIONS.md"
-    super_agent_instructions = voice_home / "SUPER_AGENT_INSTRUCTIONS.md"
-    voice_home.mkdir(parents=True)
-    claude_config.mkdir(parents=True)
-    voice_agents.write_text("voice instructions", encoding="utf-8")
-    claude_md.write_text("claude instructions", encoding="utf-8")
+    instructions_dir = tmp_path / "openbase" / "instructions"
+    codex_home = tmp_path / "codex"
+    openbase_agents = instructions_dir / "AGENTS.md"
+    normal_agents = codex_home / "AGENTS.md"
+    direct_instructions = instructions_dir / "VOICE_INSTRUCTIONS.md"
+    dispatcher_instructions = instructions_dir / "DISPATCHER_INSTRUCTIONS.md"
+    super_agent_instructions = instructions_dir / "SUPER_AGENT_INSTRUCTIONS.md"
+    instructions_dir.mkdir(parents=True)
+    openbase_agents.write_text("openbase instructions", encoding="utf-8")
     direct_instructions.write_text("direct instructions", encoding="utf-8")
     super_agent_instructions.write_text("super instructions", encoding="utf-8")
 
-    monkeypatch.setattr(views, "CODEX_HOME_DIR", voice_home)
-    monkeypatch.setattr(views, "CODEX_AGENTS_MD_PATH", voice_agents)
-    monkeypatch.setattr(views, "NORMAL_CODEX_HOME_DIR", normal_home)
-    monkeypatch.setattr(views, "NORMAL_CODEX_AGENTS_MD_PATH", normal_agents)
-    monkeypatch.setattr(views, "OPENBASE_CLAUDE_CONFIG_DIR", claude_config)
-    monkeypatch.setattr(views, "OPENBASE_CLAUDE_MD_PATH", claude_md)
+    monkeypatch.setattr(views, "CODEX_HOME_DIR", codex_home)
+    monkeypatch.setattr(views, "CODEX_AGENTS_MD_PATH", normal_agents)
+    monkeypatch.setattr(views, "OPENBASE_AGENTS_MD_PATH", openbase_agents)
+    monkeypatch.setattr(views, "OPENBASE_INSTRUCTIONS_DIR", instructions_dir)
     monkeypatch.setattr(
         views, "CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH", direct_instructions
     )
@@ -65,24 +59,20 @@ def test_agents_md_lists_all_instruction_targets(tmp_path: Path, monkeypatch) ->
     response = views.agents_md(request)
 
     assert response.status_code == 200
-    assert response.data["content"] == "voice instructions"
+    assert response.data["content"] == "openbase instructions"
     documents = {document["id"]: document for document in response.data["documents"]}
     assert list(documents) == [
-        "voice",
-        "claude",
+        "openbase",
         "normal",
         "direct_livekit",
         "super_agent",
         "dispatcher",
     ]
-    assert documents["voice"]["content"] == "voice instructions"
-    assert documents["voice"]["exists"] is True
+    assert documents["openbase"]["content"] == "openbase instructions"
+    assert documents["openbase"]["exists"] is True
     assert documents["normal"]["content"] == ""
     assert documents["normal"]["exists"] is False
     assert documents["normal"]["path"] == str(normal_agents)
-    assert documents["claude"]["content"] == "claude instructions"
-    assert documents["claude"]["exists"] is True
-    assert documents["claude"]["path"] == str(claude_md)
     assert documents["direct_livekit"]["content"] == "direct instructions"
     assert documents["direct_livekit"]["exists"] is True
     assert documents["super_agent"]["label"] == "Super Agent instructions"
@@ -102,22 +92,20 @@ def test_agents_md_lists_super_agent_target_when_file_is_absent(
 
     from openbase_coder_cli.openbase_coder_cli_app import views
 
-    voice_home = tmp_path / "openbase" / "codex_home"
-    super_agent_instructions = voice_home / "SUPER_AGENT_INSTRUCTIONS.md"
+    instructions_dir = tmp_path / "openbase" / "instructions"
+    super_agent_instructions = instructions_dir / "SUPER_AGENT_INSTRUCTIONS.md"
 
-    monkeypatch.setattr(views, "CODEX_HOME_DIR", voice_home)
-    monkeypatch.setattr(views, "CODEX_AGENTS_MD_PATH", voice_home / "AGENTS.md")
-    monkeypatch.setattr(views, "NORMAL_CODEX_HOME_DIR", tmp_path / "codex")
-    monkeypatch.setattr(
-        views, "NORMAL_CODEX_AGENTS_MD_PATH", tmp_path / "codex" / "AGENTS.md"
-    )
+    monkeypatch.setattr(views, "CODEX_HOME_DIR", tmp_path / "codex")
+    monkeypatch.setattr(views, "CODEX_AGENTS_MD_PATH", tmp_path / "codex" / "AGENTS.md")
+    monkeypatch.setattr(views, "OPENBASE_AGENTS_MD_PATH", instructions_dir / "AGENTS.md")
+    monkeypatch.setattr(views, "OPENBASE_INSTRUCTIONS_DIR", instructions_dir)
     monkeypatch.setattr(
         views,
         "CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH",
-        voice_home / "VOICE_INSTRUCTIONS.md",
+        instructions_dir / "VOICE_INSTRUCTIONS.md",
     )
     monkeypatch.setattr(
-        views, "CODEX_DISPATCHER_INSTRUCTIONS_PATH", voice_home / "dispatcher.md"
+        views, "CODEX_DISPATCHER_INSTRUCTIONS_PATH", instructions_dir / "dispatcher.md"
     )
     monkeypatch.setattr(
         views, "CODEX_SUPER_AGENT_INSTRUCTIONS_PATH", super_agent_instructions
@@ -149,18 +137,18 @@ def test_agents_md_put_creates_normal_codex_home_file(
 
     from openbase_coder_cli.openbase_coder_cli_app import views
 
-    voice_home = tmp_path / "openbase" / "codex_home"
-    normal_home = tmp_path / "codex"
-    voice_agents = voice_home / "AGENTS.md"
-    normal_agents = normal_home / "AGENTS.md"
-    direct_instructions = voice_home / "VOICE_INSTRUCTIONS.md"
-    dispatcher_instructions = voice_home / "DISPATCHER_INSTRUCTIONS.md"
-    super_agent_instructions = voice_home / "SUPER_AGENT_INSTRUCTIONS.md"
+    instructions_dir = tmp_path / "openbase" / "instructions"
+    codex_home = tmp_path / "codex"
+    openbase_agents = instructions_dir / "AGENTS.md"
+    normal_agents = codex_home / "AGENTS.md"
+    direct_instructions = instructions_dir / "VOICE_INSTRUCTIONS.md"
+    dispatcher_instructions = instructions_dir / "DISPATCHER_INSTRUCTIONS.md"
+    super_agent_instructions = instructions_dir / "SUPER_AGENT_INSTRUCTIONS.md"
 
-    monkeypatch.setattr(views, "CODEX_HOME_DIR", voice_home)
-    monkeypatch.setattr(views, "CODEX_AGENTS_MD_PATH", voice_agents)
-    monkeypatch.setattr(views, "NORMAL_CODEX_HOME_DIR", normal_home)
-    monkeypatch.setattr(views, "NORMAL_CODEX_AGENTS_MD_PATH", normal_agents)
+    monkeypatch.setattr(views, "CODEX_HOME_DIR", codex_home)
+    monkeypatch.setattr(views, "CODEX_AGENTS_MD_PATH", normal_agents)
+    monkeypatch.setattr(views, "OPENBASE_AGENTS_MD_PATH", openbase_agents)
+    monkeypatch.setattr(views, "OPENBASE_INSTRUCTIONS_DIR", instructions_dir)
     monkeypatch.setattr(
         views, "CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH", direct_instructions
     )
@@ -189,7 +177,7 @@ def test_agents_md_put_creates_normal_codex_home_file(
     assert response.data["exists"] is True
     assert response.data["content"] == "normal instructions"
     assert normal_agents.read_text(encoding="utf-8") == "normal instructions"
-    assert not voice_agents.exists()
+    assert not openbase_agents.exists()
 
 
 def test_agents_md_put_creates_dispatcher_instruction_file(

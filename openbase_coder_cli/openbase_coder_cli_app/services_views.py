@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 import socket
-import subprocess
+import threading
+import time
 
 import click
 import httpx
@@ -13,23 +14,26 @@ from rest_framework import serializers, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+from openbase_coder_cli.codex_control_plane import (
+    codex_app_server_ready as _check_codex_app_server,
+)
+from openbase_coder_cli.codex_control_plane import (
+    managed_codex_app_server_endpoint,
+)
 from openbase_coder_cli.codex_home_instructions import (
     refresh_openbase_instruction_files_from_installation,
 )
 from openbase_coder_cli.openbase_coder_cli_app.common import _auth_debug_value
 from openbase_coder_cli.services.console_settings import (
     DEFAULT_DANGEROUS_CONFIRMATION_PHRASE,
-    DEFAULT_INCLUDE_NORMAL_CODEX_AGENTS,
     DEFAULT_KEEP_SYSTEM_AWAKE,
     DEFAULT_USER_ADDRESS_NAME,
     get_dangerous_confirmation_phrase,
     get_ignored_launchctl_labels,
     get_keep_system_awake_enabled,
     get_user_address_name,
-    include_normal_codex_agents_in_openbase_agents,
     set_dangerous_confirmation_phrase,
     set_ignored_launchctl_labels,
-    set_include_normal_codex_agents_in_openbase_agents,
     set_keep_system_awake_enabled,
     set_user_address_name,
 )
@@ -46,13 +50,14 @@ from openbase_coder_cli.services.openbase_services import (
     schedule_openbase_restart_payload,
 )
 from openbase_coder_cli.services.restart import restart_target_names
-from openbase_coder_cli.services.selection import configured_coding_backend
+from openbase_coder_cli.services.selection import (
+    service_supports_configured_backends,
+)
 from openbase_coder_cli.services.tailscale_serve import tailscale_serve_health
 from openbase_coder_cli.thread_sync.claude_thread_sync import (
     ClaudeConflictResolutionError,
     claude_thread_snapshot_conflicts_payload,
     claude_thread_snapshot_status,
-    claude_thread_sync_conflicts_payload,
     resolve_claude_snapshot_conflict,
 )
 from openbase_coder_cli.thread_sync.thread_exchange import (
@@ -60,7 +65,6 @@ from openbase_coder_cli.thread_sync.thread_exchange import (
     resolve_thread_snapshot_conflict,
     thread_snapshot_conflicts_payload,
     thread_snapshot_status,
-    thread_sync_conflicts_payload,
 )
 
 logger = logging.getLogger(__name__)
@@ -119,10 +123,6 @@ class DangerousConfirmationSettingsSerializer(serializers.Serializer):
         return attrs
 
 
-class AgentsGenerationSettingsSerializer(serializers.Serializer):
-    include_normal_codex_agents_in_openbase_agents = serializers.BooleanField()
-
-
 class KeepAwakeSettingsSerializer(serializers.Serializer):
     keep_system_awake = serializers.BooleanField()
 
@@ -133,18 +133,6 @@ def _dangerous_confirmation_settings_payload(*, refreshed: bool = False) -> dict
         "default_dangerous_confirmation_phrase": DEFAULT_DANGEROUS_CONFIRMATION_PHRASE,
         "user_address_name": get_user_address_name(),
         "default_user_address_name": DEFAULT_USER_ADDRESS_NAME,
-        "refreshed": refreshed,
-    }
-
-
-def _agents_generation_settings_payload(*, refreshed: bool = False) -> dict:
-    return {
-        "include_normal_codex_agents_in_openbase_agents": (
-            include_normal_codex_agents_in_openbase_agents()
-        ),
-        "default_include_normal_codex_agents_in_openbase_agents": (
-            DEFAULT_INCLUDE_NORMAL_CODEX_AGENTS
-        ),
         "refreshed": refreshed,
     }
 
@@ -206,26 +194,6 @@ def dangerous_confirmation_settings(request):
     if user_address_name is not None:
         payload["user_address_name"] = user_address_name
     return Response(payload)
-
-
-@api_view(["GET", "PATCH"])
-def agents_generation_settings(request):
-    """Read or update generated Openbase instruction settings."""
-    if request.method == "GET":
-        return Response(_agents_generation_settings_payload())
-
-    serializer = AgentsGenerationSettingsSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-    include_normal = set_include_normal_codex_agents_in_openbase_agents(
-        serializer.validated_data["include_normal_codex_agents_in_openbase_agents"]
-    )
-    refreshed = refresh_openbase_instruction_files_from_installation()
-    return Response(
-        {
-            **_agents_generation_settings_payload(refreshed=refreshed),
-            "include_normal_codex_agents_in_openbase_agents": include_normal,
-        }
-    )
 
 
 @api_view(["GET", "PATCH"])
@@ -310,12 +278,16 @@ def thread_device_sync_conflicts(request):
 
 @api_view(["GET"])
 def thread_sync_conflicts(request):
-    """Show unresolved thread sync conflicts across homes and devices for both backends."""
+    """Show unresolved cross-device thread sync conflicts for both backends.
+
+    Local thread stores are the shared agent homes, so device snapshots are
+    the only remaining sync surface (and conflict source).
+    """
     return Response(
         {
-            **_with_conflict_backend(thread_sync_conflicts_payload(), "codex"),
+            **_with_conflict_backend(thread_snapshot_conflicts_payload(), "codex"),
             "claude": _with_conflict_backend(
-                claude_thread_sync_conflicts_payload(), "claude"
+                claude_thread_snapshot_conflicts_payload(), "claude"
             ),
         }
     )
@@ -390,22 +362,21 @@ def _check_port(port: int) -> bool:
 
 
 def _check_tailscale() -> bool:
-    """Check if Tailscale is connected."""
-    from openbase_coder_cli.services.tailscale_serve import _tailscale_bin
+    """Check if the active tailnet provider (official Tailscale or Openbase
+    netmesh) is connected."""
+    from openbase_coder_cli.services import tailscale_provider as tp
 
-    # App Store installs keep the CLI inside the app bundle, off PATH.
-    tailscale_bin = _tailscale_bin()
-    if not tailscale_bin:
+    if tp.tool_path() is None:
         return False
-    try:
-        result = subprocess.run(
-            [tailscale_bin, "status"],
-            capture_output=True,
-            timeout=5,
-        )
-        return result.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
+    status = tp.status_json()
+    if status.get("error"):
         return False
+    state = status.get("BackendState")
+    if state:
+        return state in ("Running", "Starting")
+    # Fall back to "has a self tailnet IP".
+    self_payload = status.get("Self") or {}
+    return bool(self_payload.get("TailscaleIPs"))
 
 
 def _check_web_backend() -> bool:
@@ -421,6 +392,61 @@ def _check_web_backend() -> bool:
     return 200 <= resp.status_code < 500
 
 
+# The authenticated GET /api/status/ poll (the apps hit it roughly every 30s)
+# probes the tailnet through netmesh-ctl, which shells out to the companion's
+# status path. When that path is wedged the subprocess stalls for its full
+# timeout, so a naive inline probe makes every poll block ~5-15s (two netmesh-ctl
+# calls: the tailnet-connected check and Serve health) — tying up an ASGI worker
+# and, worse, stalling the phone's live connection. Serve the last computed
+# snapshot and refresh it in the background (stale-while-revalidate): only the
+# first poll after a cold start blocks, and a wedged netmesh-ctl can never again
+# stall the status endpoint.
+_TAILNET_SNAPSHOT_TTL_SECONDS = 15.0
+_tailnet_snapshot: dict[str, object] = {"value": None, "monotonic": 0.0}
+_tailnet_snapshot_lock = threading.Lock()
+
+
+def _compute_tailnet_snapshot():
+    """(tailscale_running, serve_health) — both netmesh-ctl probes in one shot."""
+    return _check_tailscale(), tailscale_serve_health()
+
+
+def _cached_tailnet_snapshot():
+    """Cached tailnet snapshot for the status view; never blocks after warmup."""
+    snapshot = _tailnet_snapshot["value"]
+    if snapshot is None:
+        # Cold start: compute once synchronously so we don't report a false
+        # "stopped" before the first probe lands.
+        with _tailnet_snapshot_lock:
+            if _tailnet_snapshot["value"] is None:
+                _tailnet_snapshot["value"] = _compute_tailnet_snapshot()
+                _tailnet_snapshot["monotonic"] = time.monotonic()
+            return _tailnet_snapshot["value"]
+    age = time.monotonic() - float(_tailnet_snapshot["monotonic"])
+    if age >= _TAILNET_SNAPSHOT_TTL_SECONDS:
+        _refresh_tailnet_snapshot_async()
+    return snapshot
+
+
+def _refresh_tailnet_snapshot_async():
+    # Single-flight: if a refresh already holds the lock, keep serving the stale
+    # snapshot rather than piling up blocked subprocesses.
+    if not _tailnet_snapshot_lock.acquire(blocking=False):
+        return
+
+    def _run():
+        try:
+            value = _compute_tailnet_snapshot()
+            _tailnet_snapshot["value"] = value
+            _tailnet_snapshot["monotonic"] = time.monotonic()
+        except Exception:  # never let a probe failure kill the refresher thread
+            logger.exception("tailnet status snapshot refresh failed")
+        finally:
+            _tailnet_snapshot_lock.release()
+
+    threading.Thread(target=_run, name="tailnet-status-refresh", daemon=True).start()
+
+
 @api_view(["GET"])
 def service_status(request):
     """Check status of related services."""
@@ -429,11 +455,15 @@ def service_status(request):
         request.path,
         _auth_debug_value(request),
     )
+    from openbase_coder_cli.services import tailscale_provider as tp
+
+    _tailnet_label = "Openbase Netmesh" if tp.is_netmesh() else "Tailscale"
     services = {
         "django": {"name": "Django (Coder CLI)", "port": 7999, "optional": False},
         "codex_app_server": {
             "name": "Codex App Server",
-            "port": 4500,
+            "port": None,
+            "transport": managed_codex_app_server_endpoint().transport,
             "optional": False,
         },
         "livekit_server": {"name": "LiveKit Server", "port": 7880, "optional": False},
@@ -444,18 +474,17 @@ def service_status(request):
             "port": None,
             "optional": False,
         },
-        "tailscale": {"name": "Tailscale", "port": None, "optional": False},
+        "tailscale": {"name": _tailnet_label, "port": None, "optional": False},
         "keep_awake": keep_awake_status_payload(),
     }
     # Backend-scoped services (e.g. the Codex App Server on the claude_code
     # backend) are intentionally not installed, so reporting them would raise
     # a false "stopped" warning in the apps.
-    coding_backend = configured_coding_backend()
     codex_app_server = next(
         (svc for svc in SERVICES if svc.name == "codex-app-server"), None
     )
-    if codex_app_server is not None and not codex_app_server.supports_backend(
-        coding_backend
+    if codex_app_server is not None and not service_supports_configured_backends(
+        codex_app_server
     ):
         del services["codex_app_server"]
     for service_name in (
@@ -463,7 +492,7 @@ def service_status(request):
         "openbase-routines",
     ):
         service = next((svc for svc in SERVICES if svc.name == service_name), None)
-        if not service or not service.supports_backend(coding_backend):
+        if not service or not service_supports_configured_backends(service):
             continue
         status_payload = launchctl_status(service)
         services[service_name.replace("-", "_")] = {
@@ -474,12 +503,16 @@ def service_status(request):
             "last_exit_code": status_payload.get("last_exit_code"),
             "optional": not service.install_by_default,
         }
+    # One cached, non-blocking snapshot drives both tailnet probes below.
+    tailscale_running, serve_health = _cached_tailnet_snapshot()
     for key, svc in services.items():
         if "running" not in svc:
             if key == "tailscale":
-                svc["running"] = _check_tailscale()
+                svc["running"] = tailscale_running
             elif key == "web_backend":
                 svc["running"] = _check_web_backend()
+            elif key == "codex_app_server":
+                svc["running"] = _check_codex_app_server()
             else:
                 svc["running"] = _check_port(svc["port"])
         logger.info(
@@ -488,9 +521,8 @@ def service_status(request):
             svc["running"],
             svc.get("port"),
         )
-    serve_health = tailscale_serve_health()
     services["tailscale_serve"] = {
-        "name": "Tailscale Serve",
+        "name": f"{_tailnet_label} Serve",
         "port": 18080,
         "running": serve_health.healthy,
         "host": serve_health.host,

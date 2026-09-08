@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -14,7 +15,6 @@ from openbase_coder_cli.thread_sync.thread_exchange import (
     resolve_thread_snapshot_conflict,
     thread_snapshot_conflicts_payload,
     thread_snapshot_status,
-    thread_sync_conflicts_payload,
 )
 
 
@@ -252,7 +252,7 @@ def test_import_snapshot_translates_source_home_cwd(tmp_path: Path) -> None:
     source_home = tmp_path / "source-codex"
     target_home = tmp_path / "target-codex"
     exchange_dir = tmp_path / "exchange"
-    source_user_home = Path("/Users/gabe")
+    source_user_home = Path("/Users/example")
     target_user_home = Path("/home/ubuntu")
     _create_state_db(source_home / "state_5.sqlite")
     _create_state_db(target_home / "state_5.sqlite")
@@ -261,7 +261,7 @@ def test_import_snapshot_translates_source_home_cwd(tmp_path: Path) -> None:
         "thread-1",
         title="Thread title",
         updated_at=20,
-        cwd="/Users/gabe/Projects/openbase/code/openbase-coder-workspace",
+        cwd="/Users/example/Projects/openbase/code/openbase-coder-workspace",
     )
     export_thread_snapshots(
         codex_home=source_home,
@@ -296,7 +296,7 @@ def test_import_migrates_existing_foreign_home_cwd(tmp_path: Path) -> None:
         "thread-1",
         title="Thread title",
         updated_at=20,
-        cwd="/Users/gabe/Projects/example",
+        cwd="/Users/example/Projects/example",
     )
 
     import_thread_snapshots(
@@ -554,99 +554,6 @@ def test_import_snapshot_detects_divergent_local_thread(tmp_path: Path) -> None:
         ledger_path=target_ledger,
     )
     assert status["conflict_count"] == 1
-
-
-def test_thread_sync_conflicts_payload_includes_home_and_device_conflicts(
-    tmp_path: Path,
-) -> None:
-    normal_home = tmp_path / "normal"
-    voice_home = tmp_path / "voice"
-    source_home = tmp_path / "source"
-    exchange_dir = tmp_path / "exchange"
-    home_ledger = tmp_path / "home-ledger.json"
-    device_ledger = tmp_path / "device-ledger.json"
-    source_device = tmp_path / "source-device.json"
-    target_device = tmp_path / "target-device.json"
-    for home in (normal_home, voice_home, source_home):
-        _create_state_db(home / "state_5.sqlite")
-
-    _insert_thread(
-        normal_home,
-        "thread-home",
-        title="Normal title",
-        updated_at=20,
-        terminal_message="normal",
-    )
-    _insert_thread(
-        voice_home,
-        "thread-home",
-        title="Voice title",
-        updated_at=30,
-        terminal_message="voice",
-    )
-    home_ledger.write_text(
-        json.dumps(
-            {
-                "threads": {
-                    "thread-home": {
-                        "thread_id": "thread-home",
-                        "normal": {"rollout_sha256": "normal"},
-                        "voice": {"rollout_sha256": "voice"},
-                        "status": "conflict",
-                        "reason": "both_homes_changed",
-                        "synced_at": 123.0,
-                    }
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    _insert_thread(
-        source_home,
-        "thread-device",
-        title="Remote title",
-        updated_at=40,
-        terminal_message="remote",
-    )
-    _insert_thread(
-        voice_home,
-        "thread-device",
-        title="Local title",
-        updated_at=50,
-        terminal_message="local",
-    )
-    export_thread_snapshots(
-        codex_home=source_home,
-        exchange_dir=exchange_dir,
-        device_identity_path=source_device,
-        ledger_path=tmp_path / "source-ledger.json",
-        stability_delay_seconds=0,
-        max_age_days=None,
-    )
-    import_thread_snapshots(
-        codex_home=voice_home,
-        exchange_dir=exchange_dir,
-        device_identity_path=target_device,
-        ledger_path=device_ledger,
-    )
-
-    payload = thread_sync_conflicts_payload(
-        normal_home=normal_home,
-        voice_home=voice_home,
-        home_ledger_path=home_ledger,
-        exchange_dir=exchange_dir,
-        device_identity_path=target_device,
-        device_ledger_path=device_ledger,
-    )
-
-    assert payload["conflict_count"] == 2
-    assert payload["home_conflict_count"] == 1
-    assert payload["device_conflict_count"] == 1
-    assert {conflict["source_type"] for conflict in payload["conflicts"]} == {
-        "home",
-        "device",
-    }
 
 
 def test_resolve_conflict_accept_remote_latest_overwrites_local_thread(
@@ -975,3 +882,104 @@ def test_import_auto_clears_conflict_after_content_converges(tmp_path: Path) -> 
         ledger_path=target_ledger,
     )
     assert status["conflict_count"] == 0
+
+
+def _exported_snapshot_metadata_path(exchange_dir: Path) -> Path:
+    snapshot_dirs = sorted((exchange_dir / "devices").glob("*/snapshots/*/*"))
+    assert len(snapshot_dirs) == 1
+    return snapshot_dirs[0] / "metadata.json"
+
+
+def test_import_caches_invalid_snapshot_and_revalidates_on_change(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / "source"
+    target_home = tmp_path / "target"
+    exchange_dir = tmp_path / "exchange"
+    ledger_path = tmp_path / "target-ledger.json"
+    _create_state_db(source_home / "state_5.sqlite")
+    _create_state_db(target_home / "state_5.sqlite")
+    _insert_thread(source_home, "thread-1", title="Thread title", updated_at=20)
+    export_thread_snapshots(
+        codex_home=source_home,
+        exchange_dir=exchange_dir,
+        device_identity_path=tmp_path / "source-device.json",
+        ledger_path=tmp_path / "source-ledger.json",
+        stability_delay_seconds=0,
+        max_age_days=None,
+    )
+    metadata_path = _exported_snapshot_metadata_path(exchange_dir)
+    valid_metadata = metadata_path.read_text(encoding="utf-8")
+    metadata_path.write_text("not json", encoding="utf-8")
+
+    def run_import() -> list:
+        return import_thread_snapshots(
+            codex_home=target_home,
+            exchange_dir=exchange_dir,
+            device_identity_path=tmp_path / "target-device.json",
+            ledger_path=ledger_path,
+        )
+
+    first = run_import()
+    assert [result.status for result in first] == ["skipped"]
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    assert len(ledger["invalid_snapshots"]) == 1
+
+    # An unchanged invalid snapshot must not be re-read: make the metadata
+    # unreadable so any parse attempt would raise.
+    metadata_path.chmod(0o000)
+    try:
+        second = run_import()
+    finally:
+        metadata_path.chmod(0o600)
+    assert [(result.status, result.reason) for result in second] == [
+        (first[0].status, first[0].reason)
+    ]
+
+    metadata_path.write_text(valid_metadata, encoding="utf-8")
+    third = run_import()
+    assert [result.status for result in third] == ["imported"]
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    assert ledger["invalid_snapshots"] == {}
+
+
+def test_import_prunes_cache_entries_for_removed_snapshots(tmp_path: Path) -> None:
+    source_home = tmp_path / "source"
+    target_home = tmp_path / "target"
+    exchange_dir = tmp_path / "exchange"
+    ledger_path = tmp_path / "target-ledger.json"
+    _create_state_db(source_home / "state_5.sqlite")
+    _create_state_db(target_home / "state_5.sqlite")
+    _insert_thread(source_home, "thread-1", title="Thread title", updated_at=20)
+    export_thread_snapshots(
+        codex_home=source_home,
+        exchange_dir=exchange_dir,
+        device_identity_path=tmp_path / "source-device.json",
+        ledger_path=tmp_path / "source-ledger.json",
+        stability_delay_seconds=0,
+        max_age_days=None,
+    )
+    metadata_path = _exported_snapshot_metadata_path(exchange_dir)
+    metadata_path.write_text("not json", encoding="utf-8")
+
+    import_thread_snapshots(
+        codex_home=target_home,
+        exchange_dir=exchange_dir,
+        device_identity_path=tmp_path / "target-device.json",
+        ledger_path=ledger_path,
+    )
+    assert (
+        len(json.loads(ledger_path.read_text(encoding="utf-8"))["invalid_snapshots"])
+        == 1
+    )
+
+    shutil.rmtree(metadata_path.parent)
+    import_thread_snapshots(
+        codex_home=target_home,
+        exchange_dir=exchange_dir,
+        device_identity_path=tmp_path / "target-device.json",
+        ledger_path=ledger_path,
+    )
+    assert (
+        json.loads(ledger_path.read_text(encoding="utf-8"))["invalid_snapshots"] == {}
+    )

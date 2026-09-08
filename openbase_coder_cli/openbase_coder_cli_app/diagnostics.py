@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 IOS_LOG_UPLOAD_FILENAME = "ios-app.log"
 IOS_LOG_UPLOAD_MAX_ENTRIES = 1000
+IOS_LOG_UPLOAD_MAX_BYTES = 2 * 1024 * 1024
 REDACTED_VALUE = "<redacted>"
 REDACTED_EMAIL_VALUE = "<redacted-email>"
 SENSITIVE_KEY_SUFFIXES = ("password", "secret", "key", "token")
@@ -30,12 +31,12 @@ SENSITIVE_KEY_PATTERN = r"(?:password|secret|key|token)"
 class IOSLogEntrySerializer(serializers.Serializer):
     timestamp = serializers.CharField(required=False, allow_blank=True, max_length=64)
     component = serializers.CharField(required=False, allow_blank=True, max_length=128)
-    message = serializers.CharField(required=False, allow_blank=True, max_length=2000)
+    message = serializers.CharField(required=False, allow_blank=True)
     metadata = serializers.DictField(
-        child=serializers.CharField(allow_blank=True, max_length=1000),
+        child=serializers.CharField(allow_blank=True),
         required=False,
     )
-    line = serializers.CharField(required=False, allow_blank=True, max_length=4000)
+    line = serializers.CharField(required=False, allow_blank=True)
 
 
 class IOSLogUploadSerializer(serializers.Serializer):
@@ -53,6 +54,21 @@ class IOSLogUploadSerializer(serializers.Serializer):
             serializer.is_valid(raise_exception=True)
             validated_entries.append(serializer.validated_data)
         return validated_entries
+
+    def validate(self, attrs):
+        encoded_size = len(
+            json.dumps(attrs, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        )
+        if encoded_size > IOS_LOG_UPLOAD_MAX_BYTES:
+            raise serializers.ValidationError(
+                {
+                    "entries": (
+                        "The log upload exceeds the 2 MiB batch limit; "
+                        "upload fewer recent entries."
+                    )
+                }
+            )
+        return attrs
 
 
 @api_view(["GET"])

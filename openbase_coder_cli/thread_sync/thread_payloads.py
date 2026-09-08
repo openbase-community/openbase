@@ -158,6 +158,34 @@ def _user_message_texts(turn: dict[str, Any]) -> list[str]:
     return texts
 
 
+def _file_edit_paths(turn: dict[str, Any]) -> list[str]:
+    """Absolute paths of files edited in the turn, first-seen order, deduped.
+
+    Reads ``fileChange`` items. The rollout normalizer emits ``changes`` as a
+    list of ``{path, kind, diff}``; the live app-server payload may still carry
+    the raw ``{path: change}`` mapping, so both shapes are handled.
+    """
+    paths: list[str] = []
+    seen: set[str] = set()
+    for item in turn.get("items", []):
+        if not isinstance(item, dict) or item.get("type") != "fileChange":
+            continue
+        changes = item.get("changes")
+        if isinstance(changes, list):
+            candidates = [
+                change.get("path") for change in changes if isinstance(change, dict)
+            ]
+        elif isinstance(changes, dict):
+            candidates = list(changes.keys())
+        else:
+            candidates = []
+        for path in candidates:
+            if isinstance(path, str) and path.strip() and path not in seen:
+                seen.add(path)
+                paths.append(path)
+    return paths
+
+
 def _extract_agent_output(turn: dict[str, Any]) -> str:
     final_parts: list[str] = []
     fallback_parts: list[str] = []
@@ -298,6 +326,7 @@ def _run_from_turn(
             "reasoning_effort",
         ),
         steers=[SteerInfo(text=text) for text in user_texts[1:]],
+        file_edits=_file_edit_paths(turn),
     )
 
 

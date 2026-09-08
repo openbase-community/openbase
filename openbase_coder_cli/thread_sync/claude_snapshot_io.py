@@ -18,7 +18,7 @@ from .claude_models import (
     SCHEMA_VERSION,
     ClaudeSessionSnapshot,
 )
-from .thread_import import _rollout_open_for_write, _string
+from .codex_state import _rollout_open_for_write, _string
 from .thread_sync_common import (
     DeviceIdentity,
     collect_snapshot_records,
@@ -305,7 +305,7 @@ def _write_device_snapshot(
     *,
     exchange_dir: Path,
     identity: DeviceIdentity,
-    openbase_home: Path,
+    claude_home: Path,
     snapshot: ClaudeSessionSnapshot,
     fingerprint_id: str,
     parent_fingerprint: str | None,
@@ -326,8 +326,8 @@ def _write_device_snapshot(
     tmp_dir.mkdir(parents=True, exist_ok=False)
     try:
         copied_files: list[str] = []
-        for source_path in _session_paths(snapshot, openbase_home):
-            relative = source_path.relative_to(openbase_home)
+        for source_path in _session_paths(snapshot, claude_home):
+            relative = source_path.relative_to(claude_home)
             target_path = files_dir / relative
             if source_path.is_dir():
                 target_path.mkdir(parents=True, exist_ok=True)
@@ -436,7 +436,7 @@ def _import_device_snapshot_into_home(
     *,
     snapshot_dir: Path,
     metadata: dict[str, Any],
-    openbase_home: Path,
+    claude_home: Path,
     overwrite: bool,
 ) -> None:
     files_dir = snapshot_dir / "files"
@@ -446,10 +446,10 @@ def _import_device_snapshot_into_home(
     _copy_session_into_home(
         source_home=files_dir,
         source_root=source_root,
-        target_home=openbase_home,
+        target_home=claude_home,
         overwrite=overwrite,
     )
-    if not (openbase_home / root_relative_path).exists():
+    if not (claude_home / root_relative_path).exists():
         raise FileNotFoundError(f"Imported Claude session root missing: {session_id}")
 
 

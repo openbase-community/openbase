@@ -436,7 +436,7 @@ def test_project_status_returns_fresh_metadata(monkeypatch) -> None:
     ]
 
 
-def test_git_status_reports_missing_directory(monkeypatch) -> None:
+def test_project_metadata_git_status_uses_shared_multi_engine(tmp_path) -> None:
     os.environ.setdefault("OPENBASE_CODER_CLI_SECRET_KEY", "test-secret")
     os.environ.setdefault(
         "DJANGO_SETTINGS_MODULE", "openbase_coder_cli.config.settings"
@@ -448,12 +448,33 @@ def test_git_status_reports_missing_directory(monkeypatch) -> None:
 
     from openbase_coder_cli.openbase_coder_cli_app import projects as project_views
 
-    monkeypatch.setattr(project_views.Path, "is_dir", lambda self: False)
+    def git(args, cwd):
+        subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
 
-    assert project_views._git_status("/tmp/missing-project") == "missing"
+    workspace = tmp_path / "ws"
+    sub = workspace / "child"
+    for repo in (workspace, sub):
+        repo.mkdir(parents=True, exist_ok=True)
+        git(["init", "-q"], repo)
+        git(["config", "user.email", "t@example.com"], repo)
+        git(["config", "user.name", "T"], repo)
+    (workspace / "multi.json").write_text(
+        '{"repos": [{"name": "child", "url": "https://example.com/child"}]}'
+    )
+    (sub / "a.txt").write_text("hello\n")
+    git(["add", "a.txt"], sub)
+    git(["commit", "-q", "-m", "add a"], sub)
+
+    # Sub-repo has no upstream, so the workspace folds to out-of-sync.
+    metadata = project_views._project_metadata(str(workspace))
+    assert metadata["git_status"] == "out-of-sync"
+
+    # Dirty sub-repo work outranks out-of-sync.
+    (sub / "wip.txt").write_text("wip\n")
+    assert project_views._project_metadata(str(workspace))["git_status"] == "dirty"
 
 
-def test_git_status_reports_out_of_sync_for_ahead_or_behind(monkeypatch) -> None:
+def test_project_metadata_git_status_reports_missing_directory() -> None:
     os.environ.setdefault("OPENBASE_CODER_CLI_SECRET_KEY", "test-secret")
     os.environ.setdefault(
         "DJANGO_SETTINGS_MODULE", "openbase_coder_cli.config.settings"
@@ -465,21 +486,5 @@ def test_git_status_reports_out_of_sync_for_ahead_or_behind(monkeypatch) -> None
 
     from openbase_coder_cli.openbase_coder_cli_app import projects as project_views
 
-    calls: list[list[str]] = []
-
-    def fake_run(args, **_kwargs):
-        calls.append(args)
-        if args[:2] == ["git", "status"]:
-            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
-        if args[:2] == ["git", "rev-list"]:
-            return subprocess.CompletedProcess(args, 0, stdout="1\t0\n", stderr="")
-        raise AssertionError(args)
-
-    monkeypatch.setattr(project_views.Path, "is_dir", lambda self: True)
-    monkeypatch.setattr(project_views.subprocess, "run", fake_run)
-
-    assert project_views._git_status("/tmp/project") == "out-of-sync"
-    assert calls == [
-        ["git", "status", "--porcelain"],
-        ["git", "rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
-    ]
+    metadata = project_views._project_metadata("/tmp/definitely-missing-project")
+    assert metadata["git_status"] == "missing"

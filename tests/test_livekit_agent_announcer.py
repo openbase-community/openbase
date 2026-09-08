@@ -1022,7 +1022,7 @@ async def test_session_final_transcript_proactively_steers_when_logging_disabled
         if client.steered_prompts:
             break
         await asyncio.sleep(0.01)
-    assert client.steered_prompts == ["stop now"]
+    assert client.steered_prompts == ["<voice>stop now</voice>"]
     assert router.should_skip_proactively_steered_prompt("stop now") is True
 
     client.steer_result = None
@@ -1033,6 +1033,7 @@ async def test_session_final_transcript_proactively_steers_when_logging_disabled
         if len(client.steered_prompts) == 2:
             break
         await asyncio.sleep(0.01)
+    assert client.steered_prompts[-1] == "<voice>start something new</voice>"
     assert router.should_skip_proactively_steered_prompt("start something new") is False
 
 

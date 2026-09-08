@@ -84,8 +84,8 @@ else:
 
 INSTALLED_APPS = [
     # No admin/sessions/messages: the server is a JSON API + websockets behind
-    # JWT/machine-token auth. contrib.auth stays because JWTAuthentication
-    # mints per-sub User rows (config/authentication.py).
+    # JWT/local-capability auth. contrib.auth stays because the authentication
+    # classes mint per-sub User rows (config/authentication.py).
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.staticfiles",
@@ -97,7 +97,7 @@ INSTALLED_APPS = [
     "openbase_coder_cli.openbase_coder_cli_app",
 ]
 
-# No session/auth/message/CSRF middleware: auth is stateless JWT/machine
+# No session/auth/message/CSRF middleware: auth is stateless JWT/capability
 # tokens (DRF resolves request.user itself; no cookies, so CSRF protects
 # nothing here).
 MIDDLEWARE = [
@@ -168,6 +168,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
+        "openbase_coder_cli.config.authentication.LocalAPIAuthentication",
         "openbase_coder_cli.config.authentication.JWTAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [

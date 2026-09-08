@@ -1,8 +1,9 @@
 """Shared thread/session sync helpers for Openbase Coder.
 
 This package holds the CLI's thread and session persistence-and-sync layer:
-Claude/Codex thread sync (``claude_thread_sync``, ``thread_import``,
-``thread_exchange``, ``thread_sync_common``), the Codex app-server session
+Claude/Codex cross-device thread sync (``claude_thread_sync``,
+``thread_exchange``, ``codex_state``, ``thread_sync_common``), the Codex
+app-server session
 manager (``session_manager``), thread models/payloads, and recent-project
 tracking.
 

@@ -28,9 +28,12 @@ openbase-coder backend use codex
 - `openbase_cloud`: Cloud-proxied Claude Code through Openbase Cloud, authenticated with Openbase login.
 - `claude_code`: Claude Code backend for Super Agents UI-driver sessions using local Claude auth/billing, not `ANTHROPIC_API_KEY`.
 
-The command persists the selection in `~/.openbase/.env` as
-`OPENBASE_CODING_BACKEND=<backend>`, the same setting written by
-`openbase-coder setup --backend ...` and read by the local console.
+The command only updates `~/.openbase/.env`, persisting the selection as
+`OPENBASE_CODING_BACKEND=<backend>` — the same setting written by
+`openbase-coder setup --backend ...` and read by the local console. Restart
+Openbase services to apply it. Backend model/provider configuration is
+applied by the service as `codex app-server -c` launch overrides; it is
+never written into your `~/.codex/config.toml`.
 
 
 The backend setting controls `super-agents-mcp` coding sessions. Codex uses the
@@ -50,16 +53,19 @@ dispatcher explicitly so the new environment is loaded:
 openbase-coder restart --recreate-dispatcher
 ```
 
-For Claude Code, Openbase uses its managed `CLAUDE_CONFIG_DIR` at
-`~/.openbase/claude_config`. Check and configure that scoped login with:
+For Claude Code, Openbase uses your own shared `~/.claude` home and your own
+Claude Code login (`claude login`). Check it with:
 
 ```bash
 openbase-coder claude status
 openbase-coder claude login
 ```
 
-Openbase Cloud does not require a personal Claude or Anthropic login. It uses
-the same managed Claude config plus the Openbase Anthropic proxy, authenticated
+For Codex, Openbase uses your own `~/.codex/auth.json` — just run
+`codex login`.
+
+Openbase Cloud does not require a personal Claude or Anthropic login. It runs
+Claude Code through the Openbase Anthropic proxy, authenticated
 with an Openbase machine token. The legacy Codex-over-Openbase-Cloud proxy path
 remains available internally as `openbase_cloud_codex` for compatibility but is
 not listed as a normal backend choice.

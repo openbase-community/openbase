@@ -50,6 +50,24 @@ def test_friendly_error_keeps_json_without_message_field_raw():
     assert _friendly_error(RuntimeError(raw)) == raw
 
 
+def test_friendly_error_hides_unreadable_rollout_path():
+    exc = RuntimeError(
+        json.dumps(
+            {
+                "message": (
+                    "failed to read thread: failed to read session metadata "
+                    "private-rollout-location"
+                )
+            }
+        )
+    )
+
+    message = _friendly_error(exc)
+
+    assert "current Codex version" in message
+    assert "private-rollout-location" not in message
+
+
 async def _connected_communicator(manager):
     # channels.testing pulls in daphne, which is not a dependency here, so
     # drive the consumer with the underlying asgiref communicator directly.

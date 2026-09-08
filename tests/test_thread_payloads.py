@@ -1,4 +1,51 @@
-from openbase_coder_cli.thread_sync.thread_payloads import _session_from_thread
+from openbase_coder_cli.thread_sync.thread_payloads import (
+    _file_edit_paths,
+    _run_from_turn,
+    _session_from_thread,
+)
+
+
+def test_file_edit_paths_reads_normalized_list_shape() -> None:
+    turn = {
+        "items": [
+            {"type": "agentMessage", "text": "done"},
+            {
+                "type": "fileChange",
+                "changes": [
+                    {"path": "/w/cli/a.py", "kind": {"type": "add"}, "diff": "x"},
+                    {"path": "/w/console/b.tsx", "kind": {"type": "modify"}},
+                ],
+            },
+        ]
+    }
+    assert _file_edit_paths(turn) == ["/w/cli/a.py", "/w/console/b.tsx"]
+
+
+def test_file_edit_paths_reads_raw_mapping_shape_and_dedupes() -> None:
+    turn = {
+        "items": [
+            {"type": "fileChange", "changes": {"/w/cli/a.py": {"type": "add"}}},
+            {"type": "fileChange", "changes": {"/w/cli/a.py": {"type": "modify"}}},
+        ]
+    }
+    assert _file_edit_paths(turn) == ["/w/cli/a.py"]
+
+
+def test_run_from_turn_populates_file_edits() -> None:
+    turn = {
+        "id": "turn_1",
+        "status": "completed",
+        "items": [
+            {"type": "userMessage", "content": [{"type": "text", "text": "go"}]},
+            {
+                "type": "fileChange",
+                "changes": [{"path": "/w/cli/a.py", "kind": {"type": "add"}}],
+            },
+        ],
+    }
+    run = _run_from_turn(turn)
+    assert run.file_edits == ["/w/cli/a.py"]
+    assert run.model_dump(mode="json")["file_edits"] == ["/w/cli/a.py"]
 
 
 def test_session_from_thread_maps_backend_session_id() -> None:

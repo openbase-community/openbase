@@ -48,11 +48,7 @@ def test_onboarding_status_returns_payload(monkeypatch) -> None:
     assert response.data == _fake_status_payload()
 
 
-def test_onboarding_status_allows_anonymous_requests(monkeypatch) -> None:
-    # Regression: the desktop onboarding shell polls this endpoint without a
-    # local JWT (it is how the UI learns the user just signed in). The default
-    # IsAuthenticated permission returned 401, which the shell swallowed, so
-    # onboarding stuck at "Sign in to Openbase" after every successful login.
+def test_onboarding_status_allows_authenticated_installation(monkeypatch) -> None:
     from openbase_coder_cli.openbase_coder_cli_app import (
         onboarding as onboarding_views,
     )
@@ -62,6 +58,7 @@ def test_onboarding_status_allows_anonymous_requests(monkeypatch) -> None:
     )
 
     request = APIRequestFactory().get("/api/onboarding/status/")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
     response = views.onboarding_status(request)
 
     assert response.status_code == 200
@@ -104,6 +101,11 @@ def test_onboarding_status_payload_composes_checks(monkeypatch, tmp_path) -> Non
     )
     monkeypatch.setattr(
         onboarding,
+        "tailnet_experience_payload",
+        lambda: {"provider": "netmesh", "options": [{"name": "Openbase VPN"}]},
+    )
+    monkeypatch.setattr(
+        onboarding,
         "backend_auth_status",
         lambda *, authenticated: {"backend": "codex", "ready": authenticated},
     )
@@ -127,6 +129,7 @@ def test_onboarding_status_payload_composes_checks(monkeypatch, tmp_path) -> Non
     }
     assert payload["backend_auth"] == {"backend": "codex", "ready": True}
     assert payload["tailscale_self"]["dns_name"] == "mac.tailnet.ts.net"
+    assert payload["tailnet"]["provider"] == "netmesh"
     assert payload["tailscale_serve"] == {"healthy": True}
     assert payload["cloud"] == {"last_register": {"ok": True}}
     assert payload["audio"] == {

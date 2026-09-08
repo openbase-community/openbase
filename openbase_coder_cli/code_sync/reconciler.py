@@ -11,9 +11,11 @@ branch ONLY when it is provably safe:
 - the local working tree already matches the fetched commit's tree
   (Syncthing has delivered the files, so nothing moves twice).
 
-Divergence is normally converged through a synced repository manifest while
-preserving displaced commits under recovery refs. Unsafe states remain
-untouched and surface as conflict records for the product UI.
+Branch pointers follow a synced repository manifest, but only through
+provably-safe moves: fast-forwards converge, a stale manifest (its head an
+ancestor of local) loses to local history, and true divergence pauses as a
+recorded conflict for `openbase-coder sync resolve` — automation never picks
+a winner between two real histories.
 """
 
 from __future__ import annotations
@@ -440,6 +442,9 @@ def run_reconcile_once(
                 peer_git_url(peer, folder.folder_id, repo_relpath) for peer in peers
             ),
             auth_header=auth_header,
+            folder_id=folder.folder_id,
+            repo_relpath=repo_relpath,
+            conflicts_path=conflicts_path,
         )
         manifest_summary_key = (
             "worktree_manifests" if is_worktree else "repository_manifests"
@@ -611,14 +616,19 @@ def run_tick_if_enabled() -> dict[str, Any] | None:
 def _refresh_config_if_peers_changed(eligibility, peers) -> None:
     """Re-render the Syncthing config when the syncable peer set changes.
 
-    New devices register their ``syncthing_device_id`` capability after this
-    device last rendered config.xml (e.g. a freshly provisioned DevSpace);
-    this picks them up without requiring a settings mutation.
+    The fingerprint covers device ids AND their tailnet DNS names: a peer
+    that switches tailnet transport keeps its device id but changes its
+    MagicDNS name, and the rendered config pins that name as the peer's
+    address — so a name change must re-render too, or every reconnect dials
+    a dead host. New devices (fresh ``syncthing_device_id`` capability) are
+    picked up the same way, without requiring a settings mutation.
     """
     from openbase_coder_cli.code_sync import CodeSyncError
     from openbase_coder_cli.code_sync import manager as sync_manager
 
-    rendered_ids = sorted(peer.syncthing_device_id for peer in peers)
+    rendered_ids = sorted(
+        f"{peer.syncthing_device_id}@{peer.tailscale_magic_dns}" for peer in peers
+    )
     state = read_reconcile_state()
     if (
         state.get("rendered_peer_ids") == rendered_ids

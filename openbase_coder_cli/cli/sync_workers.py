@@ -1,9 +1,9 @@
 """``openbase-coder sync-workers`` — all periodic sync jobs in one process.
 
-One launchd/systemd service replaces the former quartet of near-identical
-polling services (codex-thread-sync, claude-thread-sync,
-codex-thread-device-sync, claude-thread-device-sync) and also runs the
-code-sync reconcile tick that previously hid inside ``openbase-routines``.
+One launchd/systemd service runs the periodic cross-device thread snapshot
+syncs plus the code-sync reconcile tick that previously hid inside
+``openbase-routines``. Local thread stores are the shared agent homes, so
+there is no home↔home sync job anymore.
 
 Each job runs on its own thread with its own interval and per-tick error
 isolation, so one slow or failing job never delays the others. Jobs that only
@@ -37,6 +37,7 @@ DEFAULT_MAX_AGE_DAYS = 15
 DEFAULT_STABILITY_DELAY_SECONDS = 0.2
 CODE_SYNC_TICK_SECONDS = 60.0
 CLOUD_REGISTER_INTERVAL_SECONDS = 3600.0
+CLOUD_WEBHOOK_POLL_INTERVAL_SECONDS = 30.0
 LIVEKIT_POOL_WATCHDOG_TICK_SECONDS = 30.0
 
 
@@ -79,58 +80,6 @@ class SyncJob:
     name: str
     interval: float
     tick: Callable[[], None]
-
-
-def _codex_threads_tick() -> None:
-    from openbase_coder_cli.cli.codex_sync import _sync_result_summary
-    from openbase_coder_cli.thread_sync.thread_import import sync_codex_threads_once
-
-    results = sync_codex_threads_once(
-        stability_delay_seconds=DEFAULT_STABILITY_DELAY_SECONDS,
-        max_age_days=max(
-            _env_int("CODEX_THREAD_SYNC_MAX_AGE_DAYS", DEFAULT_MAX_AGE_DAYS), 0
-        ),
-    )
-    summary = _sync_result_summary(results)
-    logger.info(
-        "codex_thread_sync sweep_complete total=%s transferred=%s conflicts=%s "
-        "errors=%s skipped=%s already_synced=%s reason_counts=%s direction_counts=%s",
-        summary["total"],
-        summary["transferred"],
-        summary["conflicts"],
-        summary["errors"],
-        summary["skipped"],
-        summary["already_synced"],
-        summary["reason_counts"],
-        summary["direction_counts"],
-    )
-
-
-def _claude_threads_tick() -> None:
-    from openbase_coder_cli.cli.claude_sync import _sync_result_summary
-    from openbase_coder_cli.thread_sync.claude_thread_sync import (
-        sync_claude_threads_once,
-    )
-
-    results = sync_claude_threads_once(
-        stability_delay_seconds=DEFAULT_STABILITY_DELAY_SECONDS,
-        max_age_days=max(
-            _env_int("CLAUDE_THREAD_SYNC_MAX_AGE_DAYS", DEFAULT_MAX_AGE_DAYS), 0
-        ),
-    )
-    summary = _sync_result_summary(results)
-    logger.info(
-        "claude_thread_sync sweep_complete total=%s transferred=%s conflicts=%s "
-        "errors=%s skipped=%s already_synced=%s reason_counts=%s direction_counts=%s",
-        summary["total"],
-        summary["transferred"],
-        summary["conflicts"],
-        summary["errors"],
-        summary["skipped"],
-        summary["already_synced"],
-        summary["reason_counts"],
-        summary["direction_counts"],
-    )
 
 
 def _codex_devices_tick() -> None:
@@ -205,6 +154,24 @@ def _claude_devices_tick() -> None:
     )
 
 
+def _claude_app_index_tick() -> None:
+    # Best-effort injection of Openbase Claude sessions into the Claude
+    # desktop app's private session index (macOS only; no-op elsewhere or
+    # when the app has no index). See claude_app_index module docstring.
+    from openbase_coder_cli.claude_app_index import sync_claude_app_index
+
+    result = sync_claude_app_index()
+    if result.get("supported"):
+        logger.info(
+            "claude_app_index sweep_complete sessions=%s created=%s updated=%s",
+            result.get("sessions"),
+            result.get("created"),
+            result.get("updated"),
+        )
+    else:
+        logger.debug("claude_app_index skipped reason=%s", result.get("reason"))
+
+
 def _cloud_registration_tick() -> None:
     from openbase_coder_cli.config.token_manager import (
         DEFAULT_WEB_BACKEND_URL,
@@ -277,21 +244,60 @@ def _code_sync_reconcile_tick() -> None:
         logger.warning("code_sync tick_errors %s", summary["errors"])
 
 
+def _cloud_webhook_events_tick() -> None:
+    from openbase_coder_cli.config.token_manager import (
+        DEFAULT_WEB_BACKEND_URL,
+        TokenManager,
+    )
+    from openbase_coder_cli.services import cloud_webhook_events
+
+    if not TokenManager(DEFAULT_WEB_BACKEND_URL).has_refresh_token:
+        logger.debug("cloud_webhook_events skipped no_login")
+        return
+    result = cloud_webhook_events.fetch_pending_relay_events()
+    if not result.ok:
+        if not result.supported:
+            logger.debug("cloud_webhook_events endpoint_unsupported")
+        else:
+            logger.warning(
+                "cloud_webhook_events poll_failed error=%s status=%s",
+                result.error,
+                result.status_code,
+            )
+        return
+    events = []
+    if isinstance(result.response, dict):
+        raw_events = result.response.get("events")
+        if isinstance(raw_events, list):
+            events = [event for event in raw_events if isinstance(event, dict)]
+    if not events:
+        logger.debug("cloud_webhook_events sweep_complete fetched=0")
+        return
+
+    import asyncio
+
+    from super_agents.app_server_client import CodexAppServerClient
+
+    async def deliver() -> dict:
+        client = CodexAppServerClient()
+        try:
+            return await cloud_webhook_events.deliver_relay_events(client, events)
+        finally:
+            await client.close()
+
+    summary = asyncio.run(deliver())
+    logger.info(
+        "cloud_webhook_events sweep_complete fetched=%s matched=%s delivered=%s acked=%s",
+        summary["fetched"],
+        summary["matched"],
+        summary["delivered"],
+        summary["acked"],
+    )
+
+
 def build_jobs() -> list[SyncJob]:
     """The full job set; gating happens inside each tick, not here."""
     return [
-        SyncJob(
-            name="codex_thread_sync",
-            interval=_env_float("CODEX_THREAD_SYNC_INTERVAL", DEFAULT_INTERVAL_SECONDS),
-            tick=_codex_threads_tick,
-        ),
-        SyncJob(
-            name="claude_thread_sync",
-            interval=_env_float(
-                "CLAUDE_THREAD_SYNC_INTERVAL", DEFAULT_INTERVAL_SECONDS
-            ),
-            tick=_claude_threads_tick,
-        ),
         SyncJob(
             name="codex_thread_device_sync",
             interval=_env_float(
@@ -307,6 +313,13 @@ def build_jobs() -> list[SyncJob]:
             tick=_claude_devices_tick,
         ),
         SyncJob(
+            name="claude_app_index",
+            interval=_env_float(
+                "CLAUDE_APP_INDEX_SYNC_INTERVAL", DEFAULT_INTERVAL_SECONDS
+            ),
+            tick=_claude_app_index_tick,
+        ),
+        SyncJob(
             name="code_sync_reconcile",
             interval=_env_float("CODE_SYNC_TICK_SECONDS", CODE_SYNC_TICK_SECONDS),
             tick=_code_sync_reconcile_tick,
@@ -317,6 +330,14 @@ def build_jobs() -> list[SyncJob]:
                 "OPENBASE_CLOUD_REGISTER_INTERVAL", CLOUD_REGISTER_INTERVAL_SECONDS
             ),
             tick=_cloud_registration_tick,
+        ),
+        SyncJob(
+            name="cloud_webhook_events",
+            interval=_env_float(
+                "OPENBASE_CLOUD_WEBHOOK_POLL_INTERVAL",
+                CLOUD_WEBHOOK_POLL_INTERVAL_SECONDS,
+            ),
+            tick=_cloud_webhook_events_tick,
         ),
         SyncJob(
             name="livekit_pool_watchdog",

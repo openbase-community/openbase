@@ -16,10 +16,8 @@ from openbase_coder_cli.paths import (
     CODEX_DISPATCHER_INSTRUCTIONS_PATH,
     CODEX_HOME_DIR,
     CODEX_SUPER_AGENT_INSTRUCTIONS_PATH,
-    NORMAL_CODEX_AGENTS_MD_PATH,
-    NORMAL_CODEX_HOME_DIR,
-    OPENBASE_CLAUDE_CONFIG_DIR,
-    OPENBASE_CLAUDE_MD_PATH,
+    OPENBASE_AGENTS_MD_PATH,
+    OPENBASE_INSTRUCTIONS_DIR,
 )
 from openbase_coder_cli.thread_sync.session_manager import (
     resolve_super_agent_instructions_path,
@@ -32,21 +30,20 @@ class AgentsMdSerializer(serializers.Serializer):
     content = serializers.CharField(allow_blank=True, trim_whitespace=False)
     target = serializers.ChoiceField(
         choices=[
-            "voice",
+            "openbase",
             "normal",
-            "claude",
             "super_agent",
             "direct_livekit",
             "dispatcher",
         ],
-        default="voice",
+        default="openbase",
         required=False,
     )
 
 
 @api_view(["GET", "PUT"])
 def agents_md(request):
-    """Read or write Codex home AGENTS.md files."""
+    """Read or write agent instruction files."""
     direct_livekit_path = Path(
         os.environ.get(
             "LIVEKIT_DIRECT_CODEX_DEVELOPER_INSTRUCTIONS_PATH",
@@ -60,47 +57,40 @@ def agents_md(request):
         )
     )
     agents_targets = {
-        "voice": {
-            "id": "voice",
-            "label": "Voice Codex home AGENTS.md",
-            "description": "Affects the Openbase Coder voice Codex home environment and its general voice-coding behavior.",
-            "path": CODEX_AGENTS_MD_PATH,
-            "codex_home": CODEX_HOME_DIR,
-        },
-        "claude": {
-            "id": "claude",
-            "label": "Openbase Claude config CLAUDE.md",
-            "description": "Affects Claude Code sessions that use Openbase's managed CLAUDE_CONFIG_DIR.",
-            "path": OPENBASE_CLAUDE_MD_PATH,
-            "codex_home": OPENBASE_CLAUDE_CONFIG_DIR,
+        "openbase": {
+            "id": "openbase",
+            "label": "Openbase base instructions",
+            "description": "Affects every Openbase Coder session on both backends; delivered per session, never written into the shared agent homes.",
+            "path": OPENBASE_AGENTS_MD_PATH,
+            "codex_home": OPENBASE_INSTRUCTIONS_DIR,
         },
         "normal": {
             "id": "normal",
-            "label": "Normal Codex home AGENTS.md",
-            "description": "Affects regular non-voice Codex sessions that use the standard Codex home directory.",
-            "path": NORMAL_CODEX_AGENTS_MD_PATH,
-            "codex_home": NORMAL_CODEX_HOME_DIR,
+            "label": "Codex home AGENTS.md",
+            "description": "Your ~/.codex/AGENTS.md — applies to every Codex session in the shared home, including Openbase sessions.",
+            "path": CODEX_AGENTS_MD_PATH,
+            "codex_home": CODEX_HOME_DIR,
         },
         "direct_livekit": {
             "id": "direct_livekit",
             "label": "Direct voice session instructions",
             "description": "Affects agent threads that are directly connected to a LiveKit voice session after a voice transfer.",
             "path": direct_livekit_path,
-            "codex_home": CODEX_HOME_DIR,
+            "codex_home": OPENBASE_INSTRUCTIONS_DIR,
         },
         "super_agent": {
             "id": "super_agent",
             "label": "Super Agent instructions",
             "description": "Affects normal non-dispatch Super Agent threads started or resumed by Openbase Coder.",
             "path": super_agent_path,
-            "codex_home": CODEX_HOME_DIR,
+            "codex_home": OPENBASE_INSTRUCTIONS_DIR,
         },
         "dispatcher": {
             "id": "dispatcher",
             "label": "Dispatcher-only instructions",
             "description": "Affects only the LiveKit dispatcher that routes voice sessions and coordinates transfers.",
             "path": dispatcher_path,
-            "codex_home": CODEX_HOME_DIR,
+            "codex_home": OPENBASE_INSTRUCTIONS_DIR,
         },
     }
 
@@ -179,12 +169,12 @@ def agents_md(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
-    voice_document = documents[0]
+    openbase_document = documents[0]
     return Response(
         {
-            "content": voice_document["content"],
-            "path": voice_document["path"],
-            "codex_home": voice_document["codex_home"],
+            "content": openbase_document["content"],
+            "path": openbase_document["path"],
+            "codex_home": openbase_document["codex_home"],
             "documents": documents,
         },
         status=status.HTTP_200_OK,

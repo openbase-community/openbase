@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import importlib.resources as importlib_resources
 import json
+import os
 import subprocess
 from pathlib import Path
+
+import click
+import pytest
 
 from openbase_coder_cli.cli.setup import hooks
 from openbase_coder_cli.paths import INJECT_SESSION_ID_HOOK_PATH
@@ -44,6 +48,40 @@ def test_hook_script_stays_silent_without_session_id() -> None:
     assert result.stdout == ""
 
 
+def test_hook_script_exports_session_id_for_claude_bash_commands(
+    tmp_path: Path,
+) -> None:
+    script = importlib_resources.files(hooks.BUNDLED_HOOKS_PACKAGE).joinpath(
+        hooks.SESSION_ID_HOOK_FILENAME
+    )
+    claude_env_file = tmp_path / "claude-session-env"
+    session_id = "abc-123"
+
+    with importlib_resources.as_file(script) as script_path:
+        subprocess.run(
+            ["bash", str(script_path)],
+            input=json.dumps({"session_id": session_id}),
+            capture_output=True,
+            text=True,
+            check=True,
+            env={**os.environ, "CLAUDE_ENV_FILE": str(claude_env_file)},
+        )
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; printf "%s" "$AGENT_SESSION_ID"',
+            "bash",
+            str(claude_env_file),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout == session_id
+
+
 def test_trusted_hash_matches_codex_fingerprint() -> None:
     # Known-answer test against codex's normalized hook trust hash
     # (codex-rs/config/src/fingerprint.rs): this is the [hooks.state] value
@@ -79,6 +117,44 @@ def test_merge_claude_hooks_is_idempotent() -> None:
     twice = hooks.merge_session_id_hook_into_claude_hooks(once)
     assert twice == once
     assert len(twice["SessionStart"]) == 1
+
+
+def test_ensure_claude_session_id_hook_preserves_other_settings(
+    tmp_path: Path,
+) -> None:
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps(
+            {
+                "model": "sonnet",
+                "hooks": {"PostToolUse": [{"hooks": [{"command": "audit.sh"}]}]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert hooks.ensure_claude_session_id_hook(settings) is True
+    updated = json.loads(settings.read_text(encoding="utf-8"))
+
+    assert updated["model"] == "sonnet"
+    assert updated["hooks"]["PostToolUse"] == [
+        {"hooks": [{"command": "audit.sh"}]}
+    ]
+    assert updated["hooks"]["SessionStart"][0]["hooks"][0]["command"] == str(
+        INJECT_SESSION_ID_HOOK_PATH
+    )
+    assert settings.stat().st_mode & 0o777 == 0o600
+    assert hooks.ensure_claude_session_id_hook(settings) is False
+
+
+def test_ensure_claude_session_id_hook_refuses_invalid_json(tmp_path: Path) -> None:
+    settings = tmp_path / "settings.json"
+    settings.write_text("not-json\n", encoding="utf-8")
+
+    with pytest.raises(click.ClickException, match="Could not read Claude settings"):
+        hooks.ensure_claude_session_id_hook(settings)
+
+    assert settings.read_text(encoding="utf-8") == "not-json\n"
 
 
 def test_ensure_codex_session_id_hook_appends_and_preserves(tmp_path: Path) -> None:
@@ -118,7 +194,9 @@ def test_ensure_codex_session_id_hook_is_idempotent(tmp_path: Path) -> None:
     assert first.count("[[hooks.SessionStart]]") == 1
 
 
-def test_ensure_codex_session_id_hook_replaces_stale_block(tmp_path: Path) -> None:
+def test_ensure_codex_session_id_hook_preserves_unrelated_session_hook(
+    tmp_path: Path,
+) -> None:
     config = tmp_path / "config.toml"
     state_key = f"{config.parent.resolve() / config.name}:session_start:0:0"
     config.write_text(
@@ -137,7 +215,39 @@ def test_ensure_codex_session_id_hook_replaces_stale_block(tmp_path: Path) -> No
     assert hooks.ensure_codex_session_id_hook(config) is True
     text = config.read_text(encoding="utf-8")
 
-    assert "/old/path.sh" not in text
-    assert "sha256:stale" not in text
-    assert text.count("[[hooks.SessionStart]]") == 1
+    assert '/old/path.sh' in text
+    assert 'sha256:stale' in text
+    assert text.count("[[hooks.SessionStart]]") == 2
+    managed_state_key = f"{config.parent.resolve() / config.name}:session_start:1:0"
     assert text.count(f'[hooks.state."{state_key}"]') == 1
+    assert text.count(f'[hooks.state."{managed_state_key}"]') == 1
+
+
+def test_ensure_codex_session_id_hook_reuses_managed_group_after_user_hook(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "config.toml"
+    command = str(INJECT_SESSION_ID_HOOK_PATH)
+    config.write_text(
+        "[[hooks.SessionStart]]\n\n"
+        "[[hooks.SessionStart.hooks]]\n"
+        'type = "command"\n'
+        'command = "user-hook.sh"\n\n'
+        "[[hooks.SessionStart]]\n\n"
+        "[[hooks.SessionStart.hooks]]\n"
+        'type = "command"\n'
+        f"command = {json.dumps(command)}\n\n"
+        '[hooks.state."stale-source:session_start:0:0"]\n'
+        f"trusted_hash = {json.dumps(hooks.session_start_hook_trusted_hash(command))}\n"
+        "enabled = true\n",
+        encoding="utf-8",
+    )
+
+    assert hooks.ensure_codex_session_id_hook(config) is True
+    text = config.read_text(encoding="utf-8")
+
+    assert text.count("[[hooks.SessionStart]]") == 2
+    assert text.count(f"command = {json.dumps(command)}") == 1
+    assert "stale-source" not in text
+    state_key = f"{config.parent.resolve() / config.name}:session_start:1:0"
+    assert f'[hooks.state."{state_key}"]' in text

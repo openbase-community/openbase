@@ -1,13 +1,10 @@
-"""Tests for codex/claude parity: normal-home MCP registration and the
-Claude keychain auth bridge."""
+"""Tests for codex/claude parity: shared-home MCP registration."""
 
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
-from openbase_coder_cli import claude_auth
 from openbase_coder_cli.cli.setup import claude as claude_phase
 from openbase_coder_cli.cli.setup import codex as codex_phase
 
@@ -20,36 +17,46 @@ def _stub_super_agents_command(monkeypatch, module) -> Path:
     return command
 
 
-def test_ensure_normal_codex_mcp_adds_only_the_table(tmp_path, monkeypatch) -> None:
+def test_ensure_codex_config_adds_table_without_permission_values(
+    tmp_path, monkeypatch
+) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text('model_reasoning_effort = "high"\n', encoding="utf-8")
-    monkeypatch.setattr(codex_phase, "NORMAL_CODEX_CONFIG_PATH", config_path)
+    monkeypatch.setattr(codex_phase, "CODEX_CONFIG_PATH", config_path)
+    monkeypatch.setattr(
+        codex_phase, "ensure_codex_session_id_hook", lambda _path: False
+    )
     command = _stub_super_agents_command(monkeypatch, codex_phase)
 
-    codex_phase._ensure_normal_codex_mcp(str(tmp_path / "workspace"))
+    codex_phase._ensure_codex_config(str(tmp_path / "workspace"))
 
     content = config_path.read_text(encoding="utf-8")
     assert "[mcp_servers.super-agents]" in content
     assert json.dumps(str(command)) in content
     assert 'model_reasoning_effort = "high"' in content
-    # Never the Openbase permission overrides.
-    assert "danger-full-access" not in content
+    # The Openbase permission posture is per-session env, never config values.
+    assert 'SUPER_AGENTS_CODEX_APPROVAL_POLICY = "never"' in content
+    assert 'SUPER_AGENTS_CODEX_SANDBOX_POLICY = "danger-full-access"' in content
+    assert "sandbox_mode" not in content
     assert "approval_policy" not in content
 
 
-def test_ensure_normal_codex_mcp_is_idempotent(tmp_path, monkeypatch) -> None:
+def test_ensure_codex_config_is_idempotent(tmp_path, monkeypatch) -> None:
     config_path = tmp_path / "config.toml"
-    monkeypatch.setattr(codex_phase, "NORMAL_CODEX_CONFIG_PATH", config_path)
+    monkeypatch.setattr(codex_phase, "CODEX_CONFIG_PATH", config_path)
+    monkeypatch.setattr(
+        codex_phase, "ensure_codex_session_id_hook", lambda _path: False
+    )
     _stub_super_agents_command(monkeypatch, codex_phase)
 
-    codex_phase._ensure_normal_codex_mcp("")
+    codex_phase._ensure_codex_config("")
     first = config_path.read_text(encoding="utf-8")
-    codex_phase._ensure_normal_codex_mcp("")
+    codex_phase._ensure_codex_config("")
 
     assert config_path.read_text(encoding="utf-8") == first
 
 
-def test_ensure_normal_claude_mcp_adds_entry_and_preserves_state(
+def test_ensure_claude_mcp_adds_entry_and_preserves_state(
     tmp_path, monkeypatch
 ) -> None:
     state_path = tmp_path / ".claude.json"
@@ -62,54 +69,30 @@ def test_ensure_normal_claude_mcp_adds_entry_and_preserves_state(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(claude_phase, "NORMAL_CLAUDE_STATE_PATH", state_path)
+    monkeypatch.setattr(claude_phase, "CLAUDE_STATE_PATH", state_path)
     command = _stub_super_agents_command(monkeypatch, claude_phase)
 
-    claude_phase._ensure_normal_claude_mcp("")
+    claude_phase._ensure_claude_mcp("")
 
     payload = json.loads(state_path.read_text(encoding="utf-8"))
     assert payload["hasCompletedOnboarding"] is True
     assert payload["mcpServers"]["existing"] == {"command": "existing"}
-    assert payload["mcpServers"]["super-agents"] == {
-        "type": "stdio",
-        "command": str(command),
-    }
-    # Normal-home entry never redirects CLAUDE_CONFIG_DIR.
-    assert "env" not in payload["mcpServers"]["super-agents"]
+    entry = payload["mcpServers"]["super-agents"]
+    assert entry["type"] == "stdio"
+    assert entry["command"] == str(command)
+    assert entry["env"]["SUPER_AGENTS_DEFAULT_BACKEND"] == "claude_code"
+    assert "SUPER_AGENTS_BASE_INSTRUCTIONS_PATH" in entry["env"]
+    # Sessions run against the shared ~/.claude; never redirect the config dir.
+    assert "CLAUDE_CONFIG_DIR" not in entry["env"]
 
 
-def test_copy_normal_claude_keychain_copies_secret(monkeypatch, tmp_path) -> None:
-    commands: list[list[str]] = []
+def test_ensure_claude_mcp_is_idempotent(tmp_path, monkeypatch) -> None:
+    state_path = tmp_path / ".claude.json"
+    monkeypatch.setattr(claude_phase, "CLAUDE_STATE_PATH", state_path)
+    _stub_super_agents_command(monkeypatch, claude_phase)
 
-    def fake_run(command, **_kwargs):
-        commands.append(command)
-        if command[1] == "find-generic-password" and "-w" in command:
-            return subprocess.CompletedProcess(command, 0, stdout="secret-token\n")
-        if command[1] == "find-generic-password":
-            return subprocess.CompletedProcess(
-                command, 0, stdout='    "acct"<blob>="user@example.com"\n'
-            )
-        return subprocess.CompletedProcess(command, 0, stdout="")
+    claude_phase._ensure_claude_mcp("")
+    first = state_path.read_text(encoding="utf-8")
+    claude_phase._ensure_claude_mcp("")
 
-    monkeypatch.setattr(claude_auth.platform, "system", lambda: "Darwin")
-    monkeypatch.setattr(claude_auth.subprocess, "run", fake_run)
-    config_dir = tmp_path / "claude_config"
-
-    assert claude_auth.copy_normal_claude_keychain(config_dir=config_dir) is True
-
-    add_command = commands[-1]
-    assert add_command[:2] == ["security", "add-generic-password"]
-    assert claude_auth.openbase_claude_keychain_service(config_dir) in add_command
-    assert "user@example.com" in add_command
-    assert "secret-token" in add_command
-
-
-def test_copy_normal_claude_keychain_skips_when_no_source(monkeypatch) -> None:
-    monkeypatch.setattr(claude_auth.platform, "system", lambda: "Darwin")
-    monkeypatch.setattr(
-        claude_auth.subprocess,
-        "run",
-        lambda command, **_kwargs: subprocess.CompletedProcess(command, 44, stdout=""),
-    )
-
-    assert claude_auth.copy_normal_claude_keychain() is False
+    assert state_path.read_text(encoding="utf-8") == first

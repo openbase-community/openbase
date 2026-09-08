@@ -28,6 +28,13 @@ def _speech_text_from_progress(progress: dict[str, Any]) -> str:
     summary = progress.get("summary")
     candidates: list[tuple[str, Any, bool]] = [
         (
+            "summary.items.final_answers",
+            _speech_text_from_turn_items(summary.get("items"))
+            if isinstance(summary, dict)
+            else None,
+            True,
+        ),
+        (
             "summary.items",
             find_turn_useful_text(summary.get("items"))
             if isinstance(summary, dict)
@@ -95,6 +102,106 @@ def _speech_text_from_progress(progress: dict[str, Any]) -> str:
         )
         return _speech_excerpt(text)
     return ""
+
+
+def _speech_text_from_turn_items(value: Any) -> str | None:
+    if not isinstance(value, list):
+        return None
+
+    final_texts: list[str] = []
+    assistant_texts: list[str] = []
+    for item in value:
+        text = _assistant_message_text(item)
+        if not text:
+            continue
+        phase = _message_phase(item)
+        if phase == "finalanswer":
+            final_texts.append(text)
+        else:
+            assistant_texts.append(text)
+
+    if final_texts:
+        return _join_distinct_speech_parts(final_texts)
+    if assistant_texts:
+        return assistant_texts[-1]
+    return None
+
+
+def _assistant_message_text(value: Any, depth: int = 0) -> str | None:
+    if depth > 6 or value is None:
+        return None
+    if isinstance(value, list):
+        for item in value:
+            if text := _assistant_message_text(item, depth + 1):
+                return text
+        return None
+    if not isinstance(value, dict):
+        return None
+
+    role = _message_role(value)
+    if role in {"agent", "agentmessage", "assistant", "assistantmessage"}:
+        return _text_content(value.get("text") or value.get("content"))
+    if role in {"user", "usermessage"}:
+        return None
+
+    payload = value.get("payload")
+    if isinstance(payload, dict):
+        payload_type = _normalized_label(payload.get("type"))
+        if payload_type in {"taskcomplete", "turncompleted"}:
+            return _text_content(
+                payload.get("last_agent_message")
+                or payload.get("lastAgentMessage")
+                or payload.get("message")
+                or payload.get("text")
+            )
+
+    for key in ("payload", "item", "message", "turn", "items", "events", "messages"):
+        if text := _assistant_message_text(value.get(key), depth + 1):
+            return text
+    return None
+
+
+def _message_phase(value: Any, depth: int = 0) -> str | None:
+    if depth > 6 or not isinstance(value, dict):
+        return None
+    phase = _normalized_label(value.get("phase"))
+    if phase:
+        return phase
+    for key in ("payload", "item", "message"):
+        if result := _message_phase(value.get(key), depth + 1):
+            return result
+    return None
+
+
+def _message_role(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    role = _normalized_label(value.get("role"))
+    item_type = _normalized_label(value.get("type"))
+    if role:
+        return role
+    if item_type:
+        return item_type
+    payload = value.get("payload")
+    return _message_role(payload) if isinstance(payload, dict) else None
+
+
+def _normalized_label(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return "".join(char for char in value.lower() if char.isalnum()) or None
+
+
+def _join_distinct_speech_parts(parts: list[str]) -> str:
+    distinct: list[str] = []
+    for part in parts:
+        normalized = _normalize_speech_candidate(part)
+        if not normalized:
+            continue
+        if distinct and normalized == _normalize_speech_candidate(distinct[-1]):
+            continue
+        distinct.append(part)
+    return "\n\n".join(distinct) if distinct else ""
 
 
 def _last_useful_message(value: Any, depth: int = 0) -> str | None:

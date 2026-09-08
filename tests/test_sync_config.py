@@ -159,9 +159,87 @@ def test_product_state_relpaths_allowed_other_openbase_rejected():
     for bad in (
         ".openbase",
         ".openbase/auth-things",
-        ".openbase/codex_home",
+        ".openbase/legacy-managed",
         ".openbase/logs",
         ".openbase/thread-sync/../db",
     ):
         with pytest.raises(ValueError):
             sync_config.validate_relpath(bad)
+
+
+def test_remove_legacy_openbase_folder_is_not_blocked_by_add_guard(
+    tmp_path: Path,
+) -> None:
+    """A folder registered before the ~/.openbase add-guard (or grandfathered
+    in) must still be removable — removal is never gated by add-time policy."""
+    config_path = tmp_path / "sync-config.json"
+    # Write a legacy registry entry directly: `set_sync_folders` would now
+    # reject this relpath, mirroring a config from an older CLI.
+    config_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "folders": [
+                    {"relpath": "Projects", "extra_ignores": []},
+                    {"relpath": ".openbase/legacy-managed/skills", "extra_ignores": []},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # The guard still blocks *adding* it back.
+    with pytest.raises(ValueError):
+        sync_config.validate_relpath(".openbase/legacy-managed/skills")
+
+    assert (
+        sync_config.remove_sync_folder(".openbase/legacy-managed/skills", config_path)
+        is True
+    )
+    assert [f.relpath for f in sync_config.sync_folders(config_path)] == ["Projects"]
+    # Idempotent: removing an absent folder returns False, no raise.
+    assert (
+        sync_config.remove_sync_folder(".openbase/legacy-managed/skills", config_path)
+        is False
+    )
+
+
+def test_add_folder_preserves_legacy_openbase_folder(tmp_path: Path) -> None:
+    config_path = tmp_path / "sync-config.json"
+    legacy_entry = {
+        "relpath": ".openbase/legacy-managed/skills",
+        "extra_ignores": ["*.tmp"],
+    }
+    config_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "folders": [
+                    {"relpath": "Projects", "extra_ignores": []},
+                    legacy_entry,
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    added = sync_config.add_sync_folder("Developer/loops/reviewer", config_path)
+
+    assert added.relpath == "Developer/loops/reviewer"
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    assert payload["folders"] == [
+        {"relpath": "Projects", "extra_ignores": []},
+        legacy_entry,
+        {"relpath": "Developer/loops/reviewer", "extra_ignores": []},
+    ]
+
+
+def test_relpath_for_path_guard_toggle() -> None:
+    home = Path.home()
+    legacy = home / ".openbase" / "legacy-managed" / "skills"
+    with pytest.raises(ValueError):
+        sync_config.relpath_for_path(legacy)
+    assert (
+        sync_config.relpath_for_path(legacy, guard=False)
+        == ".openbase/legacy-managed/skills"
+    )

@@ -145,12 +145,16 @@ def _unit_loaded(unit: str) -> bool:
 
 
 def systemd_bootout(svc: ServiceDefinition) -> bool:
-    from openbase_coder_cli.services.launchd import _cleanup_lingering_processes
+    from openbase_coder_cli.services.launchd import (
+        _cleanup_lingering_processes,
+        _cleanup_service_endpoint,
+    )
 
     unit = _unit_name(svc)
     loaded = _unit_loaded(unit)
     _systemctl("disable", "--now", unit)
     _cleanup_lingering_processes(svc)
+    _cleanup_service_endpoint(svc)
     return loaded
 
 

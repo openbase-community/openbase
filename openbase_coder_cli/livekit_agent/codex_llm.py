@@ -23,6 +23,7 @@ from openbase_coder_cli.livekit_agent.turn_detection import (
     latest_user_turn_signals_from_chat_ctx,
 )
 from openbase_coder_cli.onboarding_reminder import append_onboarding_reminder
+from openbase_coder_cli.voice_tags import wrap_voice_prompt
 
 if TYPE_CHECKING:
     from openbase_coder_cli.livekit_agent.voice_routing import LiveKitVoiceRouter
@@ -115,6 +116,18 @@ class CodexLLMStream(llm.LLMStream):
                     delivery_record,
                     reason="livekit_llm_stream_failed",
                 )
+            logger.exception(
+                "dispatch_timing stage=livekit_llm_backend_failed message_id=%s",
+                self._message_id,
+            )
+            # Speak the failure instead of leaving the room silent: emit a
+            # short fallback so TTS tells the user the backend is down.
+            if not self._event_ch.closed:
+                self._emit_delta(
+                    "Sorry, my coding backend isn't responding right now, so I "
+                    "couldn't handle that. Give it a moment and ask me again."
+                )
+                return
             raise
 
     async def _run_accepted_prompt(
@@ -138,6 +151,7 @@ class CodexLLMStream(llm.LLMStream):
             self._emit_delta("Back to dispatch.")
             return
 
+        prompt = wrap_voice_prompt(prompt)
         if self._voice_router.is_dispatcher_active:
             prompt = append_onboarding_reminder(prompt)
 

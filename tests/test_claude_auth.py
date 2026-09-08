@@ -1,66 +1,13 @@
 from __future__ import annotations
 
-import hashlib
 import importlib
 import json
-from pathlib import Path
 
 from click.testing import CliRunner
 
 from openbase_coder_cli import claude_auth
 
 claude_cli = importlib.import_module("openbase_coder_cli.cli.claude")
-
-
-def test_openbase_claude_keychain_service_uses_config_dir_hash(tmp_path: Path) -> None:
-    config_dir = tmp_path / "claude_config"
-    expected = hashlib.sha256(str(config_dir).encode("utf-8")).hexdigest()[:8]
-
-    assert (
-        claude_auth.openbase_claude_keychain_service(config_dir)
-        == f"Claude Code-credentials-{expected}"
-    )
-
-
-def test_sync_normal_claude_state_merges_into_config_dir_state(tmp_path) -> None:
-    normal_state = tmp_path / ".claude.json"
-    openbase_state = tmp_path / "openbase" / "claude_config" / ".claude.json"
-    normal_state.write_text(
-        json.dumps(
-            {
-                "oauthAccount": {"emailAddress": "test@example.com"},
-                "hasCompletedOnboarding": True,
-                "mcpServers": {"normal": {"command": "normal"}},
-            }
-        ),
-        encoding="utf-8",
-    )
-    openbase_state.parent.mkdir(parents=True)
-    openbase_state.write_text(
-        json.dumps(
-            {
-                "machineID": "openbase-machine",
-                "mcpServers": {"super-agents": {"command": "super-agents-mcp"}},
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    result = claude_auth.sync_normal_claude_state(
-        normal_state_path=normal_state,
-        openbase_state_path=openbase_state,
-    )
-
-    assert result.state_updated is True
-    payload = json.loads(openbase_state.read_text(encoding="utf-8"))
-    assert payload["oauthAccount"] == {"emailAddress": "test@example.com"}
-    assert payload["hasCompletedOnboarding"] is True
-    # Existing Openbase values win; mcpServers are unioned.
-    assert payload["machineID"] == "openbase-machine"
-    assert payload["mcpServers"] == {
-        "normal": {"command": "normal"},
-        "super-agents": {"command": "super-agents-mcp"},
-    }
 
 
 def test_claude_status_guides_login_when_not_authenticated(monkeypatch) -> None:
@@ -77,7 +24,7 @@ def test_claude_status_guides_login_when_not_authenticated(monkeypatch) -> None:
     result = CliRunner().invoke(claude_cli.claude, ["status"])
 
     assert result.exit_code != 0
-    assert "openbase-coder claude login" in result.output
+    assert "claude login" in result.output
 
 
 def test_is_claude_auth_failure_text_matches_turn_failures() -> None:
@@ -107,7 +54,7 @@ def test_verified_status_trusts_unexpired_credentials(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         claude_auth,
-        "read_openbase_claude_credential_expiry",
+        "read_claude_credential_expiry",
         lambda *_: (claude_auth.time.time() + 3600) * 1000,
     )
 
@@ -125,7 +72,7 @@ def test_verified_status_reports_logout_when_expired_probe_fails(monkeypatch) ->
         claude_auth, "claude_auth_status", lambda **_: _status(True, "cached")
     )
     monkeypatch.setattr(
-        claude_auth, "read_openbase_claude_credential_expiry", lambda *_: 1.0
+        claude_auth, "read_claude_credential_expiry", lambda *_: 1.0
     )
     monkeypatch.setattr(
         claude_auth, "probe_claude_auth", lambda **_: _status(False, failure)
@@ -142,7 +89,7 @@ def test_verified_status_keeps_login_when_probe_refreshes(monkeypatch) -> None:
         claude_auth, "claude_auth_status", lambda **_: _status(True, "cached")
     )
     monkeypatch.setattr(
-        claude_auth, "read_openbase_claude_credential_expiry", lambda *_: 1.0
+        claude_auth, "read_claude_credential_expiry", lambda *_: 1.0
     )
     monkeypatch.setattr(
         claude_auth, "probe_claude_auth", lambda **_: _status(True, "ok")
@@ -162,51 +109,9 @@ def test_read_credential_expiry_from_credentials_file(monkeypatch, tmp_path) -> 
         json.dumps({"claudeAiOauth": {"expiresAt": 1752000000000}}),
         encoding="utf-8",
     )
+    monkeypatch.setattr(claude_auth, "CLAUDE_CONFIG_DIR", config_dir)
 
-    assert (
-        claude_auth.read_openbase_claude_credential_expiry(config_dir) == 1752000000000
-    )
-    assert (
-        claude_auth.read_openbase_claude_credential_expiry(tmp_path / "missing") is None
-    )
+    assert claude_auth.read_claude_credential_expiry() == 1752000000000
 
-
-def test_heal_claude_auth_bridges_and_probes(monkeypatch) -> None:
-    calls: list[str] = []
-    monkeypatch.setattr(
-        claude_auth,
-        "sync_normal_claude_state",
-        lambda: calls.append("sync")
-        or claude_auth.ClaudeAuthBridgeResult(True, "synced"),
-    )
-    monkeypatch.setattr(
-        claude_auth,
-        "copy_normal_claude_keychain",
-        lambda **_: calls.append("copy") or True,
-    )
-    monkeypatch.setattr(
-        claude_auth, "probe_claude_auth", lambda **_: _status(True, "ok")
-    )
-
-    result = claude_auth.heal_claude_auth()
-
-    assert result.state_updated is True
-    assert calls == ["sync", "copy"]
-
-
-def test_heal_claude_auth_reports_missing_normal_login(monkeypatch) -> None:
-    monkeypatch.setattr(
-        claude_auth,
-        "sync_normal_claude_state",
-        lambda: claude_auth.ClaudeAuthBridgeResult(False, "no state"),
-    )
-    monkeypatch.setattr(claude_auth, "copy_normal_claude_keychain", lambda **_: False)
-
-    def _no_probe(**_kwargs):
-        raise AssertionError("probe must not run without a bridged credential")
-
-    monkeypatch.setattr(claude_auth, "probe_claude_auth", _no_probe)
-
-    result = claude_auth.heal_claude_auth()
-
-    assert result.state_updated is False
+    monkeypatch.setattr(claude_auth, "CLAUDE_CONFIG_DIR", tmp_path / "missing")
+    assert claude_auth.read_claude_credential_expiry() is None

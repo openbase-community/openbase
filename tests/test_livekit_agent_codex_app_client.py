@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 
 from openbase_coder_cli.livekit_agent import codex_app_client as client_module
+from openbase_coder_cli.livekit_agent import codex_transport as transport_module
 from openbase_coder_cli.livekit_agent.codex_app_client import (
     LIVEKIT_DUPLICATE_TURN_GRACE_SECONDS,
     CodexAppServerClient,
@@ -471,7 +472,9 @@ def test_initialize_advertises_experimental_api_capability(monkeypatch):
         async def fake_connect(*args, **kwargs):
             return FakeWebSocket()
 
-        monkeypatch.setattr(client_module.websockets, "connect", fake_connect)
+        monkeypatch.setattr(
+            transport_module, "open_app_server_connection", fake_connect
+        )
         await client._ensure_connected_locked()
         await client.aclose()
         return client.requests, client.notifications
@@ -492,6 +495,51 @@ def test_initialize_advertises_experimental_api_capability(monkeypatch):
         )
     ]
     assert notifications == [("initialized", {})]
+
+
+def test_livekit_client_uses_unix_endpoint_connector(monkeypatch, tmp_path: Path):
+    calls = []
+
+    class RecordingClient(CodexAppServerClient):
+        async def _send_request_locked(self, method, params):
+            return {}
+
+        async def _send_notification_locked(self, method, params):
+            return None
+
+    class FakeWebSocket:
+        async def __aiter__(self):
+            if False:
+                yield ""
+
+        async def close(self):
+            return None
+
+    async def fake_connect(endpoint, **kwargs):
+        calls.append((endpoint, kwargs))
+        return FakeWebSocket()
+
+    monkeypatch.setattr(transport_module, "open_app_server_connection", fake_connect)
+
+    async def check():
+        client = RecordingClient(
+            ws_url=f"unix://{tmp_path / 'control.sock'}",
+            cwd="/tmp",
+        )
+        await client._ensure_connected_locked()
+        await client.aclose()
+
+    asyncio.run(check())
+
+    endpoint, kwargs = calls[0]
+    assert endpoint.transport == "unix"
+    assert endpoint.socket_path == tmp_path / "control.sock"
+    assert kwargs == {
+        "max_size": None,
+        "ping_interval": 20,
+        "ping_timeout": 20,
+        "open_timeout": 5,
+    }
 
 
 def test_dispatcher_reasoning_config_ignores_legacy_shared_key(tmp_path: Path):

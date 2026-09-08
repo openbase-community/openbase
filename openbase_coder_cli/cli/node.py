@@ -88,12 +88,29 @@ def _which_node_binary(name: str) -> str | None:
             Path("/usr/local/bin") / name,
         ]
     )
+    nvm_versions = Path.home() / ".nvm" / "versions" / "node"
+    candidates.extend(
+        path / "bin" / name
+        for path in sorted(
+            nvm_versions.glob("v*"),
+            key=lambda path: _node_version_key(path.name),
+            reverse=True,
+        )
+    )
 
     for candidate in candidates:
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate)
 
     return None
+
+
+def _node_version_key(version: str) -> tuple[int, ...]:
+    """Return a sortable key for NVM directory names such as ``v24.15.0``."""
+    try:
+        return tuple(int(part) for part in version.removeprefix("v").split("."))
+    except ValueError:
+        return ()
 
 
 def _normalize_package_manager_args(

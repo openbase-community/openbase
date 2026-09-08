@@ -4,18 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
-import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from pathlib import Path
 from typing import Any
 
+from multi.app_api import get_project_status, get_project_subrepos, get_repo_diff
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from openbase_coder_cli.multi_config import multi_repo_names
 from openbase_coder_cli.openbase_coder_cli_app.common import _auth_debug_value
 from openbase_coder_cli.openbase_coder_cli_app.reports import _reports_summary
 from openbase_coder_cli.thread_sync.projects import (
@@ -98,7 +97,7 @@ def _invalidate_project_cache(path: str | None = None) -> None:
 
 def _project_metadata(project_path: str) -> dict[str, Any]:
     metadata: dict[str, Any] = {
-        "git_status": _git_status(project_path),
+        "git_status": get_project_status(project_path),
         "stack": _project_stack(project_path),
     }
     metadata.update(_reports_summary(project_path))
@@ -373,45 +372,10 @@ def _project_stack(project_path: str) -> str | None:
 
 def _repo_diff(dir_path: str) -> dict:
     """Return a diff dict for a single git repo directory."""
-    parts: list[str] = []
-
-    # Staged + unstaged changes to tracked files
-    tracked = subprocess.run(
-        ["git", "diff", "HEAD"],
-        cwd=dir_path,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    if tracked.stdout:
-        parts.append(tracked.stdout)
-
-    # Untracked files
-    untracked = subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard"],
-        cwd=dir_path,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    for rel in untracked.stdout.splitlines():
-        rel = rel.strip()
-        if not rel:
-            continue
-        file_diff = subprocess.run(
-            ["git", "diff", "--no-index", "/dev/null", rel],
-            cwd=dir_path,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if file_diff.stdout:
-            parts.append(file_diff.stdout)
-
     return {
         "path": dir_path,
         "name": Path(dir_path).name,
-        "diff": "\n".join(parts),
+        "diff": get_repo_diff(dir_path),
     }
 
 
@@ -434,10 +398,9 @@ def git_diff(request):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         repositories = [_repo_diff(resolved)]
-        for name in multi_repo_names(resolved):
-            sub_path = str(Path(resolved) / name)
-            if Path(sub_path).is_dir():
-                repositories.append(_repo_diff(sub_path))
+        for subrepo in get_project_subrepos(resolved):
+            if Path(subrepo["path"]).is_dir():
+                repositories.append(_repo_diff(subrepo["path"]))
         return Response({"repositories": repositories})
 
     # Default: all tracked projects
@@ -449,77 +412,3 @@ def git_diff(request):
             continue
         repositories.append(_repo_diff(dir_path))
     return Response({"repositories": repositories})
-
-
-def _git_status(directory: str) -> str:
-    """Return the git status of a directory.
-
-    Returns one of: 'clean', 'dirty', 'out-of-sync', 'no_git', 'missing', or 'unknown'.
-    """
-    logger.debug("git_status start directory=%s", directory)
-    if not Path(directory).is_dir():
-        logger.warning("git_status directory_missing directory=%s", directory)
-        return "missing"
-    try:
-        # Check for uncommitted changes (includes staged, unstaged, untracked)
-        st = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=directory,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if st.returncode != 0:
-            logger.warning(
-                "git_status no_git returncode=%s directory=%s stderr=%s",
-                st.returncode,
-                directory,
-                st.stderr.strip(),
-            )
-            return "no_git"
-        if st.stdout.strip():
-            logger.debug("git_status result=dirty directory=%s", directory)
-            return "dirty"
-        sync = subprocess.run(
-            ["git", "rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
-            cwd=directory,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if sync.returncode != 0:
-            logger.debug(
-                "git_status result=out-of-sync no_upstream directory=%s stderr=%s",
-                directory,
-                sync.stderr.strip(),
-            )
-            return "out-of-sync"
-        ahead, behind = [int(part) for part in sync.stdout.strip().split()]
-        if ahead > 0 or behind > 0:
-            logger.debug(
-                "git_status result=out-of-sync directory=%s ahead=%s behind=%s",
-                directory,
-                ahead,
-                behind,
-            )
-            return "out-of-sync"
-        logger.debug("git_status result=clean directory=%s", directory)
-        return "clean"
-    except (OSError, subprocess.TimeoutExpired, ValueError):
-        logger.exception("git_status failed directory=%s", directory)
-        return "unknown"
-
-
-def _get_subrepos(directory: str) -> list[dict]:
-    """Read multi.json and return git status for each declared sub-repo."""
-    results = []
-    for name in multi_repo_names(directory):
-        sub_path = str(Path(directory) / name)
-        results.append(
-            {
-                "name": name,
-                "path": sub_path,
-                "git_status": _git_status(sub_path),
-            }
-        )
-    return results

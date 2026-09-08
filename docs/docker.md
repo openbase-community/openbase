@@ -2,9 +2,10 @@
 
 The Docker image runs the full Openbase Coder runtime — the local API, the
 LiveKit voice stack, sync workers, and routines — in a single Linux
-container. Because Docker Desktop runs Linux containers on macOS and
-**Windows**, this is currently the way to run Openbase Coder on a Windows
-machine.
+container, on any Docker engine (macOS, **Windows**, or Linux). On Windows,
+Openbase Coder also runs natively in beta (`./scripts/setup` from a Windows
+checkout — see [Developer Setup](getting-started/developer-setup.md)); the
+Docker image is the most battle-tested Windows option today.
 
 Tailscale is the networking layer, exactly like every other install: the
 container joins your tailnet as its own device, and from the apps' point of
@@ -12,6 +13,12 @@ view it is just another backend host. Once it is on your tailnet, the
 [iOS app](ios-tabs.md) adds it under **Settings → Backend Host** like a Mac,
 and the [web console](console.md) is reachable at
 `http://openbase-coder.<your-tailnet>.ts.net:18080`.
+
+For a native Mac development server with one HTTP port, prefer
+[`openbase-coder service publish`](commands/service.md). A multi-port Compose
+project is the exception: join the container/backend to the tailnet as described
+here, or put one HTTP ingress in front of the containers. Do not treat a single
+published URL as covering independent HTTP, database, and UDP ports.
 
 ## Prerequisites
 
@@ -105,8 +112,7 @@ docker exec -it openbase-coder openbase-coder claude login
 ```
 
 Open the printed URL in any browser, sign in, and paste the code it shows
-back into the terminal. `openbase-coder claude status` confirms the scoped
-login.
+back into the terminal. `openbase-coder claude status` confirms the login.
 
 Codex:
 
@@ -117,8 +123,8 @@ docker exec -it openbase-coder codex login
 Codex waits for a browser redirect to `http://localhost:1455/...`, which
 lives inside the container — bridge port `1455` from your browser machine
 over the tailnet exactly like the [Openbase login](#log-in-to-openbase)
-above, then open the printed URL. The service picks the login up through its
-auth symlink; no re-setup is needed.
+above, then open the printed URL. Openbase services read the shared
+`~/.codex/auth.json` directly; no re-setup is needed.
 
 Then switch the backend and restart:
 

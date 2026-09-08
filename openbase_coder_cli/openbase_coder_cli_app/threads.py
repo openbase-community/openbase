@@ -27,6 +27,11 @@ from openbase_coder_cli.openbase_coder_cli_app.thread_cache import (
     get_cached_thread_state,
     invalidate_thread_list_cache,
 )
+from openbase_coder_cli.openbase_coder_cli_app.thread_errors import (
+    THREAD_DATA_UNAVAILABLE_CODE,
+    is_thread_data_unavailable_error,
+    thread_error_message,
+)
 from openbase_coder_cli.openbase_coder_cli_app.thread_favorites import (
     favorite_payload,
     is_thread_favorite,
@@ -307,17 +312,36 @@ def thread_list(request):
                 {"error": "directory is required"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        thread = async_to_sync(manager.create_thread)(directory)
+        backend = request.data.get("backend") or None
+        create_kwargs = {}
+        if backend:
+            # Only the mixed-backend facade can target a backend; on a
+            # single-backend install anything but that backend is an error.
+            if getattr(manager, "manager_for_backend", None) is not None:
+                if manager.manager_for_backend(backend) is None:
+                    return Response(
+                        {"error": f"backend {backend!r} is not configured"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                create_kwargs["backend"] = backend
+            elif backend != getattr(manager, "_execution_backend", backend):
+                return Response(
+                    {"error": f"backend {backend!r} is not configured"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        thread = async_to_sync(manager.create_thread)(directory, **create_kwargs)
         invalidate_thread_list_cache()
         logger.info(
-            "thread_list created thread_id=%s directory=%s",
+            "thread_list created thread_id=%s directory=%s backend=%s",
             thread.session_id,
             thread.directory,
+            thread.backend,
         )
         return Response(
             {
                 "thread_id": thread.session_id,
                 "directory": thread.directory,
+                "backend": thread.backend,
             },
             status=status.HTTP_201_CREATED,
         )
@@ -449,7 +473,19 @@ def thread_detail(request, thread_id):
         invalidate_thread_list_cache()
         return Response({"success": True})
 
-    thread = async_to_sync(manager.get_thread_state)(thread_id)
+    try:
+        thread = async_to_sync(manager.get_thread_state)(thread_id)
+    except RuntimeError as exc:
+        if not is_thread_data_unavailable_error(exc):
+            raise
+        logger.info("thread_detail unreadable rollout thread_id=%s", thread_id)
+        return Response(
+            {
+                "error": thread_error_message(exc),
+                "code": THREAD_DATA_UNAVAILABLE_CODE,
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
     if thread is None:
         return Response(
             {"error": f"Thread {thread_id} not found"},

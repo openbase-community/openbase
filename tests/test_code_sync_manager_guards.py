@@ -146,11 +146,13 @@ def test_ensure_product_state_folders_adds_missing(monkeypatch, tmp_path) -> Non
 
     added = manager.ensure_product_state_folders(config_path)
 
+    # The shared agent homes (~/.codex, ~/.claude) never sync; thread-sync is
+    # the only first-class product-state folder.
+    assert set(sync_config.PRODUCT_STATE_RELPATHS) == {".openbase/thread-sync"}
     assert set(added) == set(sync_config.PRODUCT_STATE_RELPATHS)
     relpaths = {f.relpath for f in sync_config.sync_folders(config_path)}
     assert set(sync_config.PRODUCT_STATE_RELPATHS) <= relpaths
     assert (tmp_path / ".openbase/thread-sync").is_dir()
-    assert (tmp_path / ".openbase/claude_config/skills").is_dir()
 
     # Idempotent.
     assert manager.ensure_product_state_folders(config_path) == []

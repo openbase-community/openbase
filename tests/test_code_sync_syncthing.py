@@ -132,6 +132,28 @@ def test_write_config_preserves_receiveonly_folder_type(tmp_path: Path) -> None:
     assert root.find("folder").get("type") == "receiveonly"
 
 
+def test_configured_device_names(tmp_path: Path) -> None:
+    syncthing.write_config(
+        self_device_id=SELF_ID,
+        self_name="Gabe's MacBook Pro",
+        peers=[
+            syncthing.PeerDevice(
+                device_id=PEER_ID,
+                name="Gabe's Mac mini",
+                address=syncthing.peer_address("mini.tail1234.ts.net"),
+            )
+        ],
+        folders=[],
+        config_dir=tmp_path,
+        home=tmp_path,
+    )
+
+    assert syncthing.configured_device_names(tmp_path) == {
+        SELF_ID: "Gabe's MacBook Pro",
+        PEER_ID: "Gabe's Mac mini",
+    }
+
+
 def test_device_id_parsing_and_storage(tmp_path: Path) -> None:
     output = f"Device ID: {SELF_ID}\n"
     assert syncthing._device_id_from_output(output) == SELF_ID
@@ -143,20 +165,18 @@ def test_device_id_parsing_and_storage(tmp_path: Path) -> None:
 
 
 def test_code_sync_service_definition() -> None:
-    service = next(svc for svc in SERVICES if svc.name == "code-sync")
-    command = service.command_template.format(
-        syncthing="/opt/homebrew/bin/syncthing",
-        data_dir="/tmp/openbase",
-        workspace="/tmp/workspace",
-    )
+    from openbase_coder_cli.services import runners
 
+    service = next(svc for svc in SERVICES if svc.name == "code-sync")
     assert service.install_by_default is False
-    assert (
-        'exec /opt/homebrew/bin/syncthing serve --home "/tmp/openbase/code-sync"'
-        in command
-    )
-    assert "--no-browser" in command
-    assert "--no-restart" in command
+    assert service.command_template == "code-sync"
+
+    build, binary_keys = runners.RUNNERS["code-sync"]
+    argv, _env = build({}, {"syncthing": "/opt/homebrew/bin/syncthing"})
+    assert binary_keys == ("syncthing",)
+    assert argv[:3] == ["/opt/homebrew/bin/syncthing", "serve", "--home"]
+    assert "--no-browser" in argv
+    assert "--no-restart" in argv
 
 
 def test_device_id_parsing_v2_output() -> None:

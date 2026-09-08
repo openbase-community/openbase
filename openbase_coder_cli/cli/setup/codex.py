@@ -1,4 +1,10 @@
-"""Codex config phase: service Codex home auth, config, instructions, and skills."""
+"""Codex config phase: shared-home MCP registration, instructions, and skills.
+
+Openbase runs against the user's real ``~/.codex``. Setup only registers the
+super-agents MCP server (plus the session-ID hook) there; Openbase's
+full-permission posture is passed per session by super-agents, never written
+into the shared config.
+"""
 
 from __future__ import annotations
 
@@ -10,22 +16,25 @@ from shutil import which
 
 import click
 
-from openbase_coder_cli.backend_config import DEFAULT_CODING_BACKEND
+from openbase_coder_cli.backend_config import (
+    CODEX_BACKEND,
+    DEFAULT_CODING_BACKEND,
+    OPENBASE_CLOUD_CODEX_BACKEND,
+    SUPER_AGENTS_DEFAULT_BACKEND_ENV_KEY,
+)
 from openbase_coder_cli.cli.setup.hooks import ensure_codex_session_id_hook
-from openbase_coder_cli.codex_backend_config import apply_backend_to_codex_config
 from openbase_coder_cli.codex_home_instructions import (
     ensure_openbase_agents_md,
-    ensure_openbase_claude_md_symlink,
     ensure_rendered_instruction_file,
 )
 from openbase_coder_cli.paths import (
+    CLAUDE_CONFIG_DIR,
+    CODEX_CONFIG_PATH,
     CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH,
     CODEX_DISPATCHER_INSTRUCTIONS_PATH,
     CODEX_HOME_DIR,
     CODEX_SUPER_AGENT_INSTRUCTIONS_PATH,
-    NORMAL_CODEX_CONFIG_PATH,
     OPENBASE_BASE_DIR,
-    OPENBASE_CLAUDE_CONFIG_DIR,
 )
 from openbase_coder_cli.runtime import (
     current_runtime_package,
@@ -38,75 +47,31 @@ logger = logging.getLogger(__name__)
 
 CODEX_HOME_DEFAULT_SOURCE_DIR = "instructions"
 CODEX_HOME_SKILLS_SOURCE_DIR = "skills"
-CODEX_HOME_DEFAULT_FILES = (
+OPENBASE_INSTRUCTION_FILES = (
     ("VOICE_INSTRUCTIONS.md", CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH),
     ("DISPATCHER_INSTRUCTIONS.md", CODEX_DISPATCHER_INSTRUCTIONS_PATH),
     ("SUPER_AGENT_INSTRUCTIONS.md", CODEX_SUPER_AGENT_INSTRUCTIONS_PATH),
 )
 SUPER_AGENTS_MCP_TABLE = "mcp_servers.super-agents"
 SUPER_AGENTS_MCP_COMMAND = "super-agents-mcp"
-CODEX_HOME_PERMISSION_VALUES = (
-    ("sandbox_mode", json.dumps("danger-full-access")),
-    (
-        "approval_policy",
-        "{ granular = { sandbox_approval = false, rules = false, "
-        "mcp_elicitations = false, request_permissions = false, "
-        "skill_approval = false } }",
-    ),
-)
+# Openbase sessions run without native Codex gating: approvals are handled by
+# the Openbase approvals layer, so super-agents passes these per thread.
+SUPER_AGENTS_CODEX_APPROVAL_POLICY_ENV = "SUPER_AGENTS_CODEX_APPROVAL_POLICY"
+SUPER_AGENTS_CODEX_SANDBOX_POLICY_ENV = "SUPER_AGENTS_CODEX_SANDBOX_POLICY"
+SUPER_AGENTS_CODEX_APPROVAL_POLICY = "never"
+SUPER_AGENTS_CODEX_SANDBOX_POLICY = "danger-full-access"
 
 
-def _symlink_codex_auth() -> None:
-    """Point the service CODEX_HOME at the user's normal Codex login."""
-    codex_auth = Path.home() / ".codex" / "auth.json"
-    service_auth = CODEX_HOME_DIR / "auth.json"
-
-    CODEX_HOME_DIR.mkdir(parents=True, exist_ok=True)
-
-    if not codex_auth.is_file():
-        # Still link (dangling until `codex login` writes the file) so a
-        # post-setup login is picked up without re-running setup.
-        click.echo(
-            f"Codex auth not found at {codex_auth}; run 'codex login' before "
-            "using voice Codex services."
-        )
-
-    if service_auth.is_symlink():
-        if service_auth.resolve() == codex_auth.resolve():
-            click.echo(f"Codex service auth already linked to {codex_auth}")
-            return
-        service_auth.unlink()
-    elif service_auth.exists():
-        try:
-            auth_matches = service_auth.read_bytes() == codex_auth.read_bytes()
-        except OSError:
-            auth_matches = False
-        if not auth_matches:
-            click.echo(
-                f"Codex service auth already exists at {service_auth} and differs "
-                f"from {codex_auth}; leaving it unchanged."
-            )
-            return
-        service_auth.unlink()
-
-    service_auth.symlink_to(codex_auth)
-    click.echo(f"Symlinked Codex service auth → {codex_auth}")
-
-
-def _ensure_codex_home_default_files(workspace_dir: str) -> None:
-    """Create Openbase-managed agent instruction files."""
-    CODEX_HOME_DIR.mkdir(parents=True, exist_ok=True)
-    OPENBASE_CLAUDE_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+def _ensure_openbase_instruction_files(workspace_dir: str) -> None:
+    """Render Openbase-managed agent instruction files under ~/.openbase."""
     defaults_dir = _default_instructions_dir(workspace_dir)
 
     ensure_openbase_agents_md(
         defaults_dir.parent,
-        codex_home_dir=CODEX_HOME_DIR,
         report=click.echo,
     )
-    ensure_openbase_claude_md_symlink(report=click.echo)
 
-    for resource_name, target_path in CODEX_HOME_DEFAULT_FILES:
+    for resource_name, target_path in OPENBASE_INSTRUCTION_FILES:
         source_path = defaults_dir / resource_name
         ensure_rendered_instruction_file(
             source_path,
@@ -116,48 +81,12 @@ def _ensure_codex_home_default_files(workspace_dir: str) -> None:
         )
 
 
-def _ensure_matching_symlink_or_file(
-    *,
-    target_path: Path,
-    source_path: Path,
-    label: str,
-) -> bool:
-    if target_path.is_symlink():
-        if target_path.resolve() == source_path.resolve():
-            click.echo(f"{label} already linked at {target_path}")
-            return False
-        target_path.unlink()
-    elif target_path.exists():
-        if not target_path.is_file():
-            click.echo(
-                f"{label} already exists at {target_path}; leaving it unchanged."
-            )
-            return False
-
-        try:
-            default_matches = target_path.read_bytes() == source_path.read_bytes()
-        except OSError:
-            default_matches = False
-        if not default_matches:
-            click.echo(
-                f"{label} already exists at {target_path} and differs from "
-                "the workspace default; leaving it unchanged."
-            )
-            return False
-        target_path.unlink()
-
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    target_path.symlink_to(source_path)
-    click.echo(f"Linked {label} {target_path} -> {source_path}")
-    return True
-
-
 def _symlink_codex_home_skills(
     workspace_dir: str,
     *,
     report: Callable[[str], None] = click.echo,
 ) -> None:
-    """Symlink workspace-owned skills into Openbase-managed agent homes."""
+    """Symlink workspace-owned skills into both shared agent homes."""
     source_root = _default_skills_dir(workspace_dir)
     skill_sources = _workspace_skill_sources(source_root)
     if not skill_sources:
@@ -172,7 +101,7 @@ def _symlink_codex_home_skills(
     )
     _symlink_skills_to_root(
         skill_sources,
-        target_root=OPENBASE_CLAUDE_CONFIG_DIR / "skills",
+        target_root=CLAUDE_CONFIG_DIR / "skills",
         label="Claude config",
         report=report,
     )
@@ -236,23 +165,24 @@ def _symlink_skills_to_root(
         report(f"Linked {label} skill {target_path} -> {source_path}")
 
 
-def _ensure_codex_home_config(
+def _ensure_codex_config(
     workspace_dir: str,
     *,
     coding_backend: str = DEFAULT_CODING_BACKEND,
-    link_codex_config: bool = False,
 ) -> None:
-    """Configure Openbase's service Codex home."""
-    CODEX_HOME_DIR.mkdir(parents=True, exist_ok=True)
-    config_path = CODEX_HOME_DIR / "config.toml"
-    if link_codex_config:
-        _symlink_codex_home_config()
+    """Register super-agents (and the session-ID hook) in the shared ~/.codex.
 
+    Only the MCP table and the trusted hook — the user's own model, sandbox,
+    and approval settings are never touched. Openbase sessions get their
+    permission posture per thread from super-agents.
+    """
+    config_path = CODEX_CONFIG_PATH
     command_path, args = _super_agents_mcp_command(Path(workspace_dir))
     block = (
         f"[{SUPER_AGENTS_MCP_TABLE}]\n"
         f"command = {json.dumps(str(command_path))}\n"
         f"{_toml_args_line(args)}"
+        f"{_toml_env_line(_codex_child_backend(coding_backend))}"
     )
 
     if not command_path.is_file():
@@ -265,83 +195,15 @@ def _ensure_codex_home_config(
     if config_path.is_file():
         existing = config_path.read_text(encoding="utf-8")
 
-    updated = _ensure_toml_root_values(existing, CODEX_HOME_PERMISSION_VALUES)
-    updated = _replace_toml_table(updated, SUPER_AGENTS_MCP_TABLE, block)
-    if updated == existing:
-        click.echo(f"Codex home config already configured at {config_path}")
-    else:
-        config_path.write_text(updated, encoding="utf-8")
-        click.echo(f"Configured Codex home config at {config_path}")
-
-    ensure_codex_session_id_hook(config_path)
-
-    result = apply_backend_to_codex_config(coding_backend, config_path=config_path)
-    if result.changed:
-        click.echo(f"Configured Codex backend in {result.path}")
-
-
-def _ensure_normal_codex_mcp(workspace_dir: str) -> None:
-    """Register the super-agents MCP server in the user's normal Codex home.
-
-    Only the MCP table — never the Openbase permission overrides. Users can
-    remove the entry; an explicit setup re-run restores it.
-    """
-    config_path = NORMAL_CODEX_CONFIG_PATH
-    command_path, args = _super_agents_mcp_command(Path(workspace_dir))
-    block = (
-        f"[{SUPER_AGENTS_MCP_TABLE}]\n"
-        f"command = {json.dumps(str(command_path))}\n"
-        f"{_toml_args_line(args)}"
-    )
-
-    existing = ""
-    if config_path.is_file():
-        existing = config_path.read_text(encoding="utf-8")
-
     updated = _replace_toml_table(existing, SUPER_AGENTS_MCP_TABLE, block)
     if updated == existing:
-        click.echo(f"Normal Codex config already has super-agents at {config_path}")
-        return
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(updated, encoding="utf-8")
-    click.echo(f"Registered super-agents MCP in normal Codex config {config_path}")
+        click.echo(f"Codex config already has super-agents at {config_path}")
+    else:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(updated, encoding="utf-8")
+        click.echo(f"Registered super-agents MCP in Codex config {config_path}")
 
-
-def _symlink_codex_home_config() -> None:
-    """Point the service CODEX_HOME config at the user's normal Codex config."""
-    service_config = CODEX_HOME_DIR / "config.toml"
-    normal_config = NORMAL_CODEX_CONFIG_PATH
-
-    CODEX_HOME_DIR.mkdir(parents=True, exist_ok=True)
-    normal_config.parent.mkdir(parents=True, exist_ok=True)
-
-    if normal_config.exists() and not normal_config.is_file():
-        raise click.ClickException(
-            f"Normal Codex config exists but is not a file: {normal_config}"
-        )
-
-    if service_config.is_symlink():
-        if service_config.resolve() == normal_config.resolve():
-            click.echo(f"Codex home config already linked to {normal_config}")
-            return
-        service_config.unlink()
-    elif service_config.exists():
-        if not service_config.is_file():
-            raise click.ClickException(
-                f"Codex home config exists but is not a file: {service_config}"
-            )
-        if not normal_config.exists():
-            normal_config.write_text(
-                service_config.read_text(encoding="utf-8"),
-                encoding="utf-8",
-            )
-        service_config.unlink()
-
-    if not normal_config.exists():
-        normal_config.write_text("", encoding="utf-8")
-
-    service_config.symlink_to(normal_config)
-    click.echo(f"Symlinked Codex home config -> {normal_config}")
+    ensure_codex_session_id_hook(config_path)
 
 
 def _super_agents_mcp_command(workspace_dir: Path) -> tuple[Path, list[str]]:
@@ -413,43 +275,20 @@ def _toml_args_line(args: list[str]) -> str:
     return f"args = {json.dumps(args)}\n"
 
 
-def _ensure_toml_root_values(
-    text: str,
-    values: tuple[tuple[str, str], ...],
-) -> str:
-    lines = text.splitlines()
-    first_table_index = next(
-        (
-            index
-            for index, line in enumerate(lines)
-            if line.strip().startswith("[") and line.strip().endswith("]")
-        ),
-        len(lines),
+def _toml_env_line(backend: str) -> str:
+    env_pairs = (
+        (SUPER_AGENTS_DEFAULT_BACKEND_ENV_KEY, backend),
+        (SUPER_AGENTS_CODEX_APPROVAL_POLICY_ENV, SUPER_AGENTS_CODEX_APPROVAL_POLICY),
+        (SUPER_AGENTS_CODEX_SANDBOX_POLICY_ENV, SUPER_AGENTS_CODEX_SANDBOX_POLICY),
     )
-    root_lines = lines[:first_table_index]
-    table_lines = lines[first_table_index:]
-    keys = {key for key, _value in values}
-    updated_root = [line for line in root_lines if _toml_root_key(line) not in keys]
-
-    while updated_root and not updated_root[-1].strip():
-        updated_root.pop()
-
-    for key, value in values:
-        updated_root.append(f"{key} = {value}")
-
-    while table_lines and not table_lines[0].strip():
-        table_lines.pop(0)
-
-    if table_lines:
-        return "\n".join(updated_root) + "\n\n" + "\n".join(table_lines) + "\n"
-    return "\n".join(updated_root) + "\n"
+    body = ", ".join(f"{key} = {json.dumps(value)}" for key, value in env_pairs)
+    return f"env = {{ {body} }}\n"
 
 
-def _toml_root_key(line: str) -> str | None:
-    stripped = line.strip()
-    if not stripped or stripped.startswith("#") or "=" not in stripped:
-        return None
-    return stripped.split("=", 1)[0].strip()
+def _codex_child_backend(coding_backend: str) -> str:
+    if coding_backend == OPENBASE_CLOUD_CODEX_BACKEND:
+        return OPENBASE_CLOUD_CODEX_BACKEND
+    return CODEX_BACKEND
 
 
 def _replace_toml_table(text: str, table_name: str, block: str) -> str:

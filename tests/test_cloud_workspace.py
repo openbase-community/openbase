@@ -35,7 +35,7 @@ def test_cloud_workspace_id_recovers_legacy_hostname_marker(tmp_path: Path) -> N
 def test_cloud_workspace_id_ignores_ordinary_machine(tmp_path: Path) -> None:
     public_id_path = tmp_path / "missing-public-id"
     hostname_path = tmp_path / "devspace-tailscale-hostname"
-    hostname_path.write_text("gabes-macbook\n", encoding="utf-8")
+    hostname_path.write_text("example-macbook\n", encoding="utf-8")
 
     assert (
         cloud_workspace_id(

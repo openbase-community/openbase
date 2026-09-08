@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import base64
 import contextlib
-import fcntl
 import hashlib
 import json
 import logging
@@ -22,6 +21,8 @@ from typing import Any
 
 import httpx
 
+from openbase_coder_cli.cloud_environment import PRODUCTION_WEB_BACKEND_URL
+from openbase_coder_cli.file_lock import LOCK_EX, LOCK_UN, flock
 from openbase_coder_cli.paths import AUTH_JSON_PATH
 
 logger = logging.getLogger(__name__)
@@ -65,7 +66,7 @@ LOGIN_STATUS_LOGGED_OUT = "logged_out"
 LOGIN_STATUS_LOGIN_EXPIRED = "login_expired"
 DEFAULT_OAUTH_CLIENT_ID = "openbase-coder-cli"
 DEFAULT_OAUTH_REDIRECT_URI = "http://127.0.0.1:52807/oauth/callback"
-DEFAULT_WEB_BACKEND_URL = "https://app.openbase.cloud"
+DEFAULT_WEB_BACKEND_URL = PRODUCTION_WEB_BACKEND_URL
 
 
 class TokenManager:
@@ -96,10 +97,10 @@ class TokenManager:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            flock(fd, LOCK_EX)
             yield
         finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            flock(fd, LOCK_UN)
             os.close(fd)
 
     # ------------------------------------------------------------------
@@ -236,6 +237,16 @@ class TokenManager:
             )
         except httpx.HTTPError as exc:
             raise AuthTransientError(f"Token refresh failed: {exc}") from exc
+        except OSError as exc:
+            # Raised before the request leaves the process — most often
+            # ssl.create_default_context() failing to read the CA bundle
+            # because the interpreter's prefix no longer exists (a
+            # long-running process whose install directory was renamed or
+            # replaced by an update). It is environmental, not a rejected
+            # token, so callers must not treat it as "logged out".
+            raise AuthTransientError(
+                f"Token refresh could not be attempted: {exc}"
+            ) from exc
 
         if resp.status_code in (400, 401, 403):
             # The refresh token was rotated away or expired; only a new
@@ -393,6 +404,16 @@ class TokenManager:
                         identity["email"] = str(claims["email"]).strip().lower()
                     return identity
             return {}
+
+    @property
+    def access_expires_at(self) -> float:
+        """Epoch seconds when the current in-memory access token expires.
+
+        0 when no access token is loaded. Read this after
+        :meth:`get_access_token` to report expiry alongside the token.
+        """
+        with self._lock:
+            return self._access_expires_at
 
     def get_access_token_payload(self) -> dict[str, Any]:
         with self._lock:

@@ -38,13 +38,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from openbase_coder_cli.code_sync import CodeSyncError
+from openbase_coder_cli.file_lock import LOCK_EX, LOCK_UN, flock
 from openbase_coder_cli.paths import CODE_SYNC_CONFLICTS_PATH
 from openbase_coder_cli.sync_config import folder_for_id
-
-try:  # POSIX advisory locking; the runtime only ships on macOS/Linux.
-    import fcntl
-except ImportError:  # pragma: no cover - non-POSIX fallback
-    fcntl = None  # type: ignore[assignment]
 
 BRANCH_CONFLICT_KIND = "branch"
 FILE_CONFLICT_KIND = "file"
@@ -82,6 +78,8 @@ def record_branch_conflict(
     path: Path | None = None,
 ) -> dict[str, Any]:
     """Record a repo divergence, deduped per (folder, repo, branch)."""
+    if not folder_id.strip():
+        raise CodeSyncError("Cannot record a branch conflict without a sync folder id.")
     with _conflicts_lock(path):
         conflicts = read_conflicts(path)
         for conflict in conflicts:
@@ -522,15 +520,12 @@ def _conflicts_lock(path: Path | None) -> Iterator[None]:
     conflicts_path = path or CODE_SYNC_CONFLICTS_PATH
     lock_path = conflicts_path.with_suffix(".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    if fcntl is None:  # pragma: no cover - non-POSIX fallback (no OS locking)
-        yield
-        return
     with open(lock_path, "w", encoding="utf-8") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
+        flock(handle, LOCK_EX)
         try:
             yield
         finally:
-            fcntl.flock(handle, fcntl.LOCK_UN)
+            flock(handle, LOCK_UN)
 
 
 def _write_conflicts(conflicts: list[dict[str, Any]], path: Path | None) -> None:

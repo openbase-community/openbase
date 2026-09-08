@@ -158,6 +158,21 @@ def existing_folder_types(config_dir: Path = CODE_SYNC_DIR) -> dict[str, str]:
     }
 
 
+def configured_device_names(config_dir: Path = CODE_SYNC_DIR) -> dict[str, str]:
+    """Device names keyed by Syncthing ID from the managed configuration."""
+    config_path = config_dir / CONFIG_XML_FILENAME
+    try:
+        root = ET.parse(config_path).getroot()
+    except (FileNotFoundError, OSError, ET.ParseError):
+        return {}
+    return {
+        device_id: name
+        for element in root.findall("./device")
+        if (device_id := (element.get("id") or "").strip())
+        and (name := (element.get("name") or "").strip())
+    }
+
+
 def render_config_xml(
     *,
     self_device_id: str,

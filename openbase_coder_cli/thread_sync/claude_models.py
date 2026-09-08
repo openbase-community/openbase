@@ -9,13 +9,11 @@ from typing import Any
 from openbase_coder_cli.paths import OPENBASE_BASE_DIR
 
 SCHEMA_VERSION = 1
-CLAUDE_SYNC_LEDGER_NAME = "claude-thread-sync-ledger.json"
 CLAUDE_DEVICE_LEDGER_NAME = "claude-thread-device-sync-ledger.json"
 # Shared with codex: one transported product-state exchange folder
 # carries both backends (importers skip the other backend's snapshots).
 DEFAULT_DEVICE_EXCHANGE_DIR = OPENBASE_BASE_DIR / "thread-sync"
 DEFAULT_DEVICE_LEDGER_PATH = OPENBASE_BASE_DIR / CLAUDE_DEVICE_LEDGER_NAME
-DEFAULT_SYNC_LEDGER_PATH = OPENBASE_BASE_DIR / CLAUDE_SYNC_LEDGER_NAME
 DEFAULT_SYNC_MAX_AGE_DAYS = 15
 IMPORT_STAGING_DIR_NAME = ".claude-thread-sync-staging"
 IMPORT_BACKUP_DIR_NAME = ".claude-thread-sync-backups"
@@ -46,25 +44,6 @@ class ClaudeSessionSnapshot:
     updated_at_ms: int
     fingerprint: dict[str, Any]
 
-
-@dataclass(frozen=True)
-class ClaudeThreadSyncResult:
-    session_id: str
-    status: str
-    direction: str | None
-    reason: str
-    source_path: str | None = None
-    target_path: str | None = None
-
-    def to_json(self) -> dict[str, Any]:
-        return {
-            "session_id": self.session_id,
-            "status": self.status,
-            "direction": self.direction,
-            "reason": self.reason,
-            "source_path": self.source_path,
-            "target_path": self.target_path,
-        }
 
 
 @dataclass(frozen=True)

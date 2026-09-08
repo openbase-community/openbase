@@ -94,6 +94,7 @@ def test_systemd_status_not_installed(monkeypatch):
 
 def test_launchctl_status_dispatches_to_systemd_off_macos(monkeypatch):
     monkeypatch.setattr(launchd, "_is_macos", lambda: False)
+    monkeypatch.setattr(launchd, "_is_windows", lambda: False)
     monkeypatch.setattr(
         systemd, "systemd_status", lambda svc: {"installed": True, "pid": "7"}
     )

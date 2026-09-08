@@ -38,6 +38,12 @@ from openbase_coder_cli.dispatcher_config import (
     set_stt_provider,
     set_tts_provider_and_dispatcher_voice,
 )
+from openbase_coder_cli.inbound_calls import (
+    InboundCallInvitationConflict,
+    InboundCallInvitationError,
+    InboundCallInvitationExpired,
+    answer_invitation,
+)
 from openbase_coder_cli.livekit_announcer import (
     MAX_ANNOUNCER_TEXT_LENGTH,
     SUPPORTED_AUDIO_EXTENSIONS,
@@ -65,7 +71,11 @@ from openbase_coder_cli.livekit_voice_route import (
     super_agent_voice_for_context,
 )
 from openbase_coder_cli.local_audio import local_audio_python_error
-from openbase_coder_cli.openbase_coder_cli_app.common import _request_identity
+from openbase_coder_cli.local_audio_readiness import local_audio_readiness
+from openbase_coder_cli.openbase_coder_cli_app.common import (
+    ExactFieldsSerializer,
+    _request_identity,
+)
 from openbase_coder_cli.services.cloud_workspace import cloud_workspace_id
 from openbase_coder_cli.stt_providers import (
     LOCAL_MLX_WHISPER_STT_PROVIDER_ID,
@@ -89,9 +99,25 @@ LIVEKIT_CLIENT_API_KEY_ENV = "LIVEKIT_CLIENT_API_KEY"
 LIVEKIT_CLIENT_API_SECRET_ENV = "LIVEKIT_CLIENT_API_SECRET"
 
 
-class LiveKitRoomTokenSerializer(serializers.Serializer):
+class LiveKitRoomTokenSerializer(ExactFieldsSerializer):
     room_name = serializers.CharField(required=False, allow_blank=True)
-    livekit_dispatch_agent_name = serializers.CharField()
+    livekit_dispatch_agent_name = serializers.CharField(required=False)
+    inbound_invitation_id = serializers.RegexField(
+        r"^[A-Za-z0-9_-]{43}$", required=False
+    )
+
+    def validate(self, attrs):
+        invitation_id = attrs.get("inbound_invitation_id")
+        if invitation_id:
+            if attrs.get("room_name") or attrs.get("livekit_dispatch_agent_name"):
+                raise serializers.ValidationError(
+                    "Inbound invitations cannot override room or agent routing."
+                )
+        elif not attrs.get("livekit_dispatch_agent_name"):
+            raise serializers.ValidationError(
+                "livekit_dispatch_agent_name is required."
+            )
+        return attrs
 
 
 class LiveKitCompanionSessionSerializer(serializers.Serializer):
@@ -266,7 +292,20 @@ def user_say(request):
     except AnnouncerValidationError as exc:
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
     except NoActiveLiveKitRoomError as exc:
-        return Response({"detail": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        logger.info(
+            "dispatch_timing stage=user_say_no_active_room agent_name=%s thread_id=%s",
+            agent_name,
+            voice_entry.thread_id,
+        )
+        return Response(
+            {
+                "status": "no_active_room",
+                "detail": str(exc),
+                "agent_name": agent_name,
+                "thread_id": voice_entry.thread_id,
+            },
+            status=status.HTTP_200_OK,
+        )
     except AnnouncerError as exc:
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
     except Exception:
@@ -802,10 +841,29 @@ def livekit_room_token(request):
             }
         )
 
+    tts_provider_id = selected_tts_provider_id()
+    stt_provider_id = selected_stt_provider_id()
+    readiness = local_audio_readiness(
+        tts_provider_id=tts_provider_id,
+        stt_provider_id=stt_provider_id,
+    )
+    if not readiness.ready:
+        return Response(
+            {
+                "detail": (
+                    "Local voice audio is not ready: "
+                    f"{readiness.detail or 'readiness check failed'}. Run "
+                    "`openbase-coder setup --audio-provider local` and try again."
+                ),
+                "code": "local_audio_not_ready",
+            },
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
     try:
         ensure_openbase_cloud_audio_subscription(
-            tts_provider_id=selected_tts_provider_id(),
-            stt_provider_id=selected_stt_provider_id(),
+            tts_provider_id=tts_provider_id,
+            stt_provider_id=stt_provider_id,
             web_backend_url=(
                 getattr(settings, "WEB_BACKEND_URL", "") or DEFAULT_WEB_BACKEND_URL
             ).rstrip("/"),
@@ -826,14 +884,40 @@ def livekit_room_token(request):
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
 
-    room_name = input_serializer.validated_data.get("room_name")
-    if not room_name:
-        room_name = f"room-{uuid.uuid4().hex[:12]}"
-
-    livekit_dispatch_agent_name = input_serializer.validated_data[
-        "livekit_dispatch_agent_name"
-    ]
     identity = _request_identity(request)
+    inbound_invitation_id = input_serializer.validated_data.get(
+        "inbound_invitation_id"
+    )
+    if inbound_invitation_id:
+        try:
+            invitation = answer_invitation(
+                inbound_invitation_id,
+                account_identity=identity,
+            )
+        except InboundCallInvitationExpired as exc:
+            return Response(
+                {"detail": str(exc), "code": "invitation_expired"},
+                status=status.HTTP_410_GONE,
+            )
+        except InboundCallInvitationConflict as exc:
+            return Response(
+                {"detail": str(exc), "code": "invitation_conflict"},
+                status=status.HTTP_409_CONFLICT,
+            )
+        except InboundCallInvitationError as exc:
+            return Response(
+                {"detail": str(exc), "code": "invitation_not_found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        room_name = invitation.room_name
+        livekit_dispatch_agent_name = invitation.livekit_dispatch_agent_name
+    else:
+        room_name = input_serializer.validated_data.get("room_name")
+        if not room_name:
+            room_name = f"room-{uuid.uuid4().hex[:12]}"
+        livekit_dispatch_agent_name = input_serializer.validated_data[
+            "livekit_dispatch_agent_name"
+        ]
 
     metadata = {
         "user_identity": identity,
@@ -875,6 +959,13 @@ def livekit_room_token(request):
     )
 
     payload: dict[str, Any] = {"token": token, "room_name": room_name}
+    if inbound_invitation_id:
+        payload.update(
+            {
+                "inbound_invitation_id": inbound_invitation_id,
+                "requires_route_activation": True,
+            }
+        )
     workspace_id = cloud_workspace_id()
     if workspace_id:
         payload["workspace"] = {

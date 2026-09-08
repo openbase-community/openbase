@@ -17,7 +17,7 @@ def test_services_uninstall_command_is_registered():
 
 def test_services_status_fails_when_tailscale_serve_health_fails(monkeypatch):
     monkeypatch.setattr(services_cli, "require_installation", lambda: None)
-    monkeypatch.setattr(services_cli, "configured_coding_backend", lambda: "codex")
+    monkeypatch.setattr(services_cli, "configured_coding_backends", lambda: ["codex"])
     monkeypatch.setattr(
         services_cli,
         "SERVICES",

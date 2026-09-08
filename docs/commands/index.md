@@ -24,11 +24,13 @@ openbase-coder [OPTIONS] COMMAND [ARGS]
 | Command | Description |
 |---|---|
 | [`backend`](backend.md) | View or switch the selected coding backend |
-| [`claude`](claude.md) | Manage Openbase's Claude Code auth |
-| [`claude-sync`](claude-sync.md) | Synchronize Claude Code sessions between normal and Openbase config homes |
+| [`claude`](claude.md) | Inspect the Claude Code login used by Openbase sessions |
+| [`claude-sync`](claude-sync.md) | Synchronize Claude Code session snapshots across devices |
+| [`codex-sync`](codex-sync.md) | Synchronize Codex session snapshots across devices |
 | [`defaults`](defaults.md) | Manage default dispatcher and Super Agents model/reasoning settings |
 | [`setup`](setup.md) | Full local bootstrap flow |
 | [`server`](server.md) | Run local Django/ASGI server |
+| [`service`](service.md) | Publish a local HTTP service privately over the Openbase VPN |
 | [`restart`](restart.md) | Restart Openbase-managed services |
 | [`self-update`](self-update.md) | Update a standalone install to the latest release |
 | [`version`](self-update.md) | Print CLI and package versions plus update availability |
@@ -36,6 +38,7 @@ openbase-coder [OPTIONS] COMMAND [ARGS]
 | [`doctor`](doctor.md) | Verify install, service health, and secrets |
 | [`onboarding`](onboarding.md) | Inspect onboarding state and report it to Openbase cloud |
 | [`login`](login.md) | Email-code login to Openbase cloud |
+| [`loops`](loops.md) | Manage loops: scheduled or event-triggered agent prompts and commands (alias: `routines`) |
 | [`logout`](logout.md) | Remove saved auth tokens |
 | [`plugins`](plugins.md) | Install and manage Openbase plugins |
 | [`bootstrap`](bootstrap.md) | Run plugin-provided bootstrap commands |
@@ -52,6 +55,9 @@ openbase-coder server --host 0.0.0.0 --port 7999
 
 # Check service states
 openbase-coder services status
+
+# Share a local development site with other tailnet devices
+openbase-coder service publish docs-preview 3000
 
 # Switch coding backend
 openbase-coder backend use codex

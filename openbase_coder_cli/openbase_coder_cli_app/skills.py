@@ -16,9 +16,8 @@ from rest_framework.response import Response
 
 from openbase_coder_cli import dispatcher_config, skills_autolink
 from openbase_coder_cli.paths import (
+    CLAUDE_CONFIG_DIR,
     CODEX_HOME_DIR,
-    NORMAL_CLAUDE_CONFIG_DIR,
-    OPENBASE_CLAUDE_CONFIG_DIR,
 )
 
 PRINTING_PRESS_REGISTRY_URL = "https://raw.githubusercontent.com/mvanhorn/printing-press-library/main/registry.json"
@@ -26,12 +25,11 @@ PRINTING_PRESS_SKILL_URL_TEMPLATE = (
     "https://raw.githubusercontent.com/mvanhorn/printing-press-library/main/"
     "cli-skills/pp-{name}/SKILL.md"
 )
-PRINTING_PRESS_TARGET_SCOPES = {"home", "openbase_codex", "openbase_claude"}
+PRINTING_PRESS_TARGET_SCOPES = {"home", "codex", "claude"}
 GLOBAL_SKILL_SCOPES = {
     "home",
-    "normal_claude",
-    "openbase_codex",
-    "openbase_claude",
+    "codex",
+    "claude",
 }
 PRINTING_PRESS_SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 PRINTING_PRESS_REGISTRY_CACHE_SECONDS = 300
@@ -43,28 +41,22 @@ def _home_skills_dir() -> Path:
     return Path.home() / ".agents" / "skills"
 
 
-def _normal_claude_skills_dir() -> Path:
-    return NORMAL_CLAUDE_CONFIG_DIR / "skills"
-
-
-def _openbase_codex_skills_dir() -> Path:
+def _codex_skills_dir() -> Path:
     return CODEX_HOME_DIR / "skills"
 
 
-def _openbase_claude_skills_dir() -> Path:
-    return OPENBASE_CLAUDE_CONFIG_DIR / "skills"
+def _claude_skills_dir() -> Path:
+    return CLAUDE_CONFIG_DIR / "skills"
 
 
 def _skills_dir(project_path: str | None, scope: str = "home") -> Path:
     """Return the skills directory for a project or global scope."""
     if project_path:
         return Path(project_path).expanduser().resolve() / ".agents" / "skills"
-    if scope == "openbase_codex":
-        return _openbase_codex_skills_dir()
-    if scope == "openbase_claude":
-        return _openbase_claude_skills_dir()
-    if scope == "normal_claude":
-        return _normal_claude_skills_dir()
+    if scope == "codex":
+        return _codex_skills_dir()
+    if scope == "claude":
+        return _claude_skills_dir()
     if scope == "home":
         return _home_skills_dir()
     raise ValueError("invalid skill scope")
@@ -78,19 +70,14 @@ def _skill_scope_payload() -> list[dict[str, str]]:
             "skills_dir": str(_home_skills_dir()),
         },
         {
-            "key": "normal_claude",
+            "key": "codex",
+            "label": "Codex skills",
+            "skills_dir": str(_codex_skills_dir()),
+        },
+        {
+            "key": "claude",
             "label": "Claude Code skills",
-            "skills_dir": str(_normal_claude_skills_dir()),
-        },
-        {
-            "key": "openbase_codex",
-            "label": "Openbase Codex skills",
-            "skills_dir": str(_openbase_codex_skills_dir()),
-        },
-        {
-            "key": "openbase_claude",
-            "label": "Openbase Claude skills",
-            "skills_dir": str(_openbase_claude_skills_dir()),
+            "skills_dir": str(_claude_skills_dir()),
         },
     ]
 
@@ -372,9 +359,8 @@ def _auto_link_settings_payload(*, sync: bool = False) -> dict:
     return {
         "auto_link_personal_skills": dispatcher_config.auto_link_personal_skills(),
         "personal_skills_dir": str(_home_skills_dir()),
-        "normal_claude_skills_dir": str(_normal_claude_skills_dir()),
-        "openbase_codex_skills_dir": str(_openbase_codex_skills_dir()),
-        "openbase_claude_skills_dir": str(_openbase_claude_skills_dir()),
+        "codex_skills_dir": str(_codex_skills_dir()),
+        "claude_skills_dir": str(_claude_skills_dir()),
         "config_path": str(dispatcher_config.CODEX_DISPATCHER_CONFIG_PATH),
         "config_exists": dispatcher_config.CODEX_DISPATCHER_CONFIG_PATH.is_file(),
         "sync": sync_result,

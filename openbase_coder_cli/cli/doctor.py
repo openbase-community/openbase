@@ -5,6 +5,8 @@ Doctor command — verify service health and security configuration.
 from __future__ import annotations
 
 import json
+import os
+import shlex
 import subprocess
 import tomllib
 from pathlib import Path
@@ -25,19 +27,21 @@ from openbase_coder_cli.dispatcher_config import (
     selected_tts_provider_id,
 )
 from openbase_coder_cli.paths import (
+    CLAUDE_CONFIG_DIR,
+    CLAUDE_STATE_PATH,
+    CODEX_CONFIG_PATH,
     CODEX_HOME_DIR,
     DEFAULT_ENV_FILE_PATH,
-    NORMAL_CLAUDE_STATE_PATH,
-    NORMAL_CODEX_CONFIG_PATH,
-    OPENBASE_CLAUDE_CONFIG_DIR,
-    OPENBASE_CLAUDE_JSON_PATH,
+    LAUNCHD_WRAPPER_DIR,
+    STANDALONE_CURRENT_DIR,
     STANDALONE_RELEASES_DIR,
 )
+from openbase_coder_cli.platforms import is_windows
 from openbase_coder_cli.runtime import stable_runtime_package
 from openbase_coder_cli.services.definitions import SERVICES
 from openbase_coder_cli.services.installation import InstallationConfig
 from openbase_coder_cli.services.launchd import launchctl_status
-from openbase_coder_cli.services.selection import configured_coding_backend
+from openbase_coder_cli.services.selection import configured_coding_backends
 from openbase_coder_cli.services.tailscale_serve import tailscale_serve_health
 from openbase_coder_cli.stt_providers import (
     LOCAL_MLX_WHISPER_STT_PROVIDER_ID,
@@ -80,8 +84,11 @@ def _parse_env_file() -> dict[str, str]:
 def _get_listening_sockets() -> list[tuple[str, int]]:
     """Return (bind_address, port) for all TCP LISTEN sockets.
 
-    Uses lsof to query the system, falling back to ss when lsof is missing.
+    Uses lsof to query the system, falling back to ss when lsof is missing
+    and to netstat on Windows, which has neither.
     """
+    if is_windows():
+        return _get_listening_sockets_netstat()
     try:
         result = subprocess.run(
             ["lsof", "-iTCP", "-sTCP:LISTEN", "-P", "-n"],
@@ -106,6 +113,35 @@ def _get_listening_sockets() -> list[tuple[str, int]]:
         except ValueError:
             continue
         key = (host, port)
+        if key not in seen:
+            seen.add(key)
+            sockets.append(key)
+    return sockets
+
+
+def _get_listening_sockets_netstat() -> list[tuple[str, int]]:
+    try:
+        result = subprocess.run(
+            ["netstat", "-ano", "-p", "tcp"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    seen: set[tuple[str, int]] = set()
+    sockets: list[tuple[str, int]] = []
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        # "TCP  127.0.0.1:7999  0.0.0.0:0  LISTENING  27932"
+        if len(parts) < 4 or parts[3].upper() != "LISTENING":
+            continue
+        host, separator, port_str = parts[1].rpartition(":")
+        if not separator or not port_str.isdigit():
+            continue
+        # Keep the bracket-free form so the exposure checks below compare
+        # against the same shapes lsof reports.
+        key = (host.strip("[]"), int(port_str))
         if key not in seen:
             seen.add(key)
             sockets.append(key)
@@ -163,6 +199,28 @@ def _check_livekit_client_credentials(env: dict[str, str], warn, ok) -> None:
         return
 
     ok("LiveKit client token credentials: set and separate from server credentials")
+
+
+def _check_local_livekit_tcp_listener(
+    env: dict[str, str],
+    sockets: list[tuple[str, int]],
+    ok,
+    fail,
+) -> None:
+    """Fail if embedded Netmesh exposes LiveKit's unused wildcard TCP mux."""
+    if env.get("LIVEKIT_NETWORK_MODE", "tailscale") != "local":
+        return
+
+    listeners = [(host, port) for host, port in sockets if port == 7881]
+    if listeners:
+        addresses = ", ".join(host for host, _ in listeners)
+        fail(
+            "port 7881 (LiveKit ICE-TCP): must not listen in local Netmesh "
+            f"mode (found {addresses})"
+        )
+        return
+
+    ok("port 7881 (LiveKit ICE-TCP): disabled in local Netmesh mode")
 
 
 def _selected_backend(env: dict[str, str]) -> str:
@@ -303,26 +361,89 @@ def _check_path(
         fail(f"{label}: missing at {path}")
 
 
+def _wrapper_exec_target(wrapper: Path) -> str | None:
+    """Return the binary a generated service wrapper execs, if any."""
+    try:
+        lines = wrapper.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped.startswith("exec "):
+            continue
+        parts = shlex.split(stripped[len("exec ") :])
+        if parts:
+            return parts[0]
+    return None
+
+
+def _check_service_runtime_paths(ok, warn, fail) -> None:
+    """Verify the runtime paths the *installed services* actually execute.
+
+    ``_check_installation_config`` only validates the package this CLI
+    process was launched from. Services run from the generated launchd
+    wrappers instead, which route through the ``packages/standalone/current``
+    alias — so a healthy CLI can report all-clear while every service is
+    executing a dangling path (for example after the app bundle it points
+    into is renamed or removed by an update).
+    """
+    if not LAUNCHD_WRAPPER_DIR.is_dir():
+        return
+
+    package_root: Path | None = None
+    if STANDALONE_CURRENT_DIR.is_symlink() or STANDALONE_CURRENT_DIR.exists():
+        try:
+            package_root = STANDALONE_CURRENT_DIR.resolve(strict=True)
+        except OSError:
+            fail(
+                f"standalone 'current' alias is dangling: "
+                f"{STANDALONE_CURRENT_DIR} -> "
+                f"{os.readlink(STANDALONE_CURRENT_DIR)} "
+                "— run 'openbase-coder services regenerate'"
+            )
+            return
+
+    if package_root is not None:
+        # The alias can resolve to a directory that still exists while the
+        # interpreter inside it points into a deleted prefix, which is what
+        # actually takes the services down.
+        interpreter = STANDALONE_CURRENT_DIR / "python" / "bin" / "python"
+        if not interpreter.exists():
+            fail(
+                f"standalone 'current' package has no usable interpreter at "
+                f"{interpreter} (resolves to {package_root}) "
+                "— run 'openbase-coder services regenerate'"
+            )
+        else:
+            ok(f"standalone 'current' package usable: {package_root}")
+
+    dangling: list[str] = []
+    for wrapper in sorted(LAUNCHD_WRAPPER_DIR.glob("*.sh")):
+        target = _wrapper_exec_target(wrapper)
+        if target is None:
+            continue
+        if not os.access(target, os.X_OK):
+            dangling.append(f"{wrapper.name} -> {target}")
+
+    if dangling:
+        for entry in dangling:
+            fail(f"service wrapper points at a missing executable: {entry}")
+        fail("run 'openbase-coder services regenerate' to repair service wrappers")
+    else:
+        ok("service wrappers resolve to executable runtime paths")
+
+
 def _check_agent_auth(env: dict[str, str], ok, warn, fail, action=None) -> None:
     action = action or fail
     backend = _selected_backend(env)
     ok(f"coding backend selected: {backend}")
 
-    codex_auth = Path.home() / ".codex" / "auth.json"
-    service_codex_auth = CODEX_HOME_DIR / "auth.json"
+    codex_auth = CODEX_HOME_DIR / "auth.json"
     if backend == CODEX_BACKEND:
         if codex_auth.is_file():
             ok("Codex auth: logged in")
         else:
             action("Codex auth missing: run 'codex login'")
-
-        if service_codex_auth.exists():
-            ok("Openbase Codex service auth bridge: configured")
-        else:
-            warn(
-                "Openbase Codex service auth bridge missing: "
-                "run 'openbase-coder setup' after 'codex login'"
-            )
 
     if backend == OPENBASE_CLOUD_BACKEND:
         from openbase_coder_cli.services.onboarding import cloud_login_status
@@ -375,23 +496,13 @@ def _check_super_agents_mcp_registrations(ok, warn, fail) -> None:
     """
     configs = (
         (
-            "normal Codex config",
-            NORMAL_CODEX_CONFIG_PATH,
+            "Codex config",
+            CODEX_CONFIG_PATH,
             _read_super_agents_command_codex,
         ),
         (
-            "Openbase Codex home config",
-            CODEX_HOME_DIR / "config.toml",
-            _read_super_agents_command_codex,
-        ),
-        (
-            "normal Claude config",
-            NORMAL_CLAUDE_STATE_PATH,
-            _read_super_agents_command_claude,
-        ),
-        (
-            "Openbase Claude config",
-            OPENBASE_CLAUDE_JSON_PATH,
+            "Claude config",
+            CLAUDE_STATE_PATH,
             _read_super_agents_command_claude,
         ),
     )
@@ -433,8 +544,8 @@ def _check_super_agents_mcp_registrations(ok, warn, fail) -> None:
 
 def _check_agent_home_skills(ok, warn, fail) -> None:
     for label, skills_dir in (
-        ("Openbase Codex home skills", CODEX_HOME_DIR / "skills"),
-        ("Openbase Claude config skills", OPENBASE_CLAUDE_CONFIG_DIR / "skills"),
+        ("Codex home skills", CODEX_HOME_DIR / "skills"),
+        ("Claude config skills", CLAUDE_CONFIG_DIR / "skills"),
     ):
         if not skills_dir.is_dir():
             warn(f"{label}: missing at {skills_dir}; run 'openbase-coder setup'")
@@ -635,14 +746,16 @@ def doctor() -> None:
     click.echo()
     click.echo(click.style("Installation", bold=True))
     _check_installation_config(ok, warn, fail)
+    _check_service_runtime_paths(ok, warn, fail)
 
     # --- Service health ---
     click.echo()
     click.echo(click.style("Service Health", bold=True))
-    coding_backend = configured_coding_backend()
+    coding_backends = configured_coding_backends()
+    backends_label = "/".join(coding_backends)
     for svc in SERVICES:
-        if not svc.supports_backend(coding_backend):
-            ok(f"{svc.name}: not used ({coding_backend} backend)")
+        if not any(svc.supports_backend(backend) for backend in coding_backends):
+            ok(f"{svc.name}: not used ({backends_label} backend)")
             continue
         info = launchctl_status(svc)
         required = getattr(svc, "install_by_default", True)
@@ -664,6 +777,7 @@ def doctor() -> None:
     click.echo()
     click.echo(click.style("Network Security", bold=True))
     sockets = _get_listening_sockets()
+    env = _parse_env_file()
 
     for port, label in _AUTHENTICATED_PORTS.items():
         listeners = [(h, p) for h, p in sockets if p == port]
@@ -675,6 +789,8 @@ def doctor() -> None:
                     ok(f"port {port} ({label}): bound to {host} (auth enabled)")
                 else:
                     ok(f"port {port} ({label}): bound to {host}")
+
+    _check_local_livekit_tcp_listener(env, sockets, ok, fail)
 
     # --- Tailscale Serve ---
     click.echo()
@@ -712,8 +828,6 @@ def doctor() -> None:
     # --- Credentials ---
     click.echo()
     click.echo(click.style("Credentials", bold=True))
-    env = _parse_env_file()
-
     if not DEFAULT_ENV_FILE_PATH.is_file():
         fail(f".env file not found at {DEFAULT_ENV_FILE_PATH}")
     else:

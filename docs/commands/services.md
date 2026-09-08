@@ -28,10 +28,11 @@ openbase-coder services COMMAND [ARGS]
 ## Managed Service Names
 
 - `livekit-server` (port `7880`)
-- `codex-app-server` (port `4500`)
-- `sync-workers` (thread sync, cross-device snapshot sync, and code-sync
-  reconcile in one process; state-dependent jobs no-op until code sync is
-  enabled)
+- `codex-app-server` (standard Unix control socket on macOS/Linux; legacy port
+  `4500` only for explicit compatibility deployments)
+- `sync-workers` (cross-device thread snapshot sync, Claude desktop app
+  index sync, code-sync reconcile, and other periodic jobs in one process;
+  state-dependent jobs no-op until their feature is enabled)
 - `openbase-routines`
 - `livekit-agent`
 - `django-cli` (port `7999`)

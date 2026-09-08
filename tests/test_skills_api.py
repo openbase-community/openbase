@@ -31,99 +31,67 @@ def _write_skill(root: Path, name: str, content: str = "instructions") -> Path:
 
 def _patch_skill_homes(
     monkeypatch,
-    normal_home: Path,
-    openbase_home: Path,
+    agents_home: Path,
+    codex_home: Path,
     claude_home: Path | None = None,
-    normal_claude_home: Path | None = None,
 ) -> None:
     from openbase_coder_cli import skills_autolink
 
-    resolved_claude_home = claude_home or normal_home.parent / "openbase-claude"
-    resolved_normal_claude_home = (
-        normal_claude_home or normal_home.parent / "normal-claude"
-    )
+    resolved_claude_home = claude_home or agents_home.parent / "claude"
     monkeypatch.setattr(
-        views._skills, "_home_skills_dir", lambda: normal_home / "skills"
+        views._skills, "_home_skills_dir", lambda: agents_home / "skills"
     )
-    monkeypatch.setattr(views, "_home_skills_dir", lambda: normal_home / "skills")
+    monkeypatch.setattr(views, "_home_skills_dir", lambda: agents_home / "skills")
+    monkeypatch.setattr(views, "CODEX_HOME_DIR", codex_home)
+    monkeypatch.setattr(views._skills, "CODEX_HOME_DIR", codex_home)
+    monkeypatch.setattr(views, "CLAUDE_CONFIG_DIR", resolved_claude_home)
+    monkeypatch.setattr(views._skills, "CLAUDE_CONFIG_DIR", resolved_claude_home)
     monkeypatch.setattr(
-        views._skills,
-        "_normal_claude_skills_dir",
-        lambda: resolved_normal_claude_home / "skills",
+        skills_autolink, "home_skills_dir", lambda: agents_home / "skills"
     )
-    monkeypatch.setattr(views, "CODEX_HOME_DIR", openbase_home)
-    monkeypatch.setattr(views._skills, "CODEX_HOME_DIR", openbase_home)
-    monkeypatch.setattr(views, "OPENBASE_CLAUDE_CONFIG_DIR", resolved_claude_home)
-    monkeypatch.setattr(
-        views._skills, "OPENBASE_CLAUDE_CONFIG_DIR", resolved_claude_home
-    )
-    monkeypatch.setattr(
-        skills_autolink, "home_skills_dir", lambda: normal_home / "skills"
-    )
-    monkeypatch.setattr(
-        skills_autolink,
-        "normal_claude_skills_dir",
-        lambda: resolved_normal_claude_home / "skills",
-    )
-    monkeypatch.setattr(skills_autolink, "CODEX_HOME_DIR", openbase_home)
-    monkeypatch.setattr(
-        skills_autolink, "OPENBASE_CLAUDE_CONFIG_DIR", resolved_claude_home
-    )
+    monkeypatch.setattr(skills_autolink, "CODEX_HOME_DIR", codex_home)
+    monkeypatch.setattr(skills_autolink, "CLAUDE_CONFIG_DIR", resolved_claude_home)
     monkeypatch.setattr(
         views._skills.dispatcher_config,
         "CODEX_DISPATCHER_CONFIG_PATH",
-        normal_home.parent / "dispatcher-config.json",
+        agents_home.parent / "dispatcher-config.json",
     )
 
 
-def test_skills_list_uses_normal_and_openbase_agent_homes(tmp_path: Path, monkeypatch):
-    normal_home = tmp_path / "normal-codex"
-    normal_claude_home = tmp_path / "normal-claude"
-    openbase_home = tmp_path / "openbase-codex"
-    claude_home = tmp_path / "openbase-claude"
-    _write_skill(normal_home, "normal-skill")
-    _write_skill(normal_claude_home, "normal-claude-skill")
-    _write_skill(openbase_home, "openbase-skill")
+def test_skills_list_covers_shared_agent_homes(tmp_path: Path, monkeypatch):
+    agents_home = tmp_path / "agents-home"
+    codex_home = tmp_path / "codex-home"
+    claude_home = tmp_path / "claude-home"
+    _write_skill(agents_home, "home-skill")
+    _write_skill(codex_home, "codex-skill")
     _write_skill(claude_home, "claude-skill")
 
-    _patch_skill_homes(
-        monkeypatch, normal_home, openbase_home, claude_home, normal_claude_home
-    )
+    _patch_skill_homes(monkeypatch, agents_home, codex_home, claude_home)
 
     response = views.skills_list(_request("get", "/api/skills/"))
 
     assert response.status_code == 200
     sections = {section["key"]: section for section in response.data["sections"]}
+    assert set(sections) == {"home", "codex", "claude"}
     assert sections["home"]["label"] == "Personal Codex skills"
-    assert sections["home"]["skills_dir"] == str(normal_home / "skills")
-    assert [skill["name"] for skill in sections["home"]["skills"]] == ["normal-skill"]
-    assert sections["normal_claude"]["label"] == "Claude Code skills"
-    assert sections["normal_claude"]["skills_dir"] == str(
-        normal_claude_home / "skills"
-    )
-    assert [skill["name"] for skill in sections["normal_claude"]["skills"]] == [
-        "normal-claude-skill"
-    ]
-    assert sections["openbase_codex"]["label"] == "Openbase Codex skills"
-    assert sections["openbase_codex"]["skills_dir"] == str(openbase_home / "skills")
-    assert [skill["name"] for skill in sections["openbase_codex"]["skills"]] == [
-        "openbase-skill"
-    ]
-    assert sections["openbase_claude"]["label"] == "Openbase Claude skills"
-    assert sections["openbase_claude"]["skills_dir"] == str(claude_home / "skills")
-    assert [skill["name"] for skill in sections["openbase_claude"]["skills"]] == [
-        "claude-skill"
-    ]
+    assert sections["home"]["skills_dir"] == str(agents_home / "skills")
+    assert [skill["name"] for skill in sections["home"]["skills"]] == ["home-skill"]
+    assert sections["codex"]["label"] == "Codex skills"
+    assert sections["codex"]["skills_dir"] == str(codex_home / "skills")
+    assert [skill["name"] for skill in sections["codex"]["skills"]] == ["codex-skill"]
+    assert sections["claude"]["label"] == "Claude Code skills"
+    assert sections["claude"]["skills_dir"] == str(claude_home / "skills")
+    assert [skill["name"] for skill in sections["claude"]["skills"]] == ["claude-skill"]
+    assert response.data["skills_dir"] == str(agents_home / "skills")
+    assert [skill["name"] for skill in response.data["skills"]] == ["home-skill"]
 
 
-def test_skills_symlink_links_normal_skill_to_openbase_codex(
-    tmp_path: Path, monkeypatch
-):
-    normal_home = tmp_path / "normal-codex"
-    openbase_home = tmp_path / "openbase-codex"
-    source_dir = _write_skill(normal_home, "shared-skill")
+def test_skills_symlink_links_home_skill_to_codex(tmp_path: Path, monkeypatch):
+    agents_home = tmp_path / "agents-home"
+    codex_home = tmp_path / "codex-home"
+    source_dir = _write_skill(agents_home, "shared-skill")
 
-    _patch_skill_homes(monkeypatch, normal_home, openbase_home)
+    _patch_skill_homes(monkeypatch, agents_home, codex_home)
 
     response = views.skills_symlink(
         _request(
@@ -132,12 +100,12 @@ def test_skills_symlink_links_normal_skill_to_openbase_codex(
             {
                 "name": "shared-skill",
                 "source_scope": "home",
-                "target_scope": "openbase_codex",
+                "target_scope": "codex",
             },
         )
     )
 
-    target_dir = openbase_home / "skills" / "shared-skill"
+    target_dir = codex_home / "skills" / "shared-skill"
     assert response.status_code == 201
     assert response.data["created"] is True
     assert response.data["source_dir"] == str(source_dir.resolve())
@@ -146,15 +114,13 @@ def test_skills_symlink_links_normal_skill_to_openbase_codex(
     assert (target_dir / "SKILL.md").read_text(encoding="utf-8") == "instructions"
 
 
-def test_skills_symlink_links_normal_skill_to_openbase_claude(
-    tmp_path: Path, monkeypatch
-):
-    normal_home = tmp_path / "normal-codex"
-    openbase_home = tmp_path / "openbase-codex"
-    claude_home = tmp_path / "openbase-claude"
-    source_dir = _write_skill(normal_home, "shared-skill")
+def test_skills_symlink_links_home_skill_to_claude(tmp_path: Path, monkeypatch):
+    agents_home = tmp_path / "agents-home"
+    codex_home = tmp_path / "codex-home"
+    claude_home = tmp_path / "claude-home"
+    source_dir = _write_skill(agents_home, "shared-skill")
 
-    _patch_skill_homes(monkeypatch, normal_home, openbase_home, claude_home)
+    _patch_skill_homes(monkeypatch, agents_home, codex_home, claude_home)
 
     response = views.skills_symlink(
         _request(
@@ -163,7 +129,7 @@ def test_skills_symlink_links_normal_skill_to_openbase_claude(
             {
                 "name": "shared-skill",
                 "source_scope": "home",
-                "target_scope": "openbase_claude",
+                "target_scope": "claude",
             },
         )
     )
@@ -171,25 +137,18 @@ def test_skills_symlink_links_normal_skill_to_openbase_claude(
     target_dir = claude_home / "skills" / "shared-skill"
     assert response.status_code == 201
     assert response.data["created"] is True
-    assert response.data["target_scope"] == "openbase_claude"
+    assert response.data["target_scope"] == "claude"
     assert target_dir.is_symlink()
     assert target_dir.resolve() == source_dir.resolve()
 
 
-def test_skills_symlink_links_normal_claude_skill_to_openbase_codex(
-    tmp_path: Path, monkeypatch
-):
-    normal_home = tmp_path / "normal-codex"
-    normal_claude_home = tmp_path / "normal-claude"
-    openbase_home = tmp_path / "openbase-codex"
-    source_dir = _write_skill(normal_claude_home, "shared-claude-skill")
+def test_skills_symlink_links_claude_skill_to_codex(tmp_path: Path, monkeypatch):
+    agents_home = tmp_path / "agents-home"
+    codex_home = tmp_path / "codex-home"
+    claude_home = tmp_path / "claude-home"
+    source_dir = _write_skill(claude_home, "shared-claude-skill")
 
-    _patch_skill_homes(
-        monkeypatch,
-        normal_home,
-        openbase_home,
-        normal_claude_home=normal_claude_home,
-    )
+    _patch_skill_homes(monkeypatch, agents_home, codex_home, claude_home)
 
     response = views.skills_symlink(
         _request(
@@ -197,16 +156,16 @@ def test_skills_symlink_links_normal_claude_skill_to_openbase_codex(
             "/api/skills/symlink/",
             {
                 "name": "shared-claude-skill",
-                "source_scope": "normal_claude",
-                "target_scope": "openbase_codex",
+                "source_scope": "claude",
+                "target_scope": "codex",
             },
         )
     )
 
-    target_dir = openbase_home / "skills" / "shared-claude-skill"
+    target_dir = codex_home / "skills" / "shared-claude-skill"
     assert response.status_code == 201
     assert response.data["created"] is True
-    assert response.data["source_scope"] == "normal_claude"
+    assert response.data["source_scope"] == "claude"
     assert target_dir.is_symlink()
     assert target_dir.resolve() == source_dir.resolve()
 
@@ -214,14 +173,14 @@ def test_skills_symlink_links_normal_claude_skill_to_openbase_codex(
 def test_skills_symlink_returns_ok_when_link_already_exists(
     tmp_path: Path, monkeypatch
 ):
-    normal_home = tmp_path / "normal-codex"
-    openbase_home = tmp_path / "openbase-codex"
-    source_dir = _write_skill(normal_home, "shared-skill")
-    target_dir = openbase_home / "skills" / "shared-skill"
+    agents_home = tmp_path / "agents-home"
+    codex_home = tmp_path / "codex-home"
+    source_dir = _write_skill(agents_home, "shared-skill")
+    target_dir = codex_home / "skills" / "shared-skill"
     target_dir.parent.mkdir(parents=True)
     target_dir.symlink_to(source_dir, target_is_directory=True)
 
-    _patch_skill_homes(monkeypatch, normal_home, openbase_home)
+    _patch_skill_homes(monkeypatch, agents_home, codex_home)
 
     response = views.skills_symlink(
         _request(
@@ -230,7 +189,7 @@ def test_skills_symlink_returns_ok_when_link_already_exists(
             {
                 "name": "shared-skill",
                 "source_scope": "home",
-                "target_scope": "openbase_codex",
+                "target_scope": "codex",
             },
         )
     )
@@ -240,12 +199,12 @@ def test_skills_symlink_returns_ok_when_link_already_exists(
 
 
 def test_skills_symlink_rejects_existing_non_link_target(tmp_path: Path, monkeypatch):
-    normal_home = tmp_path / "normal-codex"
-    openbase_home = tmp_path / "openbase-codex"
-    _write_skill(normal_home, "shared-skill", "normal")
-    _write_skill(openbase_home, "shared-skill", "openbase")
+    agents_home = tmp_path / "agents-home"
+    codex_home = tmp_path / "codex-home"
+    _write_skill(agents_home, "shared-skill", "home")
+    _write_skill(codex_home, "shared-skill", "codex")
 
-    _patch_skill_homes(monkeypatch, normal_home, openbase_home)
+    _patch_skill_homes(monkeypatch, agents_home, codex_home)
 
     response = views.skills_symlink(
         _request(
@@ -254,22 +213,22 @@ def test_skills_symlink_rejects_existing_non_link_target(tmp_path: Path, monkeyp
             {
                 "name": "shared-skill",
                 "source_scope": "home",
-                "target_scope": "openbase_codex",
+                "target_scope": "codex",
             },
         )
     )
 
     assert response.status_code == 409
     assert "already exists" in response.data["error"]
-    assert not (openbase_home / "skills" / "shared-skill").is_symlink()
+    assert not (codex_home / "skills" / "shared-skill").is_symlink()
 
 
 def test_skills_auto_link_setting_defaults_disabled(tmp_path: Path, monkeypatch):
-    normal_home = tmp_path / "normal-codex"
-    openbase_home = tmp_path / "openbase-codex"
+    agents_home = tmp_path / "agents-home"
+    codex_home = tmp_path / "codex-home"
     config_path = tmp_path / "dispatcher-config.json"
-    _write_skill(normal_home, "shared-skill")
-    _patch_skill_homes(monkeypatch, normal_home, openbase_home)
+    _write_skill(agents_home, "shared-skill")
+    _patch_skill_homes(monkeypatch, agents_home, codex_home)
     monkeypatch.setattr(
         views._skills.dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path
     )
@@ -281,24 +240,19 @@ def test_skills_auto_link_setting_defaults_disabled(tmp_path: Path, monkeypatch)
         response.data["auto_link_personal_skills"]["auto_link_personal_skills"] is False
     )
     assert response.data["auto_link_personal_skills_sync"] is None
-    assert not (openbase_home / "skills" / "shared-skill").exists()
+    assert not (codex_home / "skills" / "shared-skill").exists()
 
 
-def test_skills_auto_link_setting_enables_and_links_normal_skills(
+def test_skills_auto_link_setting_enables_and_links_personal_skills(
     tmp_path: Path, monkeypatch
 ):
-    normal_home = tmp_path / "normal-codex"
-    normal_claude_home = tmp_path / "normal-claude"
-    openbase_home = tmp_path / "openbase-codex"
+    agents_home = tmp_path / "agents-home"
+    codex_home = tmp_path / "codex-home"
+    claude_home = tmp_path / "claude-home"
     config_path = tmp_path / "dispatcher-config.json"
-    source_dir = _write_skill(normal_home, "shared-skill")
-    claude_source_dir = _write_skill(normal_claude_home, "shared-claude-skill")
-    _patch_skill_homes(
-        monkeypatch,
-        normal_home,
-        openbase_home,
-        normal_claude_home=normal_claude_home,
-    )
+    source_dir = _write_skill(agents_home, "shared-skill")
+    claude_source_dir = _write_skill(claude_home, "shared-claude-skill")
+    _patch_skill_homes(monkeypatch, agents_home, codex_home, claude_home)
     monkeypatch.setattr(
         views._skills.dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path
     )
@@ -311,30 +265,41 @@ def test_skills_auto_link_setting_enables_and_links_normal_skills(
         )
     )
 
-    target_dir = openbase_home / "skills" / "shared-skill"
-    claude_target_dir = openbase_home / "skills" / "shared-claude-skill"
+    codex_target_dir = codex_home / "skills" / "shared-skill"
+    claude_target_dir = claude_home / "skills" / "shared-skill"
+    codex_claude_target_dir = codex_home / "skills" / "shared-claude-skill"
     assert response.status_code == 200
     assert response.data["auto_link_personal_skills"] is True
-    # One link per source skill per target scope.
-    assert response.data["sync"]["created"] == 4
-    assert target_dir.is_symlink()
-    assert target_dir.resolve() == source_dir.resolve()
+    assert response.data["codex_skills_dir"] == str(codex_home / "skills")
+    assert response.data["claude_skills_dir"] == str(claude_home / "skills")
+    # home skill -> codex + claude, claude skill -> codex; the claude home is
+    # never linked back onto itself.
+    assert response.data["sync"]["created"] == 3
+    assert response.data["sync"]["conflicts"] == 0
+    assert codex_target_dir.is_symlink()
+    assert codex_target_dir.resolve() == source_dir.resolve()
     assert claude_target_dir.is_symlink()
-    assert claude_target_dir.resolve() == claude_source_dir.resolve()
+    assert claude_target_dir.resolve() == source_dir.resolve()
+    assert codex_claude_target_dir.is_symlink()
+    assert codex_claude_target_dir.resolve() == claude_source_dir.resolve()
 
     list_response = views.skills_list(_request("get", "/api/skills/"))
-    assert list_response.data["auto_link_personal_skills_sync"]["already_linked"] == 4
+    sync = list_response.data["auto_link_personal_skills_sync"]
+    assert sync["created"] == 0
+    # The home skill linked into the claude home now also shows up as a
+    # claude-source skill, so the re-sync sees four already-linked entries.
+    assert sync["already_linked"] == 4
 
 
 def test_skills_auto_link_reports_conflict_without_overwriting(
     tmp_path: Path, monkeypatch
 ):
-    normal_home = tmp_path / "normal-codex"
-    openbase_home = tmp_path / "openbase-codex"
+    agents_home = tmp_path / "agents-home"
+    codex_home = tmp_path / "codex-home"
     config_path = tmp_path / "dispatcher-config.json"
-    _write_skill(normal_home, "shared-skill", "normal")
-    _write_skill(openbase_home, "shared-skill", "openbase")
-    _patch_skill_homes(monkeypatch, normal_home, openbase_home)
+    _write_skill(agents_home, "shared-skill", "home")
+    _write_skill(codex_home, "shared-skill", "codex")
+    _patch_skill_homes(monkeypatch, agents_home, codex_home)
     monkeypatch.setattr(
         views._skills.dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path
     )
@@ -348,28 +313,32 @@ def test_skills_auto_link_reports_conflict_without_overwriting(
     )
 
     assert response.status_code == 200
-    assert response.data["sync"]["conflicts"] == 1
+    # home -> codex conflicts, home -> claude links; the fresh claude link is
+    # then re-seen as a claude source whose codex target is still the
+    # conflicting real directory.
+    assert response.data["sync"]["conflicts"] == 2
     assert response.data["sync"]["results"][0]["status"] == "conflict"
-    target_dir = openbase_home / "skills" / "shared-skill"
+    assert response.data["sync"]["results"][0]["target_scope"] == "codex"
+    target_dir = codex_home / "skills" / "shared-skill"
     assert not target_dir.is_symlink()
-    assert (target_dir / "SKILL.md").read_text(encoding="utf-8") == "openbase"
+    assert (target_dir / "SKILL.md").read_text(encoding="utf-8") == "codex"
 
 
 def test_skill_delete_unlinks_symlink_without_deleting_source(
     tmp_path: Path, monkeypatch
 ):
-    normal_home = tmp_path / "normal-codex"
-    openbase_home = tmp_path / "openbase-codex"
-    source_dir = _write_skill(normal_home, "shared-skill")
-    target_dir = openbase_home / "skills" / "shared-skill"
+    agents_home = tmp_path / "agents-home"
+    codex_home = tmp_path / "codex-home"
+    source_dir = _write_skill(agents_home, "shared-skill")
+    target_dir = codex_home / "skills" / "shared-skill"
     target_dir.parent.mkdir(parents=True)
     target_dir.symlink_to(source_dir, target_is_directory=True)
 
-    _patch_skill_homes(monkeypatch, normal_home, openbase_home)
+    _patch_skill_homes(monkeypatch, agents_home, codex_home)
 
     request = _request(
         "delete",
-        "/api/skills/shared-skill/?scope=openbase_codex",
+        "/api/skills/shared-skill/?scope=codex",
     )
     response = views.skill_detail(request, "shared-skill")
 
@@ -382,15 +351,15 @@ def test_skill_delete_unlinks_symlink_without_deleting_source(
 def test_skills_symlink_preserves_existing_source_symlink_chain(
     tmp_path: Path, monkeypatch
 ):
-    normal_home = tmp_path / "normal-codex"
-    openbase_home = tmp_path / "openbase-codex"
+    agents_home = tmp_path / "agents-home"
+    codex_home = tmp_path / "codex-home"
     real_skill = tmp_path / "Developer" / "skills" / "shared-skill"
     real_skill.mkdir(parents=True)
     (real_skill / "SKILL.md").write_text("real instructions", encoding="utf-8")
-    source_dir = normal_home / "skills" / "shared-skill"
+    source_dir = agents_home / "skills" / "shared-skill"
     source_dir.parent.mkdir(parents=True)
     source_dir.symlink_to(real_skill, target_is_directory=True)
-    _patch_skill_homes(monkeypatch, normal_home, openbase_home)
+    _patch_skill_homes(monkeypatch, agents_home, codex_home)
 
     response = views.skills_symlink(
         _request(
@@ -399,12 +368,12 @@ def test_skills_symlink_preserves_existing_source_symlink_chain(
             {
                 "name": "shared-skill",
                 "source_scope": "home",
-                "target_scope": "openbase_codex",
+                "target_scope": "codex",
             },
         )
     )
 
-    target_dir = openbase_home / "skills" / "shared-skill"
+    target_dir = codex_home / "skills" / "shared-skill"
     assert response.status_code == 201
     assert response.data["source_dir"] == str(source_dir)
     assert target_dir.is_symlink()
@@ -457,11 +426,11 @@ def _printing_press_registry() -> dict:
 def test_printing_press_catalog_filters_and_reports_install_status(
     tmp_path: Path, monkeypatch
 ):
-    normal_home = tmp_path / "normal-codex"
-    openbase_home = tmp_path / "openbase-codex"
-    claude_home = tmp_path / "openbase-claude"
-    _write_skill(normal_home, "pp-demo")
-    _patch_skill_homes(monkeypatch, normal_home, openbase_home, claude_home)
+    agents_home = tmp_path / "agents-home"
+    codex_home = tmp_path / "codex-home"
+    claude_home = tmp_path / "claude-home"
+    _write_skill(agents_home, "pp-demo")
+    _patch_skill_homes(monkeypatch, agents_home, codex_home, claude_home)
     monkeypatch.setattr(
         views._skills, "_fetch_printing_press_registry", _printing_press_registry
     )
@@ -479,9 +448,9 @@ def test_printing_press_catalog_filters_and_reports_install_status(
     assert [entry["name"] for entry in response.data["entries"]] == ["demo"]
     assert response.data["entries"][0]["skill_name"] == "pp-demo"
     assert response.data["entries"][0]["installed_targets"] == {
-        "openbase_claude": False,
+        "claude": False,
+        "codex": False,
         "home": True,
-        "openbase_codex": False,
     }
     assert response.data["entries"][0]["mcp"]["auth_type"] == "api_key"
 
@@ -489,10 +458,10 @@ def test_printing_press_catalog_filters_and_reports_install_status(
 def test_printing_press_install_writes_skill_to_selected_targets(
     tmp_path: Path, monkeypatch
 ):
-    normal_home = tmp_path / "normal-codex"
-    openbase_home = tmp_path / "openbase-codex"
-    claude_home = tmp_path / "openbase-claude"
-    _patch_skill_homes(monkeypatch, normal_home, openbase_home, claude_home)
+    agents_home = tmp_path / "agents-home"
+    codex_home = tmp_path / "codex-home"
+    claude_home = tmp_path / "claude-home"
+    _patch_skill_homes(monkeypatch, agents_home, codex_home, claude_home)
     monkeypatch.setattr(
         views._skills, "_fetch_printing_press_registry", _printing_press_registry
     )
@@ -506,7 +475,7 @@ def test_printing_press_install_writes_skill_to_selected_targets(
         _request(
             "post",
             "/api/skills/printing-press/install/",
-            {"name": "demo", "targets": ["home", "openbase_claude"]},
+            {"name": "demo", "targets": ["home", "claude"]},
         )
     )
 
@@ -517,21 +486,21 @@ def test_printing_press_install_writes_skill_to_selected_targets(
         "installed",
     ]
     assert (
-        (normal_home / "skills" / "pp-demo" / "SKILL.md")
+        (agents_home / "skills" / "pp-demo" / "SKILL.md")
         .read_text(encoding="utf-8")
         .startswith("---\nname: pp-demo")
     )
     assert (claude_home / "skills" / "pp-demo" / "SKILL.md").is_file()
-    assert not (openbase_home / "skills" / "pp-demo" / "SKILL.md").exists()
+    assert not (codex_home / "skills" / "pp-demo" / "SKILL.md").exists()
 
 
 def test_printing_press_install_is_idempotent_without_refetching(
     tmp_path: Path, monkeypatch
 ):
-    normal_home = tmp_path / "normal-codex"
-    openbase_home = tmp_path / "openbase-codex"
-    _write_skill(normal_home, "pp-demo")
-    _patch_skill_homes(monkeypatch, normal_home, openbase_home)
+    agents_home = tmp_path / "agents-home"
+    codex_home = tmp_path / "codex-home"
+    _write_skill(agents_home, "pp-demo")
+    _patch_skill_homes(monkeypatch, agents_home, codex_home)
     monkeypatch.setattr(
         views._skills, "_fetch_printing_press_registry", _printing_press_registry
     )
@@ -556,14 +525,14 @@ def test_printing_press_install_is_idempotent_without_refetching(
         {
             "target": "home",
             "status": "already_installed",
-            "path": str(normal_home / "skills" / "pp-demo" / "SKILL.md"),
+            "path": str(agents_home / "skills" / "pp-demo" / "SKILL.md"),
             "created": False,
         }
     ]
 
 
 def test_printing_press_install_rejects_invalid_target(tmp_path: Path, monkeypatch):
-    _patch_skill_homes(monkeypatch, tmp_path / "normal-codex", tmp_path / "openbase")
+    _patch_skill_homes(monkeypatch, tmp_path / "agents-home", tmp_path / "codex-home")
 
     response = views.printing_press_install(
         _request(
@@ -580,7 +549,7 @@ def test_printing_press_install_rejects_invalid_target(tmp_path: Path, monkeypat
 def test_printing_press_install_rejects_unknown_catalog_name(
     tmp_path: Path, monkeypatch
 ):
-    _patch_skill_homes(monkeypatch, tmp_path / "normal-codex", tmp_path / "openbase")
+    _patch_skill_homes(monkeypatch, tmp_path / "agents-home", tmp_path / "codex-home")
     monkeypatch.setattr(
         views._skills, "_fetch_printing_press_registry", _printing_press_registry
     )
@@ -598,11 +567,11 @@ def test_printing_press_install_rejects_unknown_catalog_name(
 
 
 def test_printing_press_install_reports_target_conflict(tmp_path: Path, monkeypatch):
-    normal_home = tmp_path / "normal-codex"
-    openbase_home = tmp_path / "openbase-codex"
-    conflict_dir = normal_home / "skills" / "pp-demo"
+    agents_home = tmp_path / "agents-home"
+    codex_home = tmp_path / "codex-home"
+    conflict_dir = agents_home / "skills" / "pp-demo"
     conflict_dir.mkdir(parents=True)
-    _patch_skill_homes(monkeypatch, normal_home, openbase_home)
+    _patch_skill_homes(monkeypatch, agents_home, codex_home)
     monkeypatch.setattr(
         views._skills, "_fetch_printing_press_registry", _printing_press_registry
     )

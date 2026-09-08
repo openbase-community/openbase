@@ -1,4 +1,13 @@
-"""Voice delivery state and diagnostics for LiveKit spoken turns."""
+"""Voice delivery state and diagnostics for LiveKit spoken turns.
+
+Mute semantics (intended behavior — do not "fix"): once the user goes quiet
+and their utterance is accepted, ``safe_to_mute_user`` tells the client to
+mute its microphone, and it stays muted until ``safe_to_unmute`` after the
+agent's spoken reply. A slow coding-backend turn extends that muted window
+for however long the turn runs; the sustained mute is deliberate, not a
+stuck state. When a call looks deaf during a long pending turn, investigate
+backend turn latency (see dev-docs/TROUBLESHOOTING.md), not the mute.
+"""
 
 from __future__ import annotations
 

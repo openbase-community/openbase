@@ -233,3 +233,52 @@ def test_report_cli_state_posts_registration_capabilities(
 
     cache = json.loads(onboarding_cache.read_text(encoding="utf-8"))
     assert cache["last_report"]["cli_configured"] is True
+
+
+def test_service_hostname_cloud_contract_uses_authenticated_bounded_endpoints(
+    monkeypatch, logged_in
+) -> None:
+    calls = _mock_response(
+        monkeypatch,
+        httpx.Response(
+            200,
+            json={
+                "supported": True,
+                "dns_allocation": True,
+                "serve_routing": False,
+                "pattern": "{service}.{node_dns_name}",
+                "http_port": 80,
+            },
+        ),
+    )
+
+    result = cloud_registration.netmesh_service_hostname_capabilities()
+
+    assert result.ok is True
+    assert calls[-1]["method"] == "GET"
+    assert calls[-1]["url"].endswith(
+        "/api/openbase/netmesh/service-hostnames/capabilities/"
+    )
+
+    allocation_calls = _mock_response(
+        monkeypatch, httpx.Response(200, json={"hostname": "x"})
+    )
+    result = cloud_registration.allocate_netmesh_service_hostname(
+        node_id="7", service_name="crm"
+    )
+    assert result.ok is True
+    assert allocation_calls[0]["method"] == "POST"
+    assert allocation_calls[0]["json"] == {
+        "node_id": "7",
+        "service_name": "crm",
+    }
+    # The transport itself is covered above; verify release separately through
+    # a fresh call recorder so DELETE cannot regress to an unauthenticated path.
+    release_calls = _mock_response(monkeypatch, httpx.Response(204))
+    result = cloud_registration.release_netmesh_service_hostname(
+        node_id="7", service_name="crm"
+    )
+    assert result.ok is True
+    assert release_calls[0]["method"] == "DELETE"
+    assert release_calls[0]["json"] == {"node_id": "7", "service_name": "crm"}
+    assert release_calls[0]["headers"]["Authorization"] == "Bearer jwt.token"

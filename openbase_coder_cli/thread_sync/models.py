@@ -54,6 +54,9 @@ class TurnInfo(BaseModel):
     model: str | None = None
     reasoning_effort: str | None = None
     steers: list[TurnSteerInfo] = Field(default_factory=list)
+    # Absolute paths of files the agent edited during the turn, in first-seen
+    # order. The console groups these by repo and links to the git diff view.
+    file_edits: list[str] = Field(default_factory=list)
 
 
 class ThreadInfo(BaseModel):

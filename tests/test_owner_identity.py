@@ -33,11 +33,6 @@ def auth_path(tmp_path, monkeypatch):
     return path
 
 
-@pytest.fixture(autouse=True)
-def _enforce(monkeypatch):
-    monkeypatch.delenv("OPENBASE_CODER_CLI_ALLOW_ANY_SUBJECT", raising=False)
-
-
 def login_as(auth_path, sub="user-1", email="owner@example.com"):
     TokenManager("https://backend.example.com").store_tokens(
         access_token=make_jwt({"sub": sub, "email": email}),
@@ -107,18 +102,22 @@ def test_no_owner_rejects_all(monkeypatch):
         auth_module.enforce_owner_identity({"sub": "user-1"})
 
 
-def test_allow_any_subject_escape_hatch(monkeypatch):
+def test_environment_cannot_bypass_owner_identity(monkeypatch):
     monkeypatch.setenv("OPENBASE_CODER_CLI_ALLOW_ANY_SUBJECT", "true")
-    _patch_owner(monkeypatch, {"sub": "user-1"})
-    assert auth_module.is_owner_identity({"sub": "anyone"}) is True
-    auth_module.enforce_owner_identity({"sub": "anyone"})  # no raise
+    _patch_owner(monkeypatch, {"sub": "user-1", "email": "owner@example.com"})
+
+    foreign_claims = {"sub": "user-2", "email": "other@example.com"}
+    assert auth_module.is_owner_identity(foreign_claims) is False
+    with pytest.raises(exceptions.AuthenticationFailed):
+        auth_module.enforce_owner_identity(foreign_claims)
 
 
 # ---- end-to-end through JWTAuthentication.authenticate ---------------------
 
 
-def test_authenticate_rejects_foreign_token(auth_path, monkeypatch):
+def test_authenticate_rejects_foreign_token_despite_environment(auth_path, monkeypatch):
     login_as(auth_path, sub="owner-sub", email="owner@example.com")
+    monkeypatch.setenv("OPENBASE_CODER_CLI_ALLOW_ANY_SUBJECT", "true")
 
     foreign = make_jwt({"sub": "attacker-sub", "email": "attacker@example.com"})
     monkeypatch.setattr(

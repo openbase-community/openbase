@@ -54,7 +54,9 @@ def _get_report_file(project_path: Path, relative_path: str):
 
 def _get_project_reports(project_path: Path):
     factory = APIRequestFactory()
-    request = factory.get(f"/api/projects/reports/?{urlencode({'path': str(project_path)})}")
+    request = factory.get(
+        f"/api/projects/reports/?{urlencode({'path': str(project_path)})}"
+    )
     force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
     return views.project_reports(request)
 
@@ -110,20 +112,17 @@ def test_global_reports_projects_lists_untracked_report_sources(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    openbase_codex_home = tmp_path / "openbase" / "codex_home"
-    normal_codex_home = tmp_path / ".codex"
+    codex_home = tmp_path / ".codex"
     home = tmp_path / "home"
     for source, report_name in (
-        (openbase_codex_home, "voice.md"),
-        (normal_codex_home, "normal.md"),
+        (codex_home, "codex.md"),
         (home, "home.md"),
     ):
         reports = source / ".reports"
         reports.mkdir(parents=True)
         (reports / report_name).write_text("done", encoding="utf-8")
 
-    monkeypatch.setattr(reports_service, "CODEX_HOME_DIR", openbase_codex_home)
-    monkeypatch.setattr(reports_service, "NORMAL_CODEX_HOME_DIR", normal_codex_home)
+    monkeypatch.setattr(reports_service, "CODEX_HOME_DIR", codex_home)
     monkeypatch.setattr(reports_service, "HOME_REPORTS_PROJECT_DIR", home)
 
     response = _get_global_reports_projects()
@@ -131,8 +130,7 @@ def test_global_reports_projects_lists_untracked_report_sources(
     assert response.status_code == 200
     projects = response.data["projects"]
     assert [project["path"] for project in projects] == [
-        str(openbase_codex_home.resolve()),
-        str(normal_codex_home.resolve()),
+        str(codex_home.resolve()),
         str(home.resolve()),
     ]
     assert all(project["global_reports"] is True for project in projects)
@@ -143,24 +141,22 @@ def test_global_reports_projects_skips_missing_reports_dirs(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    openbase_codex_home = tmp_path / "openbase" / "codex_home"
-    normal_codex_home = tmp_path / ".codex"
+    codex_home = tmp_path / ".codex"
     home = tmp_path / "home"
-    (normal_codex_home / ".reports").mkdir(parents=True)
-    (normal_codex_home / ".reports" / "normal.md").write_text(
+    (codex_home / ".reports").mkdir(parents=True)
+    (codex_home / ".reports" / "codex.md").write_text(
         "done",
         encoding="utf-8",
     )
 
-    monkeypatch.setattr(reports_service, "CODEX_HOME_DIR", openbase_codex_home)
-    monkeypatch.setattr(reports_service, "NORMAL_CODEX_HOME_DIR", normal_codex_home)
+    monkeypatch.setattr(reports_service, "CODEX_HOME_DIR", codex_home)
     monkeypatch.setattr(reports_service, "HOME_REPORTS_PROJECT_DIR", home)
 
     response = _get_global_reports_projects()
 
     assert response.status_code == 200
     assert [project["path"] for project in response.data["projects"]] == [
-        str(normal_codex_home.resolve()),
+        str(codex_home.resolve()),
     ]
 
 
@@ -189,8 +185,9 @@ def test_all_project_reports_lists_recent_and_global_reports(
         ],
     )
     monkeypatch.setattr(reports_service, "CODEX_HOME_DIR", global_project)
-    monkeypatch.setattr(reports_service, "NORMAL_CODEX_HOME_DIR", duplicate_global_project)
-    monkeypatch.setattr(reports_service, "HOME_REPORTS_PROJECT_DIR", tmp_path / "missing")
+    monkeypatch.setattr(
+        reports_service, "HOME_REPORTS_PROJECT_DIR", duplicate_global_project
+    )
 
     response = _get_all_project_reports()
 

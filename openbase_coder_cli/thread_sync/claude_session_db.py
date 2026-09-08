@@ -9,7 +9,7 @@ from typing import Any
 
 from .claude_jsonl import _iso_from_ms, _iso_now, _preview
 from .claude_models import DEFAULT_LEGACY_SUPER_AGENTS_STATE_PATH, ClaudeSessionSnapshot
-from .thread_import import _string
+from .codex_state import _string
 from .thread_sync_common import super_agents_state_db_path, translate_home_path
 
 

@@ -12,7 +12,11 @@ import httpx
 from openbase_coder_cli.cli.local_server import local_server_request, response_error
 from openbase_coder_cli.paths import DESKTOP_CONTROL_JSON_PATH
 
-DESKTOP_APP_NAME = "Openbase Coder"
+DESKTOP_APP_NAMES = ("Openbase", "Openbase Coder")
+DESKTOP_NO_LAUNCH_HELP = (
+    "Do not launch Openbase.app (or legacy Openbase Coder.app) if the desktop "
+    "control server is not reachable."
+)
 
 
 @click.group("desktop")
@@ -35,7 +39,7 @@ def screen_share() -> None:
 @click.option(
     "--no-launch",
     is_flag=True,
-    help="Do not launch Openbase Coder.app if the desktop control server is not reachable.",
+    help=DESKTOP_NO_LAUNCH_HELP,
 )
 def screen_share_start(room_name: str, no_launch: bool) -> None:
     """Start sharing the desktop app's screen to the active LiveKit room."""
@@ -54,7 +58,7 @@ def screen_share_start(room_name: str, no_launch: bool) -> None:
 @click.option(
     "--no-launch",
     is_flag=True,
-    help="Do not launch Openbase Coder.app if the desktop control server is not reachable.",
+    help=DESKTOP_NO_LAUNCH_HELP,
 )
 def screen_share_stop(no_launch: bool) -> None:
     """Stop the desktop app's LiveKit screen share."""
@@ -72,7 +76,7 @@ def screen_share_stop(no_launch: bool) -> None:
 @click.option(
     "--no-launch",
     is_flag=True,
-    help="Do not launch Openbase Coder.app if the desktop control server is not reachable.",
+    help=DESKTOP_NO_LAUNCH_HELP,
 )
 def screen_share_status(no_launch: bool) -> None:
     """Show the desktop app's screen-share companion status."""
@@ -132,7 +136,8 @@ def _desktop_control_request(
             _wait_for_control_file()
 
     raise click.ClickException(
-        "Unable to reach Openbase Coder desktop app. Open the app and try again."
+        "Unable to reach the Openbase Coder desktop app. Open Openbase.app "
+        "(or legacy Openbase Coder.app) and try again."
         + (f" Last error: {last_error}" if last_error else "")
     )
 
@@ -184,14 +189,18 @@ def _read_control_file() -> dict[str, Any]:
 
 
 def _launch_desktop_app() -> None:
-    result = subprocess.run(
-        ["open", "-a", DESKTOP_APP_NAME],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+    for app_name in DESKTOP_APP_NAMES:
+        result = subprocess.run(
+            ["open", "-a", app_name],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if result.returncode == 0:
+            return
+    raise click.ClickException(
+        "Unable to launch Openbase.app or legacy Openbase Coder.app."
     )
-    if result.returncode != 0:
-        raise click.ClickException(f"Unable to launch {DESKTOP_APP_NAME}.")
 
 
 def _wait_for_control_file() -> None:

@@ -32,6 +32,7 @@ nav = [
     { "bootstrap" = "commands/bootstrap.md" },
     { "claude" = "commands/claude.md" },
     { "claude-sync" = "commands/claude-sync.md" },
+    { "codex-sync" = "commands/codex-sync.md" },
     { "defaults" = "commands/defaults.md" },
     { "doctor" = "commands/doctor.md" },
     { "login" = "commands/login.md" },

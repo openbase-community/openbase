@@ -16,6 +16,7 @@ class RuntimePackage:
     root: Path
     version: str = ""
     target: str = ""
+    channel: str = "stable"
 
     @property
     def bin_dir(self) -> Path:
@@ -107,7 +108,10 @@ def stable_runtime_package() -> RuntimePackage | None:
     if stable_root == package.root:
         return package
     return RuntimePackage(
-        root=stable_root, version=package.version, target=package.target
+        root=stable_root,
+        version=package.version,
+        target=package.target,
+        channel=package.channel,
     )
 
 
@@ -152,4 +156,5 @@ def _package_from_root(root: Path) -> RuntimePackage | None:
         root=root,
         version=str(metadata.get("version", "")),
         target=str(metadata.get("target", "")),
+        channel=str(metadata.get("channel", "")).strip() or "stable",
     )
