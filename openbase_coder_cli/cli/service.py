@@ -74,16 +74,16 @@ def _registry_transaction(function):
 @click.option(
     "--tailnet-port",
     type=int,
-    help="Uncommon dynamic/private tailnet port; one is chosen automatically.",
+    help="Uncommon private port for explicit --mode dynamic (or auto).",
 )
 @click.option(
     "--mode",
     type=click.Choice([MODE_AUTO, MODE_DYNAMIC, MODE_HOSTNAME], case_sensitive=False),
-    default=MODE_DYNAMIC,
+    default=MODE_HOSTNAME,
     show_default=True,
     help=(
-        "Use an uncommon dynamic port (default), explicitly try a hostname with "
-        "fallback, or require hostname support."
+        "Require a private root hostname (default), explicitly use an uncommon "
+        "port, or try a hostname with port fallback. All modes serve at /."
     ),
 )
 @_registry_transaction
@@ -170,9 +170,7 @@ def publish(
     applied_hash = None
     try:
         save_registry(
-            ServiceRegistry(
-                tuple(desired_services), registry.last_applied_serve_hash
-            )
+            ServiceRegistry(tuple(desired_services), registry.last_applied_serve_hash)
         )
         if persistent:
             install_launchd_service(service_entry)
@@ -213,9 +211,7 @@ def publish(
         try:
             save_registry(registry)
         except OSError as registry_exc:
-            compensation_errors.append(
-                f"Registry restoration failed: {registry_exc}"
-            )
+            compensation_errors.append(f"Registry restoration failed: {registry_exc}")
         if hostname_created and node_id:
             try:
                 release_private_service_hostname(name, node_id)
@@ -338,9 +334,7 @@ def unpublish(name: str) -> None:
         try:
             save_registry(registry)
         except OSError as registry_exc:
-            compensation_errors.append(
-                f"Registry restoration failed: {registry_exc}"
-            )
+            compensation_errors.append(f"Registry restoration failed: {registry_exc}")
         message = str(exc)
         if compensation_errors:
             message += " " + " ".join(compensation_errors)
