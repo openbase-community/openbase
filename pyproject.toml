@@ -46,7 +46,6 @@ dependencies = [
     "livekit-plugins-noise-cancellation>=0.2.5",
     "aiohttp>=3.13.3",
     "psutil>=6.1.0",
-    "multi-workspace>=3.2.3",
     "super-agents[claude]>=0.1.14",
     "websockets>=16.0",
     "numpy>=2.3.0",
@@ -80,6 +79,11 @@ build-backend = "hatchling.build"
 
 [tool.uv]
 exclude-newer = "1 week"
+# First-party trusted packages are exempt from the supply-chain aging window:
+# our own releases must be installable the moment they publish (a cli floor
+# on a same-week multi-workspace release otherwise breaks Docker/standalone
+# builds until the release ages past the window).
+exclude-newer-package = { multi-workspace = "1 hour", super-agents = "1 hour" }
 
 [tool.uv.sources]
 super-agents = { path = "../super-agents", editable = true }
