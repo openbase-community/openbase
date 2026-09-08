@@ -105,6 +105,12 @@ async def _proxy_websocket(
 
 async def proxy(request: web.Request) -> web.StreamResponse:
     service = request.app[SERVICE_KEY]
+    if (
+        service.mode == "hostname"
+        and request.host.lower().removesuffix(":80").rstrip(".") != service.hostname
+    ):
+        # Serve's internal lookup key is not an alternate public Host name.
+        raise web.HTTPNotFound()
     # Every publication owns a root ingress. Service names are not URL prefixes.
     upstream = f"http://127.0.0.1:{service.local_port}{request.raw_path}"
     if request.headers.get("Upgrade", "").lower() == "websocket":

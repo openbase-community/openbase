@@ -33,7 +33,7 @@ async def test_gateway_preserves_raw_paths_and_queries(isolated_registry, mode):
                 80 if mode == "hostname" else 52807,
                 52808,
                 mode=mode,
-                hostname="docs.mac.net.obs.so"
+                hostname="docs.n11111111111111111111111111111111.vpn.example.test"
                 if mode == "hostname"
                 else None,
                 node_id="7" if mode == "hostname" else None,
@@ -59,10 +59,22 @@ async def test_gateway_preserves_raw_paths_and_queries(isolated_registry, mode):
                 "/docs/a%2Fb?q=%2f&same=1&same=2&empty=",
             ):
                 response = await client.get(
-                    URL(f"http://127.0.0.1:{proxy_port}{path}", encoded=True)
+                    URL(f"http://127.0.0.1:{proxy_port}{path}", encoded=True),
+                    headers={
+                        "Host": "docs.n11111111111111111111111111111111.vpn.example.test"
+                    },
                 )
                 assert response.status == 200
                 assert await response.text() == path
+            if mode == "hostname":
+                for host in (
+                    "foreign.example.test",
+                    "docs.n11111111111111111111111111111111.vpn.example.test.net.example.test",
+                ):
+                    response = await client.get(
+                        f"http://127.0.0.1:{proxy_port}/", headers={"Host": host}
+                    )
+                    assert response.status == 404
     finally:
         await proxy_runner.cleanup()
         await backend_runner.cleanup()
@@ -221,9 +233,7 @@ async def test_gateway_forwards_websockets_without_rewriting_paths(
                 80 if mode == "hostname" else 52807,
                 52808,
                 mode=mode,
-                hostname="chat.mac.net.obs.so"
-                if mode == "hostname"
-                else None,
+                hostname="chat.mac.net.obs.so" if mode == "hostname" else None,
                 node_id="7" if mode == "hostname" else None,
             )
         ]
