@@ -52,9 +52,7 @@ def _fake_identity(available: bool = True) -> dict:
 
 
 def test_device_registration_payload_includes_tailscale(monkeypatch) -> None:
-    monkeypatch.setattr(
-        cloud_registration, "tailscale_self_identity", _fake_identity
-    )
+    monkeypatch.setattr(cloud_registration, "tailscale_self_identity", _fake_identity)
     monkeypatch.setattr(cloud_registration, "_device_id", lambda: "desktop-1")
 
     payload = cloud_registration.device_registration_payload()
@@ -108,9 +106,7 @@ def test_device_registration_payload_reuses_cached_device_id(
 def test_register_success_writes_cache(
     monkeypatch, onboarding_cache, logged_in
 ) -> None:
-    monkeypatch.setattr(
-        cloud_registration, "tailscale_self_identity", _fake_identity
-    )
+    monkeypatch.setattr(cloud_registration, "tailscale_self_identity", _fake_identity)
     calls = _mock_response(monkeypatch, httpx.Response(201, json={}))
 
     result = cloud_registration.register_device_with_cloud()
@@ -140,9 +136,7 @@ def test_register_success_writes_cache(
 def test_unshipped_endpoint_reports_unsupported(
     monkeypatch, onboarding_cache, logged_in, response
 ) -> None:
-    monkeypatch.setattr(
-        cloud_registration, "tailscale_self_identity", _fake_identity
-    )
+    monkeypatch.setattr(cloud_registration, "tailscale_self_identity", _fake_identity)
     _mock_response(monkeypatch, response)
 
     result = cloud_registration.register_device_with_cloud()
@@ -154,9 +148,7 @@ def test_unshipped_endpoint_reports_unsupported(
 def test_json_error_reports_supported_failure(
     monkeypatch, onboarding_cache, logged_in
 ) -> None:
-    monkeypatch.setattr(
-        cloud_registration, "tailscale_self_identity", _fake_identity
-    )
+    monkeypatch.setattr(cloud_registration, "tailscale_self_identity", _fake_identity)
     _mock_response(
         monkeypatch,
         httpx.Response(
@@ -173,6 +165,22 @@ def test_json_error_reports_supported_failure(
     assert "400" in (result.error or "")
 
 
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+def test_html_gateway_error_is_not_missing_capability(monkeypatch, logged_in, status):
+    _mock_response(
+        monkeypatch,
+        httpx.Response(
+            status,
+            text="<html>Bad gateway</html>",
+            headers={"content-type": "text/html"},
+        ),
+    )
+    result = cloud_registration.netmesh_service_hostname_capabilities()
+    assert not result.ok
+    assert result.supported
+    assert f"HTTP {status}" in result.error
+
+
 def test_login_required_never_raises(monkeypatch, onboarding_cache) -> None:
     class FakeTokenManager:
         def __init__(self, web_backend_url):
@@ -182,9 +190,7 @@ def test_login_required_never_raises(monkeypatch, onboarding_cache) -> None:
             raise AuthLoginRequiredError("missing")
 
     monkeypatch.setattr(cloud_registration, "TokenManager", FakeTokenManager)
-    monkeypatch.setattr(
-        cloud_registration, "tailscale_self_identity", _fake_identity
-    )
+    monkeypatch.setattr(cloud_registration, "tailscale_self_identity", _fake_identity)
 
     result = cloud_registration.register_device_with_cloud()
 
@@ -196,9 +202,7 @@ def test_login_required_never_raises(monkeypatch, onboarding_cache) -> None:
 def test_register_and_report_returns_registration_failure(
     monkeypatch, onboarding_cache, logged_in
 ) -> None:
-    monkeypatch.setattr(
-        cloud_registration, "tailscale_self_identity", _fake_identity
-    )
+    monkeypatch.setattr(cloud_registration, "tailscale_self_identity", _fake_identity)
     calls = _mock_response(
         monkeypatch, httpx.Response(404, json={"detail": "Not found."})
     )
@@ -216,9 +220,7 @@ def test_register_and_report_returns_registration_failure(
 def test_report_cli_state_posts_registration_capabilities(
     monkeypatch, onboarding_cache, logged_in
 ) -> None:
-    monkeypatch.setattr(
-        cloud_registration, "tailscale_self_identity", _fake_identity
-    )
+    monkeypatch.setattr(cloud_registration, "tailscale_self_identity", _fake_identity)
     calls = _mock_response(monkeypatch, httpx.Response(200, json={}))
 
     result = cloud_registration.report_cli_state(
