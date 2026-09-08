@@ -11,14 +11,13 @@ from openbase_coder_cli.services import tailscale_provider as tp
 if TYPE_CHECKING:
     from openbase_coder_cli.services.published_services import PublishedService
 
-# A fresh allocation's MagicDNS record takes several seconds to propagate
-# (~10s observed on staging), so resolution is polled rather than checked once.
+# Poll through transient OS DNS failures after a fresh private allocation.
 HOSTNAME_DNS_TIMEOUT_SECONDS = 30.0
 HOSTNAME_DNS_POLL_SECONDS = 2.0
 
 
 class HostnamePublicationUnavailable(RuntimeError):
-    """The provider safely supports dynamic ports but not private hostnames."""
+    """The provider cannot safely publish an account-private hostname."""
 
 
 class ServiceHostnameAllocation(NamedTuple):
@@ -37,7 +36,7 @@ def _validate_account_hostname(name: str, hostname: str, node_name: str) -> None
 def allocate_private_service_hostname(name: str) -> ServiceHostnameAllocation:
     """Allocate and verify a private service hostname for this exact node.
 
-    Cloud verifies node ownership and writes Headscale's private DNS record.
+    Cloud verifies node ownership and writes the account-private DNS registry.
     This process then verifies that the record resolves to the local node before
     returning it to the publication transaction.
     """
