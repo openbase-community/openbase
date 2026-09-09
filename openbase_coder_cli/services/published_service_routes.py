@@ -68,9 +68,12 @@ def allocate_private_service_hostname(name: str) -> ServiceHostnameAllocation:
                 or "Openbase VPN lacks private service hostname support."
             )
         )
-    if int(capability.get("http_port") or 0) != HOSTNAME_TAILNET_PORT:
+    if (
+        int(capability.get("https_port") or 0) != HOSTNAME_TAILNET_PORT
+        or capability.get("https_supported") is not True
+    ):
         raise RuntimeError(
-            "The active Openbase VPN helper did not authorize HTTP port 80."
+            "The active Openbase VPN helper did not authorize private HTTPS port 443."
         )
     node_name, node_ips = _self_node_identity()
     from openbase_coder_cli.services.cloud_registration import (

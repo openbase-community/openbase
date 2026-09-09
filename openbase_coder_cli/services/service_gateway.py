@@ -64,7 +64,7 @@ def _forward_headers(
     if request.remote:
         headers["X-Forwarded-For"] = request.remote
     headers["X-Forwarded-Host"] = request.host
-    headers["X-Forwarded-Proto"] = "http"
+    headers["X-Forwarded-Proto"] = request.scheme
     headers["X-Forwarded-Port"] = str(service.tailnet_port)
     return headers
 
@@ -105,12 +105,21 @@ async def _proxy_websocket(
 
 async def proxy(request: web.Request) -> web.StreamResponse:
     service = request.app[SERVICE_KEY]
+    return await proxy_service(request, service)
+
+
+async def proxy_service(
+    request: web.Request, service: PublishedService
+) -> web.StreamResponse:
     if (
         service.mode == "hostname"
-        and request.host.lower().removesuffix(":80").rstrip(".") != service.hostname
+        and request.host.lower().removesuffix(f":{443 if request.secure else 80}")
+        != service.hostname
     ):
         # Serve's internal lookup key is not an alternate public Host name.
         raise web.HTTPNotFound()
+    if service.tailnet_port == 443 and not request.secure:
+        raise web.HTTPPermanentRedirect(f"https://{service.hostname}{request.raw_path}")
     # Every publication owns a root ingress. Service names are not URL prefixes.
     upstream = f"http://127.0.0.1:{service.local_port}{request.raw_path}"
     if request.headers.get("Upgrade", "").lower() == "websocket":
@@ -162,9 +171,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Openbase tailnet service gateway")
     parser.add_argument("--name", required=True)
     args = parser.parse_args()
+    if args.name == "_https":
+        from openbase_coder_cli.services.service_https import main as https_main
+
+        https_main()
+        return
     service = find_service(args.name)
     if service is None:
         raise SystemExit(f"Published service '{args.name}' no longer exists.")
+    if service.tailnet_port == 443:
+        from openbase_coder_cli.services.service_https import ensure_https_gateway
+
+        ensure_https_gateway(service)
     web.run_app(create_app(service.name), host="127.0.0.1", port=service.proxy_port)
 
 

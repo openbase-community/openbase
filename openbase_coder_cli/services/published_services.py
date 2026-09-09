@@ -8,6 +8,7 @@ import re
 import shlex
 import signal
 import socket
+import ssl
 import subprocess
 import sys
 import time
@@ -33,7 +34,8 @@ RESERVED_NAMES = {"api", "livekit", "openbase", "service", "services"}
 LAUNCHD_LABEL_PREFIX = "com.openbase.coder.published-service"
 MODE_DYNAMIC = "dynamic"
 MODE_HOSTNAME = "hostname"
-HOSTNAME_TAILNET_PORT = 80
+HOSTNAME_TAILNET_PORT = 443
+HTTPS_PROXY_PORT = 59443
 _REGISTRY_LOCK_DEPTH: ContextVar[int] = ContextVar(
     "published_service_registry_lock_depth", default=0
 )
@@ -62,7 +64,9 @@ class PublishedService:
                     "Hostname publication is missing its private hostname."
                 )
             return {
-                "kind": "published-hostname",
+                "kind": "published-https-hostname"
+                if self.tailnet_port == 443
+                else "published-hostname",
                 "hostname": self.hostname,
                 "proxy_port": self.proxy_port,
             }
@@ -178,6 +182,8 @@ def load_registry() -> ServiceRegistry:
     if not path.is_file():
         return ServiceRegistry()
     payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("version", 1) > 5:
+        raise ValueError("Unsupported published service registry version.")
     rows = payload.get("services", []) if isinstance(payload, dict) else []
     if not isinstance(rows, list):
         raise ValueError("Published service registry has an invalid services list.")
@@ -189,8 +195,8 @@ def load_registry() -> ServiceRegistry:
         tailnet_port = int(row["tailnet_port"])
         if mode == MODE_DYNAMIC:
             tailnet_port = validate_tailnet_port(tailnet_port)
-        elif tailnet_port != HOSTNAME_TAILNET_PORT:
-            raise ValueError("Hostname services must use tailnet HTTP port 80.")
+        elif tailnet_port not in {80, HOSTNAME_TAILNET_PORT}:
+            raise ValueError("Hostname services must use HTTPS port 443.")
         hostname_value = row.get("hostname")
         hostname = (
             validate_hostname(str(hostname_value))
@@ -237,7 +243,7 @@ def save_registry(registry: ServiceRegistry) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     payload = {
-        "version": 4,
+        "version": 5,
         "services": [asdict(item) for item in registry.services],
         "last_applied_serve_hash": registry.last_applied_serve_hash,
     }
@@ -319,7 +325,7 @@ def allocate_ports(tailnet_port: int | None = None) -> tuple[int, int]:
 def allocate_hostname_proxy() -> int:
     services = load_services()
     used = {port for item in services for port in (item.tailnet_port, item.proxy_port)}
-    return choose_uncommon_port(used)
+    return choose_uncommon_port(used | {HTTPS_PROXY_PORT})
 
 
 def service_url(service: PublishedService) -> str:
@@ -328,7 +334,8 @@ def service_url(service: PublishedService) -> str:
     if service.mode == MODE_HOSTNAME:
         if not service.hostname:
             raise RuntimeError("Hostname publication is missing its private hostname.")
-        return f"http://{service.hostname}/"
+        scheme = "https" if service.tailnet_port == 443 else "http"
+        return f"{scheme}://{service.hostname}/"
     status = tp.status_json()
     if status.get("error"):
         raise RuntimeError(str(status["error"]))
@@ -458,6 +465,14 @@ def gateway_healthy(service: PublishedService, timeout: float = 3.0) -> bool:
             with socket.create_connection(
                 ("127.0.0.1", service.proxy_port), timeout=min(0.2, remaining)
             ):
+                if service.tailnet_port == 443 and service.name != "_https":
+                    with socket.create_connection(
+                        ("127.0.0.1", HTTPS_PROXY_PORT), timeout=min(1.0, remaining)
+                    ) as transport:
+                        with ssl.create_default_context().wrap_socket(
+                            transport, server_hostname=service.hostname
+                        ):
+                            pass
                 return True
         except OSError:
             time.sleep(min(0.05, max(0.0, remaining)))
@@ -493,4 +508,8 @@ def _pid_is_gateway(service: PublishedService) -> bool:
         or "openbase_coder_cli.services.service_gateway" not in command
     ):
         return False
-    return f"--name {service.name}" in command
+    arguments = shlex.split(command)
+    return any(
+        arguments[i : i + 2] == ["--name", service.name]
+        for i in range(len(arguments) - 1)
+    )

@@ -95,6 +95,8 @@ def test_hostname_capability_honors_helper_kill_switch(monkeypatch):
         "serve_routing": True,
         "pattern": "{service}.{account_namespace}.{service_domain}",
         "http_port": 80,
+        "https_port": 443,
+        "https_supported": True,
     }
     monkeypatch.setattr(
         provider,
@@ -118,6 +120,8 @@ def test_hostname_capability_honors_helper_kill_switch(monkeypatch):
                 "serve_routing": False,
                 "pattern": "{service}.{account_namespace}.{service_domain}",
                 "http_port": 80,
+                "https_port": 443,
+                "https_supported": True,
             },
         ),
     )
@@ -133,4 +137,6 @@ def test_hostname_capability_honors_helper_kill_switch(monkeypatch):
         "serve_routing": True,
         "pattern": "{service}.{account_namespace}.{service_domain}",
         "http_port": 80,
+        "https_port": 443,
+        "https_supported": True,
     }

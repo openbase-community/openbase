@@ -17,6 +17,14 @@ gateway = importlib.import_module("openbase_coder_cli.services.service_gateway")
 routes = importlib.import_module("openbase_coder_cli.services.published_service_routes")
 
 
+@pytest.fixture(autouse=True)
+def no_real_certificates(monkeypatch):
+    monkeypatch.setattr(
+        "openbase_coder_cli.services.service_certificates.ensure_certificate",
+        lambda service: None,
+    )
+
+
 def test_name_and_tailnet_port_validation_reject_mdns_and_common_ports():
     with pytest.raises(ValueError, match="multicast DNS"):
         published.validate_name("demo.local")
@@ -34,7 +42,7 @@ def test_registry_round_trip_uses_private_permissions(isolated_registry):
     assert published.load_services() == [item]
     assert isolated_registry.stat().st_mode & 0o777 == 0o600
     payload = json.loads(isolated_registry.read_text())
-    assert payload["version"] == 4
+    assert payload["version"] == 5
     assert payload["services"][0]["mode"] == "dynamic"
 
 
@@ -60,7 +68,7 @@ def test_registry_v1_is_loaded_as_dynamic_and_upgraded(isolated_registry):
     published.save_registry(registry)
 
     assert registry.services[0].mode == published.MODE_DYNAMIC
-    assert json.loads(isolated_registry.read_text())["version"] == 4
+    assert json.loads(isolated_registry.read_text())["version"] == 5
 
 
 def test_service_urls_are_root_mounted_in_every_mode(monkeypatch):
@@ -153,7 +161,7 @@ def test_publish_persistence_is_explicit(monkeypatch, isolated_registry):
     assert result.exit_code == 0, result.output
     assert len(installed) == 1
     assert installed[0].persistent is True
-    assert installed[0].tailnet_port == 80
+    assert installed[0].tailnet_port == 443
     assert "explicit opt-in" in result.output
 
 
@@ -435,7 +443,12 @@ def _stub_hostname_allocation(monkeypatch):
     monkeypatch.setattr(
         provider,
         "hostname_serve_capability",
-        lambda: {"supported": True, "http_port": 80},
+        lambda: {
+            "supported": True,
+            "http_port": 80,
+            "https_port": 443,
+            "https_supported": True,
+        },
     )
     monkeypatch.setattr(
         provider,
@@ -476,8 +489,9 @@ def _stub_hostname_allocation(monkeypatch):
     monkeypatch.setattr(
         cloud,
         "release_netmesh_service_hostname",
-        lambda **kwargs: released.append(kwargs)
-        or cloud.CloudReportResult(ok=True, supported=True),
+        lambda **kwargs: (
+            released.append(kwargs) or cloud.CloudReportResult(ok=True, supported=True)
+        ),
     )
     return released
 
@@ -542,7 +556,12 @@ def test_private_hostname_allocation_must_resolve_to_this_node(monkeypatch):
     monkeypatch.setattr(
         provider,
         "hostname_serve_capability",
-        lambda: {"supported": True, "http_port": 80},
+        lambda: {
+            "supported": True,
+            "http_port": 80,
+            "https_port": 443,
+            "https_supported": True,
+        },
     )
     monkeypatch.setattr(
         provider,
@@ -596,8 +615,9 @@ def test_private_hostname_allocation_must_resolve_to_this_node(monkeypatch):
     monkeypatch.setattr(
         cloud,
         "release_netmesh_service_hostname",
-        lambda **kwargs: released.append(kwargs)
-        or cloud.CloudReportResult(ok=True, supported=True),
+        lambda **kwargs: (
+            released.append(kwargs) or cloud.CloudReportResult(ok=True, supported=True)
+        ),
     )
 
     assert routes.allocate_private_service_hostname("crm") == (
@@ -662,18 +682,12 @@ def test_hostname_publish_uses_root_hostname_and_its_own_gateway(
     assert result.exit_code == 0, result.output
     item = published.load_services()[0]
     assert item.mode == "hostname"
-    assert item.tailnet_port == 80
+    assert item.tailnet_port == 443
     assert item.proxy_port == 52808
-    assert (
-        item.hostname
-        == "docs.abcd2345efgh.vpn.obs.so"
-    )
+    assert item.hostname == "docs.abcd2345efgh.vpn.obs.so"
     assert item.node_id == "7"
     assert published.load_registry().last_applied_serve_hash == "new-hash"
-    assert (
-        "http://docs.abcd2345efgh.vpn.obs.so/"
-        in result.output
-    )
+    assert "http://docs.abcd2345efgh.vpn.obs.so/" in result.output
     assert applied[0][1]["previous_services"] == []
 
 
