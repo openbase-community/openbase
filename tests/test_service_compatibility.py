@@ -224,6 +224,7 @@ async def test_https_worker_supervisor_retries_and_stops(service_fixture, monkey
         await real_sleep(0)
 
     monkeypatch.setattr(https, "ensure_https_gateway", ensure)
+    monkeypatch.setattr(gateway, "find_service", lambda name: service_fixture)
     monkeypatch.setattr(gateway.asyncio, "sleep", next_tick)
     app = web.Application()
     app[gateway.SERVICE_KEY] = service_fixture

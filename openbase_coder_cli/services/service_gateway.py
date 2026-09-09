@@ -220,6 +220,9 @@ async def https_supervisor(app: web.Application) -> AsyncIterator[None]:
     async def supervise():
         failed = False
         while True:
+            current = find_service(app[SERVICE_KEY].name)
+            if current is None or current.proxy_port != app[SERVICE_KEY].proxy_port:
+                raise web.GracefulExit()
             try:
                 await asyncio.to_thread(ensure_https_gateway, app[SERVICE_KEY])
                 failed = False

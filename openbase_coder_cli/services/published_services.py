@@ -182,6 +182,10 @@ def load_registry() -> ServiceRegistry:
     if not path.is_file():
         return ServiceRegistry()
     payload = json.loads(path.read_text(encoding="utf-8"))
+    return decode_registry(payload)
+
+
+def decode_registry(payload: object) -> ServiceRegistry:
     if not isinstance(payload, dict) or payload.get("version", 1) > 5:
         raise ValueError("Unsupported published service registry version.")
     rows = payload.get("services", []) if isinstance(payload, dict) else []
@@ -242,11 +246,7 @@ def save_registry(registry: ServiceRegistry) -> None:
     path = _registry_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    payload = {
-        "version": 5,
-        "services": [asdict(item) for item in registry.services],
-        "last_applied_serve_hash": registry.last_applied_serve_hash,
-    }
+    payload = registry_payload(registry)
     with registry_lock():
         with temporary.open("w", encoding="utf-8") as stream:
             json.dump(payload, stream, indent=2)
@@ -255,6 +255,14 @@ def save_registry(registry: ServiceRegistry) -> None:
             os.fsync(stream.fileno())
         temporary.chmod(0o600)
         os.replace(temporary, path)
+
+
+def registry_payload(registry: ServiceRegistry) -> dict[str, Any]:
+    return {
+        "version": 5,
+        "services": [asdict(item) for item in registry.services],
+        "last_applied_serve_hash": registry.last_applied_serve_hash,
+    }
 
 
 def save_services(

@@ -35,6 +35,8 @@ The app and local proxy bind only to `127.0.0.1`. Hostname routing uses VPN-only
 
 An active publication's gateway restarts a crashed shared HTTPS worker automatically. This does not turn a session publication into a persistent one or restart your upstream app. A stopped app produces a 502 response. Removing a publication stops new requests for its hostname, including on existing HTTPS connections; already-open application streams may finish.
 
+If publication or removal is interrupted by a process crash, run `openbase-coder service recover`. Recovery removes the interrupted publication and preserves other services; publish it again if wanted. The next publish/unpublish command also performs this recovery automatically. A private transaction journal records the exact permitted route hashes before changing DNS. Recovery refuses unknown route changes and retains its journal until cleanup succeeds. It never enables persistence. A crash before local journaling may leave an unused Cloud allocation; retrying publication on the same device reuses that allocation.
+
 ## Persistence is opt-in
 
 Interactive publication asks whether to restore the gateway at login and defaults to **No**. Non-interactive publication is session-only unless explicitly requested:

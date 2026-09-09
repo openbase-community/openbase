@@ -9,6 +9,7 @@ from cryptography.x509 import ExtensionNotFound
 
 from openbase_coder_cli.services import published_services as published
 from openbase_coder_cli.services import service_certificates as certificates
+from openbase_coder_cli.services import service_recovery
 from openbase_coder_cli.services import tailscale_provider as provider
 
 
@@ -17,6 +18,13 @@ def diagnose(service):
 
     def add(name, ok, message):
         checks.append({"check": name, "ok": bool(ok), "message": message})
+
+    if service_recovery.journal_path().exists():
+        add(
+            "transaction",
+            False,
+            "Interrupted publication; run openbase-coder service recover",
+        )
 
     status = provider.status_json()
     running = status.get("BackendState") == "Running" and not status.get("error")

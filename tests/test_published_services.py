@@ -23,6 +23,12 @@ def no_real_certificates(monkeypatch):
         "openbase_coder_cli.services.service_certificates.ensure_certificate",
         lambda service: None,
     )
+    # Transaction journaling plans hashes, but these CLI unit tests never call
+    # the installed VPN helper. Real recovery planning has its own tests.
+    monkeypatch.setattr(
+        "openbase_coder_cli.services.tailscale_provider.plan_serve",
+        lambda rules: {"hash": "unit-test-plan"},
+    )
 
 
 def test_name_and_tailnet_port_validation_reject_mdns_and_common_ports():
