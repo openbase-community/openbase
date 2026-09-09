@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import platform
 import subprocess
+import urllib.error
+import urllib.request
 import webbrowser
 from datetime import date
 from pathlib import Path
@@ -11,6 +13,7 @@ from urllib.parse import urlencode
 
 import click
 
+from openbase_coder_cli.paths import DESKTOP_CONTROL_JSON_PATH
 from openbase_coder_cli.reports_service import (
     ReportQuery,
     list_report_items,
@@ -184,9 +187,45 @@ def read_report(identifier: str, summary: bool, json_output: bool) -> None:
     click.echo(_summarize(content) if summary else content)
 
 
-def _open_deep_link(url: str) -> None:
-    """Hand a custom-scheme URL to the OS so LaunchServices routes it to the
-    Openbase desktop app."""
+def _deliver_via_control_server(url: str) -> bool:
+    """Deliver a deep link straight to a running desktop app over its local
+    control server. Returns True on success.
+
+    macOS does not reliably route ``open openbase://…`` to an app that is
+    already running (it works dependably only when the URL launches a fresh
+    process) — the common case for an agent whose app is already open. The
+    running instance publishes its port and secret in the control file, so we
+    post the URL there directly and skip LaunchServices entirely.
+    """
+    try:
+        control = json.loads(DESKTOP_CONTROL_JSON_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    port = control.get("port")
+    secret = control.get("secret")
+    if not isinstance(port, int) or not isinstance(secret, str):
+        return False
+
+    body = json.dumps({"url": url}).encode("utf-8")
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/deep-link",
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "x-openbase-desktop-secret": secret,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=2) as response:
+            return response.status == 200
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return False
+
+
+def _launch_deep_link(url: str) -> None:
+    """Hand a custom-scheme URL to the OS so LaunchServices launches the
+    Openbase desktop app with it (the reliable cold-start path)."""
     system = platform.system()
     if system == "Darwin":
         subprocess.run(["open", url], check=False)
@@ -212,5 +251,9 @@ def open_report(identifier: str) -> None:
             "report": item["file"]["path"],
         }
     )
-    _open_deep_link(f"openbase://open?{query}")
+    url = f"openbase://open?{query}"
+    # Prefer the running instance's control server (reliable regardless of the
+    # app's foreground state); fall back to launching via the OS for cold start.
+    if not _deliver_via_control_server(url):
+        _launch_deep_link(url)
     click.echo("Opened the report in the Openbase desktop app.")
