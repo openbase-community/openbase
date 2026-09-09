@@ -12,12 +12,22 @@ from __future__ import annotations
 
 import calendar
 import shutil
+import threading
 import time
 from typing import Any, Callable
 
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+
+# The banner is mounted by the shared dashboard layout, so it is fetched on
+# every page navigation, and each collection runs subprocess/HTTP/filesystem
+# probes (service status, livekit version skew, sync health). A few seconds of
+# staleness is fine for an advisory banner, so a short TTL keeps a burst of
+# navigations from re-running the probes each time.
+HEALTH_WARNINGS_CACHE_TTL_SECONDS = 5.0
+_warnings_cache_lock = threading.Lock()
+_warnings_cache: tuple[float, list[dict[str, str]]] | None = None
 
 RECONCILE_STALE_SECONDS = 10 * 60
 # Warn while there is still room to act; the engine's hard pause floor is
@@ -462,7 +472,34 @@ def collect_warnings() -> list[dict[str, str]]:
     return warnings
 
 
+def collect_warnings_cached() -> list[dict[str, str]]:
+    """``collect_warnings()`` behind a short TTL cache (see the module constant).
+
+    The double-checked lock collapses a concurrent burst of navigations onto a
+    single recomputation instead of running the probes once per request.
+    """
+    global _warnings_cache
+
+    cached = _warnings_cache
+    if (
+        cached is not None
+        and time.monotonic() - cached[0] < HEALTH_WARNINGS_CACHE_TTL_SECONDS
+    ):
+        return cached[1]
+
+    with _warnings_cache_lock:
+        cached = _warnings_cache
+        if (
+            cached is not None
+            and time.monotonic() - cached[0] < HEALTH_WARNINGS_CACHE_TTL_SECONDS
+        ):
+            return cached[1]
+        warnings = collect_warnings()
+        _warnings_cache = (time.monotonic(), warnings)
+        return warnings
+
+
 @api_view(["GET"])
 def health_warnings(request):
     """Warnings the console surfaces in its top banner."""
-    return Response({"warnings": collect_warnings()}, status=status.HTTP_200_OK)
+    return Response({"warnings": collect_warnings_cached()}, status=status.HTTP_200_OK)

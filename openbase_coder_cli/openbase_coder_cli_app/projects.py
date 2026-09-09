@@ -208,6 +208,49 @@ def _schedule_project_metadata_refresh(project_paths: list[str]) -> None:
         _project_executor.submit(_refresh_project_metadata_task, project_path)
 
 
+# Kept just under PROJECT_METADATA_CACHE_TTL_SECONDS so each recent project's
+# metadata is refreshed shortly before it expires, keeping the cache warm.
+PROJECT_WARM_INTERVAL_SECONDS = 8.0
+_warmer_started = False
+_warmer_start_lock = threading.Lock()
+
+
+def _warm_recent_project_metadata() -> None:
+    projects = _get_cached_recent_projects()
+    paths = [
+        str(project.get("path", "")) for project in projects if project.get("path")
+    ]
+    # TTL-aware and in-flight-deduped, so this only recomputes stale entries.
+    _schedule_project_metadata_refresh(paths)
+
+
+def _project_warmer_loop() -> None:
+    while True:
+        try:
+            _warm_recent_project_metadata()
+        except Exception:
+            logger.exception("project metadata warm tick failed")
+        time.sleep(PROJECT_WARM_INTERVAL_SECONDS)
+
+
+def start_project_metadata_warmer() -> None:
+    """Keep recent-project metadata (git status, stack, reports) warm in the
+    background so the first Threads/Projects visit does not pay the cold
+    git-status cost inside the request path. Idempotent; started from the ASGI
+    lifespan so it runs only in the server process.
+    """
+    global _warmer_started
+    with _warmer_start_lock:
+        if _warmer_started:
+            return
+        _warmer_started = True
+    threading.Thread(
+        target=_project_warmer_loop,
+        name="project-metadata-warmer",
+        daemon=True,
+    ).start()
+
+
 def _refresh_project_metadata_now(project_paths: list[str]) -> list[dict[str, Any]]:
     unique_paths = list(dict.fromkeys(path for path in project_paths if path))
     futures = {
