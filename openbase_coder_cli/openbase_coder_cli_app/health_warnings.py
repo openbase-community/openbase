@@ -324,9 +324,8 @@ def _installation_warnings() -> list[dict[str, str]]:
 def _livekit_skew_warnings() -> list[dict[str, str]]:
     """Warn dev installs whose livekit-server differs from the release pin.
 
-    Dev resolves livekit-server from Homebrew/PATH while releases bundle
-    the pinned version; a divergence means development tests a different
-    voice engine than users run.
+    Dev prefers the downloaded engine, then Homebrew/PATH. A stale download
+    or fallback can differ from the release pin after a source update.
     """
     import re
     import subprocess
@@ -359,9 +358,9 @@ def _livekit_skew_warnings() -> list[dict[str, str]]:
             f"This dev install runs livekit-server {match.group(1)}, but "
             f"releases ship {LIVEKIT_SERVER_PINNED_VERSION} — voice testing "
             "here exercises a different engine than users run.",
-            "Run 'openbase-coder setup' to download the pinned engine into "
-            "~/.openbase/bin, or bump the pin in livekit_version.py "
-            "deliberately.",
+            "Run 'openbase-coder restart --service livekit-server' to install "
+            "the pinned engine and restart voice services. Full developer "
+            "setup also downloads the pinned engine.",
         )
     ]
 

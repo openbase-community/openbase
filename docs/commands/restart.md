@@ -2,6 +2,8 @@
 
 Restart Openbase-managed services.
 
+In a developer install, a restart that includes `livekit-server` first checks the installed engine against the source checkout's version pin and downloads the matching engine if needed. This includes a full restart and `--service livekit-server`; restarting only `livekit-agent` or an unrelated service does not update the engine. Preparation finishes before the restart is scheduled. If the download fails or reports the wrong version, the command fails and leaves services running so you can resolve the error and retry. Packaged installs continue to use their bundled engine.
+
 In the apps: **Settings → Openbase Services** in the
 [desktop app](../desktop-app.md) and [console](../console.md) offers the same
 restart controls.
