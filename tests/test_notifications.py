@@ -40,6 +40,31 @@ def _no_cloud_push(monkeypatch):
     yield pushed
 
 
+@pytest.fixture(autouse=True)
+def _empty_producer_sources(monkeypatch):
+    """Keep sweeps off real machine state; tests override what they need."""
+
+    async def no_pending():
+        return []
+
+    monkeypatch.setattr(
+        "openbase_coder_cli.reports_service.list_report_items", lambda: []
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.openbase_coder_cli_app.approvals.pending_approval_requests",
+        no_pending,
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.thread_sync.thread_exchange.thread_snapshot_conflicts_payload",
+        lambda: {"conflicts": []},
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.thread_sync.claude_conflict_payloads.claude_thread_snapshot_conflicts_payload",
+        lambda: {"conflicts": []},
+    )
+    yield
+
+
 # --- store ---
 
 
@@ -198,15 +223,19 @@ def test_approval_sweep_creates_and_resolves(monkeypatch):
 def test_sync_conflict_sweep(monkeypatch):
     conflicts = [
         {
-            "id": "c-1",
-            "kind": "branch",
-            "repo_relpath": "repo-a",
-            "branch": "develop",
+            "id": "device:t-1",
+            "thread_id": "t-1",
+            "title": "Fix login",
+            "source_device_name": "Mac mini",
         }
     ]
     monkeypatch.setattr(
-        "openbase_coder_cli.code_sync.conflicts.unresolved_conflicts",
-        lambda: conflicts,
+        "openbase_coder_cli.thread_sync.thread_exchange.thread_snapshot_conflicts_payload",
+        lambda: {"conflicts": conflicts},
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.thread_sync.claude_conflict_payloads.claude_thread_snapshot_conflicts_payload",
+        lambda: {"conflicts": []},
     )
     monkeypatch.setattr(
         "openbase_coder_cli.reports_service.list_report_items", lambda: []
@@ -214,7 +243,10 @@ def test_sync_conflict_sweep(monkeypatch):
 
     notification_producers.sync_notification_producers(force=True)
     payload = notification_store.list_notifications()
-    assert [entry["id"] for entry in payload["notifications"]] == ["sync_conflict:c-1"]
+    assert [entry["id"] for entry in payload["notifications"]] == [
+        "sync_conflict:codex:device:t-1"
+    ]
+    assert payload["notifications"][0]["body"] == "Fix login diverged from Mac mini"
 
     conflicts.clear()
     notification_producers.sync_notification_producers(force=True)

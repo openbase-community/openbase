@@ -136,26 +136,54 @@ def _sweep_approvals() -> None:
 
 
 def _sweep_sync_conflicts() -> None:
-    from openbase_coder_cli.code_sync.conflicts import unresolved_conflicts
+    """Notify for cross-device thread snapshot conflicts (both backends).
 
-    conflicts = unresolved_conflicts()
+    Same source the Sync Conflicts surfaces poll (settings/thread-sync/
+    conflicts/), so resolving a conflict anywhere clears the notification.
+    """
+    conflicts = _thread_sync_conflicts()
     live_ids: set[str] = set()
-    for conflict in conflicts:
+    for backend, conflict in conflicts:
         conflict_id = str(conflict.get("id") or "").strip()
         if not conflict_id:
             continue
-        live_ids.add(conflict_id)
+        entity_id = f"{backend}:{conflict_id}"
+        live_ids.add(entity_id)
         entry = notification_store.upsert_notification(
             KIND_SYNC_CONFLICT,
-            conflict_id,
+            entity_id,
             title="Sync conflict",
             body=_truncate(_conflict_summary(conflict)),
+            thread_id=_optional_str(conflict.get("thread_id")),
             reopen_if_read=False,
         )
         if entry:
             _push_in_background(entry)
     for entity_id in notification_store.unresolved_ids(KIND_SYNC_CONFLICT) - live_ids:
         notification_store.resolve_notification(KIND_SYNC_CONFLICT, entity_id)
+
+
+def _thread_sync_conflicts() -> list[tuple[str, dict[str, Any]]]:
+    from openbase_coder_cli.thread_sync.claude_conflict_payloads import (
+        claude_thread_snapshot_conflicts_payload,
+    )
+    from openbase_coder_cli.thread_sync.thread_exchange import (
+        thread_snapshot_conflicts_payload,
+    )
+
+    pairs: list[tuple[str, dict[str, Any]]] = []
+    for backend, payload in (
+        ("codex", thread_snapshot_conflicts_payload()),
+        ("claude", claude_thread_snapshot_conflicts_payload()),
+    ):
+        raw_conflicts = payload.get("conflicts")
+        if isinstance(raw_conflicts, list):
+            pairs.extend(
+                (backend, conflict)
+                for conflict in raw_conflicts
+                if isinstance(conflict, dict)
+            )
+    return pairs
 
 
 def _approval_thread_id(request: dict[str, Any]) -> str | None:
@@ -182,12 +210,15 @@ def _approval_summary(request: dict[str, Any]) -> str:
 
 
 def _conflict_summary(conflict: dict[str, Any]) -> str:
-    if conflict.get("kind") == "branch":
-        repo = conflict.get("repo_relpath") or ""
-        branch = conflict.get("branch") or ""
-        return f"Repo divergence in {repo} on {branch}".strip()
-    path = conflict.get("path") or conflict.get("repo_relpath") or ""
-    return f"File conflict: {path}".strip().rstrip(":")
+    title = _optional_str(conflict.get("title")) or _optional_str(
+        conflict.get("thread_id")
+    )
+    device = _optional_str(conflict.get("source_device_name"))
+    if title and device:
+        return f"{title} diverged from {device}"
+    if title:
+        return f"{title} diverged on another device"
+    return "A thread diverged across your devices."
 
 
 def _push_in_background(entry: dict[str, Any]) -> None:
