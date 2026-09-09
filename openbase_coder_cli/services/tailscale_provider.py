@@ -275,7 +275,7 @@ def _validated_rule(rule: dict[str, Any]) -> dict[str, Any]:
             "tailnet_port": tailnet_port,
             "proxy_port": proxy_port,
         }
-    if kind == "published-hostname":
+    if kind in {"published-hostname", "published-https-hostname"}:
         if set(rule) != {"kind", "hostname", "proxy_port"}:
             raise ValueError(
                 "Hostname publication accepts only a validated hostname and proxy port."
@@ -299,7 +299,7 @@ def _validated_rules(rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
     hostnames = [
         str(rule["hostname"])
         for rule in validated
-        if rule["kind"] == "published-hostname"
+        if rule["kind"] in {"published-hostname", "published-https-hostname"}
     ]
     if len(hostnames) != len(set(hostnames)):
         raise ValueError("Duplicate private service hostname Serve rule.")
@@ -344,8 +344,10 @@ def hostname_serve_capability() -> dict[str, Any]:
         }
     helper_required = {
         "serve_routing": True,
-        "pattern": "{service}.{account_namespace}.svc.{base_domain}",
+        "pattern": "{service}.{account_namespace}.{service_domain}",
         "http_port": 80,
+        "https_port": 443,
+        "https_supported": True,
     }
     for key, expected in helper_required.items():
         if declared.get(key) != expected:
@@ -373,8 +375,10 @@ def hostname_serve_capability() -> dict[str, Any]:
     cloud_required = {
         "dns_allocation": True,
         "account_private_dns": True,
-        "pattern": "{service}.{account_namespace}.svc.{base_domain}",
+        "pattern": "{service}.{account_namespace}.{service_domain}",
         "http_port": 80,
+        "https_port": 443,
+        "https_supported": True,
     }
     for key, expected in cloud_required.items():
         if cloud.get(key) != expected:
@@ -386,8 +390,10 @@ def hostname_serve_capability() -> dict[str, Any]:
         "supported": True,
         "dns_allocation": True,
         "serve_routing": True,
-        "pattern": "{service}.{account_namespace}.svc.{base_domain}",
+        "pattern": "{service}.{account_namespace}.{service_domain}",
         "http_port": 80,
+        "https_port": 443,
+        "https_supported": True,
     }
 
 

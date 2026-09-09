@@ -21,6 +21,7 @@ dependencies = [
     "qrcode>=8.0",
     "PyJWT>=2.9.0",
     "cryptography>=43.0.0",
+    "acme>=5.1.0,<6",
     "anyio>=4.13.0",
     "anthropic==0.107.0",
     "distro>=1.9.0",

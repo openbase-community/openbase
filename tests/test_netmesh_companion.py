@@ -56,14 +56,14 @@ def test_companion_status_running_and_helper_flags() -> None:
             "backendState": "Running",
             "helper": "enabled",
             "selfIP": "100.64.0.14",
-            "dnsName": "gabes-macbook-pro-openbase.netmesh.openbase.cloud.",
+            "dnsName": "gabes-macbook-pro-openbase.net.obs.so.",
         }
     )
     assert connected.running is True
     assert connected.helper_enabled is True
     assert connected.self_ip == "100.64.0.14"
     # Trailing dot trimmed.
-    assert connected.dns_name == "gabes-macbook-pro-openbase.netmesh.openbase.cloud"
+    assert connected.dns_name == "gabes-macbook-pro-openbase.net.obs.so"
 
     stopped = companion._parse_status(
         {"backendState": "Stopped", "helper": "requires-approval"}

@@ -51,7 +51,7 @@ from openbase_coder_cli.services.tailscale_provider import (
 
 TAILNET_PROVIDER_ENV_KEY = "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"
 ALLOWED_HOSTS_ENV_KEY = "OPENBASE_CODER_CLI_ALLOWED_HOSTS"
-NETMESH_ALLOWED_SUFFIX = ".netmesh.openbase.cloud"
+NETMESH_ALLOWED_SUFFIX = ".net.obs.so"
 
 
 def _ensure_env_file(

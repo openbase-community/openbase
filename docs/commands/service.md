@@ -8,11 +8,13 @@ openbase-coder service list
 openbase-coder service unpublish crm
 ```
 
-Publication has one supported shape: a dedicated hostname serving the application at its root. An illustrative URL is `http://crm.n11111111111111111111111111111111.svc.netmesh.openbase.cloud/`. Use the actual URL printed by the command, never an invented name. There is no explicit port, service-name path, personal name, or device name.
+Publication has one supported shape: a dedicated hostname serving the application at its root. An illustrative URL is `http://crm.abcd2345efgh.vpn.obs.so/`. Use the actual URL printed by the command, never an invented name. There is no explicit port, service-name path, personal name, or device name.
 
 ## Account namespace and private DNS
 
-Each account has a permanent opaque namespace derived from its random enrollment identifier. Service names are unique within that account. To move a service between devices, unpublish it on the old device and publish the same name on the new device; its URL remains stable. Another account can independently publish the same service name.
+Production device names use `net.obs.so`; private service names use the sibling `vpn.obs.so` zone. Staging uses `net-staging.obs.so` and `vpn-staging.obs.so`. Service DNS must not be beneath the device MagicDNS zone: the VPN client's authoritative local resolver would return NXDOMAIN before consulting the split DNS route. Neither private device nor private service records are published in public DNS.
+
+Each account has a permanent random 12-character ID using lowercase letters and digits `2-7`, with database-enforced uniqueness. Service names are unique within that account. To move a service between devices, unpublish it on the old device and publish the same name on the new device; its URL remains stable. Another account can independently publish the same service name. Existing long-ID URLs stay allocated until republished with an updated CLI and helper.
 
 Service records are not distributed through Headscale's global extra-record list. An independent VPN-only DNS resolver identifies the querying device through the VPN and returns records only for its account. Stock Headscale distributes a split DNS route containing the resolver address, not a shared list of private service names. The resolver's sole cross-account network exception is DNS port 53; application connections remain restricted to the same account. Names are not credentials, and knowing another account's name or IP does not authorize access.
 

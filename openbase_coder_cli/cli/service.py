@@ -123,6 +123,12 @@ def publish(
     route_applied = False
     applied_hash = None
     try:
+        from openbase_coder_cli.services.service_certificates import ensure_certificate
+
+        click.echo(
+            "Preparing device-local HTTPS certificate (first issuance can take a few minutes)…"
+        )
+        ensure_certificate(service_entry)
         save_registry(
             ServiceRegistry(tuple(desired_services), registry.last_applied_serve_hash)
         )
