@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import platform
+import subprocess
+import webbrowser
 from datetime import date
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import click
 
@@ -105,7 +109,9 @@ def list_reports(
 
     limited = items[: max(limit, 0)]
     if json_output:
-        _json_echo({"items": limited, "count": len(items), "date_basis": "modified_time"})
+        _json_echo(
+            {"items": limited, "count": len(items), "date_basis": "modified_time"}
+        )
         return
 
     if not limited:
@@ -126,7 +132,9 @@ def list_reports(
             f"{tag_suffix}\n"
             f"  project: {project_path}"
         )
-    click.echo("Date filters use filesystem modified time; filename dates are metadata only.")
+    click.echo(
+        "Date filters use filesystem modified time; filename dates are metadata only."
+    )
 
 
 @reports.command("show")
@@ -174,3 +182,35 @@ def read_report(identifier: str, summary: bool, json_output: bool) -> None:
     if not isinstance(content, str):
         raise click.ClickException(str(payload.get("error", "Report is not readable.")))
     click.echo(_summarize(content) if summary else content)
+
+
+def _open_deep_link(url: str) -> None:
+    """Hand a custom-scheme URL to the OS so LaunchServices routes it to the
+    Openbase desktop app."""
+    system = platform.system()
+    if system == "Darwin":
+        subprocess.run(["open", url], check=False)
+    elif system == "Windows":
+        subprocess.run(["cmd", "/c", "start", "", url], check=False)
+    elif not webbrowser.open(url):
+        subprocess.run(["xdg-open", url], check=False)
+
+
+@reports.command("open")
+@click.argument("identifier")
+def open_report(identifier: str) -> None:
+    """Open a report in the Openbase desktop app via its openbase:// deep link."""
+    try:
+        item = resolve_report_item(identifier)
+    except (FileNotFoundError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    query = urlencode(
+        {
+            "intent": "report",
+            "source": "cli-reports",
+            "project": item["project"]["path"],
+            "report": item["file"]["path"],
+        }
+    )
+    _open_deep_link(f"openbase://open?{query}")
+    click.echo("Opened the report in the Openbase desktop app.")

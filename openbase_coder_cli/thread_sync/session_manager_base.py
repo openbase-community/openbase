@@ -136,8 +136,12 @@ class _RoutineClient(Protocol):
         name: str | None = None,
         force: bool = False,
     ) -> dict[str, Any]: ...
-    async def add_routine_trigger(self, name: str, trigger_input: dict[str, Any]) -> dict[str, Any]: ...
-    async def remove_routine_trigger(self, name: str, trigger_id: str) -> dict[str, Any]: ...
+    async def add_routine_trigger(
+        self, name: str, trigger_input: dict[str, Any]
+    ) -> dict[str, Any]: ...
+    async def remove_routine_trigger(
+        self, name: str, trigger_id: str
+    ) -> dict[str, Any]: ...
     async def deliver_webhook_event(
         self,
         token: str,
@@ -220,7 +224,15 @@ def _runtime_error_message(exc: RuntimeError) -> str:
 
 def _is_thread_unavailable_error(exc: RuntimeError) -> bool:
     message = _runtime_error_message(exc).lower()
-    return "not found" in message or "invalid thread id" in message
+    # "thread not loaded" is the app-server's response for a thread it has no
+    # loaded record of (an archived thread, or an id owned by another backend
+    # such as a report's Claude Code session). Treat it like not-found so reads
+    # resolve to None (a clean 404) instead of surfacing as a 500.
+    return (
+        "not found" in message
+        or "invalid thread id" in message
+        or "not loaded" in message
+    )
 
 
 class _OpenbaseSuperAgentsClient(CodexAppServerClient):

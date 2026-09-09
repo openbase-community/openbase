@@ -571,7 +571,11 @@ def thread_start_turn(request, thread_id):
     try:
         turn_id = async_to_sync(manager.start_turn)(thread_id, prompt)
     except (ValueError, RuntimeError) as e:
-        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        # Surface the app-server's human-readable message (e.g. "thread not
+        # loaded: <id>") rather than its raw JSON-RPC error envelope.
+        return Response(
+            {"error": thread_error_message(e)}, status=status.HTTP_400_BAD_REQUEST
+        )
     invalidate_thread_list_cache()
     return Response(
         {"turn_id": turn_id, "status": "started"}, status=status.HTTP_201_CREATED
