@@ -41,6 +41,10 @@ from openbase_coder_cli.openbase_coder_cli_app.thread_metadata import (
     annotate_thread_payload,
     get_livekit_shared_thread_id,
 )
+from openbase_coder_cli.openbase_coder_cli_app.thread_origins import (
+    MANUAL_ORIGIN,
+    set_thread_origin,
+)
 from openbase_coder_cli.thread_sync.models import ThreadStatus
 from openbase_coder_cli.thread_sync.projects import (
     refresh_projects_from_thread_directories as _refresh_projects_from_threads,
@@ -330,6 +334,13 @@ def thread_list(request):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         thread = async_to_sync(manager.create_thread)(directory, **create_kwargs)
+        # This endpoint is the only manual-entry chokepoint (console, desktop,
+        # and mobile new-thread UIs all POST here); threads created any other
+        # way (Super Agents MCP, dispatcher, voice) get no origin record and
+        # are excluded from completion notifications. Stamping here, before
+        # the response, guarantees the origin exists before the first turn
+        # can start.
+        set_thread_origin(thread.session_id, MANUAL_ORIGIN)
         invalidate_thread_list_cache()
         logger.info(
             "thread_list created thread_id=%s directory=%s backend=%s",

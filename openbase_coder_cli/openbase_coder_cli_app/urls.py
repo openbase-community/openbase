@@ -10,6 +10,11 @@ from rest_framework.routers import DefaultRouter
 from openbase_coder_cli.openbase_coder_cli_app.common import offloaded_view
 from openbase_coder_cli.openbase_coder_cli_app.git_http import git_http_backend
 from openbase_coder_cli.openbase_coder_cli_app.health_warnings import health_warnings
+from openbase_coder_cli.openbase_coder_cli_app.notifications import (
+    notification_list,
+    notification_mark_all_read,
+    notification_mark_read,
+)
 from openbase_coder_cli.openbase_coder_cli_app.sync_settings import (
     sync_conflicts,
     sync_conflicts_ignore_containing_folder,
@@ -201,6 +206,17 @@ urlpatterns = [
         "threads/<str:thread_id>/turns/steer/",
         thread_steer_turn,
         name="thread-steer-turn",
+    ),
+    path("notifications/", notification_list, name="notifications"),
+    path(
+        "notifications/mark-read/",
+        notification_mark_read,
+        name="notifications-mark-read",
+    ),
+    path(
+        "notifications/mark-all-read/",
+        notification_mark_all_read,
+        name="notifications-mark-all-read",
     ),
     path("approval-requests/", approval_requests, name="approval-requests"),
     path(

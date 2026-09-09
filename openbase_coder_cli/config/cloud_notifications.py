@@ -1,4 +1,4 @@
-"""Authenticated Openbase Cloud delivery for failed ``user say`` messages."""
+"""Authenticated Openbase Cloud push delivery (user-say fallback + feed pushes)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from openbase_coder_cli.config.token_manager import (
 from openbase_coder_cli.services.onboarding import web_backend_url
 
 USER_SAY_FALLBACK_PATH = "/api/openbase/notifications/user-say-fallback/"
+NOTIFY_PATH = "/api/openbase/notifications/notify/"
 REQUEST_TIMEOUT_SECONDS = 15
 MAX_NOTIFICATION_AGENT_NAME_LENGTH = 80
 MAX_NOTIFICATION_MESSAGE_LENGTH = 500
@@ -19,6 +20,54 @@ MAX_NOTIFICATION_MESSAGE_LENGTH = 500
 
 class UserSayNotificationError(RuntimeError):
     """Cloud rejected a user-say fallback notification."""
+
+
+class NotificationPushError(RuntimeError):
+    """Cloud rejected a generic notification push."""
+
+
+def send_notification_push(
+    *,
+    title: str,
+    body: str,
+    user_info: dict[str, str] | None = None,
+) -> None:
+    """Relay a feed notification to the user's devices via Openbase Cloud.
+
+    The cloud fans out to APNs (iOS) and FCM (Android). Callers treat this
+    as delivery-only and fire-and-forget: read/unread state stays with the
+    local server, and any failure (offline, old cloud without the endpoint)
+    must leave local notification behavior unchanged.
+    """
+    backend_url = web_backend_url()
+    token = get_token_manager(backend_url).get_access_token()
+    try:
+        response = httpx.post(
+            f"{backend_url}{NOTIFY_PATH}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
+            },
+            json={
+                "title": _truncate_for_notification(
+                    title, MAX_NOTIFICATION_AGENT_NAME_LENGTH
+                ),
+                "body": _truncate_for_notification(
+                    body, MAX_NOTIFICATION_MESSAGE_LENGTH
+                ),
+                "user_info": user_info or {},
+            },
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+    except httpx.HTTPError as exc:
+        raise AuthTransientError(f"Cloud notification request failed: {exc}") from exc
+
+    if response.status_code == 401:
+        raise AuthLoginRequiredError(
+            "Openbase Cloud login is required to notify your devices."
+        )
+    if response.status_code != 202:
+        raise NotificationPushError(_response_detail(response))
 
 
 def send_user_say_fallback(

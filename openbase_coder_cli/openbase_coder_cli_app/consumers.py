@@ -312,6 +312,9 @@ class _ApprovalStoreWatcher:
                         self.group_name,
                         {"type": "approval_requests_changed"},
                     )
+                # New approvals should reach the notification feed within
+                # this same wakeup, not on the next poll tick.
+                await _run_notification_sweep(force=True)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -325,7 +328,9 @@ class _ApprovalStoreWatcher:
 
 def _approval_store_path() -> Path:
     configured = os.environ.get("SUPER_AGENTS_APPROVAL_REQUESTS_FILE")
-    return Path(configured).expanduser() if configured else DEFAULT_APPROVAL_REQUESTS_FILE
+    return (
+        Path(configured).expanduser() if configured else DEFAULT_APPROVAL_REQUESTS_FILE
+    )
 
 
 _approval_store_watcher = _ApprovalStoreWatcher()
@@ -373,6 +378,150 @@ class ApprovalRequestsConsumer(AsyncJsonWebsocketConsumer):
         await self.send_json(
             {"type": "approval_requests", "data": {"requests": requests}}
         )
+
+
+async def _run_notification_sweep(*, force: bool = False) -> None:
+    """Run the sync producer sweep off the event loop; never raise."""
+    from asgiref.sync import sync_to_async
+
+    from openbase_coder_cli.openbase_coder_cli_app.notification_producers import (
+        sync_notification_producers,
+    )
+
+    try:
+        await sync_to_async(sync_notification_producers, thread_sensitive=False)(
+            force=force
+        )
+    except Exception:
+        logger.exception("Notification producer sweep failed")
+
+
+class _NotificationStoreWatcher:
+    """Broadcast notification-store changes while socket clients exist.
+
+    Every producer mutation rewrites the store file atomically, so the file
+    watcher is the only push mechanism needed. A periodic sweep tick keeps
+    report notifications flowing while any client is connected.
+    """
+
+    group_name = "notifications"
+    sweep_interval_seconds = 15
+
+    def __init__(self) -> None:
+        self._connections = 0
+        self._task: asyncio.Task[None] | None = None
+
+    def acquire(self) -> None:
+        self._connections += 1
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._run())
+
+    async def release(self) -> None:
+        self._connections = max(0, self._connections - 1)
+        if self._connections or self._task is None:
+            return
+        task = self._task
+        self._task = None
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def _run(self) -> None:
+        from openbase_coder_cli.openbase_coder_cli_app.notification_store import (
+            notifications_store_path,
+        )
+
+        await asyncio.gather(
+            self._watch(notifications_store_path()),
+            self._sweep_loop(),
+        )
+
+    async def _watch(self, store_path: Path) -> None:
+        from channels.layers import get_channel_layer
+
+        store_path.parent.mkdir(parents=True, exist_ok=True)
+        channel_layer = get_channel_layer()
+        try:
+            async for _changes in awatch(
+                store_path.parent,
+                watch_filter=lambda _change, changed_path: Path(changed_path)
+                == store_path,
+                debounce=50,
+                step=25,
+            ):
+                if channel_layer is not None:
+                    await channel_layer.group_send(
+                        self.group_name,
+                        {"type": "notifications_changed"},
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Notification store watcher failed; closing live clients")
+            if channel_layer is not None:
+                await channel_layer.group_send(
+                    self.group_name,
+                    {"type": "notifications_unavailable"},
+                )
+
+    async def _sweep_loop(self) -> None:
+        while True:
+            await _run_notification_sweep()
+            await asyncio.sleep(self.sweep_interval_seconds)
+
+
+_notification_store_watcher = _NotificationStoreWatcher()
+
+
+class NotificationsConsumer(AsyncJsonWebsocketConsumer):
+    """Push notification snapshots when the store changes."""
+
+    group_name = _NotificationStoreWatcher.group_name
+
+    async def connect(self):
+        self._watching = False
+        if self.scope.get("user") != "authenticated":
+            await self.close(code=4001)
+            return
+
+        await self.channel_layer.group_add(self.group_name, self.channel_name)
+        await self.accept()
+        _notification_store_watcher.acquire()
+        self._watching = True
+        await self._send_snapshot()
+
+    async def disconnect(self, close_code):
+        if getattr(self, "_watching", False):
+            await _notification_store_watcher.release()
+        await self.channel_layer.group_discard(self.group_name, self.channel_name)
+
+    async def receive_json(self, content, **kwargs):
+        if content.get("action") == "refresh":
+            await _run_notification_sweep(force=True)
+            await self._send_snapshot()
+
+    async def notifications_changed(self, event):
+        await self._send_snapshot()
+
+    async def notifications_unavailable(self, event):
+        await self.close(code=1011)
+
+    async def _send_snapshot(self):
+        from asgiref.sync import sync_to_async
+
+        from openbase_coder_cli.openbase_coder_cli_app.notification_store import (
+            list_notifications,
+        )
+
+        try:
+            payload = await sync_to_async(list_notifications, thread_sensitive=False)()
+        except (ValueError, RuntimeError) as exc:
+            logger.warning("Unable to load notifications: %s", exc)
+            await self.close(code=1011)
+            return
+        await self.send_json({"type": "notifications", "data": payload})
 
 
 class IOSAppControlConsumer(AsyncJsonWebsocketConsumer):
