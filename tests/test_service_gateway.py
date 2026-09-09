@@ -33,7 +33,7 @@ async def test_gateway_preserves_raw_paths_and_queries(isolated_registry, mode):
                 80 if mode == "hostname" else 52807,
                 52808,
                 mode=mode,
-                hostname="docs.n11111111111111111111111111111111.vpn.example.test"
+                hostname="docs.abcd2345efgh.vpn.example.test"
                 if mode == "hostname"
                 else None,
                 node_id="7" if mode == "hostname" else None,
@@ -61,7 +61,7 @@ async def test_gateway_preserves_raw_paths_and_queries(isolated_registry, mode):
                 response = await client.get(
                     URL(f"http://127.0.0.1:{proxy_port}{path}", encoded=True),
                     headers={
-                        "Host": "docs.n11111111111111111111111111111111.vpn.example.test"
+                        "Host": "docs.abcd2345efgh.vpn.example.test"
                     },
                 )
                 assert response.status == 200
@@ -69,7 +69,7 @@ async def test_gateway_preserves_raw_paths_and_queries(isolated_registry, mode):
             if mode == "hostname":
                 for host in (
                     "foreign.example.test",
-                    "docs.n11111111111111111111111111111111.vpn.example.test.net.example.test",
+                    "docs.abcd2345efgh.vpn.example.test.net.example.test",
                 ):
                     response = await client.get(
                         f"http://127.0.0.1:{proxy_port}/", headers={"Host": host}

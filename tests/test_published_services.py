@@ -135,7 +135,7 @@ def test_publish_persistence_is_explicit(monkeypatch, isolated_registry):
         service_cli,
         "allocate_private_service_hostname",
         lambda name: routes.ServiceHostnameAllocation(
-            f"{name}.n11111111111111111111111111111111.vpn.obs.so",
+            f"{name}.abcd2345efgh.vpn.obs.so",
             "7",
             False,
         ),
@@ -200,7 +200,7 @@ def test_publish_rolls_back_registry_and_gateway_on_route_failure(
         service_cli,
         "allocate_private_service_hostname",
         lambda name: routes.ServiceHostnameAllocation(
-            f"{name}.n11111111111111111111111111111111.vpn.obs.so",
+            f"{name}.abcd2345efgh.vpn.obs.so",
             "7",
             False,
         ),
@@ -246,7 +246,7 @@ def test_publish_compensates_serve_when_final_registry_save_fails(
         service_cli,
         "allocate_private_service_hostname",
         lambda name: routes.ServiceHostnameAllocation(
-            f"{name}.n11111111111111111111111111111111.vpn.obs.so",
+            f"{name}.abcd2345efgh.vpn.obs.so",
             "7",
             False,
         ),
@@ -465,7 +465,7 @@ def _stub_hostname_allocation(monkeypatch):
             ok=True,
             supported=True,
             response={
-                "hostname": "crm.n11111111111111111111111111111111.vpn.obs.so",
+                "hostname": "crm.abcd2345efgh.vpn.obs.so",
                 "node_id": "7",
                 "service_name": "crm",
                 "created": True,
@@ -504,7 +504,7 @@ def test_private_hostname_allocation_waits_for_dns_propagation(monkeypatch):
     monkeypatch.setattr(routes.socket, "getaddrinfo", fake_getaddrinfo)
 
     assert routes.allocate_private_service_hostname("crm") == (
-        "crm.n11111111111111111111111111111111.vpn.obs.so",
+        "crm.abcd2345efgh.vpn.obs.so",
         "7",
         True,
     )
@@ -585,7 +585,7 @@ def test_private_hostname_allocation_must_resolve_to_this_node(monkeypatch):
             ok=True,
             supported=True,
             response={
-                "hostname": "crm.n11111111111111111111111111111111.vpn.obs.so",
+                "hostname": "crm.abcd2345efgh.vpn.obs.so",
                 "node_id": "7",
                 "service_name": "crm",
                 "created": True,
@@ -601,7 +601,7 @@ def test_private_hostname_allocation_must_resolve_to_this_node(monkeypatch):
     )
 
     assert routes.allocate_private_service_hostname("crm") == (
-        "crm.n11111111111111111111111111111111.vpn.obs.so",
+        "crm.abcd2345efgh.vpn.obs.so",
         "7",
         True,
     )
@@ -635,7 +635,7 @@ def test_hostname_publish_uses_root_hostname_and_its_own_gateway(
         service_cli,
         "allocate_private_service_hostname",
         lambda _name: routes.ServiceHostnameAllocation(
-            "docs.n11111111111111111111111111111111.vpn.obs.so",
+            "docs.abcd2345efgh.vpn.obs.so",
             "7",
             True,
         ),
@@ -651,7 +651,7 @@ def test_hostname_publish_uses_root_hostname_and_its_own_gateway(
     monkeypatch.setattr(
         service_cli,
         "service_url",
-        lambda _item: "http://docs.n11111111111111111111111111111111.vpn.obs.so/",
+        lambda _item: "http://docs.abcd2345efgh.vpn.obs.so/",
     )
 
     result = CliRunner().invoke(
@@ -666,12 +666,12 @@ def test_hostname_publish_uses_root_hostname_and_its_own_gateway(
     assert item.proxy_port == 52808
     assert (
         item.hostname
-        == "docs.n11111111111111111111111111111111.vpn.obs.so"
+        == "docs.abcd2345efgh.vpn.obs.so"
     )
     assert item.node_id == "7"
     assert published.load_registry().last_applied_serve_hash == "new-hash"
     assert (
-        "http://docs.n11111111111111111111111111111111.vpn.obs.so/"
+        "http://docs.abcd2345efgh.vpn.obs.so/"
         in result.output
     )
     assert applied[0][1]["previous_services"] == []

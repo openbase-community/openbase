@@ -33,7 +33,7 @@ def _validate_account_hostname(name: str, hostname: str, node_name: str) -> None
         raise ValueError("Unrecognized Netmesh device DNS zone.")
     labels[0] = labels[0].replace("net", "vpn", 1)
     service_domain = ".".join(labels)
-    pattern = rf"{re.escape(name)}\.n[a-f0-9]{{32}}\.{re.escape(service_domain)}"
+    pattern = rf"{re.escape(name)}\.(?:[a-z2-7]{{12}}|n[a-f0-9]{{32}})\.{re.escape(service_domain)}"
     if re.fullmatch(pattern, hostname) is None:
         raise ValueError("Private service hostname is outside the account namespace.")
 
