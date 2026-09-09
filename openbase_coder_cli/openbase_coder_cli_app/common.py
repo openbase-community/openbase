@@ -2,9 +2,47 @@
 
 from __future__ import annotations
 
+import functools
 from typing import Any
 
+from asgiref.sync import sync_to_async
 from rest_framework import serializers
+
+
+def offloaded_view(view):
+    """Run a sync DRF view off Django's shared thread-sensitive executor.
+
+    Under ASGI, Django runs synchronous views through
+    ``sync_to_async(thread_sensitive=True)``, which funnels every in-flight
+    request through a single shared executor thread and serializes them —
+    so a page that fires several API calls at mount has them stack up. This
+    decorator makes the view an ``async`` callable (which Django awaits
+    directly on the event loop) and offloads the real work with
+    ``thread_sensitive=False`` so concurrent requests run on separate pool
+    threads.
+
+    Nested ``async_to_sync`` calls inside the view (e.g. the out-of-process
+    session manager) still route their coroutines back to the main event
+    loop via asgiref's ``main_event_loop`` threadlocal, so the app-server
+    connection keeps its loop affinity and correctness is preserved.
+
+    Apply it outside ``@api_view`` so it wraps the finished DRF view::
+
+        @offloaded_view
+        @api_view(["GET"])
+        def my_view(request):
+            ...
+    """
+    async_view = sync_to_async(view, thread_sensitive=False)
+
+    @functools.wraps(view)
+    async def wrapper(request, *args, **kwargs):
+        return await async_view(request, *args, **kwargs)
+
+    # DRF's ``as_view()`` marks the view CSRF-exempt; preserve that on the
+    # async wrapper Django actually routes to.
+    wrapper.csrf_exempt = getattr(view, "csrf_exempt", True)
+    return wrapper
 
 
 class ExactFieldsSerializer(serializers.Serializer):

@@ -7,6 +7,7 @@ from __future__ import annotations
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
+from openbase_coder_cli.openbase_coder_cli_app.common import offloaded_view
 from openbase_coder_cli.openbase_coder_cli_app.git_http import git_http_backend
 from openbase_coder_cli.openbase_coder_cli_app.health_warnings import health_warnings
 from openbase_coder_cli.openbase_coder_cli_app.sync_settings import (
@@ -138,7 +139,11 @@ urlpatterns = [
     path("auth/logout/", auth_logout, name="auth-logout"),
     path("agents-md/", agents_md, name="agents-md"),
     path("health/", health_check, name="health-check"),
-    path("health/warnings/", health_warnings, name="health-warnings"),
+    # ``offloaded_view`` runs these hot read endpoints off Django's shared
+    # thread-sensitive ASGI executor so a page's mount-time burst of API
+    # calls runs concurrently instead of serializing one at a time. See the
+    # helper's docstring in ``openbase_coder_cli_app.common``.
+    path("health/warnings/", offloaded_view(health_warnings), name="health-warnings"),
     path("brain-readiness/", brain_readiness, name="brain-readiness"),
     path(
         "features/apple-music-playback/",
@@ -156,11 +161,21 @@ urlpatterns = [
     ),
     path("update/status/", update_status, name="update-status"),
     path("update/apply/", update_apply, name="update-apply"),
-    path("threads/", thread_list, name="thread-list"),
+    path("threads/", offloaded_view(thread_list), name="thread-list"),
     path("threads/activity/", thread_activity, name="thread-activity"),
-    path("threads/active-voice/", thread_active_voice, name="thread-active-voice"),
-    path("threads/dispatcher/", thread_dispatcher, name="thread-dispatcher"),
-    path("threads/<str:thread_id>/", thread_detail, name="thread-detail"),
+    path(
+        "threads/active-voice/",
+        offloaded_view(thread_active_voice),
+        name="thread-active-voice",
+    ),
+    path(
+        "threads/dispatcher/",
+        offloaded_view(thread_dispatcher),
+        name="thread-dispatcher",
+    ),
+    path(
+        "threads/<str:thread_id>/", offloaded_view(thread_detail), name="thread-detail"
+    ),
     path(
         "threads/<str:thread_id>/tags/",
         thread_tags,
@@ -232,11 +247,15 @@ urlpatterns = [
         inbound_call_decline,
         name="inbound-call-decline",
     ),
-    path("projects/recent/", recent_projects, name="recent-projects"),
-    path("projects/status/", project_status, name="project-status"),
+    path("projects/recent/", offloaded_view(recent_projects), name="recent-projects"),
+    path("projects/status/", offloaded_view(project_status), name="project-status"),
     path("tags/", tag_options, name="tag-options"),
-    path("projects/reports/", project_reports, name="project-reports"),
-    path("projects/reports/all/", all_project_reports, name="all-project-reports"),
+    path("projects/reports/", offloaded_view(project_reports), name="project-reports"),
+    path(
+        "projects/reports/all/",
+        offloaded_view(all_project_reports),
+        name="all-project-reports",
+    ),
     path(
         "projects/reports/action/",
         project_reports_action,
@@ -244,7 +263,7 @@ urlpatterns = [
     ),
     path(
         "projects/reports/global/",
-        global_reports_projects,
+        offloaded_view(global_reports_projects),
         name="global-reports-projects",
     ),
     path(
@@ -466,7 +485,7 @@ urlpatterns = [
         git_http_backend,
         name="sync-git-http",
     ),
-    path("status/", service_status, name="service-status"),
+    path("status/", offloaded_view(service_status), name="service-status"),
     path(
         "livekit-companion-session/",
         livekit_companion_session,
