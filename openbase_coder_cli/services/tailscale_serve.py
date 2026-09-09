@@ -215,7 +215,14 @@ def tailscale_serve_health() -> TailscaleServeHealth:
     host_header = (
         f"{host}:{OPENBASE_CODER_TAILNET_PORT}" if (probe_ip and host) else None
     )
-    openbase_reachable, reachability_error = _openbase_reachable(probe_url, host_header)
+    if tp.is_netmesh():
+        openbase_reachable, reachability_error = local_openbase_reachable(
+            host, serve_status
+        )
+    else:
+        openbase_reachable, reachability_error = _openbase_reachable(
+            probe_url, host_header
+        )
 
     return TailscaleServeHealth(
         tailscale_available=True,
@@ -410,6 +417,32 @@ def _livekit_serve_configured(payload: dict[str, Any]) -> bool:
     return (
         isinstance(entry, dict)
         and entry.get("TCPForward") == f"127.0.0.1:{LIVEKIT_LOCAL_PORT}"
+    )
+
+
+def local_openbase_reachable(
+    host: str | None, serve_status: dict[str, Any] | None = None
+) -> tuple[bool, str | None]:
+    """Check this host's route and backend without a VPN connection to itself.
+
+    macOS Netmesh can reset self-address connections even while peers can use
+    the same Serve endpoint. Verify its configured route separately, then probe
+    the loopback target with the advertised Host (including ALLOWED_HOSTS).
+    This is local readiness, not proof of reachability from another device.
+    """
+    from openbase_coder_cli.services import tailscale_provider as tp
+
+    if not host:
+        return False, "Tailscale DNS name is unavailable."
+    if serve_status is None:
+        serve_status = tp.serve_status_json()
+    if not _openbase_serve_configured(serve_status, host):
+        return False, str(
+            serve_status.get("error") or "Openbase Serve route is not configured."
+        )
+    return _openbase_reachable(
+        f"http://127.0.0.1:{OPENBASE_CODER_LOCAL_PORT}",
+        f"{host}:{OPENBASE_CODER_TAILNET_PORT}",
     )
 
 
