@@ -862,3 +862,56 @@ def test_default_dispatcher_reasoning_rejects_invalid_level():
 
     assert result.exit_code != 0
     assert "Reasoning effort must be one of" in result.output
+
+
+def test_user_say_falls_back_to_linked_notification_on_publish_failure(monkeypatch):
+    def fake_request(method, url, **kwargs):
+        return httpx.Response(
+            502,
+            json={
+                "status": "publish_failed",
+                "detail": "Unable to publish announcer message.",
+                "agent_name": "Dottie",
+                "thread_id": "thread-77",
+            },
+        )
+
+    notifications = []
+    patch_local_server_request(monkeypatch, fake_request)
+    monkeypatch.setattr(
+        user_cli,
+        "send_user_say_fallback",
+        lambda **kwargs: notifications.append(kwargs),
+    )
+
+    result = CliRunner().invoke(user_cli.user, ["say", "Dottie", "build", "done"])
+
+    assert result.exit_code == 0
+    assert "Voice announcement failed" in result.output
+    assert "accepted by Openbase Cloud" in result.output
+    assert notifications == [
+        {
+            "agent_name": "Dottie",
+            "message": "build done",
+            "thread_id": "thread-77",
+        }
+    ]
+
+
+def test_user_say_publish_failure_without_thread_still_errors(monkeypatch):
+    def fake_request(method, url, **kwargs):
+        return httpx.Response(
+            502,
+            json={
+                "status": "publish_failed",
+                "detail": "Unable to publish announcer message.",
+                "thread_id": None,
+            },
+        )
+
+    patch_local_server_request(monkeypatch, fake_request)
+
+    result = CliRunner().invoke(user_cli.user, ["say", "Dottie", "build done"])
+
+    assert result.exit_code != 0
+    assert "No agent thread was available" in result.output
