@@ -19,7 +19,7 @@ def clear_super_agent_context(monkeypatch):
     monkeypatch.delenv("OPENBASE_SUPER_AGENT_THREAD_ID", raising=False)
     monkeypatch.delenv("OPENBASE_SUPER_AGENT_LABEL", raising=False)
     monkeypatch.delenv("OPENBASE_SUPER_AGENT_AGENT_NAME", raising=False)
-    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    monkeypatch.delenv("AGENT_SESSION_ID", raising=False)
     monkeypatch.delenv("OPENBASE_CODER_ANNOUNCER_VOICE_ID", raising=False)
 
 
@@ -240,7 +240,7 @@ def test_user_say_ignores_legacy_identity_environment(monkeypatch):
     monkeypatch.setenv("OPENBASE_SUPER_AGENT_THREAD_ID", "thread-1")
     monkeypatch.setenv("OPENBASE_SUPER_AGENT_LABEL", "Build")
     monkeypatch.setenv("OPENBASE_SUPER_AGENT_AGENT_NAME", "Carl")
-    monkeypatch.setenv("CODEX_THREAD_ID", "thread-1")
+    monkeypatch.setenv("AGENT_SESSION_ID", "thread-1")
     monkeypatch.setenv("OPENBASE_CODER_ANNOUNCER_VOICE_ID", "stale-voice")
     patch_local_server_request(monkeypatch, fake_request)
 
