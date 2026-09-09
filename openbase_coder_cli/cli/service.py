@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from dataclasses import replace
 from functools import wraps
@@ -219,6 +220,35 @@ def list_command() -> None:
             f"{item.name:<20} {url} -> 127.0.0.1:{item.local_port} "
             f"({item.mode}, {mode}, {health})"
         )
+
+
+@service.command()
+@click.argument("name")
+@click.option(
+    "--json", "as_json", is_flag=True, help="Return structured diagnostic checks."
+)
+def doctor(name: str, as_json: bool) -> None:
+    """Diagnose VPN, DNS, certificates, forwarding, and the local application."""
+    from openbase_coder_cli.services.published_services import find_service
+    from openbase_coder_cli.services.service_diagnostics import diagnose
+
+    item = find_service(name)
+    if item is None:
+        raise click.ClickException(f"Service '{name}' is not published.")
+    if item.tailnet_port != 443 or item.mode != MODE_HOSTNAME:
+        raise click.ClickException(
+            "Diagnostics require a current HTTPS publication; upgrade and republish this service."
+        )
+    result = diagnose(item)
+    if as_json:
+        click.echo(json.dumps(result))
+    else:
+        for check in result["checks"]:
+            click.echo(
+                f"{'OK' if check['ok'] else 'FAIL'} {check['check']}: {check['message']}"
+            )
+    if not result["ready"]:
+        raise click.exceptions.Exit(1)
 
 
 @service.command()

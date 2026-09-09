@@ -5,10 +5,11 @@ Use `openbase-coder service` to make a local single-port HTTP service available 
 ```bash
 openbase-coder service publish crm 3000
 openbase-coder service list
+openbase-coder service doctor crm
 openbase-coder service unpublish crm
 ```
 
-Publication has one supported shape: a dedicated hostname serving the application at its root. An illustrative URL is `http://crm.abcd2345efgh.vpn.obs.so/`. Use the actual URL printed by the command, never an invented name. There is no explicit port, service-name path, personal name, or device name.
+Publication has one supported shape: a dedicated hostname serving the application at its root. An illustrative URL is `https://crm.abcd2345efgh.vpn.obs.so/`. Use the actual URL printed by the command, never an invented name. There is no explicit port, service-name path, personal name, or device name.
 
 ## Account namespace and private DNS
 
@@ -22,11 +23,17 @@ Both the Cloud allocator and signed VPN helper must advertise the current accoun
 
 ## Root-mounted only
 
-Every request path and query is forwarded unchanged, including WebSockets. There is no prefix stripping, prefix alias, shared dispatcher, or app-specific redirect workaround. For example, `/crm/api?q=1` reaches the upstream at exactly that path, not `/api?q=1`. Redirect locations and cookie paths are not rewritten. Applications must not change their base path for publication.
+Every request path and query is forwarded unchanged, including WebSockets. There is no prefix stripping, prefix alias, or app-specific redirect workaround. For example, `/crm/api?q=1` reaches the upstream at exactly that path, not `/api?q=1`. Redirect locations and cookie paths are not rewritten. Applications must not change their base path for publication. WebSocket subprotocols, streaming responses, uploads, and browser-owned session cookies pass through the proxy.
 
 The retired `--mode`, `--tailnet-port`, and path-based publication options are rejected. Old registry entries can be inspected for cleanup, but the updated helper rejects legacy dynamic publication routes. Remove old publications before replacing the helper and republish using their root hostname.
 
-The app and local proxy bind only to `127.0.0.1`. Hostname routing uses private HTTP port 80; the upstream and loopback proxy can use unrelated local ports. Traffic between devices remains WireGuard-encrypted even though the URL uses HTTP. This is not browser HTTPS and does not provide a browser secure context. Apps may additionally require their own login; the publisher does not add a per-request Openbase browser login.
+The app and local proxy bind only to `127.0.0.1`. Hostname routing uses VPN-only HTTPS port 443 and redirects port 80 to HTTPS. A device-local wildcard certificate supplies a browser secure context; certificates renew automatically while publications are active. Traffic between devices is also WireGuard-encrypted. Apps may additionally require their own login; the publisher does not add a per-request Openbase browser login. See [private HTTPS](../private-services-https.md) for certificate and privacy details.
+
+## Diagnostics and recovery
+
+`openbase-coder service doctor NAME` checks the VPN, private DNS ownership, certificate validity, forwarding configuration, local app, and HTTPS gateway separately. Add `--json` for structured output. A failed check returns a nonzero exit code; diagnostics never change settings or republish a service.
+
+An active publication's gateway restarts a crashed shared HTTPS worker automatically. This does not turn a session publication into a persistent one or restart your upstream app. A stopped app produces a 502 response. Removing a publication stops new requests for its hostname, including on existing HTTPS connections; already-open application streams may finish.
 
 ## Persistence is opt-in
 
