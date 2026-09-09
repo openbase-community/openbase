@@ -98,8 +98,9 @@ def test_reset_tailscale_serve_recovers_from_drift_dead_end(monkeypatch, tmp_pat
     monkeypatch.setattr(
         tp,
         "apply_serve",
-        lambda rules, **kwargs: applied.append((rules, kwargs))
-        or {"hash": "reset-hash"},
+        lambda rules, **kwargs: (
+            applied.append((rules, kwargs)) or {"hash": "reset-hash"}
+        ),
     )
 
     # The default path dead-ends on this drift...
@@ -116,8 +117,11 @@ def test_reset_tailscale_serve_recovers_from_drift_dead_end(monkeypatch, tmp_pat
     assert published.load_registry().last_applied_serve_hash == "reset-hash"
 
 
-def test_tailscale_serve_health_requires_routes_and_external_health(monkeypatch):
-    monkeypatch.delenv("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", raising=False)
+@pytest.mark.parametrize("provider", ["tailscale", "netmesh"])
+def test_tailscale_serve_health_requires_routes_and_backend_health(
+    monkeypatch, provider
+):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", provider)
     monkeypatch.setattr(tp, "tool_path", lambda: "/usr/bin/tailscale")
     monkeypatch.setattr(
         tp,
@@ -152,7 +156,12 @@ def test_tailscale_serve_health_requires_routes_and_external_health(monkeypatch)
         tailscale_serve,
         "_openbase_reachable",
         lambda url, host_header=None: (
-            url == "http://100.64.0.9:18080"
+            url
+            == (
+                "http://127.0.0.1:7999"
+                if provider == "netmesh"
+                else "http://100.64.0.9:18080"
+            )
             and host_header == "mac.tailnet.ts.net:18080",
             None,
         ),
@@ -163,3 +172,59 @@ def test_tailscale_serve_health_requires_routes_and_external_health(monkeypatch)
     assert health.healthy is True
     assert health.host == "mac.tailnet.ts.net"
     assert health.openbase_url == "http://mac.tailnet.ts.net:18080"
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {},
+        {"error": "helper unavailable"},
+        {
+            "TCP": {"18080": {"HTTP": True}},
+            "Web": {
+                "mac.net.example.test:18080": {
+                    "Handlers": {"/": {"Proxy": "http://127.0.0.1:8888"}}
+                }
+            },
+        },
+    ],
+)
+def test_local_readiness_never_masks_missing_or_wrong_serve_route(monkeypatch, config):
+    monkeypatch.setattr(
+        tailscale_serve.httpx,
+        "get",
+        lambda *a, **k: pytest.fail("Do not probe an unconfigured route"),
+    )
+    healthy, error = tailscale_serve.local_openbase_reachable(
+        "mac.net.example.test", config
+    )
+    assert not healthy
+    assert error
+
+
+@pytest.mark.parametrize(
+    "status_code,payload,expected",
+    [(200, {"status": "ok"}, True), (400, {}, False), (200, {"status": "bad"}, False)],
+)
+def test_local_readiness_checks_backend_health_and_advertised_host(
+    monkeypatch, status_code, payload, expected
+):
+    import httpx
+
+    host = "mac.net.example.test"
+    config = {
+        "TCP": {"18080": {"HTTP": True}},
+        "Web": {
+            host + ":18080": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:7999"}}}
+        },
+    }
+
+    def get(url, **kwargs):
+        assert url == "http://127.0.0.1:7999/api/health/"
+        assert kwargs["headers"] == {"Host": host + ":18080"}
+        return httpx.Response(status_code, json=payload)
+
+    monkeypatch.setattr(tailscale_serve.httpx, "get", get)
+    healthy, error = tailscale_serve.local_openbase_reachable(host, config)
+    assert healthy is expected
+    assert (error is None) is expected
