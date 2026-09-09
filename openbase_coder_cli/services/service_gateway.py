@@ -2,9 +2,19 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Iterable
 
-from aiohttp import ClientSession, WSMsgType, web
+from aiohttp import (
+    ClientConnectionError,
+    ClientPayloadError,
+    ClientSession,
+    ClientTimeout,
+    DummyCookieJar,
+    WSMsgType,
+    WSServerHandshakeError,
+    web,
+)
 from multidict import CIMultiDict
 from yarl import URL
 
@@ -33,6 +43,7 @@ UNTRUSTED_FORWARDED_HEADERS = {
 }
 SERVICE_KEY = web.AppKey("service", PublishedService)
 CLIENT_KEY = web.AppKey("client", ClientSession)
+logger = logging.getLogger(__name__)
 
 
 def _connection_headers(headers: Iterable[tuple[str, str]]) -> set[str]:
@@ -86,12 +97,32 @@ async def _relay_websocket(source, destination) -> None:
 async def _proxy_websocket(
     request: web.Request, upstream: str, service: PublishedService
 ) -> web.StreamResponse:
-    downstream = web.WebSocketResponse()
-    await downstream.prepare(request)
     session = request.app[CLIENT_KEY]
-    async with session.ws_connect(
-        URL(upstream, encoded=True), headers=_forward_headers(request, service)
-    ) as source:
+    protocols = [
+        p.strip()
+        for p in request.headers.get("Sec-WebSocket-Protocol", "").split(",")
+        if p.strip()
+    ]
+    try:
+        async with asyncio.timeout(10):
+            source = await session.ws_connect(
+                URL(upstream, encoded=True),
+                headers=_forward_headers(request, service),
+                protocols=protocols,
+            )
+    except WSServerHandshakeError as exc:
+        headers = _filtered_headers((exc.headers or {}).items())
+        # The handshake exception carries headers, not the upstream body.
+        headers.popall("Content-Length", None)
+        headers.popall("Content-Encoding", None)
+        return web.Response(status=exc.status, headers=headers)
+    async with source:
+        downstream = web.WebSocketResponse(
+            protocols=[source.protocol] if source.protocol else []
+        )
+        for value in source._response.headers.getall("Set-Cookie", []):
+            downstream.headers.add("Set-Cookie", value)
+        await downstream.prepare(request)
         tasks = {
             asyncio.create_task(_relay_websocket(downstream, source)),
             asyncio.create_task(_relay_websocket(source, downstream)),
@@ -99,7 +130,8 @@ async def _proxy_websocket(
         _done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
             task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await downstream.close()
     return downstream
 
 
@@ -109,6 +141,17 @@ async def proxy(request: web.Request) -> web.StreamResponse:
 
 
 async def proxy_service(
+    request: web.Request, service: PublishedService
+) -> web.StreamResponse:
+    try:
+        return await _proxy_service(request, service)
+    except (ClientConnectionError, TimeoutError) as exc:
+        raise web.HTTPBadGateway(
+            text="Local application is unavailable or its connection failed."
+        ) from exc
+
+
+async def _proxy_service(
     request: web.Request, service: PublishedService
 ) -> web.StreamResponse:
     if (
@@ -144,16 +187,59 @@ async def proxy_service(
         for key, value in _filtered_headers(response.headers.items()).items():
             downstream.headers.add(key, value)
         await downstream.prepare(request)
-        async for chunk in response.content.iter_any():
-            await downstream.write(chunk)
+        try:
+            async for chunk in response.content.iter_any():
+                await downstream.write(chunk)
+        except (ClientConnectionError, ClientPayloadError, TimeoutError):
+            # Headers are already sent: a new 502 would corrupt the response.
+            # End the connection so the caller observes an incomplete stream.
+            downstream.force_close()
+            if request.transport:
+                request.transport.close()
+            return downstream
         await downstream.write_eof()
         return downstream
 
 
 async def client_session(app: web.Application) -> AsyncIterator[None]:
-    async with ClientSession(auto_decompress=False) as session:
+    # Proxy cookies belong to the caller, never a shared server-side cookie jar.
+    # Long-running streams have no total deadline; connecting is still bounded.
+    async with ClientSession(
+        auto_decompress=False,
+        cookie_jar=DummyCookieJar(),
+        timeout=ClientTimeout(total=None, sock_connect=5),
+    ) as session:
         app[CLIENT_KEY] = session
         yield
+
+
+async def https_supervisor(app: web.Application) -> AsyncIterator[None]:
+    """Restore a crashed TLS worker while this explicitly published gateway lives."""
+    from openbase_coder_cli.services.service_https import ensure_https_gateway
+
+    async def supervise():
+        failed = False
+        while True:
+            current = find_service(app[SERVICE_KEY].name)
+            if current is None or current.proxy_port != app[SERVICE_KEY].proxy_port:
+                raise web.GracefulExit()
+            try:
+                await asyncio.to_thread(ensure_https_gateway, app[SERVICE_KEY])
+                failed = False
+            except (OSError, ValueError, RuntimeError):
+                if not failed:
+                    logger.error(
+                        "HTTPS ingress unavailable; retrying recovery in five seconds. Run service doctor for diagnostics."
+                    )
+                failed = True
+            await asyncio.sleep(5)
+
+    task = asyncio.create_task(supervise())
+    try:
+        yield
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 def create_app(name: str) -> web.Application:
@@ -183,7 +269,10 @@ def main() -> None:
         from openbase_coder_cli.services.service_https import ensure_https_gateway
 
         ensure_https_gateway(service)
-    web.run_app(create_app(service.name), host="127.0.0.1", port=service.proxy_port)
+    app = create_app(service.name)
+    if service.tailnet_port == 443:
+        app.cleanup_ctx.append(https_supervisor)
+    web.run_app(app, host="127.0.0.1", port=service.proxy_port)
 
 
 if __name__ == "__main__":

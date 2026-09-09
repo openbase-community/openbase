@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import sys
 from dataclasses import replace
 from functools import wraps
 
 import click
 
+from openbase_coder_cli.services import service_recovery
 from openbase_coder_cli.services.published_service_routes import (
     allocate_private_service_hostname,
     apply_route,
@@ -53,6 +55,22 @@ def _registry_transaction(function):
     @wraps(function)
     def wrapped(*args, **kwargs):
         with registry_lock():
+            try:
+                recovered = service_recovery.recover()
+                if recovered:
+                    if (
+                        function.__name__ == "unpublish"
+                        and kwargs.get("name") == recovered
+                    ):
+                        click.echo(
+                            f"Unpublished {recovered} (recovered interrupted operation)."
+                        )
+                        return
+                    click.echo(
+                        "Removed an interrupted publication; retrying the requested command."
+                    )
+            except (OSError, ValueError, RuntimeError) as exc:
+                raise click.ClickException(str(exc)) from exc
             return function(*args, **kwargs)
 
     return wrapped
@@ -125,6 +143,9 @@ def publish(
     try:
         from openbase_coder_cli.services.service_certificates import ensure_certificate
 
+        service_recovery.begin(
+            "publish", registry, service_entry, release_hostname=hostname_created
+        )
         click.echo(
             "Preparing device-local HTTPS certificate (first issuance can take a few minutes)…"
         )
@@ -137,6 +158,9 @@ def publish(
         else:
             pid = start_ephemeral_gateway(service_entry)
             service_entry = replace(service_entry, pid=pid)
+            service_recovery.begin(
+                "publish", registry, service_entry, release_hostname=hostname_created
+            )
             desired_services[-1] = service_entry
             save_registry(
                 ServiceRegistry(
@@ -182,8 +206,11 @@ def publish(
         message = str(exc)
         if compensation_errors:
             message += " " + " ".join(compensation_errors)
+        else:
+            service_recovery.finish()
         raise click.ClickException(message) from exc
 
+    service_recovery.finish()
     click.echo(f"Published {name}: {url}")
     click.echo(f"  Local target: http://127.0.0.1:{port}")
     click.echo("  Mode: account-private hostname")
@@ -223,6 +250,48 @@ def list_command() -> None:
 
 @service.command()
 @click.argument("name")
+@click.option(
+    "--json", "as_json", is_flag=True, help="Return structured diagnostic checks."
+)
+def doctor(name: str, as_json: bool) -> None:
+    """Diagnose VPN, DNS, certificates, forwarding, and the local application."""
+    from openbase_coder_cli.services.published_services import find_service
+    from openbase_coder_cli.services.service_diagnostics import diagnose
+
+    item = find_service(name)
+    if item is None:
+        raise click.ClickException(f"Service '{name}' is not published.")
+    if item.tailnet_port != 443 or item.mode != MODE_HOSTNAME:
+        raise click.ClickException(
+            "Diagnostics require a current HTTPS publication; upgrade and republish this service."
+        )
+    result = diagnose(item)
+    if as_json:
+        click.echo(json.dumps(result))
+    else:
+        for check in result["checks"]:
+            click.echo(
+                f"{'OK' if check['ok'] else 'FAIL'} {check['check']}: {check['message']}"
+            )
+    if not result["ready"]:
+        raise click.exceptions.Exit(1)
+
+
+@service.command("recover")
+def recover_command() -> None:
+    """Safely remove a publication interrupted by a crash or shutdown."""
+    with registry_lock():
+        try:
+            changed = service_recovery.recover()
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise click.ClickException(str(exc)) from exc
+    click.echo(
+        "Interrupted publication removed." if changed else "No interrupted publication."
+    )
+
+
+@service.command()
+@click.argument("name")
 @_registry_transaction
 def unpublish(name: str) -> None:
     """Remove NAME from the tailnet and stop its local gateway."""
@@ -237,6 +306,10 @@ def unpublish(name: str) -> None:
         raise click.ClickException(f"Service '{name}' is not published.")
     remaining = [item for item in services if item.name != name]
     hostname_released = False
+    try:
+        service_recovery.begin("unpublish", registry, target)
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise click.ClickException(str(exc)) from exc
     if target.mode == MODE_HOSTNAME:
         if not target.node_id:
             raise click.ClickException(
@@ -296,6 +369,9 @@ def unpublish(name: str) -> None:
         message = str(exc)
         if compensation_errors:
             message += " " + " ".join(compensation_errors)
+        else:
+            service_recovery.finish()
         raise click.ClickException(message) from exc
     stop_gateway(target)
+    service_recovery.finish()
     click.echo(f"Unpublished {name}.")
