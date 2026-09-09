@@ -485,7 +485,14 @@ def thread_detail(request, thread_id):
         return Response({"success": True})
 
     try:
-        thread = async_to_sync(manager.get_thread_state)(thread_id)
+        # Cache-and-coalesce: the detail view is polled every ~5s (and on each
+        # socket event and window focus) on top of the live thread WebSocket,
+        # and the dispatch page reads the same thread via /threads/dispatcher/
+        # first — so an uncached read here means repeated, redundant app-server
+        # round-trips for a thread another call just fetched. The 8s snapshot
+        # staleness is absorbed by the client's reconcileThreadSnapshot, which
+        # keeps live-streamed turns that post-date the snapshot.
+        thread = get_cached_thread_state(manager, thread_id)
     except RuntimeError as exc:
         if not is_thread_data_unavailable_error(exc):
             raise
