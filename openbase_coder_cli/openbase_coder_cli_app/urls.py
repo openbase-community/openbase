@@ -73,6 +73,8 @@ from openbase_coder_cli.openbase_coder_cli_app.views import (
     marketplace_routines,
     marketplace_skill_install,
     marketplace_skills,
+    memories_list,
+    memory_detail,
     onboarding_cloud_state,
     onboarding_status,
     openbase_restart,
@@ -297,6 +299,8 @@ urlpatterns = [
         project_reports_download,
         name="project-reports-download",
     ),
+    path("memories/", memories_list, name="memories-list"),
+    path("memories/<path:memory_name>/", memory_detail, name="memory-detail"),
     path("skills/", skills_list, name="skills-list"),
     path(
         "marketplace/skills/",

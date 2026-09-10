@@ -33,7 +33,7 @@ you; a browser launched manually without the capability remains unauthenticated.
 ## Console Pages
 
 The console serves the same pages as the desktop app dashboard — Overview,
-Projects, Threads, Reports, Dispatch, Approvals, Routines, Skills,
+Projects, Threads, Reports, Dispatch, Approvals, Routines, Skills, Memories,
 Templates, Diff, Status, Devices, Instructions, Tools, Launchctl, and
 Settings. See [Desktop App](desktop-app.md#the-dashboard) for the full tour,
 including what each page can do on iPhone.
