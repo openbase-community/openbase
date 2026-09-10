@@ -19,13 +19,16 @@ from typing import Any
 from openbase_coder_cli.paths import CLAUDE_CONFIG_DIR
 
 CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
-# Claude Code prints turn-level auth failures as result text (exit code 0).
-# An expired-but-present login answers "Failed to authenticate. API Error:
-# 401 Invalid bearer token" or "Failed to authenticate: OAuth session expired
-# and could not be refreshed"; a wiped credential (Claude Code clears the
-# keychain entry after a failed refresh) answers "Not logged in · Please run
-# /login".
-CLAUDE_AUTH_FAILURE_PREFIXES = ("Failed to authenticate", "Not logged in")
+# A coding backend prints turn-level auth failures as ordinary result text
+# (exit code 0) instead of erroring. An expired-but-present login answers
+# "Failed to authenticate. API Error: 401 Invalid bearer token" or "Failed to
+# authenticate: OAuth session expired and could not be refreshed"; a wiped
+# credential answers "Not logged in · Please run /login". Both Claude Code and
+# Codex (including the openbase_cloud Codex provider when its key is absent)
+# emit these same sentinels, so the classifier is deliberately backend-agnostic.
+BACKEND_AUTH_FAILURE_PREFIXES = ("Failed to authenticate", "Not logged in")
+# Backwards-compatible alias (kept for existing importers).
+CLAUDE_AUTH_FAILURE_PREFIXES = BACKEND_AUTH_FAILURE_PREFIXES
 CLAUDE_AUTH_PROBE_PROMPT = "Reply with the single word ok."
 CLAUDE_AUTH_PROBE_TIMEOUT_SECONDS = 90
 
@@ -68,9 +71,19 @@ def claude_auth_status(*, claude_command: str | None = None) -> ClaudeAuthStatus
     )
 
 
+def is_backend_auth_failure_text(text: str | None) -> bool:
+    """Whether a turn's answer is a coding backend's spoken-back auth failure.
+
+    Matches the Claude Code *and* Codex sentinels (see
+    ``BACKEND_AUTH_FAILURE_PREFIXES``); a turn that "answers" with one of these
+    is a login failure masquerading as a normal reply, not a real answer.
+    """
+    return bool(text) and text.strip().startswith(BACKEND_AUTH_FAILURE_PREFIXES)
+
+
 def is_claude_auth_failure_text(text: str | None) -> bool:
-    """Whether turn output is Claude Code's spoken-back auth failure."""
-    return bool(text) and text.strip().startswith(CLAUDE_AUTH_FAILURE_PREFIXES)
+    """Backwards-compatible alias for :func:`is_backend_auth_failure_text`."""
+    return is_backend_auth_failure_text(text)
 
 
 def read_claude_credential_expiry() -> float | None:

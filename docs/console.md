@@ -13,7 +13,7 @@ browser, and Openbase Cloud hosts your account at
   installation-scoped capability and removes that capability from the address
   bar immediately after launch.
 - **Another tailnet device** — use the iOS/Android app, which supplies your
-  owner JWT. Merely knowing the Tailscale, Netmesh, Docker, or Maritime URL is
+  owner JWT. Merely knowing the Tailscale, Netmesh, or Docker URL is
   intentionally insufficient to authenticate to the runtime.
 - **From the iOS app** — the Console tab opens the local console in an
   embedded browser with your CLI auth token injected automatically; the Diff

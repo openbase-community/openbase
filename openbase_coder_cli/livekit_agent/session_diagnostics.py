@@ -14,6 +14,7 @@ from openbase_coder_cli.livekit_agent.spoken_commands import (
     _is_exit_to_dispatch_command,
 )
 from openbase_coder_cli.livekit_agent.voice_routing import LiveKitVoiceRouter
+from openbase_coder_cli.voice_tags import wrap_voice_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ def _register_session_diagnostics(
             )
             if not callable(steer_active_turn):
                 return
-            turn_id = await steer_active_turn(transcript)
+            turn_id = await steer_active_turn(wrap_voice_prompt(transcript))
             if not turn_id:
                 return
             voice_router.mark_proactive_steer(transcript)

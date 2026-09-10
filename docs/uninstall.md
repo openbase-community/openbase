@@ -108,7 +108,8 @@ so deleting the app alone leaves it behind — and a later reinstall would
 silently pick up the old state:
 
 ```bash
-rm -rf "/Applications/Openbase Coder.app"
+rm -rf "/Applications/Openbase.app"
+rm -rf "/Applications/Openbase Coder.app"   # legacy pre-rename installs
 
 # Electron user data — current and older app identities:
 rm -rf "$HOME/Library/Application Support/@openbase/coder-desktop"

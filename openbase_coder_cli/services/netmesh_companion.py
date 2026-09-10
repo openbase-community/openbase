@@ -16,6 +16,7 @@ companion long enough to issue control operations.
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import subprocess
 import sys
@@ -27,10 +28,62 @@ from pathlib import Path
 
 _IPC_SECRET_HEADER = "X-Openbase-Companion-Secret"
 _APP_NAME = "OpenbaseNetmeshCompanion.app"
+HELPER_LAUNCHD_LABEL = "cloud.openbase.netmesh.helper"
 
 
 class NetmeshCompanionError(RuntimeError):
     """The netmesh companion could not be provisioned."""
+
+
+@dataclass(frozen=True)
+class HelperLaunchdHealth:
+    registered: bool
+    healthy: bool
+    detail: str
+
+
+def helper_launchd_health() -> HelperLaunchdHealth:
+    """Probe the root helper's launchd job without touching its XPC endpoint.
+
+    A registered helper whose binary launchd cannot spawn (e.g. its bundle was
+    replaced or re-signed underneath the SMAppService registration) crash-loops
+    while launchd keeps the Mach endpoint alive, so every XPC question —
+    ``netmesh-ctl``, the companion, LiveKit's node-IP lookup — hangs instead of
+    erroring. ``launchctl print`` is the only side-effect-free view of that
+    state. An *unregistered* helper is a normal pre-pairing state and reports
+    healthy.
+    """
+    if sys.platform != "darwin":
+        return HelperLaunchdHealth(False, True, "not macOS")
+    try:
+        result = subprocess.run(  # noqa: S603,S607 - fixed argv
+            ["launchctl", "print", f"system/{HELPER_LAUNCHD_LABEL}"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return HelperLaunchdHealth(False, True, f"launchctl unavailable: {exc}")
+    if result.returncode != 0:
+        return HelperLaunchdHealth(
+            False, True, "helper is not registered (pre-pairing state)"
+        )
+    text = result.stdout
+    if re.search(r"^\s*state = running\b", text, re.MULTILINE):
+        return HelperLaunchdHealth(True, True, "running")
+    exit_match = re.search(r"^\s*last exit code = (.+)$", text, re.MULTILINE)
+    last_exit = exit_match.group(1).strip() if exit_match else None
+    runs_match = re.search(r"^\s*runs = (\d+)", text, re.MULTILINE)
+    runs = runs_match.group(1) if runs_match else "?"
+    if last_exit and last_exit not in {"0", "(never exited)"}:
+        return HelperLaunchdHealth(
+            True,
+            False,
+            f"registered but failing to launch (last exit code {last_exit}, "
+            f"{runs} attempts)",
+        )
+    return HelperLaunchdHealth(True, True, "registered, not currently running")
 
 
 @dataclass(frozen=True)
@@ -52,30 +105,36 @@ class CompanionStatus:
         return self.helper == "enabled"
 
 
+# Overridable in tests: machines with the desktop app installed would
+# otherwise satisfy "companion absent" lookups through this fallback.
+_INSTALLED_APP_COMPANION = Path(
+    "/Applications/Openbase.app/Contents/Resources/" + _APP_NAME
+)
+
+
 def _companion_app_candidates(workspace_dir: Path | None) -> list[Path]:
-    candidates: list[Path] = [
-        # Shipping layout: nested in the installed desktop app.
-        Path("/Applications/Openbase.app/Contents/Resources/" + _APP_NAME),
-    ]
+    candidates: list[Path] = []
     if workspace_dir is not None:
         desktop = workspace_dir / "desktop"
+        # netmesh-macos is a sibling checkout since its 2026-09-03 extraction
+        # from desktop; public checkouts without it use the signed prebuilt
+        # staged into desktop/companion-build.
+        netmesh_macos = workspace_dir / "netmesh-macos"
         candidates += [
             desktop / "companion-build" / _APP_NAME,
-            desktop
-            / "netmesh-macos"
+            netmesh_macos
             / "DerivedData"
             / "Build"
             / "Products"
             / "Release"
             / _APP_NAME,
-            desktop
-            / "netmesh-macos"
-            / "DerivedData"
-            / "Build"
-            / "Products"
-            / "Debug"
-            / _APP_NAME,
+            netmesh_macos / "DerivedData" / "Build" / "Products" / "Debug" / _APP_NAME,
         ]
+    # A developer install must use the companion built from its recorded
+    # workspace. The installed Electron app can legitimately lag develop, and
+    # selecting its older control shim against a newly installed development
+    # helper makes supported commands appear to be missing.
+    candidates.append(_INSTALLED_APP_COMPANION)
     return candidates
 
 
@@ -88,6 +147,9 @@ def _find_companion_app(workspace_dir: Path | None) -> Path | None:
 
 def _workspace_dir_quiet() -> Path | None:
     """The dev workspace dir without emitting the usual "Using workspace" line."""
+    source_checkout = _source_checkout_workspace_dir()
+    if source_checkout is not None:
+        return source_checkout
     try:
         from openbase_coder_cli.cli.setup.workspace import (
             _editable_install_workspace_dir,
@@ -102,6 +164,18 @@ def _workspace_dir_quiet() -> Path | None:
             found = None
         if found is not None:
             return Path(found)
+    return None
+
+
+def _source_checkout_workspace_dir() -> Path | None:
+    """Infer the multi workspace when this module is imported from a checkout."""
+    try:
+        module_path = Path(__file__).resolve()
+    except OSError:
+        return None
+    for parent in module_path.parents:
+        if (parent / "multi.json").is_file() and (parent / "cli").is_dir():
+            return parent
     return None
 
 
@@ -144,12 +218,12 @@ def _missing_build_tools(workspace_dir: Path) -> list[str]:
         missing.append(
             "Xcode (install from the App Store, then `xcodebuild -runFirstLaunch`)"
         )
-    vendor = workspace_dir / "desktop" / "netmesh-macos" / "vendor" / "tailscale-bin"
+    vendor = workspace_dir / "netmesh-macos" / "vendor" / "tailscale-bin"
     engine_staged = (vendor / "tailscaled").exists() and (vendor / "tailscale").exists()
     if not engine_staged and shutil.which("go") is None:
         missing.append(
             "go (`brew install go`) — builds the pinned tailscale engine; or "
-            "stage prebuilt binaries into desktop/netmesh-macos/vendor/tailscale-bin/"
+            "stage prebuilt binaries into netmesh-macos/vendor/tailscale-bin/"
         )
     return missing
 
@@ -287,6 +361,52 @@ class NetmeshCompanion:
 
     def register(self) -> CompanionStatus:
         return self._parse_status(self._request("POST", "/register"))
+
+    def replace_helper_if_needed(self) -> CompanionStatus:
+        status = self._replace_helper_request()
+        for _attempt in range(10):
+            if status.raw.get("helperReplacementPending") is not True:
+                return status
+            if status.helper != "notRegistered":
+                raise NetmeshCompanionError(
+                    "Helper replacement cannot continue in state " + status.helper
+                )
+            time.sleep(0.2)
+            registration = self.register()
+            if registration.raw.get("ok") is False:
+                raise NetmeshCompanionError(
+                    str(registration.raw.get("error") or "Helper registration failed.")
+                )
+            if registration.helper_enabled:
+                # Re-enter the version gate only after a successful registration.
+                verified = self._replace_helper_request()
+                if verified.raw.get("helperReplacementPending") is True:
+                    raise NetmeshCompanionError(
+                        "Helper replacement verification did not complete."
+                    )
+                return self._parse_status({**verified.raw, "helperReplaced": True})
+            if registration.helper != "notRegistered":
+                raise NetmeshCompanionError(
+                    "Helper replacement cannot continue in state " + registration.helper
+                )
+        raise NetmeshCompanionError("Helper replacement registration did not complete.")
+
+    def _replace_helper_request(self) -> CompanionStatus:
+        try:
+            raw = self._request("POST", "/replace-helper", timeout=20.0)
+        except urllib.error.HTTPError as exc:
+            try:
+                payload = json.loads(exc.read().decode() or "{}")
+            except (OSError, json.JSONDecodeError):
+                payload = {}
+            raise NetmeshCompanionError(
+                str(payload.get("error") or exc.reason or "helper replacement failed")
+            ) from exc
+        if raw.get("ok") is False:
+            raise NetmeshCompanionError(
+                str(raw.get("error") or "helper replacement failed")
+            )
+        return self._parse_status(raw)
 
     def disconnect(self) -> CompanionStatus:
         """Stop the VPN tunnel (the root daemon stays registered)."""

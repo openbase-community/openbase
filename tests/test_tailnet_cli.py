@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 
+import click
 import pytest
 from click.testing import CliRunner
 
@@ -68,7 +69,7 @@ def test_set_provider_writes_env_and_orchestrates(env_path, quiet_orchestration)
 
     values = env_file_values(Path(env_path))
     assert values["OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"] == "netmesh-tsnet"
-    assert ".netmesh.openbase.cloud" in values["OPENBASE_CODER_CLI_ALLOWED_HOSTS"]
+    assert ".net.obs.so" in values["OPENBASE_CODER_CLI_ALLOWED_HOSTS"]
     assert values["LIVEKIT_NETWORK_MODE"] == "local"
 
     assert quiet_orchestration["push"] == ["netmesh-tsnet"]
@@ -155,6 +156,65 @@ def test_netmesh_routes_through_stock_tailscale_off_macos(monkeypatch):
     assert tp.tool_path() == "/n/netmesh-ctl"
 
 
+def test_bring_up_embedded_transport_installs_binary_before_service(monkeypatch):
+    from openbase_coder_cli.services import launchd, tunneld
+    from openbase_coder_cli.services.installation import InstallationConfig
+
+    config = InstallationConfig(workspace_path="workspace")
+    calls = []
+    monkeypatch.setattr(InstallationConfig, "load", lambda: config)
+    monkeypatch.setattr(
+        tunneld,
+        "install_tunneld_binary",
+        lambda received: calls.append(("binary", received)),
+    )
+    monkeypatch.setattr(
+        launchd,
+        "install_service",
+        lambda received, service: calls.append(("service", received, service.name)),
+    )
+    monkeypatch.setattr(
+        launchd,
+        "launchctl_kickstart",
+        lambda service: calls.append(("kickstart", service.name)),
+    )
+    monkeypatch.setattr(
+        tunneld,
+        "ensure_tunneld_running",
+        lambda **kwargs: calls.append(("running", kwargs)),
+    )
+
+    tailnet_cli._bring_up_transport("netmesh-tsnet")
+
+    assert calls == [
+        ("binary", config),
+        ("service", config, "openbase-tunneld"),
+        ("kickstart", "openbase-tunneld"),
+        ("running", {"managed_service": True}),
+    ]
+
+
+def test_bring_up_embedded_transport_fails_when_binary_install_fails(monkeypatch):
+    from openbase_coder_cli.services import tunneld
+    from openbase_coder_cli.services.installation import InstallationConfig
+
+    monkeypatch.setattr(
+        InstallationConfig,
+        "load",
+        lambda: InstallationConfig(workspace_path="workspace"),
+    )
+
+    def fail_install(_config):
+        raise RuntimeError("Go toolchain unavailable")
+
+    monkeypatch.setattr(tunneld, "install_tunneld_binary", fail_install)
+
+    with pytest.raises(
+        click.ClickException, match="Could not install openbase-tunneld"
+    ):
+        tailnet_cli._bring_up_transport("netmesh-tsnet")
+
+
 def test_tailnet_status_renders_state_and_peer_paths(monkeypatch):
     tp = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
     monkeypatch.setattr(tp, "provider", lambda: "netmesh-tsnet")
@@ -164,7 +224,7 @@ def test_tailnet_status_renders_state_and_peer_paths(monkeypatch):
         lambda: {
             "BackendState": "Running",
             "Self": {
-                "DNSName": "mac.netmesh.openbase.cloud.",
+                "DNSName": "mac.net.obs.so.",
                 "TailscaleIPs": ["100.64.0.10"],
             },
             "Peer": {
@@ -187,7 +247,7 @@ def test_tailnet_status_renders_state_and_peer_paths(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert "state:" in result.output and "Running" in result.output
-    assert "mac.netmesh.openbase.cloud" in result.output
+    assert "mac.net.obs.so" in result.output
     assert "direct 192.168.0.59:41641" in result.output
     assert "offline" in result.output
 
@@ -203,10 +263,10 @@ def test_tailnet_status_errors_when_provider_unreachable(monkeypatch):
 
 
 def test_provider_reads_env_file_as_single_source_of_truth(
-    monkeypatch, _isolated_default_env_file
+    monkeypatch, _isolated_host_state
 ):
     tp = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
-    env_path = _isolated_default_env_file
+    env_path = _isolated_host_state
     env_path.write_text("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER=netmesh\n")
 
     monkeypatch.delenv("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", raising=False)

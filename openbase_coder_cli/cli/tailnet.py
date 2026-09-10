@@ -21,8 +21,7 @@ from openbase_coder_cli.services import tailscale_provider as tp
 
 PROVIDER_ENV_KEY = "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"
 ALLOWED_HOSTS_ENV_KEY = "OPENBASE_CODER_CLI_ALLOWED_HOSTS"
-NETMESH_ALLOWED_SUFFIX = ".netmesh.openbase.cloud"
-LIVEKIT_MODE_ENV_KEY = "LIVEKIT_NETWORK_MODE"
+NETMESH_ALLOWED_SUFFIX = ".net.obs.so"
 
 # Pre-integration LaunchAgent label for tunneld; superseded by the managed
 # openbase-tunneld service, cleaned up on any provider switch.
@@ -141,9 +140,7 @@ def _apply_provider(name: str, *, push_cloud: bool) -> None:
     # the loopback candidate is never sent, the phone never installs a TURN
     # permission for 127.0.0.1, and the server's host-local checks (which
     # arrive with a loopback source) are all dropped by the relay.
-    values[LIVEKIT_MODE_ENV_KEY] = (
-        "local" if name == tp.PROVIDER_NETMESH_TSNET else "tailscale"
-    )
+    values[tp.LIVEKIT_NETWORK_MODE_ENV_KEY] = tp.livekit_network_mode(name)
     # A pinned LIVEKIT_NODE_IP from the previous transport is stale after a
     # switch (each transport is a different node/IP). Blank it so the service
     # runner derives the address from the ACTIVE provider instead.
@@ -388,19 +385,20 @@ def _bring_up_transport(name: str) -> None:
         install_service,
         launchctl_kickstart,
     )
-    from openbase_coder_cli.services.tunneld import ensure_tunneld_running
+    from openbase_coder_cli.services.tunneld import (
+        ensure_tunneld_running,
+        install_tunneld_binary,
+    )
 
     try:
         config = InstallationConfig.load()
+        install_tunneld_binary(config)
         install_service(config, TUNNELD_SERVICE)
         launchctl_kickstart(TUNNELD_SERVICE)
-    except Exception as exc:  # noqa: BLE001 - surface, don't crash the switch
-        click.echo(
-            click.style(
-                f"Warning: could not install openbase-tunneld: {exc}", fg="yellow"
-            )
-        )
-        return
+    except Exception as exc:
+        raise click.ClickException(
+            f"Could not install openbase-tunneld: {exc}"
+        ) from exc
     # Waits for Running + forwards; mints a netmesh key with the user's
     # cloud login if the node still needs one. The first attempt right after
     # a transport switch can catch tunneld mid-startup in NeedsLogin (its old
@@ -408,7 +406,7 @@ def _bring_up_transport(name: str) -> None:
     last_error: RuntimeError | None = None
     for _attempt in range(2):
         try:
-            ensure_tunneld_running()
+            ensure_tunneld_running(managed_service=True)
             click.echo("openbase-tunneld is running and joined the tailnet.")
             return
         except RuntimeError as exc:
@@ -515,6 +513,13 @@ def _provision_netmesh_companion() -> None:
         return
 
     if status.running and status.helper_enabled:
+        try:
+            status = companion.replace_helper_if_needed()
+            if status.raw.get("helperReplaced") is True:
+                click.echo("Updated the Openbase VPN helper.")
+        except NetmeshCompanionError as exc:
+            warn(f"could not update the Openbase VPN helper: {exc}")
+            return
         # Re-apply (e.g. re-running set-provider for serve rules): the tunnel
         # is already up — don't mint a fresh single-use key or churn the node.
         click.echo(
@@ -572,12 +577,25 @@ def _provision_netmesh_companion() -> None:
 
 
 def _apply_serve_best_effort() -> None:
-    from openbase_coder_cli.services.tailscale_serve import configure_tailscale_serve
+    from openbase_coder_cli.services.tailscale_serve import (
+        configure_tailscale_serve,
+        reset_tailscale_serve,
+    )
 
     try:
         configure_tailscale_serve()
     except Exception as exc:  # noqa: BLE001 - the doctor/health surfaces this too
-        click.echo(f"Note: serve rules not applied yet ({exc}).")
+        # A drifted Serve config (e.g. the hardened tailscaled reset its own
+        # config on restart) would otherwise dead-end here forever — the routes
+        # never get exposed and the phone can't reach the backend. set-provider
+        # is a deliberate "make this transport work" action, so recover by
+        # resetting Serve to the canonical Openbase rules over whatever is live.
+        click.echo(f"Note: serve config drifted ({exc}); resetting to Openbase rules…")
+        try:
+            reset_tailscale_serve()
+            click.echo("Reset Openbase VPN Serve rules.")
+        except Exception as reset_exc:  # noqa: BLE001
+            click.echo(f"Note: serve rules not applied yet ({reset_exc}).")
 
 
 def _restart_transport_services() -> None:
@@ -680,6 +698,24 @@ def sync(apply_: bool) -> None:
         )
         return
     _apply_provider(cloud, push_cloud=False)
+
+
+@tailnet.command("serve-reset")
+def serve_reset() -> None:
+    """Force the Openbase VPN Serve rules back to the canonical Openbase set.
+
+    Use when Serve says it "drifted from the last known desired state" and never
+    recovers (e.g. after the hardened tailscaled reset its own Serve config on a
+    restart), which leaves the backend unexposed on the tailnet. This overwrites
+    whatever is live with the canonical rules via the signed netmesh helper.
+    """
+    from openbase_coder_cli.services.tailscale_serve import reset_tailscale_serve
+
+    try:
+        reset_tailscale_serve()
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(f"Could not reset Openbase VPN Serve: {exc}")
+    click.echo("Reset Openbase VPN Serve rules to the canonical set.")
 
 
 @tailnet.command("show")

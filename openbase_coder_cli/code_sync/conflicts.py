@@ -78,6 +78,8 @@ def record_branch_conflict(
     path: Path | None = None,
 ) -> dict[str, Any]:
     """Record a repo divergence, deduped per (folder, repo, branch)."""
+    if not folder_id.strip():
+        raise CodeSyncError("Cannot record a branch conflict without a sync folder id.")
     with _conflicts_lock(path):
         conflicts = read_conflicts(path)
         for conflict in conflicts:

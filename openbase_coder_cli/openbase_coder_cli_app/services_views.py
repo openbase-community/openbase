@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import socket
+import threading
+import time
 
 import click
 import httpx
@@ -390,6 +392,61 @@ def _check_web_backend() -> bool:
     return 200 <= resp.status_code < 500
 
 
+# The authenticated GET /api/status/ poll (the apps hit it roughly every 30s)
+# probes the tailnet through netmesh-ctl, which shells out to the companion's
+# status path. When that path is wedged the subprocess stalls for its full
+# timeout, so a naive inline probe makes every poll block ~5-15s (two netmesh-ctl
+# calls: the tailnet-connected check and Serve health) — tying up an ASGI worker
+# and, worse, stalling the phone's live connection. Serve the last computed
+# snapshot and refresh it in the background (stale-while-revalidate): only the
+# first poll after a cold start blocks, and a wedged netmesh-ctl can never again
+# stall the status endpoint.
+_TAILNET_SNAPSHOT_TTL_SECONDS = 15.0
+_tailnet_snapshot: dict[str, object] = {"value": None, "monotonic": 0.0}
+_tailnet_snapshot_lock = threading.Lock()
+
+
+def _compute_tailnet_snapshot():
+    """(tailscale_running, serve_health) — both netmesh-ctl probes in one shot."""
+    return _check_tailscale(), tailscale_serve_health()
+
+
+def _cached_tailnet_snapshot():
+    """Cached tailnet snapshot for the status view; never blocks after warmup."""
+    snapshot = _tailnet_snapshot["value"]
+    if snapshot is None:
+        # Cold start: compute once synchronously so we don't report a false
+        # "stopped" before the first probe lands.
+        with _tailnet_snapshot_lock:
+            if _tailnet_snapshot["value"] is None:
+                _tailnet_snapshot["value"] = _compute_tailnet_snapshot()
+                _tailnet_snapshot["monotonic"] = time.monotonic()
+            return _tailnet_snapshot["value"]
+    age = time.monotonic() - float(_tailnet_snapshot["monotonic"])
+    if age >= _TAILNET_SNAPSHOT_TTL_SECONDS:
+        _refresh_tailnet_snapshot_async()
+    return snapshot
+
+
+def _refresh_tailnet_snapshot_async():
+    # Single-flight: if a refresh already holds the lock, keep serving the stale
+    # snapshot rather than piling up blocked subprocesses.
+    if not _tailnet_snapshot_lock.acquire(blocking=False):
+        return
+
+    def _run():
+        try:
+            value = _compute_tailnet_snapshot()
+            _tailnet_snapshot["value"] = value
+            _tailnet_snapshot["monotonic"] = time.monotonic()
+        except Exception:  # never let a probe failure kill the refresher thread
+            logger.exception("tailnet status snapshot refresh failed")
+        finally:
+            _tailnet_snapshot_lock.release()
+
+    threading.Thread(target=_run, name="tailnet-status-refresh", daemon=True).start()
+
+
 @api_view(["GET"])
 def service_status(request):
     """Check status of related services."""
@@ -446,10 +503,12 @@ def service_status(request):
             "last_exit_code": status_payload.get("last_exit_code"),
             "optional": not service.install_by_default,
         }
+    # One cached, non-blocking snapshot drives both tailnet probes below.
+    tailscale_running, serve_health = _cached_tailnet_snapshot()
     for key, svc in services.items():
         if "running" not in svc:
             if key == "tailscale":
-                svc["running"] = _check_tailscale()
+                svc["running"] = tailscale_running
             elif key == "web_backend":
                 svc["running"] = _check_web_backend()
             elif key == "codex_app_server":
@@ -462,7 +521,6 @@ def service_status(request):
             svc["running"],
             svc.get("port"),
         )
-    serve_health = tailscale_serve_health()
     services["tailscale_serve"] = {
         "name": f"{_tailnet_label} Serve",
         "port": 18080,

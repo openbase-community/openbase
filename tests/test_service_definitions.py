@@ -78,6 +78,7 @@ def test_sync_workers_jobs_cover_device_sync_and_reconcile():
         "claude_app_index",
         "code_sync_reconcile",
         "cloud_registration",
+        "cloud_webhook_events",
         "livekit_pool_watchdog",
     }
 

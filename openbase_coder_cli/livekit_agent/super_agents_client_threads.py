@@ -19,6 +19,7 @@ from super_agents.app_protocol import (
 
 from openbase_coder_cli.backend_config import (
     CLAUDE_CODE_BACKEND,
+    execution_backend_for_configured_backend,
 )
 from openbase_coder_cli.backend_config import (
     configured_execution_backend as _configured_execution_backend,
@@ -47,6 +48,27 @@ from openbase_coder_cli.livekit_agent.super_agents_client_common import (
 def _is_super_agents_mcp_server(name: str) -> bool:
     normalized = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
     return normalized in {"super-agents", "mcp-super-agents"}
+
+
+def _client_backend_identity(configured_backend: str, execution_backend: str) -> str:
+    """Backend identity to hand a client so Cloud proxying survives.
+
+    ``execution_backend`` is the engine we will run (``claude_code`` or
+    ``codex``), possibly chosen by a per-role dispatcher-model override.
+    Constructing the client with the bare execution engine loses the
+    Cloud-proxied identity (``openbase_cloud`` / ``openbase_cloud_codex``), so
+    the client falls back to a missing local login and answers every turn
+    "Not logged in · Please run /login." Reuse the configured backend as the
+    identity when it maps to the same execution engine we selected; otherwise
+    the model override picked a different engine family, so use the plain
+    execution backend.
+    """
+    if (
+        execution_backend_for_configured_backend(configured_backend)
+        == execution_backend
+    ):
+        return configured_backend
+    return execution_backend
 
 
 class SuperAgentsClientThreadsMixin:
@@ -199,6 +221,7 @@ class SuperAgentsClientThreadsMixin:
     def _client_from_environment(self) -> Any:
         from super_agents.app_server_client import CodexAppServerClient
         from super_agents.backend_clients import backend_from_environment
+        from super_agents.backend_config import configured_backend_from_environment
 
         try:
             from openbase_coder_cli.livekit_agent.config import _load_openbase_env
@@ -210,11 +233,16 @@ class SuperAgentsClientThreadsMixin:
         execution_backend = self._dispatcher_execution_backend()
         if execution_backend is None:
             execution_backend = _configured_execution_backend(backend_from_environment)
+
+        identity = _client_backend_identity(
+            configured_backend_from_environment(), execution_backend
+        )
+
         if execution_backend == CLAUDE_CODE_BACKEND:
             from super_agents.claude_sdk import ClaudeAgentSdkClient
 
-            return ClaudeAgentSdkClient()
-        return CodexAppServerClient()
+            return ClaudeAgentSdkClient(backend_identity=identity)
+        return CodexAppServerClient(backend_identity=identity)
 
     def _dispatcher_execution_backend(self) -> str | None:
         """The engine the dispatcher's configured MODEL requires, if any.

@@ -87,9 +87,7 @@ def installed_channel(runtime_package: RuntimePackage | None = None) -> str:
     package = runtime_package or current_runtime_package()
     if package is None:
         return "stable"
-    metadata = _read_package_metadata(package.root)
-    channel = str(metadata.get("channel", "")).strip()
-    return channel or "stable"
+    return package.channel
 
 
 def version_info() -> dict:

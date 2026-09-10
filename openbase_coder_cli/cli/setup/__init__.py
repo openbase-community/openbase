@@ -144,8 +144,9 @@ from openbase_coder_cli.runtime import (
     packaged_skills_dir,  # noqa: F401
 )
 from openbase_coder_cli.services.cloud_registration import register_and_report
+from openbase_coder_cli.services.definitions import TUNNELD_SERVICE
 from openbase_coder_cli.services.installation import InstallationConfig
-from openbase_coder_cli.services.launchd import install_all_services
+from openbase_coder_cli.services.launchd import install_all_services, install_service
 from openbase_coder_cli.services.onboarding import compute_cli_configured
 from openbase_coder_cli.services.tailnet_experience import TAILNET_EXPERIENCES
 from openbase_coder_cli.services.tailscale_provider import (
@@ -157,6 +158,10 @@ from openbase_coder_cli.services.tailscale_provider import (
 from openbase_coder_cli.services.tailscale_serve import (
     configure_tailscale_serve,
     tailscale_serve_health,
+)
+from openbase_coder_cli.services.tunneld import (
+    ensure_tunneld_running,
+    install_tunneld_binary,
 )
 from openbase_coder_cli.stt_providers import (
     ASSEMBLYAI_STT_PROVIDER_ID,  # noqa: F401
@@ -321,8 +326,10 @@ class _SetupProgress:
         "Tailnet transport: 'tailscale' (official), 'netmesh' (self-hosted "
         "headscale + Openbase VPN client), or 'netmesh-tsnet' (netmesh via an "
         "in-process embedded node — no VPN on either side). Interactive runs "
-        "pick it for a new env file if omitted; otherwise new files default to "
-        "tailscale. Existing env files are only changed when this is provided."
+        "pick it for a new env file if omitted; otherwise new files default "
+        "to netmesh, or to tailscale when the official Tailscale CLI/app is "
+        "already installed. Existing env files are only changed when this is "
+        "provided."
     ),
 )
 @click.option(
@@ -607,7 +614,8 @@ def _require_tailnet_provider_choice(
 
     Existing env files keep their configured provider unless --tailnet-provider
     is passed. New installs pick interactively; non-interactive fresh installs
-    keep the tailscale default.
+    fall through to the detection default (netmesh, or tailscale when the
+    official Tailscale CLI/app is already installed).
     """
     if tailnet_provider is not None:
         return tailnet_provider
@@ -619,10 +627,14 @@ def _require_tailnet_provider_choice(
         )
         return configured if configured in PROVIDER_VALUES else PROVIDER_TAILSCALE
     if interactive:
+        from openbase_coder_cli.services.tailscale_provider import (
+            default_tailnet_provider,
+        )
+
         return _prompt_pick(
             "Tailnet transport:",
             _TAILNET_PROVIDER_PICKER_OPTIONS,
-            default=PROVIDER_TAILSCALE,
+            default=default_tailnet_provider(),
         )
     return None
 
@@ -846,9 +858,48 @@ def _run_setup_phases(
     # --- Install services ---
     progress.step("services", "start")
     if not skip_services:
+        if tailnet_provider == PROVIDER_NETMESH and sys.platform == "darwin":
+            # A crash-looping registered helper makes every helper query hang
+            # (netmesh-ctl, the companion, LiveKit's node-IP lookup), so
+            # restarting services now would put livekit-server into a crash
+            # loop and take live calls down. Stop before touching anything.
+            from openbase_coder_cli.services.netmesh_companion import (
+                HELPER_LAUNCHD_LABEL,
+                helper_launchd_health,
+            )
+
+            helper_health = helper_launchd_health()
+            if not helper_health.healthy:
+                raise click.ClickException(
+                    "The Openbase VPN helper "
+                    f"({HELPER_LAUNCHD_LABEL}) is {helper_health.detail}. "
+                    "In this state every helper query hangs, so restarting "
+                    "services would break LiveKit calls. Re-register the "
+                    "helper (open the Openbase desktop app, or restage the "
+                    "companion build), then re-run 'openbase-coder setup'."
+                )
         click.echo()
         click.echo(f"Installing {service_manager_name()} services...")
+        if tailnet_provider == PROVIDER_NETMESH_TSNET:
+            click.echo("  Building and installing openbase-tunneld...")
+            try:
+                installed_tunneld = install_tunneld_binary(config)
+            except RuntimeError as exc:
+                raise click.ClickException(
+                    f"Openbase VPN daemon installation failed: {exc}"
+                ) from exc
+            click.echo(f"    Installed {installed_tunneld}")
         install_all_services(config)
+        if tailnet_provider == PROVIDER_NETMESH_TSNET:
+            click.echo("  Installing openbase-tunneld service...")
+            install_service(config, TUNNELD_SERVICE)
+            click.echo("  Waiting for openbase-tunneld to join the private network...")
+            try:
+                ensure_tunneld_running(managed_service=True)
+            except RuntimeError as exc:
+                raise click.ClickException(
+                    f"Openbase VPN daemon did not become ready: {exc}"
+                ) from exc
         progress.step("services", "ok")
     else:
         click.echo("Skipped service installation (--skip-services).")
@@ -857,7 +908,7 @@ def _run_setup_phases(
     # --- Provision the netmesh VPN (macOS Openbase VPN companion) ---
     # Build/register the selected Openbase VPN companion. Connection may be
     # deferred until after Openbase login, when an enrollment key can be minted.
-    # (tunneld for netmesh-tsnet is installed by install_all_services.)
+    # The embedded tunneld transport is installed above before enrollment.
     if (
         not skip_services
         and tailnet_provider == PROVIDER_NETMESH
@@ -884,6 +935,10 @@ def _run_setup_phases(
     try:
         configure_tailscale_serve()
     except Exception as exc:
+        if not skip_services and tailnet_provider == PROVIDER_NETMESH_TSNET:
+            raise click.ClickException(
+                f"Openbase VPN route setup did not complete: {exc}"
+            ) from exc
         managed_transport = tailnet_provider in {
             PROVIDER_NETMESH,
             PROVIDER_NETMESH_TSNET,

@@ -3,8 +3,10 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
+from openbase_coder_cli.code_sync import CodeSyncError, reconciler
 from openbase_coder_cli.code_sync import conflicts as conflicts_module
-from openbase_coder_cli.code_sync import reconciler
 
 GIT_IDENTITY = [
     "-c",
@@ -258,6 +260,22 @@ def test_resolve_keep_local_leaves_repo_alone(tmp_path: Path) -> None:
 
     assert resolved["resolved"] is True
     assert resolved["resolution"] == "keep_local"
+
+
+def test_branch_conflict_requires_sync_folder_id(tmp_path: Path) -> None:
+    conflicts_path = tmp_path / "conflicts.json"
+
+    with pytest.raises(CodeSyncError, match="without a sync folder id"):
+        conflicts_module.record_branch_conflict(
+            folder_id="",
+            repo_relpath="repo",
+            branch="main",
+            local_sha="a" * 40,
+            remote_sha="b" * 40,
+            path=conflicts_path,
+        )
+
+    assert conflicts_module.read_conflicts(conflicts_path) == []
 
 
 def test_discover_git_repos_respects_depth_and_skips_noise(tmp_path: Path) -> None:

@@ -371,6 +371,122 @@ def run_due_routines(name: str | None, force: bool) -> None:
     )
 
 
+@routines.command("add-webhook-trigger")
+@click.argument("name")
+@click.option("--description", help="What this trigger listens for.")
+@click.option(
+    "--sender-path",
+    help="Dot path to the sender identity in the event payload, e.g. sender.id.",
+)
+@click.option(
+    "--allow-sender",
+    "allow_senders",
+    multiple=True,
+    help="Sender identity allowed to trigger runs. Repeatable. Required for agent loops.",
+)
+@click.option(
+    "--filter",
+    "filters",
+    nargs=3,
+    multiple=True,
+    metavar="PATH OP VALUE",
+    help=(
+        "Payload filter, e.g. --filter comment.body startsWith /openbase. "
+        "Ops: equals, notEquals, contains, startsWith, endsWith, exists, regex."
+    ),
+)
+@click.option(
+    "--hmac-secret", help="Shared secret for provider HMAC signatures (SHA-256)."
+)
+@click.option(
+    "--hmac-header",
+    help="Header carrying the HMAC signature (default X-Hub-Signature-256).",
+)
+@click.option(
+    "--cloud",
+    is_flag=True,
+    help=(
+        "Also create an Openbase Cloud relay endpoint so external providers "
+        "get a public URL; cloud stores events durably and this machine "
+        "delivers them on its next poll."
+    ),
+)
+def add_webhook_trigger(
+    name: str,
+    description: str | None,
+    sender_path: str | None,
+    allow_senders: tuple[str, ...],
+    filters: tuple[tuple[str, str, str], ...],
+    hmac_secret: str | None,
+    hmac_header: str | None,
+    cloud: bool,
+) -> None:
+    """Add a webhook trigger to a loop and print its ingest token."""
+    trigger_input: dict[str, Any] = {}
+    if description:
+        trigger_input["description"] = description
+    if sender_path:
+        trigger_input["senderPath"] = sender_path
+    if allow_senders:
+        trigger_input["senderAllowlist"] = list(allow_senders)
+    if filters:
+        trigger_input["filters"] = [
+            {"path": path, "op": op, "value": value} for path, op, value in filters
+        ]
+    if hmac_secret:
+        trigger_input["hmacSecret"] = hmac_secret
+    if hmac_header:
+        trigger_input["hmacHeader"] = hmac_header
+    if cloud:
+        from openbase_coder_cli.services.cloud_webhook_events import (
+            create_relay_endpoint,
+        )
+
+        relay = create_relay_endpoint(description=description or f"loop:{name}")
+        if not relay.ok or not isinstance(relay.response, dict):
+            raise click.ClickException(
+                "Could not create the Openbase Cloud relay endpoint: "
+                f"{relay.error or 'unsupported by this cloud backend'}"
+            )
+        trigger_input["relayEndpointId"] = relay.response.get("id")
+        trigger_input["relayUrl"] = relay.response.get("url")
+    result = _run_client(lambda client: client.add_routine_trigger(name, trigger_input))
+    token = (result.get("trigger") or {}).get("token")
+    if token:
+        result["ingestPath"] = f"/api/hooks/t/{token}/"
+    relay_url = (result.get("trigger") or {}).get("relayUrl")
+    if relay_url:
+        result["providerUrl"] = relay_url
+    _json_echo(result)
+
+
+@routines.command("remove-trigger")
+@click.argument("name")
+@click.argument("trigger_id")
+def remove_trigger(name: str, trigger_id: str) -> None:
+    """Remove a trigger from a loop."""
+    _json_echo(
+        _run_client(lambda client: client.remove_routine_trigger(name, trigger_id))
+    )
+
+
+@routines.command("emit")
+@click.argument("name")
+@click.option("--data", help="JSON payload for the event.")
+@click.option("--event-id", help="Optional explicit event id.")
+def emit_event(name: str, data: str | None, event_id: str | None) -> None:
+    """Run a loop immediately with a locally emitted event."""
+    payload = None
+    if data:
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError as exc:
+            raise click.BadParameter(f"--data must be valid JSON: {exc}") from None
+    _json_echo(
+        _run_client(lambda client: client.emit_routine_event(name, payload, event_id))
+    )
+
+
 DOCTOR_SWEEP_FRESH_SECONDS = 300
 DOCTOR_LOG_TAIL_BYTES = 64 * 1024
 

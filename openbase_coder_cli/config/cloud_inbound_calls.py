@@ -54,7 +54,7 @@ def request_inbound_call_ring(
 
     if response.status_code == 401:
         raise AuthLoginRequiredError(
-            "Openbase Cloud login is required to ring your iPhone."
+            "Openbase Cloud login is required to ring your phone."
         )
     if response.status_code >= 500:
         raise AuthTransientError(

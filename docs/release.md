@@ -1,6 +1,6 @@
 # Release
 
-Standalone CLI releases are built by the `Release Standalone CLI` GitHub Actions workflow. The workflow is manual-only and the build job runs only on `main`.
+Standalone CLI releases are built by the `Release Standalone CLI` GitHub Actions workflow (`release-standalone.yml`). It is invoked either manually (`workflow_dispatch`) or automatically by `auto-release.yml` on pushes to `main` (stable channel) and `staging` (staging channel); the build job runs on either branch. The durable release/update contract is the workspace `AUTO_UPDATE.md`.
 
 ## Standalone CLI
 

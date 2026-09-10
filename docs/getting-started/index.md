@@ -33,10 +33,15 @@ up a machine without the desktop app (for example a headless Linux box).
 
 ### Windows & Docker
 
+On Windows, Openbase Coder runs **natively (beta)**: `./scripts/setup` works
+from a Windows checkout, supervising services through the Windows service
+backend instead of launchd/systemd (installer/packaging details are still
+firming up). See [Developer Setup](developer-setup.md).
+
 **[Run in Docker](../docker.md)** — the full runtime in a single Linux
-container, joined to your tailnet as its own device. Because Docker Desktop
-runs Linux containers on macOS and Windows, this is currently the way to
-run Openbase Coder on a **Windows** machine.
+container, joined to your tailnet as its own device, on any Docker engine
+(macOS, Windows, or Linux). On Windows it is the most battle-tested option
+today.
 
 ---
 
@@ -76,26 +81,19 @@ Apple Silicon Mac and a Python 3.12 runtime — see
 
 ## What Setup Does
 
-Whichever path you choose, `openbase-coder setup`:
+Whichever path you choose, `openbase-coder setup` detects standalone vs.
+development mode, writes `~/.openbase/installation.json`, generates
+`~/.openbase/.env` (with the first-run backend and audio-provider pickers),
+installs the selected backend's CLI if missing, renders the Openbase
+instruction files, registers **only** the Super Agents MCP server and the
+session-ID hook in your shared `~/.codex`/`~/.claude` homes (nothing else
+there is touched), downloads the LiveKit model files, builds or uses the
+console, installs the launchd/systemd services, and configures the selected
+private-network transport (Openbase VPN, Openbase Direct, or the expert
+Tailscale transport).
 
-1. Detects the bundled runtime package (standalone mode), or locates your workspace checkout (development mode).
-2. Writes `~/.openbase/installation.json`.
-3. Generates `~/.openbase/.env` (if it does not already exist). On a fresh interactive install, numbered pickers choose the coding backend (when `--backend` is omitted) and the voice audio provider (when `--audio-provider` is omitted): Cloud TTS/STT, bring-your-own-keys, or local models.
-4. Installs the selected backend's CLI on demand if missing (codex from GitHub release binaries into `~/.openbase/bin`, claude via Anthropic's official installer).
-5. Generates Openbase instruction files from bundled or workspace templates — including the Openbase base instructions at `~/.openbase/instructions/AGENTS.md`, delivered to each Openbase session — and keeps `~/.claude/CLAUDE.md` linked to `~/.codex/AGENTS.md`.
-6. Registers the super-agents MCP server and the session-ID hook in your shared agent homes (`~/.codex/config.toml`, `~/.claude.json`, `~/.claude/settings.json`) and symlinks bundled or workspace skills into `~/.codex/skills` and `~/.claude/skills`. Nothing else in the shared homes is touched — Openbase sessions use your own Codex and Claude Code logins and settings.
-7. Downloads LiveKit agent model files (VAD, turn detector) in both modes, and initializes the CLI venv with `uv sync` in development mode.
-8. Writes Codex app-server defaults such as `CODEX_MODEL_REASONING_EFFORT=high`, `CODEX_SERVICE_TIER=standard`, the standard Unix `CODEX_APP_SERVER_URL` on macOS/Linux, and `LIVEKIT_CODEX_THREAD_CWD`.
-9. Uses the bundled console build, or builds `console` in development mode.
-10. Installs background services — launchd on macOS, systemd user units on Linux (unless `--skip-services`). Backend-specific services such as `codex-app-server` are only installed for the backends that use them; visible Openbase Cloud uses Cloud-proxied Claude Code and does not install `codex-app-server`.
-11. Configures the selected private-network transport and its API/LiveKit
-    routes. Openbase VPN uses bundled Netmesh networking: an Openbase-operated
-    Headscale control plane plus Tailscale-compatible open-source clients. It
-    does not require a Tailscale account. It collects no VPN traffic or usage
-    analytics and sends no VPN analytics to Tailscale,
-    and its full-device route lets a phone browser open websites created on
-    the computer. Openbase Direct embeds only the Openbase connection, so it
-    works without a VPN but does not expose those sites to other phone apps.
+For the authoritative step-by-step phase list, every flag, and backend/audio
+details, see [setup](../commands/setup.md).
 
 ## Authenticate With Openbase Cloud
 

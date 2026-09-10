@@ -34,7 +34,7 @@ def user() -> None:
     help="Name shown by CallKit. Defaults to the resolved agent name.",
 )
 def call(agent_name: str, caller_name: str) -> None:
-    """Ring the iPhone and connect it to a known local agent."""
+    """Ring the user's phone and connect it to a known local agent."""
     normalized_agent_name = " ".join(agent_name.split())
     normalized_caller_name = " ".join(caller_name.split())
     if not normalized_agent_name:
@@ -85,18 +85,35 @@ def say(
     if room_name.strip():
         payload["room_name"] = room_name.strip()
 
-    response = local_server_request("POST", "/api/user/say/", json=payload)
+    response = local_server_request(
+        "POST", "/api/user/say/", json=payload, ok_statuses=(502,)
+    )
 
-    data = response.json()
-    if data.get("status") == "no_active_room":
+    try:
+        data = response.json()
+    except ValueError:
+        data = {}
+    if response.status_code >= 400 and data.get("status") != "publish_failed":
+        raise click.ClickException(
+            str(
+                data.get("detail")
+                or f"Request failed with status {response.status_code}."
+            )
+        )
+    if data.get("status") in {"no_active_room", "publish_failed"}:
         thread_id = str(data.get("thread_id") or "").strip()
         detail = str(data.get("detail") or "No active voice session was found.")
         if not thread_id:
             raise click.ClickException(
                 f"{detail} No agent thread was available for a linked notification."
             )
+        reason = (
+            "Voice announcement failed"
+            if data.get("status") == "publish_failed"
+            else "No active voice session"
+        )
         click.echo(
-            "No active voice session; sending a linked iPhone notification.",
+            f"{reason}; sending a linked phone notification.",
             err=True,
         )
         try:
@@ -111,9 +128,9 @@ def say(
             UserSayNotificationError,
         ) as exc:
             raise click.ClickException(
-                f"{detail} The iPhone notification also failed: {exc}"
+                f"{detail} The phone notification also failed: {exc}"
             ) from exc
-        click.echo("Linked iPhone notification accepted by Openbase Cloud.")
+        click.echo("Linked phone notification accepted by Openbase Cloud.")
         return
     target_room = data.get("room_name") or "active room"
     click.echo(f"Announcer message sent to {target_room}.")

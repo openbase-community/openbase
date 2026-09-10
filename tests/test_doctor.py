@@ -6,6 +6,7 @@ from click.testing import CliRunner
 from openbase_coder_cli.cli.doctor import (
     _check_agent_auth,
     _check_livekit_client_credentials,
+    _check_local_livekit_tcp_listener,
 )
 
 doctor_cli = importlib.import_module("openbase_coder_cli.cli.doctor")
@@ -112,6 +113,53 @@ def test_livekit_client_credential_check_accepts_separate_credentials():
             "LiveKit client token credentials: set and separate from server credentials",
         )
     ]
+
+
+def test_local_livekit_tcp_check_accepts_disabled_listener():
+    messages = []
+
+    _check_local_livekit_tcp_listener(
+        {"LIVEKIT_NETWORK_MODE": "local"},
+        [("127.0.0.1", 7880)],
+        lambda message: messages.append(("ok", message)),
+        lambda message: messages.append(("fail", message)),
+    )
+
+    assert messages == [
+        ("ok", "port 7881 (LiveKit ICE-TCP): disabled in local Netmesh mode")
+    ]
+
+
+def test_local_livekit_tcp_check_rejects_any_listener():
+    messages = []
+
+    _check_local_livekit_tcp_listener(
+        {"LIVEKIT_NETWORK_MODE": "local"},
+        [("*", 7881)],
+        lambda message: messages.append(("ok", message)),
+        lambda message: messages.append(("fail", message)),
+    )
+
+    assert messages == [
+        (
+            "fail",
+            "port 7881 (LiveKit ICE-TCP): must not listen in local Netmesh "
+            "mode (found *)",
+        )
+    ]
+
+
+def test_livekit_tcp_check_leaves_kernel_vpn_mode_unchanged():
+    messages = []
+
+    _check_local_livekit_tcp_listener(
+        {"LIVEKIT_NETWORK_MODE": "tailscale"},
+        [("*", 7881)],
+        lambda message: messages.append(("ok", message)),
+        lambda message: messages.append(("fail", message)),
+    )
+
+    assert messages == []
 
 
 def test_agent_auth_requires_codex_login_for_codex_backend(monkeypatch, tmp_path):

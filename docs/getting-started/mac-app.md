@@ -5,8 +5,9 @@ are coordinated from `main`; the app bundles the
 complete CLI runtime and walks you through setup in the app — no terminal
 required — including your coding backend, managed voice audio, and iPhone
 pairing. (Prefer working from source? See
-[Developer Setup](developer-setup.md). On Windows, see
-[Run in Docker](../docker.md).)
+[Developer Setup](developer-setup.md). On Windows, `./scripts/setup` runs
+natively in beta — or use the [Docker image](../docker.md), the most
+battle-tested Windows option today.)
 
 Before you start, check the shared [prerequisites](index.md#prerequisites).
 You do not need to install Tailscale: onboarding asks whether the environment

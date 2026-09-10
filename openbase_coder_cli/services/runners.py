@@ -61,15 +61,20 @@ def build_livekit_server(
     env: dict[str, str], binaries: dict[str, str]
 ) -> RunnerArgvEnv:
     mode = env.get("LIVEKIT_NETWORK_MODE", "tailscale")
-    tcp_port = env.get("LIVEKIT_TCP_PORT", "7881")
     udp_port = env.get("LIVEKIT_UDP_PORT", "7882")
     loopback_iface = "lo0" if platform.system() == "Darwin" else "lo"
 
     if mode == "local":
+        # LiveKit's RTC TCP mux ignores the HTTP bind address and candidate
+        # filters: any non-zero tcp_port listens on every host interface.
+        # Embedded Netmesh sends media through its authenticated tailnet TURN
+        # relay, so local mode must not open an unnecessary LAN-facing socket.
+        tcp_port = "0"
         bind_ip = env.get("LIVEKIT_BIND_IP", "127.0.0.1")
         node_ip_args = ["--node-ip", bind_ip]
         config_body = _livekit_config_body(tcp_port, udp_port, loopback_iface, [], [])
     elif mode == "tailscale":
+        tcp_port = env.get("LIVEKIT_TCP_PORT", "7881")
         node_ip = env.get("LIVEKIT_NODE_IP") or network.tailscale_ip("4") or ""
         node_ip_v6 = env.get("LIVEKIT_NODE_IP_V6") or network.tailscale_ip("6") or ""
         if node_ip and not _is_ip_version(node_ip, 4):
@@ -256,13 +261,21 @@ def build_django_cli(env: dict[str, str], binaries: dict[str, str]) -> RunnerArg
             env["LIVEKIT_NODE_IP"] = node_ip
         if existing_url == "" or existing_url.startswith(_LOCALHOST_URL_PREFIXES):
             if not node_ip:
+                # Netmesh enrollment is deferred until pairing, so a fresh
+                # install legitimately has no tailnet IP yet. The local API
+                # must still come up — onboarding's sign-in and pairing gates
+                # read it, and pairing is what later connects the VPN (a hard
+                # exit here bricks onboarding in a circular dependency).
+                # Calls cannot work in this window anyway; services restart
+                # with the real tailnet URL once enrollment applies routes.
                 print(
-                    "LIVEKIT_NODE_IP is required to derive LIVEKIT_URL in "
-                    "Tailscale mode.",
+                    "No tailnet IP yet (VPN not enrolled); starting with a "
+                    "localhost LIVEKIT_URL until enrollment restarts services.",
                     file=sys.stderr,
                 )
-                raise SystemExit(1)
-            env["LIVEKIT_URL"] = f"ws://{node_ip}:7880"
+                env["LIVEKIT_URL"] = "ws://localhost:7880"
+            else:
+                env["LIVEKIT_URL"] = f"ws://{node_ip}:7880"
     elif mode == "local":
         env["LIVEKIT_URL"] = existing_url or "ws://localhost:7880"
     elif mode == "lan":

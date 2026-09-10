@@ -1,5 +1,6 @@
 import importlib
 
+import pytest
 from click.testing import CliRunner
 
 from openbase_coder_cli.cli.restart import restart, self_restart
@@ -13,6 +14,81 @@ from openbase_coder_cli.services.restart import (
 )
 
 restart_module = importlib.import_module("openbase_coder_cli.services.restart")
+
+
+@pytest.fixture(autouse=True)
+def isolate_restart_installation(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        restart_module,
+        "require_installation",
+        lambda: InstallationConfig(workspace_path=str(tmp_path), standalone=False),
+    )
+    monkeypatch.setattr(
+        restart_module,
+        "ensure_pinned_livekit_server",
+        lambda: tmp_path / "livekit-server",
+    )
+
+
+@pytest.mark.parametrize(
+    ("standalone", "services", "refresh"),
+    [
+        (False, (), True),
+        (False, ("livekit-server",), True),
+        (False, ("livekit-agent",), False),
+        (False, ("django-cli",), False),
+        (True, (), False),
+        (True, ("livekit-server",), False),
+    ],
+)
+def test_restart_prepares_dev_engine_before_warning_and_scheduling(
+    monkeypatch, tmp_path, standalone, services, refresh
+):
+    calls = []
+    monkeypatch.setattr(
+        restart_module,
+        "require_installation",
+        lambda: InstallationConfig(standalone=standalone),
+    )
+    monkeypatch.setattr(
+        restart_module,
+        "ensure_pinned_livekit_server",
+        lambda: calls.append("engine") or tmp_path / "livekit-server",
+    )
+    monkeypatch.setattr(
+        restart_module,
+        "warn_before_voice_interruption",
+        lambda **_kwargs: calls.append("warn"),
+    )
+    monkeypatch.setattr(
+        restart_module.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: calls.append("schedule"),
+    )
+
+    plan = restart_module.schedule_restart(RestartRequest(services=services))
+
+    expected = ["engine"] if refresh else []
+    if plan.interrupts_voice:
+        expected.append("warn")
+    assert calls == [*expected, "schedule"]
+
+
+def test_failed_engine_download_does_not_schedule_restart(monkeypatch):
+    monkeypatch.setattr(restart_module, "ensure_pinned_livekit_server", lambda: None)
+
+    def unexpected_call(*_args, **_kwargs):
+        pytest.fail("failed download must leave running services alone")
+
+    monkeypatch.setattr(restart_module.subprocess, "Popen", unexpected_call)
+    monkeypatch.setattr(
+        restart_module, "warn_before_voice_interruption", unexpected_call
+    )
+
+    result = CliRunner().invoke(restart, ["--service", "livekit-server"])
+
+    assert result.exit_code != 0
+    assert "restart was not scheduled" in result.output
 
 
 def test_restart_default_schedules_all_openbase_services(monkeypatch):

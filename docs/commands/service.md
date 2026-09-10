@@ -1,105 +1,56 @@
 # Publish a Local Service
 
-Use `openbase-coder service` when a site or other single-port HTTP service on
-your computer should be available from another device. It publishes the local
-service only inside your Openbase VPN/tailnet; it never enables Tailscale
-Funnel or exposes the service to the public internet.
+Use `openbase-coder service` to make a local single-port HTTP service available to your other devices over Openbase VPN. Access is private to your account's VPN devices, not the public internet. No Funnel is enabled.
 
 ```bash
-# Start the app locally, then give it a memorable tailnet URL.
-openbase-coder service publish docs-preview 3000
-
-# Explicitly opt in when the app supports a URL base path.
-openbase-coder service publish docs-preview 3000 --portless
-
-# See URLs and gateway health.
+openbase-coder service publish crm 3000
 openbase-coder service list
-
-# Stop sharing it.
-openbase-coder service unpublish docs-preview
+openbase-coder service doctor crm
+openbase-coder service unpublish crm
 ```
 
-`publish` verifies that `127.0.0.1:3000` is accepting connections, chooses
-uncommon ports from the dynamic/private range `49152-65535`, and prints a URL
-similar to:
+Publication has one supported shape: a dedicated hostname serving the application at its root. An illustrative URL is `https://crm.abcd2345efgh.vpn.obs.so/`. Use the actual URL printed by the command, never an invented name. There is no explicit port, service-name path, personal name, or device name.
 
-```text
-http://my-mac.example-tailnet:52807/docs-preview/
-```
+## Account namespace and private DNS
 
-Prefer that URL over telling another device to use `localhost`: on a phone,
-`localhost` means the phone itself. Traffic stays encrypted by the tailnet even
-though the generated URL uses HTTP between tailnet peers.
+Production device names use `net.obs.so`; private service names use the sibling `vpn.obs.so` zone. Staging uses `net-staging.obs.so` and `vpn-staging.obs.so`. Service DNS must not be beneath the device MagicDNS zone: the VPN client's authoritative local resolver would return NXDOMAIN before consulting the split DNS route. Neither private device nor private service records are published in public DNS.
 
-Dynamic-port publication remains the default because many web applications
-assume they are mounted at `/`. Applications configured for a base path can opt
-in with either `--portless` or `--mode portless`. Portless services share one
-Openbase-owned dispatcher and use URLs such as:
+Each account has a permanent random 12-character ID using lowercase letters and digits `2-7`, with database-enforced uniqueness. Service names are unique within that account. To move a service between devices, unpublish it on the old device and publish the same name on the new device; its URL remains stable. Another account can independently publish the same service name. Existing long-ID URLs stay allocated until republished with an updated CLI and helper.
 
-```text
-http://my-mac.example-tailnet/services/docs-preview/
-```
+Service records are not distributed through Headscale's global extra-record list. An independent VPN-only DNS resolver identifies the querying device through the VPN and returns records only for its account. Stock Headscale distributes a split DNS route containing the resolver address, not a shared list of private service names. The resolver's sole cross-account network exception is DNS port 53; application connections remain restricted to the same account. Names are not credentials, and knowing another account's name or IP does not authorize access.
 
-Portless v1 uses tailnet HTTP port 80 because the Openbase VPN provider does not
-currently advertise certificate domains. The browser-to-node traffic is still
-encrypted by WireGuard. The gateway never binds `0.0.0.0:80`, `127.0.0.1:80`,
-or `127.0.0.1:443`; applications may continue using localhost ports 80 and 443.
-HTTPS port 443 will only be used after the provider can issue and report the
-matching certificates.
+Both the Cloud allocator and signed VPN helper must advertise the current account-private hostname contract. Publication verifies that DNS resolves exclusively to the local node before applying a route. Missing capability or failed resolution is an error: there is no automatic or explicit legacy port fallback. Update/configure the VPN components before retrying.
+
+## Root-mounted only
+
+Every request path and query is forwarded unchanged, including WebSockets. There is no prefix stripping, prefix alias, or app-specific redirect workaround. For example, `/crm/api?q=1` reaches the upstream at exactly that path, not `/api?q=1`. Redirect locations and cookie paths are not rewritten. Applications must not change their base path for publication. WebSocket subprotocols, streaming responses, uploads, and browser-owned session cookies pass through the proxy.
+
+The retired `--mode`, `--tailnet-port`, and path-based publication options are rejected. Old registry entries can be inspected for cleanup, but the updated helper rejects legacy dynamic publication routes. Remove old publications before replacing the helper and republish using their root hostname.
+
+The app and local proxy bind only to `127.0.0.1`. Hostname routing uses VPN-only HTTPS port 443 and redirects port 80 to HTTPS. A device-local wildcard certificate supplies a browser secure context; certificates renew automatically while publications are active. Traffic between devices is also WireGuard-encrypted. Apps may additionally require their own login; the publisher does not add a per-request Openbase browser login. See [private HTTPS](../private-services-https.md) for certificate and privacy details.
+
+## Diagnostics and recovery
+
+`openbase-coder service doctor NAME` checks the VPN, private DNS ownership, certificate validity, forwarding configuration, local app, and HTTPS gateway separately. Add `--json` for structured output. A failed check returns a nonzero exit code; diagnostics never change settings or republish a service.
+
+An active publication's gateway restarts a crashed shared HTTPS worker automatically. This does not turn a session publication into a persistent one or restart your upstream app. A stopped app produces a 502 response. Removing a publication stops new requests for its hostname, including on existing HTTPS connections; already-open application streams may finish.
+
+If publication or removal is interrupted by a process crash, run `openbase-coder service recover`. Recovery removes the interrupted publication and preserves other services; publish it again if wanted. The next publish/unpublish command also performs this recovery automatically. A private transaction journal records the exact permitted route hashes before changing DNS. Recovery refuses unknown route changes and retains its journal until cleanup succeeds. It never enables persistence. A crash before local journaling may leave an unused Cloud allocation; retrying publication on the same device reuses that allocation.
 
 ## Persistence is opt-in
 
-In an interactive terminal, `publish` asks whether to start the local gateway
-at login with launchd and defaults to **No**. In non-interactive use it remains
-session-only unless `--persist` is passed explicitly:
+Interactive publication asks whether to restore the gateway at login and defaults to **No**. Non-interactive publication is session-only unless explicitly requested:
 
 ```bash
-openbase-coder service publish docs-preview 3000 --persist
+openbase-coder service publish crm 3000 --persist
 ```
 
-Persistent publications still use an automatically selected uncommon tailnet
-port in dynamic mode. If `--tailnet-port` is supplied, Openbase rejects common or registered
-ports and accepts only `49152-65535`. The local app may continue to use its
-normal port, such as `3000`; it remains bound to loopback.
+The upstream app needs its own lifecycle management. Persisting the gateway does not install or start that app.
 
-Persistence remains a separate explicit choice in portless mode. Because all
-portless services share one dispatcher, their persistence setting must match.
+## Provider boundary
 
-Openbase Direct cannot publish arbitrary host services because it carries only
-Openbase app traffic. Portless mode also rejects the official Tailscale provider
-and unknown providers before it writes the registry or starts a process. Switch
-the computer to **Openbase VPN** before using portless publication.
+This feature requires Openbase VPN and its authenticated Cloud allocator. Openbase Direct carries only Openbase app traffic and cannot publish arbitrary host services. Official Tailscale and unknown providers cannot allocate Openbase private service names. `.local` is reserved for multicast DNS.
 
-## Naming and DNS boundary
+The helper uses typed, atomic Serve rules, preserves the built-in console and LiveKit routes, and refuses to overwrite unexpected configuration. It accepts only root-mounted account hostnames resolving to this node and loopback proxy ports; callers cannot supply arbitrary targets, paths, or Funnel settings.
 
-Names use lowercase letters, numbers, and hyphens. Openbase puts the name in
-the URL path on the computer's existing MagicDNS address. It does not use
-`.local`, which is reserved for multicast DNS, and it does not claim to create
-control-plane DNS records.
-
-A dedicated hostname such as `docs-preview.example-tailnet` requires an
-administrator-managed DNS record. Headscale supports this through
-[`dns.extra_records`](https://headscale.net/stable/ref/dns/), while hosted
-Tailscale's named
-[`Services`](https://tailscale.com/docs/features/tailscale-services) require
-admin definition, tagged hosts, and approval. Those provider-side operations
-are intentionally outside this local command.
-
-The local proxy is based on private
-[`tailscale serve`](https://tailscale.com/docs/reference/tailscale-cli/serve)
-routing and never uses Funnel. `.local` avoidance follows
-[RFC 6762](https://www.rfc-editor.org/rfc/rfc6762).
-
-Openbase VPN applies the complete desired Serve configuration atomically. The
-signed helper derives targets from a fixed Openbase rule vocabulary, preserves
-the built-in console and LiveKit routes, uses an ETag compare-and-swap, and
-refuses to overwrite an unexpected configuration. Funnel is not present in the
-desired state and cannot be requested through the helper surface.
-
-## Docker and multiple ports
-
-`service publish` represents one HTTP ingress. For a Docker Compose project
-with several externally consumed ports or non-HTTP protocols, use the
-[Docker tailnet pattern](../docker.md) instead. You can still publish a single
-web gateway from a multi-container project when all browser traffic enters
-through that one local HTTP port.
+For Docker/multi-port projects, publish a single web ingress when one exists. One HTTP publication does not carry database, UDP, or other independent ports. PaaS deployment routing is a separate feature and is unchanged.

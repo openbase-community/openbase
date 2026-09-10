@@ -8,6 +8,7 @@ requires-python = ">=3.12,<3.14"
 dynamic = ["version"]
 dependencies = [
     "click>=8.2.0",
+    "multi-workspace>=3.2.18",
     "Django==5.2.6",
     "djangorestframework==3.16.1",
     "django-cors-headers>=4.6.0",
@@ -20,6 +21,7 @@ dependencies = [
     "qrcode>=8.0",
     "PyJWT>=2.9.0",
     "cryptography>=43.0.0",
+    "acme>=5.1.0,<6",
     "anyio>=4.13.0",
     "anthropic==0.107.0",
     "distro>=1.9.0",
@@ -45,7 +47,6 @@ dependencies = [
     "livekit-plugins-noise-cancellation>=0.2.5",
     "aiohttp>=3.13.3",
     "psutil>=6.1.0",
-    "multi-workspace>=3.2.3",
     "super-agents[claude]>=0.1.14",
     "websockets>=16.0",
     "numpy>=2.3.0",
@@ -79,6 +80,11 @@ build-backend = "hatchling.build"
 
 [tool.uv]
 exclude-newer = "1 week"
+# First-party trusted packages are exempt from the supply-chain aging window:
+# our own releases must be installable the moment they publish (a cli floor
+# on a same-week multi-workspace release otherwise breaks Docker/standalone
+# builds until the release ages past the window).
+exclude-newer-package = { multi-workspace = "1 hour", super-agents = "1 hour" }
 
 [tool.uv.sources]
 super-agents = { path = "../super-agents", editable = true }

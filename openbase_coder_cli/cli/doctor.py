@@ -201,6 +201,28 @@ def _check_livekit_client_credentials(env: dict[str, str], warn, ok) -> None:
     ok("LiveKit client token credentials: set and separate from server credentials")
 
 
+def _check_local_livekit_tcp_listener(
+    env: dict[str, str],
+    sockets: list[tuple[str, int]],
+    ok,
+    fail,
+) -> None:
+    """Fail if embedded Netmesh exposes LiveKit's unused wildcard TCP mux."""
+    if env.get("LIVEKIT_NETWORK_MODE", "tailscale") != "local":
+        return
+
+    listeners = [(host, port) for host, port in sockets if port == 7881]
+    if listeners:
+        addresses = ", ".join(host for host, _ in listeners)
+        fail(
+            "port 7881 (LiveKit ICE-TCP): must not listen in local Netmesh "
+            f"mode (found {addresses})"
+        )
+        return
+
+    ok("port 7881 (LiveKit ICE-TCP): disabled in local Netmesh mode")
+
+
 def _selected_backend(env: dict[str, str]) -> str:
     raw_value = env.get(CODING_BACKEND_ENV_KEY) or DEFAULT_CODING_BACKEND
     try:
@@ -755,6 +777,7 @@ def doctor() -> None:
     click.echo()
     click.echo(click.style("Network Security", bold=True))
     sockets = _get_listening_sockets()
+    env = _parse_env_file()
 
     for port, label in _AUTHENTICATED_PORTS.items():
         listeners = [(h, p) for h, p in sockets if p == port]
@@ -766,6 +789,8 @@ def doctor() -> None:
                     ok(f"port {port} ({label}): bound to {host} (auth enabled)")
                 else:
                     ok(f"port {port} ({label}): bound to {host}")
+
+    _check_local_livekit_tcp_listener(env, sockets, ok, fail)
 
     # --- Tailscale Serve ---
     click.echo()
@@ -803,8 +828,6 @@ def doctor() -> None:
     # --- Credentials ---
     click.echo()
     click.echo(click.style("Credentials", bold=True))
-    env = _parse_env_file()
-
     if not DEFAULT_ENV_FILE_PATH.is_file():
         fail(f".env file not found at {DEFAULT_ENV_FILE_PATH}")
     else:

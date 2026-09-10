@@ -1,4 +1,4 @@
-"""Authenticated local broker for explicit inbound iPhone calls."""
+"""Authenticated local broker for explicit inbound phone calls."""
 
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ class InboundCallActivateSerializer(InboundCallActionSerializer):
 
 @api_view(["POST"])
 def user_call(request):
-    """Ring the user's registered iPhones for one known local agent thread."""
+    """Ring the user's registered phones for one known local agent thread."""
     serializer = UserCallSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     requested_name = serializer.validated_data["agent_name"]

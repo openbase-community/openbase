@@ -121,7 +121,7 @@ git checkout develop
 ```
 
 After cloning the workspace, use
-[`DEV_RUNBOOK.md`](../DEV_RUNBOOK.md) for the full developer install,
+[`dev-docs/DEV_RUNBOOK.md`](../dev-docs/DEV_RUNBOOK.md) for the full developer install,
 authentication, verification, and iteration flow.
 
 The workspace setup syncs the public development repos with `multi`, builds the

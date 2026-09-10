@@ -20,8 +20,23 @@ def test_livekit_server_local_mode_binds_loopback(monkeypatch):
     assert argv[argv.index("--node-ip") + 1] == "127.0.0.1"
     assert argv[argv.index("--keys") + 1] == "key: secret"
     config_body = argv[argv.index("--config-body") + 1]
+    assert "tcp_port: 0" in config_body
     assert "interfaces:" in config_body
     assert "lo" in config_body
+
+
+def test_livekit_server_local_mode_cannot_enable_wildcard_ice_tcp(monkeypatch):
+    monkeypatch.setattr(runners.platform, "system", lambda: "Darwin")
+    env = {
+        "LIVEKIT_NETWORK_MODE": "local",
+        "LIVEKIT_TCP_PORT": "7881",
+    }
+
+    argv, _ = runners.build_livekit_server(env, {"livekit": "livekit-server"})
+
+    config_body = argv[argv.index("--config-body") + 1]
+    assert "tcp_port: 0" in config_body
+    assert "tcp_port: 7881" not in config_body
 
 
 def test_livekit_server_tailscale_mode_resolves_node_ip_and_interface(monkeypatch):
@@ -39,6 +54,7 @@ def test_livekit_server_tailscale_mode_resolves_node_ip_and_interface(monkeypatc
 
     assert argv[argv.index("--node-ip") + 1] == "100.64.1.2"
     config_body = argv[argv.index("--config-body") + 1]
+    assert "tcp_port: 7881" in config_body
     assert "en0" in config_body
     assert "100.64.1.2/32" in config_body
 
@@ -198,6 +214,23 @@ def test_django_cli_tailscale_mode_derives_livekit_url(monkeypatch):
         "--port",
         "7999",
     ]
+
+
+def test_django_cli_tailscale_mode_degrades_to_localhost_before_enrollment(
+    monkeypatch, capsys
+):
+    # Fresh installs defer netmesh enrollment to pairing: no tailnet IP
+    # exists yet, but the local API must still start (onboarding reads it).
+    monkeypatch.setattr(runners.network, "tailscale_ip", lambda family: None)
+    env = {"LIVEKIT_NETWORK_MODE": "tailscale"}
+    binaries = {"openbase_coder": "/bin/openbase-coder"}
+
+    argv, out_env = runners.build_django_cli(env, binaries)
+
+    assert out_env["LIVEKIT_URL"] == "ws://localhost:7880"
+    assert "LIVEKIT_NODE_IP" not in out_env
+    assert argv[0] == "/bin/openbase-coder"
+    assert "No tailnet IP yet" in capsys.readouterr().err
 
 
 def test_django_cli_local_mode_preserves_custom_url(monkeypatch):

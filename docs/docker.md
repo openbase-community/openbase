@@ -2,9 +2,10 @@
 
 The Docker image runs the full Openbase Coder runtime — the local API, the
 LiveKit voice stack, sync workers, and routines — in a single Linux
-container. Because Docker Desktop runs Linux containers on macOS and
-**Windows**, this is currently the way to run Openbase Coder on a Windows
-machine.
+container, on any Docker engine (macOS, **Windows**, or Linux). On Windows,
+Openbase Coder also runs natively in beta (`./scripts/setup` from a Windows
+checkout — see [Developer Setup](getting-started/developer-setup.md)); the
+Docker image is the most battle-tested Windows option today.
 
 Tailscale is the networking layer, exactly like every other install: the
 container joins your tailnet as its own device, and from the apps' point of

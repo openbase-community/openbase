@@ -51,3 +51,37 @@ class SessionManagerRoutinesMixin:
     ) -> dict[str, Any]:
         """Run due routines through the Super Agents client library."""
         return await self._routines_client().run_due_routines(name=name, force=force)
+
+    async def add_routine_trigger(
+        self, name: str, trigger_input: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Add a webhook trigger to a persisted routine (loop)."""
+        return await self._routines_client().add_routine_trigger(name, trigger_input)
+
+    async def remove_routine_trigger(
+        self, name: str, trigger_id: str
+    ) -> dict[str, Any]:
+        """Remove a trigger from a persisted routine (loop)."""
+        return await self._routines_client().remove_routine_trigger(name, trigger_id)
+
+    async def deliver_webhook_event(
+        self,
+        token: str,
+        *,
+        headers: dict[str, Any] | None = None,
+        body: bytes | str = b"",
+        origin: str = "external",
+    ) -> dict[str, Any]:
+        """Deliver an inbound webhook event to the loop trigger owning the token."""
+        return await self._routines_client().deliver_webhook_event(
+            token, headers=headers, body=body, origin=origin
+        )
+
+    async def emit_routine_event(
+        self,
+        name: str,
+        payload: dict[str, Any] | None = None,
+        event_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Run a loop immediately with a locally emitted event payload."""
+        return await self._routines_client().emit_routine_event(name, payload, event_id)

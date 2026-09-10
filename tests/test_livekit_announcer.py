@@ -854,3 +854,67 @@ def test_user_say_api_rejects_blank_text():
     response = views.user_say(request)
 
     assert response.status_code == 400
+
+
+def test_livekit_api_url_rewrites_tailnet_node_ip_to_localhost(monkeypatch):
+    from openbase_coder_cli.livekit_announcer import _livekit_api_url
+
+    monkeypatch.delenv("LIVEKIT_API_URL", raising=False)
+    monkeypatch.setenv("LIVEKIT_URL", "ws://100.64.0.21:7880")
+    monkeypatch.setenv("LIVEKIT_NODE_IP", "100.64.0.21")
+    assert _livekit_api_url() == "ws://localhost:7880"
+
+
+def test_livekit_api_url_prefers_explicit_api_url(monkeypatch):
+    from openbase_coder_cli.livekit_announcer import _livekit_api_url
+
+    monkeypatch.setenv("LIVEKIT_API_URL", "ws://127.0.0.1:9999")
+    monkeypatch.setenv("LIVEKIT_URL", "ws://100.64.0.21:7880")
+    monkeypatch.setenv("LIVEKIT_NODE_IP", "100.64.0.21")
+    assert _livekit_api_url() == "ws://127.0.0.1:9999"
+
+
+def test_livekit_api_url_keeps_localhost_and_foreign_urls(monkeypatch):
+    from openbase_coder_cli.livekit_announcer import _livekit_api_url
+
+    monkeypatch.delenv("LIVEKIT_API_URL", raising=False)
+    monkeypatch.setenv("LIVEKIT_NODE_IP", "100.64.0.21")
+    monkeypatch.setenv("LIVEKIT_URL", "ws://localhost:7880")
+    assert _livekit_api_url() == "ws://localhost:7880"
+    monkeypatch.setenv("LIVEKIT_URL", "wss://myagent.livekit.cloud")
+    assert _livekit_api_url() == "wss://myagent.livekit.cloud"
+
+
+def test_publish_announcer_message_retries_once_on_connection_loss(tmp_path, monkeypatch):
+    import aiohttp
+
+    from openbase_coder_cli import livekit_announcer
+
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+
+    class DisconnectingClient(FakeLiveKitClient):
+        def __init__(self):
+            super().__init__([], {})
+
+            async def failing_list_rooms(request):
+                raise aiohttp.ServerDisconnectedError("Server disconnected")
+
+            self.room.list_rooms = failing_list_rooms
+
+    healthy = FakeLiveKitClient(
+        [_room("room-retry", 100)],
+        {
+            "room-retry": [
+                _participant("agent-1", kind=livekit_api.ParticipantInfo.Kind.AGENT),
+                _participant("user-1", kind=livekit_api.ParticipantInfo.Kind.STANDARD),
+            ]
+        },
+    )
+    clients = [DisconnectingClient(), healthy]
+    monkeypatch.setattr(livekit_announcer, "_build_livekit_client", lambda: clients.pop(0))
+
+    result = asyncio.run(publish_announcer_message("hello again"))
+
+    assert result.room_name == "room-retry"
+    assert healthy.closed is True
+    assert not clients

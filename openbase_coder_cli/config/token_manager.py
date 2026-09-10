@@ -21,6 +21,7 @@ from typing import Any
 
 import httpx
 
+from openbase_coder_cli.cloud_environment import PRODUCTION_WEB_BACKEND_URL
 from openbase_coder_cli.file_lock import LOCK_EX, LOCK_UN, flock
 from openbase_coder_cli.paths import AUTH_JSON_PATH, OWNER_IDENTITY_JSON_PATH
 
@@ -65,7 +66,7 @@ LOGIN_STATUS_LOGGED_OUT = "logged_out"
 LOGIN_STATUS_LOGIN_EXPIRED = "login_expired"
 DEFAULT_OAUTH_CLIENT_ID = "openbase-coder-cli"
 DEFAULT_OAUTH_REDIRECT_URI = "http://127.0.0.1:52807/oauth/callback"
-DEFAULT_WEB_BACKEND_URL = "https://app.openbase.cloud"
+DEFAULT_WEB_BACKEND_URL = PRODUCTION_WEB_BACKEND_URL
 
 
 class TokenManager:
@@ -415,6 +416,16 @@ class TokenManager:
             if owner.get("email"):
                 identity["email"] = str(owner["email"]).strip().lower()
             return identity
+
+    @property
+    def access_expires_at(self) -> float:
+        """Epoch seconds when the current in-memory access token expires.
+
+        0 when no access token is loaded. Read this after
+        :meth:`get_access_token` to report expiry alongside the token.
+        """
+        with self._lock:
+            return self._access_expires_at
 
     def get_access_token_payload(self) -> dict[str, Any]:
         with self._lock:

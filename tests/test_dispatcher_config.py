@@ -120,3 +120,26 @@ def test_set_service_tiers_persist_config(tmp_path: Path) -> None:
     payload = json.loads(config_path.read_text(encoding="utf-8"))
     assert payload["dispatcher_service_tier"] == "standard"
     assert payload["super_agents_service_tier"] == "fast"
+
+
+def test_default_setup_config_uses_sonnet_for_openbase_cloud(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # A fresh install must NOT let openbase_cloud inherit the personal
+    # claude_code "opus" default: the Cloud proxy 403s opus for trial accounts.
+    from openbase_coder_cli.cli.setup.dispatcher import (
+        CODEX_HOME_DEFAULT_DISPATCHER_CONFIG,
+    )
+
+    config_path = tmp_path / "dispatcher-config.json"
+    config_path.write_text(
+        json.dumps(CODEX_HOME_DEFAULT_DISPATCHER_CONFIG), encoding="utf-8"
+    )
+
+    monkeypatch.setenv("OPENBASE_CODING_BACKEND", "openbase_cloud")
+    assert dispatcher_config.dispatcher_model(config_path) == "sonnet"
+    assert dispatcher_config.super_agents_model(config_path) == "sonnet"
+
+    # Personal claude_code login keeps opus (its own plan allows it).
+    monkeypatch.setenv("OPENBASE_CODING_BACKEND", "claude_code")
+    assert dispatcher_config.dispatcher_model(config_path) == "opus"

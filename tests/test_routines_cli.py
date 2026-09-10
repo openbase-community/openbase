@@ -269,3 +269,141 @@ def test_update_routine_can_switch_to_command(monkeypatch) -> None:
         "save_routine",
         {"name": "report-routine", "kind": "command", "command": "discover"},
     )
+
+
+class FakeTriggerClient(FakeRoutinesClient):
+    async def add_routine_trigger(
+        self, name: str, trigger_input: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.calls.append(("add_routine_trigger", {"name": name, **trigger_input}))
+        return {"routine": {"name": name}, "trigger": {"id": "trg-1", "token": "tok"}}
+
+    async def remove_routine_trigger(
+        self, name: str, trigger_id: str
+    ) -> dict[str, Any]:
+        self.calls.append(
+            ("remove_routine_trigger", {"name": name, "triggerId": trigger_id})
+        )
+        return {"deleted": True, "routine": {"name": name}}
+
+    async def emit_routine_event(
+        self,
+        name: str,
+        payload: dict[str, Any] | None = None,
+        event_id: str | None = None,
+    ) -> dict[str, Any]:
+        self.calls.append(
+            (
+                "emit_routine_event",
+                {"name": name, "payload": payload, "eventId": event_id},
+            )
+        )
+        return {"status": "delivered", "routine": name}
+
+
+def test_add_webhook_trigger_builds_trigger_input(monkeypatch) -> None:
+    import json
+
+    FakeRoutinesClient.instances = []
+    monkeypatch.setattr(routines_cli, "CodexAppServerClient", FakeTriggerClient)
+
+    result = CliRunner().invoke(
+        routines_cli.routines,
+        [
+            "add-webhook-trigger",
+            "pr-loop",
+            "--description",
+            "GitHub PR comments",
+            "--sender-path",
+            "sender.id",
+            "--allow-sender",
+            "12345",
+            "--filter",
+            "comment.body",
+            "startsWith",
+            "/openbase",
+            "--hmac-secret",
+            "shhh",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    call = FakeRoutinesClient.instances[0].calls[0]
+    assert call == (
+        "add_routine_trigger",
+        {
+            "name": "pr-loop",
+            "description": "GitHub PR comments",
+            "senderPath": "sender.id",
+            "senderAllowlist": ["12345"],
+            "filters": [
+                {"path": "comment.body", "op": "startsWith", "value": "/openbase"}
+            ],
+            "hmacSecret": "shhh",
+        },
+    )
+    payload = json.loads(result.output)
+    assert payload["ingestPath"] == "/api/hooks/t/tok/"
+
+
+def test_remove_trigger_and_emit(monkeypatch) -> None:
+    FakeRoutinesClient.instances = []
+    monkeypatch.setattr(routines_cli, "CodexAppServerClient", FakeTriggerClient)
+    runner = CliRunner()
+
+    removed = runner.invoke(
+        routines_cli.routines, ["remove-trigger", "pr-loop", "trg-1"]
+    )
+    emitted = runner.invoke(
+        routines_cli.routines,
+        ["emit", "pr-loop", "--data", '{"note": "manual"}', "--event-id", "evt-1"],
+    )
+    bad = runner.invoke(routines_cli.routines, ["emit", "pr-loop", "--data", "{nope"])
+
+    assert removed.exit_code == 0, removed.output
+    assert emitted.exit_code == 0, emitted.output
+    assert bad.exit_code != 0
+    calls = [call for client in FakeRoutinesClient.instances for call in client.calls]
+    assert (
+        "remove_routine_trigger",
+        {"name": "pr-loop", "triggerId": "trg-1"},
+    ) in calls
+    assert (
+        "emit_routine_event",
+        {"name": "pr-loop", "payload": {"note": "manual"}, "eventId": "evt-1"},
+    ) in calls
+
+
+def test_add_webhook_trigger_cloud_flag_creates_relay_endpoint(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    FakeRoutinesClient.instances = []
+    monkeypatch.setattr(routines_cli, "CodexAppServerClient", FakeTriggerClient)
+
+    cloud_events = importlib.import_module(
+        "openbase_coder_cli.services.cloud_webhook_events"
+    )
+    created = []
+
+    def fake_create(description=""):
+        created.append(description)
+        return SimpleNamespace(
+            ok=True,
+            response={
+                "id": "ep-1",
+                "url": "https://cloud/api/openbase/hooks/t/obhk_x/",
+            },
+        )
+
+    monkeypatch.setattr(cloud_events, "create_relay_endpoint", fake_create)
+
+    result = CliRunner().invoke(
+        routines_cli.routines,
+        ["add-webhook-trigger", "cmd-loop", "--cloud", "--description", "PRs"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert created == ["PRs"]
+    call = FakeRoutinesClient.instances[0].calls[0]
+    assert call[1]["relayEndpointId"] == "ep-1"
+    assert call[1]["relayUrl"] == "https://cloud/api/openbase/hooks/t/obhk_x/"

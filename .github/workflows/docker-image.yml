@@ -20,6 +20,8 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - ".github/workflows/docker-image.yml"
+      - "uv.lock"
+      - ".github/workflows/docker-image.yml"
   workflow_dispatch:
 
 env:

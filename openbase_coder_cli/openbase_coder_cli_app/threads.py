@@ -41,6 +41,10 @@ from openbase_coder_cli.openbase_coder_cli_app.thread_metadata import (
     annotate_thread_payload,
     get_livekit_shared_thread_id,
 )
+from openbase_coder_cli.openbase_coder_cli_app.thread_origins import (
+    MANUAL_ORIGIN,
+    set_thread_origin,
+)
 from openbase_coder_cli.thread_sync.models import ThreadStatus
 from openbase_coder_cli.thread_sync.projects import (
     refresh_projects_from_thread_directories as _refresh_projects_from_threads,
@@ -330,6 +334,13 @@ def thread_list(request):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         thread = async_to_sync(manager.create_thread)(directory, **create_kwargs)
+        # This endpoint is the only manual-entry chokepoint (console, desktop,
+        # and mobile new-thread UIs all POST here); threads created any other
+        # way (Super Agents MCP, dispatcher, voice) get no origin record and
+        # are excluded from completion notifications. Stamping here, before
+        # the response, guarantees the origin exists before the first turn
+        # can start.
+        set_thread_origin(thread.session_id, MANUAL_ORIGIN)
         invalidate_thread_list_cache()
         logger.info(
             "thread_list created thread_id=%s directory=%s backend=%s",
@@ -474,7 +485,14 @@ def thread_detail(request, thread_id):
         return Response({"success": True})
 
     try:
-        thread = async_to_sync(manager.get_thread_state)(thread_id)
+        # Cache-and-coalesce: the detail view is polled every ~5s (and on each
+        # socket event and window focus) on top of the live thread WebSocket,
+        # and the dispatch page reads the same thread via /threads/dispatcher/
+        # first — so an uncached read here means repeated, redundant app-server
+        # round-trips for a thread another call just fetched. The 8s snapshot
+        # staleness is absorbed by the client's reconcileThreadSnapshot, which
+        # keeps live-streamed turns that post-date the snapshot.
+        thread = get_cached_thread_state(manager, thread_id)
     except RuntimeError as exc:
         if not is_thread_data_unavailable_error(exc):
             raise
@@ -571,7 +589,11 @@ def thread_start_turn(request, thread_id):
     try:
         turn_id = async_to_sync(manager.start_turn)(thread_id, prompt)
     except (ValueError, RuntimeError) as e:
-        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        # Surface the app-server's human-readable message (e.g. "thread not
+        # loaded: <id>") rather than its raw JSON-RPC error envelope.
+        return Response(
+            {"error": thread_error_message(e)}, status=status.HTTP_400_BAD_REQUEST
+        )
     invalidate_thread_list_cache()
     return Response(
         {"turn_id": turn_id, "status": "started"}, status=status.HTTP_201_CREATED

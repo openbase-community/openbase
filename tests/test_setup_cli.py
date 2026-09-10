@@ -441,6 +441,14 @@ def test_ensure_codex_home_dispatcher_config_creates_default(
                 "dispatcher": "gpt-5.5",
                 "super_agents": "gpt-5.5",
             },
+            "openbase_cloud": {
+                "dispatcher": "sonnet",
+                "super_agents": "sonnet",
+            },
+            "openbase_cloud_codex": {
+                "dispatcher": "gpt-5.5",
+                "super_agents": "gpt-5.5",
+            },
         },
         "dispatcher_voice_id": "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc",
         "dispatcher_voice_name": "Jacqueline",
@@ -841,6 +849,61 @@ def test_ensure_env_file_documents_coding_backend_default(tmp_path) -> None:
     assert env_file.stat().st_mode & 0o777 == 0o600
 
 
+def test_ensure_env_file_persists_staging_release_backend(
+    tmp_path, monkeypatch
+) -> None:
+    env_file = tmp_path / ".env"
+    _patch_setup(
+        monkeypatch,
+        "default_web_backend_url",
+        lambda: "https://app-staging.openbase.cloud",
+    )
+
+    setup_cli._ensure_env_file(
+        str(env_file),
+        assembly_ai_api_key="",
+        cartesia_api_key="",
+    )
+
+    assert (
+        setup_cli._env_file_values(env_file)["OPENBASE_CODER_CLI_WEB_BACKEND_URL"]
+        == "https://app-staging.openbase.cloud"
+    )
+
+
+def test_ensure_env_file_adds_staging_backend_without_overriding_explicit_url(
+    tmp_path, monkeypatch
+) -> None:
+    missing = tmp_path / "missing.env"
+    missing.write_text("KEEP_ME=1\n", encoding="utf-8")
+    explicit = tmp_path / "explicit.env"
+    explicit.write_text(
+        "OPENBASE_CODER_CLI_WEB_BACKEND_URL=https://custom.example\n",
+        encoding="utf-8",
+    )
+    _patch_setup(
+        monkeypatch,
+        "default_web_backend_url",
+        lambda: "https://app-staging.openbase.cloud",
+    )
+
+    for env_file in (missing, explicit):
+        setup_cli._ensure_env_file(
+            str(env_file),
+            assembly_ai_api_key="",
+            cartesia_api_key="",
+        )
+
+    assert (
+        setup_cli._env_file_values(missing)["OPENBASE_CODER_CLI_WEB_BACKEND_URL"]
+        == "https://app-staging.openbase.cloud"
+    )
+    assert (
+        setup_cli._env_file_values(explicit)["OPENBASE_CODER_CLI_WEB_BACKEND_URL"]
+        == "https://custom.example"
+    )
+
+
 def test_ensure_env_file_migrates_existing_env_to_shared_homes(tmp_path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -928,6 +991,45 @@ def test_ensure_env_file_can_select_backend(tmp_path) -> None:
     assert "OPENBASE_CODING_BACKEND=openbase_cloud" in env_file.read_text(
         encoding="utf-8"
     )
+
+
+def test_ensure_env_file_selects_embedded_livekit_mode_for_fresh_setup(
+    tmp_path,
+) -> None:
+    env_file = tmp_path / ".env"
+
+    setup_cli._ensure_env_file(
+        str(env_file),
+        assembly_ai_api_key="",
+        cartesia_api_key="",
+        tailnet_provider="netmesh-tsnet",
+    )
+
+    values = setup_cli._env_file_values(env_file)
+    assert values["OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"] == "netmesh-tsnet"
+    assert values["LIVEKIT_NETWORK_MODE"] == "local"
+
+
+def test_ensure_env_file_updates_livekit_mode_with_existing_provider(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER=tailscale\n"
+        "LIVEKIT_NETWORK_MODE=tailscale\n"
+        "LIVEKIT_NODE_IP=100.64.0.9\n",
+        encoding="utf-8",
+    )
+
+    setup_cli._ensure_env_file(
+        str(env_file),
+        assembly_ai_api_key="",
+        cartesia_api_key="",
+        tailnet_provider="netmesh-tsnet",
+    )
+
+    values = setup_cli._env_file_values(env_file)
+    assert values["OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"] == "netmesh-tsnet"
+    assert values["LIVEKIT_NETWORK_MODE"] == "local"
+    assert values["LIVEKIT_NODE_IP"] == ""
 
 
 def test_ensure_openbase_cloud_machine_token_uses_env_backend_url(
@@ -1123,6 +1225,21 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
     _patch_setup(monkeypatch, "_install_cli_shim", lambda _workspace_dir: None)
     _patch_setup(monkeypatch, "_build_console", lambda _workspace_dir: None)
     _patch_setup(monkeypatch, "install_all_services", lambda _config: None)
+    _patch_setup(
+        monkeypatch,
+        "install_tunneld_binary",
+        lambda _config: calls.append("tunneld-binary") or tmp_path / "openbase-tunneld",
+    )
+    _patch_setup(
+        monkeypatch,
+        "install_service",
+        lambda _config, service: calls.append(f"service:{service.name}"),
+    )
+    _patch_setup(
+        monkeypatch,
+        "ensure_tunneld_running",
+        lambda **_kwargs: calls.append("tunneld-ready"),
+    )
     _patch_setup(monkeypatch, "compute_cli_configured", lambda: True)
     monkeypatch.setattr(
         setup_cli.InstallationConfig,
@@ -1211,6 +1328,124 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
         "provision-netmesh",
         "configure",
     ]
+
+    _patch_setup(
+        monkeypatch,
+        "configure_tailscale_serve",
+        fake_configure_tailscale_serve,
+    )
+    calls.clear()
+    result = runner.invoke(
+        setup_cli.setup,
+        [
+            "--workspace-dir",
+            str(workspace),
+            "--env-file",
+            str(env_file),
+            "--backend",
+            "claude-code",
+            "--tailnet-provider",
+            "netmesh-tsnet",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        "thread-sync",
+        "sounds",
+        "claude-md",
+        "tunneld-binary",
+        "service:openbase-tunneld",
+        "tunneld-ready",
+        "configure",
+    ]
+
+    _patch_setup(
+        monkeypatch,
+        "configure_tailscale_serve",
+        unavailable_before_login,
+    )
+    calls.clear()
+    result = runner.invoke(
+        setup_cli.setup,
+        [
+            "--workspace-dir",
+            str(workspace),
+            "--env-file",
+            str(env_file),
+            "--backend",
+            "claude-code",
+            "--tailnet-provider",
+            "netmesh-tsnet",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Openbase VPN route setup did not complete" in result.output
+    assert "netmesh control socket is not ready" in result.output
+
+    def tunneld_never_becomes_ready(**_kwargs):
+        raise RuntimeError("managed service control API timed out")
+
+    _patch_setup(
+        monkeypatch,
+        "ensure_tunneld_running",
+        tunneld_never_becomes_ready,
+    )
+    calls.clear()
+    result = runner.invoke(
+        setup_cli.setup,
+        [
+            "--workspace-dir",
+            str(workspace),
+            "--env-file",
+            str(env_file),
+            "--backend",
+            "claude-code",
+            "--tailnet-provider",
+            "netmesh-tsnet",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Openbase VPN daemon did not become ready" in result.output
+    assert "managed service control API timed out" in result.output
+    assert calls == [
+        "thread-sync",
+        "sounds",
+        "claude-md",
+        "tunneld-binary",
+        "service:openbase-tunneld",
+    ]
+
+    _patch_setup(
+        monkeypatch,
+        "ensure_tunneld_running",
+        lambda **_kwargs: calls.append("tunneld-ready"),
+    )
+
+    def unavailable_tunneld(_config):
+        raise RuntimeError("Go is unavailable")
+
+    _patch_setup(monkeypatch, "install_tunneld_binary", unavailable_tunneld)
+    calls.clear()
+    result = runner.invoke(
+        setup_cli.setup,
+        [
+            "--workspace-dir",
+            str(workspace),
+            "--env-file",
+            str(env_file),
+            "--backend",
+            "claude-code",
+            "--tailnet-provider",
+            "netmesh-tsnet",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Openbase VPN daemon installation failed: Go is unavailable" in result.output
+    assert "configure" not in calls
 
 
 def test_ensure_local_audio_dependencies_installs_into_runtime_python(
@@ -1715,3 +1950,49 @@ def test_print_app_download_qr_outputs_url(capsys) -> None:
     out = capsys.readouterr().out
     assert "https://openbase.cloud/downloads.html" in out
     assert "█" in out or "▀" in out or "▄" in out
+
+
+def test_default_tailnet_provider_detection(monkeypatch) -> None:
+    from openbase_coder_cli.services import tailscale_provider as tp
+
+    monkeypatch.setattr(tp, "tailscale_bin", lambda: "/usr/local/bin/tailscale")
+    assert tp.default_tailnet_provider() == tp.PROVIDER_TAILSCALE
+
+    monkeypatch.setattr(tp, "tailscale_bin", lambda: None)
+    assert tp.default_tailnet_provider() == tp.PROVIDER_NETMESH
+
+
+def test_ensure_env_file_defaults_to_netmesh_without_tailscale(
+    monkeypatch, tmp_path
+) -> None:
+    from openbase_coder_cli.services import tailscale_provider as tp
+
+    monkeypatch.setattr(tp, "tailscale_bin", lambda: None)
+    env_file = tmp_path / ".env"
+
+    setup_cli._ensure_env_file(
+        str(env_file),
+        assembly_ai_api_key="",
+        cartesia_api_key="",
+    )
+
+    content = env_file.read_text(encoding="utf-8")
+    assert "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER=netmesh\n" in content
+
+
+def test_ensure_env_file_defaults_to_tailscale_when_detected(
+    monkeypatch, tmp_path
+) -> None:
+    from openbase_coder_cli.services import tailscale_provider as tp
+
+    monkeypatch.setattr(tp, "tailscale_bin", lambda: "/opt/homebrew/bin/tailscale")
+    env_file = tmp_path / ".env"
+
+    setup_cli._ensure_env_file(
+        str(env_file),
+        assembly_ai_api_key="",
+        cartesia_api_key="",
+    )
+
+    content = env_file.read_text(encoding="utf-8")
+    assert "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER=tailscale\n" in content

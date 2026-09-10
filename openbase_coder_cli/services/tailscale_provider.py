@@ -37,6 +37,13 @@ PROVIDER_NETMESH = "netmesh"
 PROVIDER_NETMESH_TSNET = "netmesh-tsnet"
 
 PROVIDER_VALUES = (PROVIDER_TAILSCALE, PROVIDER_NETMESH, PROVIDER_NETMESH_TSNET)
+LIVEKIT_NETWORK_MODE_ENV_KEY = "LIVEKIT_NETWORK_MODE"
+
+
+def livekit_network_mode(provider_name: str) -> str:
+    """Return the LiveKit network mode required by a tailnet transport."""
+    return "local" if provider_name == PROVIDER_NETMESH_TSNET else "tailscale"
+
 
 # Last-resort netmesh-ctl location: the legacy standalone Openbase Netmesh app
 # (retired). The shipping companion (nested in the desktop app) and the dev
@@ -106,6 +113,16 @@ def netmesh_uses_stock_tailscale() -> bool:
 def is_netmesh_tsnet() -> bool:
     """True only for the embedded, no-VPN netmesh transport (openbase-tunneld)."""
     return provider() == PROVIDER_NETMESH_TSNET
+
+
+def default_tailnet_provider() -> str:
+    """Fresh-install default transport.
+
+    Openbase VPN (netmesh) unless the official Tailscale CLI/app is already
+    installed — an existing Tailscale user keeps the compatibility transport
+    their machine is set up for.
+    """
+    return PROVIDER_TAILSCALE if tailscale_bin() else PROVIDER_NETMESH
 
 
 def tailscale_bin() -> str | None:
@@ -258,27 +275,39 @@ def _validated_rule(rule: dict[str, Any]) -> dict[str, Any]:
             "tailnet_port": tailnet_port,
             "proxy_port": proxy_port,
         }
-    if kind == "portless-dispatcher":
-        if set(rule) != {"kind", "proxy_port"}:
-            raise ValueError("Portless publication accepts only a dispatcher port.")
+    if kind in {"published-hostname", "published-https-hostname"}:
+        if set(rule) != {"kind", "hostname", "proxy_port"}:
+            raise ValueError(
+                "Hostname publication accepts only a validated hostname and proxy port."
+            )
+        from openbase_coder_cli.services.published_services import validate_hostname
+
+        hostname = validate_hostname(str(rule["hostname"]))
         proxy_port = int(rule["proxy_port"])
         if not 49152 <= proxy_port <= 65535:
-            raise ValueError("The dispatcher port must be in 49152-65535.")
-        return {"kind": kind, "proxy_port": proxy_port}
+            raise ValueError("The hostname proxy port must be in 49152-65535.")
+        return {"kind": kind, "hostname": hostname, "proxy_port": proxy_port}
     raise ValueError(f"Unsupported Openbase Serve rule kind: {kind!r}.")
 
 
 def _validated_rules(rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
     validated = [_validated_rule(rule) for rule in rules]
     kinds = [rule["kind"] for rule in validated]
-    for singleton in ("openbase-console", "openbase-livekit", "portless-dispatcher"):
+    for singleton in ("openbase-console", "openbase-livekit"):
         if kinds.count(singleton) > 1:
             raise ValueError(f"Duplicate {singleton} Serve rule.")
+    hostnames = [
+        str(rule["hostname"])
+        for rule in validated
+        if rule["kind"] in {"published-hostname", "published-https-hostname"}
+    ]
+    if len(hostnames) != len(set(hostnames)):
+        raise ValueError("Duplicate private service hostname Serve rule.")
     return validated
 
 
-def portless_serve_capability() -> dict[str, Any]:
-    """Return the hardened helper's declared portless/CAS capability."""
+def serve_capability() -> dict[str, Any]:
+    """Return the hardened helper's declared atomic Serve capability."""
     if is_netmesh_tsnet():
         return {"supported": False, "error": "Openbase Direct is not a host VPN."}
     if not is_netmesh() or netmesh_uses_stock_tailscale():
@@ -293,6 +322,79 @@ def portless_serve_capability() -> dict[str, Any]:
     if payload.get("error"):
         return {"supported": False, "error": str(payload["error"])}
     return payload
+
+
+def hostname_serve_capability() -> dict[str, Any]:
+    """Compose the helper's routing half with Cloud's DNS-allocation half."""
+    capability = serve_capability()
+    if not capability.get("supported"):
+        return capability
+    declared = capability.get("service_hostnames")
+    if not isinstance(declared, dict):
+        return {
+            "supported": False,
+            "error": (
+                "Openbase VPN does not advertise private service hostname routing."
+            ),
+        }
+    if declared.get("supported") is not True:
+        return {
+            "supported": False,
+            "error": "Openbase VPN explicitly disabled private hostname routing.",
+        }
+    helper_required = {
+        "serve_routing": True,
+        "pattern": "{service}.{account_namespace}.{service_domain}",
+        "http_port": 80,
+        "https_port": 443,
+        "https_supported": True,
+    }
+    for key, expected in helper_required.items():
+        if declared.get(key) != expected:
+            return {
+                "supported": False,
+                "error": f"Openbase VPN private hostname capability lacks {key}={expected!r}.",
+            }
+    if capability.get("atomic_etag") is not True:
+        return {
+            "supported": False,
+            "error": "Openbase VPN private hostname routing requires atomic ETag apply.",
+        }
+    from openbase_coder_cli.services.cloud_registration import (
+        netmesh_service_hostname_capabilities,
+    )
+
+    cloud_result = netmesh_service_hostname_capabilities()
+    cloud = cloud_result.response if isinstance(cloud_result.response, dict) else {}
+    if not cloud_result.ok or cloud.get("supported") is not True:
+        return {
+            "supported": False,
+            "error": cloud_result.error
+            or "Openbase Cloud private hostname DNS allocation is unavailable.",
+        }
+    cloud_required = {
+        "dns_allocation": True,
+        "account_private_dns": True,
+        "pattern": "{service}.{account_namespace}.{service_domain}",
+        "http_port": 80,
+        "https_port": 443,
+        "https_supported": True,
+    }
+    for key, expected in cloud_required.items():
+        if cloud.get(key) != expected:
+            return {
+                "supported": False,
+                "error": f"Openbase Cloud private hostname capability lacks {key}={expected!r}.",
+            }
+    return {
+        "supported": True,
+        "dns_allocation": True,
+        "serve_routing": True,
+        "pattern": "{service}.{account_namespace}.{service_domain}",
+        "http_port": 80,
+        "https_port": 443,
+        "https_supported": True,
+    }
 
 
 def serve_snapshot() -> dict[str, Any]:
@@ -340,11 +442,11 @@ def _legacy_cli_rule(rule: dict[str, Any]) -> tuple[str, int, str]:
             int(rule["tailnet_port"]),
             f"http://127.0.0.1:{rule['proxy_port']}",
         )
-    raise RuntimeError("Portless publication is unavailable through this provider.")
+    raise RuntimeError("Hostname publication is unavailable through this provider.")
 
 
 def apply_serve_legacy(rules: list[dict[str, Any]]) -> None:
-    """Compatibility path for the pre-CAS signed helper, never for portless rules."""
+    """Compatibility path for the pre-CAS signed helper, never for hostnames."""
     if not is_netmesh() or is_netmesh_tsnet() or netmesh_uses_stock_tailscale():
         raise RuntimeError(
             "Legacy Serve replacement is only available to Openbase VPN."

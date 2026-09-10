@@ -12,6 +12,11 @@ from openbase_coder_cli.backend_config import (
     DEFAULT_CODING_BACKEND,
     normalize_backend,
 )
+from openbase_coder_cli.cloud_environment import (
+    PRODUCTION_WEB_BACKEND_URL,
+    WEB_BACKEND_ENV_KEY,
+    default_web_backend_url,
+)
 from openbase_coder_cli.codex_control_plane import (
     CODEX_APP_SERVER_ENDPOINT_ENV,
     managed_codex_app_server_endpoint,
@@ -39,10 +44,14 @@ from openbase_coder_cli.paths import (
     CODEX_DISPATCHER_CONFIG_PATH,
     OPENBASE_AGENTS_MD_PATH,
 )
+from openbase_coder_cli.services.tailscale_provider import (
+    LIVEKIT_NETWORK_MODE_ENV_KEY,
+    livekit_network_mode,
+)
 
 TAILNET_PROVIDER_ENV_KEY = "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"
 ALLOWED_HOSTS_ENV_KEY = "OPENBASE_CODER_CLI_ALLOWED_HOSTS"
-NETMESH_ALLOWED_SUFFIX = ".netmesh.openbase.cloud"
+NETMESH_ALLOWED_SUFFIX = ".net.obs.so"
 
 
 def _ensure_env_file(
@@ -60,6 +69,13 @@ def _ensure_env_file(
         path.chmod(0o600)
         _drop_managed_claude_config_dir(path)
         updates = _missing_livekit_client_credential_values(path)
+        current_values = _env_file_values(path)
+        release_backend_url = default_web_backend_url()
+        if (
+            release_backend_url != PRODUCTION_WEB_BACKEND_URL
+            and WEB_BACKEND_ENV_KEY not in current_values
+        ):
+            updates[WEB_BACKEND_ENV_KEY] = release_backend_url
         if coding_backend:
             updates[CODING_BACKEND_ENV_KEY] = coding_backend
         if tailnet_provider:
@@ -79,7 +95,11 @@ def _ensure_env_file(
         return
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    selected_provider = tailnet_provider or "tailscale"
+    from openbase_coder_cli.services.tailscale_provider import (
+        default_tailnet_provider,
+    )
+
+    selected_provider = tailnet_provider or default_tailnet_provider()
     secret_key = secrets.token_urlsafe(50)
     livekit_api_key = "APIkey" + secrets.token_urlsafe(12)
     livekit_api_secret = secrets.token_urlsafe(32)
@@ -94,8 +114,8 @@ def _ensure_env_file(
         "# Client-facing token issuer. LiveKit JWTs expose this key in the issuer claim.",
         f"LIVEKIT_CLIENT_API_KEY={livekit_client_api_key}",
         f"LIVEKIT_CLIENT_API_SECRET={livekit_client_api_secret}",
-        "# Use tailscale for phone-to-computer voice calls; use local for loopback-only testing.",
-        "LIVEKIT_NETWORK_MODE=tailscale",
+        "# Embedded netmesh uses local mode; system VPN transports use tailscale mode.",
+        f"{LIVEKIT_NETWORK_MODE_ENV_KEY}={livekit_network_mode(selected_provider)}",
         "LIVEKIT_URL=ws://localhost:7880",
         "# In tailscale mode, the managed service rewrites localhost LIVEKIT_URL to the Tailscale IPv4 address.",
         "# The local Python agent still registers over localhost unless LIVEKIT_AGENT_URL is set.",
@@ -148,6 +168,10 @@ def _ensure_env_file(
         "OPENBASE_CODER_CLI_OAUTH_CLIENT_ID=openbase-coder-cli",
     ]
 
+    release_backend_url = default_web_backend_url()
+    if release_backend_url != PRODUCTION_WEB_BACKEND_URL:
+        lines.append(f"{WEB_BACKEND_ENV_KEY}={release_backend_url}")
+
     if assembly_ai_api_key:
         lines.append(f"ASSEMBLY_AI_API_KEY={assembly_ai_api_key}")
     if cartesia_api_key:
@@ -155,7 +179,7 @@ def _ensure_env_file(
 
     lines.extend(
         [
-            "# Override the web backend URL (defaults to https://app.openbase.cloud):",
+            "# Override the web backend URL selected by the release channel:",
             "# OPENBASE_CODER_CLI_WEB_BACKEND_URL=https://app.openbase.cloud",
             "# Override JWT key/session endpoints if your backend routes differ:",
             "# OPENBASE_CODER_CLI_JWT_JWKS_URL=https://app.openbase.cloud/.well-known/jwks.json",
@@ -183,9 +207,14 @@ def _allowed_hosts_for(provider: str) -> str:
 
 
 def _tailnet_provider_updates(path: Path, provider: str) -> dict[str, str]:
-    """Env updates to switch an existing .env to ``provider``: the provider key,
-    plus the netmesh MagicDNS suffix in allowed hosts for the netmesh transports."""
-    updates: dict[str, str] = {TAILNET_PROVIDER_ENV_KEY: provider}
+    """Return every env value whose meaning depends on the tailnet provider."""
+    updates: dict[str, str] = {
+        TAILNET_PROVIDER_ENV_KEY: provider,
+        LIVEKIT_NETWORK_MODE_ENV_KEY: livekit_network_mode(provider),
+        # A pinned address belongs to the previous transport. Let the active
+        # provider derive a current address when its LiveKit mode needs one.
+        "LIVEKIT_NODE_IP": "",
+    }
     if provider in ("netmesh", "netmesh-tsnet"):
         hosts = _env_file_values(path).get(
             ALLOWED_HOSTS_ENV_KEY, _DEFAULT_ALLOWED_HOSTS
