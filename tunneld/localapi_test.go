@@ -77,3 +77,17 @@ func TestStatusContainsProbePeer(t *testing.T) {
 		t.Error("expected a missing status to reject all hosts")
 	}
 }
+
+func TestResolveOpenbaseLocalAddr(t *testing.T) {
+	if addr, err := resolveOpenbaseLocalAddr(""); err != nil || addr != "127.0.0.1:7999" {
+		t.Fatalf("default addr = %q, err %v", addr, err)
+	}
+	if addr, err := resolveOpenbaseLocalAddr("18789"); err != nil || addr != "127.0.0.1:18789" {
+		t.Fatalf("maritime addr = %q, err %v", addr, err)
+	}
+	for _, bad := range []string{"0", "-1", "65536", "http", "80x"} {
+		if _, err := resolveOpenbaseLocalAddr(bad); err == nil {
+			t.Fatalf("expected error for %q", bad)
+		}
+	}
+}

@@ -39,6 +39,30 @@ def test_livekit_server_local_mode_cannot_enable_wildcard_ice_tcp(monkeypatch):
     assert "tcp_port: 7881" not in config_body
 
 
+def test_livekit_server_netmesh_mode_serves_ice_tcp_loopback_only(monkeypatch):
+    monkeypatch.setattr(runners.platform, "system", lambda: "Linux")
+    env = {
+        "LIVEKIT_NETWORK_MODE": "netmesh",
+        "LIVEKIT_API_KEY": "key",
+        "LIVEKIT_API_SECRET": "secret",
+    }
+    binaries = {"livekit": "/usr/local/bin/livekit-server"}
+
+    argv, _ = runners.build_livekit_server(env, binaries)
+
+    assert argv[argv.index("--bind") + 1] == "127.0.0.1"
+    assert argv[argv.index("--node-ip") + 1] == "127.0.0.1"
+    config_body = argv[argv.index("--config-body") + 1]
+    # tunneld forwards tailnet :7881 to the local ICE-TCP mux, so it must
+    # actually listen — unlike bare local mode.
+    assert "tcp_port: 7881" in config_body
+    # Candidates stay loopback-only: no routable interface or IP is
+    # advertised, so mesh clients never wait on an unreachable candidate.
+    assert "- lo" in config_body
+    assert "- 127.0.0.1/32" in config_body
+    assert "100." not in config_body
+
+
 def test_livekit_server_tailscale_mode_resolves_node_ip_and_interface(monkeypatch):
     monkeypatch.setattr(runners.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(runners.network, "tailscale_ip", lambda family: "100.64.1.2")

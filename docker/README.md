@@ -89,6 +89,14 @@ control-plane-managed mode, not a manual `docker run` login flow:
 
 - Cloud sets `OPENBASE_CODER_RUNTIME=maritime`, mounts the durable provider
   disk at `/data`, and sets `OPENBASE_CODER_CLI_DATA_DIR=/data/openbase`.
+  Maritime mode defaults the network mode to `netmesh`, so the box joins the
+  per-user Openbase netmesh via the embedded `openbase-tunneld` and needs no
+  published ports at all: the API (tailnet `:18080`), LiveKit signaling
+  (`:7880`), ICE-TCP media (`:7881`), and the embedded TURN relay (`:3478`)
+  are all served outbound-first from the node.
+- Backend logins for both coding backends survive container recreation: the
+  entrypoint keeps `~/.codex` and `~/.claude` (plus the Claude state file,
+  via `CLAUDE_CONFIG_DIR`) inside the data volume.
 - The image refuses Maritime startup as root or with state outside `/data`.
 - Cloud supplies a short-lived, single-use bootstrap grant. The runtime
   exchanges it for an installation-scoped machine token with only
@@ -102,8 +110,7 @@ control-plane-managed mode, not a manual `docker run` login flow:
 
 Do not set the bootstrap variable manually or copy credential files into a
 Maritime volume. The complete control-plane contract, threat model, and safe
-migration procedure are in `specs/secure-maritime-workspaces/README.md` at the
-workspace root.
+migration procedure are in `docker/maritime-security.md`.
 
 ## Environment variables
 
@@ -112,7 +119,13 @@ workspace root.
 | `TS_AUTHKEY` | — | Tailscale auth key for unattended tailnet joins. |
 | `TS_HOSTNAME` | `openbase-coder` | Tailnet device hostname. |
 | `TS_SOCKET` | — | Use an external tailscaled (sidecar) socket instead of starting one in-container. |
-| `OPENBASE_CODER_NETWORK_MODE` | `tailscale` | Set `local` for loopback-only testing with no Tailscale. |
+| `OPENBASE_CODER_NETWORK_MODE` | `tailscale` (`netmesh` under Maritime) | `tailscale`, `netmesh` (embedded `openbase-tunneld`; alias `netmesh-tsnet`), or `local` for loopback-only testing. |
+| `TS_AUTHKEY` (netmesh) | — | Netmesh pre-auth key for unattended enrollment; normally staged by `provision` from the bootstrap exchange instead of passed directly. The staged key is deleted only after the node reports an enrolled, forwarding state. |
+| `OPENBASE_TSNET_CONTROL_URL` | `https://net.openbase.cloud` | Netmesh headscale control plane for `openbase-tunneld`. |
+| `OPENBASE_TSNET_HOSTNAME` | derived | Stable tailnet hostname for the netmesh node (e.g. `devspace-<id>`). |
+| `OPENBASE_TSNET_STATE_DIR` | `<data>/tsnet` | Netmesh node identity/state; keep below the data dir so it survives image upgrades. |
+| `OPENBASE_CODER_CLI_PORT` | `7999` | Local API bind port; `openbase-tunneld`'s tailnet `:18080` forward follows it. |
+| `OPENBASE_CODER_WORKSPACE_DIR` / `OPENBASE_CODER_PROJECTS_DIR` | `/data/workspace` (Maritime) | Durable projects dir for coding sessions; in Maritime mode it must live below `/data` (`OPENBASE_CODER_WORKSPACE_DIR` wins only when it points below `/data`). |
 | `OPENBASE_CODER_RUNTIME` | — | Cloud sets `maritime` only for a managed private Maritime Workspace. |
 | `OPENBASE_CODER_CLI_DATA_DIR` | `~/.openbase` | Durable state root; managed Maritime mode requires a path below `/data`. |
 | `OPENBASE_CODER_BACKEND` | `openbase-cloud` | Coding backend for first-run setup (`codex`, `claude-code`, `openbase-cloud`). |
@@ -151,6 +164,14 @@ tailnet address; userspace netstack forwards it to loopback, and this path
 is verified working with real phone calls. The kernel TUN and sidecar
 variants above remain available for networks where userspace forwarding
 falls short.
+
+In **netmesh** mode there is no tailscaled at all: `openbase-tunneld` (an
+embedded tsnet node) serves the tailnet forwards itself, and media never
+depends on inbound UDP — it rides ICE-TCP (tailnet `:7881`) or the embedded
+TURN relay (tailnet `:3478`). LiveKit advertises loopback-only candidates
+(the loopback UDP socket exists solely for the TURN relay's host-local
+allocation sockets), so mesh clients never wait on an unreachable UDP
+candidate.
 
 ## Limitations
 

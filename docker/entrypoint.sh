@@ -32,6 +32,10 @@ NETWORK_MODE="${OPENBASE_CODER_NETWORK_MODE:-tailscale}"
 MARITIME_MODE=0
 if [ "${OPENBASE_CODER_RUNTIME:-}" = "maritime" ]; then
     MARITIME_MODE=1
+    # Maritime VMs accept no inbound connections, so netmesh (outbound-only
+    # tunneld) is the only mode that works there. Default to it so a missing
+    # env value can never silently boot the tailscale path.
+    NETWORK_MODE="${OPENBASE_CODER_NETWORK_MODE:-netmesh}"
     if [ "$(id -u)" = "0" ]; then
         echo "[entrypoint] Refusing to run the Maritime workspace as root." >&2
         exit 1
@@ -43,7 +47,12 @@ if [ "${OPENBASE_CODER_RUNTIME:-}" = "maritime" ]; then
             exit 1
             ;;
     esac
+    # The image ENV pins OPENBASE_CODER_WORKSPACE_DIR to an image-layer path,
+    # so it only wins here when the platform points it somewhere durable.
     PROJECTS_DIR="${OPENBASE_CODER_PROJECTS_DIR:-/data/workspace}"
+    case "${OPENBASE_CODER_WORKSPACE_DIR:-}" in
+        /data/*) PROJECTS_DIR="$OPENBASE_CODER_WORKSPACE_DIR" ;;
+    esac
     case "$PROJECTS_DIR" in
         /data/*) ;;
         *)
@@ -51,7 +60,19 @@ if [ "${OPENBASE_CODER_RUNTIME:-}" = "maritime" ]; then
             exit 1
             ;;
     esac
+    export OPENBASE_CODER_PROJECTS_DIR="$PROJECTS_DIR"
 fi
+# "netmesh" is the canonical env-contract value; "netmesh-tsnet" is the
+# internal tailnet-provider id. Accept both spellings.
+if [ "$NETWORK_MODE" = "netmesh" ]; then
+    NETWORK_MODE="netmesh-tsnet"
+fi
+
+# The one-time bootstrap grant is only ever consumed by `provision` during
+# first-run setup below; keep it (a credential, even if usually already
+# consumed) out of every supervised service's environment on every boot.
+BOOTSTRAP_TOKEN_FOR_PROVISION="${OPENBASE_CODER_BOOTSTRAP_TOKEN:-}"
+unset OPENBASE_CODER_BOOTSTRAP_TOKEN
 
 # Tell the runtime the entrypoint (not launchd/systemd) supervises services;
 # status checks then read the $RUN_DIR/<name>.pid files maintained below.
@@ -69,6 +90,20 @@ rm -f "$RUN_DIR"/*.pid
 if [ ! -e "$HOME/.codex" ]; then
     mkdir -p "$DATA_DIR/normal-codex-home"
     ln -s "$DATA_DIR/normal-codex-home" "$HOME/.codex"
+fi
+
+# The claude-code backend writes ~/.claude and ~/.claude.json; keep both in
+# the volume too, or its login is lost on any container recreate. Newer
+# Claude CLIs follow CLAUDE_CONFIG_DIR (state file included); the symlinks
+# cover tools that still hardcode the home paths.
+export CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$DATA_DIR/normal-claude-home}"
+mkdir -p "$CLAUDE_CONFIG_DIR"
+if [ ! -e "$HOME/.claude" ]; then
+    ln -s "$CLAUDE_CONFIG_DIR" "$HOME/.claude"
+fi
+if [ ! -e "$HOME/.claude.json" ]; then
+    [ -f "$CLAUDE_CONFIG_DIR/.claude.json" ] || printf '{}\n' >"$CLAUDE_CONFIG_DIR/.claude.json"
+    ln -s "$CLAUDE_CONFIG_DIR/.claude.json" "$HOME/.claude.json"
 fi
 
 # Run a command under a restart-on-exit loop, prefixing its output and
@@ -162,8 +197,8 @@ fi
 if [ ! -f "$DATA_DIR/installation.json" ]; then
     echo "[entrypoint] First run: setting up Openbase Coder in $DATA_DIR ..."
     if [ "$MARITIME_MODE" = "1" ]; then
-        openbase-coder provision --kind container
-        unset OPENBASE_CODER_BOOTSTRAP_TOKEN
+        OPENBASE_CODER_BOOTSTRAP_TOKEN="$BOOTSTRAP_TOKEN_FOR_PROVISION" \
+            openbase-coder provision --kind container
     else
         setup_args=(
             --backend "${OPENBASE_CODER_BACKEND:-openbase-cloud}"
@@ -195,9 +230,14 @@ awk '/^# BEGIN docker overrides/{skip=1} !skip{print} /^# END docker overrides/{
 {
     echo "# BEGIN docker overrides"
     if [ "$NETWORK_MODE" = "netmesh-tsnet" ]; then
-        echo "LIVEKIT_NETWORK_MODE=local"
+        echo "LIVEKIT_NETWORK_MODE=netmesh"
     else
         echo "LIVEKIT_NETWORK_MODE=$NETWORK_MODE"
+    fi
+    if [ -n "${OPENBASE_CODER_CLI_PORT:-}" ]; then
+        # Container env must win over any stale port in the env file so the
+        # API binds where the platform (and tunneld's 18080 forward) expect.
+        echo "OPENBASE_CODER_CLI_PORT=$OPENBASE_CODER_CLI_PORT"
     fi
     if [ "$MARITIME_MODE" = "1" ]; then
         echo "OPENBASE_CODER_CLI_HOST=${OPENBASE_CODER_CLI_HOST:-127.0.0.1}"
@@ -260,11 +300,18 @@ if [ -f "$WRAPPER_DIR/code-sync.sh" ] \
     default_services="$default_services code-sync"
 fi
 services="${OPENBASE_CODER_SERVICES:-$default_services}"
+# The staged single-use netmesh key must survive failed enrollments (egress
+# can lag boot on Maritime, and the container can restart before login
+# completes), so it is deleted only once the daemon reports an enrolled,
+# forwarding node — see the confirmation watcher below.
 netmesh_authkey=""
-if [ "$NETWORK_MODE" = "netmesh-tsnet" ] \
-    && [ -f "$DATA_DIR/bootstrap-netmesh-authkey" ]; then
-    netmesh_authkey="$(/bin/cat "$DATA_DIR/bootstrap-netmesh-authkey")"
-    rm -f "$DATA_DIR/bootstrap-netmesh-authkey"
+NETMESH_AUTHKEY_FILE="$DATA_DIR/bootstrap-netmesh-authkey"
+if [ "$NETWORK_MODE" = "netmesh-tsnet" ] && [ -f "$NETMESH_AUTHKEY_FILE" ]; then
+    netmesh_authkey="$(/bin/cat "$NETMESH_AUTHKEY_FILE")"
+fi
+netmesh_key_staged=0
+if [ -n "$netmesh_authkey" ]; then
+    netmesh_key_staged=1
 fi
 
 for name in $services; do
@@ -282,6 +329,24 @@ for name in $services; do
         start_supervised "$name" bash "$wrapper"
     fi
 done
+
+if [ "$netmesh_key_staged" = "1" ]; then
+    (
+        while :; do
+            if python -c "
+import sys
+from openbase_coder_cli.services.tunneld import tunneld_health
+h = tunneld_health()
+sys.exit(0 if h.get('backend_state') == 'Running' and h.get('forwards_up') else 1)
+" 2>/dev/null; then
+                rm -f "$NETMESH_AUTHKEY_FILE"
+                echo "enrollment confirmed; staged auth key removed"
+                break
+            fi
+            sleep 10
+        done
+    ) 2>&1 | sed -u "s/^/[netmesh-enroll] /" &
+fi
 
 echo "[entrypoint] Supervising services: $services"
 echo "[entrypoint] Local API: http://localhost:7999/api/health/"

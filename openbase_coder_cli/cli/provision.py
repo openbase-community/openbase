@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 import click
 import httpx
 
+from openbase_coder_cli.cloud_environment import configured_web_backend_url
 from openbase_coder_cli.config.machine_token_manager import (
     MachineTokenError,
     MachineTokenManager,
@@ -40,6 +41,19 @@ WEB_BACKEND_ENV_KEY = "OPENBASE_CODER_CLI_WEB_BACKEND_URL"
 BOOTSTRAP_TOKEN_ENV_KEY = "OPENBASE_CODER_BOOTSTRAP_TOKEN"
 BOOTSTRAP_EXCHANGE_PATH = "/api/openbase/devspaces/bootstrap/exchange/"
 NETMESH_AUTHKEY_FILE = DEFAULT_ENV_FILE_PATH.parent / "bootstrap-netmesh-authkey"
+
+
+def _container_projects_dir() -> str:
+    """Durable projects dir for container workspaces.
+
+    Mirrors the entrypoint's precedence: OPENBASE_CODER_WORKSPACE_DIR wins
+    only when it points below /data (the image ENV pins it to an image-layer
+    path), then OPENBASE_CODER_PROJECTS_DIR, then the documented default.
+    """
+    workspace_dir = os.environ.get("OPENBASE_CODER_WORKSPACE_DIR", "")
+    if workspace_dir.startswith("/data/"):
+        return workspace_dir
+    return os.environ.get("OPENBASE_CODER_PROJECTS_DIR", "/data/workspace")
 
 
 def _load_bundle(input_file: str | None, overrides: dict) -> dict:
@@ -230,7 +244,14 @@ def provision(
     )
 
     kind = bundle.get("kind", "full")
-    web_backend_url = bundle.get("web_backend_url") or DEFAULT_WEB_BACKEND_URL
+    # Container workspaces have no bundle: the control plane names its own
+    # backend via OPENBASE_CODER_CLI_WEB_BACKEND_URL, and the exchange must
+    # target it — a staging grant must never be transmitted to production.
+    web_backend_url = (
+        bundle.get("web_backend_url")
+        or (configured_web_backend_url() if kind == "container" else "")
+        or DEFAULT_WEB_BACKEND_URL
+    )
 
     # 1. Point the CLI at Openbase Cloud and establish the installation
     # identity. Container workspaces exchange only a one-time grant; they never
@@ -265,9 +286,7 @@ def provision(
                 "OPENBASE_TSNET_STATE_DIR",
                 str(DEFAULT_ENV_FILE_PATH.parent / "tsnet"),
             ),
-            "LIVEKIT_CODEX_THREAD_CWD": os.environ.get(
-                "OPENBASE_CODER_PROJECTS_DIR", "/data/workspace"
-            ),
+            "LIVEKIT_CODEX_THREAD_CWD": _container_projects_dir(),
         }
     else:
         upsert_env_file_values(

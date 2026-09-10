@@ -23,7 +23,14 @@ CLAUDE_CONFIG_DIR = Path(
     os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")
 ).expanduser()
 CLAUDE_SETTINGS_PATH = CLAUDE_CONFIG_DIR / "settings.json"
-CLAUDE_STATE_PATH = Path.home() / ".claude.json"
+# The Claude CLI keeps its state file inside CLAUDE_CONFIG_DIR when that env
+# is set (containers point it at the durable data volume); otherwise it is
+# the legacy home-directory dotfile.
+CLAUDE_STATE_PATH = (
+    CLAUDE_CONFIG_DIR / ".claude.json"
+    if os.environ.get("CLAUDE_CONFIG_DIR")
+    else Path.home() / ".claude.json"
+)
 # Rendered Openbase base agent instructions, delivered per session (Codex
 # developerInstructions / Claude system prompt), not via the shared homes.
 OPENBASE_AGENTS_MD_PATH = OPENBASE_INSTRUCTIONS_DIR / "AGENTS.md"

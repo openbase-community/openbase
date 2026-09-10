@@ -73,6 +73,18 @@ def build_livekit_server(
         bind_ip = env.get("LIVEKIT_BIND_IP", "127.0.0.1")
         node_ip_args = ["--node-ip", bind_ip]
         config_body = _livekit_config_body(tcp_port, udp_port, loopback_iface, [], [])
+    elif mode == "netmesh":
+        # Netmesh containers have no published ports or LAN: every media path
+        # enters through openbase-tunneld's tailnet forwards (ICE-TCP :7881,
+        # TURN :3478), so the ICE-TCP mux must actually listen. Candidates
+        # stay loopback-only — nothing routable is advertised, so mesh
+        # clients never wait on an unreachable UDP candidate; the loopback
+        # UDP socket exists for the embedded TURN relay's host-local
+        # allocation sockets.
+        tcp_port = env.get("LIVEKIT_TCP_PORT", "7881")
+        bind_ip = env.get("LIVEKIT_BIND_IP", "127.0.0.1")
+        node_ip_args = ["--node-ip", bind_ip]
+        config_body = _livekit_config_body(tcp_port, udp_port, loopback_iface, [], [])
     elif mode == "tailscale":
         tcp_port = env.get("LIVEKIT_TCP_PORT", "7881")
         node_ip = env.get("LIVEKIT_NODE_IP") or network.tailscale_ip("4") or ""
@@ -223,7 +235,7 @@ def build_livekit_agent(env: dict[str, str], binaries: dict[str, str]) -> Runner
 
     if mode == "tailscale":
         env["LIVEKIT_URL"] = env.get("LIVEKIT_AGENT_URL", "ws://localhost:7880")
-    elif mode in ("local", "lan"):
+    elif mode in ("local", "lan", "netmesh"):
         env["LIVEKIT_URL"] = env.get("LIVEKIT_URL", "ws://localhost:7880")
     else:
         print(f"Unsupported LIVEKIT_NETWORK_MODE: {mode}", file=sys.stderr)
@@ -276,7 +288,7 @@ def build_django_cli(env: dict[str, str], binaries: dict[str, str]) -> RunnerArg
                 env["LIVEKIT_URL"] = "ws://localhost:7880"
             else:
                 env["LIVEKIT_URL"] = f"ws://{node_ip}:7880"
-    elif mode == "local":
+    elif mode in ("local", "netmesh"):
         env["LIVEKIT_URL"] = existing_url or "ws://localhost:7880"
     elif mode == "lan":
         if not node_ip:

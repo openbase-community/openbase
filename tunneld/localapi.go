@@ -48,11 +48,12 @@ func loadOrCreateControlToken(stateDir string) (string, error) {
 // localAPI is the loopback control surface consumed by the Python CLI in
 // place of `tailscale status --json` / `tailscale serve status --json`.
 type localAPI struct {
-	srv        *tsnet.Server
-	lc         *local.Client
-	token      string
-	turnCreds  *turnCredentials
-	forwardsUp atomic.Bool
+	srv          *tsnet.Server
+	lc           *local.Client
+	token        string
+	openbaseAddr string
+	turnCreds    *turnCredentials
+	forwardsUp   atomic.Bool
 }
 
 func (a *localAPI) markForwardsUp() { a.forwardsUp.Store(true) }
@@ -99,7 +100,7 @@ func (a *localAPI) handleHealth(w http.ResponseWriter, r *http.Request) {
 	payload := map[string]any{
 		"forwards_up": a.forwardsUp.Load(),
 		"forwards": map[string]string{
-			strconv.Itoa(openbaseTailnetPort): "http://" + openbaseLocalAddr,
+			strconv.Itoa(openbaseTailnetPort): "http://" + a.openbaseAddr,
 			strconv.Itoa(livekitTailnetPort):  "tcp://" + livekitLocalAddr,
 		},
 	}
