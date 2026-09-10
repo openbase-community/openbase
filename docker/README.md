@@ -8,10 +8,11 @@ via `tailscale serve` (18080 → 7999 API, 7880 → 7880 LiveKit signaling), and
 LiveKit advertises the tailnet address for media.
 
 The published image is `openbaseai/openbase` on Docker Hub (linux/amd64 +
-linux/arm64), and it is the supported way to run Openbase Coder on Windows
-hosts via Docker Desktop. User-facing instructions live in
-`docs/docker.md` (published at docs.openbase.cloud); this file is the deeper
-image/development reference.
+linux/arm64). It backs the Maritime-managed DevSpaces launched from
+openbase.cloud and is the easy way to try Openbase Coder in a container on
+any Docker host. (Windows hosts run the native Windows install, not this
+image.) User-facing instructions live in `docs/docker.md` (published at
+docs.openbase.cloud); this file is the deeper image/development reference.
 
 ## Publishing
 
