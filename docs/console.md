@@ -51,6 +51,24 @@ Differences in a browser:
 Useful shortcuts: **Cmd/Ctrl+B** toggles the sidebar; in a thread,
 **Enter** sends the prompt and **Shift+Enter** inserts a newline.
 
+## Tabs and Panes
+
+Normal navigation replaces the focused tab's view. Right-click a thread, report, or project and choose **Open in new tab**, **Open to the right**, or **Open below** to keep several views open. The tab strip appears when more than one tab is open. Each pane has its own tabs, and the layout can be resized, rearranged, maximized, or restored with the layout undo and redo controls.
+
+The address follows the focused item; it does not encode the entire workspace. The layout is saved separately on the current device. Unsent prompts and report edits stay with their tab during navigation and rearrangement, but are not saved across app restarts. Closing a tab with unfinished text asks for confirmation.
+
+In the Electron desktop app:
+
+| Action | macOS | Windows / Linux |
+| --- | --- | --- |
+| Next / previous tab in focused pane | Control-Tab / Control-Shift-Tab | Ctrl-Tab / Ctrl-Shift-Tab |
+| Next / previous tab (alternate) | Command-Option-Right / Left | - |
+| Split right | Command-\\ | Ctrl-\\ |
+| Split down | Command-Option-\\ | Ctrl-Alt-\\ |
+| Focus pane 1 through 9 | Command-1 through 9 | Ctrl-1 through 9 |
+
+The console uses the same bindings where the browser delivers them to the page; browser-reserved tab shortcuts may take precedence. Dialogs and open menus keep keyboard control until dismissed. Separate native windows are not currently supported by the workspace layout.
+
 ## Openbase Cloud (app.openbase.cloud)
 
 `https://app.openbase.cloud` is your Openbase Cloud account. As a user you
