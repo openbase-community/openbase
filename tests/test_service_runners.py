@@ -80,7 +80,12 @@ def test_codex_app_server_builds_default_backend_argv(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "CODEX_HOME_DIR", codex_home)
     # A stray CODEX_HOME in the service environment must not retarget the
     # service away from the shared ~/.codex home.
-    env: dict[str, str] = {"CODEX_HOME": "/somewhere/else"}
+    env: dict[str, str] = {
+        "CODEX_HOME": "/somewhere/else",
+        "CODEX_MODEL": "gpt-env-model",
+        "CODEX_MODEL_REASONING_EFFORT": "low",
+        "CODEX_SERVICE_TIER": "fast",
+    }
     binaries = {
         "codex": "/usr/local/bin/codex",
         "openbase_coder": "/usr/local/bin/openbase-coder",
@@ -90,16 +95,12 @@ def test_codex_app_server_builds_default_backend_argv(tmp_path, monkeypatch):
 
     assert argv[0] == "/usr/local/bin/codex"
     assert argv[1] == "app-server"
-    assert argv[2:8] == [
-        "-c",
-        'model_reasoning_effort="high"',
-        "-c",
-        'service_tier="standard"',
-        "-c",
-        'model="gpt-5.5"',
-    ]
+    assert "-c" not in argv
     assert argv[-2:] == ["--listen", "unix://"]
     assert out_env["CODEX_HOME"] == str(codex_home)
+    assert "CODEX_MODEL" not in out_env
+    assert "CODEX_MODEL_REASONING_EFFORT" not in out_env
+    assert "CODEX_SERVICE_TIER" not in out_env
     assert out_env["CODEX_APP_SERVER_URL"] == "unix://"
     assert out_env["DISABLE_AUTOUPDATER"] == "1"
     assert codex_home.is_dir()

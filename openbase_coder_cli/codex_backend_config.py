@@ -1,8 +1,9 @@
 """Backend-dependent Codex app-server launch overrides.
 
-The service app-server runs against the shared ``~/.codex`` home, so backend
-model/provider choices are passed as ``-c`` launch overrides scoped to the
-service process — never written into the user's config.toml.
+The normal local Codex app-server runs against the shared ``~/.codex`` home,
+so it must not receive global model, reasoning, or service-tier overrides that
+would also affect terminal-launched Codex chats. Openbase role settings are
+sent per turn by the Openbase client instead.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ def codex_backend_cli_overrides(
     *,
     web_backend_url: str | None = None,
 ) -> list[str]:
-    """``codex app-server`` ``-c`` arguments for the selected backend."""
+    """``codex app-server`` ``-c`` arguments for provider-level backend routing."""
     if backend == OPENBASE_CLOUD_CODEX_BACKEND:
         base_url = _openbase_cloud_llm_base_url(web_backend_url)
         model = os.getenv(
@@ -45,8 +46,7 @@ def codex_backend_cli_overrides(
             (f"{provider}.wire_api", "responses"),
         )
     if backend == CODEX_BACKEND:
-        model = os.getenv("CODEX_MODEL", DEFAULT_CODEX_MODEL)
-        return _config_args(("model", model))
+        return []
     return []
 
 

@@ -142,7 +142,10 @@ def build_livekit_server(
 def build_codex_app_server(
     env: dict[str, str], binaries: dict[str, str]
 ) -> RunnerArgvEnv:
-    from openbase_coder_cli.backend_config import normalize_backend
+    from openbase_coder_cli.backend_config import (
+        OPENBASE_CLOUD_CODEX_BACKEND,
+        normalize_backend,
+    )
     from openbase_coder_cli.codex_backend_config import codex_backend_cli_overrides
     from openbase_coder_cli.codex_control_plane import (
         apply_managed_codex_app_server_endpoint,
@@ -179,20 +182,34 @@ def build_codex_app_server(
         env["OPENBASE_CLOUD_CODEX_API_KEY"] = result.stdout.strip()
 
     try:
+        normalized_backend = normalize_backend(backend)
+    except ValueError:
+        normalized_backend = None
+
+    if normalized_backend == OPENBASE_CLOUD_CODEX_BACKEND:
+        backend_overrides = [
+            "-c",
+            f'model_reasoning_effort="{reasoning_effort}"',
+            "-c",
+            f'service_tier="{service_tier}"',
+            *codex_backend_cli_overrides(
+                normalized_backend,
+                web_backend_url=env.get("OPENBASE_CODER_CLI_WEB_BACKEND_URL"),
+            ),
+        ]
+    elif normalized_backend is not None:
+        for key in ("CODEX_MODEL", "CODEX_MODEL_REASONING_EFFORT", "CODEX_SERVICE_TIER"):
+            env.pop(key, None)
         backend_overrides = codex_backend_cli_overrides(
-            normalize_backend(backend),
+            normalized_backend,
             web_backend_url=env.get("OPENBASE_CODER_CLI_WEB_BACKEND_URL"),
         )
-    except ValueError:
+    else:
         backend_overrides = []
 
     argv = [
         binaries["codex"],
         "app-server",
-        "-c",
-        f'model_reasoning_effort="{reasoning_effort}"',
-        "-c",
-        f'service_tier="{service_tier}"',
         *backend_overrides,
         "--listen",
         endpoint.value,

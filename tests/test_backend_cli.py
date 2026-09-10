@@ -80,10 +80,10 @@ def test_codex_backend_cli_overrides_for_openbase_cloud() -> None:
     assert 'model_providers.openbase_cloud.wire_api="responses"' in joined
 
 
-def test_codex_backend_cli_overrides_for_direct_codex() -> None:
+def test_codex_backend_cli_overrides_for_direct_codex_are_empty() -> None:
     args = codex_backend_cli_overrides("codex")
 
-    assert args == ["-c", 'model="gpt-5.5"']
+    assert args == []
 
 
 def test_codex_backend_cli_overrides_use_configured_web_backend() -> None:
