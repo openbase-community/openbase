@@ -1,6 +1,6 @@
 # services status
 
-Show launchd install/running state for all managed services.
+Show install/running state for all managed services.
 
 ## Usage
 
@@ -13,6 +13,8 @@ Output includes whether each service is:
 - `not installed`
 - `running (pid ...)`
 - `loaded (not running, last exit: ...)`
+- `not used (<backend> backend)`
+- `optional (not installed)`
 
 The command also verifies the Tailscale Serve routes that the iOS app uses:
 
