@@ -45,15 +45,6 @@ def livekit_network_mode(provider_name: str) -> str:
     return "local" if provider_name == PROVIDER_NETMESH_TSNET else "tailscale"
 
 
-# Last-resort netmesh-ctl location: the legacy standalone Openbase Netmesh app
-# (retired). The shipping companion (nested in the desktop app) and the dev
-# companion-build/DerivedData layouts are resolved from netmesh_companion —
-# the single source of truth for where the companion lives — so they are not
-# re-declared here.
-NETMESH_CTL_CANDIDATES = (
-    "/Applications/OpenbaseNetmesh.app/Contents/MacOS/netmesh-ctl",
-)
-
 _TAILSCALE_FALLBACK_PATHS = (
     "/usr/local/bin/tailscale",
     "/opt/homebrew/bin/tailscale",
@@ -147,10 +138,6 @@ def netmesh_ctl_bin() -> str | None:
     shared = netmesh_ctl_path()
     if shared and os.access(shared, os.X_OK):
         return shared
-    # Legacy standalone app (retired) as a last resort.
-    for candidate in NETMESH_CTL_CANDIDATES:
-        if os.access(candidate, os.X_OK):
-            return candidate
     return shutil.which("netmesh-ctl")
 
 
