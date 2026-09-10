@@ -13,9 +13,12 @@ branch ONLY when it is provably safe:
 
 Branch pointers follow a synced repository manifest, but only through
 provably-safe moves: fast-forwards converge, a stale manifest (its head an
-ancestor of local) loses to local history, and true divergence pauses as a
-recorded conflict for `openbase-coder sync resolve` — automation never picks
-a winner between two real histories.
+ancestor of local) loses to local history, a rewrite the manifest's
+publisher advertised (``replaces``, backed by its own reflog) displaces the
+superseded tip with a recovery-ref backup — force-with-lease semantics —
+and true divergence pauses as a recorded conflict for
+`openbase-coder sync resolve` — automation never picks a winner between two
+real histories.
 """
 
 from __future__ import annotations
@@ -292,6 +295,25 @@ def reconcile_repo(
     )
     if remote_is_ancestor:
         return result(ACTION_REMOTE_BEHIND, branch)
+
+    from openbase_coder_cli.code_sync.repositories import (
+        own_advertised_manifest,
+        tip_superseded_by_manifest,
+    )
+
+    own_manifest = own_advertised_manifest(repo, branch, local_sha)
+    if own_manifest is not None and tip_superseded_by_manifest(
+        repo, fetched_sha, own_manifest
+    ):
+        # The peer still serves a tip this machine rewrote away (rebase or
+        # amend) and advertised as replaced in its manifest. Not a
+        # conflict: the peer converges to the rewrite once the manifest
+        # reaches it.
+        return result(
+            ACTION_REMOTE_BEHIND,
+            branch,
+            f"peer tip {fetched_sha[:12]} superseded by advertised rewrite",
+        )
 
     record_branch_conflict(
         folder_id=folder_id,

@@ -18,6 +18,11 @@ from urllib.parse import urlsplit
 REPO_MANIFEST_NAME = ".openbase-repo.json"
 MANIFEST_SCHEMA_VERSION = 1
 RECOVERY_REF_PREFIX = "refs/openbase-code-sync/backups"
+# Bound the advertised rewritten-away tips a manifest may carry.
+MAX_REPLACED_TIPS = 20
+# How far back in the branch reflog an old advertised tip is still
+# recognized as this machine's own history when publishing rewrite intent.
+REFLOG_REWRITE_LOOKBACK = 200
 
 
 def is_repository_manifest_conflict(path: Path) -> bool:
@@ -91,6 +96,11 @@ def ensure_repository_manifest(repo: Path) -> dict[str, Any] | None:
         "schema_version": MANIFEST_SCHEMA_VERSION,
         **state,
     }
+    replaces = replaced_tips_for_publish(
+        repo, state["branch"], state["head"], read_repository_manifest(repo)
+    )
+    if replaces:
+        manifest["replaces"] = replaces
     origin = _git(["remote", "get-url", "origin"], repo).stdout.strip()
     if _safe_origin_url(origin):
         manifest["origin_url"] = origin
@@ -126,6 +136,115 @@ def read_repository_manifest(directory: Path) -> dict[str, Any] | None:
     ):
         return None
     return payload
+
+
+def manifest_replaces(manifest: dict[str, Any] | None) -> list[str]:
+    """Validated ``replaces`` shas a manifest advertises as rewritten away."""
+    if not isinstance(manifest, dict):
+        return []
+    raw = manifest.get("replaces")
+    if not isinstance(raw, list):
+        return []
+    return [sha for sha in raw if _is_sha(sha)]
+
+
+def replaced_tips_for_publish(
+    repo: Path, branch: str, head: str, previous: dict[str, Any] | None
+) -> list[str]:
+    """Superseded tips the new manifest head replaces (rewrite intent).
+
+    Only the machine that performed a history rewrite can tell a rebase or
+    amend apart from two-sided divergence: its branch reflog records that
+    the previously advertised tip used to be the local tip. Publishing the
+    superseded tips alongside the new head gives peers force-with-lease
+    semantics — they may discard exactly the history this machine claims
+    to have rewritten, and nothing else. A previously advertised head that
+    was never a local tip here (a peer's own divergent publish) is
+    deliberately never claimed as replaced.
+    """
+    from openbase_coder_cli.code_sync.reconciler import _git
+
+    if not previous or previous.get("branch") != branch:
+        return []
+    candidates = manifest_replaces(previous)
+    if _is_sha(previous.get("head")):
+        candidates.append(str(previous["head"]))
+    candidates = [sha for sha in dict.fromkeys(candidates) if sha != head]
+    if not candidates:
+        return []
+    reflog_tips = set(
+        _git(
+            [
+                "rev-list",
+                "-g",
+                f"-n{REFLOG_REWRITE_LOOKBACK}",
+                f"refs/heads/{branch}",
+            ],
+            repo,
+        ).stdout.split()
+    )
+    replaced = [
+        sha
+        for sha in candidates
+        if sha in reflog_tips
+        # An old tip still reachable from the new head is ordinary growth,
+        # not a rewrite.
+        and _git(["merge-base", "--is-ancestor", sha, head], repo).returncode != 0
+    ]
+    return replaced[-MAX_REPLACED_TIPS:]
+
+
+def tip_superseded_by_manifest(
+    repo: Path, tip_sha: str, manifest: dict[str, Any] | None
+) -> bool:
+    """Whether ``tip_sha`` holds only history the manifest's publisher
+    advertised as rewritten away — so displacing it discards nothing the
+    rewriting machine did not explicitly claim to have replaced."""
+    from openbase_coder_cli.code_sync.reconciler import _git
+
+    for replaced in manifest_replaces(manifest):
+        if tip_sha == replaced:
+            return True
+        # A tip strictly behind a rewritten-away tip is also entirely
+        # within the rewritten history; checkable only when the replaced
+        # commit's object is available locally.
+        if (
+            _git(["cat-file", "-e", f"{replaced}^{{commit}}"], repo).returncode == 0
+            and _git(
+                ["merge-base", "--is-ancestor", tip_sha, replaced], repo
+            ).returncode
+            == 0
+        ):
+            return True
+    return False
+
+
+def own_advertised_manifest(
+    repo: Path, branch: str, head: str
+) -> dict[str, Any] | None:
+    """This checkout's published manifest, when it advertises exactly the
+    local branch/head — i.e. it is our own advertisement, not a peer's
+    not-yet-consumed one."""
+    from openbase_coder_cli.code_sync.worktrees import (
+        read_manifest as read_worktree_manifest,
+    )
+
+    for manifest in (read_repository_manifest(repo), read_worktree_manifest(repo)):
+        if (
+            manifest is not None
+            and manifest.get("branch") == branch
+            and manifest.get("head") == head
+        ):
+            return manifest
+    return None
+
+
+def _is_sha(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 40
+        and all(char in "0123456789abcdef" for char in value)
+    )
 
 
 def sync_checkout_manifest(
@@ -245,10 +364,15 @@ def converge_repository_to_manifest(
 
     Convergence only performs provably-safe moves. A manifest whose head is
     an ANCESTOR of the local head is stale (the peer lags this machine) —
-    the local state wins and the caller republishes it. Truly divergent
-    history PAUSES: the ref stays put, a branch conflict is recorded for
-    health warnings and ``openbase-coder sync resolve``, and no winner is
-    picked automatically (the 2026-08-25 incident). Setting
+    the local state wins and the caller republishes it. A local tip the
+    manifest advertises as rewritten away (``replaces``, published only by
+    the machine whose reflog proves it performed the rewrite) is displaced
+    to the new head with the old tip retained under
+    ``refs/openbase-code-sync/backups`` — force-with-lease semantics.
+    Any other divergent history PAUSES: the ref stays put, a branch
+    conflict is recorded for health warnings and
+    ``openbase-coder sync resolve``, and no winner is picked automatically
+    (the 2026-08-25 incident). Setting
     ``OPENBASE_CODE_SYNC_AUTO_DISPLACE=1`` restores the legacy behavior of
     displacing to the manifest with the old tip retained under
     ``refs/openbase-code-sync/backups``.
@@ -284,6 +408,7 @@ def converge_repository_to_manifest(
         ["rev-parse", "--verify", "--quiet", f"{target_ref}^{{commit}}"], repo
     ).stdout.strip()
     backup = ""
+    superseded = False
     if old_target and old_target != desired_head:
         is_fast_forward = (
             _git(
@@ -300,27 +425,38 @@ def converge_repository_to_manifest(
             )
             if manifest_is_stale:
                 return "local_ahead"
-            from openbase_coder_cli.code_sync.conflicts import (
-                record_branch_conflict,
-            )
+            if tip_superseded_by_manifest(repo, old_target, manifest):
+                # The manifest's publisher advertised this exact tip as
+                # rewritten away (rebase/amend): converging discards only
+                # the history that machine explicitly claims to have
+                # replaced — force-with-lease semantics — and the old tip
+                # is still preserved under a recovery ref.
+                backup = _preserve_commit(repo, old_target)
+                superseded = True
+            else:
+                from openbase_coder_cli.code_sync.conflicts import (
+                    record_branch_conflict,
+                )
 
-            record_branch_conflict(
-                folder_id=folder_id,
-                repo_relpath=repo_relpath,
-                branch=branch,
-                local_sha=old_target,
-                remote_sha=desired_head,
-                path=conflicts_path,
-            )
-            if os.environ.get("OPENBASE_CODE_SYNC_AUTO_DISPLACE") != "1":
-                # Truly divergent history: neither machine's automation has
-                # standing to pick a winner. The ref stays put (Syncthing has
-                # already made the files match, so the machines are not
-                # materially out of step), the conflict surfaces in health
-                # warnings, and `openbase-coder sync resolve` decides.
-                return "divergence_paused"
-            # Legacy opt-in: displace to the manifest, preserving the old tip.
-            backup = _preserve_commit(repo, old_target)
+                record_branch_conflict(
+                    folder_id=folder_id,
+                    repo_relpath=repo_relpath,
+                    branch=branch,
+                    local_sha=old_target,
+                    remote_sha=desired_head,
+                    path=conflicts_path,
+                )
+                if os.environ.get("OPENBASE_CODE_SYNC_AUTO_DISPLACE") != "1":
+                    # Truly divergent history: neither machine's automation
+                    # has standing to pick a winner. The ref stays put
+                    # (Syncthing has already made the files match, so the
+                    # machines are not materially out of step), the conflict
+                    # surfaces in health warnings, and
+                    # `openbase-coder sync resolve` decides.
+                    return "divergence_paused"
+                # Legacy opt-in: displace to the manifest, preserving the
+                # old tip.
+                backup = _preserve_commit(repo, old_target)
     update_args = ["update-ref", target_ref, desired_head]
     if old_target:
         update_args.append(old_target)
@@ -336,7 +472,21 @@ def converge_repository_to_manifest(
     if reset.returncode != 0:
         return "index_refresh_failed"
     _exclude_manifest(repo)
-    action = "converged"
+    if superseded and folder_id:
+        from openbase_coder_cli.code_sync.conflicts import (
+            mark_branch_conflicts_resolved,
+        )
+
+        # A conflict recorded on an earlier tick (before the rewrite
+        # advertisement arrived) is settled by this convergence.
+        mark_branch_conflicts_resolved(
+            folder_id=folder_id,
+            repo_relpath=repo_relpath,
+            branch=branch,
+            resolution="superseded",
+            path=conflicts_path,
+        )
+    action = "converged_rewrite" if superseded else "converged"
     return f"{action}; backup={backup}" if backup else action
 
 

@@ -78,7 +78,10 @@ def ensure_worktree_manifest(repo: Path, home: Path | None = None) -> bool:
 
     Returns True when ``repo`` is a linked worktree (manifest ensured).
     """
-    from openbase_coder_cli.code_sync.repositories import repository_state
+    from openbase_coder_cli.code_sync.repositories import (
+        replaced_tips_for_publish,
+        repository_state,
+    )
 
     home = home or Path.home()
     main_repo = worktree_main_repo(repo)
@@ -97,6 +100,11 @@ def ensure_worktree_manifest(repo: Path, home: Path | None = None) -> bool:
         "main_repo": main_relhome,
         **state,
     }
+    replaces = replaced_tips_for_publish(
+        repo, state["branch"], state["head"], read_manifest(repo)
+    )
+    if replaces:
+        manifest["replaces"] = replaces
     path = repo / WORKTREE_MANIFEST_NAME
     rendered = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
     try:
