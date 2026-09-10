@@ -42,6 +42,7 @@ from openbase_coder_cli.services.definitions import SERVICES
 from openbase_coder_cli.services.installation import InstallationConfig
 from openbase_coder_cli.services.launchd import launchctl_status
 from openbase_coder_cli.services.selection import configured_coding_backends
+from openbase_coder_cli.services.tailscale_provider import stock_tailscale_conflict
 from openbase_coder_cli.services.tailscale_serve import tailscale_serve_health
 from openbase_coder_cli.stt_providers import (
     LOCAL_MLX_WHISPER_STT_PROVIDER_ID,
@@ -795,6 +796,8 @@ def doctor() -> None:
     # --- Tailscale Serve ---
     click.echo()
     click.echo(click.style("Tailscale Serve", bold=True))
+    if conflict := stock_tailscale_conflict():
+        fail(f"tailnet transport conflict: {conflict}")
     serve_health = tailscale_serve_health()
     if not serve_health.tailscale_available:
         action("tailscale: not found on PATH")

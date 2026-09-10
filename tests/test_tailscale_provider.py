@@ -140,3 +140,60 @@ def test_hostname_capability_honors_helper_kill_switch(monkeypatch):
         "https_port": 443,
         "https_supported": True,
     }
+
+
+class _FakeStatusResult:
+    def __init__(self, returncode: int, stdout: str):
+        self.returncode = returncode
+        self.stdout = stdout
+
+
+def _stock_status(monkeypatch, backend_state: str | None, *, returncode: int = 0):
+    monkeypatch.setattr(provider, "tailscale_bin", lambda: "/stock/tailscale")
+    payload = "" if backend_state is None else json.dumps({"BackendState": backend_state})
+    monkeypatch.setattr(
+        provider.subprocess,
+        "run",
+        lambda *a, **k: _FakeStatusResult(returncode, payload),
+    )
+
+
+def test_stock_tailscale_conflict_flags_active_vpn_on_netmesh(monkeypatch):
+    monkeypatch.setattr(provider, "provider", lambda: provider.PROVIDER_NETMESH)
+    monkeypatch.setattr(provider, "netmesh_uses_stock_tailscale", lambda: False)
+    _stock_status(monkeypatch, "Running")
+    assert "official Tailscale VPN" in (provider.stock_tailscale_conflict() or "")
+
+
+def test_stock_tailscale_installed_but_stopped_is_not_a_conflict(monkeypatch):
+    monkeypatch.setattr(provider, "provider", lambda: provider.PROVIDER_NETMESH)
+    monkeypatch.setattr(provider, "netmesh_uses_stock_tailscale", lambda: False)
+    _stock_status(monkeypatch, "Stopped")
+    assert provider.stock_tailscale_conflict() is None
+
+
+def test_stock_tailscale_absent_is_not_a_conflict(monkeypatch):
+    monkeypatch.setattr(provider, "provider", lambda: provider.PROVIDER_NETMESH)
+    monkeypatch.setattr(provider, "netmesh_uses_stock_tailscale", lambda: False)
+    monkeypatch.setattr(provider, "tailscale_bin", lambda: None)
+    assert provider.stock_tailscale_conflict() is None
+
+
+def test_stock_tailscale_conflict_ignored_on_stock_transport(monkeypatch):
+    monkeypatch.setattr(provider, "provider", lambda: provider.PROVIDER_TAILSCALE)
+    _stock_status(monkeypatch, "Running")
+    assert provider.stock_tailscale_conflict() is None
+
+
+def test_stock_tailscale_conflict_ignored_where_netmesh_rides_stock(monkeypatch):
+    monkeypatch.setattr(provider, "provider", lambda: provider.PROVIDER_NETMESH)
+    monkeypatch.setattr(provider, "netmesh_uses_stock_tailscale", lambda: True)
+    _stock_status(monkeypatch, "Running")
+    assert provider.stock_tailscale_conflict() is None
+
+
+def test_stock_tailscale_probe_failure_is_not_a_conflict(monkeypatch):
+    monkeypatch.setattr(provider, "provider", lambda: provider.PROVIDER_NETMESH)
+    monkeypatch.setattr(provider, "netmesh_uses_stock_tailscale", lambda: False)
+    _stock_status(monkeypatch, None, returncode=1)
+    assert provider.stock_tailscale_conflict() is None
