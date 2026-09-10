@@ -52,7 +52,7 @@ openbase-coder sync resolve 3f2a... --use-remote
 - Eligibility requires two or more non-phone devices with Tailscale
   identities in your Openbase Cloud device registry.
 - The reconcile tick also runs automatically every minute inside the
-  `openbase-routines` service whenever sync is enabled; the `reconcile`
+  `sync-workers` service whenever sync is enabled; the `reconcile`
   command exists for one-off runs and debugging.
 - Settings are also exposed at `GET/PUT /api/sync/settings/` for the console
   Sync page.
