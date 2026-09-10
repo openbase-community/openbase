@@ -1,6 +1,6 @@
 # services
 
-Manage Openbase launchd background services.
+Manage Openbase background services.
 
 In the apps: the [desktop app](../desktop-app.md) and
 [console](../console.md) show the same services on their **Status** page and
@@ -17,13 +17,14 @@ openbase-coder services COMMAND [ARGS]
 
 | Subcommand | Description |
 |---|---|
-| [`install`](services-install.md) | Generate wrappers/plists and load default services |
+| [`install`](services-install.md) | Generate service wrappers and supervisor files, then load default services |
 | `up` | Alias for `install`; also configures Tailscale Serve routes |
 | [`start`](services-start.md) | Start default services or one named service |
 | [`stop`](services-stop.md) | Stop all or one service |
+| `uninstall` | Stop services and remove generated supervisor files and wrapper scripts |
 | [`status`](services-status.md) | Show service state summary |
 | [`logs`](services-logs.md) | Tail one service's logs |
-| [`regenerate`](services-regenerate.md) | Rebuild wrappers/plists from `installation.json` |
+| [`regenerate`](services-regenerate.md) | Rebuild service wrappers and supervisor files from `installation.json` |
 
 ## Managed Service Names
 
@@ -37,6 +38,9 @@ openbase-coder services COMMAND [ARGS]
 - `livekit-agent`
 - `django-cli` (port `7999`)
 - `code-sync` (optional; installed when code sync is enabled)
+- `openbase-cloud-auth-rehydrate` (optional; Cloud workspace auth helper)
+- `openbase-cloud-heartbeat` (optional; Cloud workspace idle heartbeat)
+- `openbase-tunneld` (optional; embedded Openbase VPN transport, port `7998`)
 
 ## Examples
 
