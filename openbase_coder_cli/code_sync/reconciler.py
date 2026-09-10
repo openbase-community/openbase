@@ -434,7 +434,7 @@ def run_reconcile_once(
     )
     from openbase_coder_cli.code_sync.worktrees import (
         adopt_worktree,
-        ensure_worktree_manifest,
+        is_linked_worktree,
     )
 
     reconcile_state = read_reconcile_state()
@@ -448,7 +448,12 @@ def run_reconcile_once(
     ) -> None:
         auth_header = current_auth_header()
         try:
-            is_worktree = ensure_worktree_manifest(repo, home)
+            # Detection only — publishing/refreshing the worktree manifest
+            # is sync_checkout_manifest's call, AFTER it has had the chance
+            # to consume a peer-published manifest. An eager write here
+            # would overwrite the peer's advertisement with local state
+            # every tick, making worktree manifests consume-proof.
+            is_worktree = is_linked_worktree(repo)
         except (OSError, subprocess.TimeoutExpired):
             is_worktree = False
         state_key = f"{folder.folder_id}:{repo_relpath}"

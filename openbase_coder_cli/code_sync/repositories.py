@@ -303,7 +303,13 @@ def sync_checkout_manifest(
             publish()
             return "local_ahead_republished"
         return action
-    if not is_worktree:
+    if is_worktree:
+        # Refresh machine-local metadata (main-repo path, carried rewrite
+        # advertisements) now that the manifest agrees with local state.
+        # Refreshing ONLY in the agreeing case is what lets a peer's
+        # not-yet-consumed manifest survive until convergence.
+        ensure_worktree_manifest(repo, home)
+    else:
         # Refresh a newly added/changed safe origin URL even when the branch
         # state itself did not move.
         ensure_repository_manifest(repo)

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from pathlib import Path
 
+from openbase_coder_cli import sync_config
 from openbase_coder_cli.code_sync import reconciler, repositories, worktrees
+from openbase_coder_cli.code_sync.eligibility import SyncPeer
 
 GIT_IDENTITY = ["-c", "user.email=test@example.com", "-c", "user.name=Test"]
 
@@ -61,6 +64,11 @@ def _origin_with_worktree(home: Path) -> tuple[Path, Path]:
 
 def test_manifest_written_for_worktree_only(tmp_path: Path) -> None:
     main, wt = _origin_with_worktree(tmp_path)
+
+    # Detection is read-only and manifest-free.
+    assert worktrees.is_linked_worktree(main) is False
+    assert worktrees.is_linked_worktree(wt) is True
+    assert not (wt / worktrees.WORKTREE_MANIFEST_NAME).exists()
 
     assert worktrees.ensure_worktree_manifest(main, home=tmp_path) is False
     assert not (main / worktrees.WORKTREE_MANIFEST_NAME).exists()
@@ -186,6 +194,113 @@ def test_existing_worktree_follows_synced_branch_manifest(tmp_path: Path) -> Non
     assert action == "converged"
     assert _git(peer_wt, "rev-parse", "--abbrev-ref", "HEAD") == "feature"
     assert _git(peer_wt, "rev-parse", "HEAD") == head
+
+
+def test_reconcile_tick_follows_worktree_rewrite_manifest(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # Regression: the tick used to refresh the worktree manifest during
+    # detection, overwriting a peer-published manifest with local state
+    # before it could be consumed — worktree branch moves and rewrites
+    # never converged through the manifest path.
+    from openbase_coder_cli.code_sync.conflicts import unresolved_conflicts
+
+    home = tmp_path / "home"
+    main, wt = _origin_with_worktree(home)
+    old_tip = _git(wt, "rev-parse", "HEAD")
+
+    # The peer machine's stand-in: a clone that rewrites the dev branch.
+    peer = tmp_path / "peer"
+    subprocess.run(
+        ["git", "clone", "-q", str(main), str(peer)],
+        capture_output=True,
+        check=True,
+    )
+    _git(peer, "checkout", "-q", "dev")
+
+    config_path = tmp_path / "sync-config.json"
+    conflicts_path = tmp_path / "conflicts.json"
+    sync_config.set_sync_folders([{"relpath": "Projects"}], config_path)
+    sync_peer = SyncPeer("peer", "peer", "desktop", "peer.test", "engine")
+    monkeypatch.setattr(
+        reconciler, "RECONCILE_STATE_PATH", tmp_path / "reconcile-state.json"
+    )
+    monkeypatch.setattr(
+        reconciler.TokenManager, "get_access_token", lambda _self: "token"
+    )
+    monkeypatch.setattr(reconciler, "peer_git_url", lambda *_args: str(peer))
+
+    def tick():
+        return reconciler.run_reconcile_once(
+            config_path=config_path,
+            home=home,
+            conflicts_path=conflicts_path,
+            peers=(sync_peer,),
+        )
+
+    tick()  # Publishes manifests and records per-repo previous state.
+
+    _git(peer, "commit", "--amend", "-m", "dev work (rewritten)")
+    new_tip = _git(peer, "rev-parse", "HEAD")
+    # Syncthing stand-in: the rewriting peer's worktree manifest arrives.
+    (wt / worktrees.WORKTREE_MANIFEST_NAME).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "main_repo": "Projects/app",
+                "branch": "dev",
+                "head": new_tip,
+                "replaces": [old_tip],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    summary = tick()
+
+    (manifest_entry,) = summary["worktree_manifests"]
+    assert manifest_entry["path"] == "app-worktrees/dev"
+    assert manifest_entry["action"].startswith("converged_rewrite; backup=")
+    assert _git(wt, "rev-parse", "HEAD") == new_tip
+    assert unresolved_conflicts(conflicts_path) == []
+
+
+def test_peer_worktree_manifest_survives_blocked_convergence(tmp_path: Path) -> None:
+    # When convergence cannot run yet (staged changes), the peer's manifest
+    # must stay on disk untouched so a later tick can still consume it.
+    home = tmp_path / "home"
+    main, wt = _origin_with_worktree(home)
+    old_tip = _git(wt, "rev-parse", "HEAD")
+    peer_head = "f" * 40
+    (wt / worktrees.WORKTREE_MANIFEST_NAME).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "main_repo": "Projects/app",
+                "branch": "dev",
+                "head": peer_head,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (wt / "staged.txt").write_text("keep staged\n", encoding="utf-8")
+    _git(wt, "add", "staged.txt")
+
+    action = repositories.sync_checkout_manifest(
+        wt,
+        is_worktree=True,
+        home=home,
+        previous_state={"branch": "dev", "head": old_tip},
+        remote_urls=(),
+        auth_header=None,
+    )
+
+    assert action == "staged_changes"
+    manifest = worktrees.read_manifest(wt)
+    assert manifest is not None
+    assert manifest["head"] == peer_head
 
 
 def test_adopt_skips_when_unsafe(tmp_path: Path) -> None:
