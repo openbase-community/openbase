@@ -622,7 +622,7 @@ class CodexAppServerClient(CodexTransportMixin):
     def _configured_reasoning_effort(self) -> str | None:
         if self._use_super_agent_reasoning:
             return self._super_agents_reasoning_effort() or "high"
-        return self._dispatcher_reasoning_effort()
+        return self._dispatcher_reasoning_effort() or "high"
 
     def _dispatcher_voice(self) -> dict[str, str]:
         return dispatcher_voice(self._dispatcher_config_path)

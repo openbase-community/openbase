@@ -194,6 +194,7 @@ def test_run_turn_emits_dispatch_timing_logs(tmp_path: Path, caplog):
             assert method == "turn/start"
             assert params["serviceTier"] == "standard"
             assert params["model"] == "gpt-5.5"
+            assert params["effort"] == "high"
             return {"turn": {"id": "turn-1"}}
 
     async def check():
@@ -225,7 +226,7 @@ def test_run_turn_emits_dispatch_timing_logs(tmp_path: Path, caplog):
         message for message in messages if "stage=turn_start_request" in message
     ]
     assert any(
-        "reasoning_effort=app-server-default" in message for message in turn_start_logs
+        "reasoning_effort=high" in message for message in turn_start_logs
     )
     assert any("model=gpt-5.5" in message for message in turn_start_logs)
     assert any("service_tier=standard" in message for message in turn_start_logs)
@@ -298,6 +299,16 @@ def test_dispatcher_reasoning_config_applies_to_new_turns_without_restart(
         "stage=turn_start_request" in message and "reasoning_effort=high" in message
         for message in messages
     )
+
+
+def test_dispatcher_reasoning_defaults_to_high_when_unset(tmp_path: Path):
+    client = CodexAppServerClient(
+        ws_url="ws://example.invalid",
+        cwd="/tmp/project",
+        dispatcher_config_path=tmp_path / "missing-dispatcher-config.json",
+    )
+
+    assert client._configured_reasoning_effort() == "high"
 
 
 def test_target_thread_uses_super_agents_reasoning_instead_of_dispatcher(
