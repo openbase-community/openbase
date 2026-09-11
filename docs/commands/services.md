@@ -21,6 +21,7 @@ openbase-coder services COMMAND [ARGS]
 | `up` | Alias for `install`; also configures Tailscale Serve routes |
 | [`start`](services-start.md) | Start default services or one named service |
 | [`stop`](services-stop.md) | Stop all or one service |
+| `uninstall [NAME]` | Stop services and remove their launchd plists and wrapper scripts |
 | [`status`](services-status.md) | Show service state summary |
 | [`logs`](services-logs.md) | Tail one service's logs |
 | [`regenerate`](services-regenerate.md) | Rebuild wrappers/plists from `installation.json` |
