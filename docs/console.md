@@ -57,6 +57,8 @@ Normal navigation replaces the focused tab's view. Right-click a thread, report,
 
 The address follows the focused item; it does not encode the entire workspace. The layout is saved separately on the current device. Unsent prompts and report edits stay with their tab during navigation and rearrangement, but are not saved across app restarts. Closing a tab with unfinished text asks for confirmation.
 
+In **Settings > Interface > Tab position**, choose **Horizontal** (the default, above the content) or **Vertical** (beside the navigation sidebar, grouped by pane). The preference is saved on this device without changing the layout. Vertical tabs support reordering within the list, closing, and the same right-click actions. Narrow screens use horizontal tabs to preserve content space.
+
 In the Electron desktop app:
 
 | Action | macOS | Windows / Linux |
@@ -65,9 +67,13 @@ In the Electron desktop app:
 | Next / previous tab (alternate) | Command-Option-Right / Left | - |
 | Split right | Command-\\ | Ctrl-\\ |
 | Split down | Command-Option-\\ | Ctrl-Alt-\\ |
-| Focus pane 1 through 9 | Command-1 through 9 | Ctrl-1 through 9 |
+| Select tab 1 through 8 in focused pane | Command-1 through 8 | Ctrl-1 through 8 |
+| Select last tab in focused pane | Command-9 | Ctrl-9 |
+| Close focused tab | Command-W | Ctrl-W |
 
 The console uses the same bindings where the browser delivers them to the page; browser-reserved tab shortcuts may take precedence. Dialogs and open menus keep keyboard control until dismissed. Separate native windows are not currently supported by the workspace layout.
+
+In Electron, closing a tab with the keyboard uses the same unfinished-text confirmation as its close button and leaves the window open. The final tab stays open.
 
 ## Openbase Cloud (app.openbase.cloud)
 
