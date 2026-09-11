@@ -22,9 +22,10 @@ such as backend host and call audio. This page is the underlying reference.
 | `OPENBASE_CODER_CLI_CORS_ORIGINS`         | No       | `http://localhost:8080,http://127.0.0.1:8080`    | CORS allowlist                              |
 | `OPENBASE_CODER_CLI_DATA_DIR`             | No       | `~/.openbase`                                    | Data root (DB, static, logs, etc.)          |
 | `OPENBASE_CODER_CLI_CONSOLE_BUILD_DIR`    | No       | inferred from install config                     | Console dist directory                      |
-| `CODEX_MODEL`                             | No       | `gpt-5.5`                                        | Codex app-server model                      |
-| `CODEX_MODEL_REASONING_EFFORT`            | No       | `high`                                           | Codex app-server reasoning effort           |
-| `CODEX_SERVICE_TIER`                      | No       | `standard`                                       | Codex app-server service tier               |
+| `SUPER_AGENTS_CODEX_PROFILE_PATH` | No | `~/.codex/openbase.config.toml` | TOML settings applied to each Openbase Codex thread |
+| `SUPER_AGENTS_OPENBASE_CLOUD_CODEX_PROFILE_PATH` | No | `~/.codex/openbase-cloud.config.toml` | Thread-scoped Cloud Codex provider profile |
+| `SUPER_AGENTS_CLAUDE_SETTINGS_PATH` | No | `~/.openbase/profiles/claude/settings.json` | Claude session-only settings layer |
+| `SUPER_AGENTS_CLAUDE_MCP_CONFIG_PATH` | No | `~/.openbase/profiles/claude/mcp.json` | Additional MCP servers for Openbase Claude sessions |
 | `OPENBASE_CODING_BACKEND`                 | No       | `codex` from new setup env files                 | `codex`, `openbase_cloud`, or `claude_code` backend. `openbase_cloud` runs Cloud-proxied Claude Code |
 | `SUPER_AGENTS_DEFAULT_BACKEND`            | No       | spawning agent's backend                         | Default backend for new child threads in one Super Agents MCP process; an explicit per-launch backend can override it |
 | `OPENBASE_CLOUD_ANTHROPIC_BASE_URL`       | No       | `<WEB_BACKEND_URL>/api/openbase/llm/anthropic`   | Anthropic-compatible proxy base URL for the visible Openbase Cloud Claude Code backend |
@@ -32,6 +33,18 @@ such as backend host and call audio. This page is the underlying reference.
 | `OPENBASE_CLOUD_LLM_BASE_URL`             | No       | `<WEB_BACKEND_URL>/api/openbase/llm/openai/v1`   | Legacy Openbase Cloud Responses-compatible proxy base URL for internal Codex compatibility |
 | `OPENBASE_CLOUD_CODEX_MODEL`              | No       | `gpt-5.5`                                        | Model name used by the internal Openbase Cloud Codex compatibility backend |
 | `SUPER_AGENTS_CLAUDE_PERMISSION_MODE`     | No       | `bypassPermissions`                              | Claude SDK permission mode. Use `default` or `acceptEdits` to route tool requests through Openbase's approval queue |
+
+## Conversation Profiles
+
+Setup installs Openbase profiles for both Codex and Claude Code. Normal terminal sessions retain their own model, reasoning, permissions, hooks, and MCP settings. Openbase may add shared skills, but setup does not create or replace the user's `AGENTS.md` or `CLAUDE.md` instructions.
+
+Codex's `openbase.config.toml` is also usable with `codex -p openbase`. Codex does not accept `--profile` on `app-server`, so Openbase loads the same TOML file through `thread/start` and `thread/resume` configuration overrides. The shared daemon receives no global model, provider, reasoning, or service-tier overrides, including for the internal Cloud Codex backend. Role-specific model and reasoning choices are applied to the relevant conversation.
+
+Claude Code uses `--settings` for a session-only profile rather than a named `--profile` option. Openbase supplies its settings and MCP files through the Claude SDK. Authentication and conversation storage remain in the user's existing Claude home; Openbase does not redirect `CLAUDE_CONFIG_DIR` or duplicate login credentials.
+
+The Codex profile also registers the session-ID hook for native `codex -p openbase` commands. App-server configuration overrides do not guarantee execution of native file hooks; Openbase's Super Agents client supplies thread identity through developer instructions and shell environment independently. Claude runs its profile hooks through the native session settings layer.
+
+Existing installations can run `openbase-coder profiles install`, then restart Openbase services. Setup and this repair command migrate identifiable Openbase MCP and session-ID hook entries out of user configuration, leaving unrelated entries intact. Changed user files receive a `.before-openbase-profiles` backup. Existing profile settings are preserved on repeated setup; invalid explicitly selected profiles fail instead of silently falling back to terminal defaults.
 
 ## Dispatcher Config
 

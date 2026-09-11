@@ -28,9 +28,9 @@ from openbase_coder_cli.dispatcher_config import (
 )
 from openbase_coder_cli.paths import (
     CLAUDE_CONFIG_DIR,
-    CLAUDE_STATE_PATH,
-    CODEX_CONFIG_PATH,
+    CLAUDE_PROFILE_MCP_PATH,
     CODEX_HOME_DIR,
+    CODEX_PROFILE_PATH,
     DEFAULT_ENV_FILE_PATH,
     LAUNCHD_WRAPPER_DIR,
     STANDALONE_CURRENT_DIR,
@@ -498,12 +498,12 @@ def _check_super_agents_mcp_registrations(ok, warn, fail) -> None:
     configs = (
         (
             "Codex config",
-            CODEX_CONFIG_PATH,
+            CODEX_PROFILE_PATH,
             _read_super_agents_command_codex,
         ),
         (
             "Claude config",
-            CLAUDE_STATE_PATH,
+            CLAUDE_PROFILE_MCP_PATH,
             _read_super_agents_command_claude,
         ),
     )

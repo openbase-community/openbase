@@ -21,6 +21,32 @@ from openbase_coder_cli.livekit_voice_route import (
 )
 
 
+def test_profile_defaults_are_thread_scoped_and_role_choices_win(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENBASE_CODING_BACKEND", "codex")
+    profile = tmp_path / "profile.toml"
+    profile.write_text('model = "profile-model"\nmodel_reasoning_effort = "medium"\n')
+    monkeypatch.setenv("SUPER_AGENTS_CODEX_PROFILE_PATH", str(profile))
+    roles = tmp_path / "roles.json"
+    client = CodexAppServerClient(
+        ws_url="ws://example.invalid",
+        cwd=str(tmp_path),
+        dispatcher_config_path=str(roles),
+    )
+    assert client._thread_params()["config"]["model"] == "profile-model"
+    assert client._thread_params()["model"] == "profile-model"
+    assert client._configured_reasoning_effort() == "medium"
+    roles.write_text(
+        json.dumps({"backend_models": {"codex": {"dispatcher": "role-model"}}})
+    )
+    client = CodexAppServerClient(
+        ws_url="ws://example.invalid",
+        cwd=str(tmp_path),
+        dispatcher_config_path=str(roles),
+    )
+    assert client._thread_params()["model"] == "role-model"
+    assert client._thread_params()["config"]["model"] == "profile-model"
+
+
 def test_returns_full_text_when_nothing_was_delivered():
     assert _undelivered_suffix("", "hello") == "hello"
 
@@ -225,9 +251,7 @@ def test_run_turn_emits_dispatch_timing_logs(tmp_path: Path, caplog):
     turn_start_logs = [
         message for message in messages if "stage=turn_start_request" in message
     ]
-    assert any(
-        "reasoning_effort=high" in message for message in turn_start_logs
-    )
+    assert any("reasoning_effort=high" in message for message in turn_start_logs)
     assert any("model=gpt-5.5" in message for message in turn_start_logs)
     assert any("service_tier=standard" in message for message in turn_start_logs)
 

@@ -26,6 +26,10 @@ from super_agents.app_server_client import (
     shared_permission_requests,
 )
 from super_agents.backend_clients import CLAUDE_CODE_BACKEND
+from super_agents.backend_config import (
+    configured_backend_from_environment,
+    execution_backend,
+)
 
 from openbase_coder_cli.dispatcher_config import (
     DISPATCHER_MODEL_ROLE,
@@ -239,7 +243,9 @@ class _OpenbaseSuperAgentsClient(CodexAppServerClient):
     def __init__(
         self, manager: "CodexAppServerSessionManager", ws_url: str | None
     ) -> None:
-        super().__init__(ws_url=ws_url)
+        configured = configured_backend_from_environment()
+        identity = configured if execution_backend(configured) == "codex" else "codex"
+        super().__init__(ws_url=ws_url, backend_identity=identity)
         self._manager = manager
 
     async def start_managed_server(self) -> None:

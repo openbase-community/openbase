@@ -154,11 +154,6 @@ def build_livekit_server(
 def build_codex_app_server(
     env: dict[str, str], binaries: dict[str, str]
 ) -> RunnerArgvEnv:
-    from openbase_coder_cli.backend_config import (
-        OPENBASE_CLOUD_CODEX_BACKEND,
-        normalize_backend,
-    )
-    from openbase_coder_cli.codex_backend_config import codex_backend_cli_overrides
     from openbase_coder_cli.codex_control_plane import (
         apply_managed_codex_app_server_endpoint,
     )
@@ -172,8 +167,6 @@ def build_codex_app_server(
     env, endpoint = apply_managed_codex_app_server_endpoint(env)
     env.setdefault("DISABLE_AUTOUPDATER", "1")
     backend = env.get("OPENBASE_CODING_BACKEND", "codex")
-    reasoning_effort = env.get("CODEX_MODEL_REASONING_EFFORT", "high")
-    service_tier = env.get("CODEX_SERVICE_TIER", "standard")
 
     if backend in ("openbase_cloud_codex", "openbase-cloud-codex") and not env.get(
         "OPENBASE_CLOUD_CODEX_API_KEY"
@@ -193,36 +186,19 @@ def build_codex_app_server(
             raise SystemExit(1)
         env["OPENBASE_CLOUD_CODEX_API_KEY"] = result.stdout.strip()
 
-    try:
-        normalized_backend = normalize_backend(backend)
-    except ValueError:
-        normalized_backend = None
-
-    if normalized_backend == OPENBASE_CLOUD_CODEX_BACKEND:
-        backend_overrides = [
-            "-c",
-            f'model_reasoning_effort="{reasoning_effort}"',
-            "-c",
-            f'service_tier="{service_tier}"',
-            *codex_backend_cli_overrides(
-                normalized_backend,
-                web_backend_url=env.get("OPENBASE_CODER_CLI_WEB_BACKEND_URL"),
-            ),
-        ]
-    elif normalized_backend is not None:
-        for key in ("CODEX_MODEL", "CODEX_MODEL_REASONING_EFFORT", "CODEX_SERVICE_TIER"):
-            env.pop(key, None)
-        backend_overrides = codex_backend_cli_overrides(
-            normalized_backend,
-            web_backend_url=env.get("OPENBASE_CODER_CLI_WEB_BACKEND_URL"),
-        )
-    else:
-        backend_overrides = []
+    # The daemon also serves ordinary TUIs. Profile selection belongs to the
+    # client; even environment selection must not leak into its child tools.
+    for key in list(env):
+        if key.startswith("SUPER_AGENTS_") or key in {
+            "CODEX_MODEL",
+            "CODEX_MODEL_REASONING_EFFORT",
+            "CODEX_SERVICE_TIER",
+        }:
+            env.pop(key)
 
     argv = [
         binaries["codex"],
         "app-server",
-        *backend_overrides,
         "--listen",
         endpoint.value,
     ]
@@ -413,6 +389,9 @@ def _load_env(config: InstallationConfig) -> dict[str, str]:
     only place the env file gets applied.
     """
     env = dict(os.environ)
+    from openbase_coder_cli.agent_profiles import profile_environment
+
+    env.update(profile_environment())
     if config.env_file:
         env.update(env_file_values(Path(config.env_file).expanduser()))
     from openbase_coder_cli.codex_control_plane import (

@@ -13,6 +13,7 @@ dependencies = [
     "djangorestframework==3.16.1",
     "django-cors-headers>=4.6.0",
     "python-dotenv>=1.0.0",
+    "tomlkit>=0.13.3",
     "gunicorn>=23.0.0",
     "uvicorn[standard]>=0.32.0",
     "whitenoise>=6.8.0",

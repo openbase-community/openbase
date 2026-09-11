@@ -7,6 +7,7 @@ from pathlib import Path
 
 import click
 
+from openbase_coder_cli.agent_profiles import profile_environment
 from openbase_coder_cli.backend_config import (
     CODING_BACKEND_ENV_KEY,
     DEFAULT_CODING_BACKEND,
@@ -70,6 +71,13 @@ def _ensure_env_file(
         _drop_managed_claude_config_dir(path)
         updates = _missing_livekit_client_credential_values(path)
         current_values = _env_file_values(path)
+        updates.update(
+            {
+                key: value
+                for key, value in profile_environment().items()
+                if key not in current_values
+            }
+        )
         release_backend_url = default_web_backend_url()
         if (
             release_backend_url != PRODUCTION_WEB_BACKEND_URL
@@ -155,10 +163,8 @@ def _ensure_env_file(
         "SUPER_AGENTS_CODEX_SANDBOX_POLICY=danger-full-access",
         f"SUPER_AGENTS_BASE_INSTRUCTIONS_PATH={OPENBASE_AGENTS_MD_PATH}",
         "CLAUDE_CODE_ENABLE_TELEMETRY=0",
-        "CODEX_MODEL_REASONING_EFFORT=high",
-        "# App-server ambient tier follows the Super Agents lane; the voice",
-        "# dispatcher passes its (fast by default) tier explicitly per turn.",
-        "CODEX_SERVICE_TIER=standard",
+        "# Profiles apply only to Openbase conversations, never to the shared daemon.",
+        *(f"{key}={value}" for key, value in profile_environment().items()),
         "DISPATCHER_SERVICE_TIER=fast",
         "SUPER_AGENTS_SERVICE_TIER=standard",
         f"{CODEX_APP_SERVER_ENDPOINT_ENV}={managed_codex_app_server_endpoint({}).value}",

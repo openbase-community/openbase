@@ -19,6 +19,11 @@ OPENBASE_INSTRUCTIONS_DIR = OPENBASE_BASE_DIR / "instructions"
 CODEX_HOME_DIR = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
 CODEX_AGENTS_MD_PATH = CODEX_HOME_DIR / "AGENTS.md"
 CODEX_CONFIG_PATH = CODEX_HOME_DIR / "config.toml"
+CODEX_PROFILE_PATH = CODEX_HOME_DIR / "openbase.config.toml"
+CLOUD_CODEX_PROFILE_PATH = CODEX_HOME_DIR / "openbase-cloud.config.toml"
+OPENBASE_PROFILES_DIR = OPENBASE_BASE_DIR / "profiles"
+CLAUDE_PROFILE_SETTINGS_PATH = OPENBASE_PROFILES_DIR / "claude" / "settings.json"
+CLAUDE_PROFILE_MCP_PATH = OPENBASE_PROFILES_DIR / "claude" / "mcp.json"
 CLAUDE_CONFIG_DIR = Path(
     os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")
 ).expanduser()
