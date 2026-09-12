@@ -174,6 +174,47 @@ def test_tailscale_serve_health_requires_routes_and_backend_health(
     assert health.openbase_url == "http://mac.tailnet.ts.net:18080"
 
 
+def test_tailscale_serve_status_does_not_probe_the_api(monkeypatch):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", "netmesh")
+    monkeypatch.setattr(tp, "tool_path", lambda: "/usr/bin/netmesh-ctl")
+    monkeypatch.setattr(
+        tp,
+        "status_json",
+        lambda: {
+            "Self": {
+                "DNSName": "mac.tailnet.ts.net.",
+                "TailscaleIPs": ["100.64.0.9"],
+            }
+        },
+    )
+    monkeypatch.setattr(
+        tp,
+        "serve_status_json",
+        lambda: {
+            "TCP": {
+                "18080": {"HTTP": True},
+                "7880": {"TCPForward": "127.0.0.1:7880"},
+            },
+            "Web": {
+                "mac.tailnet.ts.net:18080": {
+                    "Handlers": {"/": {"Proxy": "http://127.0.0.1:7999"}}
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(
+        tailscale_serve,
+        "_openbase_reachable",
+        lambda *args, **kwargs: pytest.fail("Status must not self-probe the API"),
+    )
+
+    status = tailscale_serve.tailscale_serve_status()
+
+    assert status.tailscale_running is True
+    assert status.openbase_configured is True
+    assert status.livekit_configured is True
+
+
 @pytest.mark.parametrize(
     "config",
     [

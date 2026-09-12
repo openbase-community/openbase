@@ -202,14 +202,9 @@ a template's fields (variables and options), and scaffold projects from them.
 
 ### Status
 
-Service health for the local runtime: each required and optional service with
-its port/URL and a green (running), yellow (loaded/optional), or red
-(stopped) indicator. Auto-refreshes every 30 seconds. The same information is
-available from `openbase-coder services status`.
+Service health for the local runtime: each required and optional check has one healthy/unhealthy result with its port or URL. The Netmesh/Tailscale connection, Openbase API Serve route, and LiveKit Serve route are separate checks; the Status page reads the configured routes without asking the local API to reach itself through Serve. It auto-refreshes every 30 seconds. The corresponding command-line diagnostics are available from `openbase-coder services status`.
 
-**On iPhone:** the iOS app shows a warning banner when the local runtime is
-unreachable, and its Console tab can open this Status page in the embedded
-browser.
+**On iPhone:** the iOS app shows a warning banner when the local runtime is unreachable, and its Console tab can open this Status page in the embedded browser.
 
 ### Devices
 
