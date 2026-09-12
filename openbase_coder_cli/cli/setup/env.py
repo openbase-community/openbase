@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import secrets
 from pathlib import Path
 
@@ -78,7 +79,12 @@ def _ensure_env_file(
                 if key not in current_values
             }
         )
-        release_backend_url = default_web_backend_url()
+        # An explicit env override at setup time (e.g. pointing a dev install
+        # at staging) must be persisted, or services silently target the
+        # channel default afterwards.
+        release_backend_url = (
+            os.environ.get(WEB_BACKEND_ENV_KEY) or default_web_backend_url()
+        )
         if (
             release_backend_url != PRODUCTION_WEB_BACKEND_URL
             and WEB_BACKEND_ENV_KEY not in current_values
@@ -174,7 +180,11 @@ def _ensure_env_file(
         "OPENBASE_CODER_CLI_OAUTH_CLIENT_ID=openbase-coder-cli",
     ]
 
-    release_backend_url = default_web_backend_url()
+    # Persist an explicit env override (e.g. a staging-targeted dev install)
+    # alongside the channel default so bare CLI commands and services agree.
+    release_backend_url = (
+        os.environ.get(WEB_BACKEND_ENV_KEY) or default_web_backend_url()
+    )
     if release_backend_url != PRODUCTION_WEB_BACKEND_URL:
         lines.append(f"{WEB_BACKEND_ENV_KEY}={release_backend_url}")
 

@@ -918,6 +918,29 @@ def test_ensure_env_file_adds_staging_backend_without_overriding_explicit_url(
     )
 
 
+def test_ensure_env_file_persists_process_env_override(
+    tmp_path, monkeypatch
+) -> None:
+    """An OPENBASE_CODER_CLI_WEB_BACKEND_URL exported around ./scripts/setup
+    (e.g. pointing a dev install at staging) must land in the generated .env;
+    it used to be silently dropped, leaving the install targeting prod."""
+    env_file = tmp_path / ".env"
+    monkeypatch.setenv(
+        "OPENBASE_CODER_CLI_WEB_BACKEND_URL", "https://app-staging.openbase.cloud"
+    )
+
+    setup_cli._ensure_env_file(
+        str(env_file),
+        assembly_ai_api_key="",
+        cartesia_api_key="",
+    )
+
+    assert (
+        setup_cli._env_file_values(env_file)["OPENBASE_CODER_CLI_WEB_BACKEND_URL"]
+        == "https://app-staging.openbase.cloud"
+    )
+
+
 def test_ensure_env_file_migrates_existing_env_to_shared_homes(tmp_path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(

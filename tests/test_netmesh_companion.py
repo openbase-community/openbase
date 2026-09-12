@@ -84,6 +84,9 @@ def test_missing_build_tools_lists_absent_and_skips_go_when_staged(
     import shutil
 
     workspace = tmp_path / "ws"
+    # A netmesh-macos source checkout is present -> full toolchain required.
+    (workspace / "netmesh-macos").mkdir(parents=True)
+    (workspace / "netmesh-macos" / "project.yml").write_text("name: OpenbaseNetmesh")
     # Only xcodegen/xcodebuild present; node + go absent.
     present = {"xcodegen", "xcodebuild"}
     monkeypatch.setattr(
@@ -100,6 +103,43 @@ def test_missing_build_tools_lists_absent_and_skips_go_when_staged(
     (vendor / "tailscale").write_text("")
     missing_staged = nc._missing_build_tools(workspace)
     assert not any(m.startswith("go") for m in missing_staged)
+
+
+def test_missing_build_tools_public_clone_needs_only_node(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A public workspace clone has no netmesh-macos source; the stage script
+    downloads the signed prebuilt, so only node is required (regression:
+    setup used to demand xcodegen/Xcode/go and abort VPN provisioning)."""
+    import shutil
+
+    workspace = tmp_path / "ws"
+    monkeypatch.delenv("OPENBASE_NETMESH_MACOS_DIR", raising=False)
+
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    missing = nc._missing_build_tools(workspace)
+    assert [m for m in missing if m.startswith("node")]
+    assert len(missing) == 1
+
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    assert nc._missing_build_tools(workspace) == []
+
+
+def test_missing_build_tools_env_override_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OPENBASE_NETMESH_MACOS_DIR points at a source checkout -> build tools
+    are required again, matching stage-netmesh-companion.mjs's candidates."""
+    import shutil
+
+    workspace = tmp_path / "ws"
+    source = tmp_path / "elsewhere" / "netmesh-macos"
+    source.mkdir(parents=True)
+    (source / "project.yml").write_text("name: OpenbaseNetmesh")
+    monkeypatch.setenv("OPENBASE_NETMESH_MACOS_DIR", str(source))
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    missing = nc._missing_build_tools(workspace)
+    assert any(m.startswith("xcodegen") for m in missing)
 
 
 def test_build_companion_fails_fast_with_prereq_message(
