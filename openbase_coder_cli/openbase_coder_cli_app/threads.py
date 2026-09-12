@@ -45,6 +45,15 @@ from openbase_coder_cli.openbase_coder_cli_app.thread_origins import (
     MANUAL_ORIGIN,
     set_thread_origin,
 )
+from openbase_coder_cli.services.fleet_aggregation import (
+    FLEET_SCOPE_PARAM,
+    FLEET_SCOPE_VALUE,
+    ORIGIN_DEVICE_KEY,
+    SourcePage,
+    fleet_thread_detail,
+    fleet_thread_page,
+    thread_payload_sort_key,
+)
 from openbase_coder_cli.thread_sync.models import ThreadStatus
 from openbase_coder_cli.thread_sync.projects import (
     refresh_projects_from_thread_directories as _refresh_projects_from_threads,
@@ -391,6 +400,15 @@ def thread_list(request):
         )
     cursor = request.query_params.get("cursor") or None
 
+    if request.query_params.get(FLEET_SCOPE_PARAM) == FLEET_SCOPE_VALUE:
+        return _fleet_thread_list_response(
+            request,
+            manager,
+            page=page,
+            page_size=page_size,
+            cursor=cursor,
+        )
+
     page_result = _get_thread_page_result(
         manager,
         page=page,
@@ -437,6 +455,80 @@ def thread_list(request):
             "threads": [
                 annotate_thread_payload(t.model_dump(mode="json")) for t in page_threads
             ],
+        }
+    )
+
+
+def _local_thread_source_page(manager, *, cursor: str | None, page_size: int):
+    page_result = get_cached_thread_page(manager, limit=page_size, cursor=cursor)
+    return SourcePage(
+        items=[
+            annotate_thread_payload(t.model_dump(mode="json"))
+            for t in page_result.threads
+        ],
+        next_cursor=page_result.next_cursor,
+    )
+
+
+def _include_livekit_fallback_payload(manager, items: list[dict]) -> list[dict]:
+    livekit_thread_id = get_livekit_shared_thread_id()
+    if not livekit_thread_id or any(
+        item.get("thread_id") == livekit_thread_id for item in items
+    ):
+        return items
+    livekit_thread = _get_cached_livekit_dispatcher_thread(manager)
+    if livekit_thread is None:
+        return items
+    payload = annotate_thread_payload(livekit_thread.model_dump(mode="json"))
+    return sorted([*items, payload], key=thread_payload_sort_key, reverse=True)
+
+
+def _fleet_thread_list_response(
+    request, manager, *, page: int, page_size: int, cursor: str | None
+):
+    result = fleet_thread_page(
+        page_size=page_size,
+        cursor=cursor,
+        fetch_local_page=lambda _page, local_cursor, size: _local_thread_source_page(
+            manager, cursor=local_cursor, page_size=size
+        ),
+    )
+    threads = result.threads
+    if page == 1:
+        threads = _include_livekit_fallback_payload(manager, threads)
+    _refresh_projects_from_threads(
+        [
+            item["directory"]
+            for item in threads
+            if item.get("directory") and not item.get(ORIGIN_DEVICE_KEY)
+        ]
+    )
+    count = (page - 1) * page_size + len(threads)
+    if result.next_cursor:
+        count += 1
+    next_url = (
+        _thread_cursor_url(
+            request,
+            page=page + 1,
+            page_size=page_size,
+            cursor=result.next_cursor,
+        )
+        if result.next_cursor
+        else None
+    )
+    previous_url = (
+        _thread_page_url(request, page=page - 1, page_size=page_size)
+        if page > 1
+        else None
+    )
+    return Response(
+        {
+            "count": count,
+            "page": page,
+            "page_size": page_size,
+            "next": next_url,
+            "previous": previous_url,
+            "threads": threads,
         }
     )
 
@@ -505,6 +597,13 @@ def thread_detail(request, thread_id):
             status=status.HTTP_409_CONFLICT,
         )
     if thread is None:
+        # A fleet-scoped client may hold a thread that only exists on a peer
+        # device (older than the sync window, or not yet exchanged) — serve
+        # the peer's read-only copy rather than a 404.
+        if request.query_params.get(FLEET_SCOPE_PARAM) == FLEET_SCOPE_VALUE:
+            peer_payload = fleet_thread_detail(thread_id)
+            if peer_payload is not None:
+                return Response(peer_payload)
         return Response(
             {"error": f"Thread {thread_id} not found"},
             status=status.HTTP_404_NOT_FOUND,
