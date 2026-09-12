@@ -16,6 +16,7 @@ companion long enough to issue control operations.
 from __future__ import annotations
 
 import json
+import os
 import re
 import secrets
 import subprocess
@@ -199,12 +200,35 @@ def netmesh_ctl_path(workspace_dir: str | Path | None = None) -> str | None:
     return str(ctl) if ctl.is_file() else None
 
 
+def _netmesh_source_checkout(workspace_dir: Path) -> Path | None:
+    """The netmesh-macos source checkout the stage script would build from.
+
+    Mirrors the candidate order in ``desktop/scripts/stage-netmesh-companion.mjs``
+    (env override, in-repo checkout, workspace sibling). Public workspace
+    clones have none of these — the stage script then downloads the signed
+    prebuilt instead of building, so no Xcode toolchain is needed.
+    """
+    env_dir = os.environ.get("OPENBASE_NETMESH_MACOS_DIR")
+    candidates = [
+        Path(env_dir) if env_dir else None,
+        workspace_dir / "desktop" / "netmesh-macos",
+        workspace_dir / "netmesh-macos",
+    ]
+    for candidate in candidates:
+        if candidate is not None and (candidate / "project.yml").is_file():
+            return candidate
+    return None
+
+
 def _missing_build_tools(workspace_dir: Path) -> list[str]:
-    """Tools required to build the companion that aren't installed.
+    """Tools required to stage the companion that aren't installed.
 
     This is the single source of truth for the netmesh (Openbase VPN) build
     prerequisites — the human docs point here rather than re-listing them.
-    ``go`` is only needed when the pinned tailscale engine hasn't been staged
+    Public checkouts (no netmesh-macos source) only need ``node``: the stage
+    script downloads the signed prebuilt companion for them. The Xcode
+    toolchain is required only when a source checkout is present to build
+    from, and ``go`` only when the pinned tailscale engine hasn't been staged
     yet (it's a gitignored ~56 MB build artifact).
     """
     import shutil
@@ -212,13 +236,16 @@ def _missing_build_tools(workspace_dir: Path) -> list[str]:
     missing: list[str] = []
     if shutil.which("node") is None:
         missing.append("node (https://nodejs.org — or `brew install node`)")
+    source_checkout = _netmesh_source_checkout(workspace_dir)
+    if source_checkout is None:
+        return missing
     if shutil.which("xcodegen") is None:
         missing.append("xcodegen (`brew install xcodegen`)")
     if shutil.which("xcodebuild") is None:
         missing.append(
             "Xcode (install from the App Store, then `xcodebuild -runFirstLaunch`)"
         )
-    vendor = workspace_dir / "netmesh-macos" / "vendor" / "tailscale-bin"
+    vendor = source_checkout / "vendor" / "tailscale-bin"
     engine_staged = (vendor / "tailscaled").exists() and (vendor / "tailscale").exists()
     if not engine_staged and shutil.which("go") is None:
         missing.append(
