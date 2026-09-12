@@ -359,7 +359,11 @@ urlpatterns = [
         name="plugin-console-registry",
     ),
     path("plugins/<str:plugin_id>/", plugin_detail, name="plugin-detail"),
-    path("boilersync/templates/", boilersync_templates, name="boilersync-templates"),
+    path(
+        "boilersync/templates/",
+        offloaded_view(boilersync_templates),
+        name="boilersync-templates",
+    ),
     path("tools/uv/", uv_tools_list, name="uv-tools-list"),
     path(
         "tools/uv/<str:tool_name>/executables/<str:executable_name>/help/",
