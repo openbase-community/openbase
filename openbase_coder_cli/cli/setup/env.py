@@ -53,7 +53,7 @@ from openbase_coder_cli.services.tailscale_provider import (
 
 TAILNET_PROVIDER_ENV_KEY = "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"
 ALLOWED_HOSTS_ENV_KEY = "OPENBASE_CODER_CLI_ALLOWED_HOSTS"
-NETMESH_ALLOWED_SUFFIX = ".net.obs.so"
+NETMESH_ALLOWED_SUFFIXES = (".net.obs.so", ".net-staging.obs.so")
 
 
 def _ensure_env_file(
@@ -217,8 +217,10 @@ def _allowed_hosts_for(provider: str) -> str:
     """Allowed-hosts list for a fresh .env, adding the netmesh MagicDNS suffix
     for either netmesh transport (served requests arrive with a netmesh Host)."""
     hosts = [h for h in _DEFAULT_ALLOWED_HOSTS.split(",") if h]
-    if provider in ("netmesh", "netmesh-tsnet") and NETMESH_ALLOWED_SUFFIX not in hosts:
-        hosts.append(NETMESH_ALLOWED_SUFFIX)
+    if provider in ("netmesh", "netmesh-tsnet"):
+        for suffix in NETMESH_ALLOWED_SUFFIXES:
+            if suffix not in hosts:
+                hosts.append(suffix)
     return ",".join(hosts)
 
 
@@ -236,8 +238,12 @@ def _tailnet_provider_updates(path: Path, provider: str) -> dict[str, str]:
             ALLOWED_HOSTS_ENV_KEY, _DEFAULT_ALLOWED_HOSTS
         )
         host_list = [h.strip() for h in hosts.split(",") if h.strip()]
-        if NETMESH_ALLOWED_SUFFIX not in host_list:
-            host_list.append(NETMESH_ALLOWED_SUFFIX)
+        changed = False
+        for suffix in NETMESH_ALLOWED_SUFFIXES:
+            if suffix not in host_list:
+                host_list.append(suffix)
+                changed = True
+        if changed:
             updates[ALLOWED_HOSTS_ENV_KEY] = ",".join(host_list)
     return updates
 
