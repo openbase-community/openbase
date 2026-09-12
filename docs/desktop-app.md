@@ -195,8 +195,7 @@ Codex per-thread memories are read-only.
 
 ### Templates
 
-BoilerSync project templates. Browse templates by source repository, inspect
-a template's fields (variables and options), and scaffold projects from them.
+BoilerSync project templates. Import the featured Openbase community templates or add any public GitHub template repository, remove local repository checkouts, browse templates by source, and inspect a template's fields (variables and options). The featured repository is optional: dismiss its suggestion on the Templates page, or restore the suggestion under Settings → Interface.
 
 **On iPhone:** not available; templates are tied to the local filesystem.
 

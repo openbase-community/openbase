@@ -8,6 +8,7 @@ from openbase_coder_cli.paths import CONSOLE_SETTINGS_JSON_PATH
 DEFAULT_DANGEROUS_CONFIRMATION_PHRASE = "yes, proceed"
 DEFAULT_USER_ADDRESS_NAME = "there"
 DEFAULT_KEEP_SYSTEM_AWAKE = False
+DEFAULT_FEATURED_TEMPLATE_PROMPT_DISMISSED = False
 
 
 def get_ignored_launchctl_labels() -> list[str]:
@@ -77,6 +78,21 @@ def get_keep_system_awake_enabled() -> bool:
 def set_keep_system_awake_enabled(value: bool) -> bool:
     data = _read_settings()
     data["keep_system_awake"] = bool(value)
+    _write_settings(data)
+    return bool(value)
+
+
+def get_featured_template_prompt_dismissed() -> bool:
+    data = _read_settings()
+    value = data.get("featured_template_prompt_dismissed")
+    if isinstance(value, bool):
+        return value
+    return DEFAULT_FEATURED_TEMPLATE_PROMPT_DISMISSED
+
+
+def set_featured_template_prompt_dismissed(value: bool) -> bool:
+    data = _read_settings()
+    data["featured_template_prompt_dismissed"] = bool(value)
     _write_settings(data)
     return bool(value)
 
