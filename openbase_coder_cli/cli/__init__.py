@@ -4,7 +4,6 @@ CLI entry point for openbase_coder_cli.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import click
@@ -29,6 +28,7 @@ from .desktop import desktop
 from .doctor import doctor
 from .onboarding import onboarding
 from .plugins import plugins
+from .profiles import profiles
 from .provision import provision
 from .reports import reports
 from .restart import restart, self_restart
@@ -116,6 +116,7 @@ main.add_command(login)
 main.add_command(logout)
 main.add_command(auth)
 main.add_command(plugins)
+main.add_command(profiles)
 main.add_command(provision)
 main.add_command(reports)
 main.add_command(bootstrap)

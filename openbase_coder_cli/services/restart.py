@@ -11,6 +11,7 @@ from typing import Any
 
 import click
 
+from openbase_coder_cli.livekit_install import ensure_pinned_livekit_server
 from openbase_coder_cli.services.definitions import SERVICES
 from openbase_coder_cli.services.launchd import (
     install_service,
@@ -80,9 +81,18 @@ def schedule_restart(
     warn: bool = True,
     emit_cli_warning: bool = True,
 ) -> RestartPlan:
-    require_installation()
+    config = require_installation()
 
     plan = build_restart_plan(request)
+    if not config.standalone and "livekit-server" in plan.services:
+        # Git updates Python's pin but not the separately installed engine.
+        # Prepare it before scheduling so download failures are visible to
+        # the caller and leave the currently running services untouched.
+        if ensure_pinned_livekit_server() is None:
+            raise click.ClickException(
+                "Could not prepare the pinned LiveKit engine; restart was not "
+                "scheduled. Resolve the download error above and retry."
+            )
     if warn and plan.interrupts_voice:
         warn_before_voice_interruption(
             reason="restart",

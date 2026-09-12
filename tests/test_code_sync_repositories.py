@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -328,3 +329,204 @@ def test_divergence_pauses_and_records_conflict_by_default(
         and not entry.get("resolved")
         for entry in conflicts
     )
+
+
+def test_rewrite_publish_advertises_replaced_tip(tmp_path: Path) -> None:
+    # The machine that rewrote history is the only one that can prove it
+    # (its reflog held the old tip); its manifest advertises the rewrite.
+    repo = _init(tmp_path / "repo")
+    _commit(repo, "app.py", "print('base')\n", "base")
+    old_tip = _commit(repo, "feature.py", "wip\n", "feature")
+    first = repositories.ensure_repository_manifest(repo)
+    assert first is not None
+    assert "replaces" not in first
+
+    _git(repo, "commit", "--amend", "-m", "feature (rewritten)")
+    new_tip = _git(repo, "rev-parse", "HEAD")
+    manifest = repositories.ensure_repository_manifest(repo)
+
+    assert manifest is not None
+    assert manifest["head"] == new_tip
+    assert manifest["replaces"] == [old_tip]
+
+    # A later ordinary commit keeps the advertisement (the old tip is still
+    # not part of the published history) so late peers can still follow.
+    _commit(repo, "more.py", "more\n", "more")
+    manifest = repositories.ensure_repository_manifest(repo)
+    assert manifest is not None
+    assert manifest["replaces"] == [old_tip]
+
+
+def test_rebase_publish_advertises_replaced_tip(tmp_path: Path) -> None:
+    # The exact recurring workflow: feature commits rebased onto a moved
+    # base leave the old tip only in the reflog.
+    repo = _init(tmp_path / "repo")
+    _commit(repo, "app.py", "print('base')\n", "base")
+    _git(repo, "checkout", "-q", "-b", "feature")
+    _commit(repo, "feature.py", "wip\n", "feature work")
+    _git(repo, "checkout", "-q", "main")
+    _commit(repo, "app.py", "print('moved base')\n", "base moves on")
+    _git(repo, "checkout", "-q", "feature")
+    old_tip = _git(repo, "rev-parse", "HEAD")
+    first = repositories.ensure_repository_manifest(repo)
+    assert first is not None and "replaces" not in first
+
+    _git(repo, "rebase", "--quiet", "main")
+    new_tip = _git(repo, "rev-parse", "HEAD")
+    manifest = repositories.ensure_repository_manifest(repo)
+
+    assert manifest is not None
+    assert manifest["branch"] == "feature"
+    assert manifest["head"] == new_tip
+    assert manifest["replaces"] == [old_tip]
+
+
+def test_publish_never_claims_peer_history_as_replaced(tmp_path: Path) -> None:
+    # A peer-published manifest head that was never a tip of THIS clone's
+    # branch (no reflog entry) is the peer's own real work: overwriting the
+    # manifest must not claim it as rewritten away.
+    source, peer = _pair(tmp_path)
+    peer_head = _commit(peer, "app.py", "print('peer')\n", "peer work")
+    _commit(source, "app.py", "print('local')\n", "local work")
+    (source / repositories.REPO_MANIFEST_NAME).write_text(
+        json.dumps({"schema_version": 1, "branch": "main", "head": peer_head}) + "\n",
+        encoding="utf-8",
+    )
+
+    manifest = repositories.ensure_repository_manifest(source)
+
+    assert manifest is not None
+    assert "replaces" not in manifest
+
+
+def test_converge_follows_advertised_rewrite(tmp_path: Path) -> None:
+    from openbase_coder_cli.code_sync.conflicts import unresolved_conflicts
+
+    local, source = _pair(tmp_path)
+    old_tip = _commit(source, "feature.py", "wip\n", "feature")
+    first = repositories.ensure_repository_manifest(source)
+    assert first is not None
+    _copy_without_git(source, local)
+    assert (
+        repositories.converge_repository_to_manifest(
+            local, first, remote_urls=(str(source),)
+        )
+        == "converged"
+    )
+    assert _git(local, "rev-parse", "HEAD") == old_tip
+
+    _git(source, "commit", "--amend", "-m", "feature (rewritten)")
+    new_tip = _git(source, "rev-parse", "HEAD")
+    manifest = repositories.ensure_repository_manifest(source)
+    assert manifest is not None and manifest["replaces"] == [old_tip]
+    _copy_without_git(source, local)
+    conflicts_path = tmp_path / "conflicts.json"
+
+    action = repositories.converge_repository_to_manifest(
+        local,
+        manifest,
+        remote_urls=(str(source),),
+        folder_id="projects",
+        repo_relpath="repo",
+        conflicts_path=conflicts_path,
+    )
+
+    assert action.startswith(
+        "converged_rewrite; backup=refs/openbase-code-sync/backups/"
+    )
+    assert _git(local, "rev-parse", "HEAD") == new_tip
+    assert old_tip in _git(
+        local,
+        "for-each-ref",
+        "--format=%(objectname)",
+        "refs/openbase-code-sync/backups/",
+    )
+    assert unresolved_conflicts(conflicts_path) == []
+
+
+def test_own_commits_atop_rewritten_tip_still_pause(tmp_path: Path) -> None:
+    # force-with-lease semantics: the advertisement covers exactly the old
+    # tip's history. Real local commits on top of it are NOT covered, so
+    # the divergence still pauses for a human decision.
+    from openbase_coder_cli.code_sync.conflicts import unresolved_conflicts
+
+    local, source = _pair(tmp_path)
+    old_tip = _commit(source, "feature.py", "wip\n", "feature")
+    first = repositories.ensure_repository_manifest(source)
+    assert first is not None
+    _copy_without_git(source, local)
+    repositories.converge_repository_to_manifest(
+        local, first, remote_urls=(str(source),)
+    )
+    assert _git(local, "rev-parse", "HEAD") == old_tip
+    local_head = _commit(local, "extra.py", "mine\n", "local addition")
+
+    _git(source, "commit", "--amend", "-m", "feature (rewritten)")
+    manifest = repositories.ensure_repository_manifest(source)
+    assert manifest is not None and manifest["replaces"] == [old_tip]
+    conflicts_path = tmp_path / "conflicts.json"
+
+    action = repositories.converge_repository_to_manifest(
+        local,
+        manifest,
+        remote_urls=(str(source),),
+        folder_id="projects",
+        repo_relpath="repo",
+        conflicts_path=conflicts_path,
+    )
+
+    assert action == "divergence_paused"
+    assert _git(local, "rev-parse", "HEAD") == local_head
+    assert unresolved_conflicts(conflicts_path) != []
+
+
+def test_reconcile_tick_follows_rebase_manifest(tmp_path: Path, monkeypatch) -> None:
+    from openbase_coder_cli.code_sync.conflicts import unresolved_conflicts
+
+    home = tmp_path / "home"
+    local = _init(home / "Projects" / "demo")
+    _commit(local, "app.py", "print('v1')\n", "initial")
+    source = tmp_path / "source"
+    subprocess.run(
+        ["git", "clone", "-q", str(local), str(source)],
+        capture_output=True,
+        check=True,
+    )
+    config_path = tmp_path / "sync-config.json"
+    state_path = tmp_path / "reconcile-state.json"
+    conflicts_path = tmp_path / "conflicts.json"
+    sync_config.set_sync_folders([{"relpath": "Projects/demo"}], config_path)
+    peer = SyncPeer("peer", "peer", "desktop", "peer.test", "engine")
+    monkeypatch.setattr(reconciler, "RECONCILE_STATE_PATH", state_path)
+    monkeypatch.setattr(
+        reconciler.TokenManager, "get_access_token", lambda _self: "token"
+    )
+    monkeypatch.setattr(reconciler, "peer_git_url", lambda *_args: str(source))
+
+    def tick():
+        return reconciler.run_reconcile_once(
+            config_path=config_path,
+            home=home,
+            conflicts_path=conflicts_path,
+            peers=(peer,),
+        )
+
+    tick()
+    old_tip = _commit(source, "feature.py", "wip\n", "feature")
+    repositories.ensure_repository_manifest(source)
+    _copy_without_git(source, local)
+    tick()
+    assert _git(local, "rev-parse", "HEAD") == old_tip
+
+    _git(source, "commit", "--amend", "-m", "feature (rewritten)")
+    new_tip = _git(source, "rev-parse", "HEAD")
+    repositories.ensure_repository_manifest(source)
+    _copy_without_git(source, local)
+
+    summary = tick()
+
+    (manifest_entry,) = summary["repository_manifests"]
+    assert manifest_entry["path"] == ""
+    assert manifest_entry["action"].startswith("converged_rewrite; backup=")
+    assert _git(local, "rev-parse", "HEAD") == new_tip
+    assert unresolved_conflicts(conflicts_path) == []

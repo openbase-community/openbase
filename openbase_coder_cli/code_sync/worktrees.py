@@ -15,8 +15,11 @@ branch, kept out of ``git status`` via the worktree's machine-local
 is adopted — the branch is fetched from the peer when absent locally, a
 worktree is created against the corresponding main repo, and its ``.git``
 pointer is placed around the already-synced files. From then on ``git``
-works in the worktree on either machine and commits reconcile back through
-the normal branch fast-forward path.
+works in the worktree on either machine: commits reconcile through the
+normal branch fast-forward path, and the manifest converges branch
+switches and advertised rewrites the same way repository manifests do
+(``sync_checkout_manifest`` consumes it — which is why detection during a
+tick must never eagerly rewrite it; see :func:`is_linked_worktree`).
 """
 
 from __future__ import annotations
@@ -73,12 +76,25 @@ def worktree_main_repo(repo: Path) -> Path | None:
     return common_dir.parent
 
 
+def is_linked_worktree(repo: Path) -> bool:
+    """Whether ``repo`` is a linked worktree, without touching its manifest.
+
+    Detection must stay read-only: the reconcile tick decides publish vs
+    consume only AFTER detection, and an eager manifest write here would
+    clobber a peer-published manifest before it could be consumed.
+    """
+    return worktree_main_repo(repo) is not None
+
+
 def ensure_worktree_manifest(repo: Path, home: Path | None = None) -> bool:
     """Write/refresh the synced manifest for a linked worktree.
 
     Returns True when ``repo`` is a linked worktree (manifest ensured).
     """
-    from openbase_coder_cli.code_sync.repositories import repository_state
+    from openbase_coder_cli.code_sync.repositories import (
+        replaced_tips_for_publish,
+        repository_state,
+    )
 
     home = home or Path.home()
     main_repo = worktree_main_repo(repo)
@@ -97,6 +113,11 @@ def ensure_worktree_manifest(repo: Path, home: Path | None = None) -> bool:
         "main_repo": main_relhome,
         **state,
     }
+    replaces = replaced_tips_for_publish(
+        repo, state["branch"], state["head"], read_manifest(repo)
+    )
+    if replaces:
+        manifest["replaces"] = replaces
     path = repo / WORKTREE_MANIFEST_NAME
     rendered = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
     try:

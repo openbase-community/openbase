@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -48,6 +49,41 @@ def validate_announcer_text(text: str) -> str:
     return normalized
 
 
+def _transient_connection_errors() -> tuple[type[BaseException], ...]:
+    import aiohttp
+
+    return (aiohttp.ClientConnectionError, ConnectionError, asyncio.TimeoutError)
+
+
+async def _run_with_livekit_client(
+    operation,
+    livekit_client: livekit_api.LiveKitAPI | None,
+):
+    """Run ``operation(client)``, retrying once on transient connection loss.
+
+    Only retries when this call owns the client (built it itself); a caller
+    supplied client is used as-is.
+    """
+    if livekit_client is not None:
+        return await operation(livekit_client)
+    client = _build_livekit_client()
+    try:
+        try:
+            return await operation(client)
+        except _transient_connection_errors() as exc:
+            logger.warning(
+                "announcer_transient_connection_error retrying error=%s",
+                exc,
+            )
+    finally:
+        await client.aclose()
+    client = _build_livekit_client()
+    try:
+        return await operation(client)
+    finally:
+        await client.aclose()
+
+
 async def publish_announcer_message(
     text: str,
     *,
@@ -55,61 +91,71 @@ async def publish_announcer_message(
     voice_id: str | None = None,
     livekit_client: livekit_api.LiveKitAPI | None = None,
 ) -> AnnouncerPublishResult:
+    normalized_text = validate_announcer_text(text)
+
+    async def operation(client) -> AnnouncerPublishResult:
+        return await _publish_announcer_message_with(
+            client, normalized_text, room_name=room_name, voice_id=voice_id
+        )
+
+    return await _run_with_livekit_client(operation, livekit_client)
+
+
+async def _publish_announcer_message_with(
+    client: livekit_api.LiveKitAPI,
+    normalized_text: str,
+    *,
+    room_name: str | None,
+    voice_id: str | None,
+) -> AnnouncerPublishResult:
     import livekit.api as livekit_api
 
     started = time.monotonic()
-    normalized_text = validate_announcer_text(text)
-    owns_client = livekit_client is None
-    client = livekit_client or _build_livekit_client()
-    try:
-        logger.info(
-            "dispatch_timing stage=announcer_publish_request room_name=%s text_len=%d",
-            room_name or "",
-            len(normalized_text),
+    logger.info(
+        "dispatch_timing stage=announcer_publish_request room_name=%s text_len=%d",
+        room_name or "",
+        len(normalized_text),
+    )
+    target = await _resolve_target_room(client, room_name=room_name)
+    message_id = f"announcer-{uuid.uuid4().hex}"
+    logger.info(
+        "dispatch_timing stage=announcer_target_resolved message_id=%s "
+        "room_name=%s agent_count=%d elapsed_ms=%d",
+        message_id,
+        target.room_name,
+        len(target.agent_identities),
+        int((time.monotonic() - started) * 1000),
+    )
+    payload = {
+        "message_id": message_id,
+        "text": normalized_text,
+    }
+    target_voice_id = _safe_announcer_voice_id(
+        (voice_id or "").strip() or _active_target_voice_id()
+    )
+    if target_voice_id:
+        payload["voice_id"] = target_voice_id
+    await client.room.send_data(
+        livekit_api.SendDataRequest(
+            room=target.room_name,
+            data=json.dumps(payload).encode("utf-8"),
+            kind=livekit_api.DataPacket.Kind.RELIABLE,
+            destination_identities=list(target.agent_identities),
+            topic=ANNOUNCER_TOPIC,
         )
-        target = await _resolve_target_room(client, room_name=room_name)
-        message_id = f"announcer-{uuid.uuid4().hex}"
-        logger.info(
-            "dispatch_timing stage=announcer_target_resolved message_id=%s "
-            "room_name=%s agent_count=%d elapsed_ms=%d",
-            message_id,
-            target.room_name,
-            len(target.agent_identities),
-            int((time.monotonic() - started) * 1000),
-        )
-        payload = {
-            "message_id": message_id,
-            "text": normalized_text,
-        }
-        target_voice_id = _safe_announcer_voice_id(
-            (voice_id or "").strip() or _active_target_voice_id()
-        )
-        if target_voice_id:
-            payload["voice_id"] = target_voice_id
-        await client.room.send_data(
-            livekit_api.SendDataRequest(
-                room=target.room_name,
-                data=json.dumps(payload).encode("utf-8"),
-                kind=livekit_api.DataPacket.Kind.RELIABLE,
-                destination_identities=list(target.agent_identities),
-                topic=ANNOUNCER_TOPIC,
-            )
-        )
-        logger.info(
-            "dispatch_timing stage=announcer_send_data_end message_id=%s "
-            "room_name=%s elapsed_ms=%d",
-            message_id,
-            target.room_name,
-            int((time.monotonic() - started) * 1000),
-        )
-        return AnnouncerPublishResult(
-            message_id=message_id,
-            room_name=target.room_name,
-            agent_identities=target.agent_identities,
-        )
-    finally:
-        if owns_client:
-            await client.aclose()
+    )
+    logger.info(
+        "dispatch_timing stage=announcer_send_data_end message_id=%s "
+        "room_name=%s elapsed_ms=%d",
+        message_id,
+        target.room_name,
+        int((time.monotonic() - started) * 1000),
+    )
+    return AnnouncerPublishResult(
+        message_id=message_id,
+        room_name=target.room_name,
+        agent_identities=target.agent_identities,
+    )
 
 
 async def publish_announcer_audio_file(
@@ -118,51 +164,59 @@ async def publish_announcer_audio_file(
     room_name: str | None = None,
     livekit_client: livekit_api.LiveKitAPI | None = None,
 ) -> AnnouncerPublishResult:
-    import livekit.api as livekit_api
-
-    started = time.monotonic()
     normalized_path = str(audio_path).strip()
     if not normalized_path:
         raise AnnouncerValidationError("audio_path is required")
 
-    owns_client = livekit_client is None
-    client = livekit_client or _build_livekit_client()
-    try:
-        logger.info(
-            "dispatch_timing stage=announcer_audio_publish_request room_name=%s",
-            room_name or "",
+    async def operation(client) -> AnnouncerPublishResult:
+        return await _publish_announcer_audio_file_with(
+            client, normalized_path, room_name=room_name
         )
-        target = await _resolve_target_room(client, room_name=room_name)
-        message_id = f"announcer-audio-{uuid.uuid4().hex}"
-        payload = {
-            "kind": AUDIO_PLAYBACK_KIND,
-            "message_id": message_id,
-            "audio_path": normalized_path,
-        }
-        await client.room.send_data(
-            livekit_api.SendDataRequest(
-                room=target.room_name,
-                data=json.dumps(payload).encode("utf-8"),
-                kind=livekit_api.DataPacket.Kind.RELIABLE,
-                destination_identities=list(target.agent_identities),
-                topic=ANNOUNCER_TOPIC,
-            )
+
+    return await _run_with_livekit_client(operation, livekit_client)
+
+
+async def _publish_announcer_audio_file_with(
+    client: livekit_api.LiveKitAPI,
+    normalized_path: str,
+    *,
+    room_name: str | None,
+) -> AnnouncerPublishResult:
+    import livekit.api as livekit_api
+
+    started = time.monotonic()
+    logger.info(
+        "dispatch_timing stage=announcer_audio_publish_request room_name=%s",
+        room_name or "",
+    )
+    target = await _resolve_target_room(client, room_name=room_name)
+    message_id = f"announcer-audio-{uuid.uuid4().hex}"
+    payload = {
+        "kind": AUDIO_PLAYBACK_KIND,
+        "message_id": message_id,
+        "audio_path": normalized_path,
+    }
+    await client.room.send_data(
+        livekit_api.SendDataRequest(
+            room=target.room_name,
+            data=json.dumps(payload).encode("utf-8"),
+            kind=livekit_api.DataPacket.Kind.RELIABLE,
+            destination_identities=list(target.agent_identities),
+            topic=ANNOUNCER_TOPIC,
         )
-        logger.info(
-            "dispatch_timing stage=announcer_audio_send_data_end message_id=%s "
-            "room_name=%s elapsed_ms=%d",
-            message_id,
-            target.room_name,
-            int((time.monotonic() - started) * 1000),
-        )
-        return AnnouncerPublishResult(
-            message_id=message_id,
-            room_name=target.room_name,
-            agent_identities=target.agent_identities,
-        )
-    finally:
-        if owns_client:
-            await client.aclose()
+    )
+    logger.info(
+        "dispatch_timing stage=announcer_audio_send_data_end message_id=%s "
+        "room_name=%s elapsed_ms=%d",
+        message_id,
+        target.room_name,
+        int((time.monotonic() - started) * 1000),
+    )
+    return AnnouncerPublishResult(
+        message_id=message_id,
+        room_name=target.room_name,
+        agent_identities=target.agent_identities,
+    )
 
 
 def _active_target_voice_id() -> str | None:
@@ -204,14 +258,15 @@ class _TargetRoom:
 
 async def active_voice_room_exists() -> bool:
     """True when a live voice session (agent + user in a room) is active."""
-    client = _build_livekit_client()
-    try:
-        await _resolve_target_room(client, room_name=None)
-    except NoActiveLiveKitRoomError:
-        return False
-    finally:
-        await client.aclose()
-    return True
+
+    async def operation(client) -> bool:
+        try:
+            await _resolve_target_room(client, room_name=None)
+        except NoActiveLiveKitRoomError:
+            return False
+        return True
+
+    return await _run_with_livekit_client(operation, None)
 
 
 def _build_livekit_client() -> livekit_api.LiveKitAPI:
@@ -222,10 +277,30 @@ def _build_livekit_client() -> livekit_api.LiveKitAPI:
     if not api_key or not api_secret:
         raise AnnouncerValidationError("Local LiveKit credentials are not configured.")
     return livekit_api.LiveKitAPI(
-        url=os.environ.get("LIVEKIT_URL", "ws://localhost:7880"),
+        url=_livekit_api_url(),
         api_key=api_key,
         api_secret=api_secret,
     )
+
+
+def _livekit_api_url() -> str:
+    """Server-API URL for twirp calls from this host.
+
+    LIVEKIT_URL is the client-facing signaling URL; in tailscale mode it is
+    the tailnet node IP, which livekit-server (bound to 127.0.0.1) does not
+    listen on from this host — every announcer publish then dies with a
+    connection reset. Same-host API calls must target loopback instead.
+    """
+    explicit = os.environ.get("LIVEKIT_API_URL", "").strip()
+    if explicit:
+        return explicit
+    url = os.environ.get("LIVEKIT_URL", "ws://localhost:7880")
+    node_ip = os.environ.get("LIVEKIT_NODE_IP", "").strip()
+    if node_ip and f"//{node_ip}:" in url:
+        return url.replace(f"//{node_ip}:", "//localhost:", 1)
+    if node_ip and url.endswith(f"//{node_ip}"):
+        return url.replace(f"//{node_ip}", "//localhost", 1)
+    return url
 
 
 async def _resolve_target_room(

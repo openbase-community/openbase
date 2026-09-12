@@ -356,8 +356,8 @@ def test_oauth_success_page_announces_success_and_returns_to_desktop():
 
     assert "Logged in successfully" in html
     assert "Open the Mac app" in html
-    assert "openbase-coder://open?source=cli-auth&amp;intent=login-complete" in html
-    assert '"openbase-coder://open?source=cli-auth&intent=login-complete"' in html
+    assert "openbase://open?source=cli-auth&amp;intent=login-complete" in html
+    assert '"openbase://open?source=cli-auth&intent=login-complete"' in html
     assert "window.location.href" in html
 
 

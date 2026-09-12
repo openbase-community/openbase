@@ -34,17 +34,21 @@ resets onboarding. Remove both when fully uninstalling (see
 | `~/.openbase/installation.json` | `openbase-coder setup` | Stores `workspace_path` + `env_file` |
 | `~/.openbase/.env` | `openbase-coder setup` | Shared env config and generated secrets, including Openbase's per-session Super Agents posture (`SUPER_AGENTS_CODEX_APPROVAL_POLICY=never`, `SUPER_AGENTS_CODEX_SANDBOX_POLICY=danger-full-access`, `SUPER_AGENTS_BASE_INSTRUCTIONS_PATH`) |
 | `~/.codex/auth.json` | `codex login` | Your Codex login; used directly by Openbase Codex sessions and services |
-| `~/.codex/AGENTS.md` | User, `openbase-coder setup` | Your own Codex instructions; applies natively to every Codex session in the shared home, including Openbase's. Setup creates it if needed so `~/.claude/CLAUDE.md` can link to it |
-| `~/.claude/CLAUDE.md` | User, `openbase-coder setup` | Symlink to `~/.codex/AGENTS.md`, kept in place by setup |
+| `~/.codex/AGENTS.md` | User | Your own Codex instructions; setup leaves this file unchanged |
+| `~/.claude/CLAUDE.md` | User | Your own Claude instructions; setup leaves this file or symlink unchanged |
 | `~/.openbase/instructions/AGENTS.md` | `openbase-coder setup`, settings API | Generated Openbase base instructions from `instructions/AGENTS.md`; delivered per session by super-agents (Codex developer instructions / Claude system prompt), never written into the shared homes. Editable via the console "Openbase base instructions" target |
-| `~/.codex/config.toml` | User, `openbase-coder setup` | Your own Codex config; setup adds only a `[mcp_servers.super-agents]` table (child-thread default `codex`, plus the per-session posture env) and the trusted session-ID `[[hooks.SessionStart]]` hook. Your model, sandbox, approval, and permission settings are never touched |
-| `~/.claude.json` | Claude Code, `openbase-coder setup` | Your Claude Code state; setup registers an `mcpServers.super-agents` entry whose child-thread default is `claude_code` (MCP entry only) |
-| `~/.claude/settings.json` | User, `openbase-coder setup` | Your Claude Code settings; setup adds only the session-ID hook entry under `hooks` |
+| `~/.codex/config.toml` | User | Normal Codex defaults; setup only removes identifiable legacy Openbase MCP and hook entries, with a backup |
+| `~/.codex/openbase.config.toml` | Setup, user | Openbase Codex profile: model, reasoning, permissions, MCP, and session-ID hook; loaded per thread and usable with `codex -p openbase` |
+| `~/.codex/openbase-cloud.config.toml` | Setup, user | Thread-scoped internal Cloud Codex profile and provider routing |
+| `~/.claude.json` | Claude Code | Shared login and session state; setup migrates only identifiable legacy Openbase MCP entries |
+| `~/.claude/settings.json` | User | Normal Claude settings; setup migrates only the legacy Openbase session-ID hook |
+| `~/.openbase/profiles/claude/settings.json` | Setup, user | Openbase Claude session settings and hooks, supplied through `--settings` |
+| `~/.openbase/profiles/claude/mcp.json` | Setup | Openbase Claude MCP configuration, supplied per session |
 | `~/.openbase/instructions/VOICE_INSTRUCTIONS.md` | `openbase-coder setup` | Generated default direct voice-session instructions |
 | `~/.openbase/instructions/DISPATCHER_INSTRUCTIONS.md` | `openbase-coder setup` | Generated default dispatcher-only instructions |
 | `~/.openbase/instructions/SUPER_AGENT_INSTRUCTIONS.md` | `openbase-coder setup` | Generated default Super Agent thread instructions |
 | `~/.openbase/dispatcher-config.json` | `openbase-coder setup`, `openbase-coder defaults`, settings API | Dispatcher runtime settings, including default reasoning and backend-specific model defaults |
-| `~/.openbase/hooks/inject-session-id.sh` | `openbase-coder setup` | Bundled SessionStart hook script, registered in both shared agent homes (`~/.codex/config.toml` and `~/.claude/settings.json`); injects the session's thread/session ID into the conversation, includes the instructions to stamp commits with it as the `Agent-Thread-Id` trailer, and exports it as the vendor-neutral `AGENT_SESSION_ID` for subsequent Claude Code commands |
+| `~/.openbase/hooks/inject-session-id.sh` | `openbase-coder setup` | Bundled SessionStart hook script, registered in the Openbase profiles; supplies session attribution for commits and agent-aware commands |
 | `~/.openbase/packages/standalone/previous` | `openbase-coder self-update` | Symlink to the prior release, kept for rollback |
 | `~/.openbase/update-check.json` | `openbase-coder self-update` / update API | Cached result of the last update check (no-network status reads) |
 | `~/.openbase/logs/self-update.log` | `POST /api/update/apply/` | Output of UI-triggered detached self-updates |
@@ -80,8 +84,7 @@ The Super Agents MCP entries use the workspace venv MCP executable when
 available; otherwise setup records the resolved absolute `uv` path for the
 current machine. Openbase's permission posture is not written into
 `~/.codex/config.toml` or `~/.claude/settings.json`; super-agents passes it
-per session via the `SUPER_AGENTS_*` env, and backend model/provider settings
-are applied as `codex app-server -c` launch overrides by the service.
+per session via profiles and role overrides. The shared Codex app-server has no Openbase model or provider launch overrides.
 
 ## Service Artifacts
 

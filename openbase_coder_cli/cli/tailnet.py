@@ -714,7 +714,9 @@ def serve_reset() -> None:
     try:
         reset_tailscale_serve()
     except Exception as exc:  # noqa: BLE001
-        raise click.ClickException(f"Could not reset Openbase VPN Serve: {exc}")
+        raise click.ClickException(
+            f"Could not reset Openbase VPN Serve: {exc}"
+        ) from exc
     click.echo("Reset Openbase VPN Serve rules to the canonical set.")
 
 
@@ -750,6 +752,8 @@ def status(json_: bool) -> None:
     color = {"Running": "green", "Starting": "yellow"}.get(state, "red")
     click.echo(f"provider: {tp.provider()}")
     click.echo("state:    " + click.style(state, fg=color))
+    if conflict := tp.stock_tailscale_conflict():
+        click.echo(click.style("warning:  ", fg="yellow") + conflict)
 
     self_node = payload.get("Self") or {}
     dns = str(self_node.get("DNSName") or "").rstrip(".")

@@ -37,9 +37,7 @@ from openbase_coder_cli.services.cloud_registration import register_and_report
 
 from .password_auth import exchange_password_for_jwts
 
-DESKTOP_LOGIN_COMPLETE_URL = (
-    "openbase-coder://open?source=cli-auth&intent=login-complete"
-)
+DESKTOP_LOGIN_COMPLETE_URL = "openbase://open?source=cli-auth&intent=login-complete"
 # How long the local OAuth callback listener waits for the browser redirect
 # before giving up and releasing the port.
 LOGIN_CALLBACK_TIMEOUT_SECONDS = 300.0

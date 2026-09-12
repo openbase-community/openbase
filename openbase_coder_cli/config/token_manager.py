@@ -23,7 +23,7 @@ import httpx
 
 from openbase_coder_cli.cloud_environment import PRODUCTION_WEB_BACKEND_URL
 from openbase_coder_cli.file_lock import LOCK_EX, LOCK_UN, flock
-from openbase_coder_cli.paths import AUTH_JSON_PATH
+from openbase_coder_cli.paths import AUTH_JSON_PATH, OWNER_IDENTITY_JSON_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -386,10 +386,11 @@ class TokenManager:
     def get_owner_identity(self) -> dict[str, str]:
         """Return the ``{sub, email}`` of the account that owns this server.
 
-        Derived from the credentials written by ``openbase-coder login``.
-        This is the single authorized identity for the local server: only
-        tokens for the same subject may use authenticated endpoints. Returns
-        an empty dict when no one is logged in (server has no owner).
+        Derived from credentials written by ``openbase-coder login`` or from
+        the non-secret owner identity pinned during isolated-workspace
+        bootstrap. This is the single authorized identity for the local
+        server: only tokens for the same subject may use authenticated
+        endpoints. Returns an empty dict when the server has no owner.
         """
         with self._lock:
             self.load()
@@ -403,7 +404,18 @@ class TokenManager:
                     if claims.get("email"):
                         identity["email"] = str(claims["email"]).strip().lower()
                     return identity
-            return {}
+            if not OWNER_IDENTITY_JSON_PATH.is_file():
+                return {}
+            try:
+                owner = json.loads(OWNER_IDENTITY_JSON_PATH.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return {}
+            if not isinstance(owner, dict) or not owner.get("sub"):
+                return {}
+            identity = {"sub": str(owner["sub"])}
+            if owner.get("email"):
+                identity["email"] = str(owner["email"]).strip().lower()
+            return identity
 
     @property
     def access_expires_at(self) -> float:

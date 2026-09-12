@@ -28,9 +28,9 @@ from openbase_coder_cli.dispatcher_config import (
 )
 from openbase_coder_cli.paths import (
     CLAUDE_CONFIG_DIR,
-    CLAUDE_STATE_PATH,
-    CODEX_CONFIG_PATH,
+    CLAUDE_PROFILE_MCP_PATH,
     CODEX_HOME_DIR,
+    CODEX_PROFILE_PATH,
     DEFAULT_ENV_FILE_PATH,
     LAUNCHD_WRAPPER_DIR,
     STANDALONE_CURRENT_DIR,
@@ -42,6 +42,7 @@ from openbase_coder_cli.services.definitions import SERVICES
 from openbase_coder_cli.services.installation import InstallationConfig
 from openbase_coder_cli.services.launchd import launchctl_status
 from openbase_coder_cli.services.selection import configured_coding_backends
+from openbase_coder_cli.services.tailscale_provider import stock_tailscale_conflict
 from openbase_coder_cli.services.tailscale_serve import tailscale_serve_health
 from openbase_coder_cli.stt_providers import (
     LOCAL_MLX_WHISPER_STT_PROVIDER_ID,
@@ -497,12 +498,12 @@ def _check_super_agents_mcp_registrations(ok, warn, fail) -> None:
     configs = (
         (
             "Codex config",
-            CODEX_CONFIG_PATH,
+            CODEX_PROFILE_PATH,
             _read_super_agents_command_codex,
         ),
         (
             "Claude config",
-            CLAUDE_STATE_PATH,
+            CLAUDE_PROFILE_MCP_PATH,
             _read_super_agents_command_claude,
         ),
     )
@@ -795,6 +796,8 @@ def doctor() -> None:
     # --- Tailscale Serve ---
     click.echo()
     click.echo(click.style("Tailscale Serve", bold=True))
+    if conflict := stock_tailscale_conflict():
+        fail(f"tailnet transport conflict: {conflict}")
     serve_health = tailscale_serve_health()
     if not serve_health.tailscale_available:
         action("tailscale: not found on PATH")

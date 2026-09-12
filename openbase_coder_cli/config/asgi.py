@@ -44,6 +44,14 @@ async def application(scope, receive, send):
         while True:
             message = await receive()
             if message["type"] == "lifespan.startup":
+                # Runs only in the server process (not management commands):
+                # keep recent-project metadata warm so the first Threads/
+                # Projects visit does not pay the cold git-status cost.
+                from openbase_coder_cli.openbase_coder_cli_app.projects import (
+                    start_project_metadata_warmer,
+                )
+
+                start_project_metadata_warmer()
                 await send({"type": "lifespan.startup.complete"})
             elif message["type"] == "lifespan.shutdown":
                 await send({"type": "lifespan.shutdown.complete"})

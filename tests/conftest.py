@@ -40,4 +40,8 @@ def _isolated_host_state(monkeypatch, tmp_path):
     # touching the URLconf. Tests must see only what they set themselves.
     monkeypatch.delenv("OPENBASE_CODING_BACKEND", raising=False)
     monkeypatch.delenv("OPENBASE_CODING_BACKENDS", raising=False)
+    from openbase_coder_cli.agent_profiles import profile_environment
+
+    for key in profile_environment():
+        monkeypatch.delenv(key, raising=False)
     return env_path

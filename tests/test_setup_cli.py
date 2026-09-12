@@ -4,6 +4,7 @@ import importlib
 import json
 import os
 import subprocess
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,7 +24,7 @@ codex_home_instructions = importlib.import_module(
 _setup_phase_modules = tuple(
     importlib.import_module(f"openbase_coder_cli.cli.setup.{name}")
     for name in ("claude", "codex", "dispatcher", "env", "workspace")
-)
+) + (importlib.import_module("openbase_coder_cli.agent_profiles"),)
 
 
 def _patch_setup(monkeypatch, name, value):
@@ -41,6 +42,20 @@ def _patch_openbase_agent_paths(monkeypatch, tmp_path: Path) -> tuple[Path, Path
     instructions = tmp_path / "openbase" / "instructions"
     _patch_setup(monkeypatch, "CODEX_HOME_DIR", codex_home)
     _patch_setup(monkeypatch, "CODEX_CONFIG_PATH", codex_home / "config.toml")
+    _patch_setup(monkeypatch, "CODEX_PROFILE_PATH", codex_home / "openbase.config.toml")
+    _patch_setup(
+        monkeypatch,
+        "CLOUD_CODEX_PROFILE_PATH",
+        codex_home / "openbase-cloud.config.toml",
+    )
+    _patch_setup(
+        monkeypatch,
+        "CLAUDE_PROFILE_SETTINGS_PATH",
+        tmp_path / "profiles" / "settings.json",
+    )
+    _patch_setup(
+        monkeypatch, "CLAUDE_PROFILE_MCP_PATH", tmp_path / "profiles" / "mcp.json"
+    )
     _patch_setup(monkeypatch, "CODEX_AGENTS_MD_PATH", codex_home / "AGENTS.md")
     _patch_setup(monkeypatch, "CLAUDE_CONFIG_DIR", claude_config)
     _patch_setup(monkeypatch, "CLAUDE_SETTINGS_PATH", claude_config / "settings.json")
@@ -599,15 +614,12 @@ def test_ensure_codex_config_registers_super_agents_mcp(tmp_path, monkeypatch) -
 
     setup_cli._ensure_codex_config(str(workspace))
 
-    config_path = codex_home / "config.toml"
-    assert config_path.read_text(encoding="utf-8") == (
-        "[mcp_servers.super-agents]\n"
-        f"command = {json.dumps(str(command))}\n"
-        'env = { SUPER_AGENTS_DEFAULT_BACKEND = "codex", '
-        + SUPER_AGENTS_PERMISSION_ENV_SUFFIX
-        + " }\n"
-        + _expected_session_id_hook_suffix(config_path)
-    )
+    config_path = codex_home / "openbase.config.toml"
+    config = tomllib.loads(config_path.read_text())
+    assert config["mcp_servers"]["super-agents"]["command"] == str(command)
+    assert config["model_reasoning_effort"] == "high"
+    assert config["hooks"]["SessionStart"]
+    assert not (codex_home / "config.toml").exists()
 
 
 def test_ensure_codex_config_preserves_user_config_values(
@@ -653,12 +665,12 @@ def test_ensure_codex_config_preserves_user_config_values(
     assert 'model = "gpt-5.5-mini"' in updated
     assert 'sandbox_mode = "danger-full-access"' not in updated
     assert updated.count("[mcp_servers.super-agents]") == 1
-    assert "/Users/example/.local/bin/uv" not in updated
-    assert "args =" not in updated
+    assert "/Users/example/.local/bin/uv" in updated
+    assert "args =" in updated
     assert '[projects."/Users/example"]\ntrust_level = "trusted"' in updated
-    assert f"command = {json.dumps(str(command))}" in updated
+    assert f"command = {json.dumps(str(command))}" not in updated
     assert '[mcp_servers.playwright]\ncommand = "npx"' in updated
-    assert SUPER_AGENTS_PERMISSION_ENV_SUFFIX in updated
+    assert SUPER_AGENTS_PERMISSION_ENV_SUFFIX not in updated
 
 
 def test_ensure_codex_config_preserves_cloud_codex_child_default(
@@ -675,11 +687,13 @@ def test_ensure_codex_config_preserves_cloud_codex_child_default(
         coding_backend="openbase_cloud_codex",
     )
 
+    cloud = tomllib.loads((codex_home / "openbase-cloud.config.toml").read_text())
     assert (
-        'env = { SUPER_AGENTS_DEFAULT_BACKEND = "openbase_cloud_codex", '
-        + SUPER_AGENTS_PERMISSION_ENV_SUFFIX
-        + " }"
-    ) in (codex_home / "config.toml").read_text(encoding="utf-8")
+        cloud["mcp_servers"]["super-agents"]["env"]["SUPER_AGENTS_DEFAULT_BACKEND"]
+        == "openbase_cloud_codex"
+    )
+    assert cloud["model_provider"] == "openbase_cloud"
+    assert not (codex_home / "config.toml").exists()
 
 
 def test_ensure_codex_config_falls_back_to_resolved_uv(tmp_path, monkeypatch) -> None:
@@ -699,16 +713,10 @@ def test_ensure_codex_config_falls_back_to_resolved_uv(tmp_path, monkeypatch) ->
 
     setup_cli._ensure_codex_config(str(workspace))
 
-    config_path = codex_home / "config.toml"
-    assert config_path.read_text(encoding="utf-8") == (
-        "[mcp_servers.super-agents]\n"
-        f"command = {json.dumps(str(uv_bin))}\n"
-        f"args = {json.dumps(['--directory', str(cli_dir), 'run', 'super-agents-mcp'])}\n"
-        'env = { SUPER_AGENTS_DEFAULT_BACKEND = "codex", '
-        + SUPER_AGENTS_PERMISSION_ENV_SUFFIX
-        + " }\n"
-        + _expected_session_id_hook_suffix(config_path)
-    )
+    config_path = codex_home / "openbase.config.toml"
+    entry = tomllib.loads(config_path.read_text())["mcp_servers"]["super-agents"]
+    assert entry["command"] == str(uv_bin)
+    assert entry["args"] == ["--directory", str(cli_dir), "run", "super-agents-mcp"]
 
 
 def test_super_agents_mcp_command_prefers_packaged_python_bin(
@@ -759,10 +767,15 @@ def test_ensure_claude_mcp_installs_super_agents(tmp_path, monkeypatch) -> None:
     payload = json.loads(state_path.read_text(encoding="utf-8"))
     assert payload["firstStartTime"] == "2026-06-18T00:00:00.000Z"
     assert payload["mcpServers"]["playwright"] == {"command": "npx"}
+    assert "super-agents" not in payload["mcpServers"]
+    payload = json.loads((tmp_path / "profiles" / "mcp.json").read_text())
     assert payload["mcpServers"]["super-agents"] == {
         "type": "stdio",
         "command": str(command),
         "env": {
+            **importlib.import_module(
+                "openbase_coder_cli.agent_profiles"
+            ).profile_environment(),
             "SUPER_AGENTS_DEFAULT_CONFIG_PATH": str(dispatcher_config),
             "CODEX_SUPER_AGENT_INSTRUCTIONS_PATH": str(
                 instructions / "SUPER_AGENT_INSTRUCTIONS.md"
@@ -779,7 +792,6 @@ def test_ensure_claude_mcp_preserves_cloud_child_default(tmp_path, monkeypatch) 
     workspace = tmp_path / "workspace"
     command = workspace / ".venv" / "bin" / "super-agents-mcp"
     _patch_openbase_agent_paths(monkeypatch, tmp_path)
-    state_path = tmp_path / ".claude.json"
     command.parent.mkdir(parents=True)
     command.write_text("#!/bin/sh\n", encoding="utf-8")
 
@@ -788,7 +800,7 @@ def test_ensure_claude_mcp_preserves_cloud_child_default(tmp_path, monkeypatch) 
         coding_backend="openbase_cloud",
     )
 
-    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload = json.loads((tmp_path / "profiles" / "mcp.json").read_text())
     assert (
         payload["mcpServers"]["super-agents"]["env"]["SUPER_AGENTS_DEFAULT_BACKEND"]
         == "openbase_cloud"
@@ -809,6 +821,8 @@ def test_ensure_claude_hooks_registers_session_id_hook(tmp_path, monkeypatch) ->
     settings = json.loads(settings_path.read_text(encoding="utf-8"))
     assert settings["model"] == "sonnet"
     assert settings["permissions"] == {"defaultMode": "auto"}
+    assert "hooks" not in settings
+    settings = json.loads((tmp_path / "profiles" / "settings.json").read_text())
     assert settings["hooks"]["SessionStart"] == [
         {
             "matcher": "",
@@ -1283,7 +1297,7 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
     )
 
     assert result.exit_code == 0, result.output
-    assert calls == ["thread-sync", "sounds", "claude-md", "configure"]
+    assert calls == ["thread-sync", "sounds", "configure"]
     assert "Claude Code is not logged in" in result.output
 
     tailnet_cli = importlib.import_module("openbase_coder_cli.cli.tailnet")
@@ -1324,7 +1338,6 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
     assert calls == [
         "thread-sync",
         "sounds",
-        "claude-md",
         "provision-netmesh",
         "configure",
     ]
@@ -1353,7 +1366,6 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
     assert calls == [
         "thread-sync",
         "sounds",
-        "claude-md",
         "tunneld-binary",
         "service:openbase-tunneld",
         "tunneld-ready",
@@ -1413,7 +1425,6 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
     assert calls == [
         "thread-sync",
         "sounds",
-        "claude-md",
         "tunneld-binary",
         "service:openbase-tunneld",
     ]

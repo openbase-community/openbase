@@ -45,15 +45,6 @@ def livekit_network_mode(provider_name: str) -> str:
     return "local" if provider_name == PROVIDER_NETMESH_TSNET else "tailscale"
 
 
-# Last-resort netmesh-ctl location: the legacy standalone Openbase Netmesh app
-# (retired). The shipping companion (nested in the desktop app) and the dev
-# companion-build/DerivedData layouts are resolved from netmesh_companion —
-# the single source of truth for where the companion lives — so they are not
-# re-declared here.
-NETMESH_CTL_CANDIDATES = (
-    "/Applications/OpenbaseNetmesh.app/Contents/MacOS/netmesh-ctl",
-)
-
 _TAILSCALE_FALLBACK_PATHS = (
     "/usr/local/bin/tailscale",
     "/opt/homebrew/bin/tailscale",
@@ -147,11 +138,52 @@ def netmesh_ctl_bin() -> str | None:
     shared = netmesh_ctl_path()
     if shared and os.access(shared, os.X_OK):
         return shared
-    # Legacy standalone app (retired) as a last resort.
-    for candidate in NETMESH_CTL_CANDIDATES:
-        if os.access(candidate, os.X_OK):
-            return candidate
     return shutil.which("netmesh-ctl")
+
+
+def stock_tailscale_vpn_active() -> bool:
+    """True when the official Tailscale client's VPN is up on this machine."""
+    bin_path = tailscale_bin()
+    if not bin_path:
+        return False
+    try:
+        result = subprocess.run(  # noqa: S603 - fixed argv from trusted lookup
+            [bin_path, "status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if result.returncode != 0:
+        return False
+    try:
+        payload = json.loads(result.stdout)
+    except ValueError:
+        return False
+    return isinstance(payload, dict) and payload.get("BackendState") == "Running"
+
+
+def stock_tailscale_conflict() -> str | None:
+    """Describe a stock-Tailscale-vs-netmesh VPN conflict, or None.
+
+    Tailscale merely being installed coexists fine with the netmesh VPN. But
+    when the official client's VPN is *active* on a netmesh machine, its tunnel
+    takes over the route to the shared MagicDNS resolver (100.100.100.100) and
+    authoritatively NXDOMAINs every netmesh hostname — names die while the
+    netmesh tunnel itself stays Running, which presents as a mystery outage.
+    """
+    if provider() != PROVIDER_NETMESH or netmesh_uses_stock_tailscale():
+        return None
+    if not stock_tailscale_vpn_active():
+        return None
+    return (
+        "the official Tailscale VPN is connected alongside the Openbase VPN; "
+        "it captures MagicDNS, so Openbase hostnames stop resolving. "
+        "Disconnect it (menu bar -> Disconnect, or `tailscale down`), or switch "
+        "this machine's transport: `openbase-coder tailnet set-provider tailscale`."
+    )
 
 
 def tool_path() -> str | None:

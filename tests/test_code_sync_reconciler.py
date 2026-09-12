@@ -195,6 +195,29 @@ def test_up_to_date_and_remote_behind(tmp_path: Path) -> None:
     )
 
 
+def test_rewritten_branch_treats_stale_peer_tip_as_behind(tmp_path: Path) -> None:
+    # After a local rebase/amend the peer still serves the pre-rewrite tip.
+    # The local manifest advertises that tip as replaced, so this is the
+    # peer lagging the rewrite — not a divergence conflict.
+    from openbase_coder_cli.code_sync import repositories
+
+    local, peer = _pair(tmp_path)
+    old_tip = _commit(local, "feature.py", "wip\n", "feature")
+    _git(peer, "pull", "--ff-only", "--quiet", "origin", "main")
+    assert _git(peer, "rev-parse", "HEAD") == old_tip
+    repositories.ensure_repository_manifest(local)
+    _git(local, "commit", "--amend", "-m", "feature (rewritten)")
+    manifest = repositories.ensure_repository_manifest(local)
+    assert manifest is not None and manifest["replaces"] == [old_tip]
+    conflicts_path = tmp_path / "conflicts.json"
+
+    result = _reconcile(local, peer, conflicts_path)
+
+    assert result.action == reconciler.ACTION_REMOTE_BEHIND
+    assert "superseded by advertised rewrite" in result.detail
+    assert conflicts_module.read_conflicts(conflicts_path) == []
+
+
 def test_resolve_use_remote_stashes_then_resets(tmp_path: Path) -> None:
     home = tmp_path / "home"
     local_parent = home / "Projects" / "demo"

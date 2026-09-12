@@ -21,6 +21,7 @@ from openbase_coder_cli.livekit_announcer import (
 from openbase_coder_cli.openbase_coder_cli_app import agents_md as _agents_md
 from openbase_coder_cli.openbase_coder_cli_app import diagnostics as _diagnostics
 from openbase_coder_cli.openbase_coder_cli_app import livekit as _livekit
+from openbase_coder_cli.openbase_coder_cli_app import memories as _memories
 from openbase_coder_cli.openbase_coder_cli_app import skills as _skills
 from openbase_coder_cli.openbase_coder_cli_app.approvals import (
     approval_request_detail,
@@ -184,6 +185,11 @@ def _sync_skills_compat_globals() -> None:
     _skills._home_skills_dir = _home_skills_dir
 
 
+def _sync_memories_compat_globals() -> None:
+    _memories.CODEX_HOME_DIR = CODEX_HOME_DIR
+    _memories.CLAUDE_CONFIG_DIR = CLAUDE_CONFIG_DIR
+
+
 def agents_md(request):
     _sync_agents_md_compat_globals()
     return _agents_md.agents_md(request)
@@ -274,6 +280,16 @@ def skill_detail(request, skill_name):
     return _skills.skill_detail(request, skill_name)
 
 
+def memories_list(request):
+    _sync_memories_compat_globals()
+    return _memories.memories_list(request)
+
+
+def memory_detail(request, memory_name):
+    _sync_memories_compat_globals()
+    return _memories.memory_detail(request, memory_name)
+
+
 __all__ = [
     "agents_md",
     "all_project_reports",
@@ -314,6 +330,8 @@ __all__ = [
     "marketplace_skill_install",
     "marketplace_skills",
     "marketplace_routines",
+    "memories_list",
+    "memory_detail",
     "onboarding_cloud_state",
     "onboarding_status",
     "openbase_restart",

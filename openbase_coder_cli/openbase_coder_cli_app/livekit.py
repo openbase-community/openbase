@@ -260,6 +260,7 @@ def user_say(request):
         agent_name,
         len(input_serializer.validated_data["text"]),
     )
+    voice_entry = None
     try:
         voice_entry = get_voice_history_entry_for_agent_name(agent_name)
         logger.info(
@@ -310,8 +311,15 @@ def user_say(request):
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
     except Exception:
         logger.exception("Unable to publish LiveKit announcer message")
+        # Include the resolved agent thread so callers can degrade to a
+        # linked phone notification instead of dropping the message.
         return Response(
-            {"detail": "Unable to publish announcer message."},
+            {
+                "status": "publish_failed",
+                "detail": "Unable to publish announcer message.",
+                "agent_name": agent_name,
+                "thread_id": voice_entry.thread_id if voice_entry else None,
+            },
             status=status.HTTP_502_BAD_GATEWAY,
         )
 
@@ -885,9 +893,7 @@ def livekit_room_token(request):
         )
 
     identity = _request_identity(request)
-    inbound_invitation_id = input_serializer.validated_data.get(
-        "inbound_invitation_id"
-    )
+    inbound_invitation_id = input_serializer.validated_data.get("inbound_invitation_id")
     if inbound_invitation_id:
         try:
             invitation = answer_invitation(
