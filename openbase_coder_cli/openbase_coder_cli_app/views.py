@@ -126,6 +126,11 @@ from openbase_coder_cli.openbase_coder_cli_app.services_views import (
     thread_device_sync_status,
     thread_sync_conflicts,
 )
+from openbase_coder_cli.openbase_coder_cli_app.sharing import (
+    report_share,
+    report_share_grants,
+    report_share_revoke_grant,
+)
 from openbase_coder_cli.openbase_coder_cli_app.skills import _home_skills_dir
 from openbase_coder_cli.openbase_coder_cli_app.tags import tag_options
 from openbase_coder_cli.openbase_coder_cli_app.threads import (
@@ -348,6 +353,9 @@ __all__ = [
     "project_reports_file",
     "project_reports_tags",
     "project_status",
+    "report_share",
+    "report_share_grants",
+    "report_share_revoke_grant",
     "recent_projects",
     "reasoning_settings",
     "hooks_ingest",

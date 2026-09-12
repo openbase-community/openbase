@@ -117,6 +117,14 @@ Agents write Markdown reports into per-project `.reports` folders. The
 Reports page lists them across all projects grouped by date, with search and
 tag filtering. Open a report to read it, tag it, download it, or delete it.
 
+**Sharing a report:** the Share button in a report's detail view publishes
+the report (with any images it references) to your Openbase Cloud account
+and lets you grant access to specific people by email. Recipients get an
+email and read the report at app.openbase.cloud under "Shared with me" after
+signing in with that email address — there are no public links, and every
+grant can be revoked. While a report stays shared, edits to the local file
+republish automatically; "Stop sharing" removes the cloud copy.
+
 **On iPhone:** the Reports tab mirrors this — search, tag chips, date
 grouping, report detail with Markdown rendering, share sheet export, and
 delete. Report push notifications open the specific report.
