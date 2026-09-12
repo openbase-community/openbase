@@ -53,6 +53,9 @@ MAX_FILL_ROUNDS = 5
 
 LOCAL_SOURCE_KEY = "local"
 ORIGIN_DEVICE_KEY = "origin_device"
+# MagicDNS host of the owning peer; clients connect to it DIRECTLY (REST and
+# WebSockets) for peer-only items instead of proxying through this server.
+ORIGIN_HOST_KEY = "origin_host"
 
 
 class FleetPeer(NamedTuple):
@@ -220,6 +223,7 @@ def _fetch_peer_thread_page(
     items = [item for item in threads if isinstance(item, dict)]
     for item in items:
         item[ORIGIN_DEVICE_KEY] = peer.name
+        item[ORIGIN_HOST_KEY] = peer.key
     return SourcePage(
         items=items, next_cursor=_cursor_from_next_url(payload.get("next"))
     )
@@ -447,6 +451,7 @@ def fleet_report_items(local_items: list[dict[str, Any]]) -> list[dict[str, Any]
         peer_items = [item for item in items if isinstance(item, dict)]
         for item in peer_items:
             item[ORIGIN_DEVICE_KEY] = peer.name
+            item[ORIGIN_HOST_KEY] = peer.key
         return peer_items
 
     with ThreadPoolExecutor(max_workers=max(1, min(8, len(peers)))) as executor:
@@ -502,6 +507,7 @@ def fleet_thread_detail(thread_id: str) -> dict[str, Any] | None:
             continue
         if isinstance(payload, dict):
             payload[ORIGIN_DEVICE_KEY] = peer.name
+            payload[ORIGIN_HOST_KEY] = peer.key
             return payload
     return None
 

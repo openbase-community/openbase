@@ -239,4 +239,35 @@ def test_fleet_reports_dedupe_across_home_directories(monkeypatch):
     assert "/home/gabe/Projects/other:review.md" in ids
     peer_only = next(item for item in merged if "other" in item["id"])
     assert peer_only["origin_device"] == "mini"
+    assert peer_only["origin_host"] == "mini"
     assert merged[0]["id"] == "/home/gabe/Projects/other:review.md"  # newest first
+
+
+def test_peer_thread_page_stamps_origin_host(monkeypatch):
+    peer = FleetPeer(
+        key="mini.tail1234.ts.net",
+        name="mini",
+        base_url="http://mini.tail1234.ts.net:18080",
+    )
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "threads": [
+                    {"thread_id": "t1", "updated_at": "2026-09-12T10:00:00+00:00"}
+                ],
+                "next": "/api/threads/?page=2&cursor=abc",
+            }
+
+    monkeypatch.setattr(fleet, "peer_get", lambda *a, **k: FakeResponse())
+
+    page = fleet._fetch_peer_thread_page(
+        peer, "token", page=1, page_size=25, cursor=None
+    )
+
+    assert page is not None
+    assert page.items[0]["origin_device"] == "mini"
+    assert page.items[0]["origin_host"] == "mini.tail1234.ts.net"
+    assert page.next_cursor == "abc"
