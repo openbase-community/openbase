@@ -3,7 +3,7 @@ from __future__ import annotations
 from click.testing import CliRunner
 
 from openbase_coder_cli.cli import main
-from openbase_coder_cli.codex_backend_config import codex_backend_cli_overrides
+from openbase_coder_cli.codex_backend_config import codex_backend_profile_config
 
 
 def test_backend_status_defaults_when_env_file_missing(tmp_path) -> None:
@@ -68,30 +68,34 @@ def test_backend_use_internal_openbase_cloud_codex_keeps_codex_proxy(tmp_path) -
     )
 
 
-def test_codex_backend_cli_overrides_for_openbase_cloud() -> None:
-    args = codex_backend_cli_overrides("openbase_cloud_codex")
-
-    joined = " ".join(args)
-    assert args[0] == "-c"
-    assert 'model="gpt-5.5"' in joined
-    assert 'model_provider="openbase_cloud"' in joined
-    assert 'model_providers.openbase_cloud.base_url="https://app.openbase.cloud/api/openbase/llm/openai/v1"' in joined
-    assert 'model_providers.openbase_cloud.env_key="OPENBASE_CLOUD_CODEX_API_KEY"' in joined
-    assert 'model_providers.openbase_cloud.wire_api="responses"' in joined
-
-
-def test_codex_backend_cli_overrides_for_direct_codex() -> None:
-    args = codex_backend_cli_overrides("codex")
-
-    assert args == ["-c", 'model="gpt-5.5"']
+def test_codex_backend_profile_config_for_openbase_cloud(monkeypatch) -> None:
+    monkeypatch.setenv("OPENBASE_CLOUD_CODEX_MODEL", "cloud-test-model")
+    config = codex_backend_profile_config("openbase_cloud_codex")
+    assert config["model"] == "cloud-test-model"
+    assert config["model_provider"] == "openbase_cloud"
+    assert config["model_providers"]["openbase_cloud"] == {
+        "name": "Openbase Cloud",
+        "base_url": "https://app.openbase.cloud/api/openbase/llm/openai/v1",
+        "env_key": "OPENBASE_CLOUD_CODEX_API_KEY",
+        "wire_api": "responses",
+    }
 
 
-def test_codex_backend_cli_overrides_use_configured_web_backend() -> None:
-    args = codex_backend_cli_overrides(
+def test_codex_backend_profile_config_for_direct_codex() -> None:
+    assert codex_backend_profile_config("codex") == {
+        "model": "gpt-5.5",
+        "model_provider": "openai",
+    }
+
+
+def test_codex_backend_profile_config_uses_configured_web_backend() -> None:
+    config = codex_backend_profile_config(
         "openbase_cloud_codex", web_backend_url="http://localhost:8000"
     )
 
-    assert 'model_providers.openbase_cloud.base_url="http://localhost:8000/api/openbase/llm/openai/v1"' in " ".join(args)
+    assert config["model_providers"]["openbase_cloud"]["base_url"] == (
+        "http://localhost:8000/api/openbase/llm/openai/v1"
+    )
 
 
 def test_backend_status_reports_unsupported_value(tmp_path) -> None:

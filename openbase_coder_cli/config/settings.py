@@ -189,6 +189,22 @@ CORS_ALLOWED_ORIGINS = os.environ.get(
     "OPENBASE_CODER_CLI_CORS_ORIGINS", "http://localhost:8080,http://127.0.0.1:8080"
 ).split(",")
 
+# Cross-origin reads from the user's other desktops (fleet scope): a console
+# served by one desktop opens peer-only items directly against the desktop
+# that owns them, so every desktop must answer tailnet-origin requests.
+# Suffix-level allowance is safe here: every data endpoint requires a bearer
+# token (no cookie auth), so a foreign page on the tailnet only ever reads
+# 401s, and owner-identity pinning rejects other accounts' tokens.
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://[a-z0-9-]+(\.[a-z0-9-]+)*\.ts\.net$",
+    r"^https://[a-z0-9-]+(\.[a-z0-9-]+)*\.net\.obs\.so$",
+    r"^https://[a-z0-9-]+(\.[a-z0-9-]+)*\.net-staging\.obs\.so$",
+    r"^http://[a-z0-9-]+(\.[a-z0-9-]+)*\.ts\.net:\d+$",
+    r"^http://[a-z0-9-]+(\.[a-z0-9-]+)*\.net\.obs\.so:\d+$",
+    r"^http://[a-z0-9-]+(\.[a-z0-9-]+)*\.net-staging\.obs\.so:\d+$",
+    r"^http://(localhost|127\.0\.0\.1):\d+$",
+]
+
 CORS_ALLOW_CREDENTIALS = True
 
 

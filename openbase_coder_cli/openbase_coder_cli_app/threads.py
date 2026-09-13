@@ -41,6 +41,19 @@ from openbase_coder_cli.openbase_coder_cli_app.thread_metadata import (
     annotate_thread_payload,
     get_livekit_shared_thread_id,
 )
+from openbase_coder_cli.openbase_coder_cli_app.thread_origins import (
+    MANUAL_ORIGIN,
+    set_thread_origin,
+)
+from openbase_coder_cli.services.fleet_aggregation import (
+    FLEET_SCOPE_PARAM,
+    FLEET_SCOPE_VALUE,
+    ORIGIN_DEVICE_KEY,
+    SourcePage,
+    fleet_thread_detail,
+    fleet_thread_page,
+    thread_payload_sort_key,
+)
 from openbase_coder_cli.thread_sync.models import ThreadStatus
 from openbase_coder_cli.thread_sync.projects import (
     refresh_projects_from_thread_directories as _refresh_projects_from_threads,
@@ -330,6 +343,13 @@ def thread_list(request):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         thread = async_to_sync(manager.create_thread)(directory, **create_kwargs)
+        # This endpoint is the only manual-entry chokepoint (console, desktop,
+        # and mobile new-thread UIs all POST here); threads created any other
+        # way (Super Agents MCP, dispatcher, voice) get no origin record and
+        # are excluded from completion notifications. Stamping here, before
+        # the response, guarantees the origin exists before the first turn
+        # can start.
+        set_thread_origin(thread.session_id, MANUAL_ORIGIN)
         invalidate_thread_list_cache()
         logger.info(
             "thread_list created thread_id=%s directory=%s backend=%s",
@@ -379,6 +399,15 @@ def thread_list(request):
             favorite=favorite_filter,
         )
     cursor = request.query_params.get("cursor") or None
+
+    if request.query_params.get(FLEET_SCOPE_PARAM) == FLEET_SCOPE_VALUE:
+        return _fleet_thread_list_response(
+            request,
+            manager,
+            page=page,
+            page_size=page_size,
+            cursor=cursor,
+        )
 
     page_result = _get_thread_page_result(
         manager,
@@ -430,6 +459,80 @@ def thread_list(request):
     )
 
 
+def _local_thread_source_page(manager, *, cursor: str | None, page_size: int):
+    page_result = get_cached_thread_page(manager, limit=page_size, cursor=cursor)
+    return SourcePage(
+        items=[
+            annotate_thread_payload(t.model_dump(mode="json"))
+            for t in page_result.threads
+        ],
+        next_cursor=page_result.next_cursor,
+    )
+
+
+def _include_livekit_fallback_payload(manager, items: list[dict]) -> list[dict]:
+    livekit_thread_id = get_livekit_shared_thread_id()
+    if not livekit_thread_id or any(
+        item.get("thread_id") == livekit_thread_id for item in items
+    ):
+        return items
+    livekit_thread = _get_cached_livekit_dispatcher_thread(manager)
+    if livekit_thread is None:
+        return items
+    payload = annotate_thread_payload(livekit_thread.model_dump(mode="json"))
+    return sorted([*items, payload], key=thread_payload_sort_key, reverse=True)
+
+
+def _fleet_thread_list_response(
+    request, manager, *, page: int, page_size: int, cursor: str | None
+):
+    result = fleet_thread_page(
+        page_size=page_size,
+        cursor=cursor,
+        fetch_local_page=lambda _page, local_cursor, size: _local_thread_source_page(
+            manager, cursor=local_cursor, page_size=size
+        ),
+    )
+    threads = result.threads
+    if page == 1:
+        threads = _include_livekit_fallback_payload(manager, threads)
+    _refresh_projects_from_threads(
+        [
+            item["directory"]
+            for item in threads
+            if item.get("directory") and not item.get(ORIGIN_DEVICE_KEY)
+        ]
+    )
+    count = (page - 1) * page_size + len(threads)
+    if result.next_cursor:
+        count += 1
+    next_url = (
+        _thread_cursor_url(
+            request,
+            page=page + 1,
+            page_size=page_size,
+            cursor=result.next_cursor,
+        )
+        if result.next_cursor
+        else None
+    )
+    previous_url = (
+        _thread_page_url(request, page=page - 1, page_size=page_size)
+        if page > 1
+        else None
+    )
+    return Response(
+        {
+            "count": count,
+            "page": page,
+            "page_size": page_size,
+            "next": next_url,
+            "previous": previous_url,
+            "threads": threads,
+        }
+    )
+
+
 @api_view(["GET"])
 def thread_dispatcher(request):
     """Return the LiveKit dispatcher thread without scanning the thread list."""
@@ -474,7 +577,14 @@ def thread_detail(request, thread_id):
         return Response({"success": True})
 
     try:
-        thread = async_to_sync(manager.get_thread_state)(thread_id)
+        # Cache-and-coalesce: the detail view is polled every ~5s (and on each
+        # socket event and window focus) on top of the live thread WebSocket,
+        # and the dispatch page reads the same thread via /threads/dispatcher/
+        # first — so an uncached read here means repeated, redundant app-server
+        # round-trips for a thread another call just fetched. The 8s snapshot
+        # staleness is absorbed by the client's reconcileThreadSnapshot, which
+        # keeps live-streamed turns that post-date the snapshot.
+        thread = get_cached_thread_state(manager, thread_id)
     except RuntimeError as exc:
         if not is_thread_data_unavailable_error(exc):
             raise
@@ -487,6 +597,13 @@ def thread_detail(request, thread_id):
             status=status.HTTP_409_CONFLICT,
         )
     if thread is None:
+        # A fleet-scoped client may hold a thread that only exists on a peer
+        # device (older than the sync window, or not yet exchanged) — serve
+        # the peer's read-only copy rather than a 404.
+        if request.query_params.get(FLEET_SCOPE_PARAM) == FLEET_SCOPE_VALUE:
+            peer_payload = fleet_thread_detail(thread_id)
+            if peer_payload is not None:
+                return Response(peer_payload)
         return Response(
             {"error": f"Thread {thread_id} not found"},
             status=status.HTTP_404_NOT_FOUND,
@@ -571,7 +688,11 @@ def thread_start_turn(request, thread_id):
     try:
         turn_id = async_to_sync(manager.start_turn)(thread_id, prompt)
     except (ValueError, RuntimeError) as e:
-        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        # Surface the app-server's human-readable message (e.g. "thread not
+        # loaded: <id>") rather than its raw JSON-RPC error envelope.
+        return Response(
+            {"error": thread_error_message(e)}, status=status.HTTP_400_BAD_REQUEST
+        )
     invalidate_thread_list_cache()
     return Response(
         {"turn_id": turn_id, "status": "started"}, status=status.HTTP_201_CREATED

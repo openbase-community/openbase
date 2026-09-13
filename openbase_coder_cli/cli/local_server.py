@@ -20,7 +20,13 @@ def local_server_url() -> str:
     ).rstrip("/")
 
 
-def local_server_request(method: str, path: str, **kwargs) -> httpx.Response:
+def local_server_request(
+    method: str,
+    path: str,
+    *,
+    ok_statuses: tuple[int, ...] = (),
+    **kwargs,
+) -> httpx.Response:
     url = f"{local_server_url()}{path}"
     try:
         response = httpx.request(
@@ -35,7 +41,7 @@ def local_server_request(method: str, path: str, **kwargs) -> httpx.Response:
             f"Unable to reach the local Openbase Coder server: {exc}"
         ) from None
 
-    if response.status_code >= 400:
+    if response.status_code >= 400 and response.status_code not in ok_statuses:
         raise click.ClickException(response_error(response))
     return response
 

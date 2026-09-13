@@ -95,16 +95,14 @@ fingerprints side by side. Device conflicts offer **Keep Local** and
 
 ## Approvals
 
-Pending permission requests from running agents, with approve/deny buttons
-and 5-second auto-refresh. Approval push notifications deep-link here, so you
-can unblock an agent without being at your Mac.
+Pending permission requests from running agents, with approve/deny buttons and 5-second auto-refresh. The iPhone app polls for requests and generates local alerts for newly detected requests. These alerts open the Approvals screen; they are not cloud push notifications and cannot detect new requests while the app is suspended or stopped. The initial load populates the list without alerting for existing requests.
 
 ## Reports
 
 Browse agent-written reports across projects: search, tag filter chips, and
 date grouping (Today, This Week, This Month, Earlier). Tap a report for
 rendered Markdown with previous/next navigation, a share-sheet export, and
-delete. Report push notifications open the specific report.
+delete. Locally generated report alerts open the specific report; detection requires the app's report monitor to be running.
 
 ## Diff
 
@@ -137,16 +135,28 @@ auth token automatically.
   Openbase Cloud subscription); the concurrent-agent threshold for music
   (driven by the Brain Readiness score when available — see
   [Brain Score Concurrency](plugins/brain-score-concurrency.md)).
-- **Diagnostics** — upload iOS logs to support.
+- **Diagnostics** — opt into **Share Anonymous Product Usage**, enable **Verbose Audio Playback Diagnostics**, or use **Upload iOS Logs**.
 - **Sign Out**.
+
+Product usage collection is off by default and requires an analytics key in the app build. When enabled, iOS sends restricted events to Amplitude for app sessions, onboarding progress/failures/skips, voice-call start/connect/end timing and outcomes, approval decisions and response timing, and diff views. Metadata includes a random persistent device ID, session and event IDs, timestamps, platform, surface, environment, and app version. Events do not include prompts, code, audio, file paths, or repository content. Turning collection off removes the stored analytics device ID.
+
+Diagnostics are separate from product analytics. The app keeps up to 1,000 recent redacted diagnostic entries in memory, covering authentication, API/network activity, and call setup. Verbose audio diagnostics add playback timing, gaps, packet/jitter statistics, routes, and interruptions. **Upload iOS Logs**, or a connected runtime's diagnostics command, sends recent entries and the device model/OS version to the selected Mac or DevSpace, where they are saved in `~/.openbase/logs/ios-app.log`. Upload payloads redact secret-like values and email addresses.
 
 ## Push Notifications
 
-The app routes notifications to the right screen:
+There are two notification delivery paths:
+
+- **Cloud push for agent announcements:** when `openbase-coder user say` finds no active voice room, the CLI submits the announcement to the authenticated Openbase Cloud endpoint. A cloud worker sends an Apple Push Notification service (APNs) alert to the account's registered iPhone token. After registration, this path does not require the iPhone app to be open. Cloud acceptance means the request was queued, not that Apple accepted it or the phone displayed it.
+- **App-generated alerts for approvals, reports, and sync conflicts:** monitors in the iPhone app poll the selected runtime and schedule local notifications. They cannot detect new events while iOS suspends the app or the app is stopped. These monitors do not provide cloud push delivery.
+
+Opening the signed-in app requests or retries remote-notification registration. This registration step is distinct from receiving later APNs alerts. Notification permission, a valid registered token, and successful cloud/APNs delivery are required for cloud alerts; presentation remains subject to iOS notification settings.
+
+The app routes alerts to the right screen:
 
 - Approval requests → Approvals tab
 - New reports → Reports tab (opens the specific report)
 - Thread sync conflicts → Sync tab
+- Cloud agent announcements → the linked thread
 
 Thread turn start/completion events refresh the UI in place.
 

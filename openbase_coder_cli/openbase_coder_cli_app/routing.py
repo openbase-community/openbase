@@ -10,5 +10,6 @@ websocket_urlpatterns = [
     re_path(r"ws/threads/$", consumers.AllThreadsConsumer.as_asgi()),
     re_path(r"ws/threads/(?P<thread_id>[^/]+)/$", consumers.ThreadConsumer.as_asgi()),
     re_path(r"ws/approval-requests/$", consumers.ApprovalRequestsConsumer.as_asgi()),
+    re_path(r"ws/notifications/$", consumers.NotificationsConsumer.as_asgi()),
     re_path(r"ws/ios-app-control/$", consumers.IOSAppControlConsumer.as_asgi()),
 ]

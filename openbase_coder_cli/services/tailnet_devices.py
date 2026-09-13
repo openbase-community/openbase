@@ -24,6 +24,7 @@ class TailnetDevice:
     openbase_url: str | None = None
     openbase_available: bool = False
     probe_error: str | None = None
+    is_self: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -127,7 +128,7 @@ def _devices_from_tailscale_status(payload: dict[str, Any]) -> list[TailnetDevic
 
     self_device = payload.get("Self")
     if isinstance(self_device, dict):
-        device = _device_from_status_entry(self_device, online=True)
+        device = _device_from_status_entry(self_device, online=True, is_self=True)
         if device is not None:
             devices.append(device)
 
@@ -151,6 +152,7 @@ def _device_from_status_entry(
     entry: dict[str, Any],
     *,
     online: bool | None = None,
+    is_self: bool = False,
 ) -> TailnetDevice | None:
     ips = entry.get("TailscaleIPs")
     ip = str(ips[0]) if isinstance(ips, list) and ips else None
@@ -171,6 +173,7 @@ def _device_from_status_entry(
         ip=ip,
         online=online_value,
         os=str(os_name) if os_name else None,
+        is_self=is_self,
     )
 
 
@@ -200,6 +203,13 @@ def _probe_openbase_devices(devices: list[TailnetDevice]) -> None:
 def _probe_openbase_device(device: TailnetDevice) -> None:
     url = f"http://{_url_host_literal(device.host)}:{OPENBASE_CODER_TAILNET_PORT}{OPENBASE_HEALTH_PATH}"
     device.openbase_url = url.removesuffix(OPENBASE_HEALTH_PATH)
+    if device.is_self:
+        from openbase_coder_cli.services.tailscale_serve import local_openbase_reachable
+
+        device.openbase_available, device.probe_error = local_openbase_reachable(
+            device.dns_name
+        )
+        return
     try:
         response = httpx.get(url, timeout=OPENBASE_PROBE_TIMEOUT_SECONDS)
     except httpx.HTTPError as exc:

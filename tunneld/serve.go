@@ -22,7 +22,7 @@ import (
 
 const (
 	openbaseTailnetPort = 18080
-	openbaseLocalAddr   = "127.0.0.1:7999"
+	openbaseLocalPort   = 7999
 	livekitTailnetPort  = 7880
 	livekitLocalAddr    = "127.0.0.1:7880"
 	livekitICETCPPort   = 7881
@@ -86,7 +86,12 @@ func runServe(args []string) error {
 	if err != nil {
 		return fmt.Errorf("local client: %w", err)
 	}
-	api := &localAPI{srv: srv, lc: lc, token: token}
+	openbaseLocalAddr, err := resolveOpenbaseLocalAddr(os.Getenv("OPENBASE_CODER_CLI_PORT"))
+	if err != nil {
+		return err
+	}
+
+	api := &localAPI{srv: srv, lc: lc, token: token, openbaseAddr: openbaseLocalAddr}
 	apiLn, err := net.Listen("tcp", cfg.localAPI)
 	if err != nil {
 		// The control port doubles as a single-instance lock.
@@ -162,6 +167,21 @@ func runServe(args []string) error {
 		livekitICETCPPort, livekitICETCPAddr, turnTailnetPort, turnCreds.Username)
 
 	select {} // run until killed
+}
+
+// resolveOpenbaseLocalAddr picks the local Django API target for the fixed
+// tailnet :18080 forward. It tracks OPENBASE_CODER_CLI_PORT so platforms
+// that bind the API elsewhere (Maritime sets 18789) stay reachable on the
+// contract port.
+func resolveOpenbaseLocalAddr(rawPort string) (string, error) {
+	if rawPort == "" {
+		return "127.0.0.1:" + strconv.Itoa(openbaseLocalPort), nil
+	}
+	port, err := strconv.Atoi(rawPort)
+	if err != nil || port < 1 || port > 65535 {
+		return "", fmt.Errorf("invalid OPENBASE_CODER_CLI_PORT: %q", rawPort)
+	}
+	return "127.0.0.1:" + strconv.Itoa(port), nil
 }
 
 func forwardTCP(ln net.Listener, targetAddr string) {

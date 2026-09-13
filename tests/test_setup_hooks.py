@@ -137,9 +137,7 @@ def test_ensure_claude_session_id_hook_preserves_other_settings(
     updated = json.loads(settings.read_text(encoding="utf-8"))
 
     assert updated["model"] == "sonnet"
-    assert updated["hooks"]["PostToolUse"] == [
-        {"hooks": [{"command": "audit.sh"}]}
-    ]
+    assert updated["hooks"]["PostToolUse"] == [{"hooks": [{"command": "audit.sh"}]}]
     assert updated["hooks"]["SessionStart"][0]["hooks"][0]["command"] == str(
         INJECT_SESSION_ID_HOOK_PATH
     )
@@ -155,6 +153,23 @@ def test_ensure_claude_session_id_hook_refuses_invalid_json(tmp_path: Path) -> N
         hooks.ensure_claude_session_id_hook(settings)
 
     assert settings.read_text(encoding="utf-8") == "not-json\n"
+
+
+def test_ensure_claude_session_id_hook_can_back_up_default_settings(
+    tmp_path: Path,
+) -> None:
+    settings = tmp_path / "settings.json"
+    original = '{"model":"opus"}\n'
+    settings.write_text(original, encoding="utf-8")
+
+    assert hooks.ensure_claude_session_id_hook(settings, backup=True) is True
+
+    assert (
+        settings.with_name("settings.json.before-openbase-profiles").read_text(
+            encoding="utf-8"
+        )
+        == original
+    )
 
 
 def test_ensure_codex_session_id_hook_appends_and_preserves(tmp_path: Path) -> None:
@@ -194,6 +209,23 @@ def test_ensure_codex_session_id_hook_is_idempotent(tmp_path: Path) -> None:
     assert first.count("[[hooks.SessionStart]]") == 1
 
 
+def test_ensure_codex_session_id_hook_can_back_up_default_config(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "config.toml"
+    original = 'model = "personal"\n'
+    config.write_text(original, encoding="utf-8")
+
+    assert hooks.ensure_codex_session_id_hook(config, backup=True) is True
+
+    assert (
+        config.with_name("config.toml.before-openbase-profiles").read_text(
+            encoding="utf-8"
+        )
+        == original
+    )
+
+
 def test_ensure_codex_session_id_hook_preserves_unrelated_session_hook(
     tmp_path: Path,
 ) -> None:
@@ -215,8 +247,8 @@ def test_ensure_codex_session_id_hook_preserves_unrelated_session_hook(
     assert hooks.ensure_codex_session_id_hook(config) is True
     text = config.read_text(encoding="utf-8")
 
-    assert '/old/path.sh' in text
-    assert 'sha256:stale' in text
+    assert "/old/path.sh" in text
+    assert "sha256:stale" in text
     assert text.count("[[hooks.SessionStart]]") == 2
     managed_state_key = f"{config.parent.resolve() / config.name}:session_start:1:0"
     assert text.count(f'[hooks.state."{state_key}"]') == 1

@@ -69,7 +69,7 @@ def test_set_provider_writes_env_and_orchestrates(env_path, quiet_orchestration)
 
     values = env_file_values(Path(env_path))
     assert values["OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"] == "netmesh-tsnet"
-    assert ".netmesh.openbase.cloud" in values["OPENBASE_CODER_CLI_ALLOWED_HOSTS"]
+    assert ".net.obs.so" in values["OPENBASE_CODER_CLI_ALLOWED_HOSTS"]
     assert values["LIVEKIT_NETWORK_MODE"] == "local"
 
     assert quiet_orchestration["push"] == ["netmesh-tsnet"]
@@ -224,7 +224,7 @@ def test_tailnet_status_renders_state_and_peer_paths(monkeypatch):
         lambda: {
             "BackendState": "Running",
             "Self": {
-                "DNSName": "mac.netmesh.openbase.cloud.",
+                "DNSName": "mac.net.obs.so.",
                 "TailscaleIPs": ["100.64.0.10"],
             },
             "Peer": {
@@ -247,7 +247,7 @@ def test_tailnet_status_renders_state_and_peer_paths(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert "state:" in result.output and "Running" in result.output
-    assert "mac.netmesh.openbase.cloud" in result.output
+    assert "mac.net.obs.so" in result.output
     assert "direct 192.168.0.59:41641" in result.output
     assert "offline" in result.output
 

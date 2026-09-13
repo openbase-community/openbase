@@ -39,6 +39,30 @@ def test_livekit_server_local_mode_cannot_enable_wildcard_ice_tcp(monkeypatch):
     assert "tcp_port: 7881" not in config_body
 
 
+def test_livekit_server_netmesh_mode_serves_ice_tcp_loopback_only(monkeypatch):
+    monkeypatch.setattr(runners.platform, "system", lambda: "Linux")
+    env = {
+        "LIVEKIT_NETWORK_MODE": "netmesh",
+        "LIVEKIT_API_KEY": "key",
+        "LIVEKIT_API_SECRET": "secret",
+    }
+    binaries = {"livekit": "/usr/local/bin/livekit-server"}
+
+    argv, _ = runners.build_livekit_server(env, binaries)
+
+    assert argv[argv.index("--bind") + 1] == "127.0.0.1"
+    assert argv[argv.index("--node-ip") + 1] == "127.0.0.1"
+    config_body = argv[argv.index("--config-body") + 1]
+    # tunneld forwards tailnet :7881 to the local ICE-TCP mux, so it must
+    # actually listen — unlike bare local mode.
+    assert "tcp_port: 7881" in config_body
+    # Candidates stay loopback-only: no routable interface or IP is
+    # advertised, so mesh clients never wait on an unreachable candidate.
+    assert "- lo" in config_body
+    assert "- 127.0.0.1/32" in config_body
+    assert "100." not in config_body
+
+
 def test_livekit_server_tailscale_mode_resolves_node_ip_and_interface(monkeypatch):
     monkeypatch.setattr(runners.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(runners.network, "tailscale_ip", lambda family: "100.64.1.2")
@@ -80,7 +104,12 @@ def test_codex_app_server_builds_default_backend_argv(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "CODEX_HOME_DIR", codex_home)
     # A stray CODEX_HOME in the service environment must not retarget the
     # service away from the shared ~/.codex home.
-    env: dict[str, str] = {"CODEX_HOME": "/somewhere/else"}
+    env: dict[str, str] = {
+        "CODEX_HOME": "/somewhere/else",
+        "CODEX_MODEL": "gpt-env-model",
+        "CODEX_MODEL_REASONING_EFFORT": "low",
+        "CODEX_SERVICE_TIER": "fast",
+    }
     binaries = {
         "codex": "/usr/local/bin/codex",
         "openbase_coder": "/usr/local/bin/openbase-coder",
@@ -90,16 +119,12 @@ def test_codex_app_server_builds_default_backend_argv(tmp_path, monkeypatch):
 
     assert argv[0] == "/usr/local/bin/codex"
     assert argv[1] == "app-server"
-    assert argv[2:8] == [
-        "-c",
-        'model_reasoning_effort="high"',
-        "-c",
-        'service_tier="standard"',
-        "-c",
-        'model="gpt-5.5"',
-    ]
+    assert "-c" not in argv
     assert argv[-2:] == ["--listen", "unix://"]
     assert out_env["CODEX_HOME"] == str(codex_home)
+    assert "CODEX_MODEL" not in out_env
+    assert "CODEX_MODEL_REASONING_EFFORT" not in out_env
+    assert "CODEX_SERVICE_TIER" not in out_env
     assert out_env["CODEX_APP_SERVER_URL"] == "unix://"
     assert out_env["DISABLE_AUTOUPDATER"] == "1"
     assert codex_home.is_dir()
@@ -124,16 +149,7 @@ def test_codex_app_server_fetches_cloud_token_for_cloud_backend(tmp_path, monkey
     argv, out_env = runners.build_codex_app_server(env, binaries)
 
     assert out_env["OPENBASE_CLOUD_CODEX_API_KEY"] == "cloud-token-value"
-    assert 'model="gpt-5.5"' in argv
-    assert 'model_provider="openbase_cloud"' in argv
-    assert 'model_providers.openbase_cloud.name="Openbase Cloud"' in argv
-    assert any(
-        arg.startswith('model_providers.openbase_cloud.base_url="') for arg in argv
-    )
-    assert (
-        'model_providers.openbase_cloud.env_key="OPENBASE_CLOUD_CODEX_API_KEY"' in argv
-    )
-    assert 'model_providers.openbase_cloud.wire_api="responses"' in argv
+    assert "-c" not in argv
 
 
 def test_sync_workers_argv():
@@ -324,12 +340,14 @@ def test_load_env_merges_env_file_over_process_env(tmp_path, monkeypatch):
 
 
 def test_load_env_without_env_file_returns_process_env(monkeypatch):
+    from openbase_coder_cli.agent_profiles import profile_environment
     from openbase_coder_cli.services.installation import InstallationConfig
 
     monkeypatch.setattr(runners.os, "environ", {"PATH": "/bin"})
     config = InstallationConfig(env_file="")
 
     assert runners._load_env(config) == {
+        **profile_environment(),
         "PATH": "/bin",
         "CODEX_APP_SERVER_URL": "unix://",
         "CODEX_HOME": str(runners.Path.home() / ".codex"),

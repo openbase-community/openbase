@@ -21,7 +21,7 @@ from openbase_coder_cli.openbase_coder_cli_app import (  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _reset_tailnet_status_cache():
-    # service_status caches its tailnet probe in module state (stale-while-
+    # service_status caches its tailnet status in module state (stale-while-
     # revalidate in production). Reset it around each test so a test sees its own
     # mocks rather than a previous test's cached snapshot.
     services_views._tailnet_snapshot["value"] = None
@@ -34,22 +34,16 @@ def _reset_tailnet_status_cache():
 def test_service_status_caches_tailnet_probe_across_polls(monkeypatch) -> None:
     """Repeated /api/status/ polls must not re-run the (possibly wedged)
     netmesh-ctl probes; the first poll computes, later polls serve the cache."""
-    calls = {"tailscale": 0, "serve": 0}
+    calls = {"status": 0}
 
-    def counting_check() -> bool:
-        calls["tailscale"] += 1
-        return True
-
-    def counting_serve():
-        calls["serve"] += 1
+    def counting_status():
+        calls["status"] += 1
         return SimpleNamespace(
-            healthy=True,
+            tailscale_running=True,
             host="mac.tailnet.ts.net",
             openbase_url="http://mac.tailnet.ts.net:18080",
             openbase_configured=True,
             livekit_configured=True,
-            openbase_reachable=True,
-            error=None,
         )
 
     monkeypatch.setattr(
@@ -58,8 +52,7 @@ def test_service_status_caches_tailnet_probe_across_polls(monkeypatch) -> None:
     monkeypatch.setattr(services_views, "_check_port", lambda port: True)
     monkeypatch.setattr(services_views, "_check_web_backend", lambda: True)
     monkeypatch.setattr(services_views, "_check_codex_app_server", lambda: True)
-    monkeypatch.setattr(services_views, "_check_tailscale", counting_check)
-    monkeypatch.setattr(services_views, "tailscale_serve_health", counting_serve)
+    monkeypatch.setattr(services_views, "tailscale_serve_status", counting_status)
     monkeypatch.setattr(
         services_views,
         "keep_awake_status_payload",
@@ -83,10 +76,11 @@ def test_service_status_caches_tailnet_probe_across_polls(monkeypatch) -> None:
         response = views.service_status(request)
         assert response.status_code == 200
         assert response.data["services"]["tailscale"]["running"] is True
-        assert response.data["services"]["tailscale_serve"]["running"] is True
+        assert response.data["services"]["openbase_api_serve_route"]["running"] is True
+        assert response.data["services"]["livekit_serve_route"]["running"] is True
 
-    # Three polls, but each netmesh-ctl probe ran exactly once (cache hit after).
-    assert calls == {"tailscale": 1, "serve": 1}
+    # Three polls, but the control-tool status read ran once (cache hit after).
+    assert calls == {"status": 1}
 
 
 def test_service_status_includes_background_openbase_services(monkeypatch) -> None:
@@ -95,7 +89,6 @@ def test_service_status_includes_background_openbase_services(monkeypatch) -> No
         services_views, "service_supports_configured_backends", lambda service: True
     )
     monkeypatch.setattr(services_views, "_check_port", lambda port: True)
-    monkeypatch.setattr(services_views, "_check_tailscale", lambda: True)
     monkeypatch.setattr(services_views, "_check_web_backend", lambda: True)
     monkeypatch.setattr(services_views, "_check_codex_app_server", lambda: True)
     monkeypatch.setattr(
@@ -116,15 +109,13 @@ def test_service_status_includes_background_openbase_services(monkeypatch) -> No
     )
     monkeypatch.setattr(
         services_views,
-        "tailscale_serve_health",
+        "tailscale_serve_status",
         lambda: SimpleNamespace(
-            healthy=True,
+            tailscale_running=True,
             host="mac.tailnet.ts.net",
             openbase_url="http://mac.tailnet.ts.net:18080",
             openbase_configured=True,
             livekit_configured=True,
-            openbase_reachable=True,
-            error=None,
         ),
     )
 
@@ -161,16 +152,19 @@ def test_service_status_includes_background_openbase_services(monkeypatch) -> No
     }
     assert response.data["services"]["codex_app_server"]["port"] is None
     assert response.data["services"]["codex_app_server"]["transport"] == "unix"
-    assert response.data["services"]["tailscale_serve"] == {
-        "name": "Tailscale Serve",
+    assert response.data["services"]["openbase_api_serve_route"] == {
+        "name": "Openbase API Serve Route",
         "port": 18080,
         "running": True,
         "host": "mac.tailnet.ts.net",
         "url": "http://mac.tailnet.ts.net:18080",
-        "openbase_configured": True,
-        "livekit_configured": True,
-        "openbase_reachable": True,
-        "error": None,
+        "optional": False,
+    }
+    assert response.data["services"]["livekit_serve_route"] == {
+        "name": "LiveKit Serve Route",
+        "port": 7880,
+        "running": True,
+        "host": "mac.tailnet.ts.net",
         "optional": False,
     }
     assert response.data["services"]["keep_awake"] == {
@@ -185,7 +179,51 @@ def test_service_status_includes_background_openbase_services(monkeypatch) -> No
             {"flag": "-d", "label": "Prevent display sleep"},
         ],
     }
-    assert len(response.data["services"]) == 10
+    assert len(response.data["services"]) == 11
+
+
+def test_service_status_reports_each_serve_route_independently(monkeypatch) -> None:
+    monkeypatch.setattr(
+        services_views, "service_supports_configured_backends", lambda service: True
+    )
+    monkeypatch.setattr(services_views, "_check_port", lambda port: True)
+    monkeypatch.setattr(services_views, "_check_web_backend", lambda: True)
+    monkeypatch.setattr(services_views, "_check_codex_app_server", lambda: True)
+    monkeypatch.setattr(
+        services_views,
+        "tailscale_serve_status",
+        lambda: SimpleNamespace(
+            tailscale_running=True,
+            host="mac.tailnet.ts.net",
+            openbase_url="http://mac.tailnet.ts.net:18080",
+            openbase_configured=False,
+            livekit_configured=True,
+        ),
+    )
+    monkeypatch.setattr(
+        services_views,
+        "keep_awake_status_payload",
+        lambda: {
+            "name": "Keep Awake",
+            "port": None,
+            "running": True,
+            "optional": False,
+        },
+    )
+    monkeypatch.setattr(
+        services_views,
+        "launchctl_status",
+        lambda service: {"installed": True, "pid": "123", "last_exit_code": None},
+    )
+
+    request = APIRequestFactory().get("/api/status/")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+    response = views.service_status(request)
+
+    assert response.data["services"]["tailscale"]["running"] is True
+    assert response.data["services"]["openbase_api_serve_route"]["running"] is False
+    assert response.data["services"]["livekit_serve_route"]["running"] is True
+    assert "tailscale_serve" not in response.data["services"]
 
 
 def test_service_status_omits_codex_app_server_on_claude_code_backend(
@@ -197,7 +235,6 @@ def test_service_status_omits_codex_app_server_on_claude_code_backend(
         lambda service: service.supports_backend("claude_code"),
     )
     monkeypatch.setattr(services_views, "_check_port", lambda port: True)
-    monkeypatch.setattr(services_views, "_check_tailscale", lambda: True)
     monkeypatch.setattr(services_views, "_check_web_backend", lambda: True)
     monkeypatch.setattr(
         services_views,
@@ -214,15 +251,13 @@ def test_service_status_omits_codex_app_server_on_claude_code_backend(
     )
     monkeypatch.setattr(
         services_views,
-        "tailscale_serve_health",
+        "tailscale_serve_status",
         lambda: SimpleNamespace(
-            healthy=True,
+            tailscale_running=True,
             host="mac.tailnet.ts.net",
             openbase_url="http://mac.tailnet.ts.net:18080",
             openbase_configured=True,
             livekit_configured=True,
-            openbase_reachable=True,
-            error=None,
         ),
     )
     monkeypatch.setattr(
@@ -239,7 +274,7 @@ def test_service_status_omits_codex_app_server_on_claude_code_backend(
     assert response.status_code == 200
     assert "codex_app_server" not in response.data["services"]
     assert "sync_workers" in response.data["services"]
-    assert len(response.data["services"]) == 9
+    assert len(response.data["services"]) == 10
 
 
 def test_thread_device_sync_status_returns_snapshot_payload(monkeypatch) -> None:

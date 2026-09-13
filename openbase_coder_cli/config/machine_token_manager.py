@@ -57,10 +57,53 @@ class MachineTokenManager:
                     return str(cached["token"])
             return self._mint(required_scopes)
 
+    def has_cached_token(
+        self,
+        *,
+        scopes: Sequence[str] = DEFAULT_MACHINE_TOKEN_SCOPES,
+    ) -> bool:
+        """Return whether a usable token is already persisted, without minting."""
+        required_scopes = tuple(dict.fromkeys(scopes))
+        with self._file_lock():
+            cached = self._load()
+            return (
+                self._cached_token_matches(cached, required_scopes)
+                and tuple(cached.get("scopes") or ()) == required_scopes
+            )
+
     def clear(self) -> None:
         with self._file_lock():
             if MACHINE_TOKEN_JSON_PATH.is_file():
                 MACHINE_TOKEN_JSON_PATH.unlink()
+
+    def store_bootstrap_token(
+        self,
+        *,
+        token: str,
+        token_prefix: str,
+        install_id: str,
+        scopes: Sequence[str],
+    ) -> None:
+        if not token.startswith("obmt_"):
+            raise MachineTokenError(
+                "Bootstrap response did not include a machine token."
+            )
+        if tuple(scopes) != DEFAULT_MACHINE_TOKEN_SCOPES:
+            raise MachineTokenError(
+                "Bootstrap machine token scopes must be llm_proxy and audio_proxy."
+            )
+        if not install_id:
+            raise MachineTokenError("Bootstrap response did not include an install ID.")
+        with self._file_lock():
+            self._save(
+                {
+                    "web_backend_url": self._web_backend_url,
+                    "install_id": install_id,
+                    "token": token,
+                    "token_prefix": token_prefix or token[:16],
+                    "scopes": list(scopes),
+                }
+            )
 
     def _load(self) -> dict:
         if not MACHINE_TOKEN_JSON_PATH.is_file():
@@ -128,6 +171,10 @@ class MachineTokenManager:
             "token_prefix": payload.get("token_prefix", token[:16]),
             "scopes": payload.get("scopes", list(scopes)),
         }
+        self._save(saved)
+        return token
+
+    def _save(self, saved: dict) -> None:
         MACHINE_TOKEN_JSON_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = MACHINE_TOKEN_JSON_PATH.with_suffix(f".json.tmp{os.getpid()}")
         fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -138,7 +185,6 @@ class MachineTokenManager:
         finally:
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(tmp_path)
-        return token
 
     def _access_token(self) -> str:
         return self._token_manager.get_access_token()

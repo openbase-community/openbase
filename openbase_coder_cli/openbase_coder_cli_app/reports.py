@@ -8,11 +8,12 @@ import re
 from pathlib import Path
 
 from asgiref.sync import async_to_sync
-from django.http import FileResponse
+from django.http import FileResponse, HttpResponse
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+from openbase_coder_cli import sharing_service
 from openbase_coder_cli.openbase_coder_cli_app.item_tags import (
     report_tags_payload,
     set_report_tags,
@@ -32,6 +33,12 @@ from openbase_coder_cli.reports_service import (
     _resolve_reports_path,
     enrich_report_provenance,
     explicit_report_provenance,
+)
+from openbase_coder_cli.services.fleet_aggregation import (
+    FLEET_SCOPE_PARAM,
+    FLEET_SCOPE_VALUE,
+    fleet_report_items,
+    proxy_peer_report_request,
 )
 from openbase_coder_cli.thread_sync.session_manager import get_session_manager
 
@@ -108,6 +115,7 @@ def _report_action_prompt(
         f"{excerpt}"
     )
 
+
 @api_view(["GET"])
 def project_reports(request):
     """List developer communication files for a project."""
@@ -143,7 +151,10 @@ def global_reports_projects(request):
 @api_view(["GET"])
 def all_project_reports(request):
     """List all report artifacts across recent and global report sources."""
-    return Response({"items": _all_reports_items()})
+    items = _all_reports_items()
+    if request.query_params.get(FLEET_SCOPE_PARAM) == FLEET_SCOPE_VALUE:
+        items = fleet_report_items(items)
+    return Response({"items": items})
 
 
 @api_view(["POST"])
@@ -252,6 +263,26 @@ def project_reports_file(request):
     """Return, update, or delete a renderable developer communication file."""
     project_path = request.query_params.get("path", "").strip()
     relative_path = request.query_params.get("file", "").strip()
+    device = request.query_params.get("device", "").strip()
+    if device:
+        # A fleet-scoped item that only exists on a peer device: read it from
+        # there. Peer report edits are deliberately not supported yet.
+        if request.method != "GET":
+            return Response(
+                {"error": "Reports on another device are read-only here."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        proxied = proxy_peer_report_request(
+            device,
+            "/api/projects/reports/file/",
+            {"path": project_path, "file": relative_path},
+        )
+        if proxied is None or proxied.payload is None:
+            return Response(
+                {"error": f"Device {device} is not reachable."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return Response(proxied.payload, status=proxied.status_code)
     if not project_path:
         return Response(
             {"error": "path is required"},
@@ -337,6 +368,8 @@ def project_reports_file(request):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        sharing_service.maybe_republish_report(str(resolved), relative_path)
+
         return Response(
             {
                 "file": _reports_file_payload(file_path, reports_dir),
@@ -370,9 +403,7 @@ def project_reports_file(request):
         }
         if provenance:
             payload["provenance"] = provenance.payload()
-        return Response(
-            payload
-        )
+        return Response(payload)
 
     if kind == "image":
         if size > REPORTS_MAX_IMAGE_BYTES:
@@ -449,6 +480,27 @@ def project_reports_download(request):
     """Download any report artifact as a raw file."""
     project_path = request.query_params.get("path", "").strip()
     relative_path = request.query_params.get("file", "").strip()
+    device = request.query_params.get("device", "").strip()
+    if device:
+        proxied = proxy_peer_report_request(
+            device,
+            "/api/projects/reports/download/",
+            {"path": project_path, "file": relative_path},
+            binary=True,
+        )
+        if proxied is None or proxied.content is None:
+            return Response(
+                {"error": f"Device {device} is not reachable."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        response = HttpResponse(
+            proxied.content,
+            status=proxied.status_code,
+            content_type=proxied.content_type or "application/octet-stream",
+        )
+        filename = proxied.filename or Path(relative_path).name or "report"
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
     if not project_path:
         return Response(
             {"error": "path is required"},

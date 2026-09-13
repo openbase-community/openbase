@@ -18,6 +18,7 @@ from super_agents.app_server_client import (
     extract_threads,
     login_shell_config_override,
 )
+from super_agents.config_profiles import codex_profile_config, merge_config
 
 from openbase_coder_cli.codex_session_defaults import codex_permission_defaults
 from openbase_coder_cli.dispatcher_config import (
@@ -155,10 +156,13 @@ class SessionManagerThreadsMixin:
         params: dict[str, Any] = {
             "threadId": thread_id,
             "cwd": directory,
-            **self._codex_permission_defaults(),
-            "config": await login_shell_config_override(),
         }
         if effective_developer_instructions is not None:
+            params.update(self._codex_permission_defaults())
+            params["config"] = merge_config(
+                codex_profile_config(getattr(self._client, "backend", "codex")),
+                await login_shell_config_override(),
+            )
             params["developerInstructions"] = effective_developer_instructions
         await self._client.request("thread/resume", params)
         await self._client.merge_session(

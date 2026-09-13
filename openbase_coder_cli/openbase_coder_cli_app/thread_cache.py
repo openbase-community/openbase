@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any
+from typing import Any, Callable, Hashable, TypeVar
 
 from asgiref.sync import async_to_sync
 
@@ -13,29 +13,87 @@ from openbase_coder_cli.thread_sync.session_manager import ThreadListPage
 
 THREAD_LIST_CACHE_TTL_SECONDS = 8.0
 
-_cache_lock = threading.Lock()
-_cached_threads: list[ThreadInfo] | None = None
-_cached_at = 0.0
-_cached_pages: dict[tuple[int, str | None], tuple[float, ThreadListPage]] = {}
-_cached_thread_states: dict[str, tuple[float, ThreadInfo | None]] = {}
+_T = TypeVar("_T")
+
+
+class _InFlight:
+    """A computation in progress, shared with everyone waiting on the same key."""
+
+    __slots__ = ("event", "value", "error")
+
+    def __init__(self) -> None:
+        self.event = threading.Event()
+        self.value: Any = None
+        self.error: BaseException | None = None
+
+
+class _SingleFlightCache:
+    """Per-key TTL cache that coalesces concurrent misses onto one computation
+    without holding a lock while that computation runs.
+
+    The reads this backs go to the single out-of-process app-server connection.
+    A previous design held one global lock across that (slow) call on every
+    miss, so a single slow round-trip serialized every thread read. Here the
+    lock only guards the small bookkeeping dicts; the value is computed outside
+    it, so a miss on one key never blocks reads of another key, while concurrent
+    misses on the *same* key still share one call and its result (or error).
+    """
+
+    def __init__(self, ttl_seconds: float) -> None:
+        self._ttl = ttl_seconds
+        self._lock = threading.Lock()
+        self._entries: dict[Hashable, tuple[float, Any]] = {}
+        self._inflight: dict[Hashable, _InFlight] = {}
+
+    def get(self, key: Hashable, compute: Callable[[], _T]) -> _T:
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is not None and time.monotonic() - entry[0] < self._ttl:
+                return entry[1]
+            inflight = self._inflight.get(key)
+            leader = inflight is None
+            if leader:
+                inflight = _InFlight()
+                self._inflight[key] = inflight
+
+        if not leader:
+            # Wait for the in-flight leader and share its result — never hold a
+            # lock or issue a duplicate app-server call.
+            inflight.event.wait()
+            if inflight.error is not None:
+                raise inflight.error
+            return inflight.value
+
+        try:
+            value = compute()
+        except BaseException as error:  # noqa: BLE001 - re-raised to all waiters
+            inflight.error = error
+            with self._lock:
+                self._inflight.pop(key, None)
+            inflight.event.set()
+            raise
+        with self._lock:
+            self._entries[key] = (time.monotonic(), value)
+            self._inflight.pop(key, None)
+        inflight.value = value
+        inflight.event.set()
+        return value
+
+    def invalidate(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
+_thread_cache = _SingleFlightCache(THREAD_LIST_CACHE_TTL_SECONDS)
 
 
 def get_cached_thread_list(manager: Any) -> list[ThreadInfo]:
     """Return a cached thread list and coalesce concurrent refreshes."""
-    global _cached_at, _cached_threads
-
-    now = time.monotonic()
-    with _cache_lock:
-        if (
-            _cached_threads is not None
-            and now - _cached_at < THREAD_LIST_CACHE_TTL_SECONDS
-        ):
-            return list(_cached_threads)
-
-        threads = list(async_to_sync(manager.list_threads)())
-        _cached_threads = threads
-        _cached_at = time.monotonic()
-        return list(threads)
+    threads = _thread_cache.get(
+        ("list",),
+        lambda: list(async_to_sync(manager.list_threads)()),
+    )
+    return list(threads)
 
 
 def get_cached_thread_page(
@@ -45,55 +103,23 @@ def get_cached_thread_page(
     cursor: str | None = None,
 ) -> ThreadListPage:
     """Return one cached thread page and coalesce concurrent refreshes."""
-    global _cached_pages
 
-    key = (limit, cursor)
-    now = time.monotonic()
-    with _cache_lock:
-        cached = _cached_pages.get(key)
-        if cached is not None:
-            cached_at, cached_page = cached
-            if now - cached_at < THREAD_LIST_CACHE_TTL_SECONDS:
-                return ThreadListPage(
-                    threads=list(cached_page.threads),
-                    next_cursor=cached_page.next_cursor,
-                )
-
+    def _compute() -> ThreadListPage:
         page = async_to_sync(manager.list_thread_page)(limit=limit, cursor=cursor)
-        cached_page = ThreadListPage(
-            threads=list(page.threads),
-            next_cursor=page.next_cursor,
-        )
-        _cached_pages[key] = (time.monotonic(), cached_page)
-        return ThreadListPage(
-            threads=list(cached_page.threads),
-            next_cursor=cached_page.next_cursor,
-        )
+        return ThreadListPage(threads=list(page.threads), next_cursor=page.next_cursor)
+
+    page = _thread_cache.get(("page", limit, cursor), _compute)
+    return ThreadListPage(threads=list(page.threads), next_cursor=page.next_cursor)
 
 
 def get_cached_thread_state(manager: Any, thread_id: str) -> ThreadInfo | None:
     """Return one cached thread snapshot and coalesce concurrent refreshes."""
-    global _cached_thread_states
-
-    now = time.monotonic()
-    with _cache_lock:
-        cached = _cached_thread_states.get(thread_id)
-        if cached is not None:
-            cached_at, cached_thread = cached
-            if now - cached_at < THREAD_LIST_CACHE_TTL_SECONDS:
-                return cached_thread
-
-        thread = async_to_sync(manager.get_thread_state)(thread_id)
-        _cached_thread_states[thread_id] = (time.monotonic(), thread)
-        return thread
+    return _thread_cache.get(
+        ("state", thread_id),
+        lambda: async_to_sync(manager.get_thread_state)(thread_id),
+    )
 
 
 def invalidate_thread_list_cache() -> None:
     """Clear cached thread-list reads after thread mutations."""
-    global _cached_at, _cached_pages, _cached_thread_states, _cached_threads
-
-    with _cache_lock:
-        _cached_threads = None
-        _cached_at = 0.0
-        _cached_pages = {}
-        _cached_thread_states = {}
+    _thread_cache.invalidate()

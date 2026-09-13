@@ -1,10 +1,4 @@
-"""Codex config phase: shared-home MCP registration, instructions, and skills.
-
-Openbase runs against the user's real ``~/.codex``. Setup only registers the
-super-agents MCP server (plus the session-ID hook) there; Openbase's
-full-permission posture is passed per session by super-agents, never written
-into the shared config.
-"""
+"""Codex profiles, Openbase instructions, and shared skill links."""
 
 from __future__ import annotations
 
@@ -15,7 +9,9 @@ from pathlib import Path
 from shutil import which
 
 import click
+import tomlkit
 
+from openbase_coder_cli.agent_profiles import profile_environment
 from openbase_coder_cli.backend_config import (
     CODEX_BACKEND,
     DEFAULT_CODING_BACKEND,
@@ -23,17 +19,26 @@ from openbase_coder_cli.backend_config import (
     SUPER_AGENTS_DEFAULT_BACKEND_ENV_KEY,
 )
 from openbase_coder_cli.cli.setup.hooks import ensure_codex_session_id_hook
+from openbase_coder_cli.cli.setup.profile_migration import (
+    migrate_codex_user_config,
+    write_if_changed,
+)
+from openbase_coder_cli.codex_backend_config import codex_backend_profile_config
 from openbase_coder_cli.codex_home_instructions import (
     ensure_openbase_agents_md,
     ensure_rendered_instruction_file,
 )
 from openbase_coder_cli.paths import (
     CLAUDE_CONFIG_DIR,
+    CLOUD_CODEX_PROFILE_PATH,
     CODEX_CONFIG_PATH,
     CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH,
+    CODEX_DISPATCHER_CONFIG_PATH,
     CODEX_DISPATCHER_INSTRUCTIONS_PATH,
     CODEX_HOME_DIR,
+    CODEX_PROFILE_PATH,
     CODEX_SUPER_AGENT_INSTRUCTIONS_PATH,
+    OPENBASE_AGENTS_MD_PATH,
     OPENBASE_BASE_DIR,
 )
 from openbase_coder_cli.runtime import (
@@ -170,20 +175,8 @@ def _ensure_codex_config(
     *,
     coding_backend: str = DEFAULT_CODING_BACKEND,
 ) -> None:
-    """Register super-agents (and the session-ID hook) in the shared ~/.codex.
-
-    Only the MCP table and the trusted hook — the user's own model, sandbox,
-    and approval settings are never touched. Openbase sessions get their
-    permission posture per thread from super-agents.
-    """
-    config_path = CODEX_CONFIG_PATH
+    """Install session profiles, then retire our legacy shared-home entries."""
     command_path, args = _super_agents_mcp_command(Path(workspace_dir))
-    block = (
-        f"[{SUPER_AGENTS_MCP_TABLE}]\n"
-        f"command = {json.dumps(str(command_path))}\n"
-        f"{_toml_args_line(args)}"
-        f"{_toml_env_line(_codex_child_backend(coding_backend))}"
-    )
 
     if not command_path.is_file():
         click.echo(
@@ -191,19 +184,32 @@ def _ensure_codex_config(
             "writing the expected config path anyway."
         )
 
-    existing = ""
-    if config_path.is_file():
-        existing = config_path.read_text(encoding="utf-8")
-
-    updated = _replace_toml_table(existing, SUPER_AGENTS_MCP_TABLE, block)
-    if updated == existing:
-        click.echo(f"Codex config already has super-agents at {config_path}")
-    else:
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(updated, encoding="utf-8")
-        click.echo(f"Registered super-agents MCP in Codex config {config_path}")
-
-    ensure_codex_session_id_hook(config_path)
+    for config_path, backend in (
+        (CODEX_PROFILE_PATH, CODEX_BACKEND),
+        (CLOUD_CODEX_PROFILE_PATH, OPENBASE_CLOUD_CODEX_BACKEND),
+    ):
+        existing = (
+            config_path.read_text(encoding="utf-8") if config_path.is_file() else ""
+        )
+        document = tomlkit.parse(existing)
+        for key, value in {
+            **codex_backend_profile_config(backend),
+            "model_reasoning_effort": "high",
+            "service_tier": "standard",
+            "approval_policy": "never",
+            "sandbox_mode": "danger-full-access",
+        }.items():
+            document.setdefault(key, value)
+        entry = tomlkit.parse(
+            f"[{SUPER_AGENTS_MCP_TABLE}]\n"
+            f"command = {json.dumps(str(command_path))}\n"
+            f"{_toml_args_line(args)}"
+            f"{_toml_env_line(backend)}"
+        )["mcp_servers"]["super-agents"]
+        document.setdefault("mcp_servers", {})["super-agents"] = entry
+        write_if_changed(config_path, tomlkit.dumps(document))
+        ensure_codex_session_id_hook(config_path)
+    migrate_codex_user_config(CODEX_CONFIG_PATH)
 
 
 def _super_agents_mcp_command(workspace_dir: Path) -> tuple[Path, list[str]]:
@@ -280,6 +286,13 @@ def _toml_env_line(backend: str) -> str:
         (SUPER_AGENTS_DEFAULT_BACKEND_ENV_KEY, backend),
         (SUPER_AGENTS_CODEX_APPROVAL_POLICY_ENV, SUPER_AGENTS_CODEX_APPROVAL_POLICY),
         (SUPER_AGENTS_CODEX_SANDBOX_POLICY_ENV, SUPER_AGENTS_CODEX_SANDBOX_POLICY),
+        ("SUPER_AGENTS_DEFAULT_CONFIG_PATH", str(CODEX_DISPATCHER_CONFIG_PATH)),
+        ("SUPER_AGENTS_BASE_INSTRUCTIONS_PATH", str(OPENBASE_AGENTS_MD_PATH)),
+        (
+            "CODEX_SUPER_AGENT_INSTRUCTIONS_PATH",
+            str(CODEX_SUPER_AGENT_INSTRUCTIONS_PATH),
+        ),
+        *profile_environment().items(),
     )
     body = ", ".join(f"{key} = {json.dumps(value)}" for key, value in env_pairs)
     return f"env = {{ {body} }}\n"

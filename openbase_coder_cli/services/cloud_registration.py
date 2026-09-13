@@ -342,13 +342,14 @@ def _endpoint_unsupported(response: httpx.Response) -> bool:
     """Whether an error response means the endpoint has not shipped yet.
 
     The real endpoints are DRF views that return JSON errors; a 404/405 or an
-    HTML error page (e.g. Django's CSRF failure page) means the backend does
-    not implement the onboarding contract yet.
+    HTML client-error page (e.g. Django's CSRF failure page) can mean the
+    backend does not implement the contract. Gateway/server failures are
+    transient errors, never evidence that a capability is absent.
     """
     if response.status_code in (404, 405):
         return True
     content_type = response.headers.get("content-type", "")
-    return content_type.startswith("text/html")
+    return response.status_code < 500 and content_type.startswith("text/html")
 
 
 def _timestamp() -> str:

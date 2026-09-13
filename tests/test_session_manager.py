@@ -12,6 +12,16 @@ from openbase_coder_cli.thread_sync.session_manager import (
 )
 
 
+def test_codex_client_retains_cloud_profile_identity(monkeypatch):
+    from openbase_coder_cli.thread_sync.session_manager_base import (
+        _OpenbaseSuperAgentsClient,
+    )
+
+    monkeypatch.setenv("OPENBASE_CODING_BACKEND", "openbase_cloud_codex")
+    client = _OpenbaseSuperAgentsClient(None, "ws://example.invalid")
+    assert client.backend == "openbase_cloud_codex"
+
+
 def _thread(
     thread_id: str,
     cwd: str,
@@ -2195,6 +2205,25 @@ def test_interrupt_turn_ignores_stale_local_turn_mapping(tmp_path: Path) -> None
     assert turn_id == "turn-1"
     assert success is False
     assert all(call[0] != "cancel_turn" for call in client.calls)
+
+
+def test_resume_normal_thread_does_not_apply_openbase_settings(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "SUPER_AGENTS_CODEX_PROFILE_PATH", str(tmp_path / "missing.toml")
+    )
+    client = FakeSuperAgentsClient({"request:thread/resume": [{}]})
+    asyncio.run(
+        _manager(client).resume_thread_without_developer_instructions(
+            "thr-1", str(tmp_path)
+        )
+    )
+    assert client.calls[1] == (
+        "request",
+        {
+            "method": "thread/resume",
+            "params": {"threadId": "thr-1", "cwd": str(tmp_path)},
+        },
+    )
 
 
 def test_resume_thread_with_developer_instructions_uses_thread_resume(

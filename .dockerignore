@@ -12,3 +12,13 @@ docs/
 Images/
 dist/
 build/
+
+# Local secrets/state must never enter the image build context.
+.env
+*.env
+auth.json
+machine-token.json
+owner-identity.json
+tsnet/
+# Local Go build output
+tunneld/tunneld

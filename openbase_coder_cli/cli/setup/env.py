@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import secrets
 from pathlib import Path
 
 import click
 
+from openbase_coder_cli.agent_profiles import profile_environment
 from openbase_coder_cli.backend_config import (
     CODING_BACKEND_ENV_KEY,
     DEFAULT_CODING_BACKEND,
@@ -51,7 +53,7 @@ from openbase_coder_cli.services.tailscale_provider import (
 
 TAILNET_PROVIDER_ENV_KEY = "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"
 ALLOWED_HOSTS_ENV_KEY = "OPENBASE_CODER_CLI_ALLOWED_HOSTS"
-NETMESH_ALLOWED_SUFFIX = ".netmesh.openbase.cloud"
+NETMESH_ALLOWED_SUFFIXES = (".net.obs.so", ".net-staging.obs.so")
 
 
 def _ensure_env_file(
@@ -70,7 +72,19 @@ def _ensure_env_file(
         _drop_managed_claude_config_dir(path)
         updates = _missing_livekit_client_credential_values(path)
         current_values = _env_file_values(path)
-        release_backend_url = default_web_backend_url()
+        updates.update(
+            {
+                key: value
+                for key, value in profile_environment().items()
+                if key not in current_values
+            }
+        )
+        # An explicit env override at setup time (e.g. pointing a dev install
+        # at staging) must be persisted, or services silently target the
+        # channel default afterwards.
+        release_backend_url = (
+            os.environ.get(WEB_BACKEND_ENV_KEY) or default_web_backend_url()
+        )
         if (
             release_backend_url != PRODUCTION_WEB_BACKEND_URL
             and WEB_BACKEND_ENV_KEY not in current_values
@@ -155,10 +169,8 @@ def _ensure_env_file(
         "SUPER_AGENTS_CODEX_SANDBOX_POLICY=danger-full-access",
         f"SUPER_AGENTS_BASE_INSTRUCTIONS_PATH={OPENBASE_AGENTS_MD_PATH}",
         "CLAUDE_CODE_ENABLE_TELEMETRY=0",
-        "CODEX_MODEL_REASONING_EFFORT=high",
-        "# App-server ambient tier follows the Super Agents lane; the voice",
-        "# dispatcher passes its (fast by default) tier explicitly per turn.",
-        "CODEX_SERVICE_TIER=standard",
+        "# Profiles apply only to Openbase conversations, never to the shared daemon.",
+        *(f"{key}={value}" for key, value in profile_environment().items()),
         "DISPATCHER_SERVICE_TIER=fast",
         "SUPER_AGENTS_SERVICE_TIER=standard",
         f"{CODEX_APP_SERVER_ENDPOINT_ENV}={managed_codex_app_server_endpoint({}).value}",
@@ -168,7 +180,11 @@ def _ensure_env_file(
         "OPENBASE_CODER_CLI_OAUTH_CLIENT_ID=openbase-coder-cli",
     ]
 
-    release_backend_url = default_web_backend_url()
+    # Persist an explicit env override (e.g. a staging-targeted dev install)
+    # alongside the channel default so bare CLI commands and services agree.
+    release_backend_url = (
+        os.environ.get(WEB_BACKEND_ENV_KEY) or default_web_backend_url()
+    )
     if release_backend_url != PRODUCTION_WEB_BACKEND_URL:
         lines.append(f"{WEB_BACKEND_ENV_KEY}={release_backend_url}")
 
@@ -201,8 +217,10 @@ def _allowed_hosts_for(provider: str) -> str:
     """Allowed-hosts list for a fresh .env, adding the netmesh MagicDNS suffix
     for either netmesh transport (served requests arrive with a netmesh Host)."""
     hosts = [h for h in _DEFAULT_ALLOWED_HOSTS.split(",") if h]
-    if provider in ("netmesh", "netmesh-tsnet") and NETMESH_ALLOWED_SUFFIX not in hosts:
-        hosts.append(NETMESH_ALLOWED_SUFFIX)
+    if provider in ("netmesh", "netmesh-tsnet"):
+        for suffix in NETMESH_ALLOWED_SUFFIXES:
+            if suffix not in hosts:
+                hosts.append(suffix)
     return ",".join(hosts)
 
 
@@ -220,8 +238,12 @@ def _tailnet_provider_updates(path: Path, provider: str) -> dict[str, str]:
             ALLOWED_HOSTS_ENV_KEY, _DEFAULT_ALLOWED_HOSTS
         )
         host_list = [h.strip() for h in hosts.split(",") if h.strip()]
-        if NETMESH_ALLOWED_SUFFIX not in host_list:
-            host_list.append(NETMESH_ALLOWED_SUFFIX)
+        changed = False
+        for suffix in NETMESH_ALLOWED_SUFFIXES:
+            if suffix not in host_list:
+                host_list.append(suffix)
+                changed = True
+        if changed:
             updates[ALLOWED_HOSTS_ENV_KEY] = ",".join(host_list)
     return updates
 
@@ -238,19 +260,19 @@ def _ensure_openbase_cloud_machine_token(env_file: Path) -> None:
         DEFAULT_WEB_BACKEND_URL,
     )
     token_manager = TokenManager(web_backend_url)
-    if not token_manager.has_refresh_token:
-        click.echo(
-            "Openbase Cloud backend selected. Run `openbase-coder login` before "
-            "starting services so setup can create the cloud proxy machine token."
-        )
-        return
     try:
         MachineTokenManager(web_backend_url, token_manager).get_machine_token()
     except AuthLoginRequiredError:
-        click.echo(
-            "Openbase Cloud backend selected, but your Openbase login needs to be "
-            "refreshed. Run `openbase-coder login` before starting services."
-        )
+        if token_manager.has_refresh_token:
+            click.echo(
+                "Openbase Cloud backend selected, but your Openbase login needs to be "
+                "refreshed. Run `openbase-coder login` before starting services."
+            )
+        else:
+            click.echo(
+                "Openbase Cloud backend selected. Run `openbase-coder login` before "
+                "starting services so setup can create the cloud proxy machine token."
+            )
     except (AuthTransientError, MachineTokenError) as exc:
         click.echo(
             click.style(

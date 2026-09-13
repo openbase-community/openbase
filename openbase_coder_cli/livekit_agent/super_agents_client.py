@@ -30,6 +30,7 @@ from openbase_coder_cli.backend_config import (
 )
 from openbase_coder_cli.claude_auth import (
     is_backend_auth_failure_text,
+    is_spend_limit_text,
     verified_claude_auth_status,
 )
 from openbase_coder_cli.codex_session_defaults import (
@@ -194,6 +195,14 @@ BACKEND_ERROR_SPOKEN_FALLBACK = (
     "Please try again in a moment."
 )
 
+# A spend-limit 403 is NOT a transient outage — telling the user to "try again
+# in a moment" is misleading (they'll keep failing until next month or until
+# they subscribe). Speak the actual, actionable cause instead (FT-10).
+BACKEND_SPEND_LIMIT_SPOKEN = (
+    "You've reached your monthly Openbase model limit, so coding requests are "
+    "paused. You can raise your limit by subscribing at Openbase Cloud."
+)
+
 
 def _looks_like_raw_backend_error(text: str | None) -> bool:
     """Whether a turn answer is a raw backend/proxy error that must not be spoken."""
@@ -219,6 +228,17 @@ def _safe_spoken_answer(
     logged). This additionally catches non-auth proxy/API error bodies so the
     dispatcher never reads a 403/500 payload aloud.
     """
+    # A monthly-spend-limit 403 arrives looking like an auth failure ("Failed
+    # to authenticate. API Error: 403 {...spend limit...}") but has a distinct,
+    # actionable remedy — surface it accurately rather than as a generic outage.
+    if is_spend_limit_text(speech_text):
+        logger.error(
+            "%s stage=voice_turn_backend_spend_limit backend=%s turn_id=%s",
+            DISPATCH_TIMING_LOG,
+            backend or "unknown",
+            turn_id or "",
+        )
+        return BACKEND_SPEND_LIMIT_SPOKEN
     if auth_failed:
         return BACKEND_ERROR_SPOKEN_FALLBACK
     if not _looks_like_raw_backend_error(speech_text):

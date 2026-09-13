@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import py_compile
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -68,3 +69,33 @@ def test_validate_no_rebuildable_bytecode_rejects_source_backed_cache(
         build_standalone_package._validate_no_rebuildable_bytecode(package_dir)
 
     assert str(bytecode) in str(exc_info.value)
+
+
+def test_verify_source_super_agents_rejects_incompatible_mcp_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    commands: list[list[str]] = []
+    results = iter(
+        [
+            subprocess.CompletedProcess([], 0),
+            subprocess.CompletedProcess([], 1),
+        ]
+    )
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+        commands.append(command)
+        return next(results)
+
+    monkeypatch.setattr(
+        build_standalone_package,
+        "runtime_python",
+        lambda _python_dir: tmp_path / "python",
+    )
+    monkeypatch.setattr(build_standalone_package.subprocess, "run", fake_run)
+
+    with pytest.raises(SystemExit, match="cannot construct its MCP server"):
+        build_standalone_package._verify_source_super_agents(tmp_path)
+
+    assert len(commands) == 2
+    assert "create_server(object())" in commands[1][-1]

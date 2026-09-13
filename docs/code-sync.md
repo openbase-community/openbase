@@ -64,6 +64,14 @@ every minute:
   your local history wins: nothing moves, this machine republishes its own
   state, and the peer fast-forwards to you on its next pass. A branch is
   never rewound.
+- When one machine **rewrites history** (rebase, amend), its manifest
+  advertises the replaced tips alongside the new head — intent only that
+  machine can prove, from its own reflog. A peer whose branch tip is exactly
+  that rewritten-away history follows the rewrite automatically, with
+  `--force-with-lease` semantics: only the history the rewriting machine
+  claims to have replaced is discarded, and the old tip is retained under
+  `refs/openbase-code-sync/backups/`. A peer that made its own new commits
+  on top still pauses as a conflict.
 - When branch histories **truly diverge** (both machines committed different
   history to the same branch), sync pauses that branch instead of picking a
   winner: the local pointer stays put, the divergence is recorded as a repo

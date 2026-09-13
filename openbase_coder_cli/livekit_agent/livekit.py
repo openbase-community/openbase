@@ -1046,6 +1046,25 @@ async def livekit_agent(ctx: JobContext):
         await voice_router.close()
 
     ctx.add_shutdown_callback(close_announcer_queue)
+
+    # Surface stalled agent turns during the call — e.g. a spawned sub-agent
+    # blocked on a macOS permission dialog on the user's computer (field-test
+    # finding FT-9, 2026-09-12). Runs session-wide so it covers the dispatcher
+    # and any fire-and-forgotten sub-agent alike.
+    from . import stall_diagnostics
+
+    stall_task = asyncio.create_task(
+        stall_diagnostics.stall_watch_loop(
+            is_call_active=lambda: ctx.room.connection_state
+            == rtc.ConnectionState.CONN_CONNECTED
+        ),
+        name="openbase-stall-watch-loop",
+    )
+
+    async def _cancel_stall_watch():
+        stall_task.cancel()
+
+    ctx.add_shutdown_callback(_cancel_stall_watch)
     logger.info("LiveKit AgentSession started")
 
 

@@ -21,6 +21,7 @@ from pathlib import Path
 
 import click
 
+from openbase_coder_cli.cli.setup.profile_migration import write_if_changed
 from openbase_coder_cli.paths import (
     CODEX_HOME_DIR,
     INJECT_SESSION_ID_HOOK_PATH,
@@ -64,7 +65,7 @@ def merge_session_id_hook_into_claude_hooks(value: object) -> dict[str, object]:
     return hooks
 
 
-def ensure_claude_session_id_hook(settings_path: Path) -> bool:
+def ensure_claude_session_id_hook(settings_path: Path, *, backup: bool = False) -> bool:
     """Register the session-ID hook in one Claude settings file."""
     if settings_path.is_file():
         try:
@@ -89,10 +90,10 @@ def ensure_claude_session_id_hook(settings_path: Path) -> bool:
         click.echo(f"Claude session-ID hook already configured in {settings_path}")
         return False
 
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(
+    write_if_changed(
+        settings_path,
         json.dumps(updated, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+        backup=backup,
     )
     settings_path.chmod(0o600)
     click.echo(f"Configured Claude session-ID hook in {settings_path}")
@@ -127,7 +128,9 @@ def session_start_hook_trusted_hash(command: str) -> str:
     return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
 
 
-def ensure_codex_session_id_hook(config_path: Path | None = None) -> bool:
+def ensure_codex_session_id_hook(
+    config_path: Path | None = None, *, backup: bool = False
+) -> bool:
     """Register the session-ID hook and its trust state in the codex config.
 
     Returns True when the config file changed.
@@ -188,8 +191,7 @@ def ensure_codex_session_id_hook(config_path: Path | None = None) -> bool:
         click.echo(f"Codex session-ID hook already configured in {path}")
         return False
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(updated, encoding="utf-8")
+    write_if_changed(path, updated, backup=backup)
     click.echo(f"Configured codex session-ID hook in {path}")
     return True
 

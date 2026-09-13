@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Callable
 
 from super_agents.app_endpoint import default_app_server_endpoint
@@ -83,6 +84,61 @@ async def _broadcast(session_id: str, event: dict[str, Any]) -> None:
             "Failed to broadcast %s event for thread %s",
             event.get("type"),
             session_id,
+            exc_info=True,
+        )
+
+
+async def _notify_manual_thread_finished(
+    thread_id: str,
+    session_state: Any,
+    *,
+    failed: bool,
+) -> None:
+    """Record a feed notification when a manually-started thread finishes.
+
+    Only threads stamped manual by the new-thread endpoint notify; agent
+    driven threads (Super Agents MCP, dispatcher) have no origin record and
+    are skipped. Failure here must never affect turn handling.
+    """
+    try:
+        from asgiref.sync import sync_to_async
+
+        from openbase_coder_cli.openbase_coder_cli_app.notification_producers import (
+            notify_thread_turn_finished,
+        )
+        from openbase_coder_cli.openbase_coder_cli_app.thread_origins import (
+            is_manual_thread,
+        )
+
+        # If another turn is already running or queued, the thread isn't
+        # finished from the user's perspective yet; notify on the last one.
+        status = getattr(session_state, "status", None)
+        if getattr(status, "value", status) == "running":
+            return
+        if getattr(session_state, "queued_turns", None):
+            return
+        if not await sync_to_async(is_manual_thread, thread_sensitive=False)(thread_id):
+            return
+
+        title = (
+            session_state.title
+            or session_state.name
+            or Path(session_state.directory).name
+            or "Thread finished"
+        )
+        if failed:
+            body = "The turn failed."
+        else:
+            body = (session_state.preview or "").strip() or "The agent finished."
+        await sync_to_async(notify_thread_turn_finished, thread_sensitive=False)(
+            thread_id,
+            title=title,
+            body=body,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to record finish notification for thread %s",
+            thread_id,
             exc_info=True,
         )
 
@@ -357,6 +413,11 @@ class CodexAppServerSessionManager(
                         "type": "turn_completed",
                         "data": session_state.model_dump(mode="json"),
                     },
+                )
+                await _notify_manual_thread_finished(
+                    thread_id,
+                    session_state,
+                    failed=method == "turn/failed",
                 )
 
     async def _announce_started_turn(

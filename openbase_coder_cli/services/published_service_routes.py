@@ -28,8 +28,13 @@ class ServiceHostnameAllocation(NamedTuple):
 
 def _validate_account_hostname(name: str, hostname: str, node_name: str) -> None:
     base_domain = node_name.partition(".")[2]
-    pattern = rf"{re.escape(name)}\.n[a-f0-9]{{32}}\.svc\.{re.escape(base_domain)}"
-    if not base_domain or re.fullmatch(pattern, hostname) is None:
+    labels = base_domain.split(".")
+    if len(labels) < 3 or labels[0] not in {"net", "net-staging"}:
+        raise ValueError("Unrecognized Netmesh device DNS zone.")
+    labels[0] = labels[0].replace("net", "vpn", 1)
+    service_domain = ".".join(labels)
+    pattern = rf"{re.escape(name)}\.(?:[a-z2-7]{{12}}|n[a-f0-9]{{32}})\.{re.escape(service_domain)}"
+    if re.fullmatch(pattern, hostname) is None:
         raise ValueError("Private service hostname is outside the account namespace.")
 
 
@@ -63,9 +68,12 @@ def allocate_private_service_hostname(name: str) -> ServiceHostnameAllocation:
                 or "Openbase VPN lacks private service hostname support."
             )
         )
-    if int(capability.get("http_port") or 0) != HOSTNAME_TAILNET_PORT:
+    if (
+        int(capability.get("https_port") or 0) != HOSTNAME_TAILNET_PORT
+        or capability.get("https_supported") is not True
+    ):
         raise RuntimeError(
-            "The active Openbase VPN helper did not authorize HTTP port 80."
+            "The active Openbase VPN helper did not authorize private HTTPS port 443."
         )
     node_name, node_ips = _self_node_identity()
     from openbase_coder_cli.services.cloud_registration import (

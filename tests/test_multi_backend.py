@@ -188,6 +188,19 @@ async def test_answer_approval_routes_to_owning_backend(managers):
     assert result["backend"] == "codex"
 
 
+@pytest.mark.parametrize("request_id", ["gmail-cli:shared-request", 0, 7])
+async def test_shared_approvals_appear_once_across_backends(managers, request_id):
+    codex, claude = managers
+    shared = {"id": request_id, "params": {"description": "Create an email draft"}}
+    codex_only = {"id": "codex-only"}
+    claude_only = {"id": "claude-only"}
+    codex.approval_payloads = [shared, codex_only]
+    claude.approval_payloads = [{**shared, "id": str(request_id)}, claude_only]
+    facade = MultiBackendSessionManager({"codex": codex, "claude_code": claude})
+
+    assert await facade.list_approval_requests() == [shared, codex_only, claude_only]
+
+
 def test_configured_execution_backends_single(monkeypatch):
     monkeypatch.delenv("OPENBASE_CODING_BACKENDS", raising=False)
     backends = configured_execution_backends(lambda: "codex")

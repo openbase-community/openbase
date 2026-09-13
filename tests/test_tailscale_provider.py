@@ -12,7 +12,7 @@ def test_rule_validation_rejects_arbitrary_targets_and_paths():
         provider._validated_rule(
             {
                 "kind": "published-hostname",
-                "hostname": "crm.mac.netmesh.openbase.cloud",
+                "hostname": "crm.mac.net.obs.so",
                 "proxy_port": 52808,
                 "target": "http://attacker.example",
             }
@@ -41,7 +41,7 @@ def test_atomic_apply_passes_validated_rules_etag_and_hash(monkeypatch):
             {"kind": "openbase-livekit"},
             {
                 "kind": "published-hostname",
-                "hostname": "crm.mac.netmesh.openbase.cloud",
+                "hostname": "crm.mac.net.obs.so",
                 "proxy_port": 52808,
             },
         ],
@@ -53,7 +53,7 @@ def test_atomic_apply_passes_validated_rules_etag_and_hash(monkeypatch):
     assert commands[0][0:2] == ["/signed/netmesh-ctl", "serve-apply"]
     assert json.loads(commands[0][2])[-1] == {
         "kind": "published-hostname",
-        "hostname": "crm.mac.netmesh.openbase.cloud",
+        "hostname": "crm.mac.net.obs.so",
         "proxy_port": 52808,
     }
     assert commands[0][3:] == ["v1", "before"]
@@ -93,8 +93,10 @@ def test_hostname_capability_honors_helper_kill_switch(monkeypatch):
         "supported": False,
         "dns_allocation": False,
         "serve_routing": True,
-        "pattern": "{service}.{account_namespace}.svc.{base_domain}",
+        "pattern": "{service}.{account_namespace}.{service_domain}",
         "http_port": 80,
+        "https_port": 443,
+        "https_supported": True,
     }
     monkeypatch.setattr(
         provider,
@@ -116,8 +118,10 @@ def test_hostname_capability_honors_helper_kill_switch(monkeypatch):
                 "dns_allocation": True,
                 "account_private_dns": True,
                 "serve_routing": False,
-                "pattern": "{service}.{account_namespace}.svc.{base_domain}",
+                "pattern": "{service}.{account_namespace}.{service_domain}",
                 "http_port": 80,
+                "https_port": 443,
+                "https_supported": True,
             },
         ),
     )
@@ -131,6 +135,65 @@ def test_hostname_capability_honors_helper_kill_switch(monkeypatch):
         "supported": True,
         "dns_allocation": True,
         "serve_routing": True,
-        "pattern": "{service}.{account_namespace}.svc.{base_domain}",
+        "pattern": "{service}.{account_namespace}.{service_domain}",
         "http_port": 80,
+        "https_port": 443,
+        "https_supported": True,
     }
+
+
+class _FakeStatusResult:
+    def __init__(self, returncode: int, stdout: str):
+        self.returncode = returncode
+        self.stdout = stdout
+
+
+def _stock_status(monkeypatch, backend_state: str | None, *, returncode: int = 0):
+    monkeypatch.setattr(provider, "tailscale_bin", lambda: "/stock/tailscale")
+    payload = "" if backend_state is None else json.dumps({"BackendState": backend_state})
+    monkeypatch.setattr(
+        provider.subprocess,
+        "run",
+        lambda *a, **k: _FakeStatusResult(returncode, payload),
+    )
+
+
+def test_stock_tailscale_conflict_flags_active_vpn_on_netmesh(monkeypatch):
+    monkeypatch.setattr(provider, "provider", lambda: provider.PROVIDER_NETMESH)
+    monkeypatch.setattr(provider, "netmesh_uses_stock_tailscale", lambda: False)
+    _stock_status(monkeypatch, "Running")
+    assert "official Tailscale VPN" in (provider.stock_tailscale_conflict() or "")
+
+
+def test_stock_tailscale_installed_but_stopped_is_not_a_conflict(monkeypatch):
+    monkeypatch.setattr(provider, "provider", lambda: provider.PROVIDER_NETMESH)
+    monkeypatch.setattr(provider, "netmesh_uses_stock_tailscale", lambda: False)
+    _stock_status(monkeypatch, "Stopped")
+    assert provider.stock_tailscale_conflict() is None
+
+
+def test_stock_tailscale_absent_is_not_a_conflict(monkeypatch):
+    monkeypatch.setattr(provider, "provider", lambda: provider.PROVIDER_NETMESH)
+    monkeypatch.setattr(provider, "netmesh_uses_stock_tailscale", lambda: False)
+    monkeypatch.setattr(provider, "tailscale_bin", lambda: None)
+    assert provider.stock_tailscale_conflict() is None
+
+
+def test_stock_tailscale_conflict_ignored_on_stock_transport(monkeypatch):
+    monkeypatch.setattr(provider, "provider", lambda: provider.PROVIDER_TAILSCALE)
+    _stock_status(monkeypatch, "Running")
+    assert provider.stock_tailscale_conflict() is None
+
+
+def test_stock_tailscale_conflict_ignored_where_netmesh_rides_stock(monkeypatch):
+    monkeypatch.setattr(provider, "provider", lambda: provider.PROVIDER_NETMESH)
+    monkeypatch.setattr(provider, "netmesh_uses_stock_tailscale", lambda: True)
+    _stock_status(monkeypatch, "Running")
+    assert provider.stock_tailscale_conflict() is None
+
+
+def test_stock_tailscale_probe_failure_is_not_a_conflict(monkeypatch):
+    monkeypatch.setattr(provider, "provider", lambda: provider.PROVIDER_NETMESH)
+    monkeypatch.setattr(provider, "netmesh_uses_stock_tailscale", lambda: False)
+    _stock_status(monkeypatch, None, returncode=1)
+    assert provider.stock_tailscale_conflict() is None

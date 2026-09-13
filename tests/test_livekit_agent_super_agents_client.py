@@ -1569,6 +1569,29 @@ def test_safe_spoken_answer_suppresses_raw_proxy_error_body(caplog) -> None:
     assert "voice_turn_backend_error" in caplog.text
 
 
+def test_safe_spoken_answer_surfaces_spend_limit_distinctly(caplog) -> None:
+    import logging
+
+    caplog.set_level(logging.ERROR)
+    # A monthly-spend-limit 403 arrives prefixed like an auth failure, so
+    # auth_failed is True — but it must be spoken as the actionable spend-limit
+    # line, not the generic "trouble reaching the coding service" outage line
+    # (field-test finding FT-10).
+    raw = (
+        'Failed to authenticate. API Error: 403 {"detail":"Monthly Openbase '
+        "model proxy spend limit reached. Model requests are blocked until next "
+        'month. Subscribe at app.openbase.cloud to raise your monthly limits."}'
+    )
+    spoken = super_agents_client_module._safe_spoken_answer(
+        raw, auth_failed=True, backend="openbase_cloud", turn_id="t_spend"
+    )
+    assert spoken == super_agents_client_module.BACKEND_SPEND_LIMIT_SPOKEN
+    assert spoken != super_agents_client_module.BACKEND_ERROR_SPOKEN_FALLBACK
+    assert "monthly" in spoken.lower() and "subscrib" in spoken.lower()
+    assert "voice_turn_backend_spend_limit" in caplog.text
+    assert raw not in spoken
+
+
 def test_safe_spoken_answer_passes_through_normal_speech() -> None:
     answer = "I pushed the fix and the build is green."
     assert (

@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from super_agents.app_endpoint import parse_app_server_endpoint
+from super_agents.backend_config import configured_backend_from_environment
+from super_agents.config_profiles import codex_profile_config
 
 from openbase_coder_cli.codex_session_defaults import (
     DEFAULT_CODEX_APPROVAL_POLICY,
@@ -67,9 +69,13 @@ def _model_name_for_role(
     *,
     use_super_agent_model: bool = False,
 ) -> str:
+    fallback = (
+        codex_profile_config(configured_backend_from_environment()).get("model")
+        or DEFAULT_CODEX_MODEL
+    )
     if use_super_agent_model:
-        return super_agents_model(path) or DEFAULT_CODEX_MODEL
-    return dispatcher_model(path) or DEFAULT_CODEX_MODEL
+        return super_agents_model(path) or fallback
+    return dispatcher_model(path) or fallback
 
 
 class CodexAppServerClient(CodexTransportMixin):
@@ -594,6 +600,8 @@ class CodexAppServerClient(CodexTransportMixin):
             "approvalPolicy": self._approval_policy,
             "sandbox": self._sandbox,
         }
+        if profile := codex_profile_config(configured_backend_from_environment()):
+            params["config"] = profile
         if developer_instructions := _with_super_agent_identity_instructions(
             self._developer_instructions,
             self._super_agent_name,
@@ -620,9 +628,15 @@ class CodexAppServerClient(CodexTransportMixin):
         return super_agents_reasoning_effort(self._dispatcher_config_path)
 
     def _configured_reasoning_effort(self) -> str | None:
+        fallback = (
+            codex_profile_config(configured_backend_from_environment()).get(
+                "model_reasoning_effort"
+            )
+            or "high"
+        )
         if self._use_super_agent_reasoning:
-            return self._super_agents_reasoning_effort() or "high"
-        return self._dispatcher_reasoning_effort()
+            return self._super_agents_reasoning_effort() or fallback
+        return self._dispatcher_reasoning_effort() or fallback
 
     def _dispatcher_voice(self) -> dict[str, str]:
         return dispatcher_voice(self._dispatcher_config_path)

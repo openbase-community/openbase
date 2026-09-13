@@ -35,7 +35,7 @@ from openbase_coder_cli.cli.node import run_workspace_package_command  # noqa: F
 from openbase_coder_cli.cli.setup.claude import (
     _ensure_claude_hooks,
     _ensure_claude_mcp,
-    _ensure_claude_md_symlink,
+    _ensure_claude_md_symlink,  # noqa: F401 (legacy helper import)
     _read_json_object,  # noqa: F401
 )
 from openbase_coder_cli.cli.setup.codex import (
@@ -798,7 +798,6 @@ def _run_setup_phases(
         # Standalone packages bundle the pinned engine; dev installs download
         # the same pin so both pathways exercise one livekit-server.
         ensure_pinned_livekit_server()
-    _ensure_claude_md_symlink()
     _ensure_openbase_instruction_files(workspace_dir if use_dev_workspace else "")
     _ensure_codex_home_dispatcher_config(audio_provider=audio_provider)
     set_dispatcher_service_tier("fast" if fast_mode else "standard")
@@ -820,7 +819,7 @@ def _run_setup_phases(
     else:
         _init_standalone_runtime(runtime_package)
 
-    # --- Register super-agents MCP + hooks in the shared agent homes ---
+    # --- Install scoped profiles for both backends ---
     _ensure_session_id_hook_script()
     _ensure_codex_config(
         workspace_dir if use_dev_workspace else "",

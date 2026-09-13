@@ -26,6 +26,10 @@ from super_agents.app_server_client import (
     shared_permission_requests,
 )
 from super_agents.backend_clients import CLAUDE_CODE_BACKEND
+from super_agents.backend_config import (
+    configured_backend_from_environment,
+    execution_backend,
+)
 
 from openbase_coder_cli.dispatcher_config import (
     DISPATCHER_MODEL_ROLE,
@@ -136,8 +140,12 @@ class _RoutineClient(Protocol):
         name: str | None = None,
         force: bool = False,
     ) -> dict[str, Any]: ...
-    async def add_routine_trigger(self, name: str, trigger_input: dict[str, Any]) -> dict[str, Any]: ...
-    async def remove_routine_trigger(self, name: str, trigger_id: str) -> dict[str, Any]: ...
+    async def add_routine_trigger(
+        self, name: str, trigger_input: dict[str, Any]
+    ) -> dict[str, Any]: ...
+    async def remove_routine_trigger(
+        self, name: str, trigger_id: str
+    ) -> dict[str, Any]: ...
     async def deliver_webhook_event(
         self,
         token: str,
@@ -220,14 +228,24 @@ def _runtime_error_message(exc: RuntimeError) -> str:
 
 def _is_thread_unavailable_error(exc: RuntimeError) -> bool:
     message = _runtime_error_message(exc).lower()
-    return "not found" in message or "invalid thread id" in message
+    # "thread not loaded" is the app-server's response for a thread it has no
+    # loaded record of (an archived thread, or an id owned by another backend
+    # such as a report's Claude Code session). Treat it like not-found so reads
+    # resolve to None (a clean 404) instead of surfacing as a 500.
+    return (
+        "not found" in message
+        or "invalid thread id" in message
+        or "not loaded" in message
+    )
 
 
 class _OpenbaseSuperAgentsClient(CodexAppServerClient):
     def __init__(
         self, manager: "CodexAppServerSessionManager", ws_url: str | None
     ) -> None:
-        super().__init__(ws_url=ws_url)
+        configured = configured_backend_from_environment()
+        identity = configured if execution_backend(configured) == "codex" else "codex"
+        super().__init__(ws_url=ws_url, backend_identity=identity)
         self._manager = manager
 
     async def start_managed_server(self) -> None:

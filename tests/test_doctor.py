@@ -511,9 +511,11 @@ def test_check_code_sync_fails_when_managed_stignore_lacks_git(monkeypatch, tmp_
 
 def _patch_agent_home_paths(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        doctor_cli, "CODEX_CONFIG_PATH", tmp_path / "codex" / "config.toml"
+        doctor_cli, "CODEX_PROFILE_PATH", tmp_path / "codex" / "openbase.config.toml"
     )
-    monkeypatch.setattr(doctor_cli, "CLAUDE_STATE_PATH", tmp_path / ".claude.json")
+    monkeypatch.setattr(
+        doctor_cli, "CLAUDE_PROFILE_MCP_PATH", tmp_path / ".claude.json"
+    )
     monkeypatch.setattr(doctor_cli, "CLAUDE_CONFIG_DIR", tmp_path / "claude_config")
     monkeypatch.setattr(doctor_cli, "STANDALONE_RELEASES_DIR", tmp_path / "releases")
 
@@ -539,7 +541,7 @@ def _collect_agent_home_messages(check, monkeypatch, tmp_path):
 def test_mcp_registration_check_fails_on_dangling_command(monkeypatch, tmp_path):
     import json as json_module
 
-    codex_config = tmp_path / "codex" / "config.toml"
+    codex_config = tmp_path / "codex" / "openbase.config.toml"
     codex_config.parent.mkdir(parents=True)
     gone = tmp_path / "releases" / "0.1.0" / "super-agents-mcp"
     codex_config.write_text(

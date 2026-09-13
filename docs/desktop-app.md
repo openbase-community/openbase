@@ -13,6 +13,14 @@ sharing, deep links) are called out below.
 Throughout this page, **On iPhone** notes describe what the
 [iOS app](ios-tabs.md) can do for the same feature area.
 
+## Product Analytics and Diagnostics
+
+**Share anonymous product usage** is off until you opt in. When enabled and the app build has an analytics key, the desktop app sends a restricted set of events to Amplitude: app sessions, onboarding progress and failures, voice-call start/connect/end timing and outcomes, approval decisions and response timing, and diff views. Events include a randomly generated persistent device ID, session and event IDs, timestamps, platform, surface, and environment. They do not include prompts, code, audio, file paths, or repository content. Turning collection off removes the stored analytics device ID; the desktop also respects Do Not Track and Global Privacy Control.
+
+Diagnostic logging is separate from this preference. Electron writes main-process, renderer, and screen-sharing companion logs under `~/.openbase/logs/`, including console output, update activity, load failures, and renderer termination details. Structured secret-like fields are redacted, but the logger does not scrub arbitrary strings or error stacks. These are local diagnostic files, not Amplitude events.
+
+**On iPhone:** the equivalent usage toggle is under **Settings → Diagnostics**. See [iOS Settings](ios-tabs.md#settings) for collection and log-upload details.
+
 ## Install and First-Run Setup
 
 Download the Apple Silicon DMG from [Downloads](downloads.md) and open the
@@ -109,6 +117,14 @@ Agents write Markdown reports into per-project `.reports` folders. The
 Reports page lists them across all projects grouped by date, with search and
 tag filtering. Open a report to read it, tag it, download it, or delete it.
 
+**Sharing a report:** the Share button in a report's detail view publishes
+the report (with any images it references) to your Openbase Cloud account
+and lets you grant access to specific people by email. Recipients get an
+email and read the report at app.openbase.cloud under "Shared with me" after
+signing in with that email address — there are no public links, and every
+grant can be revoked. While a report stays shared, edits to the local file
+republish automatically; "Stop sharing" removes the cloud copy.
+
 **On iPhone:** the Reports tab mirrors this — search, tag chips, date
 grouping, report detail with Markdown rendering, share sheet export, and
 delete. Report push notifications open the specific report.
@@ -142,6 +158,11 @@ optional target thread (or a fresh thread per run), working directory, model,
 and reasoning effort. Routines show their last run status and next run time,
 and can be edited, disabled, run immediately, or deleted.
 
+The Templates tab is browse-only. It shows prompts, commands, schedules, and
+required skills from the managed registry, but never creates or schedules a
+routine. Create a routine explicitly from the Loops tab after reviewing a
+template.
+
 **On iPhone:** routines are not managed from the iOS app; use the desktop
 app, the console, or `openbase-coder routines ...`.
 
@@ -155,16 +176,22 @@ and the selected agent homes; installation never runs catalog dependencies or
 scripts. Existing skills with the same name are treated as conflicts rather
 than overwritten.
 
-The Routine templates tab is browse-only. It shows prompts, commands,
-schedules, and required skills from the managed registry, but never creates or
-schedules a routine. Create a routine explicitly from the Routines page after
-reviewing a template.
-
 You can also edit installed skill sources and enable auto-linking of personal
 skills (`~/.agents/skills`, the `home` scope) into the shared agent homes at
 `~/.codex/skills` and `~/.claude/skills`.
 
 **On iPhone:** skills are not managed from the iOS app.
+
+### Memories
+
+Browse the persistent memories your coding agents have saved on this
+machine, grouped by source: Claude Code keeps per-project memory files
+(shown as one group per project), and Codex keeps global memories. Open a
+memory to read it; file-backed memories can be edited or deleted — deleting
+one also removes its line from the project's `MEMORY.md` index — while
+Codex per-thread memories are read-only.
+
+**On iPhone:** memories are not managed from the iOS app.
 
 ### Templates
 
@@ -175,14 +202,9 @@ a template's fields (variables and options), and scaffold projects from them.
 
 ### Status
 
-Service health for the local runtime: each required and optional service with
-its port/URL and a green (running), yellow (loaded/optional), or red
-(stopped) indicator. Auto-refreshes every 30 seconds. The same information is
-available from `openbase-coder services status`.
+Service health for the local runtime: each required and optional check has one healthy/unhealthy result with its port or URL. The Netmesh/Tailscale connection, Openbase API Serve route, and LiveKit Serve route are separate checks; the Status page reads the configured routes without asking the local API to reach itself through Serve. It auto-refreshes every 30 seconds. The corresponding command-line diagnostics are available from `openbase-coder services status`.
 
-**On iPhone:** the iOS app shows a warning banner when the local runtime is
-unreachable, and its Console tab can open this Status page in the embedded
-browser.
+**On iPhone:** the iOS app shows a warning banner when the local runtime is unreachable, and its Console tab can open this Status page in the embedded browser.
 
 ### Devices
 

@@ -163,10 +163,20 @@ class MultiBackendSessionManager:
             return_exceptions=True,
         )
         merged: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
         for result in results:
             if isinstance(result, BaseException):
                 continue
-            merged.extend(result)
+            for request in result:
+                # Every backend also lists the shared approval store. Keep
+                # each request once, using the same ID normalization as answers.
+                request_id = request.get("id")
+                if request_id is not None:
+                    key = str(request_id)
+                    if key in seen_ids:
+                        continue
+                    seen_ids.add(key)
+                merged.append(request)
         return merged
 
     async def answer_approval_request(
