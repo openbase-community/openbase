@@ -233,9 +233,9 @@ class TestSecretScan:
     def test_detects_common_secret_shapes(self):
         content = (
             "# Report\n"
-            "aws AKIAABCDEFGHIJKLMNOP here\n"
+            "aws AKIAABCDEFGHIJKLMNOP here\n"  # gitleaks:allow (synthetic fixture)
             "clean line\n"
-            "api_key = 'abcdefghijklmnop1234'\n"
+            "api_key = 'abcdefghijklmnop1234'\n"  # gitleaks:allow (synthetic fixture)
         )
         findings = sharing_service.scan_for_secrets(content)
         assert [f["line"] for f in findings] == [2, 4]
@@ -246,7 +246,7 @@ class TestSecretScan:
 
     def test_publish_blocks_secrets_without_confirm(self, tmp_path, monkeypatch):
         _reset_cache()
-        content = "# R\ntoken = 'abcdefghijklmnop1234'\n"
+        content = "# R\ntoken = 'abcdefghijklmnop1234'\n"  # gitleaks:allow (synthetic)
         project, name = _project_with_report(tmp_path, content)
         monkeypatch.setattr(
             sharing_service.cloud_sharing,
@@ -259,7 +259,7 @@ class TestSecretScan:
 
     def test_share_view_returns_409_with_findings(self, tmp_path):
         _reset_cache()
-        content = "# R\ntoken = 'abcdefghijklmnop1234'\n"
+        content = "# R\ntoken = 'abcdefghijklmnop1234'\n"  # gitleaks:allow (synthetic)
         project, name = _project_with_report(tmp_path, content)
         response = sharing_views.report_share(
             _request(
@@ -274,7 +274,7 @@ class TestSecretScan:
 
     def test_confirm_secrets_publishes(self, tmp_path, monkeypatch):
         _reset_cache()
-        content = "# R\ntoken = 'abcdefghijklmnop1234'\n"
+        content = "# R\ntoken = 'abcdefghijklmnop1234'\n"  # gitleaks:allow (synthetic)
         project, name = _project_with_report(tmp_path, content)
         monkeypatch.setattr(
             sharing_service, "local_device_id", lambda: "device-test"
