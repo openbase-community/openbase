@@ -4,6 +4,7 @@ import importlib.resources as importlib_resources
 import json
 import os
 import subprocess
+import tomllib
 from pathlib import Path
 
 import click
@@ -207,6 +208,29 @@ def test_ensure_codex_session_id_hook_is_idempotent(tmp_path: Path) -> None:
     assert hooks.ensure_codex_session_id_hook(config) is False
     assert config.read_text(encoding="utf-8") == first
     assert first.count("[[hooks.SessionStart]]") == 1
+
+
+def test_ensure_codex_session_id_hook_replaces_empty_inline_array(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(
+        "[hooks]\n"
+        "SessionStart = []\n\n"
+        '[hooks.state."plugin:session_start:0:0"]\n'
+        'trusted_hash = "sha256:plugin"\n',
+        encoding="utf-8",
+    )
+
+    assert hooks.ensure_codex_session_id_hook(config) is True
+    parsed = tomllib.loads(config.read_text(encoding="utf-8"))
+    session_start = parsed["hooks"]["SessionStart"]
+    assert len(session_start) == 1
+    assert session_start[0]["hooks"][0]["command"] == str(INJECT_SESSION_ID_HOOK_PATH)
+    assert parsed["hooks"]["state"]["plugin:session_start:0:0"] == {
+        "trusted_hash": "sha256:plugin"
+    }
+    assert hooks.ensure_codex_session_id_hook(config) is False
 
 
 def test_ensure_codex_session_id_hook_can_back_up_default_config(
