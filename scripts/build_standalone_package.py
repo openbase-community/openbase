@@ -205,6 +205,24 @@ def _verify_source_super_agents(python_dir: Path) -> None:
             "cli's floor, or lower the floor."
         )
 
+    # Importing the package is not enough: MCP 2 removed the low-level
+    # Server.list_tools/call_tool decorators used while constructing this
+    # server. Exercise that construction in the exact bundled interpreter so
+    # an incompatible resolver result fails the release instead of onboarding.
+    compatibility_check = (
+        "from super_agents.mcp_server import create_server; "
+        "create_server(object())"
+    )
+    result = subprocess.run(
+        [str(runtime_python(python_dir)), "-c", compatibility_check],
+        env=_runtime_pip_env(),
+    )
+    if result.returncode != 0:
+        raise SystemExit(
+            "Packaged super-agents cannot construct its MCP server with the "
+            "resolved MCP runtime. Check the super-agents MCP dependency bounds."
+        )
+
 
 def rewrite_bin_shebangs(python_dir: Path) -> None:
     # pip writes each entry-point script with an absolute shebang pointing at
