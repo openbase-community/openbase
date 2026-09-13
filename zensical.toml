@@ -24,6 +24,7 @@ nav = [
   { "Manual Setup" = "manual-installation.md" },
   { "Cloud DevSpace" = "cloud-devspace.md" },
   { "Local-Only Mode" = "local-only.md" },
+  { "Self-Hosting" = "self-hosting.md" },
   { "Troubleshooting" = "troubleshooting.md" },
   { "Uninstall" = "uninstall.md" },
   { "Commands" = [
