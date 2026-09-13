@@ -29,6 +29,29 @@ CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
 BACKEND_AUTH_FAILURE_PREFIXES = ("Failed to authenticate", "Not logged in")
 # Backwards-compatible alias (kept for existing importers).
 CLAUDE_AUTH_FAILURE_PREFIXES = BACKEND_AUTH_FAILURE_PREFIXES
+
+# The Openbase Cloud model proxy returns a 403 whose body says the monthly
+# spend limit is reached; the coding SDK surfaces it as a "Failed to
+# authenticate. API Error: 403 {...spend limit...}" answer, which the auth
+# classifier above would otherwise mistake for a dead login. It is not an
+# auth failure — it is a billing cap with a specific, actionable remedy
+# (subscribe / raise the limit), so it must be distinguished and spoken
+# differently (field-test finding FT-10, 2026-09-13).
+SPEND_LIMIT_MARKERS = (
+    "spend limit reached",
+    "model requests are blocked until next month",
+    "raise your monthly limits",
+)
+
+
+def is_spend_limit_text(text: str | None) -> bool:
+    """Whether a turn's error answer is an Openbase Cloud monthly-spend-limit 403."""
+    if not text:
+        return False
+    lowered = text.lower()
+    return any(marker in lowered for marker in SPEND_LIMIT_MARKERS)
+
+
 CLAUDE_AUTH_PROBE_PROMPT = "Reply with the single word ok."
 CLAUDE_AUTH_PROBE_TIMEOUT_SECONDS = 90
 
