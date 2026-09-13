@@ -17,10 +17,8 @@ from openbase_coder_cli.backend_config import (
     OPENBASE_CLOUD_BACKEND,
 )
 from openbase_coder_cli.claude_auth import claude_auth_status
-from openbase_coder_cli.config.token_manager import (
-    DEFAULT_WEB_BACKEND_URL,
-    get_token_manager,
-)
+from openbase_coder_cli.cloud_environment import configured_web_backend_url
+from openbase_coder_cli.config.token_manager import get_token_manager
 from openbase_coder_cli.dispatcher_config import selected_tts_provider_id
 from openbase_coder_cli.env_file import (
     env_file_values,
@@ -166,9 +164,9 @@ def backend_auth_status(*, authenticated: bool | None = None) -> dict[str, Any]:
 
 
 def web_backend_url() -> str:
-    return os.environ.get(
-        "OPENBASE_CODER_CLI_WEB_BACKEND_URL", DEFAULT_WEB_BACKEND_URL
-    ).rstrip("/")
+    # Delegates so the ~/.openbase/.env override applies here too — device
+    # registration and login status must target the same cloud as `login`.
+    return configured_web_backend_url()
 
 
 def cloud_login_status() -> dict[str, Any]:
