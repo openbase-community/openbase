@@ -388,6 +388,7 @@ class StalledTurn:
 
 def scan_stalled_running_turns(
     *,
+    since: _dt.datetime | None = None,
     now: _dt.datetime | None = None,
     min_elapsed_seconds: float = DEFAULT_STALL_THRESHOLD_SECONDS,
     state_db_path: Path | None = None,
@@ -403,6 +404,11 @@ def scan_stalled_running_turns(
     folder (``Desktop``/``Documents``/``Downloads``). Ordinary slow work has
     neither signal, so it is never announced. Covers the dispatcher and spawned
     sub-agents uniformly (both are rows in the shared store).
+
+    ``since`` bounds detection to turns that *started* on or after it — the
+    caller passes the watcher's start time so a turn left ``running`` by an
+    earlier, since-crashed agent process (never reconciled to ``failed``) is not
+    announced as a live stall on a fresh call.
     """
     import sqlite3
 
@@ -438,6 +444,8 @@ def scan_stalled_running_turns(
     for row in rows:
         started = _parse_sqlite_ts(row["created_at"])
         if started is None:
+            continue
+        if since is not None and started < since:
             continue
         elapsed = (now - started).total_seconds()
         if elapsed < min_elapsed_seconds:
@@ -518,7 +526,9 @@ async def stall_watch_loop(
             )
             for turn in blocked:
                 await _announce(turn)
-            stalled = await loop.run_in_executor(None, scan_stalled_running_turns)
+            stalled = await loop.run_in_executor(
+                None, lambda: scan_stalled_running_turns(since=since)
+            )
             for turn in stalled:
                 await _announce(turn)
         except asyncio.CancelledError:

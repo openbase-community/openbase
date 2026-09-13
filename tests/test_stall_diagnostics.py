@@ -383,5 +383,21 @@ def test_scan_stalled_running_turns_ignores_young_turn(tmp_path, monkeypatch):
     assert sd.scan_stalled_running_turns(now=now, state_db_path=db) == []
 
 
+def test_scan_stalled_running_turns_ignores_orphan_from_before_watcher(
+    tmp_path, monkeypatch
+):
+    # A turn left 'running' by a since-crashed process (started before the
+    # watcher/call began) must not be announced as a live stall.
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(sd, "dialog_presenter_started_after", lambda since: None)
+    now = dt.datetime(2026, 9, 13, 4, 35, 0)
+    created = (now - dt.timedelta(seconds=600)).strftime("%Y-%m-%d %H:%M:%S")
+    db = _running_turn_db(tmp_path, created_at=created, command="ls ~/Desktop")
+    since = now - dt.timedelta(seconds=120)  # watcher started after the turn began
+    assert sd.scan_stalled_running_turns(since=since, now=now, state_db_path=db) == []
+    # ...but with no since bound (or a since before it), it is still detected.
+    assert len(sd.scan_stalled_running_turns(now=now, state_db_path=db)) == 1
+
+
 def test_scan_stalled_running_turns_missing_db_returns_empty(tmp_path):
     assert sd.scan_stalled_running_turns(state_db_path=tmp_path / "nope.sqlite3") == []
