@@ -37,7 +37,9 @@ def _isolated_host_state(monkeypatch, tmp_path):
     # Django app imports load the REAL ~/.openbase/.env into os.environ as a
     # side effect, so host backend settings (e.g. mixed-backend
     # OPENBASE_CODING_BACKENDS) leak into every test that runs after one
-    # touching the URLconf. Tests must see only what they set themselves.
+    # touching the URLconf or invoking the CLI. Tests must see only what they
+    # set themselves.
+    monkeypatch.delenv("OPENBASE_CODER_CLI_WEB_BACKEND_URL", raising=False)
     monkeypatch.delenv("OPENBASE_CODING_BACKEND", raising=False)
     monkeypatch.delenv("OPENBASE_CODING_BACKENDS", raising=False)
     from openbase_coder_cli.agent_profiles import profile_environment
