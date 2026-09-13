@@ -227,3 +227,105 @@ class TestMaybeRepublish:
             sharing_service._shared_origin_keys.add(key)
         sharing_service.maybe_republish_report(project, name)
         assert len(calls) == 1
+
+
+class TestSecretScan:
+    def test_detects_common_secret_shapes(self):
+        content = (
+            "# Report\n"
+            "aws AKIAABCDEFGHIJKLMNOP here\n"
+            "clean line\n"
+            "api_key = 'abcdefghijklmnop1234'\n"
+        )
+        findings = sharing_service.scan_for_secrets(content)
+        assert [f["line"] for f in findings] == [2, 4]
+        assert findings[0]["rule"] == "aws-access-key-id"
+
+    def test_clean_content_has_no_findings(self):
+        assert sharing_service.scan_for_secrets("# Weekly\nAll fine.\n") == []
+
+    def test_publish_blocks_secrets_without_confirm(self, tmp_path, monkeypatch):
+        _reset_cache()
+        content = "# R\ntoken = 'abcdefghijklmnop1234'\n"
+        project, name = _project_with_report(tmp_path, content)
+        monkeypatch.setattr(
+            sharing_service.cloud_sharing,
+            "publish_item",
+            lambda payload: (_ for _ in ()).throw(AssertionError("must not publish")),
+        )
+        result = sharing_service.publish_report(project, name)
+        assert result["ok"] is False
+        assert result["reason"] == "possible_secrets"
+
+    def test_share_view_returns_409_with_findings(self, tmp_path):
+        _reset_cache()
+        content = "# R\ntoken = 'abcdefghijklmnop1234'\n"
+        project, name = _project_with_report(tmp_path, content)
+        response = sharing_views.report_share(
+            _request(
+                "post",
+                "/api/projects/reports/share/",
+                {"path": project, "file": name},
+            )
+        )
+        assert response.status_code == 409
+        assert response.data["reason"] == "possible_secrets"
+        assert response.data["findings"]
+
+    def test_confirm_secrets_publishes(self, tmp_path, monkeypatch):
+        _reset_cache()
+        content = "# R\ntoken = 'abcdefghijklmnop1234'\n"
+        project, name = _project_with_report(tmp_path, content)
+        monkeypatch.setattr(
+            sharing_service, "local_device_id", lambda: "device-test"
+        )
+        monkeypatch.setattr(
+            sharing_service.cloud_sharing,
+            "publish_item",
+            lambda payload: _ok({"id": "it_1", "revision_seq": 1}, status_code=201),
+        )
+        result = sharing_service.publish_report(project, name, allow_secrets=True)
+        assert result["ok"] is True
+
+
+class TestSweepEfficiency:
+    def test_sweep_skips_unchanged_content(self, tmp_path, monkeypatch):
+        _reset_cache()
+        content = "# Demo\n"
+        project, name = _project_with_report(tmp_path, content)
+        item = {
+            "id": "it_1",
+            "origin_project_path": project,
+            "origin_item_path": name,
+        }
+        publishes = []
+        monkeypatch.setattr(
+            sharing_service, "local_device_id", lambda: "device-test"
+        )
+        monkeypatch.setattr(
+            sharing_service.cloud_sharing, "list_items", lambda **_: _ok([item])
+        )
+        monkeypatch.setattr(
+            sharing_service.cloud_sharing,
+            "publish_item",
+            lambda payload: publishes.append(payload)
+            or _ok({"id": "it_1", "revision_seq": 1}),
+        )
+        sharing_service.sync_shared_reports(force=True)
+        assert len(publishes) == 1
+        sharing_service.sync_shared_reports(force=True)
+        assert len(publishes) == 1
+
+        report_file = Path(project) / ".reports" / name
+        report_file.write_text("# Demo changed\n", encoding="utf-8")
+        sharing_service.sync_shared_reports(force=True)
+        assert len(publishes) == 2
+
+    def test_asset_collection_respects_total_budget(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sharing_service, "MAX_SHARE_TOTAL_ASSET_BYTES", len(PNG_BYTES) + 5)
+        content = "![a](images/chart.png)\n![b](images/chart2.png)\n"
+        project, name = _project_with_report(tmp_path, content)
+        chart2 = Path(project) / ".reports" / "images" / "chart2.png"
+        chart2.write_bytes(PNG_BYTES)
+        assets = sharing_service.collect_report_assets(project, name, content)
+        assert len(assets) == 1

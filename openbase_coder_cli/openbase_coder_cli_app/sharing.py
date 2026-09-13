@@ -68,8 +68,11 @@ def report_share(request):
             )
         return Response({"shared": False})
 
+    allow_secrets = bool(request.data.get("confirm_secrets"))
     try:
-        result = sharing_service.publish_report(project_path, relative_path)
+        result = sharing_service.publish_report(
+            project_path, relative_path, allow_secrets=allow_secrets
+        )
     except FileNotFoundError:
         return Response(
             {"error": f"File not found: {relative_path}"},
@@ -77,6 +80,15 @@ def report_share(request):
         )
     except ValueError as exc:
         return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    if result.get("reason") == "possible_secrets":
+        return Response(
+            {
+                "error": "This report appears to contain secrets.",
+                "reason": "possible_secrets",
+                "findings": result.get("findings") or [],
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
     if not result.get("ok"):
         return Response(
             {"error": result.get("error") or "Unable to publish share"},
