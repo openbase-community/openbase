@@ -120,9 +120,43 @@ def test_spoken_hint_soft_status_without_dialog():
     assert "still working" in hint
 
 
-def test_speak_via_local_api_without_token(tmp_path, monkeypatch):
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+def test_speak_via_local_api_without_token(monkeypatch):
+    # If the capability accessor fails (e.g. read-only data dir), the hint is
+    # skipped rather than crashing the call.
+    def _boom() -> str:
+        raise OSError("no data dir")
+
+    monkeypatch.setattr(sd, "get_local_api_token", _boom)
     assert sd.speak_via_local_api("hello") is False
+
+
+def test_speak_via_local_api_mints_token_and_posts(monkeypatch):
+    # A fresh install has no token file; the accessor mints one and the hint
+    # authenticates against the local API. The original read-only lookup
+    # returned False here (FT-9 follow-up 2026-09-13).
+    monkeypatch.setattr(sd, "get_local_api_token", lambda: "x" * 40)
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def _fake_urlopen(request, timeout=0):
+        captured["url"] = request.full_url
+        captured["auth"] = request.headers.get("Authorization")
+        captured["body"] = json.loads(request.data.decode())
+        return _Resp()
+
+    monkeypatch.setattr(sd.urllib.request, "urlopen", _fake_urlopen)
+    assert sd.speak_via_local_api("hello", agent_name="Dispatcher") is True
+    assert captured["auth"] == "Bearer " + "x" * 40
+    assert captured["url"].endswith("/api/user/say/")
+    assert captured["body"] == {"agent_name": "Dispatcher", "text": "hello"}
 
 
 def _make_state_db(tmp_path: Path, sessions: list[dict], turns: list[dict]) -> Path:

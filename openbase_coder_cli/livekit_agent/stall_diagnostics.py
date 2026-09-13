@@ -40,6 +40,8 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from openbase_coder_cli.config.local_api_token import get_local_api_token
+
 logger = logging.getLogger(__name__)
 
 #: Processes macOS spawns to present consent/auth dialogs.
@@ -373,10 +375,17 @@ def speak_via_local_api(text: str, *, agent_name: str = "Dispatcher") -> bool:
     Reuses the product's existing announcer path so the hint plays inside
     the live call with the standard announcer voice.
     """
-    token_path = Path.home() / ".openbase" / "local-api-token"
+    # Resolve the capability through the same accessor the local API server
+    # validates against (``middleware``/``authentication`` both call
+    # ``get_local_api_token``). It honours ``OPENBASE_CODER_CLI_DATA_DIR`` and
+    # *creates* the token when absent, so the hint authenticates even on a
+    # fresh install that has never minted the file — the original read-only
+    # ``~/.openbase/local-api-token`` lookup silently no-op'd there (FT-9
+    # follow-up 2026-09-13: observed "local API token unavailable",
+    # delivered=False on a clean field-test VM).
     try:
-        token = token_path.read_text().strip()
-    except OSError:
+        token = get_local_api_token()
+    except Exception:  # noqa: BLE001 - a diagnostic must never crash the call
         logger.warning("stall hint not spoken: local API token unavailable")
         return False
     request = urllib.request.Request(
