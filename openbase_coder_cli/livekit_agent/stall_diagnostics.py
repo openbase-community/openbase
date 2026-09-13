@@ -35,6 +35,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import logging
+import re
 import subprocess
 import urllib.request
 from dataclasses import dataclass
@@ -49,6 +50,32 @@ DIALOG_PRESENTERS = ("UserNotificationCenter", "SecurityAgent")
 
 _PS_TIME_FORMAT = "%a %b %d %H:%M:%S %Y"  # `ps -o lstart=` output
 
+#: macOS TCC-protected home folders. The *first* access to one of these by a
+#: spawned agent triggers a per-binary consent grant; in the headless launchd
+#: context the product runs under, that consent can't be presented, so the
+#: access hangs indefinitely and the turn sits in ``running`` forever with the
+#: triggering tool call unresolved — a stall the failed-turn signature scan
+#: (``CONTROL_INIT_TIMEOUT_SIGNATURE``) never sees. Observed live in the
+#: 2026-09-13 field test: a dispatcher Bash ``ls ~/Desktop`` hung 5+ minutes
+#: with the caller's mic muted and nothing surfaced to the phone.
+PROTECTED_FOLDERS = ("Desktop", "Documents", "Downloads")
+_PROTECTED_FOLDER_RE = re.compile(
+    r"(?:^|[\s/~'\"=])(" + "|".join(PROTECTED_FOLDERS) + r")(?:$|[/\s'\"])"
+)
+#: A running turn must be stalled at least this long before its in-flight
+#: protected-folder access is treated as a likely permission block (rather than
+#: ordinary in-progress work), so brief legitimate accesses never trigger a
+#: hint.
+DEFAULT_STALL_THRESHOLD_SECONDS = 75.0
+
+
+def protected_folder_in_command(command: str | None) -> str | None:
+    """Name of the TCC-protected home folder a shell command touches, if any."""
+    if not command:
+        return None
+    match = _PROTECTED_FOLDER_RE.search(command)
+    return match.group(1) if match else None
+
 
 @dataclass
 class StallDiagnosis:
@@ -56,13 +83,22 @@ class StallDiagnosis:
     blocking_dialog_process: str | None
     in_flight_tool: str | None
     in_flight_command: str | None
+    protected_folder: str | None = None
 
     @property
     def likely_blocked_on_dialog(self) -> bool:
         return self.blocking_dialog_process is not None
 
+    @property
+    def likely_blocked(self) -> bool:
+        """Whether there is a concrete reason to believe the turn is stuck
+        (rather than merely slow): a mid-turn consent dialog, or an in-flight
+        command reaching into a TCC-protected folder."""
+        return self.likely_blocked_on_dialog or self.protected_folder is not None
+
     def spoken_hint(self) -> str:
         minutes = max(1, round(self.elapsed_seconds / 60))
+        plural = "s" if minutes != 1 else ""
         doing = ""
         if self.in_flight_command:
             doing = f" while running {_speakable_command(self.in_flight_command)}"
@@ -71,13 +107,21 @@ class StallDiagnosis:
         if self.likely_blocked_on_dialog:
             return (
                 f"Heads up — your agent has been waiting{doing} for about "
-                f"{minutes} minute{'s' if minutes != 1 else ''}, and a "
-                "permission dialog appears to be open on your computer. It "
-                "may need you to click Allow."
+                f"{minutes} minute{plural}, and a permission dialog appears to "
+                "be open on your computer. It may need you to click Allow."
+            )
+        if self.protected_folder:
+            return (
+                f"Heads up — your agent has been trying to reach your "
+                f"{self.protected_folder} folder for about {minutes} "
+                f"minute{plural}, and your Mac may be blocking access. Check "
+                "your computer for a permission prompt and click Allow, or "
+                f"grant Openbase access to your {self.protected_folder} folder "
+                "in System Settings, then ask me to try again."
             )
         return (
             f"Your agent is still working{doing} — about "
-            f"{minutes} minute{'s' if minutes != 1 else ''} so far."
+            f"{minutes} minute{plural} so far."
         )
 
     def packet_payload(self) -> dict:
@@ -89,6 +133,7 @@ class StallDiagnosis:
             "blocking_dialog_process": self.blocking_dialog_process,
             "in_flight_tool": self.in_flight_tool,
             "in_flight_command_excerpt": (self.in_flight_command or "")[:120],
+            "protected_folder": self.protected_folder,
         }
 
 
@@ -189,6 +234,7 @@ def diagnose(
         blocking_dialog_process=dialog_presenter_started_after(turn_started_at),
         in_flight_tool=tool,
         in_flight_command=command,
+        protected_folder=protected_folder_in_command(command),
     )
 
 
@@ -317,6 +363,104 @@ def scan_blocked_turns(
     return results
 
 
+@dataclass
+class StalledTurn:
+    session_id: str
+    session_name: str
+    agent_name: str | None
+    turn_id: str
+    diagnosis: StallDiagnosis
+
+    def spoken_hint(self) -> str:
+        return self.diagnosis.spoken_hint()
+
+    def packet_payload(self) -> dict:
+        payload = self.diagnosis.packet_payload()
+        payload.update(
+            {
+                "session_name": self.session_name,
+                "agent_name": self.agent_name,
+                "turn_id": self.turn_id,
+            }
+        )
+        return payload
+
+
+def scan_stalled_running_turns(
+    *,
+    now: _dt.datetime | None = None,
+    min_elapsed_seconds: float = DEFAULT_STALL_THRESHOLD_SECONDS,
+    state_db_path: Path | None = None,
+) -> list[StalledTurn]:
+    """Find in-flight turns that look stuck behind a macOS permission block.
+
+    Complements :func:`scan_blocked_turns`: that scan only sees turns that
+    *failed* with the init-timeout signature, but the common TCC hang leaves the
+    turn in ``running`` indefinitely (the offending tool call never returns).
+    Here we look at ``running`` turns older than ``min_elapsed_seconds`` and keep
+    only those with a concrete block signal — a consent dialog that appeared
+    after the turn began, or an in-flight command reaching into a TCC-protected
+    folder (``Desktop``/``Documents``/``Downloads``). Ordinary slow work has
+    neither signal, so it is never announced. Covers the dispatcher and spawned
+    sub-agents uniformly (both are rows in the shared store).
+    """
+    import sqlite3
+
+    if state_db_path is None:
+        try:
+            from openbase_coder_cli.thread_sync.thread_sync_common import (
+                super_agents_state_db_path,
+            )
+
+            state_db_path = super_agents_state_db_path()
+        except Exception:  # noqa: BLE001 - resolution is best-effort
+            return []
+    if not Path(state_db_path).exists():
+        return []
+    now = now or _dt.datetime.now()
+    try:
+        conn = sqlite3.connect(f"file:{state_db_path}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error:
+        return []
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT t.id AS turn_id, t.created_at, "
+            "s.id AS session_id, s.name, s.agent_name "
+            "FROM turns t JOIN sessions s ON s.id = t.session_id "
+            "WHERE t.status = 'running'"
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+    results: list[StalledTurn] = []
+    for row in rows:
+        started = _parse_sqlite_ts(row["created_at"])
+        if started is None:
+            continue
+        elapsed = (now - started).total_seconds()
+        if elapsed < min_elapsed_seconds:
+            continue
+        diagnosis = diagnose(
+            turn_started_at=started,
+            elapsed_seconds=elapsed,
+            thread_id=row["session_id"],
+        )
+        if not diagnosis.likely_blocked:
+            continue
+        results.append(
+            StalledTurn(
+                session_id=row["session_id"],
+                session_name=row["name"],
+                agent_name=row["agent_name"],
+                turn_id=row["turn_id"],
+                diagnosis=diagnosis,
+            )
+        )
+    return results
+
+
 async def stall_watch_loop(
     *,
     poll_seconds: float = 15.0,
@@ -325,11 +469,18 @@ async def stall_watch_loop(
     """Background poller: surface blocked agent turns during a live call.
 
     Runs for the lifetime of a LiveKit voice session. Every ``poll_seconds``
-    it looks for agent turns (dispatcher OR spawned sub-agent) that just failed
-    with the blocked-at-init signature — the reliable signal that a process is
-    stuck behind a macOS permission dialog on the user's computer (field-test
-    finding FT-9). Each such turn is announced once, so the person on the phone
-    learns their Mac needs attention. ``is_call_active``, if given, gates
+    it surfaces two classes of stuck agent turn (dispatcher OR spawned
+    sub-agent), so the person on the phone learns their Mac needs attention:
+
+    1. turns that *failed* with the blocked-at-init signature
+       (:func:`scan_blocked_turns`); and
+    2. turns still *running* well past the stall threshold with a concrete
+       block signal — a consent dialog, or an in-flight command reaching into a
+       TCC-protected folder (:func:`scan_stalled_running_turns`). This is the
+       common case: the offending access hangs and the turn never fails, so the
+       signature scan alone would miss it (field-test finding FT-9 / follow-up).
+
+    Each turn is announced at most once. ``is_call_active``, if given, gates
     speaking so hints never play outside an active call.
     """
     import asyncio
@@ -339,6 +490,26 @@ async def stall_watch_loop(
     # Only surface failures observed from when the watcher started, so a
     # pre-existing stale failure doesn't get announced on a fresh call.
     since = _dt.datetime.now()
+
+    async def _announce(turn) -> None:
+        if turn.turn_id in spoken_turn_ids:
+            return
+        spoken_turn_ids.add(turn.turn_id)
+        if is_call_active is not None and not is_call_active():
+            return
+        delivered = await loop.run_in_executor(
+            None, speak_via_local_api, turn.spoken_hint()
+        )
+        logger.info(
+            "%s stage=agent_turn_blocked_hint_spoken session=%s "
+            "agent=%s turn_id=%s delivered=%s",
+            "dispatch_timing",
+            turn.session_name,
+            turn.agent_name,
+            turn.turn_id,
+            delivered,
+        )
+
     while True:
         try:
             await asyncio.sleep(poll_seconds)
@@ -346,23 +517,10 @@ async def stall_watch_loop(
                 None, lambda: scan_blocked_turns(since=since)
             )
             for turn in blocked:
-                if turn.turn_id in spoken_turn_ids:
-                    continue
-                spoken_turn_ids.add(turn.turn_id)
-                if is_call_active is not None and not is_call_active():
-                    continue
-                delivered = await loop.run_in_executor(
-                    None, speak_via_local_api, turn.spoken_hint()
-                )
-                logger.info(
-                    "%s stage=agent_turn_blocked_hint_spoken session=%s "
-                    "agent=%s turn_id=%s delivered=%s",
-                    "dispatch_timing",
-                    turn.session_name,
-                    turn.agent_name,
-                    turn.turn_id,
-                    delivered,
-                )
+                await _announce(turn)
+            stalled = await loop.run_in_executor(None, scan_stalled_running_turns)
+            for turn in stalled:
+                await _announce(turn)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - a diagnostic must never crash the call

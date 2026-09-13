@@ -269,3 +269,119 @@ def test_scan_blocked_turns_respects_since_window(tmp_path):
 
 def test_scan_blocked_turns_missing_db_returns_empty(tmp_path):
     assert sd.scan_blocked_turns(state_db_path=tmp_path / "nope.sqlite3") == []
+
+
+@pytest.mark.parametrize(
+    "command,expected",
+    [
+        ("ls ~/Desktop", "Desktop"),
+        ('mkdir -p ~/Desktop/"Demo project"', "Desktop"),
+        ("cat /Users/admin/Documents/notes.txt", "Documents"),
+        ("find ~/Downloads -name '*.zip'", "Downloads"),
+        ("git status", None),
+        ("npm run build", None),
+        # Substrings inside other words must not match.
+        ("echo my_desktop_theme > x", None),
+        ("ls ~/DocumentsArchive", None),
+        (None, None),
+    ],
+)
+def test_protected_folder_in_command(command, expected):
+    assert sd.protected_folder_in_command(command) == expected
+
+
+def test_spoken_hint_protected_folder_is_actionable():
+    diag = sd.StallDiagnosis(
+        elapsed_seconds=130,
+        blocking_dialog_process=None,
+        in_flight_tool="Bash",
+        in_flight_command="ls ~/Desktop",
+        protected_folder="Desktop",
+    )
+    assert diag.likely_blocked is True
+    hint = diag.spoken_hint()
+    assert "Desktop" in hint
+    assert "blocking" in hint or "permission" in hint
+    assert diag.packet_payload()["protected_folder"] == "Desktop"
+
+
+def test_spoken_hint_plain_long_turn_is_reassuring():
+    diag = sd.StallDiagnosis(
+        elapsed_seconds=130,
+        blocking_dialog_process=None,
+        in_flight_tool="Bash",
+        in_flight_command="npm run build",
+        protected_folder=None,
+    )
+    assert diag.likely_blocked is False
+    assert "still working" in diag.spoken_hint()
+
+
+def _running_turn_db(tmp_path, *, created_at, command, session_id="s_hang"):
+    db = _make_state_db(
+        tmp_path,
+        sessions=[
+            {
+                "id": session_id,
+                "name": "edit-desktop-project",
+                "agent_name": "Blake",
+                "status": "running",
+                "active_turn_id": "t_hang",
+            }
+        ],
+        turns=[
+            {
+                "id": "t_hang",
+                "session_id": session_id,
+                "status": "running",
+                "last_error": None,
+                "created_at": created_at,
+                "updated_at": created_at,
+                "finished_at": None,
+            }
+        ],
+    )
+    share = tmp_path / ".local" / "share"
+    _write_session_log(
+        share,
+        session_id,
+        [{"content": [{"id": "b1", "name": "Bash", "input": {"command": command}}]}],
+    )
+    return db
+
+
+def test_scan_stalled_running_turns_flags_protected_folder_hang(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(sd, "dialog_presenter_started_after", lambda since: None)
+    now = dt.datetime(2026, 9, 13, 4, 35, 0)
+    created = (now - dt.timedelta(seconds=180)).strftime("%Y-%m-%d %H:%M:%S")
+    db = _running_turn_db(tmp_path, created_at=created, command="ls ~/Desktop")
+    stalled = sd.scan_stalled_running_turns(now=now, state_db_path=db)
+    assert len(stalled) == 1
+    st = stalled[0]
+    assert st.agent_name == "Blake"
+    assert st.diagnosis.protected_folder == "Desktop"
+    assert "Desktop" in st.spoken_hint()
+    assert st.packet_payload()["turn_id"] == "t_hang"
+
+
+def test_scan_stalled_running_turns_ignores_plain_long_turn(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(sd, "dialog_presenter_started_after", lambda since: None)
+    now = dt.datetime(2026, 9, 13, 4, 35, 0)
+    created = (now - dt.timedelta(seconds=180)).strftime("%Y-%m-%d %H:%M:%S")
+    db = _running_turn_db(tmp_path, created_at=created, command="npm run build")
+    assert sd.scan_stalled_running_turns(now=now, state_db_path=db) == []
+
+
+def test_scan_stalled_running_turns_ignores_young_turn(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(sd, "dialog_presenter_started_after", lambda since: None)
+    now = dt.datetime(2026, 9, 13, 4, 35, 0)
+    created = (now - dt.timedelta(seconds=10)).strftime("%Y-%m-%d %H:%M:%S")
+    db = _running_turn_db(tmp_path, created_at=created, command="ls ~/Desktop")
+    assert sd.scan_stalled_running_turns(now=now, state_db_path=db) == []
+
+
+def test_scan_stalled_running_turns_missing_db_returns_empty(tmp_path):
+    assert sd.scan_stalled_running_turns(state_db_path=tmp_path / "nope.sqlite3") == []
