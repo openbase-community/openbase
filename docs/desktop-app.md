@@ -158,6 +158,11 @@ optional target thread (or a fresh thread per run), working directory, model,
 and reasoning effort. Routines show their last run status and next run time,
 and can be edited, disabled, run immediately, or deleted.
 
+The Templates tab is browse-only. It shows prompts, commands, schedules, and
+required skills from the managed registry, but never creates or schedules a
+routine. Create a routine explicitly from the Loops tab after reviewing a
+template.
+
 **On iPhone:** routines are not managed from the iOS app; use the desktop
 app, the console, or `openbase-coder routines ...`.
 
@@ -170,11 +175,6 @@ and optional `SKILL.md` digest. The confirmation dialog shows that provenance
 and the selected agent homes; installation never runs catalog dependencies or
 scripts. Existing skills with the same name are treated as conflicts rather
 than overwritten.
-
-The Routine templates tab is browse-only. It shows prompts, commands,
-schedules, and required skills from the managed registry, but never creates or
-schedules a routine. Create a routine explicitly from the Routines page after
-reviewing a template.
 
 You can also edit installed skill sources and enable auto-linking of personal
 skills (`~/.agents/skills`, the `home` scope) into the shared agent homes at
