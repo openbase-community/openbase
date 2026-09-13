@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import importlib.resources as importlib_resources
 import json
+import re
 from pathlib import Path
 
 import click
@@ -138,6 +139,7 @@ def ensure_codex_session_id_hook(
     path = config_path or CODEX_HOME_DIR / "config.toml"
     command = str(INJECT_SESSION_ID_HOOK_PATH)
     existing = path.read_text(encoding="utf-8") if path.is_file() else ""
+    existing = _remove_empty_session_start_assignment(existing)
     existing_groups = _session_start_hook_commands(existing)
     try:
         group_index = next(
@@ -194,6 +196,23 @@ def ensure_codex_session_id_hook(
     write_if_changed(path, updated, backup=backup)
     click.echo(f"Configured codex session-ID hook in {path}")
     return True
+
+
+def _remove_empty_session_start_assignment(text: str) -> str:
+    """Remove Codex's empty inline value before appending array tables."""
+    lines = text.splitlines(keepends=True)
+    in_hooks_table = False
+    kept: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_hooks_table = stripped == "[hooks]"
+        if in_hooks_table and re.fullmatch(
+            r"SessionStart\s*=\s*\[\s*\]\s*(?:#.*)?", stripped
+        ):
+            continue
+        kept.append(line)
+    return "".join(kept)
 
 
 def _session_start_hook_commands(text: str) -> list[list[str]]:
