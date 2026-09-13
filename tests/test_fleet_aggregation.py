@@ -271,3 +271,99 @@ def test_peer_thread_page_stamps_origin_host(monkeypatch):
     assert page.items[0]["origin_device"] == "mini"
     assert page.items[0]["origin_host"] == "mini.tail1234.ts.net"
     assert page.next_cursor == "abc"
+
+
+class _FakeFeedResponse:
+    status_code = 200
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+def _install_feed_peer(monkeypatch, payload):
+    peers = [FleetPeer(key="mini.ts.net", name="mini", base_url="http://mini.ts.net:18080")]
+    monkeypatch.setattr(fleet, "owner_access_token", lambda: "token")
+    monkeypatch.setattr(fleet, "fleet_peers", lambda: peers)
+    monkeypatch.setattr(fleet, "peer_get", lambda *a, **k: _FakeFeedResponse(payload))
+
+
+def test_fleet_approvals_concat_stamp_and_sort(monkeypatch):
+    _install_feed_peer(
+        monkeypatch,
+        {"requests": [{"id": "p1", "received_at": "2026-09-12T11:00:00Z"}]},
+    )
+    local = [{"id": "l1", "received_at": "2026-09-12T10:00:00Z"}]
+
+    merged = fleet.fleet_approval_requests(local)
+
+    assert [item["id"] for item in merged] == ["p1", "l1"]
+    assert merged[0]["origin_device"] == "mini"
+    assert merged[0]["origin_host"] == "mini.ts.net"
+    assert "origin_device" not in merged[1]
+
+
+def test_fleet_notifications_merges_and_sums_unread(monkeypatch):
+    _install_feed_peer(
+        monkeypatch,
+        {
+            "notifications": [
+                {"id": "report:x", "created_at": "2026-09-12T11:00:00Z", "read_at": None}
+            ],
+            "unread_count": 4,
+        },
+    )
+    local = {
+        "notifications": [
+            {"id": "thread:y", "created_at": "2026-09-12T12:00:00Z", "read_at": None}
+        ],
+        "unread_count": 2,
+    }
+
+    merged = fleet.fleet_notifications(local, include_read=True, limit=10)
+
+    assert [item["id"] for item in merged["notifications"]] == ["thread:y", "report:x"]
+    assert merged["unread_count"] == 6
+    assert merged["notifications"][1]["origin_host"] == "mini.ts.net"
+
+
+def test_fleet_notifications_respects_limit(monkeypatch):
+    _install_feed_peer(
+        monkeypatch,
+        {
+            "notifications": [
+                {"id": f"peer:{i}", "created_at": f"2026-09-12T11:0{i}:00Z"}
+                for i in range(5)
+            ],
+            "unread_count": 5,
+        },
+    )
+    local = {"notifications": [], "unread_count": 0}
+
+    merged = fleet.fleet_notifications(local, include_read=True, limit=3)
+
+    assert len(merged["notifications"]) == 3
+    assert merged["unread_count"] == 5
+
+
+def test_fleet_recent_projects_merges_by_recency(monkeypatch):
+    _install_feed_peer(
+        monkeypatch,
+        {"projects": [{"path": "/home/g/newest", "last_worked_on": "2026-09-12T12:00:00Z"}]},
+    )
+    local = [{"path": "/Users/g/older", "last_worked_on": "2026-09-12T10:00:00Z"}]
+
+    merged = fleet.fleet_recent_projects(local, page_size=25)
+
+    assert [item["path"] for item in merged] == ["/home/g/newest", "/Users/g/older"]
+    assert merged[0]["origin_device"] == "mini"
+
+
+def test_fleet_feeds_without_token_stay_local(monkeypatch):
+    monkeypatch.setattr(fleet, "owner_access_token", lambda: None)
+
+    assert fleet.fleet_approval_requests([{"id": "l1"}]) == [{"id": "l1"}]
+    payload = {"notifications": [], "unread_count": 0}
+    assert fleet.fleet_notifications(payload, include_read=True, limit=5) == payload

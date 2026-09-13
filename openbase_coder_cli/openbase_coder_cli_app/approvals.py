@@ -7,6 +7,11 @@ from rest_framework import serializers, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+from openbase_coder_cli.services.fleet_aggregation import (
+    FLEET_SCOPE_PARAM,
+    FLEET_SCOPE_VALUE,
+    fleet_approval_requests,
+)
 from openbase_coder_cli.skill_approvals import (
     answer_skill_approval_request,
     consume_skill_approval_decision,
@@ -47,6 +52,10 @@ async def pending_approval_requests() -> list[dict]:
 def approval_requests(request):
     """List currently pending approval requests across threads and skills."""
     requests = async_to_sync(pending_approval_requests)()
+    if request.query_params.get(FLEET_SCOPE_PARAM) == FLEET_SCOPE_VALUE:
+        # Approvals are device-local; peer items carry origin_host and are
+        # answered by the client directly on the owning device.
+        requests = fleet_approval_requests(requests)
     return Response({"requests": requests}, status=status.HTTP_200_OK)
 
 

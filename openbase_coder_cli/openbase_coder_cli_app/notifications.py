@@ -10,6 +10,11 @@ from openbase_coder_cli.openbase_coder_cli_app import notification_store
 from openbase_coder_cli.openbase_coder_cli_app.notification_producers import (
     sync_notification_producers,
 )
+from openbase_coder_cli.services.fleet_aggregation import (
+    FLEET_SCOPE_PARAM,
+    FLEET_SCOPE_VALUE,
+    fleet_notifications,
+)
 
 
 class MarkReadSerializer(serializers.Serializer):
@@ -41,10 +46,17 @@ def notification_list(request):
         limit = int(request.query_params.get("limit") or "")
     except ValueError:
         limit = notification_store.DEFAULT_LIST_LIMIT
+    effective_limit = limit if limit > 0 else notification_store.DEFAULT_LIST_LIMIT
     payload = notification_store.list_notifications(
         include_read=include_read,
-        limit=limit if limit > 0 else notification_store.DEFAULT_LIST_LIMIT,
+        limit=effective_limit,
     )
+    if request.query_params.get(FLEET_SCOPE_PARAM) == FLEET_SCOPE_VALUE:
+        # Notification stores are device-local; peer items carry origin_host
+        # and are marked read by the client directly on the owning device.
+        payload = fleet_notifications(
+            payload, include_read=include_read, limit=effective_limit
+        )
     return Response(payload, status=status.HTTP_200_OK)
 
 
