@@ -17,6 +17,11 @@ from rest_framework.response import Response
 
 from openbase_coder_cli.openbase_coder_cli_app.common import _auth_debug_value
 from openbase_coder_cli.openbase_coder_cli_app.reports import _reports_summary
+from openbase_coder_cli.services.fleet_aggregation import (
+    FLEET_SCOPE_PARAM,
+    FLEET_SCOPE_VALUE,
+    fleet_recent_projects,
+)
 from openbase_coder_cli.thread_sync.projects import (
     get_recent_projects as _get_recent_projects,
 )
@@ -374,6 +379,14 @@ def recent_projects(request):
         page_size,
         len(page_projects),
     )
+    project_payloads = [_project_payload(project) for project in page_projects]
+    if request.query_params.get(FLEET_SCOPE_PARAM) == FLEET_SCOPE_VALUE and page == 1:
+        # Fleet picker: top-N recent projects across every device (first page
+        # per device only — thread creation targets the project's origin
+        # device, so deep cross-device paging isn't needed here).
+        project_payloads = fleet_recent_projects(
+            project_payloads, page_size=page_size
+        )
     return Response(
         {
             "count": len(projects),
@@ -381,7 +394,7 @@ def recent_projects(request):
             "page_size": page_size,
             "next": next_url,
             "previous": previous_url,
-            "projects": [_project_payload(project) for project in page_projects],
+            "projects": project_payloads,
         }
     )
 

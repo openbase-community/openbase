@@ -21,7 +21,11 @@ from openbase_coder_cli.services import tailscale_provider as tp
 
 PROVIDER_ENV_KEY = "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"
 ALLOWED_HOSTS_ENV_KEY = "OPENBASE_CODER_CLI_ALLOWED_HOSTS"
-NETMESH_ALLOWED_SUFFIX = ".net.obs.so"
+# Both netmesh MagicDNS domains: prod and the isolated staging control plane.
+# A staging-cloud install serves hosts under .net-staging.obs.so; listing only
+# the prod suffix made Django reject every phone request with 400 (field test
+# 2026-09-12), wedging pairing at "waiting for backend".
+NETMESH_ALLOWED_SUFFIXES = (".net.obs.so", ".net-staging.obs.so")
 
 # Pre-integration LaunchAgent label for tunneld; superseded by the managed
 # openbase-tunneld service, cleaned up on any provider switch.
@@ -123,8 +127,9 @@ def _apply_provider(name: str, *, push_cloud: bool) -> None:
         existing = env_file_values(path)
         hosts = existing.get(ALLOWED_HOSTS_ENV_KEY, "localhost,127.0.0.1,.ts.net")
         host_list = [h.strip() for h in hosts.split(",") if h.strip()]
-        if NETMESH_ALLOWED_SUFFIX not in host_list:
-            host_list.append(NETMESH_ALLOWED_SUFFIX)
+        for suffix in NETMESH_ALLOWED_SUFFIXES:
+            if suffix not in host_list:
+                host_list.append(suffix)
             values[ALLOWED_HOSTS_ENV_KEY] = ",".join(host_list)
         # Both netmesh transports MUST enroll under the same node name: peers
         # store this machine's MagicDNS name (phone backend host, syncthing

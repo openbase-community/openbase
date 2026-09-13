@@ -53,6 +53,9 @@ MAX_FILL_ROUNDS = 5
 
 LOCAL_SOURCE_KEY = "local"
 ORIGIN_DEVICE_KEY = "origin_device"
+# MagicDNS host of the owning peer; clients connect to it DIRECTLY (REST and
+# WebSockets) for peer-only items instead of proxying through this server.
+ORIGIN_HOST_KEY = "origin_host"
 
 
 class FleetPeer(NamedTuple):
@@ -220,6 +223,7 @@ def _fetch_peer_thread_page(
     items = [item for item in threads if isinstance(item, dict)]
     for item in items:
         item[ORIGIN_DEVICE_KEY] = peer.name
+        item[ORIGIN_HOST_KEY] = peer.key
     return SourcePage(
         items=items, next_cursor=_cursor_from_next_url(payload.get("next"))
     )
@@ -447,6 +451,7 @@ def fleet_report_items(local_items: list[dict[str, Any]]) -> list[dict[str, Any]
         peer_items = [item for item in items if isinstance(item, dict)]
         for item in peer_items:
             item[ORIGIN_DEVICE_KEY] = peer.name
+            item[ORIGIN_HOST_KEY] = peer.key
         return peer_items
 
     with ThreadPoolExecutor(max_workers=max(1, min(8, len(peers)))) as executor:
@@ -472,6 +477,130 @@ def fleet_report_items(local_items: list[dict[str, Any]]) -> list[dict[str, Any]
             merged.append(item)
     merged.sort(key=lambda item: item.get("updated_at") or 0, reverse=True)
     return merged
+
+
+# ---------------------------------------------------------------------------
+# Device-local feeds (approvals, notifications, projects)
+#
+# Unlike threads/reports these are never synced between devices and their ids
+# are device-local, so a fleet view is plain concat + origin stamp + sort —
+# no dedup. Clients answer/ack/create DIRECTLY against the stamped
+# origin_host; nothing is proxied.
+# ---------------------------------------------------------------------------
+
+
+def _iso_sort_key(value: Any) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.min.replace(tzinfo=UTC)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _fan_out_peer_payloads(
+    path: str,
+    *,
+    params: dict[str, str] | None = None,
+    list_key: str,
+) -> list[tuple[FleetPeer, dict[str, Any]]]:
+    """Fetch a payload from every reachable peer, ``list_key`` items stamped."""
+    token = owner_access_token()
+    peers = fleet_peers() if token else []
+    if not peers:
+        return []
+
+    def fetch(peer: FleetPeer) -> tuple[FleetPeer, dict[str, Any]] | None:
+        response = peer_get(peer, path, token or "", params=params)
+        if response is None or response.status_code != 200:
+            return None
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            _mark_peer_failed(peer, exc)
+            return None
+        if not isinstance(payload, dict) or not isinstance(
+            payload.get(list_key), list
+        ):
+            return None
+        for item in payload[list_key]:
+            if isinstance(item, dict):
+                item[ORIGIN_DEVICE_KEY] = peer.name
+                item[ORIGIN_HOST_KEY] = peer.key
+        return (peer, payload)
+
+    with ThreadPoolExecutor(max_workers=max(1, min(8, len(peers)))) as executor:
+        results = list(executor.map(fetch, peers))
+    return [entry for entry in results if entry is not None]
+
+
+def _peer_list_items(
+    payloads: list[tuple[FleetPeer, dict[str, Any]]], list_key: str
+) -> list[dict[str, Any]]:
+    return [
+        item
+        for _, payload in payloads
+        for item in payload[list_key]
+        if isinstance(item, dict)
+    ]
+
+
+def fleet_approval_requests(
+    local_requests: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    payloads = _fan_out_peer_payloads("/api/approval-requests/", list_key="requests")
+    merged = list(local_requests)
+    merged.extend(_peer_list_items(payloads, "requests"))
+    merged.sort(key=lambda item: _iso_sort_key(item.get("received_at")), reverse=True)
+    return merged
+
+
+def fleet_notifications(
+    local_payload: dict[str, Any],
+    *,
+    include_read: bool,
+    limit: int,
+) -> dict[str, Any]:
+    params = {"limit": str(limit)}
+    if not include_read:
+        params["include_read"] = "false"
+    payloads = _fan_out_peer_payloads(
+        "/api/notifications/", params=params, list_key="notifications"
+    )
+    notifications = list(local_payload.get("notifications") or [])
+    notifications.extend(_peer_list_items(payloads, "notifications"))
+    notifications.sort(
+        key=lambda item: _iso_sort_key(item.get("created_at")), reverse=True
+    )
+    unread_count = int(local_payload.get("unread_count") or 0) + sum(
+        int(payload.get("unread_count") or 0) for _, payload in payloads
+    )
+    return {"notifications": notifications[:limit], "unread_count": unread_count}
+
+
+def fleet_recent_projects(
+    local_projects: list[dict[str, Any]],
+    *,
+    page_size: int,
+) -> list[dict[str, Any]]:
+    """Top recent projects across the fleet (first page per device only).
+
+    The new-thread picker needs "what have I worked on lately, anywhere" —
+    top-N per device merged by recency covers that without cross-device
+    pagination. Creating the thread targets the project's origin device.
+    """
+    payloads = _fan_out_peer_payloads(
+        "/api/projects/recent/",
+        params={"page_size": str(page_size)},
+        list_key="projects",
+    )
+    merged = list(local_projects)
+    merged.extend(_peer_list_items(payloads, "projects"))
+    merged.sort(
+        key=lambda item: _iso_sort_key(item.get("last_worked_on")), reverse=True
+    )
+    return merged[:page_size]
 
 
 # ---------------------------------------------------------------------------
@@ -502,6 +631,7 @@ def fleet_thread_detail(thread_id: str) -> dict[str, Any] | None:
             continue
         if isinstance(payload, dict):
             payload[ORIGIN_DEVICE_KEY] = peer.name
+            payload[ORIGIN_HOST_KEY] = peer.key
             return payload
     return None
 

@@ -15,6 +15,7 @@ from typing import Any
 
 from asgiref.sync import async_to_sync
 
+from openbase_coder_cli import sharing_service
 from openbase_coder_cli.openbase_coder_cli_app import notification_store
 from openbase_coder_cli.openbase_coder_cli_app.notification_store import (
     KIND_APPROVAL,
@@ -50,6 +51,11 @@ def sync_notification_producers(*, force: bool = False) -> None:
             producer()
         except Exception:
             logger.exception("Notification producer %s failed", producer.__name__)
+
+    # Piggyback on the same pull-driven tick to keep cloud shares fresh when
+    # agents rewrite shared report files directly on disk. Runs on its own
+    # thread with its own debounce, so this never adds request latency.
+    sharing_service.sync_shared_reports_in_background()
 
 
 def notify_thread_turn_finished(

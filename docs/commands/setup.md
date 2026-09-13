@@ -212,7 +212,7 @@ openbase-coder setup \
 - Shared default instruction files under `~/.openbase/instructions` are generated regular files with source-template comments.
 - If `dispatcher-config.json` already exists, setup preserves it.
 - Existing skill symlinks in `~/.codex/skills` and `~/.claude/skills` are updated to the bundled or workspace source. Real skill directories or files are left unchanged.
-- Setup installs session profiles for both backends and preserves your normal terminal defaults. See [Conversation profiles](../configuration.md#conversation-profiles) for profile selection, migration, and the `openbase-coder profiles install` repair command.
+- Setup installs session profiles for both backends and preserves your normal terminal defaults. See [Conversation profiles](../configuration.md#conversation-profiles) for profile selection, migration, and the `openbase-coder profiles install` repair command. Pass `--include-default-hooks` to that repair command when ordinary Codex and Claude Code terminal sessions should also run Openbase's session-ID hook.
 - If `npm` or `uv` are missing in development mode, related steps are skipped with messages.
 - With the expert `tailscale` provider, setup fails with install/connect
   guidance when it cannot configure Serve. With Openbase VPN or Openbase

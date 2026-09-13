@@ -53,7 +53,7 @@ from openbase_coder_cli.services.restart import restart_target_names
 from openbase_coder_cli.services.selection import (
     service_supports_configured_backends,
 )
-from openbase_coder_cli.services.tailscale_serve import tailscale_serve_health
+from openbase_coder_cli.services.tailscale_serve import tailscale_serve_status
 from openbase_coder_cli.thread_sync.claude_thread_sync import (
     ClaudeConflictResolutionError,
     claude_thread_snapshot_conflicts_payload,
@@ -361,24 +361,6 @@ def _check_port(port: int) -> bool:
         return False
 
 
-def _check_tailscale() -> bool:
-    """Check if the active tailnet provider (official Tailscale or Openbase
-    netmesh) is connected."""
-    from openbase_coder_cli.services import tailscale_provider as tp
-
-    if tp.tool_path() is None:
-        return False
-    status = tp.status_json()
-    if status.get("error"):
-        return False
-    state = status.get("BackendState")
-    if state:
-        return state in ("Running", "Starting")
-    # Fall back to "has a self tailnet IP".
-    self_payload = status.get("Self") or {}
-    return bool(self_payload.get("TailscaleIPs"))
-
-
 def _check_web_backend() -> bool:
     """Check whether the configured web backend is reachable."""
     web_backend_url = getattr(settings, "WEB_BACKEND_URL", "").rstrip("/")
@@ -393,22 +375,20 @@ def _check_web_backend() -> bool:
 
 
 # The authenticated GET /api/status/ poll (the apps hit it roughly every 30s)
-# probes the tailnet through netmesh-ctl, which shells out to the companion's
-# status path. When that path is wedged the subprocess stalls for its full
-# timeout, so a naive inline probe makes every poll block ~5-15s (two netmesh-ctl
-# calls: the tailnet-connected check and Serve health) — tying up an ASGI worker
-# and, worse, stalling the phone's live connection. Serve the last computed
-# snapshot and refresh it in the background (stale-while-revalidate): only the
-# first poll after a cold start blocks, and a wedged netmesh-ctl can never again
-# stall the status endpoint.
+# reads the provider and Serve routes through its control tool. When that path is
+# wedged the subprocess stalls for its full timeout, so a naive inline probe can
+# tie up an ASGI worker and stall the phone's live connection. Serve the last
+# computed snapshot and refresh it in the background (stale-while-revalidate):
+# only the first poll after a cold start blocks. This deliberately does not dial
+# the API back through its own Serve route; each row reports one direct check.
 _TAILNET_SNAPSHOT_TTL_SECONDS = 15.0
 _tailnet_snapshot: dict[str, object] = {"value": None, "monotonic": 0.0}
 _tailnet_snapshot_lock = threading.Lock()
 
 
 def _compute_tailnet_snapshot():
-    """(tailscale_running, serve_health) — both netmesh-ctl probes in one shot."""
-    return _check_tailscale(), tailscale_serve_health()
+    """Read provider and route state without probing this API through itself."""
+    return tailscale_serve_status()
 
 
 def _cached_tailnet_snapshot():
@@ -503,12 +483,12 @@ def service_status(request):
             "last_exit_code": status_payload.get("last_exit_code"),
             "optional": not service.install_by_default,
         }
-    # One cached, non-blocking snapshot drives both tailnet probes below.
-    tailscale_running, serve_health = _cached_tailnet_snapshot()
+    # One cached, non-blocking snapshot drives the independent tailnet checks.
+    serve_status = _cached_tailnet_snapshot()
     for key, svc in services.items():
         if "running" not in svc:
             if key == "tailscale":
-                svc["running"] = tailscale_running
+                svc["running"] = serve_status.tailscale_running
             elif key == "web_backend":
                 svc["running"] = _check_web_backend()
             elif key == "codex_app_server":
@@ -521,23 +501,30 @@ def service_status(request):
             svc["running"],
             svc.get("port"),
         )
-    services["tailscale_serve"] = {
-        "name": f"{_tailnet_label} Serve",
+    services["openbase_api_serve_route"] = {
+        "name": "Openbase API Serve Route",
         "port": 18080,
-        "running": serve_health.healthy,
-        "host": serve_health.host,
-        "url": serve_health.openbase_url,
-        "openbase_configured": serve_health.openbase_configured,
-        "livekit_configured": serve_health.livekit_configured,
-        "openbase_reachable": serve_health.openbase_reachable,
-        "error": serve_health.error,
+        "running": serve_status.openbase_configured,
+        "host": serve_status.host,
+        "url": serve_status.openbase_url,
+        "optional": False,
+    }
+    services["livekit_serve_route"] = {
+        "name": "LiveKit Serve Route",
+        "port": 7880,
+        "running": serve_status.livekit_configured,
+        "host": serve_status.host,
         "optional": False,
     }
     logger.info(
-        "service_status probe service=tailscale_serve running=%s url=%s error=%s",
-        serve_health.healthy,
-        serve_health.openbase_url,
-        serve_health.error,
+        "service_status probe service=openbase_api_serve_route healthy=%s url=%s",
+        serve_status.openbase_configured,
+        serve_status.openbase_url,
+    )
+    logger.info(
+        "service_status probe service=livekit_serve_route healthy=%s host=%s",
+        serve_status.livekit_configured,
+        serve_status.host,
     )
     logger.info("service_status complete")
     return Response({"services": services})

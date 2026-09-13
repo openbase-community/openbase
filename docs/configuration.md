@@ -44,7 +44,7 @@ Claude Code uses `--settings` for a session-only profile rather than a named `--
 
 The Codex profile also registers the session-ID hook for native `codex -p openbase` commands. App-server configuration overrides do not guarantee execution of native file hooks; Openbase's Super Agents client supplies thread identity through developer instructions and shell environment independently. Claude runs its profile hooks through the native session settings layer.
 
-Existing installations can run `openbase-coder profiles install`, then restart Openbase services. Setup and this repair command migrate identifiable Openbase MCP and session-ID hook entries out of user configuration, leaving unrelated entries intact. Changed user files receive a `.before-openbase-profiles` backup. Existing profile settings are preserved on repeated setup; invalid explicitly selected profiles fail instead of silently falling back to terminal defaults.
+Existing installations can run `openbase-coder profiles install`, then restart Openbase services. Setup and this repair command migrate identifiable Openbase MCP and session-ID hook entries out of user configuration, leaving unrelated entries intact. Pass `--include-default-hooks` to explicitly reinstall the session-ID hook in the default Codex and Claude Code configurations as well as the Openbase profiles. Changed user files receive a `.before-openbase-profiles` backup. Existing profile settings are preserved on repeated setup; invalid explicitly selected profiles fail instead of silently falling back to terminal defaults.
 
 ## Dispatcher Config
 

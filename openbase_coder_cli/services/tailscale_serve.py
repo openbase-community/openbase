@@ -53,6 +53,20 @@ class TailscaleServeHealth:
         }
 
 
+@dataclass(frozen=True)
+class TailscaleServeStatus:
+    """Provider and Serve-route state without an end-to-end HTTP probe."""
+
+    tailscale_available: bool
+    tailscale_running: bool
+    host: str | None
+    openbase_url: str | None
+    openbase_configured: bool
+    livekit_configured: bool
+    tailnet_ip: str | None = None
+    error: str | None = None
+
+
 def openbase_serve_rules() -> list[dict[str, Any]]:
     """Canonical built-in Serve rules, kept separate from user publications."""
     return [
@@ -156,114 +170,132 @@ def reset_tailscale_serve() -> None:
     save_registry(ServiceRegistry(registry.services, str(result["hash"])))
 
 
-def tailscale_serve_health() -> TailscaleServeHealth:
+def tailscale_serve_status() -> TailscaleServeStatus:
+    """Read the provider and the two canonical Serve routes without self-dialing."""
     from openbase_coder_cli.services import tailscale_provider as tp
 
     if tp.is_netmesh_tsnet():
-        return _tunneld_serve_health()
+        return _tunneld_serve_status()
 
     if tp.tool_path() is None:
-        return TailscaleServeHealth(
+        return TailscaleServeStatus(
             tailscale_available=False,
             tailscale_running=False,
             host=None,
             openbase_url=None,
             openbase_configured=False,
             livekit_configured=False,
-            openbase_reachable=False,
             error=f"{tp.provider()} control tool was not found.",
         )
 
     status = tp.status_json()
     if status.get("error"):
-        return TailscaleServeHealth(
+        return TailscaleServeStatus(
             tailscale_available=True,
             tailscale_running=False,
             host=None,
             openbase_url=None,
             openbase_configured=False,
             livekit_configured=False,
-            openbase_reachable=False,
             error=str(status["error"]),
         )
 
     host = _self_dns_name(status)
+    backend_state = status.get("BackendState")
+    tailscale_running = (
+        backend_state in ("Running", "Starting")
+        if backend_state
+        else _self_tailnet_ipv4(status) is not None
+    )
     serve_status = tp.serve_status_json()
     if serve_status.get("error"):
-        return TailscaleServeHealth(
+        return TailscaleServeStatus(
             tailscale_available=True,
-            tailscale_running=True,
+            tailscale_running=tailscale_running,
             host=host,
             openbase_url=_openbase_url(host),
             openbase_configured=False,
             livekit_configured=False,
-            openbase_reachable=False,
+            tailnet_ip=_self_tailnet_ipv4(status),
             error=str(serve_status["error"]),
         )
 
     openbase_configured = _openbase_serve_configured(serve_status, host)
     livekit_configured = _livekit_serve_configured(serve_status)
     openbase_url = _openbase_url(host)
+    return TailscaleServeStatus(
+        tailscale_available=True,
+        tailscale_running=tailscale_running,
+        host=host,
+        openbase_url=openbase_url,
+        openbase_configured=openbase_configured,
+        livekit_configured=livekit_configured,
+        tailnet_ip=_self_tailnet_ipv4(status),
+    )
+
+
+def tailscale_serve_health() -> TailscaleServeHealth:
+    """Run the explicit CLI/doctor end-to-end check for the Serve routes."""
+    from openbase_coder_cli.services import tailscale_provider as tp
+
+    serve_status = tailscale_serve_status()
+    if not (
+        serve_status.tailscale_available
+        and serve_status.tailscale_running
+        and serve_status.openbase_configured
+        and serve_status.livekit_configured
+    ):
+        return _health_from_status(serve_status, openbase_reachable=False)
+
+    if tp.is_netmesh_tsnet():
+        return _tunneld_serve_health(serve_status)
+
     # Probe reachability via the tailnet IP rather than the MagicDNS name: the
     # backend can reach the IP with no DNS, so this doesn't depend on system
     # MagicDNS being configured (which differs between Tailscale and netmesh, and
     # isn't wired up on macOS for netmesh). But `tailscale serve --http` mounts are
     # name-based (virtual-hosted), so an IP request 404s — we present the MagicDNS
     # name in the Host header so the serve mount and Django ALLOWED_HOSTS match.
-    probe_ip = _self_tailnet_ipv4(status)
-    probe_url = _openbase_url(probe_ip) or openbase_url
+    probe_url = _openbase_url(serve_status.tailnet_ip) or serve_status.openbase_url
     host_header = (
-        f"{host}:{OPENBASE_CODER_TAILNET_PORT}" if (probe_ip and host) else None
+        f"{serve_status.host}:{OPENBASE_CODER_TAILNET_PORT}"
+        if (serve_status.tailnet_ip and serve_status.host)
+        else None
     )
     if tp.is_netmesh():
-        openbase_reachable, reachability_error = local_openbase_reachable(
-            host, serve_status
+        openbase_reachable, reachability_error = _openbase_reachable(
+            f"http://127.0.0.1:{OPENBASE_CODER_LOCAL_PORT}", host_header
         )
     else:
         openbase_reachable, reachability_error = _openbase_reachable(
             probe_url, host_header
         )
 
-    return TailscaleServeHealth(
-        tailscale_available=True,
-        tailscale_running=True,
-        host=host,
-        openbase_url=openbase_url,
-        openbase_configured=openbase_configured,
-        livekit_configured=livekit_configured,
+    return _health_from_status(
+        serve_status,
         openbase_reachable=openbase_reachable,
         error=reachability_error,
     )
 
 
-def _tunneld_serve_health() -> TailscaleServeHealth:
-    """Serve health for the embedded (netmesh-tsnet) transport.
-
-    The tunneld daemon forwards the routes natively, so "configured" means its
-    forwards are up, and reachability is verified by dialing our own node
-    through the daemon (the host network stack has no route into the tailnet).
-    Adapted from the tsnet prototype branch, keyed on the provider.
-    """
-    from openbase_coder_cli.services.tunneld import tunneld_health, tunneld_probe
+def _tunneld_serve_status() -> TailscaleServeStatus:
+    from openbase_coder_cli.services.tunneld import tunneld_health
 
     health = tunneld_health()
     if not health.get("reachable"):
-        return TailscaleServeHealth(
+        return TailscaleServeStatus(
             tailscale_available=False,
             tailscale_running=False,
             host=None,
             openbase_url=None,
             openbase_configured=False,
             livekit_configured=False,
-            openbase_reachable=False,
             error=str(health.get("error") or "openbase-tunneld is not reachable."),
         )
 
     running = health.get("backend_state") == "Running"
     host = str(health.get("self_dns_name") or "").strip().rstrip(".") or None
     forwards_up = bool(health.get("forwards_up"))
-    openbase_url = _openbase_url(host)
-
     error: str | None = None
     if not running:
         if health.get("auth_url"):
@@ -271,9 +303,33 @@ def _tunneld_serve_health() -> TailscaleServeHealth:
         else:
             error = f"tunneld backend state is {health.get('backend_state')}."
 
+    return TailscaleServeStatus(
+        tailscale_available=True,
+        tailscale_running=running,
+        host=host,
+        openbase_url=_openbase_url(host),
+        openbase_configured=forwards_up,
+        livekit_configured=forwards_up,
+        error=error,
+    )
+
+
+def _tunneld_serve_health(serve_status: TailscaleServeStatus) -> TailscaleServeHealth:
+    """Serve health for the embedded (netmesh-tsnet) transport.
+
+    The tunneld daemon forwards the routes natively, so "configured" means its
+    forwards are up, and reachability is verified by dialing our own node
+    through the daemon (the host network stack has no route into the tailnet).
+    Adapted from the tsnet prototype branch, keyed on the provider.
+    """
+    from openbase_coder_cli.services.tunneld import tunneld_probe
+
     openbase_reachable = False
-    if running and forwards_up and host:
-        probe = tunneld_probe(host, OPENBASE_CODER_TAILNET_PORT, OPENBASE_HEALTH_PATH)
+    error = serve_status.error
+    if serve_status.host:
+        probe = tunneld_probe(
+            serve_status.host, OPENBASE_CODER_TAILNET_PORT, OPENBASE_HEALTH_PATH
+        )
         if probe.get("ok"):
             openbase_reachable = True
         else:
@@ -283,15 +339,28 @@ def _tunneld_serve_health() -> TailscaleServeHealth:
                 f"http://127.0.0.1:{OPENBASE_CODER_LOCAL_PORT}"
             )
 
-    return TailscaleServeHealth(
-        tailscale_available=True,
-        tailscale_running=running,
-        host=host,
-        openbase_url=openbase_url,
-        openbase_configured=forwards_up,
-        livekit_configured=forwards_up,
+    return _health_from_status(
+        serve_status,
         openbase_reachable=openbase_reachable,
         error=error,
+    )
+
+
+def _health_from_status(
+    status: TailscaleServeStatus,
+    *,
+    openbase_reachable: bool,
+    error: str | None = None,
+) -> TailscaleServeHealth:
+    return TailscaleServeHealth(
+        tailscale_available=status.tailscale_available,
+        tailscale_running=status.tailscale_running,
+        host=status.host,
+        openbase_url=status.openbase_url,
+        openbase_configured=status.openbase_configured,
+        livekit_configured=status.livekit_configured,
+        openbase_reachable=openbase_reachable,
+        error=error if error is not None else status.error,
     )
 
 

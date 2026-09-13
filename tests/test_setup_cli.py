@@ -918,6 +918,41 @@ def test_ensure_env_file_adds_staging_backend_without_overriding_explicit_url(
     )
 
 
+def test_allowed_hosts_include_staging_netmesh_suffix() -> None:
+    """Both netmesh MagicDNS domains must be allowed: a staging-cloud install
+    serves hosts under .net-staging.obs.so, and listing only the prod suffix
+    made Django 400 every phone request (field test 2026-09-12)."""
+    from openbase_coder_cli.cli.setup import env as setup_env
+
+    hosts = setup_env._allowed_hosts_for("netmesh").split(",")
+    assert ".net.obs.so" in hosts
+    assert ".net-staging.obs.so" in hosts
+    assert ".net-staging.obs.so" not in setup_env._allowed_hosts_for("direct")
+
+
+def test_ensure_env_file_persists_process_env_override(
+    tmp_path, monkeypatch
+) -> None:
+    """An OPENBASE_CODER_CLI_WEB_BACKEND_URL exported around ./scripts/setup
+    (e.g. pointing a dev install at staging) must land in the generated .env;
+    it used to be silently dropped, leaving the install targeting prod."""
+    env_file = tmp_path / ".env"
+    monkeypatch.setenv(
+        "OPENBASE_CODER_CLI_WEB_BACKEND_URL", "https://app-staging.openbase.cloud"
+    )
+
+    setup_cli._ensure_env_file(
+        str(env_file),
+        assembly_ai_api_key="",
+        cartesia_api_key="",
+    )
+
+    assert (
+        setup_cli._env_file_values(env_file)["OPENBASE_CODER_CLI_WEB_BACKEND_URL"]
+        == "https://app-staging.openbase.cloud"
+    )
+
+
 def test_ensure_env_file_migrates_existing_env_to_shared_homes(tmp_path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(

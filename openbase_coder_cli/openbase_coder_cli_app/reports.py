@@ -13,6 +13,7 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+from openbase_coder_cli import sharing_service
 from openbase_coder_cli.openbase_coder_cli_app.item_tags import (
     report_tags_payload,
     set_report_tags,
@@ -366,6 +367,8 @@ def project_reports_file(request):
                 {"error": f"Unable to save report: {exc.strerror or exc}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+        sharing_service.maybe_republish_report(str(resolved), relative_path)
 
         return Response(
             {

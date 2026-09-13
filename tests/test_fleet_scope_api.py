@@ -126,3 +126,64 @@ def test_report_file_device_param_proxies_get_and_rejects_writes(monkeypatch):
     force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
     response = report_views.project_reports_file(request)
     assert response.status_code == 400
+
+
+def test_approvals_fleet_scope_merges(monkeypatch):
+    from openbase_coder_cli.openbase_coder_cli_app import approvals as approval_views
+
+    async def fake_pending():
+        return [{"id": "l1"}]
+
+    monkeypatch.setattr(approval_views, "pending_approval_requests", fake_pending)
+    monkeypatch.setattr(
+        approval_views,
+        "fleet_approval_requests",
+        lambda requests: [*requests, {"id": "p1", "origin_device": "mini"}],
+    )
+
+    plain = _get("/api/approval-requests/", approval_views.approval_requests)
+    fleet = _get(
+        "/api/approval-requests/?scope=fleet", approval_views.approval_requests
+    )
+
+    assert [r["id"] for r in plain.data["requests"]] == ["l1"]
+    assert [r["id"] for r in fleet.data["requests"]] == ["l1", "p1"]
+
+
+def test_notifications_fleet_scope_merges(monkeypatch):
+    from openbase_coder_cli.openbase_coder_cli_app import (
+        notifications as notification_views,
+    )
+
+    monkeypatch.setattr(
+        notification_views, "sync_notification_producers", lambda: None
+    )
+    monkeypatch.setattr(
+        notification_views.notification_store,
+        "list_notifications",
+        lambda include_read, limit: {
+            "notifications": [{"id": "thread:l"}],
+            "unread_count": 1,
+        },
+    )
+    captured = {}
+
+    def fake_fleet(payload, *, include_read, limit):
+        captured["include_read"] = include_read
+        captured["limit"] = limit
+        return {
+            "notifications": [*payload["notifications"], {"id": "report:p"}],
+            "unread_count": 3,
+        }
+
+    monkeypatch.setattr(notification_views, "fleet_notifications", fake_fleet)
+
+    plain = _get("/api/notifications/", notification_views.notification_list)
+    fleet = _get(
+        "/api/notifications/?scope=fleet&include_read=false&limit=7",
+        notification_views.notification_list,
+    )
+
+    assert plain.data["unread_count"] == 1
+    assert fleet.data["unread_count"] == 3
+    assert captured == {"include_read": False, "limit": 7}

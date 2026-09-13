@@ -41,6 +41,7 @@ openbase-coder [OPTIONS] COMMAND [ARGS]
 | [`loops`](loops.md) | Manage loops: scheduled or event-triggered agent prompts and commands (alias: `routines`) |
 | [`logout`](logout.md) | Remove saved auth tokens |
 | [`plugins`](plugins.md) | Install and manage Openbase plugins |
+| [`profiles`](profiles.md) | Install or repair Openbase conversation profiles and session-ID hooks |
 | [`bootstrap`](bootstrap.md) | Run plugin-provided bootstrap commands |
 | [`voice routing`](../voice-routing.md) | Route the active LiveKit voice room between the dispatcher and Super Agents |
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import secrets
 from pathlib import Path
 
@@ -52,7 +53,7 @@ from openbase_coder_cli.services.tailscale_provider import (
 
 TAILNET_PROVIDER_ENV_KEY = "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"
 ALLOWED_HOSTS_ENV_KEY = "OPENBASE_CODER_CLI_ALLOWED_HOSTS"
-NETMESH_ALLOWED_SUFFIX = ".net.obs.so"
+NETMESH_ALLOWED_SUFFIXES = (".net.obs.so", ".net-staging.obs.so")
 
 
 def _ensure_env_file(
@@ -78,7 +79,12 @@ def _ensure_env_file(
                 if key not in current_values
             }
         )
-        release_backend_url = default_web_backend_url()
+        # An explicit env override at setup time (e.g. pointing a dev install
+        # at staging) must be persisted, or services silently target the
+        # channel default afterwards.
+        release_backend_url = (
+            os.environ.get(WEB_BACKEND_ENV_KEY) or default_web_backend_url()
+        )
         if (
             release_backend_url != PRODUCTION_WEB_BACKEND_URL
             and WEB_BACKEND_ENV_KEY not in current_values
@@ -174,7 +180,11 @@ def _ensure_env_file(
         "OPENBASE_CODER_CLI_OAUTH_CLIENT_ID=openbase-coder-cli",
     ]
 
-    release_backend_url = default_web_backend_url()
+    # Persist an explicit env override (e.g. a staging-targeted dev install)
+    # alongside the channel default so bare CLI commands and services agree.
+    release_backend_url = (
+        os.environ.get(WEB_BACKEND_ENV_KEY) or default_web_backend_url()
+    )
     if release_backend_url != PRODUCTION_WEB_BACKEND_URL:
         lines.append(f"{WEB_BACKEND_ENV_KEY}={release_backend_url}")
 
@@ -207,8 +217,10 @@ def _allowed_hosts_for(provider: str) -> str:
     """Allowed-hosts list for a fresh .env, adding the netmesh MagicDNS suffix
     for either netmesh transport (served requests arrive with a netmesh Host)."""
     hosts = [h for h in _DEFAULT_ALLOWED_HOSTS.split(",") if h]
-    if provider in ("netmesh", "netmesh-tsnet") and NETMESH_ALLOWED_SUFFIX not in hosts:
-        hosts.append(NETMESH_ALLOWED_SUFFIX)
+    if provider in ("netmesh", "netmesh-tsnet"):
+        for suffix in NETMESH_ALLOWED_SUFFIXES:
+            if suffix not in hosts:
+                hosts.append(suffix)
     return ",".join(hosts)
 
 
@@ -226,8 +238,12 @@ def _tailnet_provider_updates(path: Path, provider: str) -> dict[str, str]:
             ALLOWED_HOSTS_ENV_KEY, _DEFAULT_ALLOWED_HOSTS
         )
         host_list = [h.strip() for h in hosts.split(",") if h.strip()]
-        if NETMESH_ALLOWED_SUFFIX not in host_list:
-            host_list.append(NETMESH_ALLOWED_SUFFIX)
+        changed = False
+        for suffix in NETMESH_ALLOWED_SUFFIXES:
+            if suffix not in host_list:
+                host_list.append(suffix)
+                changed = True
+        if changed:
             updates[ALLOWED_HOSTS_ENV_KEY] = ",".join(host_list)
     return updates
 
