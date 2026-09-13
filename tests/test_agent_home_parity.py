@@ -1,4 +1,4 @@
-"""Tests for codex/claude parity: shared-home MCP registration."""
+"""Tests for Codex and Claude Code session-profile parity."""
 
 from __future__ import annotations
 
@@ -17,12 +17,18 @@ def _stub_super_agents_command(monkeypatch, module) -> Path:
     return command
 
 
-def test_ensure_codex_config_adds_table_without_permission_values(
+def test_ensure_codex_config_adds_openbase_profile_without_changing_default(
     tmp_path, monkeypatch
 ) -> None:
-    config_path = tmp_path / "config.toml"
-    config_path.write_text('model_reasoning_effort = "high"\n', encoding="utf-8")
-    monkeypatch.setattr(codex_phase, "CODEX_CONFIG_PATH", config_path)
+    default_config_path = tmp_path / "config.toml"
+    profile_path = tmp_path / "openbase.config.toml"
+    cloud_profile_path = tmp_path / "openbase-cloud.config.toml"
+    default_config = 'model = "personal"\n'
+    profile_path.write_text('model_reasoning_effort = "high"\n', encoding="utf-8")
+    default_config_path.write_text(default_config, encoding="utf-8")
+    monkeypatch.setattr(codex_phase, "CODEX_CONFIG_PATH", default_config_path)
+    monkeypatch.setattr(codex_phase, "CODEX_PROFILE_PATH", profile_path)
+    monkeypatch.setattr(codex_phase, "CLOUD_CODEX_PROFILE_PATH", cloud_profile_path)
     monkeypatch.setattr(
         codex_phase, "ensure_codex_session_id_hook", lambda _path: False
     )
@@ -30,36 +36,47 @@ def test_ensure_codex_config_adds_table_without_permission_values(
 
     codex_phase._ensure_codex_config(str(tmp_path / "workspace"))
 
-    content = config_path.read_text(encoding="utf-8")
+    content = profile_path.read_text(encoding="utf-8")
     assert "[mcp_servers.super-agents]" in content
     assert json.dumps(str(command)) in content
     assert 'model_reasoning_effort = "high"' in content
-    # The Openbase permission posture is per-session env, never config values.
     assert 'SUPER_AGENTS_CODEX_APPROVAL_POLICY = "never"' in content
     assert 'SUPER_AGENTS_CODEX_SANDBOX_POLICY = "danger-full-access"' in content
-    assert "sandbox_mode" not in content
-    assert "approval_policy" not in content
+    assert 'sandbox_mode = "danger-full-access"' in content
+    assert 'approval_policy = "never"' in content
+    assert default_config_path.read_text(encoding="utf-8") == default_config
 
 
 def test_ensure_codex_config_is_idempotent(tmp_path, monkeypatch) -> None:
-    config_path = tmp_path / "config.toml"
-    monkeypatch.setattr(codex_phase, "CODEX_CONFIG_PATH", config_path)
+    default_config_path = tmp_path / "config.toml"
+    profile_path = tmp_path / "openbase.config.toml"
+    cloud_profile_path = tmp_path / "openbase-cloud.config.toml"
+    monkeypatch.setattr(codex_phase, "CODEX_CONFIG_PATH", default_config_path)
+    monkeypatch.setattr(codex_phase, "CODEX_PROFILE_PATH", profile_path)
+    monkeypatch.setattr(codex_phase, "CLOUD_CODEX_PROFILE_PATH", cloud_profile_path)
     monkeypatch.setattr(
         codex_phase, "ensure_codex_session_id_hook", lambda _path: False
     )
     _stub_super_agents_command(monkeypatch, codex_phase)
 
     codex_phase._ensure_codex_config("")
-    first = config_path.read_text(encoding="utf-8")
+    first = (
+        profile_path.read_text(encoding="utf-8"),
+        cloud_profile_path.read_text(encoding="utf-8"),
+    )
     codex_phase._ensure_codex_config("")
 
-    assert config_path.read_text(encoding="utf-8") == first
+    assert (
+        profile_path.read_text(encoding="utf-8"),
+        cloud_profile_path.read_text(encoding="utf-8"),
+    ) == first
 
 
 def test_ensure_claude_mcp_adds_entry_and_preserves_state(
     tmp_path, monkeypatch
 ) -> None:
     state_path = tmp_path / ".claude.json"
+    profile_path = tmp_path / "mcp.json"
     state_path.write_text(
         json.dumps(
             {
@@ -70,13 +87,15 @@ def test_ensure_claude_mcp_adds_entry_and_preserves_state(
         encoding="utf-8",
     )
     monkeypatch.setattr(claude_phase, "CLAUDE_STATE_PATH", state_path)
+    monkeypatch.setattr(claude_phase, "CLAUDE_PROFILE_MCP_PATH", profile_path)
     command = _stub_super_agents_command(monkeypatch, claude_phase)
 
     claude_phase._ensure_claude_mcp("")
 
-    payload = json.loads(state_path.read_text(encoding="utf-8"))
-    assert payload["hasCompletedOnboarding"] is True
-    assert payload["mcpServers"]["existing"] == {"command": "existing"}
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    assert state["hasCompletedOnboarding"] is True
+    assert state["mcpServers"] == {"existing": {"command": "existing"}}
+    payload = json.loads(profile_path.read_text(encoding="utf-8"))
     entry = payload["mcpServers"]["super-agents"]
     assert entry["type"] == "stdio"
     assert entry["command"] == str(command)
@@ -88,11 +107,13 @@ def test_ensure_claude_mcp_adds_entry_and_preserves_state(
 
 def test_ensure_claude_mcp_is_idempotent(tmp_path, monkeypatch) -> None:
     state_path = tmp_path / ".claude.json"
+    profile_path = tmp_path / "mcp.json"
     monkeypatch.setattr(claude_phase, "CLAUDE_STATE_PATH", state_path)
+    monkeypatch.setattr(claude_phase, "CLAUDE_PROFILE_MCP_PATH", profile_path)
     _stub_super_agents_command(monkeypatch, claude_phase)
 
     claude_phase._ensure_claude_mcp("")
-    first = state_path.read_text(encoding="utf-8")
+    first = profile_path.read_text(encoding="utf-8")
     claude_phase._ensure_claude_mcp("")
 
-    assert state_path.read_text(encoding="utf-8") == first
+    assert profile_path.read_text(encoding="utf-8") == first
