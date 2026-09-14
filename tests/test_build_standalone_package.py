@@ -99,3 +99,25 @@ def test_verify_source_super_agents_rejects_incompatible_mcp_runtime(
 
     assert len(commands) == 2
     assert "create_server(object())" in commands[1][-1]
+
+
+def test_stage_bin_includes_direct_tunnel(tmp_path: Path) -> None:
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    python_dir = package_dir / "python"
+    livekit = tmp_path / "livekit-server"
+    tunneld = tmp_path / "openbase-tunneld"
+    livekit.write_bytes(b"livekit")
+    tunneld.write_bytes(b"tunneld")
+
+    build_standalone_package.stage_bin(
+        package_dir,
+        python_dir,
+        livekit,
+        tunneld,
+    )
+
+    assert (package_dir / "bin" / "livekit-server").read_bytes() == b"livekit"
+    packaged_tunneld = package_dir / "bin" / "openbase-tunneld"
+    assert packaged_tunneld.read_bytes() == b"tunneld"
+    assert packaged_tunneld.stat().st_mode & 0o111

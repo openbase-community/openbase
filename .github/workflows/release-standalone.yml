@@ -226,6 +226,21 @@ jobs:
           fi
           echo "LIVEKIT_SERVER_BIN=${livekit_server}" >> "$GITHUB_ENV"
 
+      - name: Setup Go for Openbase Direct
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: cli/tunneld/go.mod
+          cache-dependency-path: cli/tunneld/go.sum
+
+      - name: Build Openbase Direct tunnel
+        working-directory: cli/tunneld
+        run: |
+          tunneld_bin="$RUNNER_TEMP/openbase-tunneld"
+          go build -trimpath -ldflags="-s -w" -o "$tunneld_bin" .
+          test -x "$tunneld_bin"
+          file "$tunneld_bin"
+          echo "OPENBASE_TUNNELD_BIN=${tunneld_bin}" >> "$GITHUB_ENV"
+
       - name: Build package directory
         env:
           # hatch-vcs only honors the unsuffixed form; the _FOR_<dist> variant
@@ -241,6 +256,7 @@ jobs:
             --repo-shas '${{ steps.shas.outputs.repo_shas }}' \
             --python "$python_bin" \
             --livekit-server-bin "$LIVEKIT_SERVER_BIN" \
+            --tunneld-bin "$OPENBASE_TUNNELD_BIN" \
             --package-dir "$package_dir" \
             --force
           echo "PACKAGE_DIR=${package_dir}" >> "$GITHUB_ENV"
@@ -269,6 +285,7 @@ jobs:
             --package-dir "$PACKAGE_DIR" \
             --identity "$identity"
           codesign --verify --deep --strict "$PACKAGE_DIR/bin/livekit-server"
+          codesign --verify --deep --strict "$PACKAGE_DIR/bin/openbase-tunneld"
           codesign --verify --deep --strict "$PACKAGE_DIR/python/bin/python$pyver"
 
       - name: Archive release assets

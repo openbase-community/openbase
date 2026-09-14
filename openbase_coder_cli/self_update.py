@@ -445,6 +445,7 @@ def _validate_release_dir(release_dir: Path) -> None:
         release_dir / PACKAGE_METADATA_FILENAME,
         launcher,
         release_dir / "bin" / "livekit-server",
+        release_dir / "bin" / "openbase-tunneld",
     )
     for path in required:
         if not path.is_file():
