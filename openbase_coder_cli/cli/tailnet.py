@@ -256,17 +256,14 @@ def _teardown_transport(previous: str) -> None:
             return
         # macOS: actually stop the VPN tunnel — leaving it running alongside
         # the next transport creates a second live node and a stale route.
-        from openbase_coder_cli.services.netmesh_companion import (
-            NetmeshCompanion,
-            NetmeshCompanionError,
-        )
+        from openbase_coder_cli.services.netmesh_companion import NetmeshCompanion
 
         try:
             companion = NetmeshCompanion(workspace_dir=_dev_workspace_dir_or_none())
             companion.ensure_running(build_if_missing=False)
             companion.disconnect()
             click.echo("Disconnected the Openbase VPN.")
-        except NetmeshCompanionError as exc:
+        except Exception as exc:  # noqa: BLE001 - best-effort teardown
             click.echo(f"Note: could not disconnect the Openbase VPN: {exc}")
 
 
