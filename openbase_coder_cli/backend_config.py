@@ -64,6 +64,19 @@ def execution_backend_for_configured_backend(backend: str) -> str:
     return backend
 
 
+def backend_identity_for_execution_backend(
+    configured_backend: str,
+    execution_backend: str,
+) -> str:
+    """Preserve a configured provider identity when it uses this engine."""
+    if (
+        execution_backend_for_configured_backend(configured_backend)
+        == execution_backend
+    ):
+        return configured_backend
+    return execution_backend
+
+
 def configured_execution_backend(
     environment_backend: Callable[[], str] | None = None,
 ) -> str:

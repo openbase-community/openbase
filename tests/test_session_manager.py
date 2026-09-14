@@ -22,6 +22,25 @@ def test_codex_client_retains_cloud_profile_identity(monkeypatch):
     assert client.backend == "openbase_cloud_codex"
 
 
+def test_claude_client_retains_cloud_profile_identity(monkeypatch, tmp_path):
+    from openbase_coder_cli.thread_sync import session_manager_base
+
+    monkeypatch.setenv("SUPER_AGENTS_CLAUDE_CODE_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        session_manager_base,
+        "configured_backend_from_environment",
+        lambda: "openbase_cloud",
+    )
+
+    client = session_manager_base._default_client_for_execution_backend(
+        manager=SimpleNamespace(),
+        ws_url="ws://example.invalid",
+        execution_backend="claude_code",
+    )
+
+    assert client.backend == "openbase_cloud"
+
+
 def _thread(
     thread_id: str,
     cwd: str,

@@ -31,6 +31,7 @@ from super_agents.backend_config import (
     execution_backend,
 )
 
+from openbase_coder_cli.backend_config import backend_identity_for_execution_backend
 from openbase_coder_cli.dispatcher_config import (
     DISPATCHER_MODEL_ROLE,
     SUPER_AGENTS_MODEL_ROLE,
@@ -278,7 +279,10 @@ def _default_client_for_execution_backend(
     if execution_backend == CLAUDE_CODE_BACKEND:
         from super_agents.claude_sdk import ClaudeAgentSdkClient
 
-        return ClaudeAgentSdkClient()
+        identity = backend_identity_for_execution_backend(
+            configured_backend_from_environment(), execution_backend
+        )
+        return ClaudeAgentSdkClient(backend_identity=identity)
     return _OpenbaseSuperAgentsClient(manager, ws_url)
 
 
