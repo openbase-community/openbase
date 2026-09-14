@@ -1,6 +1,6 @@
 # services status
 
-Show launchd install/running state for all managed services.
+Show install/running state for all managed services.
 
 ## Usage
 

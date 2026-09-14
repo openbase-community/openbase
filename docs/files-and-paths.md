@@ -14,6 +14,7 @@ state under `~/Library/Application Support/@openbase/coder-desktop`, and the
   `openbase-coder-workspace` (recorded in `~/.openbase/installation.json`)
 - Launchd plists (macOS): `~/Library/LaunchAgents`
 - systemd user units (Linux): `~/.config/systemd/user`
+- Task Scheduler XML definitions (Windows): `~/.openbase/tasks`
 
 ## Desktop App Storage
 
@@ -93,20 +94,26 @@ per session via profiles and role overrides. The shared Codex app-server has no 
 | `~/.openbase/launchd/<service>.sh` | `services install/regenerate` | Launch wrappers |
 | `~/Library/LaunchAgents/com.openbase.coder.<service>.plist` | `services install/regenerate` (macOS) | launchd job definitions |
 | `~/.config/systemd/user/com.openbase.coder.<service>.service` | `services install/regenerate` (Linux) | systemd user unit definitions |
-| `~/.openbase/logs/<service>.stdout.log` | launchd services | Service stdout logs |
-| `~/.openbase/logs/<service>.stderr.log` | launchd services | Service stderr logs |
+| `~/.openbase/tasks/com.openbase.coder.<service>.xml` | `services install/regenerate` (Windows) | Task Scheduler XML definitions |
+| `~/.openbase/logs/<service>.log` | managed services | Combined service stdout/stderr logs |
 
-Wrappers for `codex-app-server`, `livekit-agent`, and `django-cli` prefer binaries from
-`<workspace>/.venv/bin/`, then `<workspace>/cli/.venv/bin/`, then
-`<workspace>/agent/.venv/bin/`
-so launchd follows the configured workspace checkout.
+Wrappers/tasks run
+`python -m openbase_coder_cli.services.runners <service>`. Runners resolve only
+the binaries needed by that service, using the standalone runtime package and
+Openbase-managed binaries where available before service-specific fallbacks.
 
-Managed services:
+Default managed services:
 
 - `livekit-server`
 - `codex-app-server`
+- `sync-workers`
+- `openbase-routines`
 - `livekit-agent`
 - `django-cli`
+
+Optional or explicitly installed managed services include `code-sync`,
+`openbase-cloud-auth-rehydrate`, `openbase-cloud-heartbeat`, and
+`openbase-tunneld`.
 
 On macOS and Linux, `codex-app-server` listens at
 `$CODEX_HOME/app-server-control/app-server-control.sock`. Openbase pins its
