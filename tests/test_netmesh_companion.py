@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -76,6 +77,44 @@ def test_non_darwin_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(nc.sys, "platform", "linux")
     with pytest.raises(nc.NetmeshCompanionError, match="macOS-only"):
         nc.NetmeshCompanion()
+
+
+def test_control_cleanup_targets_only_its_private_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if sys.platform != "darwin":
+        pytest.skip("NetmeshCompanion is macOS-only")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        nc.subprocess,
+        "run",
+        lambda argv, **_kwargs: calls.append(argv),
+    )
+    companion = nc.NetmeshCompanion()
+
+    companion.close()
+
+    assert calls[0][:2] == ["/usr/bin/pkill", "-f"]
+    pattern = calls[0][2]
+    assert str(companion._port) in pattern
+    assert pattern != "OpenbaseNetmeshCompanion"
+
+
+def test_connect_wraps_listener_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    if sys.platform != "darwin":
+        pytest.skip("NetmeshCompanion is macOS-only")
+    companion = nc.NetmeshCompanion()
+
+    def unavailable(*_args, **_kwargs):
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(companion, "_request", unavailable)
+    with pytest.raises(nc.NetmeshCompanionError, match="listener became unavailable"):
+        companion.connect(
+            control_url="https://net.example.test",
+            auth_key="secret",
+            hostname="field-test",
+        )
 
 
 def test_missing_build_tools_lists_absent_and_skips_go_when_staged(
@@ -259,12 +298,15 @@ def test_netmesh_provisioning_replaces_stale_enabled_helper(
         def connect(self, **_kwargs):
             calls.append("connect")
 
+        def close(self):
+            calls.append("close")
+
     monkeypatch.setattr(t, "_dev_workspace_dir_or_none", lambda: "/workspace")
     monkeypatch.setattr(nc, "NetmeshCompanion", Companion)
 
     t._provision_netmesh_companion()
 
-    assert calls == ["init:/workspace", "ensure", "replace"]
+    assert calls == ["init:/workspace", "ensure", "replace", "close"]
 
 
 def test_revoke_old_node_matches_offline_by_captured_name(
