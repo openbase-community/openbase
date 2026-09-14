@@ -384,6 +384,7 @@ def _bring_up_transport(name: str) -> None:
         _apply_serve_best_effort()
         return
 
+    from openbase_coder_cli.services.cloud_registration import netmesh_enroll
     from openbase_coder_cli.services.definitions import TUNNELD_SERVICE
     from openbase_coder_cli.services.installation import InstallationConfig
     from openbase_coder_cli.services.launchd import (
@@ -391,9 +392,24 @@ def _bring_up_transport(name: str) -> None:
         launchctl_kickstart,
     )
     from openbase_coder_cli.services.tunneld import (
+        TSNET_CONTROL_URL_ENV_KEY,
         ensure_tunneld_running,
         install_tunneld_binary,
     )
+
+    # The staging and production Cloud APIs mint keys for separate headscale
+    # control planes. Persist the URL returned alongside this key before the
+    # managed service starts; otherwise a staging key gets submitted to the
+    # production default and is rejected as an invalid pre-auth key.
+    enrollment = netmesh_enroll()
+    auth_key = None
+    if enrollment:
+        control_url = enrollment.get("control_url")
+        auth_key = enrollment.get("auth_key")
+        if control_url:
+            upsert_env_file_values(
+                _env_path(), {TSNET_CONTROL_URL_ENV_KEY: str(control_url)}
+            )
 
     try:
         config = InstallationConfig.load()
@@ -411,7 +427,7 @@ def _bring_up_transport(name: str) -> None:
     last_error: RuntimeError | None = None
     for _attempt in range(2):
         try:
-            ensure_tunneld_running(managed_service=True)
+            ensure_tunneld_running(auth_key=auth_key, managed_service=True)
             click.echo("openbase-tunneld is running and joined the tailnet.")
             return
         except RuntimeError as exc:
