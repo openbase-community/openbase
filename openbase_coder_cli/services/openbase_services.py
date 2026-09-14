@@ -19,6 +19,7 @@ from openbase_coder_cli.services.restart import (
     restart_plan_payload,
     schedule_restart,
 )
+from openbase_coder_cli.services.selection import configured_coding_backend
 from openbase_coder_cli.services.voice_warning import (
     service_action_interrupts_voice,
     warn_before_voice_interruption,
@@ -28,7 +29,13 @@ SERVICE_ACTIONS = {"start", "stop", "restart"}
 
 
 def list_openbase_services_payload() -> dict:
-    return {"services": [_service_payload(service) for service in SERVICES]}
+    coding_backend = configured_coding_backend()
+    return {
+        "services": [
+            _service_payload(service, coding_backend=coding_backend)
+            for service in SERVICES
+        ]
+    }
 
 
 def run_openbase_service_action(service_name: str, action: str) -> dict:
@@ -91,7 +98,7 @@ def schedule_openbase_restart_payload(
     }
 
 
-def _service_payload(service: ServiceDefinition) -> dict:
+def _service_payload(service: ServiceDefinition, *, coding_backend: str) -> dict:
     status = launchctl_status(service)
     pid = status.get("pid")
     return {
@@ -103,5 +110,8 @@ def _service_payload(service: ServiceDefinition) -> dict:
         "running": bool(pid),
         "pid": pid,
         "last_exit_code": status.get("last_exit_code"),
-        "optional": not service.install_by_default,
+        "optional": (
+            not service.install_by_default
+            or not service.supports_backend(coding_backend)
+        ),
     }

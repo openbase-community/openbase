@@ -17,9 +17,10 @@ ONBOARDING_REMINDER = (
     "openbase-onboarding skill has never been read here. To remove this note "
     "from future messages, read and follow the openbase-onboarding skill now; "
     "its first step records that it was read even if the user skips the rest "
-    "of onboarding. Act on this in this reply: after addressing the user's "
-    "message, use the skill to ask them to choose between completing onboarding "
-    "now and skipping it. Do not ignore this note or postpone the question.]"
+    "of onboarding. The user's current request is primary: answer it fully and "
+    "correctly before acting on this note. Then use the skill to ask them to "
+    "choose between completing onboarding now and skipping it. Never replace "
+    "their requested answer with onboarding guidance.]"
 )
 
 
@@ -29,9 +30,12 @@ def onboarding_skill_read() -> bool:
 
 
 def append_onboarding_reminder(prompt: str) -> str:
-    """Append the onboarding reminder to a dispatcher-bound user message."""
+    """Add the onboarding reminder before a dispatcher-bound user message."""
     if onboarding_skill_read():
         return prompt
     if ONBOARDING_REMINDER in prompt:
         return prompt
-    return f"{prompt}\n\n{ONBOARDING_REMINDER}"
+    # Keep the user's actual request last. Small/fast dispatcher models can
+    # overweight a trailing system note and answer only the onboarding nudge;
+    # placing the secondary reminder first preserves the primary instruction.
+    return f"{ONBOARDING_REMINDER}\n\n{prompt}"
