@@ -150,12 +150,17 @@ def test_backend_model_settings_lists_openbase_cloud_claude_model(
     assert response.data["backend"] == "openbase_cloud"
     assert response.data["location"] == "cloud"
     assert [option["id"] for option in response.data["options"]] == [
+        "haiku",
         "sonnet",
         "opus",
         "fable",
-        "haiku",
         "gpt-5.5",
     ]
+    assert response.data["options"][0]["is_default"] is True
+    assert response.data["options"][0]["label"] == "Claude Haiku"
+    assert (
+        "Trial accounts run Claude Haiku" in response.data["options"][1]["description"]
+    )
     # Codex is read-only on Openbase Cloud: listed, but not selectable.
     availability = {
         option["id"]: option["available"] for option in response.data["options"]
@@ -654,9 +659,6 @@ def test_coding_backend_settings_verifies_claude_login_on_save(
     assert response.data["claude_auth"]["logged_in"] is False
     assert response.data["claude_auth"]["command"] == "claude login"
     assert response.data["claude_auth"]["verified"] is True
-
-
-
 
 def test_coding_backend_location_local_engages_both_engines(
     monkeypatch,

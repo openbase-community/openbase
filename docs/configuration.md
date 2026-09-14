@@ -59,6 +59,8 @@ Useful keys:
 | `super_agents_reasoning_effort` | Default Super Agents reasoning effort |
 | `backend_models` | Backend-specific default dispatcher and default Super Agents models for `codex`, `openbase_cloud`, and `claude_code` |
 
+Fresh Openbase Cloud installs write `haiku` for both roles, so the stored configuration, Settings UI, and model actually requested by the runtime agree. The Cloud proxy continues to route older trial configurations that explicitly contain `sonnet` to Haiku for compatibility.
+
 ## Agent/Voice Variables
 
 | Variable                   | Required | Purpose                      |
