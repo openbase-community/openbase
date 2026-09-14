@@ -1,9 +1,36 @@
+import plistlib
 import subprocess
 
 from openbase_coder_cli.runtime import RuntimePackage
 from openbase_coder_cli.services import launchd, process_utils
 from openbase_coder_cli.services.definitions import ServiceDefinition
 from openbase_coder_cli.services.installation import InstallationConfig
+
+
+def test_standalone_plist_associates_background_item_with_desktop_app(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(launchd, "LAUNCHD_WRAPPER_DIR", tmp_path / "launchd")
+    monkeypatch.setattr(launchd, "PLIST_DIR", tmp_path / "plists")
+    monkeypatch.setattr(launchd, "DEFAULT_LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr(launchd, "OPENBASE_BASE_DIR", tmp_path / "openbase")
+
+    service = ServiceDefinition(
+        name="sample",
+        description="Sample",
+        command_template="sample",
+        workdir_template="{runtime_workdir}",
+    )
+    config = InstallationConfig(
+        env_file=str(tmp_path / ".env"),
+        standalone=True,
+    )
+
+    plist = launchd.generate_plist(service, config)
+    payload = plistlib.loads(plist.read_bytes())
+
+    assert payload["AssociatedBundleIdentifiers"] == ["tech.openbase.coder.desktop"]
+    assert payload["ProgramArguments"] == [str(tmp_path / "launchd" / "sample.sh")]
 
 
 def test_generate_wrapper_includes_user_bin_paths(tmp_path, monkeypatch):
@@ -21,9 +48,7 @@ def test_generate_wrapper_includes_user_bin_paths(tmp_path, monkeypatch):
         env_file=str(tmp_path / ".env"),
     )
 
-    wrapper = launchd.generate_wrapper(
-        service, config, {"python": "/usr/bin/python3"}
-    )
+    wrapper = launchd.generate_wrapper(service, config, {"python": "/usr/bin/python3"})
 
     assert (
         'export PATH="$HOME/.openbase/bin:$HOME/.local/bin:$HOME/bin:'
@@ -46,9 +71,7 @@ def test_generate_wrapper_execs_runner_module_with_service_name(tmp_path, monkey
         env_file=str(tmp_path / ".env"),
     )
 
-    wrapper = launchd.generate_wrapper(
-        service, config, {"python": "/usr/bin/python3"}
-    )
+    wrapper = launchd.generate_wrapper(service, config, {"python": "/usr/bin/python3"})
 
     content = wrapper.read_text()
     assert (
@@ -182,9 +205,7 @@ def test_generate_wrapper_quotes_python_binary_path_with_spaces(tmp_path, monkey
         "OpenbaseCoderCLI/python/bin/python"
     )
 
-    wrapper = launchd.generate_wrapper(
-        service, config, {"python": bundled_python}
-    )
+    wrapper = launchd.generate_wrapper(service, config, {"python": bundled_python})
 
     content = wrapper.read_text()
     assert (
@@ -293,15 +314,15 @@ def test_launchctl_bootstrap_dispatches_to_windows(monkeypatch):
     from openbase_coder_cli.services import windows
 
     service = ServiceDefinition(
-        name="sample", description="Sample", command_template="sample",
+        name="sample",
+        description="Sample",
+        command_template="sample",
         workdir_template="{workspace}",
     )
     monkeypatch.setattr(launchd, "_is_macos", lambda: False)
     monkeypatch.setattr(launchd, "_is_windows", lambda: True)
     calls = []
-    monkeypatch.setattr(
-        windows, "windows_bootstrap", lambda svc: calls.append(svc)
-    )
+    monkeypatch.setattr(windows, "windows_bootstrap", lambda svc: calls.append(svc))
 
     launchd.launchctl_bootstrap(service)
 
@@ -312,7 +333,9 @@ def test_launchctl_status_dispatches_to_windows(monkeypatch):
     from openbase_coder_cli.services import windows
 
     service = ServiceDefinition(
-        name="sample", description="Sample", command_template="sample",
+        name="sample",
+        description="Sample",
+        command_template="sample",
         workdir_template="{workspace}",
     )
     monkeypatch.setattr(launchd, "_is_macos", lambda: False)
@@ -330,9 +353,7 @@ def test_ensure_launchd_paths_creates_systemd_dir_on_linux(tmp_path, monkeypatch
     monkeypatch.setattr(launchd, "_is_macos", lambda: False)
     monkeypatch.setattr(launchd.sys, "platform", "linux")
     systemd_dir = tmp_path / "systemd"
-    monkeypatch.setattr(
-        "openbase_coder_cli.paths.SYSTEMD_UNIT_DIR", systemd_dir
-    )
+    monkeypatch.setattr("openbase_coder_cli.paths.SYSTEMD_UNIT_DIR", systemd_dir)
 
     launchd._ensure_launchd_paths()
 

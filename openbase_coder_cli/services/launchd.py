@@ -386,6 +386,18 @@ def generate_plist(svc: ServiceDefinition, config: InstallationConfig) -> Path:
         runtime_workdir=_runtime_workdir(config),
     )
     log_dir = DEFAULT_LOG_DIR
+    associated_bundle = ""
+    if config.standalone:
+        # Legacy LaunchAgents installed by the signed desktop app otherwise
+        # appear as generic `bash` background items in notifications and
+        # System Settings. Associate them with the owning app so macOS can
+        # present a trustworthy Openbase identity.
+        associated_bundle = textwrap.dedent("""\
+            <key>AssociatedBundleIdentifiers</key>
+            <array>
+                <string>tech.openbase.coder.desktop</string>
+            </array>
+        """)
 
     plist = _plist_path(svc)
     plist.parent.mkdir(parents=True, exist_ok=True)
@@ -397,9 +409,9 @@ def generate_plist(svc: ServiceDefinition, config: InstallationConfig) -> Path:
         <dict>
             <key>Label</key>
             <string>{label}</string>
+{textwrap.indent(associated_bundle, "            ")}
             <key>ProgramArguments</key>
             <array>
-                <string>/bin/bash</string>
                 <string>{wrapper}</string>
             </array>
             <key>WorkingDirectory</key>
