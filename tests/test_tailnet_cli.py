@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import urllib.error
 from pathlib import Path
 
 import click
@@ -109,6 +110,30 @@ def test_set_provider_same_value_skips_teardown_but_cleans_legacy(
     assert result.exit_code == 0, result.output
     assert quiet_orchestration["teardown"] == []
     assert quiet_orchestration["legacy_bootout"] == 1
+
+
+def test_teardown_netmesh_ignores_unavailable_helper(monkeypatch, capsys):
+    from openbase_coder_cli.services import netmesh_companion, tailscale_provider
+
+    class UnavailableCompanion:
+        def ensure_running(self, *, build_if_missing):
+            assert build_if_missing is False
+
+        def disconnect(self):
+            raise urllib.error.HTTPError(
+                "http://127.0.0.1/disconnect", 502, "helper unavailable", {}, None
+            )
+
+    monkeypatch.setattr(tailscale_provider, "netmesh_uses_stock_tailscale", lambda: False)
+    monkeypatch.setattr(
+        netmesh_companion,
+        "NetmeshCompanion",
+        lambda **_kwargs: UnavailableCompanion(),
+    )
+
+    tailnet_cli._teardown_transport("netmesh")
+
+    assert "could not disconnect the Openbase VPN" in capsys.readouterr().out
 
 
 def test_sync_applies_cloud_value_without_pushing(
