@@ -23,38 +23,21 @@ Diagnostic logging is separate from this preference. Electron writes main-proces
 
 ## Install and First-Run Setup
 
-Download the Apple Silicon DMG from [Downloads](downloads.md) and open the
-app. On first run it shows a guided setup flow:
+Download the Apple Silicon DMG from [Downloads](downloads.md) and open the app. On first run it shows a guided setup flow:
 
 1. **Welcome** — overview of the steps ahead.
-2. **Check prerequisites and choose private networking** — verifies macOS and
-   the bundled CLI, then asks the important constraint: **Can this environment
-   support a VPN?** Choose **Openbase VPN** (recommended) when it can, or
-   **Openbase Direct** when a managed/restricted environment cannot install a
-   VPN. Electron onboarding never offers the separate Tailscale app.
-3. **Set up Openbase Cloud** — starts the normal managed path: Cloud-proxied
-   Claude Code plus managed speech-to-text and voice output, with free
-   Openbase Cloud monthly allowances and no third-party provider keys.
-4. **Voice configuration** — the normal Openbase Cloud path is already
-   configured; developer/provider-key audio remains available later in
-   settings.
-5. **Sign in** — a browser opens for Openbase Cloud OAuth; completion is
-   detected when `~/.openbase/auth.json` is written.
-6. **Get Openbase on iPhone** — scan a QR code to install the iOS app and
-   sign in with the same account. You can skip phone setup.
-7. **Pair devices privately** — connect the selected Openbase transport on the
-   Mac and phone, then register the Mac so the phone can find it. Openbase VPN
-   bundles Netmesh (Openbase-operated Headscale plus Tailscale-compatible
-   open-source clients), needs no Tailscale account, collects no VPN traffic or
-   usage analytics, and sends no VPN analytics
-   to Tailscale. Its full-device route enables every feature, including opening
-   agent-created websites in the phone browser. Publish those sites with
-   `openbase-coder service publish <name> <port>` so the agent gives you a
-   tailnet URL instead of unusable phone-side `localhost`. Openbase Direct is
-   the no-VPN alternative; it carries Openbase app traffic but cannot expose
-   those sites to other phone apps. You can skip pairing.
-8. **Verify** — health-checks the local API, shows CLI and app versions, and
-   confirms voice configuration and login.
+2. **Check this Mac and connect your phone** — verifies macOS and the bundled CLI, then offers **Openbase VPN (Recommended)** or **Openbase Direct**. The full Openbase experience requires a VPN. Openbase VPN is built on Tailscale networking technology and lets the phone securely reach the Mac, including agent-created sites. Openbase Direct is the fallback when an organization or device policy blocks VPNs; core Openbase traffic works, but agent-created sites cannot open in other phone apps. Electron onboarding never asks users to install the separate Tailscale app.
+3. **Choose coding setup** — asks whether the Mac already uses the Codex CLI or Claude Code CLI. Choose **No** for the normal Openbase Cloud path: managed Claude Code plus managed speech-to-text and voice output, with free monthly allowances and no third-party provider keys. Choose **Yes** to bring an existing Codex or Claude Code subscription.
+4. **Sign in to the coding agent when needed** — appears only after choosing Codex or Claude Code. The app starts the provider's secure browser sign-in and detects completion automatically. Openbase Cloud skips this stage.
+5. **Configure voice keys when needed** — appears only after choosing provider-key audio through developer or advanced setup. The normal Openbase Cloud path is already configured.
+6. **Sign in to Openbase** — always required to link the Mac and iPhone and provide managed voice audio. The app opens browser OAuth and detects completion automatically.
+7. **Get Openbase on iPhone** — scan a QR code to install the iOS app and sign in with the same account. You can skip phone setup.
+8. **Pair devices privately** — connect the selected Openbase transport on the Mac and phone, then register the Mac so the phone can find it. Openbase VPN bundles Netmesh (Openbase-operated Headscale plus Tailscale-compatible open-source clients), needs no Tailscale account, collects no VPN traffic or usage analytics, and sends no VPN analytics to Tailscale. Its full-device route enables every feature, including opening agent-created websites in the phone browser. Publish those sites with `openbase-coder service publish <name> <port>` so the agent gives you a tailnet URL instead of unusable phone-side `localhost`. Openbase Direct carries Openbase app traffic without a VPN but cannot expose those sites to other phone apps. You can skip pairing.
+9. **Verify** — confirms the local service, voice configuration, and Openbase login. Technical health URLs, versions, diagnostics, and CLI maintenance actions stay under **Advanced**.
+
+The normal Openbase Cloud flow has one authentication stage: Openbase sign-in. Bringing your own Codex or Claude Code adds exactly one provider sign-in, for two stages total. Setup does not add a separate voice-provider sign-in.
+
+Technical details are collapsed under **Advanced** throughout onboarding: raw commands and output, configuration paths, exit codes, manual fallbacks, and diagnostics. Advanced also identifies `~/.openbase` as the runtime working directory; when setup is failing, open Terminal, run `cd ~/.openbase`, then launch `codex` or `claude` there and ask it to diagnose the failure. When macOS System Settings approval is required, onboarding shows an inline screenshot guide before opening the relevant settings page.
 
 Prefer running these steps yourself from a terminal? Follow
 [Manual Setup](manual-installation.md); the app detects completion and skips

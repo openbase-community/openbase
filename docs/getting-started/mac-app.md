@@ -9,9 +9,7 @@ pairing. (Prefer working from source? See
 natively in beta — or use the [Docker image](../docker.md), the most
 battle-tested Windows option today.)
 
-Before you start, check the shared [prerequisites](index.md#prerequisites).
-You do not need to install Tailscale: onboarding asks whether the environment
-can support a VPN, then configures Openbase VPN or Openbase Direct.
+Before you start, check the shared [prerequisites](index.md#prerequisites). You do not need to install the Tailscale app: onboarding asks you to connect your phone with Openbase VPN or Openbase Direct. The full experience requires **Openbase VPN (Recommended)**, which is built on Tailscale networking technology; choose Direct only when an organization or device policy blocks VPNs. See the shared [first-run setup](../desktop-app.md#install-and-first-run-setup) for the connection tradeoff, conditional authentication stages, and Advanced diagnostics.
 
 ## Download and Open
 
