@@ -24,6 +24,9 @@ def _make_fake_package(
     livekit = root / "bin" / "livekit-server"
     livekit.write_text("#!/bin/sh\n", encoding="utf-8")
     livekit.chmod(0o755)
+    tunneld = root / "bin" / "openbase-tunneld"
+    tunneld.write_text("#!/bin/sh\n", encoding="utf-8")
+    tunneld.chmod(0o755)
     (root / "openbase-coder-package.json").write_text(
         json.dumps(
             {
