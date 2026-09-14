@@ -84,24 +84,31 @@ CLAUDE_CODE_MODEL_OPTIONS = (
 # they are pinned to the proxy's public model ids before reaching the SDK.
 OPENBASE_CLOUD_CLAUDE_MODEL_OPTIONS = (
     {
+        "id": "haiku",
+        "label": "Claude Haiku",
+        "description": "Default Claude model for Openbase Cloud.",
+        "is_default": True,
+    },
+    {
         "id": "sonnet",
         "label": "Claude Sonnet",
-        "description": "Claude Sonnet through the Openbase Cloud proxy (default).",
+        "description": (
+            "Claude Sonnet through Openbase Cloud. Trial accounts run Claude "
+            "Haiku instead."
+        ),
+        "is_default": False,
     },
     {
         "id": "opus",
         "label": "Claude Opus",
         "description": "Claude Opus through the Openbase Cloud proxy.",
+        "is_default": False,
     },
     {
         "id": "fable",
         "label": "Claude Fable 5",
         "description": "Claude Fable 5 through the Openbase Cloud proxy.",
-    },
-    {
-        "id": "haiku",
-        "label": "Claude Haiku",
-        "description": "Claude Haiku through the Openbase Cloud proxy.",
+        "is_default": False,
     },
 )
 BACKEND_MODEL_OPTIONS = {
@@ -407,7 +414,7 @@ def set_backend_model(
     return config_path
 
 
-def model_options_for_backend(backend: str | None = None) -> tuple[dict[str, str], ...]:
+def model_options_for_backend(backend: str | None = None) -> tuple[dict[str, Any], ...]:
     selected_backend = _normalize_backend(
         backend or _configured_backend_from_environment()
     )

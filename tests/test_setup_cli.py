@@ -457,8 +457,8 @@ def test_ensure_codex_home_dispatcher_config_creates_default(
                 "super_agents": "gpt-5.5",
             },
             "openbase_cloud": {
-                "dispatcher": "sonnet",
-                "super_agents": "sonnet",
+                "dispatcher": "haiku",
+                "super_agents": "haiku",
             },
             "openbase_cloud_codex": {
                 "dispatcher": "gpt-5.5",
