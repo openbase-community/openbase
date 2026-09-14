@@ -89,6 +89,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             OPENBASE_CODER_VERSION=${{ needs.preflight.outputs.version }}
+            VITE_AMPLITUDE_API_KEY=${{ secrets.OPENBASE_AMPLITUDE_API_KEY }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=docker-image-${{ matrix.slug }}
           cache-to: type=gha,mode=max,scope=docker-image-${{ matrix.slug }}

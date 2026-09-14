@@ -51,6 +51,20 @@ Differences in a browser:
 Useful shortcuts: **Cmd/Ctrl+B** toggles the sidebar; in a thread,
 **Enter** sends the prompt and **Shift+Enter** inserts a newline.
 
+## Product Analytics
+
+**Share anonymous product usage** in **Settings > Account** is off until you
+opt in. When enabled and the console build has an analytics key, the browser
+sends a restricted set of events to Amplitude: app sessions, voice-call
+start/connect/end timing and outcomes, approval decisions and response timing,
+and diff views. The console respects Do Not Track and Global Privacy Control.
+
+Events include a randomly generated persistent device ID, session and event
+IDs, timestamps, platform, surface, and environment. They do not include
+prompts, code, audio, file paths, repository content, email addresses, or
+usernames. Turning collection off removes the stored analytics device ID. The
+console does not use interaction autocapture or session replay.
+
 ## Tabs and Panes
 
 Normal navigation replaces the focused tab's view. Right-click a thread, report, or project and choose **Open in new tab**, **Open to the right**, or **Open below** to keep several views open. The tab strip appears when more than one tab is open. Each pane has its own tabs, and the layout can be resized, rearranged, maximized, or restored with the layout undo and redo controls.

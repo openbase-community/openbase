@@ -12,6 +12,7 @@
 # a node stage so the runtime image serves the console UI. Refs are ARGs —
 # note they track the remotes, not the local checkout this image builds from.
 FROM node:24-slim AS console-build
+ARG VITE_AMPLITUDE_API_KEY
 ARG CONSOLE_REPO=https://github.com/openbase-community/openbase-coder-console
 ARG CONSOLE_REF=develop
 ARG CODER_REACT_REPO=https://github.com/openbase-community/openbase-coder-react

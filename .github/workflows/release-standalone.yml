@@ -57,6 +57,7 @@ jobs:
       APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
       APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
       APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+      VITE_AMPLITUDE_API_KEY: ${{ secrets.OPENBASE_AMPLITUDE_API_KEY }}
     steps:
       - name: Checkout CLI
         uses: actions/checkout@v4
@@ -247,6 +248,9 @@ jobs:
           # is silently ignored and the build falls back to a dev version.
           SETUPTOOLS_SCM_PRETEND_VERSION: ${{ steps.release.outputs.version }}
         run: |
+          if [ -z "$VITE_AMPLITUDE_API_KEY" ]; then
+            echo "::warning::OPENBASE_AMPLITUDE_API_KEY is not set; product analytics will be disabled in this build."
+          fi
           package_dir="$RUNNER_TEMP/openbase-coder-package-${{ steps.release.outputs.target }}"
           python_bin="$(uv python find --managed-python "$(cat cli/.python-version)")"
           "$python_bin" cli/scripts/build_standalone_package.py \
