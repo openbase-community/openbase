@@ -321,10 +321,12 @@ def build_code_sync(env: dict[str, str], binaries: dict[str, str]) -> RunnerArgv
 def build_openbase_tunneld(
     env: dict[str, str], binaries: dict[str, str]
 ) -> RunnerArgvEnv:
+    from openbase_coder_cli.services.tunneld import TSNET_CONTROL_URL_ENV_KEY
+
     env = dict(env)
     # The daemon's flag defaults point at Tailscale's hosted control plane;
     # the embedded transport always rides Openbase's headscale.
-    env.setdefault("OPENBASE_TSNET_CONTROL_URL", "https://net.openbase.cloud")
+    env.setdefault(TSNET_CONTROL_URL_ENV_KEY, "https://net.openbase.cloud")
     return [binaries["tunneld"], "serve"], env
 
 
