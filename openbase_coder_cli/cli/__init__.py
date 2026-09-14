@@ -42,6 +42,7 @@ from .super_agent_name import super_agent_name
 from .sync import sync
 from .sync_workers import sync_workers
 from .tailnet import tailnet
+from .threads import threads
 from .user import exit_to_dispatch, user
 from .vibes import vibes
 
@@ -135,6 +136,7 @@ main.add_command(routines, name="loops")
 main.add_command(super_agent_name)
 main.add_command(sync)
 main.add_command(sync_workers)
+main.add_command(threads)
 main.add_command(defaults)
 main.add_command(exit_to_dispatch)
 main.add_command(vibes)

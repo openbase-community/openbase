@@ -43,11 +43,13 @@ def test_openbase_cloud_model_options_include_fable(monkeypatch) -> None:
     options = dispatcher_config.model_options_for_backend()
 
     assert [option["id"] for option in options] == [
+        "haiku",
         "sonnet",
         "opus",
         "fable",
-        "haiku",
     ]
+    assert options[0]["is_default"] is True
+    assert "Trial accounts run Claude Haiku" in options[1]["description"]
 
 
 def test_backend_model_uses_env_file_backend(tmp_path: Path, monkeypatch) -> None:
@@ -122,11 +124,11 @@ def test_set_service_tiers_persist_config(tmp_path: Path) -> None:
     assert payload["super_agents_service_tier"] == "fast"
 
 
-def test_default_setup_config_uses_sonnet_for_openbase_cloud(
+def test_default_setup_config_uses_haiku_for_openbase_cloud(
     tmp_path: Path, monkeypatch
 ) -> None:
     # A fresh install must NOT let openbase_cloud inherit the personal
-    # claude_code "opus" default: the Cloud proxy 403s opus for trial accounts.
+    # claude_code "opus" default or rely on a hidden Sonnet-to-Haiku reroute.
     from openbase_coder_cli.cli.setup.dispatcher import (
         CODEX_HOME_DEFAULT_DISPATCHER_CONFIG,
     )
@@ -137,8 +139,8 @@ def test_default_setup_config_uses_sonnet_for_openbase_cloud(
     )
 
     monkeypatch.setenv("OPENBASE_CODING_BACKEND", "openbase_cloud")
-    assert dispatcher_config.dispatcher_model(config_path) == "sonnet"
-    assert dispatcher_config.super_agents_model(config_path) == "sonnet"
+    assert dispatcher_config.dispatcher_model(config_path) == "haiku"
+    assert dispatcher_config.super_agents_model(config_path) == "haiku"
 
     # Personal claude_code login keeps opus (its own plan allows it).
     monkeypatch.setenv("OPENBASE_CODING_BACKEND", "claude_code")

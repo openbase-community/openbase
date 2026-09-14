@@ -10,13 +10,32 @@ $CODEX_HOME/app-server-control/app-server-control.sock
 After Openbase services are ready, launch the TUI normally:
 
 ```bash
-codex --yolo
+codex
 ```
 
-No wrapper, alias, or `--remote` flag is required. Codex probes the standard
-socket and, when the invocation is eligible, connects the TUI to the same
-app-server owner used by Super Agents. Openbase can then discover and steer the
-TUI's active turn.
+No wrapper or alias is required. Codex probes the standard socket and, when
+the invocation is eligible, connects the TUI to the same app-server owner used
+by Super Agents. Openbase can then discover and steer the TUI's active turn.
+
+Implicit discovery is best-effort: if the socket is not ready or the
+invocation is ineligible, the TUI silently keeps a private embedded owner, and
+that session is invisible to the dispatcher, Super Agents, and the mobile
+apps. When a session must run on the shared owner, request the endpoint
+explicitly:
+
+```bash
+codex --remote unix://
+```
+
+Explicit `--remote` fails loudly instead of falling back to an embedded
+owner. It also switches Codex to remote-endpoint semantics, with two
+consequences for `resume` and `fork`: permission-override flags (approval
+policy or sandbox) are rejected — the resumed thread keeps the permission
+settings it was started with on the server, so drop those flags; nothing is
+lost — and name-based resume requires the shared owner's active interactive
+thread listing to fit one server page. See
+[Troubleshooting](troubleshooting.md#codex-resume-fails-against-the-shared-app-server)
+for both.
 
 This requires Codex 0.151.0 or newer (or a capability-equivalent build with
 `app-server --listen unix://` and implicit TUI standard-socket discovery).

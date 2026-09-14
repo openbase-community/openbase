@@ -9,6 +9,8 @@ settings.
 Service tiers (Fast mode) apply to the Codex backend only; Claude Code turns
 always run at the standard tier. Reasoning levels apply to both backends.
 
+Fresh Openbase Cloud installs default both dispatcher and Super Agents to Claude Haiku, and the Settings UI marks it as the default. Existing Sonnet selections remain supported; trial accounts run those requests on Haiku and the UI explains that compatibility behavior.
+
 ## Usage
 
 ```bash

@@ -300,6 +300,28 @@ class NetmeshCompanion:
         self._secret = secrets.token_hex(32)
         self._app_path: Path | None = None
 
+    def _terminate_control_process(self) -> None:
+        """Terminate only the companion listener owned by this client.
+
+        Electron and the CLI can legitimately drive the same root helper from
+        separate loopback listeners. A machine-wide ``pkill`` lets an
+        onboarding status refresh kill the CLI listener between enrollment and
+        connect, so cleanup must be scoped to this client's private port.
+        """
+        pattern = (
+            "OpenbaseNetmeshCompanion.*--openbase-ipc-port[ =]"
+            f"{self._port}([ ]|$)"
+        )
+        subprocess.run(  # noqa: S603,S607 - fixed executable, scoped pattern
+            ["/usr/bin/pkill", "-f", pattern],
+            check=False,
+            capture_output=True,
+        )
+
+    def close(self) -> None:
+        """Release this client's headless control listener, not the VPN daemon."""
+        self._terminate_control_process()
+
     # -- location / build --------------------------------------------------
 
     def resolve_app(self, *, build_if_missing: bool = True) -> Path:
@@ -357,11 +379,7 @@ class NetmeshCompanion:
             pass  # not running yet — spawn it
 
         app = self.resolve_app(build_if_missing=build_if_missing)
-        subprocess.run(  # noqa: S603,S607 - clean up any stale control process
-            ["/usr/bin/pkill", "-f", "OpenbaseNetmeshCompanion"],
-            check=False,
-            capture_output=True,
-        )
+        self._terminate_control_process()
         subprocess.Popen(  # noqa: S603 - fixed argv
             [
                 "/usr/bin/open",
@@ -382,6 +400,7 @@ class NetmeshCompanion:
                 return self._parse_status(self._status_raw())
             except (urllib.error.URLError, OSError, TimeoutError) as exc:
                 last = str(exc)
+        self._terminate_control_process()
         raise NetmeshCompanionError(
             f"The netmesh companion did not become ready: {last or 'unknown error'}"
         )
@@ -448,14 +467,23 @@ class NetmeshCompanion:
     def connect(
         self, *, control_url: str, auth_key: str, hostname: str
     ) -> CompanionStatus:
-        return self._parse_status(
-            self._request(
-                "POST",
-                "/connect",
-                {"controlURL": control_url, "authKey": auth_key, "hostname": hostname},
-                timeout=45.0,
+        try:
+            return self._parse_status(
+                self._request(
+                    "POST",
+                    "/connect",
+                    {
+                        "controlURL": control_url,
+                        "authKey": auth_key,
+                        "hostname": hostname,
+                    },
+                    timeout=45.0,
+                )
             )
-        )
+        except (urllib.error.URLError, OSError, TimeoutError) as exc:
+            raise NetmeshCompanionError(
+                f"the companion control listener became unavailable: {exc}"
+            ) from exc
 
     def status(self) -> CompanionStatus:
         return self._parse_status(self._status_raw())

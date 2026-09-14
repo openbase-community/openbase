@@ -250,11 +250,7 @@ The Settings page groups configuration into sections:
   Cloud (same setting as `openbase-coder backend use ...`). The app warns
   before changing it, then restarts Openbase services and recreates the
   dispatcher automatically.
-- **Backend Model**, **Service Tier**, **Reasoning** — model and reasoning
-  defaults for agents (same as `openbase-coder defaults ...`). Service tiers
-  (Fast mode) apply to the Codex backend only; on Claude Code the tier
-  cannot be set and turns always run at the standard tier. Reasoning levels
-  apply to both backends and are the Claude speed/quality knob.
+- **Backend Model**, **Service Tier**, **Reasoning** — model and reasoning defaults for agents (same as `openbase-coder defaults ...`). Service tiers (Fast mode) apply to the Codex backend only; on Claude Code the tier cannot be set and turns always run at the standard tier. Reasoning levels apply to both backends and are the Claude speed/quality knob. Fresh Openbase Cloud installs show Claude Haiku as the default for both dispatcher and Super Agents. Existing Sonnet selections remain visible; trial accounts explain that their requests run on Haiku.
 - **LiveKit Companion Screen Sharing** (desktop app only) — see below.
 - **Dispatcher Voice** — TTS/STT provider and voice selection, voice API
   keys, local model downloads, and a "Recreate LiveKit thread" action.

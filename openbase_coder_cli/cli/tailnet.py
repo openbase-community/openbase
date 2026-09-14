@@ -524,6 +524,7 @@ def _provision_netmesh_companion() -> None:
                 click.echo("Updated the Openbase VPN helper.")
         except NetmeshCompanionError as exc:
             warn(f"could not update the Openbase VPN helper: {exc}")
+            companion.close()
             return
         # Re-apply (e.g. re-running set-provider for serve rules): the tunnel
         # is already up — don't mint a fresh single-use key or churn the node.
@@ -531,6 +532,7 @@ def _provision_netmesh_companion() -> None:
             f"Openbase VPN already connected: {status.dns_name or 'netmesh'} "
             f"({status.self_ip or '?'})."
         )
+        companion.close()
         return
 
     if not status.helper_enabled:
@@ -538,6 +540,7 @@ def _provision_netmesh_companion() -> None:
             companion.register()
         except NetmeshCompanionError as exc:
             warn(f"could not register the Openbase VPN background service: {exc}")
+            companion.close()
             return
         companion.open_approval_settings()
         click.echo(
@@ -550,16 +553,19 @@ def _provision_netmesh_companion() -> None:
                 "timed out waiting for approval — re-run "
                 "'openbase-coder tailnet set-provider netmesh' once approved."
             )
+            companion.close()
             return
 
     enrollment = netmesh_enroll()
     if not enrollment:
         warn("could not mint a netmesh key — sign in to Openbase first.")
+        companion.close()
         return
     control_url = enrollment.get("control_url") or enrollment.get("controlURL")
     auth_key = enrollment.get("auth_key") or enrollment.get("authKey")
     if not control_url or not auth_key:
         warn("netmesh enrollment did not return a control URL + key.")
+        companion.close()
         return
 
     try:
@@ -570,6 +576,7 @@ def _provision_netmesh_companion() -> None:
         )
     except NetmeshCompanionError as exc:
         warn(f"the Openbase VPN failed to connect: {exc}")
+        companion.close()
         return
 
     if connected.running:
@@ -579,6 +586,7 @@ def _provision_netmesh_companion() -> None:
         )
     else:
         warn(f"Openbase VPN did not report Running (state={connected.backend_state}).")
+    companion.close()
 
 
 def _apply_serve_best_effort() -> None:
