@@ -156,3 +156,37 @@ OPENBASE_AUTH_DIAGNOSTICS=1
 ```
 
 Upload payloads redact secret-like values and email addresses before they are written to the local runtime log directory. Do not leave verbose console diagnostics enabled for routine development sessions unless you need the extra local output.
+
+## Codex Resume Fails Against the Shared App-Server
+
+Three distinct failures can block `codex --remote unix:// resume <name>`
+(resuming a session on the Openbase-managed Codex app-server by name):
+
+**"Cannot verify a unique session label across server pages; matching
+session UUID: …"** — Codex resolves a session name by paging the server's
+active interactive thread list 100 at a time, and it refuses every name
+match — even a unique one — when the listing spans more than one page.
+Openbase names each dispatched agent thread, so active installs accumulate
+thousands of threads and trip this permanently. Archive the stale ones:
+
+```bash
+openbase-coder threads archive-stale --dry-run   # inspect first
+openbase-coder threads archive-stale             # archive threads idle > 10 days
+```
+
+Archiving is reversible: archived threads stay resumable by UUID and can be
+unarchived. The command reports `resumeByNameUsable`; the active interactive
+set must fit one page (100 threads or fewer). As a one-off workaround,
+resume by the UUID printed in the error message.
+
+**"Permission overrides are not supported when resuming a remote task."** —
+the invocation carries a permission-override flag (approval policy or
+sandbox). A thread resumed over an explicit `--remote` endpoint keeps the
+permission settings it was started with on the server, so drop the override
+flags from the `resume` or `fork` invocation; nothing is lost.
+
+**"No saved session found with ID `<word>`"** for a name that exists — the
+session name is a single positional argument with exact matching
+(`codex resume <name> [prompt]`). A two-word invocation passes only the
+first word as the name and the rest as the opening prompt; quote the name
+or use its exact hyphenated form.
