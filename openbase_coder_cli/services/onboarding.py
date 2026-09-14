@@ -67,6 +67,34 @@ def compute_cli_configured() -> bool:
     return all(cli_configured_checks().values())
 
 
+def runtime_readiness() -> dict[str, bool]:
+    """Live process facts required before a phone can start a voice session.
+
+    Pairing needs more than a registered private address: the local API and
+    both LiveKit services must actually be running.  Keep this probe beside
+    the service definitions so every UI consumes the same readiness truth.
+    """
+    statuses = {
+        service.name: launchctl_status(service)
+        for service in configured_default_services()
+        if service.name in {"django-cli", "livekit-server", "livekit-agent"}
+    }
+
+    def running(name: str) -> bool:
+        status = statuses.get(name, {})
+        return status.get("installed") is True and bool(status.get("pid"))
+
+    backend_ready = running("django-cli")
+    livekit_server_ready = running("livekit-server")
+    livekit_agent_ready = running("livekit-agent")
+    return {
+        "backend_ready": backend_ready,
+        "livekit_server_ready": livekit_server_ready,
+        "livekit_agent_ready": livekit_agent_ready,
+        "voice_ready": livekit_server_ready and livekit_agent_ready,
+    }
+
+
 def read_onboarding_cache() -> dict[str, Any]:
     """Last-known cloud registration/report results written by this CLI."""
     try:
@@ -194,6 +222,7 @@ def onboarding_status_payload() -> dict[str, Any]:
         "authenticated": authenticated,
         "auth_status": auth_status,
         "backend_auth": backend_auth_status(authenticated=authenticated),
+        "runtime": runtime_readiness(),
         "audio": audio_status(),
         "tailnet": tailnet_experience_payload(),
         "tailscale_self": tailscale_self_identity(),

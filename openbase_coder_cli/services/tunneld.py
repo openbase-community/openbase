@@ -28,6 +28,7 @@ from openbase_coder_cli.paths import OPENBASE_BIN_DIR
 from openbase_coder_cli.services.installation import InstallationConfig
 
 TUNNELD_LOCAL_API = os.environ.get("OPENBASE_TUNNELD_URL", "http://127.0.0.1:7998")
+TSNET_CONTROL_URL_ENV_KEY = "OPENBASE_TSNET_CONTROL_URL"
 TUNNELD_TIMEOUT_SECONDS = 5
 TUNNELD_PROBE_TIMEOUT_SECONDS = 8
 TUNNELD_START_WAIT_SECONDS = 15

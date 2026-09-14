@@ -156,12 +156,24 @@ def test_netmesh_routes_through_stock_tailscale_off_macos(monkeypatch):
     assert tp.tool_path() == "/n/netmesh-ctl"
 
 
-def test_bring_up_embedded_transport_installs_binary_before_service(monkeypatch):
+def test_bring_up_embedded_transport_installs_binary_before_service(
+    monkeypatch, tmp_path
+):
     from openbase_coder_cli.services import launchd, tunneld
     from openbase_coder_cli.services.installation import InstallationConfig
 
     config = InstallationConfig(workspace_path="workspace")
+    env_path = tmp_path / ".env"
     calls = []
+    monkeypatch.setattr(tailnet_cli, "_env_path", lambda: env_path)
+    monkeypatch.setattr(
+        cloud_registration,
+        "netmesh_enroll",
+        lambda: {
+            "control_url": "https://net-staging.example.test",
+            "auth_key": "staging-single-use-key",
+        },
+    )
     monkeypatch.setattr(InstallationConfig, "load", lambda: config)
     monkeypatch.setattr(
         tunneld,
@@ -190,14 +202,21 @@ def test_bring_up_embedded_transport_installs_binary_before_service(monkeypatch)
         ("binary", config),
         ("service", config, "openbase-tunneld"),
         ("kickstart", "openbase-tunneld"),
-        ("running", {"managed_service": True}),
+        (
+            "running",
+            {"auth_key": "staging-single-use-key", "managed_service": True},
+        ),
     ]
+    assert env_file_values(env_path)["OPENBASE_TSNET_CONTROL_URL"] == (
+        "https://net-staging.example.test"
+    )
 
 
 def test_bring_up_embedded_transport_fails_when_binary_install_fails(monkeypatch):
     from openbase_coder_cli.services import tunneld
     from openbase_coder_cli.services.installation import InstallationConfig
 
+    monkeypatch.setattr(cloud_registration, "netmesh_enroll", lambda: None)
     monkeypatch.setattr(
         InstallationConfig,
         "load",
