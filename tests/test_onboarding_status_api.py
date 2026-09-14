@@ -110,6 +110,16 @@ def test_onboarding_status_payload_composes_checks(monkeypatch, tmp_path) -> Non
         lambda *, authenticated: {"backend": "codex", "ready": authenticated},
     )
     monkeypatch.setattr(
+        onboarding,
+        "runtime_readiness",
+        lambda: {
+            "backend_ready": True,
+            "livekit_server_ready": True,
+            "livekit_agent_ready": True,
+            "voice_ready": True,
+        },
+    )
+    monkeypatch.setattr(
         onboarding, "selected_tts_provider_id", lambda: "openbase_cloud"
     )
 
@@ -128,6 +138,12 @@ def test_onboarding_status_payload_composes_checks(monkeypatch, tmp_path) -> Non
         "detail": "",
     }
     assert payload["backend_auth"] == {"backend": "codex", "ready": True}
+    assert payload["runtime"] == {
+        "backend_ready": True,
+        "livekit_server_ready": True,
+        "livekit_agent_ready": True,
+        "voice_ready": True,
+    }
     assert payload["tailscale_self"]["dns_name"] == "mac.tailnet.ts.net"
     assert payload["tailnet"]["provider"] == "netmesh"
     assert payload["tailscale_serve"] == {"healthy": True}
@@ -277,6 +293,33 @@ def test_cli_configured_false_when_service_not_installed(monkeypatch, tmp_path) 
     assert checks["installation_config"] is True
     assert checks["env_file"] is True
     assert checks["services_installed"] is False
+
+
+def test_runtime_readiness_requires_backend_and_both_livekit_processes(
+    monkeypatch,
+) -> None:
+    services = [
+        SimpleNamespace(name="django-cli"),
+        SimpleNamespace(name="livekit-server"),
+        SimpleNamespace(name="livekit-agent"),
+        SimpleNamespace(name="sync-workers"),
+    ]
+    monkeypatch.setattr(onboarding, "configured_default_services", lambda: services)
+    statuses = {
+        "django-cli": {"installed": True, "pid": "101"},
+        "livekit-server": {"installed": True, "pid": "102"},
+        "livekit-agent": {"installed": True, "pid": None},
+    }
+    monkeypatch.setattr(
+        onboarding, "launchctl_status", lambda service: statuses[service.name]
+    )
+
+    assert onboarding.runtime_readiness() == {
+        "backend_ready": True,
+        "livekit_server_ready": True,
+        "livekit_agent_ready": False,
+        "voice_ready": False,
+    }
 
 
 def test_backend_auth_claude_code_uses_claude_auth_status(monkeypatch) -> None:
