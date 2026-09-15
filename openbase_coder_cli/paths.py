@@ -82,6 +82,19 @@ DESKTOP_CONTROL_JSON_PATH = OPENBASE_BASE_DIR / "desktop-control.json"
 OPENBASE_HOOKS_DIR = OPENBASE_BASE_DIR / "hooks"
 INJECT_SESSION_ID_HOOK_PATH = OPENBASE_HOOKS_DIR / "inject-session-id.sh"
 
+# Per-session Claude Code inbox-socket registry. The session-ID hook records
+# each terminal-started Claude session's messaging socket + token here so
+# Openbase (and super-agents, standalone) can steer a live turn it did not
+# launch. One JSON file per session, named by the Claude session id. It lives
+# inside the Claude home — co-located with the sessions it describes and in a
+# backend-generic location super-agents resolves without Openbase-specific
+# wiring — not under ~/.openbase. Overridable with CLAUDE_CONFIG_DIR, matching
+# how the shared Claude home is resolved everywhere else.
+CLAUDE_HOME_DIR = Path(
+    os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")
+).expanduser()
+CLAUDE_INBOX_REGISTRY_DIR = CLAUDE_HOME_DIR / "inbox-registry"
+
 PLUGIN_BASE_DIR = OPENBASE_BASE_DIR / "plugins"
 # Stable site dir for plugin Python packages in standalone installs; lives
 # outside the versioned runtime package so upgrades don't drop plugins.

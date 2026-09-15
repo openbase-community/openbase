@@ -2562,3 +2562,99 @@ def test_model_for_thread_keeps_role_default_on_matching_backend() -> None:
 
     thread = ThreadInfo(session_id="s1", directory="/tmp/p", model="gpt-5")
     assert manager._model_for_thread(thread) == "gpt-5.5"
+
+
+def test_steer_turn_delivers_to_terminal_inbox_and_fires_hint(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A terminal-started Claude session (no store active turn) is steerable
+    through its inbox socket, and doing so fires the crossSessionInbound hint."""
+    import json as _json
+
+    from openbase_coder_cli.openbase_coder_cli_app import notification_store
+    from openbase_coder_cli.thread_sync.inbox_steer_hint import hint_entity_id
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    # Isolate the notification store and the inbox registry.
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path / "data"))
+    registry = tmp_path / "registry"
+    registry.mkdir()
+    monkeypatch.setenv("CLAUDE_INBOX_REGISTRY_DIR", str(registry))
+
+    # A live inbox record. The liveness probe only checks the socket path
+    # exists; the fake client short-circuits the actual delivery, so a plain
+    # placeholder file stands in for the bound socket (and dodges the AF_UNIX
+    # path-length limit under the deep worktree tmp dir).
+    sock_path = tmp_path / "s.sock"
+    sock_path.write_bytes(b"")
+    (registry / "claude-term-1.json").write_text(
+        _json.dumps(
+            {"sessionId": "claude-term-1", "socket": str(sock_path), "token": "t"}
+        )
+    )
+
+    # Idle thread (no active turn) that maps to that backend session id.
+    idle = _thread("thr-1", str(project_dir), status="idle", turns=[])
+    idle["backendSessionId"] = "claude-term-1"
+    thread_payload = {"thread": idle}
+    client = FakeSuperAgentsClient(
+        {
+            "read_thread": [thread_payload] * 6,
+            "steer_by_label": [
+                {"delivery": "inbox", "steered": True, "nativeSteer": False}
+            ],
+        }
+    )
+    manager = _manager(client)
+
+    result = asyncio.run(manager.steer_turn("thr-1", "use the other approach"))
+
+    # The steer reached steer_by_label despite there being no store active turn.
+    assert result["delivery"] == "inbox"
+    assert (
+        "steer_by_label",
+        {
+            "thread_id": "thr-1",
+            "cwd": str(project_dir),
+            "turn_id": None,
+            "prefer": "latest_active",
+            "prompt": "use the other approach",
+            "turn_input": {"cwd": str(project_dir)},
+        },
+    ) in client.calls
+
+    # The crossSessionInbound hint was surfaced once for this thread.
+    listing = notification_store.list_notifications()
+    hint = next(
+        (
+            n
+            for n in listing["notifications"]
+            if n["id"] == f"thread:{hint_entity_id('thr-1')}"
+        ),
+        None,
+    )
+    assert hint is not None
+    assert "crossSessionInbound" in hint["body"]
+
+
+def test_steer_turn_without_active_turn_or_inbox_still_raises(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """No active turn and no inbox record: the ordinary 'nothing to steer'
+    guard still applies (behavior unchanged for non-terminal threads)."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    monkeypatch.setenv("CLAUDE_INBOX_REGISTRY_DIR", str(tmp_path / "empty-registry"))
+
+    idle = _thread("thr-1", str(project_dir), status="idle", turns=[])
+    thread_payload = {"thread": idle}
+    client = FakeSuperAgentsClient({"read_thread": [thread_payload] * 4})
+    manager = _manager(client)
+
+    raised: ValueError | None = None
+    try:
+        asyncio.run(manager.steer_turn("thr-1", "hello"))
+    except ValueError as exc:
+        raised = exc
+    assert raised is not None and "no active turn to steer" in str(raised)
