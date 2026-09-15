@@ -390,6 +390,31 @@ class FakeSuperAgentsClient:
         return result
 
 
+class PaginatedFakeSuperAgentsClient(FakeSuperAgentsClient):
+    async def read_thread_page(
+        self,
+        thread_id: str,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        items_view: str = "summary",
+        sort_direction: str = "desc",
+    ) -> dict[str, Any]:
+        self.calls.append(
+            (
+                "read_thread_page",
+                {
+                    "thread_id": thread_id,
+                    "limit": limit,
+                    "cursor": cursor,
+                    "items_view": items_view,
+                    "sort_direction": sort_direction,
+                },
+            )
+        )
+        return self._pop("read_thread_page")
+
+
 class FakeBackendSessionClient:
     def __init__(self, responses: dict[str, list[Any]]) -> None:
         self.responses = {key: list(value) for key, value in responses.items()}
@@ -967,7 +992,12 @@ def test_read_thread_reads_claude_code_backend_turns(tmp_path: Path) -> None:
         }
     )
 
-    thread = asyncio.run(_manager(client).get_thread_state("s_dispatcher"))
+    thread = asyncio.run(
+        _manager(client).get_thread_state(
+            "s_dispatcher",
+            history_cursor="ignored-for-claude",
+        )
+    )
 
     assert thread is not None
     assert thread.session_id == "s_dispatcher"
@@ -1492,6 +1522,70 @@ def test_read_thread_treats_in_progress_turn_as_current_run(tmp_path: Path) -> N
     assert thread.current_run is not None
     assert thread.current_run.run_id == "turn-1"
     assert thread.current_run.status == "running"
+
+
+def test_read_thread_uses_bounded_codex_turn_page(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    monkeypatch.setenv("OPENBASE_CODER_THREAD_HISTORY_LIMIT", "2")
+    client = PaginatedFakeSuperAgentsClient(
+        {
+            "read_thread_page": [
+                {
+                    "thread": {
+                        **_thread(
+                            "thr-1",
+                            str(project_dir),
+                            turns=[
+                                _turn(
+                                    "turn-3",
+                                    message="Prompt 3",
+                                    output="Output 3",
+                                    started_at=3,
+                                    completed_at=4,
+                                    status="completed",
+                                ),
+                                _turn(
+                                    "turn-2",
+                                    message="Prompt 2",
+                                    output="Output 2",
+                                    started_at=2,
+                                    completed_at=3,
+                                    status="completed",
+                                ),
+                            ],
+                        ),
+                        "historyNextCursor": "older-page",
+                    }
+                }
+            ]
+        }
+    )
+
+    thread = asyncio.run(
+        _manager(client).get_thread_state(
+            "thr-1",
+            history_cursor="current-page",
+        )
+    )
+
+    assert thread is not None
+    assert [turn.run_id for turn in thread.run_history] == ["turn-2", "turn-3"]
+    assert thread.history_next_cursor == "older-page"
+    assert client.calls[0] == (
+        "read_thread_page",
+        {
+            "thread_id": "thr-1",
+            "limit": 2,
+            "cursor": "current-page",
+            "items_view": "summary",
+            "sort_direction": "desc",
+        },
+    )
+    assert not any(call[0] == "read_thread" for call in client.calls)
 
 
 def test_read_thread_treats_invalid_app_server_thread_id_as_missing() -> None:

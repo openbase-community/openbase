@@ -59,6 +59,21 @@ class UnreadableThreadManager(FakeThreadManager):
         )
 
 
+class PaginatedThreadManager(FakeThreadManager):
+    def __init__(self, threads: list[ThreadInfo]) -> None:
+        super().__init__(threads)
+        self.history_calls: list[tuple[str, str | None]] = []
+
+    async def get_thread_state(
+        self,
+        thread_id: str,
+        *,
+        history_cursor: str | None = None,
+    ) -> ThreadInfo | None:
+        self.history_calls.append((thread_id, history_cursor))
+        return await super().get_thread_state(thread_id)
+
+
 def _thread(index: int) -> ThreadInfo:
     now = datetime(2026, 5, 28, 12, tzinfo=timezone.utc)
     updated_at = now - timedelta(minutes=index)
@@ -121,6 +136,31 @@ def test_thread_detail_returns_conflict_for_unreadable_rollout(monkeypatch) -> N
     assert response.data["code"] == "thread_data_unavailable"
     assert "current Codex version" in response.data["error"]
     assert "private-rollout-location" not in response.data["error"]
+
+
+def test_thread_detail_passes_history_cursor_without_using_snapshot_cache(
+    monkeypatch,
+) -> None:
+    paged_thread = _thread(1)
+    paged_thread.history_next_cursor = "older-page"
+    manager = PaginatedThreadManager([paged_thread])
+    monkeypatch.setattr(thread_views, "get_session_manager", lambda: manager)
+    monkeypatch.setattr(
+        thread_views,
+        "get_cached_thread_state",
+        lambda *_: (_ for _ in ()).throw(AssertionError("cache should be bypassed")),
+    )
+    factory = APIRequestFactory()
+    request = factory.get(
+        "/api/threads/thread-001/?scope=fleet&history_cursor=current-page"
+    )
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+
+    response = thread_views.thread_detail(request, "thread-001")
+
+    assert response.status_code == 200
+    assert response.data["history_next_cursor"] == "older-page"
+    assert manager.history_calls == [("thread-001", "current-page")]
 
 
 def test_thread_list_slices_requested_page(monkeypatch) -> None:

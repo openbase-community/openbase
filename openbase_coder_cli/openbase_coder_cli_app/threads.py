@@ -584,7 +584,14 @@ def thread_detail(request, thread_id):
         # round-trips for a thread another call just fetched. The 8s snapshot
         # staleness is absorbed by the client's reconcileThreadSnapshot, which
         # keeps live-streamed turns that post-date the snapshot.
-        thread = get_cached_thread_state(manager, thread_id)
+        history_cursor = request.query_params.get("history_cursor")
+        if history_cursor:
+            thread = async_to_sync(manager.get_thread_state)(
+                thread_id,
+                history_cursor=history_cursor,
+            )
+        else:
+            thread = get_cached_thread_state(manager, thread_id)
     except RuntimeError as exc:
         if not is_thread_data_unavailable_error(exc):
             raise
