@@ -429,10 +429,17 @@ def setup(
         _interactive_cloud_login_and_checks(env_file, cli_configured=cli_configured)
         _print_app_download_qr()
     else:
-        click.echo(
-            "To enable remote authentication, run 'openbase-coder login' "
-            "and ensure OPENBASE_CODER_CLI_WEB_BACKEND_URL is set in your .env."
+        web_backend_url = (
+            _env_file_values(Path(env_file)).get("OPENBASE_CODER_CLI_WEB_BACKEND_URL")
+            or DEFAULT_WEB_BACKEND_URL
         )
+        if TokenManager(web_backend_url).has_refresh_token:
+            click.echo("Openbase Cloud login is already configured.")
+        else:
+            click.echo(
+                "To enable remote authentication, run 'openbase-coder login' "
+                "and ensure OPENBASE_CODER_CLI_WEB_BACKEND_URL is set in your .env."
+            )
 
 
 APP_DOWNLOADS_URL = "https://openbase.cloud/downloads.html"

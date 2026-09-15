@@ -1439,6 +1439,8 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
     )
 
     assert result.exit_code == 0, result.output
+    assert "Openbase Cloud login is already configured" in result.output
+    assert "run 'openbase-coder login'" not in result.output
     assert calls == [
         "thread-sync",
         "sounds",
