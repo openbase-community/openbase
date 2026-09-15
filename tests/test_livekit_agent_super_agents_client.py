@@ -138,6 +138,42 @@ def test_speech_text_from_progress_preserves_multiple_final_answers() -> None:
     assert "Yes, the session I found is the ai Tinkerers one." in speech
 
 
+def test_speech_text_from_progress_never_replays_cached_text_on_failed_turn() -> None:
+    # Regression: a dispatcher whose backend session had become unresumable
+    # failed every turn, and the voice layer replayed the session's cached
+    # lastUsefulMessage (a months-old reply) as if it were the fresh answer.
+    progress = {
+        "status": "failed",
+        "turn": {"lastUsefulMessage": "Found the whole thing. Cached July reply."},
+        "summary": {"lastUsefulMessage": "Found the whole thing. Cached July reply."},
+    }
+
+    assert _speech_text_from_progress(progress) == ""
+
+
+def test_speech_text_from_progress_still_speaks_failed_turns_own_output() -> None:
+    # A failed turn's OWN items (e.g. a real error message it produced) are
+    # fresh output and remain speakable — only cached candidates are blocked.
+    progress = {
+        "status": "failed",
+        "turn": {"lastUsefulMessage": "Cached stale reply."},
+        "summary": {
+            "items": [
+                {
+                    "type": "agentMessage",
+                    "phase": "final_answer",
+                    "text": "I hit an error reading that repository.",
+                }
+            ]
+        },
+    }
+
+    assert (
+        _speech_text_from_progress(progress)
+        == "I hit an error reading that repository."
+    )
+
+
 def test_speech_text_from_progress_prefers_final_answer_over_commentary() -> None:
     progress = {
         "status": "completed",

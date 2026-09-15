@@ -487,10 +487,27 @@ class SuperAgentsLiveKitClient(
                 backend=backend,
                 turn_id=turn_id,
             )
+            turn_status = result.get("status") or result.get("summary", {}).get(
+                "status"
+            )
+            if (
+                isinstance(turn_status, str)
+                and turn_status.lower() == "failed"
+                and not spoken_text
+                and not auth_failed
+            ):
+                # Failed turns yield no fresh assistant text (cached
+                # lastUsefulMessage candidates are excluded upstream), and
+                # silence here historically fell through to stale speech or
+                # nothing at all. Say what actually happened so the user
+                # isn't left talking to a session that never answers.
+                spoken_text = (
+                    "Sorry — that request didn't reach the coding agent. "
+                    "Please try again in a moment."
+                )
             completed_turn = {
                 "id": turn_id,
-                "status": result.get("status")
-                or result.get("summary", {}).get("status"),
+                "status": turn_status,
                 "_livekit_speech_text": spoken_text,
                 "_livekit_turn_id": turn_id,
                 "_livekit_backend_auth_failure": auth_failed,

@@ -22,8 +22,40 @@ from openbase_coder_cli.livekit_agent.super_agents_client_common import (
 )
 
 
+def _turn_failed(progress: dict[str, Any]) -> bool:
+    summary = progress.get("summary")
+    status = progress.get("status") or (
+        summary.get("status") if isinstance(summary, dict) else None
+    )
+    return isinstance(status, str) and status.lower() == "failed"
+
+
+def _without_cached_messages(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _without_cached_messages(item)
+            for key, item in value.items()
+            if key != "lastUsefulMessage"
+        }
+    if isinstance(value, list):
+        return [_without_cached_messages(item) for item in value]
+    return value
+
+
 def _speech_text_from_progress(progress: dict[str, Any]) -> str:
     from super_agents.app_formatting import find_turn_useful_text, find_useful_text
+
+    # A failed turn produced no fresh assistant output; every
+    # lastUsefulMessage value in the snapshot is CACHED text from an earlier
+    # successful turn (the generic extractors walk every key, so filtering
+    # candidate names is not enough — strip the keys themselves). Speaking a
+    # cached value as if it were the reply silently replays a stale answer
+    # on every failed turn: a broken session resume once repeated a July
+    # reply on every call, with nothing suggesting breakage. Item-derived
+    # text still speaks — it is this turn's own output, e.g. a real error
+    # message.
+    if _turn_failed(progress):
+        progress = _without_cached_messages(progress)
 
     summary = progress.get("summary")
     candidates: list[tuple[str, Any, bool]] = [
