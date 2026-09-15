@@ -136,7 +136,7 @@ jobs:
       security-events: write
     steps:
       - name: Run Trivy on published image
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: openbaseai/openbase:${{ needs.preflight.outputs.version }}
           format: sarif
