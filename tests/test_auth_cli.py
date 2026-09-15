@@ -65,6 +65,7 @@ def test_login_password_stdin_reissues_and_stores_jwts_without_echo(monkeypatch)
         "register_and_report",
         lambda: type("Report", (), {"ok": True, "supported": True})(),
     )
+    monkeypatch.setattr(auth_cli, "reconcile_after_login", lambda: None)
     monkeypatch.setenv("OPENBASE_CODER_CLI_WEB_BACKEND_URL", "https://backend.example")
 
     result = CliRunner().invoke(

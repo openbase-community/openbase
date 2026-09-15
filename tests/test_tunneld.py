@@ -7,6 +7,24 @@ import pytest
 from openbase_coder_cli.services import tunneld
 
 
+def test_tunneld_node_enrolled_requires_complete_profile_markers(
+    tmp_path, monkeypatch
+) -> None:
+    state_dir = tmp_path / "tsnet"
+    state_dir.mkdir()
+    monkeypatch.setattr(tunneld, "_state_dir", lambda: state_dir)
+    state_file = state_dir / "tailscaled.state"
+
+    state_file.write_text('{"_machinekey":"opaque"}', encoding="utf-8")
+    assert tunneld.tunneld_node_enrolled() is False
+
+    state_file.write_text(
+        '{"_current-profile":"opaque","_profiles":"opaque","profile-abcd":"opaque"}',
+        encoding="utf-8",
+    )
+    assert tunneld.tunneld_node_enrolled() is True
+
+
 def test_managed_tunneld_waits_for_control_api_without_spawning(monkeypatch) -> None:
     health = iter(
         [

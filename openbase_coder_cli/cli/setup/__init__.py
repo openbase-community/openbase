@@ -162,6 +162,7 @@ from openbase_coder_cli.services.tailscale_serve import (
 from openbase_coder_cli.services.tunneld import (
     ensure_tunneld_running,
     install_tunneld_binary,
+    tunneld_node_enrolled,
 )
 from openbase_coder_cli.stt_providers import (
     ASSEMBLYAI_STT_PROVIDER_ID,  # noqa: F401
@@ -429,13 +430,61 @@ def setup(
         _interactive_cloud_login_and_checks(env_file, cli_configured=cli_configured)
         _print_app_download_qr()
     else:
-        click.echo(
-            "To enable remote authentication, run 'openbase-coder login' "
-            "and ensure OPENBASE_CODER_CLI_WEB_BACKEND_URL is set in your .env."
+        web_backend_url = (
+            _env_file_values(Path(env_file)).get("OPENBASE_CODER_CLI_WEB_BACKEND_URL")
+            or DEFAULT_WEB_BACKEND_URL
         )
+        if TokenManager(web_backend_url).has_refresh_token:
+            click.echo("Openbase Cloud login is already configured.")
+            _report_cloud_readiness(
+                cli_configured=cli_configured,
+                serve_healthy=serve_healthy,
+                tailnet_provider=tailnet_provider,
+            )
+        else:
+            click.echo(
+                "To enable remote authentication, run 'openbase-coder login' "
+                "and ensure OPENBASE_CODER_CLI_WEB_BACKEND_URL is set in your .env."
+            )
 
 
 APP_DOWNLOADS_URL = "https://openbase.cloud/downloads.html"
+
+
+def _report_cloud_readiness(
+    *, cli_configured: bool, serve_healthy: bool, tailnet_provider: str
+) -> None:
+    """Publish the final post-setup identity and explain its visible state."""
+    from openbase_coder_cli.cli.tailnet import record_account_provider
+
+    record_account_provider(tailnet_provider)
+    report = register_and_report(
+        cli_configured=cli_configured,
+        serve_healthy=serve_healthy,
+    )
+    if report.ok:
+        click.echo("Device registered with Openbase Cloud.")
+    elif report.supported:
+        click.echo(
+            click.style(
+                "Warning: could not register this device with Openbase "
+                f"Cloud: {report.error}",
+                fg="yellow",
+            )
+        )
+    if serve_healthy:
+        click.echo("Private-network routes are exposing the local API and LiveKit.")
+    else:
+        click.echo(
+            click.style(
+                "Warning: private-network routes are not fully healthy yet.",
+                fg="yellow",
+            )
+        )
+        click.echo(
+            "  Re-check with 'openbase-coder onboarding status' once the "
+            "selected private connection is ready."
+        )
 
 
 def _interactive_cloud_login_and_checks(env_file: str, *, cli_configured: bool) -> None:
@@ -469,34 +518,14 @@ def _interactive_cloud_login_and_checks(env_file: str, *, cli_configured: bool) 
     # Login already registers the device; re-report with the freshest facts
     # so the cloud sees this install as configured, and surface the result.
     serve_health = tailscale_serve_health()
-    report = register_and_report(
+    provider = _env_file_values(Path(env_file)).get(
+        "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", PROVIDER_TAILSCALE
+    )
+    _report_cloud_readiness(
         cli_configured=cli_configured,
         serve_healthy=serve_health.healthy,
+        tailnet_provider=provider,
     )
-    if report.ok:
-        click.echo("Device registered with Openbase Cloud.")
-    elif report.supported:
-        click.echo(
-            click.style(
-                "Warning: could not register this device with Openbase "
-                f"Cloud: {report.error}",
-                fg="yellow",
-            )
-        )
-    if serve_health.healthy:
-        click.echo("Tailscale Serve is exposing the local API and LiveKit.")
-    else:
-        click.echo(
-            click.style(
-                "Warning: Tailscale Serve is not fully healthy: "
-                f"{serve_health.error or 'routes not configured'}",
-                fg="yellow",
-            )
-        )
-        click.echo(
-            "  Re-check with 'openbase-coder onboarding status' once "
-            "Tailscale is signed in and connected."
-        )
 
 
 def _print_app_download_qr() -> None:
@@ -856,6 +885,19 @@ def _run_setup_phases(
 
     # --- Install services ---
     progress.step("services", "start")
+    direct_enrollment = None
+    direct_existing_profile = False
+    direct_login_present = False
+    if not skip_services and tailnet_provider == PROVIDER_NETMESH_TSNET:
+        configured_cloud_url = _env_file_values(Path(env_file)).get(
+            "OPENBASE_CODER_CLI_WEB_BACKEND_URL", DEFAULT_WEB_BACKEND_URL
+        )
+        direct_login_present = TokenManager(configured_cloud_url).has_refresh_token
+        direct_existing_profile = tunneld_node_enrolled()
+        if direct_login_present and not direct_existing_profile:
+            from openbase_coder_cli.cli.tailnet import prepare_embedded_enrollment
+
+            direct_enrollment = prepare_embedded_enrollment(Path(env_file))
     if not skip_services:
         if tailnet_provider == PROVIDER_NETMESH and sys.platform == "darwin":
             # A crash-looping registered helper makes every helper query hang
@@ -885,20 +927,39 @@ def _run_setup_phases(
                 installed_tunneld = install_tunneld_binary(config)
             except RuntimeError as exc:
                 raise click.ClickException(
-                    f"Openbase VPN daemon installation failed: {exc}"
+                    f"Openbase Direct service installation failed: {exc}"
                 ) from exc
             click.echo(f"    Installed {installed_tunneld}")
         install_all_services(config)
         if tailnet_provider == PROVIDER_NETMESH_TSNET:
             click.echo("  Installing openbase-tunneld service...")
             install_service(config, TUNNELD_SERVICE)
-            click.echo("  Waiting for openbase-tunneld to join the private network...")
-            try:
-                ensure_tunneld_running(managed_service=True)
-            except RuntimeError as exc:
+            if direct_enrollment or direct_existing_profile:
+                click.echo(
+                    "  Waiting for Openbase Direct to join its private network..."
+                )
+                try:
+                    ensure_tunneld_running(
+                        auth_key=(
+                            direct_enrollment["auth_key"] if direct_enrollment else None
+                        ),
+                        managed_service=True,
+                    )
+                except RuntimeError as exc:
+                    raise click.ClickException(
+                        f"Openbase Direct service did not become ready: {exc}"
+                    ) from exc
+            elif direct_login_present:
                 raise click.ClickException(
-                    f"Openbase VPN daemon did not become ready: {exc}"
-                ) from exc
+                    "Openbase Direct could not mint an enrollment key from the "
+                    "configured Openbase Cloud environment. Check Cloud reachability "
+                    "and re-run setup."
+                )
+            else:
+                click.echo(
+                    "  Openbase Direct is installed; Cloud login will connect it "
+                    "automatically."
+                )
         progress.step("services", "ok")
     else:
         click.echo("Skipped service installation (--skip-services).")
@@ -931,12 +992,27 @@ def _run_setup_phases(
     click.echo("Configuring private-network routes...")
     progress.step("tailscale_serve", "start")
     serve_healthy = False
+    if (
+        not skip_services
+        and tailnet_provider == PROVIDER_NETMESH_TSNET
+        and not direct_login_present
+    ):
+        click.echo(
+            "  Deferred until Cloud login; login will connect Openbase Direct "
+            "and apply its routes automatically."
+        )
+        progress.step("tailscale_serve", "warn", "deferred until Cloud login")
+        return False
     try:
         configure_tailscale_serve()
     except Exception as exc:
-        if not skip_services and tailnet_provider == PROVIDER_NETMESH_TSNET:
+        if (
+            not skip_services
+            and tailnet_provider == PROVIDER_NETMESH_TSNET
+            and direct_login_present
+        ):
             raise click.ClickException(
-                f"Openbase VPN route setup did not complete: {exc}"
+                f"Openbase Direct route setup did not complete: {exc}"
             ) from exc
         managed_transport = tailnet_provider in {
             PROVIDER_NETMESH,
@@ -954,9 +1030,8 @@ def _run_setup_phases(
         click.echo(click.style(f"  WARN  {exc}", fg="yellow"))
         if managed_transport:
             click.echo(
-                "  The Openbase networking choice was saved. Sign in, then "
-                "connect it during pairing; that step enrolls the device and "
-                "applies its routes."
+                "  The Openbase networking choice was saved. Sign in to finish "
+                "connecting it; pairing can continue after the routes are ready."
             )
         else:
             # --skip-services image bakes configure official Tailscale on first
