@@ -31,6 +31,7 @@ from openbase_coder_cli.claude_auth import (
     claude_auth_status,  # noqa: F401
     run_claude_login,  # noqa: F401
 )
+from openbase_coder_cli.cli.auth import login as login_command
 from openbase_coder_cli.cli.node import run_workspace_package_command  # noqa: F401
 from openbase_coder_cli.cli.setup.claude import (
     _ensure_claude_hooks,
@@ -505,9 +506,7 @@ def _interactive_cloud_login_and_checks(env_file: str, *, cli_configured: bool) 
         "cloud onboarding)",
         default=True,
     ):
-        from openbase_coder_cli.cli import auth as _auth
-
-        click.get_current_context().invoke(_auth.login)
+        click.get_current_context().invoke(login_command)
     else:
         click.echo(
             "Skipping login. Run 'openbase-coder login' later; iPhone pairing "
