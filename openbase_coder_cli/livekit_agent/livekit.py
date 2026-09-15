@@ -1002,13 +1002,13 @@ async def livekit_agent(ctx: JobContext):
             _packet_hash(data_packet),
         )
         if route_command.action == "exit_to_dispatch":
-            voice_router.exit_to_dispatch()
-            announcer_queue.enqueue(
-                AnnouncerMessage(
-                    message_id=f"voice-route-{uuid.uuid4().hex}",
-                    text="Back to dispatch.",
+            if voice_router.exit_to_dispatch():
+                announcer_queue.enqueue(
+                    AnnouncerMessage(
+                        message_id=f"voice-route-{uuid.uuid4().hex}",
+                        text="Back to dispatch.",
+                    )
                 )
-            )
         elif route_command.action == "transfer_to_thread":
             if not route_command.thread_id or not route_command.cwd:
                 logger.warning(

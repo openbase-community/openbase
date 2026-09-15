@@ -2533,3 +2533,32 @@ def test_trigger_and_event_methods_delegate_to_super_agents_client() -> None:
             {"name": "daily", "payload": {"a": 1}, "eventId": "evt-1"},
         ),
     ]
+
+
+def test_model_for_thread_falls_back_to_thread_model_on_cross_backend_default() -> None:
+    from openbase_coder_cli.thread_sync.models import ThreadInfo
+
+    manager = CodexAppServerSessionManager(
+        client=FakeBackendSessionClient({}),
+        model_for_role=lambda _role: "gpt-5.5",
+        execution_backend="claude_code",
+    )
+
+    fable_thread = ThreadInfo(session_id="s1", directory="/tmp/p", model="fable")
+    assert manager._model_for_thread(fable_thread) == "fable"
+
+    modelless_thread = ThreadInfo(session_id="s2", directory="/tmp/p")
+    assert manager._model_for_thread(modelless_thread) is None
+
+
+def test_model_for_thread_keeps_role_default_on_matching_backend() -> None:
+    from openbase_coder_cli.thread_sync.models import ThreadInfo
+
+    manager = CodexAppServerSessionManager(
+        client=FakeBackendSessionClient({}),
+        model_for_role=lambda _role: "gpt-5.5",
+        execution_backend="codex",
+    )
+
+    thread = ThreadInfo(session_id="s1", directory="/tmp/p", model="gpt-5")
+    assert manager._model_for_thread(thread) == "gpt-5.5"

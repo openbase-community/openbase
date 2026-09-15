@@ -18,6 +18,7 @@ from super_agents.app_server_client import (
     extract_threads,
     login_shell_config_override,
 )
+from super_agents.backend_config import execution_backend_for_model
 from super_agents.config_profiles import codex_profile_config, merge_config
 
 from openbase_coder_cli.codex_session_defaults import codex_permission_defaults
@@ -74,7 +75,16 @@ class SessionManagerThreadsMixin:
             if thread.name and thread.name.casefold() == "dispatcher"
             else SUPER_AGENTS_MODEL_ROLE
         )
-        return self._model_for_role(role)
+        model = self._model_for_role(role)
+        family = execution_backend_for_model(model)
+        if model and family is not None and family != self._execution_backend:
+            # The configured role default cannot run on this manager's backend
+            # (e.g. a codex default of "gpt-5.5" while starting a turn on a
+            # claude_code thread created with model=fable). Continue the
+            # thread on its own recorded model instead of failing the turn
+            # with a cross-backend model error.
+            return thread.model or None
+        return model
 
     async def create_thread(
         self,

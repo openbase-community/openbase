@@ -56,6 +56,7 @@ from openbase_coder_cli.livekit_agent.super_agents_client_threads import (
 )
 from openbase_coder_cli.livekit_agent.super_agents_client_turns import (
     SuperAgentsClientTurnsMixin,
+    _wrap_transcript,
 )
 from openbase_coder_cli.livekit_agent.super_agents_speech import (
     _last_useful_message,
@@ -336,6 +337,7 @@ class SuperAgentsLiveKitClient(
         ) = None
         self._claimed_speech_turns: set[str] = set()
         self._turn_prompt_hashes: dict[str, set[str]] = {}
+        self._turn_submitted_transcripts: dict[str, list[str]] = {}
         self._turn_spoken_at: dict[str, float] = {}
         self._state_lock = asyncio.Lock()
         self._turn_start_lock = asyncio.Lock()
@@ -366,11 +368,14 @@ class SuperAgentsLiveKitClient(
 
             if self._active_turn_id and self._active_turn_has_completed():
                 completed_turn_id = self._active_turn_id
-                if (
-                    completed_turn_id in self._claimed_speech_turns
-                    and self._is_duplicate_of_spoken_turn(
+                if completed_turn_id in self._claimed_speech_turns and (
+                    self._is_duplicate_of_spoken_turn(
                         completed_turn_id, prompt_debug["hash"]
                     )
+                    # A merged utterance whose fragments all reached the turn
+                    # before it completed is the same duplication: the spoken
+                    # answer already covered this content.
+                    or self._is_covered_by_spoken_turn(completed_turn_id, prompt)
                 ):
                     # The just-spoken answer already covered this content
                     # (an STT twin or a restated correction); a fresh turn
@@ -420,7 +425,29 @@ class SuperAgentsLiveKitClient(
                         prompt_debug["hash"],
                     )
                 else:
-                    turn_id = await self._steer_turn(thread_id, prompt)
+                    remainder = self._unsubmitted_transcript_remainder(
+                        self._active_turn_id, prompt
+                    )
+                    if remainder == "":
+                        # A merged utterance whose fragments already reached
+                        # the active turn (start prompt + proactive steers);
+                        # re-steering it would make the model answer the same
+                        # content twice. Join the turn and wait for its answer.
+                        turn_id = self._active_turn_id
+                        logger.info(
+                            "%s stage=voice_request_joined_covered_active_turn "
+                            "dispatch_id=%s thread_id=%s turn_id=%s prompt_hash=%s",
+                            DISPATCH_TIMING_LOG,
+                            dispatch_id,
+                            thread_id,
+                            turn_id,
+                            prompt_debug["hash"],
+                        )
+                    else:
+                        steer_prompt = prompt
+                        if remainder is not None:
+                            steer_prompt = _wrap_transcript(remainder)
+                        turn_id = await self._steer_turn(thread_id, steer_prompt)
             else:
                 active_turn_id = await self._resolve_active_turn_id(thread_id)
                 if active_turn_id:
@@ -444,7 +471,9 @@ class SuperAgentsLiveKitClient(
                         self._active_turn_started_at = time.monotonic()
                         self._active_turn_dispatch_id = dispatch_id
                         self._active_turn_prompt_hash = prompt_debug["hash"]
-                        self._record_turn_prompt(turn_id, prompt_debug["hash"])
+                        self._record_turn_prompt(
+                            turn_id, prompt_debug["hash"], prompt
+                        )
                         preserve_active_turn = True
                         logger.info(
                             "%s stage=turn_start_cancelled_after_backend_start "
@@ -460,7 +489,7 @@ class SuperAgentsLiveKitClient(
             self._active_turn_started_at = time.monotonic()
             self._active_turn_dispatch_id = dispatch_id
             self._active_turn_prompt_hash = prompt_debug["hash"]
-            self._record_turn_prompt(turn_id, prompt_debug["hash"])
+            self._record_turn_prompt(turn_id, prompt_debug["hash"], prompt)
 
         logger.info(
             "%s stage=turn_wait_start dispatch_id=%s thread_id=%s turn_id=%s "
