@@ -78,6 +78,15 @@ class _SuperAgentsClient(Protocol):
         thread_id: str,
         include_turns: bool = True,
     ) -> dict[str, Any]: ...
+    async def read_thread_page(
+        self,
+        thread_id: str,
+        *,
+        limit: int,
+        cursor: str | None = None,
+        items_view: str = "summary",
+        sort_direction: str = "desc",
+    ) -> dict[str, Any]: ...
     async def start_thread(self, input_data: dict[str, Any]) -> dict[str, Any]: ...
     async def start_turn(self, input_data: dict[str, Any]) -> dict[str, Any]: ...
     async def start_turn_by_label(

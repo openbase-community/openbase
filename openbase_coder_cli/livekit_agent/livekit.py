@@ -1056,7 +1056,10 @@ async def livekit_agent(ctx: JobContext):
     stall_task = asyncio.create_task(
         stall_diagnostics.stall_watch_loop(
             is_call_active=lambda: ctx.room.connection_state
-            == rtc.ConnectionState.CONN_CONNECTED
+            == rtc.ConnectionState.CONN_CONNECTED,
+            prepare_announcement=lambda: stall_diagnostics.interrupt_nonplaying_reply(
+                session
+            ),
         ),
         name="openbase-stall-watch-loop",
     )

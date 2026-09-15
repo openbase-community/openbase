@@ -159,6 +159,58 @@ def test_speak_via_local_api_mints_token_and_posts(monkeypatch):
     assert captured["body"] == {"agent_name": "Dispatcher", "text": "hello"}
 
 
+def test_announcement_attempt_retries_failed_delivery_but_not_success():
+    spoken: set[str] = set()
+    attempted = {"turn-1": 100.0}
+
+    assert not sd.announcement_attempt_due(
+        "turn-1", spoken_turn_ids=spoken, last_attempted_at=attempted, now=129.9
+    )
+    assert sd.announcement_attempt_due(
+        "turn-1", spoken_turn_ids=spoken, last_attempted_at=attempted, now=130.0
+    )
+
+    spoken.add("turn-1")
+    assert not sd.announcement_attempt_due(
+        "turn-1", spoken_turn_ids=spoken, last_attempted_at={}, now=999.0
+    )
+
+
+def test_interrupt_nonplaying_reply_clears_thinking_handle():
+    class Speech:
+        interrupted = False
+
+        def done(self):
+            return False
+
+        def interrupt(self, *, force):
+            assert force is True
+            self.interrupted = True
+
+    class Session:
+        current_speech = Speech()
+        agent_state = "thinking"
+
+    session = Session()
+    assert sd.interrupt_nonplaying_reply(session) is True
+    assert session.current_speech.interrupted is True
+
+
+def test_interrupt_nonplaying_reply_preserves_playing_audio():
+    class Speech:
+        def done(self):
+            return False
+
+        def interrupt(self, *, force):
+            raise AssertionError("playing audio must not be interrupted")
+
+    class Session:
+        current_speech = Speech()
+        agent_state = "speaking"
+
+    assert sd.interrupt_nonplaying_reply(Session()) is False
+
+
 def _make_state_db(tmp_path: Path, sessions: list[dict], turns: list[dict]) -> Path:
     import sqlite3
 
@@ -381,6 +433,18 @@ def test_scan_stalled_running_turns_ignores_young_turn(tmp_path, monkeypatch):
     created = (now - dt.timedelta(seconds=10)).strftime("%Y-%m-%d %H:%M:%S")
     db = _running_turn_db(tmp_path, created_at=created, command="ls ~/Desktop")
     assert sd.scan_stalled_running_turns(now=now, state_db_path=db) == []
+
+
+def test_default_stall_threshold_surfaces_concrete_folder_block_promptly(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(sd, "dialog_presenter_started_after", lambda since: None)
+    now = dt.datetime(2026, 9, 13, 4, 35, 0)
+    created = (now - dt.timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S")
+    db = _running_turn_db(tmp_path, created_at=created, command="ls ~/Documents")
+
+    assert len(sd.scan_stalled_running_turns(now=now, state_db_path=db)) == 1
 
 
 def test_scan_stalled_running_turns_ignores_orphan_from_before_watcher(

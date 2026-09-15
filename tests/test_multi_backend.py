@@ -71,6 +71,21 @@ class PagingManager(FakeManager):
         )
 
 
+class HistoryPagingManager(FakeManager):
+    def __init__(self, backend: str, threads: list[ThreadInfo]):
+        super().__init__(backend, threads)
+        self.history_cursors: list[str | None] = []
+
+    async def get_session_state(
+        self,
+        session_id: str,
+        *,
+        history_cursor: str | None = None,
+    ) -> ThreadInfo | None:
+        self.history_cursors.append(history_cursor)
+        return self.threads.get(session_id)
+
+
 class ExplodingManager:
     async def list_threads(self):
         raise RuntimeError("backend down")
@@ -173,6 +188,23 @@ async def test_list_thread_page_survives_one_backend_down():
     page = await facade.list_thread_page(limit=5)
     assert [t.session_id for t in page.threads] == ["c1", "c2"]
     assert page.next_cursor is None
+
+
+async def test_thread_history_cursor_routes_to_owning_backend():
+    codex = HistoryPagingManager("codex", [_thread("c1", minutes_ago=1)])
+    claude = HistoryPagingManager(
+        "claude_code",
+        [_thread("k1", minutes_ago=2)],
+    )
+    facade = MultiBackendSessionManager({"codex": codex, "claude_code": claude})
+    await facade.list_threads()
+
+    thread = await facade.get_thread_state("k1", history_cursor="older-page")
+
+    assert thread is not None
+    assert thread.session_id == "k1"
+    assert claude.history_cursors == ["older-page"]
+    assert codex.history_cursors == []
 
 
 async def test_answer_approval_routes_to_owning_backend(managers):

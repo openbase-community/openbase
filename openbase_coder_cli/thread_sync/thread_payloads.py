@@ -378,6 +378,11 @@ def _session_from_thread(
             "reasoningEffort",
             "reasoning_effort",
         ),
+        history_next_cursor=_optional_thread_string(
+            thread,
+            "historyNextCursor",
+            "history_next_cursor",
+        ),
         session_type="codex",
         created_at=_timestamp_to_datetime(thread.get("createdAt")),
         updated_at=_timestamp_to_datetime(

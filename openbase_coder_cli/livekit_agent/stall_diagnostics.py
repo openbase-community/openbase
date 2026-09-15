@@ -37,6 +37,7 @@ import json
 import logging
 import re
 import subprocess
+import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -66,7 +67,44 @@ _PROTECTED_FOLDER_RE = re.compile(
 #: protected-folder access is treated as a likely permission block (rather than
 #: ordinary in-progress work), so brief legitimate accesses never trigger a
 #: hint.
-DEFAULT_STALL_THRESHOLD_SECONDS = 75.0
+DEFAULT_STALL_THRESHOLD_SECONDS = 30.0
+
+# A failed local announcement is usually a short-lived API/service race. Keep
+# retrying while the turn remains blocked, but not on every poll tick.
+ANNOUNCEMENT_RETRY_SECONDS = 30.0
+
+
+def announcement_attempt_due(
+    turn_id: str,
+    *,
+    spoken_turn_ids: set[str],
+    last_attempted_at: dict[str, float],
+    now: float,
+    retry_seconds: float = ANNOUNCEMENT_RETRY_SECONDS,
+) -> bool:
+    """Whether a blocked-turn announcement may be attempted now."""
+    if turn_id in spoken_turn_ids:
+        return False
+    last_attempt = last_attempted_at.get(turn_id)
+    return last_attempt is None or now - last_attempt >= retry_seconds
+
+
+def interrupt_nonplaying_reply(session) -> bool:
+    """Interrupt a pending reply that would otherwise trap an urgent warning.
+
+    LiveKit keeps ``current_speech`` active while an LLM reply is blocked in a
+    tool call, even though no audio is playing. The normal announcer queue waits
+    for that handle to finish, which made permission warnings arrive only after
+    the user had already approved the dialog. Preserve genuinely playing audio,
+    but cancel a non-playing reply so the warning can become the next speech.
+    """
+    speech = getattr(session, "current_speech", None)
+    if speech is None or speech.done():
+        return False
+    if str(getattr(session, "agent_state", "") or "") == "speaking":
+        return False
+    speech.interrupt(force=True)
+    return True
 
 
 def protected_folder_in_command(command: str | None) -> str | None:
@@ -473,6 +511,7 @@ async def stall_watch_loop(
     *,
     poll_seconds: float = 15.0,
     is_call_active=None,
+    prepare_announcement=None,
 ) -> None:
     """Background poller: surface blocked agent turns during a live call.
 
@@ -494,28 +533,42 @@ async def stall_watch_loop(
     import asyncio
 
     spoken_turn_ids: set[str] = set()
+    last_attempted_at: dict[str, float] = {}
     loop = asyncio.get_running_loop()
     # Only surface failures observed from when the watcher started, so a
     # pre-existing stale failure doesn't get announced on a fresh call.
     since = _dt.datetime.now()
 
     async def _announce(turn) -> None:
-        if turn.turn_id in spoken_turn_ids:
-            return
-        spoken_turn_ids.add(turn.turn_id)
         if is_call_active is not None and not is_call_active():
             return
-        delivered = await loop.run_in_executor(
+        now = time.monotonic()
+        if not announcement_attempt_due(
+            turn.turn_id,
+            spoken_turn_ids=spoken_turn_ids,
+            last_attempted_at=last_attempted_at,
+            now=now,
+        ):
+            return
+        last_attempted_at[turn.turn_id] = now
+        interrupted_reply = False
+        if prepare_announcement is not None:
+            interrupted_reply = bool(prepare_announcement())
+        queued = await loop.run_in_executor(
             None, speak_via_local_api, turn.spoken_hint()
         )
+        if queued:
+            spoken_turn_ids.add(turn.turn_id)
+            last_attempted_at.pop(turn.turn_id, None)
         logger.info(
-            "%s stage=agent_turn_blocked_hint_spoken session=%s "
-            "agent=%s turn_id=%s delivered=%s",
+            "%s stage=agent_turn_blocked_hint_queued session=%s "
+            "agent=%s turn_id=%s queued=%s interrupted_reply=%s",
             "dispatch_timing",
             turn.session_name,
             turn.agent_name,
             turn.turn_id,
-            delivered,
+            queued,
+            interrupted_reply,
         )
 
     while True:

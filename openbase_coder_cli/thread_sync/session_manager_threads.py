@@ -92,9 +92,17 @@ class SessionManagerThreadsMixin:
         """Archive a Codex app-server thread."""
         return await self.close_session(thread_id)
 
-    async def get_thread_state(self, thread_id: str) -> SessionInfo | None:
+    async def get_thread_state(
+        self,
+        thread_id: str,
+        *,
+        history_cursor: str | None = None,
+    ) -> SessionInfo | None:
         """Get the current thread snapshot."""
-        return await self.get_session_state(thread_id)
+        return await self.get_session_state(
+            thread_id,
+            history_cursor=history_cursor,
+        )
 
     async def resume_thread_with_developer_instructions(
         self,
@@ -387,9 +395,18 @@ class SessionManagerThreadsMixin:
                 self._forget_turn_locked(turn_id)
         return True
 
-    async def get_session_state(self, session_id: str) -> SessionInfo | None:
+    async def get_session_state(
+        self,
+        session_id: str,
+        *,
+        history_cursor: str | None = None,
+    ) -> SessionInfo | None:
         """Get the current thread snapshot."""
-        result = await self._read_thread(session_id, include_turns=True)
+        result = await self._read_thread(
+            session_id,
+            include_turns=True,
+            history_cursor=history_cursor,
+        )
         if result is None:
             return None
         session = _session_from_thread(result, include_turns=True)
@@ -432,6 +449,7 @@ class SessionManagerThreadsMixin:
         session_id: str,
         *,
         include_turns: bool,
+        history_cursor: str | None = None,
     ) -> dict[str, Any] | None:
         if self._uses_backend_session_api():
             read_by_label = getattr(self._client, "read_by_label", None)
@@ -455,6 +473,31 @@ class SessionManagerThreadsMixin:
             return thread
 
         fetched_turns = include_turns
+        page_reader = getattr(self._client, "read_thread_page", None)
+        if include_turns and callable(page_reader):
+            try:
+                result = await page_reader(
+                    session_id,
+                    limit=_thread_history_limit(),
+                    cursor=history_cursor,
+                    items_view="summary",
+                    sort_direction="desc",
+                )
+                thread = _thread_payload(result)
+                if thread is not None:
+                    await _merge_tracked_turn_details(self._client, thread)
+                return thread
+            except RuntimeError as exc:
+                message = _runtime_error_message(exc).lower()
+                if not (
+                    "method not found" in message
+                    or "not supported" in message
+                    or "-32601" in message
+                ):
+                    raise
+                logger.info(
+                    "Codex turn pagination unavailable; using legacy thread read"
+                )
         try:
             result = await self._client.read_thread(session_id, include_turns)
         except RuntimeError as exc:

@@ -235,12 +235,30 @@ class MultiBackendSessionManager:
         # backend's native not-found behavior.
         return self._primary
 
-    async def get_session_state(self, session_id: str) -> ThreadInfo | None:
+    async def get_session_state(
+        self,
+        session_id: str,
+        *,
+        history_cursor: str | None = None,
+    ) -> ThreadInfo | None:
         manager = await self._manager_for_thread(session_id)
-        return await manager.get_session_state(session_id)
+        if history_cursor is None:
+            return await manager.get_session_state(session_id)
+        return await manager.get_session_state(
+            session_id,
+            history_cursor=history_cursor,
+        )
 
-    async def get_thread_state(self, thread_id: str) -> ThreadInfo | None:
-        return await self.get_session_state(thread_id)
+    async def get_thread_state(
+        self,
+        thread_id: str,
+        *,
+        history_cursor: str | None = None,
+    ) -> ThreadInfo | None:
+        return await self.get_session_state(
+            thread_id,
+            history_cursor=history_cursor,
+        )
 
     async def start_turn(self, thread_id: str, prompt: str) -> str:
         manager = await self._manager_for_thread(thread_id)
