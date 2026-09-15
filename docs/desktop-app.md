@@ -43,9 +43,9 @@ Prefer running these steps yourself from a terminal? Follow
 [Manual Setup](manual-installation.md); the app detects completion and skips
 its own setup flow.
 
-**On iPhone:** the iOS app has a mirrored onboarding flow ("Link Your
-Computer") that waits for your Mac to sign in and pair. See
-[iOS App](ios-tabs.md#onboarding).
+**On your phone:** the iOS and Android apps have the same mirrored onboarding
+flow ("Link Your Computer") that waits for your Mac to sign in and pair. See
+[iOS App](ios-tabs.md#onboarding); the Android app pairs the same way.
 
 ## The Dashboard
 
@@ -271,7 +271,8 @@ never auto-update. The CLI runtime updates separately via
 [self-update](commands/self-update.md), and the dashboard footer shows a
 yellow dot when a CLI update is available (red when required).
 
-**On iPhone:** iOS updates arrive through TestFlight/App Store.
+**On your phone:** iOS updates arrive through TestFlight/App Store; Android
+updates arrive as a new APK from [Downloads](downloads.md).
 
 ## Deep Links
 
