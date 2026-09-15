@@ -422,17 +422,18 @@ def _bring_up_transport(name: str) -> None:
 
 
 def reconcile_after_login() -> None:
-    """Publish the selected transport and finish deferred Direct enrollment."""
+    """Publish the selected transport and finish deferred managed enrollment."""
     from openbase_coder_cli.services.installation import InstallationConfig
 
     if not InstallationConfig.exists():
         return
     provider = _configured_provider()
     record_account_provider(provider)
-    if provider != tp.PROVIDER_NETMESH_TSNET:
+    if provider not in (tp.PROVIDER_NETMESH, tp.PROVIDER_NETMESH_TSNET):
         return
-    click.echo("Connecting Openbase Direct...")
-    _bring_up_transport(tp.PROVIDER_NETMESH_TSNET)
+    label = "Openbase VPN" if provider == tp.PROVIDER_NETMESH else "Openbase Direct"
+    click.echo(f"Connecting {label}...")
+    _bring_up_transport(provider)
     _restart_transport_services()
 
 
