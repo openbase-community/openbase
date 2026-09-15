@@ -69,6 +69,8 @@ def test_device_registration_payload_includes_tailscale(monkeypatch) -> None:
     }
     assert payload["tailscale_ip"] == "100.64.0.1"
     assert payload["tailscale_magic_dns"] == "mac.tailnet.ts.net"
+    assert payload["capabilities"]["runtime"] in ("native", "docker", "cloud")
+    assert payload["capabilities"]["tailscale_ips"] == ["100.64.0.1"]
 
 
 def test_device_registration_payload_omits_tailscale_when_down(monkeypatch) -> None:
@@ -83,6 +85,42 @@ def test_device_registration_payload_omits_tailscale_when_down(monkeypatch) -> N
     assert "tailscale" not in payload
     assert "tailscale_ip" not in payload
     assert "tailscale_magic_dns" not in payload
+    assert payload["capabilities"] == {"runtime": cloud_registration.runtime_flavor()}
+
+
+def test_runtime_flavor_native_off_linux(monkeypatch) -> None:
+    monkeypatch.setattr(cloud_registration.platform, "system", lambda: "Darwin")
+    assert cloud_registration.runtime_flavor() == "native"
+
+
+def test_runtime_flavor_docker_via_env(monkeypatch) -> None:
+    monkeypatch.setattr(cloud_registration.platform, "system", lambda: "Linux")
+    monkeypatch.setenv("OPENBASE_CODER_RUNTIME", "maritime")
+    assert cloud_registration.runtime_flavor() == "docker"
+
+
+def test_runtime_flavor_cloud_on_ec2(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(cloud_registration.platform, "system", lambda: "Linux")
+    monkeypatch.delenv("OPENBASE_CODER_RUNTIME", raising=False)
+    vendor_file = tmp_path / "sys_vendor"
+    vendor_file.write_text("Amazon EC2\n")
+
+    real_exists = cloud_registration.Path.exists
+    real_read_text = cloud_registration.Path.read_text
+
+    def fake_exists(self):
+        if str(self) == "/.dockerenv":
+            return False
+        return real_exists(self)
+
+    def fake_read_text(self, *args, **kwargs):
+        if str(self) == "/sys/class/dmi/id/sys_vendor":
+            return real_read_text(vendor_file)
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(cloud_registration.Path, "exists", fake_exists)
+    monkeypatch.setattr(cloud_registration.Path, "read_text", fake_read_text)
+    assert cloud_registration.runtime_flavor() == "cloud"
 
 
 def test_device_registration_payload_reuses_cached_device_id(

@@ -1,13 +1,23 @@
 # Cloud DevSpace
 
-This guide starts from an Openbase Cloud Sandbox/DevSpace image that already
-has `openbase-coder`, Tailscale, NICE DCV, LiveKit, Codex, and the Openbase
-Coder service wrappers installed.
+A Cloud DevSpace (shown as a **Sandbox** in the Openbase Cloud dashboard) is a
+cloud Linux workspace that runs the full Openbase Coder runtime —
+`openbase-coder`, LiveKit, Codex, and the background services — on an instance
+Openbase Cloud launches for you. The instance provisions itself at launch: it
+signs in to your Openbase Cloud account, points coding sessions at the Openbase
+Cloud backend, defaults voice audio to Openbase Cloud, and starts the services.
+You do not need direct OpenAI, Anthropic, Cartesia, or AssemblyAI accounts for
+this path.
 
-Use this flow when you want the only external services to be Tailscale and
-Openbase Cloud. You do not need direct Cartesia or AssemblyAI accounts for this
-path; current setup defaults voice audio to Openbase Cloud, and the commands
-below switch coding sessions to the Openbase Cloud backend.
+DevSpaces come in two kinds, chosen at launch:
+
+- **Full (GUI) workspace** — a remote Linux desktop you reach through the
+  Amazon DCV web or native client. The Openbase Coder desktop app (the same
+  app as on macOS, built for Linux) is pre-installed, pinned to the dock, and
+  opens automatically in the desktop session.
+- **Headless workspace** — no remote desktop. The workspace is reached through
+  Openbase-mediated networking, and you interact with it from the phone apps
+  and the [web console](console.md).
 
 From the apps' point of view a DevSpace is just another backend host: once it
 is on your tailnet, the [iOS app](ios-tabs.md) adds it under
@@ -36,103 +46,19 @@ is on your tailnet, the [iOS app](ios-tabs.md) adds it under
 The browser connection is the Amazon DCV web client. It gives you a Linux
 desktop in the cloud instance.
 
-## Prepare the Linux Desktop
+## First Connection
 
-Open the first terminal inside the DCV desktop:
+When the desktop appears, the Openbase Coder desktop app is already running
+(or one click away in the dock). Openbase Cloud sign-in, backend selection,
+and service startup already happened during launch provisioning — there are
+no terminal commands to run.
 
-1. Click `Activities`.
-2. Search for `Terminal`.
-3. Open `Terminal`.
-
-Start a browser inside the Linux desktop before running the auth commands:
-
-```bash
-firefox &
-```
-
-If Firefox is not installed in the image, install it and start it:
-
-```bash
-sudo snap install firefox
-firefox &
-```
-
-## Connect Tailscale
-
-Run:
-
-```bash
-sudo tailscale up
-```
-
-Tailscale prints an authentication URL. Open that URL in Firefox, sign in to the
-same tailnet your iPhone uses, and approve the new Linux device.
-
-Confirm Tailscale is connected:
-
-```bash
-tailscale status
-tailscale ip -4
-```
-
-The IP should be a `100.x.y.z` address.
-
-## Log In to Openbase Cloud
-
-Log in from the Linux terminal:
-
-```bash
-openbase-coder login
-```
-
-If Firefox does not open automatically, copy the URL printed by the command into
-Firefox. Sign in with the same Openbase Cloud account you use in the iOS app.
-
-Switch coding sessions to Openbase Cloud:
-
-```bash
-openbase-coder backend use openbase_cloud
-```
-
-Use the underscore spelling, `openbase_cloud`, for compatibility with cloud
-images that have an older `openbase-coder` CLI installed.
-
-This avoids requiring local OpenAI, Anthropic, Cartesia, or AssemblyAI account
-setup for the basic voice-agent path.
-
-## Start Openbase Coder Services
-
-Start the default services:
-
-```bash
-openbase-coder services start
-```
-
-Starting the default service set also configures the Tailscale Serve routes used
-by the iOS app:
-
-```bash
-tailscale serve --bg --http=18080 http://127.0.0.1:7999
-tailscale serve --bg --tcp=7880 tcp://127.0.0.1:7880
-```
-
-Check the instance:
-
-```bash
-openbase-coder services status
-openbase-coder doctor
-```
-
-Both commands should report healthy services and healthy Tailscale Serve routes.
-
-If `doctor` reports missing Openbase Cloud audio configuration on an older
-image, refresh setup in Openbase Cloud mode and start services again:
-
-```bash
-openbase-coder setup --backend openbase_cloud --audio-provider openbase-cloud
-openbase-coder services start
-openbase-coder doctor
-```
+The desktop app walks you through the one step that must be yours: private
+networking. It opens Tailscale's browser authentication page; sign in to the
+same tailnet your iPhone uses and approve the new Linux device. The app then
+joins your tailnet, enables Tailscale SSH, and registers the DevSpace with
+your Openbase account so the phone apps can find it. The DevSpace never joins
+anyone else's tailnet — only the one you authenticate.
 
 ## Get the iOS Host Name
 
@@ -184,7 +110,7 @@ start and call before automatic resume is available.
 
 ## Quick Recovery
 
-If the iOS app cannot connect:
+If the iOS app cannot connect, open a terminal in the DCV desktop and check:
 
 ```bash
 tailscale status
@@ -204,4 +130,49 @@ If the call reaches `Connecting...` or `Waiting for Agent`, inspect recent logs:
 ```bash
 openbase-coder services logs livekit-server
 openbase-coder services logs livekit-agent
+```
+
+## Manual Fallback
+
+Older images, or an instance whose launch provisioning did not complete, can
+be brought up by hand from a terminal in the DCV desktop. None of this is
+needed on a healthy current DevSpace.
+
+Authenticate Tailscale directly (instead of through the desktop app):
+
+```bash
+sudo tailscale up
+```
+
+Open the printed URL in a browser inside the desktop (`firefox &`; install it
+with `sudo snap install firefox` if missing), sign in to the same tailnet your
+iPhone uses, and approve the device. Confirm with `tailscale status` and
+`tailscale ip -4` — the IP should be a `100.x.y.z` address.
+
+Sign in to Openbase Cloud and select the cloud backend:
+
+```bash
+openbase-coder login
+openbase-coder backend use openbase_cloud
+```
+
+Use the underscore spelling, `openbase_cloud`, for compatibility with cloud
+images that have an older `openbase-coder` CLI installed.
+
+Start the default services, which also configures the Tailscale Serve routes
+the iOS app uses (`18080 → 7999` API, `7880` LiveKit signaling):
+
+```bash
+openbase-coder services start
+```
+
+Verify with `openbase-coder services status` and `openbase-coder doctor` —
+both should report healthy services and healthy Tailscale Serve routes. If
+`doctor` reports missing Openbase Cloud audio configuration on an older image,
+refresh setup and start services again:
+
+```bash
+openbase-coder setup --backend openbase_cloud --audio-provider openbase-cloud
+openbase-coder services start
+openbase-coder doctor
 ```
