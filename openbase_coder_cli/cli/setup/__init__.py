@@ -162,6 +162,7 @@ from openbase_coder_cli.services.tailscale_serve import (
 from openbase_coder_cli.services.tunneld import (
     ensure_tunneld_running,
     install_tunneld_binary,
+    tunneld_node_enrolled,
 )
 from openbase_coder_cli.stt_providers import (
     ASSEMBLYAI_STT_PROVIDER_ID,  # noqa: F401
@@ -875,13 +876,15 @@ def _run_setup_phases(
     # --- Install services ---
     progress.step("services", "start")
     direct_enrollment = None
+    direct_existing_profile = False
     direct_login_present = False
     if not skip_services and tailnet_provider == PROVIDER_NETMESH_TSNET:
         configured_cloud_url = _env_file_values(Path(env_file)).get(
             "OPENBASE_CODER_CLI_WEB_BACKEND_URL", DEFAULT_WEB_BACKEND_URL
         )
         direct_login_present = TokenManager(configured_cloud_url).has_refresh_token
-        if direct_login_present:
+        direct_existing_profile = tunneld_node_enrolled()
+        if direct_login_present and not direct_existing_profile:
             from openbase_coder_cli.cli.tailnet import prepare_embedded_enrollment
 
             direct_enrollment = prepare_embedded_enrollment(Path(env_file))
@@ -921,13 +924,16 @@ def _run_setup_phases(
         if tailnet_provider == PROVIDER_NETMESH_TSNET:
             click.echo("  Installing openbase-tunneld service...")
             install_service(config, TUNNELD_SERVICE)
-            if direct_enrollment:
+            if direct_enrollment or direct_existing_profile:
                 click.echo(
                     "  Waiting for Openbase Direct to join its private network..."
                 )
                 try:
                     ensure_tunneld_running(
-                        auth_key=direct_enrollment["auth_key"], managed_service=True
+                        auth_key=(
+                            direct_enrollment["auth_key"] if direct_enrollment else None
+                        ),
+                        managed_service=True,
                     )
                 except RuntimeError as exc:
                     raise click.ClickException(

@@ -111,6 +111,29 @@ def _state_dir() -> Path:
     return Path.home() / ".openbase" / "tsnet"
 
 
+def tunneld_node_enrolled() -> bool:
+    """Whether tsnet persisted a completed node profile for reuse.
+
+    A setup rerun must not demand another single-use enrollment key when the
+    daemon already has a node identity. Tailscale's state values are opaque
+    encoded strings, so only the documented top-level profile markers are
+    inspected; no credential material is decoded.
+    """
+    import json
+
+    try:
+        state = json.loads((_state_dir() / "tailscaled.state").read_text())
+    except (OSError, ValueError):
+        return False
+    if not isinstance(state, dict):
+        return False
+    return bool(
+        state.get("_current-profile")
+        and state.get("_profiles")
+        and any(str(key).startswith("profile-") for key in state)
+    )
+
+
 def _control_headers() -> dict[str, str]:
     """Bearer token minted by the daemon into <statedir>/control.token."""
     token = os.environ.get("OPENBASE_TUNNELD_TOKEN")

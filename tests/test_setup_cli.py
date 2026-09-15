@@ -1301,6 +1301,7 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
         lambda **_kwargs: calls.append("tunneld-ready"),
     )
     _patch_setup(monkeypatch, "compute_cli_configured", lambda: True)
+    _patch_setup(monkeypatch, "tunneld_node_enrolled", lambda: False)
     monkeypatch.setattr(
         setup_cli.InstallationConfig,
         "save",
@@ -1458,6 +1459,51 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
         "configure",
         "register",
     ]
+
+    monkeypatch.setattr(
+        tailnet_cli,
+        "prepare_embedded_enrollment",
+        lambda _path=None: pytest.fail(
+            "an enrolled Direct node must not request another single-use key"
+        ),
+    )
+    _patch_setup(monkeypatch, "tunneld_node_enrolled", lambda: True)
+    calls.clear()
+    result = runner.invoke(
+        setup_cli.setup,
+        [
+            "--workspace-dir",
+            str(workspace),
+            "--env-file",
+            str(env_file),
+            "--backend",
+            "claude-code",
+            "--tailnet-provider",
+            "netmesh-tsnet",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Device registered with Openbase Cloud" in result.output
+    assert calls == [
+        "thread-sync",
+        "sounds",
+        "tunneld-binary",
+        "service:openbase-tunneld",
+        "tunneld-ready",
+        "configure",
+        "register",
+    ]
+
+    _patch_setup(monkeypatch, "tunneld_node_enrolled", lambda: False)
+    monkeypatch.setattr(
+        tailnet_cli,
+        "prepare_embedded_enrollment",
+        lambda _path=None: {
+            "control_url": "https://net-staging.example.test",
+            "auth_key": "staging-single-use-key",
+        },
+    )
 
     _patch_setup(
         monkeypatch,
