@@ -108,6 +108,37 @@ def test_record_account_provider_uses_shared_cloud_path(quiet_orchestration):
     assert quiet_orchestration["push"] == ["netmesh-tsnet"]
 
 
+@pytest.mark.parametrize("provider", ["netmesh", "netmesh-tsnet"])
+def test_reconcile_after_login_connects_managed_transport(
+    provider, quiet_orchestration, monkeypatch
+):
+    from openbase_coder_cli.services.installation import InstallationConfig
+
+    monkeypatch.setattr(InstallationConfig, "exists", lambda: True)
+    monkeypatch.setattr(tailnet_cli, "_configured_provider", lambda: provider)
+
+    tailnet_cli.reconcile_after_login()
+
+    assert quiet_orchestration["push"] == [provider]
+    assert quiet_orchestration["bring_up"] == [provider]
+    assert quiet_orchestration["restart"] == 1
+
+
+def test_reconcile_after_login_does_not_restart_expert_tailscale(
+    quiet_orchestration, monkeypatch
+):
+    from openbase_coder_cli.services.installation import InstallationConfig
+
+    monkeypatch.setattr(InstallationConfig, "exists", lambda: True)
+    monkeypatch.setattr(tailnet_cli, "_configured_provider", lambda: "tailscale")
+
+    tailnet_cli.reconcile_after_login()
+
+    assert quiet_orchestration["push"] == ["tailscale"]
+    assert quiet_orchestration["bring_up"] == []
+    assert quiet_orchestration["restart"] == 0
+
+
 def test_set_provider_same_value_skips_teardown_but_cleans_legacy(
     env_path, quiet_orchestration
 ):

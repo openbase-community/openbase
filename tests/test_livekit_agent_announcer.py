@@ -1080,6 +1080,15 @@ async def test_voice_router_close_closes_dispatcher_client():
     assert dispatcher.closed is True
 
 
+def test_voice_router_exit_to_dispatch_is_silent_when_dispatcher_is_active():
+    dispatcher = PreparedClient()
+    router = LiveKitVoiceRouter(dispatcher)
+
+    assert router.exit_to_dispatch() is False
+    assert router.route_snapshot().route_version == 0
+    assert dispatcher.persisted_routes == []
+
+
 @pytest.mark.asyncio
 async def test_voice_router_transfers_to_prepared_target(monkeypatch, tmp_path):
     dispatcher = PreparedClient()

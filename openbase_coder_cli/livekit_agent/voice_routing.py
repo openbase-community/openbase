@@ -82,7 +82,13 @@ class LiveKitVoiceRouter:
             active_route=active_route,
         )
 
-    def exit_to_dispatch(self) -> None:
+    def exit_to_dispatch(self) -> bool:
+        if self.is_dispatcher_active:
+            logger.info(
+                "dispatch_timing stage=voice_route_unchanged "
+                "action=exit_to_dispatch reason=dispatcher_already_active"
+            )
+            return False
         self._active_client = self._dispatcher_client
         self._active_target_voice_id = None
         self._active_target_voice_name = None
@@ -94,6 +100,7 @@ class LiveKitVoiceRouter:
             self._route_version,
             getattr(self._active_client, "_thread_id", "") or "",
         )
+        return True
 
     async def transfer_to_thread(
         self,
