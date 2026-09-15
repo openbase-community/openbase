@@ -39,6 +39,7 @@ openbase-coder user exit-to-dispatch --room "openbase-room-name"
 Super Agent thread names and speaking agent names are related but different.
 The thread name is the durable work label, while the speaking agent name chooses
 the voice identity used in the LiveKit room.
+The speaking name is always derived deterministically from the exact thread name; choosing an unrelated person name is not a separate user-facing option.
 
 Before creating, transferring to, or referring to a Super Agent by a thread
 name, derive the speaking name:

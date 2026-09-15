@@ -8,6 +8,7 @@ import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
+import click
 import pytest
 from click.testing import CliRunner
 
@@ -2069,6 +2070,45 @@ def test_interactive_login_checks_skip_when_declined(tmp_path, monkeypatch) -> N
     )
 
     assert calls == []
+
+
+def test_interactive_login_checks_run_login_when_accepted(
+    tmp_path, monkeypatch
+) -> None:
+    class _LoggedOut:
+        def __init__(self, url):
+            self.has_refresh_token = False
+
+    login_calls = []
+    reports = []
+
+    @click.command()
+    def fake_login():
+        login_calls.append(True)
+
+    monkeypatch.setattr(setup_cli, "TokenManager", _LoggedOut)
+    monkeypatch.setattr(setup_cli, "login_command", fake_login)
+    monkeypatch.setattr(
+        setup_cli,
+        "tailscale_serve_health",
+        lambda: SimpleNamespace(healthy=True, error=None),
+    )
+    monkeypatch.setattr(
+        setup_cli,
+        "register_and_report",
+        lambda **kwargs: reports.append(kwargs)
+        or SimpleNamespace(ok=True, supported=True, error=None),
+    )
+    _fake_tty_stdin(monkeypatch, "y\n")
+
+    ctx = setup_cli.setup.make_context("setup", [])
+    with ctx:
+        setup_cli._interactive_cloud_login_and_checks(
+            str(tmp_path / ".env"), cli_configured=True
+        )
+
+    assert login_calls == [True]
+    assert reports == [{"cli_configured": True, "serve_healthy": True}]
 
 
 def test_interactive_login_checks_report_when_logged_in(tmp_path, monkeypatch) -> None:

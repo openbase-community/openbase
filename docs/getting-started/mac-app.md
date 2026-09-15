@@ -3,7 +3,7 @@
 The desktop app is the production, no-terminal install path. Release builds
 are coordinated from `main`; the app bundles the
 complete CLI runtime and walks you through setup in the app — no terminal
-required — including your coding backend, managed voice audio, and iPhone
+required — including your coding backend, managed voice audio, and phone
 pairing. (Prefer working from source? See
 [Developer Setup](developer-setup.md). On Windows, `./scripts/setup` runs
 natively in beta — or use the [Docker image](../docker.md), the most
@@ -42,7 +42,7 @@ This requires an Apple Silicon Mac — see [Local-Only Mode](../local-only.md).
 
 ## After Setup
 
-Authenticate with Openbase Cloud (required for iOS app pairing and cloud
+Authenticate with Openbase Cloud (required for mobile app pairing — iOS or Android — and cloud
 onboarding):
 
 ```bash
