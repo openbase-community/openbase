@@ -20,8 +20,6 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - ".github/workflows/docker-image.yml"
-      - "uv.lock"
-      - ".github/workflows/docker-image.yml"
   workflow_dispatch:
 
 env:
@@ -127,3 +125,25 @@ jobs:
             $(printf "$IMAGE@sha256:%s " *)
       - name: Inspect
         run: docker buildx imagetools inspect "$IMAGE:latest"
+
+  # Report-only vulnerability scan of the image that was just published, so
+  # base-image and OS-package CVEs surface in the Security tab instead of
+  # waiting for someone to scan the image by hand. Does not gate the release.
+  scan:
+    needs: [preflight, merge]
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    steps:
+      - name: Run Trivy on published image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: openbaseai/openbase:${{ needs.preflight.outputs.version }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+      - name: Upload results to code scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif

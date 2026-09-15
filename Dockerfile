@@ -117,7 +117,9 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack \
     && node --version && npm --version
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# Pinned (not :latest) so a bad or compromised uv release can't ride into the
+# next image build unreviewed; bump deliberately.
+COPY --from=ghcr.io/astral-sh/uv:0.12.14 /uv /usr/local/bin/uv
 COPY --from=tunneld-build /out/openbase-tunneld /usr/local/bin/openbase-tunneld
 
 COPY docker/entrypoint.sh /usr/local/bin/openbase-coder-entrypoint
