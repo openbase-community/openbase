@@ -9,11 +9,13 @@ so login/setup never fail because of them. The last results are cached in
 
 from __future__ import annotations
 
+import os
 import platform
 import socket
 import time
 import uuid
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -56,6 +58,23 @@ class CloudReportResult:
         return asdict(self)
 
 
+def runtime_flavor() -> str:
+    """Where this desktop runs: native, docker, or cloud (EC2 DevSpace).
+
+    Distinguishes the three Linux runtimes the same "linux" platform value
+    collapses; macOS and Windows installs are always native.
+    """
+    if platform.system() != "Linux":
+        return "native"
+    if os.environ.get("OPENBASE_CODER_RUNTIME") or Path("/.dockerenv").exists():
+        return "docker"
+    try:
+        vendor = Path("/sys/class/dmi/id/sys_vendor").read_text()
+    except OSError:
+        vendor = ""
+    return "cloud" if "Amazon EC2" in vendor else "native"
+
+
 def device_registration_payload() -> dict[str, Any]:
     identity = tailscale_self_identity()
     payload: dict[str, Any] = {
@@ -70,22 +89,17 @@ def device_registration_payload() -> dict[str, Any]:
             else platform.release()
         ),
         "version": __version__,
+        "capabilities": {"runtime": runtime_flavor()},
     }
     if identity["available"]:
-        payload.update(
-            {
-                "tailscale": {
-                    "dns_name": identity["dns_name"],
-                    "node_hostname": identity["node_hostname"],
-                    "tailnet": identity["tailnet"],
-                    "ips": identity["ips"],
-                },
-                "tailscale_magic_dns": identity["dns_name"] or "",
-                "capabilities": {
-                    "tailscale_ips": identity["ips"],
-                },
-            }
-        )
+        payload["tailscale"] = {
+            "dns_name": identity["dns_name"],
+            "node_hostname": identity["node_hostname"],
+            "tailnet": identity["tailnet"],
+            "ips": identity["ips"],
+        }
+        payload["tailscale_magic_dns"] = identity["dns_name"] or ""
+        payload["capabilities"]["tailscale_ips"] = identity["ips"]
         if identity["ips"]:
             payload["tailscale_ip"] = identity["ips"][0]
     return payload
@@ -238,9 +252,7 @@ def revoke_netmesh_device(node_id: str) -> bool:
 
 
 def netmesh_service_hostname_capabilities() -> CloudReportResult:
-    return _post_to_cloud(
-        NETMESH_SERVICE_HOSTNAME_CAPABILITIES_PATH, {}, method="GET"
-    )
+    return _post_to_cloud(NETMESH_SERVICE_HOSTNAME_CAPABILITIES_PATH, {}, method="GET")
 
 
 def allocate_netmesh_service_hostname(
