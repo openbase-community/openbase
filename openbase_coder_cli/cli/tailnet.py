@@ -154,33 +154,7 @@ def _apply_provider(name: str, *, push_cloud: bool) -> None:
     click.echo(f"Tailnet provider set to '{name}' in {path}.")
 
     if push_cloud:
-        from openbase_coder_cli.services.cloud_registration import (
-            push_tailnet_provider,
-        )
-
-        result = push_tailnet_provider(name)
-        if result.ok:
-            click.echo(
-                "Recorded as the account-level transport; your other devices "
-                "will prompt to follow."
-            )
-        elif not result.supported:
-            click.echo(
-                click.style(
-                    "Note: openbase-cloud does not support the account-level "
-                    "transport yet — other devices will not follow "
-                    "automatically.",
-                    fg="yellow",
-                )
-            )
-        else:
-            click.echo(
-                click.style(
-                    f"Warning: could not record the choice in openbase-cloud: "
-                    f"{result.error}",
-                    fg="yellow",
-                )
-            )
+        record_account_provider(name)
 
     # Always: the pre-integration LaunchAgent must never survive a switch —
     # even a same-provider re-apply — or it holds tunneld's control port and
@@ -448,16 +422,47 @@ def _bring_up_transport(name: str) -> None:
 
 
 def reconcile_after_login() -> None:
-    """Finish a deferred Direct enrollment immediately after Cloud login."""
+    """Publish the selected transport and finish deferred Direct enrollment."""
     from openbase_coder_cli.services.installation import InstallationConfig
 
     if not InstallationConfig.exists():
         return
-    if _configured_provider() != tp.PROVIDER_NETMESH_TSNET:
+    provider = _configured_provider()
+    record_account_provider(provider)
+    if provider != tp.PROVIDER_NETMESH_TSNET:
         return
     click.echo("Connecting Openbase Direct...")
     _bring_up_transport(tp.PROVIDER_NETMESH_TSNET)
     _restart_transport_services()
+
+
+def record_account_provider(name: str) -> bool:
+    """Persist the local transport choice as the account-level source of truth."""
+    from openbase_coder_cli.services.cloud_registration import push_tailnet_provider
+
+    result = push_tailnet_provider(name)
+    if result.ok:
+        click.echo(
+            "Recorded as the account-level transport; your other devices "
+            "will prompt to follow."
+        )
+    elif not result.supported:
+        click.echo(
+            click.style(
+                "Note: Openbase Cloud does not support the account-level "
+                "transport yet — other devices will not follow automatically.",
+                fg="yellow",
+            )
+        )
+    else:
+        click.echo(
+            click.style(
+                "Warning: could not record the networking choice in Openbase "
+                f"Cloud: {result.error}",
+                fg="yellow",
+            )
+        )
+    return result.ok
 
 
 def _join_netmesh_with_stock_tailscale() -> None:

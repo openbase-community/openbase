@@ -1214,6 +1214,7 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
     tmp_path, monkeypatch
 ) -> None:
     calls = []
+    tailnet_cli = importlib.import_module("openbase_coder_cli.cli.tailnet")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     env_file = tmp_path / ".env"
@@ -1303,6 +1304,11 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
     _patch_setup(monkeypatch, "compute_cli_configured", lambda: True)
     _patch_setup(monkeypatch, "tunneld_node_enrolled", lambda: False)
     monkeypatch.setattr(
+        tailnet_cli,
+        "record_account_provider",
+        lambda provider: calls.append(f"provider:{provider}") or True,
+    )
+    monkeypatch.setattr(
         setup_cli.InstallationConfig,
         "save",
         lambda self: None,
@@ -1346,8 +1352,6 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
     assert result.exit_code == 0, result.output
     assert calls == ["thread-sync", "sounds", "configure"]
     assert "Claude Code is not logged in" in result.output
-
-    tailnet_cli = importlib.import_module("openbase_coder_cli.cli.tailnet")
 
     calls.clear()
     monkeypatch.setattr(
@@ -1457,6 +1461,7 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
         "service:openbase-tunneld",
         "tunneld-ready",
         "configure",
+        "provider:netmesh-tsnet",
         "register",
     ]
 
@@ -1492,6 +1497,7 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
         "service:openbase-tunneld",
         "tunneld-ready",
         "configure",
+        "provider:netmesh-tsnet",
         "register",
     ]
 
@@ -2071,6 +2077,13 @@ def test_interactive_login_checks_report_when_logged_in(tmp_path, monkeypatch) -
             self.has_refresh_token = True
 
     reports = []
+    tailnet_cli = importlib.import_module("openbase_coder_cli.cli.tailnet")
+    providers = []
+    monkeypatch.setattr(
+        tailnet_cli,
+        "record_account_provider",
+        lambda provider: providers.append(provider) or True,
+    )
     monkeypatch.setattr(setup_cli, "TokenManager", _LoggedIn)
     monkeypatch.setattr(
         setup_cli,
@@ -2089,6 +2102,7 @@ def test_interactive_login_checks_report_when_logged_in(tmp_path, monkeypatch) -
     )
 
     assert reports == [{"cli_configured": True, "serve_healthy": True}]
+    assert providers == ["tailscale"]
 
 
 def test_print_app_download_qr_outputs_url(capsys) -> None:

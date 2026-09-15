@@ -439,6 +439,7 @@ def setup(
             _report_cloud_readiness(
                 cli_configured=cli_configured,
                 serve_healthy=serve_healthy,
+                tailnet_provider=tailnet_provider,
             )
         else:
             click.echo(
@@ -450,8 +451,13 @@ def setup(
 APP_DOWNLOADS_URL = "https://openbase.cloud/downloads.html"
 
 
-def _report_cloud_readiness(*, cli_configured: bool, serve_healthy: bool) -> None:
+def _report_cloud_readiness(
+    *, cli_configured: bool, serve_healthy: bool, tailnet_provider: str
+) -> None:
     """Publish the final post-setup identity and explain its visible state."""
+    from openbase_coder_cli.cli.tailnet import record_account_provider
+
+    record_account_provider(tailnet_provider)
     report = register_and_report(
         cli_configured=cli_configured,
         serve_healthy=serve_healthy,
@@ -512,9 +518,13 @@ def _interactive_cloud_login_and_checks(env_file: str, *, cli_configured: bool) 
     # Login already registers the device; re-report with the freshest facts
     # so the cloud sees this install as configured, and surface the result.
     serve_health = tailscale_serve_health()
+    provider = _env_file_values(Path(env_file)).get(
+        "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", PROVIDER_TAILSCALE
+    )
     _report_cloud_readiness(
         cli_configured=cli_configured,
         serve_healthy=serve_health.healthy,
+        tailnet_provider=provider,
     )
 
 
