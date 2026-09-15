@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import pytest
+
 from openbase_coder_cli.services import openbase_services
 from openbase_coder_cli.services.definitions import SERVICES, ServiceDefinition
 from openbase_coder_cli.services.restart import RestartPlan
+
+
+@pytest.fixture(autouse=True)
+def _configured_backend(monkeypatch):
+    monkeypatch.setattr(openbase_services, "configured_coding_backend", lambda: "codex")
 
 
 def test_settings_service_payload_includes_all_defined_openbase_services(monkeypatch):
@@ -33,6 +40,25 @@ def test_settings_service_payload_includes_all_defined_openbase_services(monkeyp
     }.issubset({service["name"] for service in payload["services"]})
     assert all(service["installed"] for service in payload["services"])
     assert all(service["running"] for service in payload["services"])
+
+
+def test_settings_marks_services_for_other_backends_optional(monkeypatch):
+    monkeypatch.setattr(
+        openbase_services,
+        "launchctl_status",
+        lambda _service: {"installed": False, "pid": None, "last_exit_code": None},
+    )
+    monkeypatch.setattr(
+        openbase_services,
+        "configured_coding_backend",
+        lambda: "openbase_cloud",
+    )
+
+    payload = openbase_services.list_openbase_services_payload()
+    services = {service["name"]: service for service in payload["services"]}
+
+    assert services["codex-app-server"]["optional"] is True
+    assert services["livekit-server"]["optional"] is False
 
 
 def test_restart_payload_schedules_everything(monkeypatch):
