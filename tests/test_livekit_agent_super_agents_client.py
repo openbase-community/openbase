@@ -1778,3 +1778,88 @@ async def test_super_agents_livekit_client_awaits_pushed_turn_completion(
     assert backend.wait_calls == 1
     assert backend.progress_calls >= 2
     assert result["_livekit_speech_text"] == "The event driven answer is ready."
+
+
+def test_unsubmitted_transcript_remainder_detects_fragment_coverage(
+    tmp_path: Path,
+) -> None:
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "livekit-voice-route.json"),
+        backend_client=FakeSuperAgentsBackend(),
+    )
+    client._record_turn_prompt(
+        "turn-1", "h1", "<voice>Why didn't you add that to Cindy before?</voice>"
+    )
+    client._record_turn_prompt("turn-1", "h2", "<voice>Like this is not ideal.</voice>")
+
+    covered = (
+        "<voice>Why didn't you add that to Cindy before? "
+        "Like this is not ideal.</voice>"
+    )
+    assert client._unsubmitted_transcript_remainder("turn-1", covered) == ""
+
+    extended = (
+        "<voice>Why didn't you add that to Cindy before? "
+        "Like this is not ideal. Please look into it.</voice>"
+    )
+    assert (
+        client._unsubmitted_transcript_remainder("turn-1", extended)
+        == "Please look into it."
+    )
+
+    unrelated = "<voice>Tell me about zebras.</voice>"
+    assert client._unsubmitted_transcript_remainder("turn-1", unrelated) is None
+
+    # A turn with no submissions offers no overlap information.
+    assert client._unsubmitted_transcript_remainder("turn-9", covered) is None
+
+
+@pytest.mark.asyncio
+async def test_steer_active_turn_skips_transcript_covered_by_prior_fragments(
+    tmp_path: Path,
+) -> None:
+    backend = FakeExternallyActiveSuperAgentsBackend()
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "livekit-voice-route.json"),
+        backend_client=backend,
+    )
+    client._active_turn_id = "turn-1"
+    client._record_turn_prompt("turn-1", "h1", "<voice>Fragment one.</voice>")
+    client._record_turn_prompt("turn-1", "h2", "<voice>And fragment two.</voice>")
+
+    merged = "<voice>Fragment one. And fragment two.</voice>"
+    assert await client.steer_active_turn(merged) == "turn-1"
+    assert backend.steered == []
+
+    # A merged transcript with a novel tail steers only the new content.
+    extended = "<voice>Fragment one. And fragment two. Now do the fix.</voice>"
+    assert await client.steer_active_turn(extended) == "turn-1"
+    assert len(backend.steered) == 1
+    _steer_input, steered_prompt = backend.steered[0]
+    assert steered_prompt == "<voice>Now do the fix.</voice>"
+
+
+@pytest.mark.asyncio
+async def test_run_turn_joins_active_turn_when_transcript_already_covered(
+    tmp_path: Path,
+) -> None:
+    backend = FakeExternallyActiveSuperAgentsBackend()
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "livekit-voice-route.json"),
+        backend_client=backend,
+    )
+    client._active_turn_id = "active-turn-1"
+    client._active_turn_prompt_hash = "hash-of-first-fragment"
+    client._record_turn_prompt("active-turn-1", "h1", "<voice>Fragment one.</voice>")
+    client._record_turn_prompt(
+        "active-turn-1", "h2", "<voice>And fragment two.</voice>"
+    )
+
+    result = await client.run_turn("<voice>Fragment one. And fragment two.</voice>")
+
+    assert backend.steered == []
+    assert result["_livekit_turn_id"] == "active-turn-1"
+    assert result["_livekit_speech_text"] == "The steered dispatcher answer is ready."

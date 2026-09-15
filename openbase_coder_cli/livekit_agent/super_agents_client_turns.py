@@ -44,11 +44,27 @@ from openbase_coder_cli.livekit_agent.super_agents_client_common import (
 from openbase_coder_cli.livekit_agent.super_agents_speech import (
     _speech_text_from_progress,
 )
+from openbase_coder_cli.voice_tags import VOICE_TAG_CLOSE, VOICE_TAG_OPEN
 
 if TYPE_CHECKING:
     from openbase_coder_cli.livekit_agent.super_agents_client import (
         SuperAgentsLiveKitClient,
     )
+
+
+def _voice_prompt_transcript(prompt: str) -> str:
+    """The spoken transcript inside a voice-tagged prompt, else the prompt."""
+    start = prompt.find(VOICE_TAG_OPEN)
+    end = prompt.rfind(VOICE_TAG_CLOSE)
+    if start != -1 and end > start:
+        return prompt[start + len(VOICE_TAG_OPEN) : end].strip()
+    return prompt.strip()
+
+
+def _wrap_transcript(transcript: str) -> str:
+    # The transcript came out of an already-wrapped prompt, so it is already
+    # HTML-escaped; wrap_voice_prompt would double-escape entities.
+    return f"{VOICE_TAG_OPEN}{transcript}{VOICE_TAG_CLOSE}"
 
 
 class SuperAgentsClientTurnsMixin:
@@ -110,6 +126,27 @@ class SuperAgentsClientTurnsMixin:
                         prompt_debug["hash"],
                     )
                     return None
+                remainder = self._unsubmitted_transcript_remainder(
+                    self._active_turn_id, prompt
+                )
+                if remainder == "":
+                    # Every fragment of this transcript already reached the
+                    # turn; steering it again would make the model answer the
+                    # same content twice.
+                    logger.info(
+                        "%s stage=proactive_steer_skipped_covered_transcript "
+                        "thread_id=%s turn_id=%s prompt_hash=%s",
+                        DISPATCH_TIMING_LOG,
+                        thread_id,
+                        self._active_turn_id,
+                        prompt_debug["hash"],
+                    )
+                    self._record_turn_prompt(
+                        self._active_turn_id, prompt_debug["hash"], prompt
+                    )
+                    return self._active_turn_id
+                if remainder is not None:
+                    prompt = _wrap_transcript(remainder)
                 return await self._steer_turn(
                     thread_id,
                     prompt,
@@ -427,14 +464,14 @@ class SuperAgentsClientTurnsMixin:
                 self._active_turn_id = turn_id
                 self._active_turn_started_at = time.monotonic()
                 self._active_turn_prompt_hash = prompt_debug["hash"]
-                self._record_turn_prompt(turn_id, prompt_debug["hash"])
+                self._record_turn_prompt(turn_id, prompt_debug["hash"], prompt)
                 return turn_id
             else:
                 raise
         turn_id = _extract_turn_id(result) or self._active_turn_id
         self._active_turn_id = turn_id
         self._active_turn_prompt_hash = prompt_debug["hash"]
-        self._record_turn_prompt(turn_id, prompt_debug["hash"])
+        self._record_turn_prompt(turn_id, prompt_debug["hash"], prompt)
         logger.info(
             "Submitted Super Agents turn steering turn_id=%s prompt_hash=%s prompt_len=%s",
             turn_id,
@@ -530,11 +567,64 @@ class SuperAgentsClientTurnsMixin:
         self._prune_turn_prompt_records()
         return True
 
-    def _record_turn_prompt(self, turn_id: str | None, prompt_hash: str) -> None:
+    def _record_turn_prompt(
+        self,
+        turn_id: str | None,
+        prompt_hash: str,
+        prompt: str | None = None,
+    ) -> None:
         if not turn_id or not prompt_hash:
             return
         self._turn_prompt_hashes.setdefault(turn_id, set()).add(prompt_hash)
+        if prompt:
+            transcript = _voice_prompt_transcript(prompt)
+            submitted = self._turn_submitted_transcripts.setdefault(turn_id, [])
+            if transcript and transcript not in submitted:
+                submitted.append(transcript)
         self._prune_turn_prompt_records()
+
+    def _unsubmitted_transcript_remainder(
+        self,
+        turn_id: str | None,
+        prompt: str,
+    ) -> str | None:
+        """Portion of ``prompt``'s transcript not yet submitted to ``turn_id``.
+
+        Streaming STT delivers one spoken thought as several final fragments,
+        and the framework then submits the merged utterance as well. Without
+        overlap awareness each layer re-submits content the turn already has,
+        and the model answers the same thing twice (2026-09-15 dispatcher
+        double-response incidents). Returns ``""`` when the transcript is
+        fully covered by previously submitted fragments, the novel suffix
+        when known fragments form a strict prefix, or ``None`` when there is
+        no overlap information to act on.
+        """
+        submitted = self._turn_submitted_transcripts.get(turn_id or "") or []
+        transcript = _voice_prompt_transcript(prompt)
+        remainder = transcript
+        progressed = True
+        while remainder and progressed:
+            progressed = False
+            folded = remainder.casefold()
+            for fragment in submitted:
+                fragment_folded = fragment.casefold()
+                if fragment_folded and folded.startswith(fragment_folded):
+                    remainder = remainder[len(fragment) :].lstrip(" \t\n.,;—-")
+                    progressed = True
+                    break
+        if not remainder:
+            return ""
+        if remainder == transcript:
+            return None
+        return remainder
+
+    def _is_covered_by_spoken_turn(self, turn_id: str, prompt: str) -> bool:
+        spoken_at = self._turn_spoken_at.get(turn_id)
+        if spoken_at is None:
+            return False
+        if time.monotonic() - spoken_at > SPOKEN_TURN_DUPLICATE_SUPPRESSION_SECONDS:
+            return False
+        return self._unsubmitted_transcript_remainder(turn_id, prompt) == ""
 
     def _prune_turn_prompt_records(self) -> None:
         cutoff = time.monotonic() - 4 * SPOKEN_TURN_DUPLICATE_SUPPRESSION_SECONDS
@@ -542,11 +632,13 @@ class SuperAgentsClientTurnsMixin:
             if spoken_at < cutoff and turn_id != self._active_turn_id:
                 self._turn_spoken_at.pop(turn_id, None)
                 self._turn_prompt_hashes.pop(turn_id, None)
+                self._turn_submitted_transcripts.pop(turn_id, None)
         while len(self._turn_prompt_hashes) > 16:
             oldest = next(iter(self._turn_prompt_hashes))
             if oldest == self._active_turn_id:
                 break
             self._turn_prompt_hashes.pop(oldest, None)
+            self._turn_submitted_transcripts.pop(oldest, None)
 
     def _is_duplicate_of_spoken_turn(self, turn_id: str, prompt_hash: str) -> bool:
         spoken_at = self._turn_spoken_at.get(turn_id)
