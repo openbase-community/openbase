@@ -103,6 +103,11 @@ def test_set_provider_no_cloud_skips_push(env_path, quiet_orchestration):
     assert quiet_orchestration["push"] == []
 
 
+def test_record_account_provider_uses_shared_cloud_path(quiet_orchestration):
+    assert tailnet_cli.record_account_provider("netmesh-tsnet") is True
+    assert quiet_orchestration["push"] == ["netmesh-tsnet"]
+
+
 def test_set_provider_same_value_skips_teardown_but_cleans_legacy(
     env_path, quiet_orchestration
 ):
@@ -124,7 +129,9 @@ def test_teardown_netmesh_ignores_unavailable_helper(monkeypatch, capsys):
                 "http://127.0.0.1/disconnect", 502, "helper unavailable", {}, None
             )
 
-    monkeypatch.setattr(tailscale_provider, "netmesh_uses_stock_tailscale", lambda: False)
+    monkeypatch.setattr(
+        tailscale_provider, "netmesh_uses_stock_tailscale", lambda: False
+    )
     monkeypatch.setattr(
         netmesh_companion,
         "NetmeshCompanion",
