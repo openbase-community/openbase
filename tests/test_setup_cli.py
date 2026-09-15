@@ -1238,6 +1238,14 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
         setup_cli, "_ensure_bundled_sounds", lambda: calls.append("sounds")
     )
     _patch_setup(monkeypatch, "_ensure_env_file", lambda *_args, **_kwargs: None)
+    _patch_setup(
+        monkeypatch,
+        "register_and_report",
+        lambda **_kwargs: (
+            calls.append("register")
+            or SimpleNamespace(ok=True, supported=True, error=None)
+        ),
+    )
     monkeypatch.setattr(
         setup_cli.TokenManager,
         "has_refresh_token",
@@ -1448,6 +1456,7 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
         "service:openbase-tunneld",
         "tunneld-ready",
         "configure",
+        "register",
     ]
 
     _patch_setup(

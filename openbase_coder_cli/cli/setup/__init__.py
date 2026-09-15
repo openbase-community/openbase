@@ -435,6 +435,10 @@ def setup(
         )
         if TokenManager(web_backend_url).has_refresh_token:
             click.echo("Openbase Cloud login is already configured.")
+            _report_cloud_readiness(
+                cli_configured=cli_configured,
+                serve_healthy=serve_healthy,
+            )
         else:
             click.echo(
                 "To enable remote authentication, run 'openbase-coder login' "
@@ -443,6 +447,37 @@ def setup(
 
 
 APP_DOWNLOADS_URL = "https://openbase.cloud/downloads.html"
+
+
+def _report_cloud_readiness(*, cli_configured: bool, serve_healthy: bool) -> None:
+    """Publish the final post-setup identity and explain its visible state."""
+    report = register_and_report(
+        cli_configured=cli_configured,
+        serve_healthy=serve_healthy,
+    )
+    if report.ok:
+        click.echo("Device registered with Openbase Cloud.")
+    elif report.supported:
+        click.echo(
+            click.style(
+                "Warning: could not register this device with Openbase "
+                f"Cloud: {report.error}",
+                fg="yellow",
+            )
+        )
+    if serve_healthy:
+        click.echo("Private-network routes are exposing the local API and LiveKit.")
+    else:
+        click.echo(
+            click.style(
+                "Warning: private-network routes are not fully healthy yet.",
+                fg="yellow",
+            )
+        )
+        click.echo(
+            "  Re-check with 'openbase-coder onboarding status' once the "
+            "selected private connection is ready."
+        )
 
 
 def _interactive_cloud_login_and_checks(env_file: str, *, cli_configured: bool) -> None:
@@ -476,34 +511,10 @@ def _interactive_cloud_login_and_checks(env_file: str, *, cli_configured: bool) 
     # Login already registers the device; re-report with the freshest facts
     # so the cloud sees this install as configured, and surface the result.
     serve_health = tailscale_serve_health()
-    report = register_and_report(
+    _report_cloud_readiness(
         cli_configured=cli_configured,
         serve_healthy=serve_health.healthy,
     )
-    if report.ok:
-        click.echo("Device registered with Openbase Cloud.")
-    elif report.supported:
-        click.echo(
-            click.style(
-                "Warning: could not register this device with Openbase "
-                f"Cloud: {report.error}",
-                fg="yellow",
-            )
-        )
-    if serve_health.healthy:
-        click.echo("Tailscale Serve is exposing the local API and LiveKit.")
-    else:
-        click.echo(
-            click.style(
-                "Warning: Tailscale Serve is not fully healthy: "
-                f"{serve_health.error or 'routes not configured'}",
-                fg="yellow",
-            )
-        )
-        click.echo(
-            "  Re-check with 'openbase-coder onboarding status' once "
-            "Tailscale is signed in and connected."
-        )
 
 
 def _print_app_download_qr() -> None:
