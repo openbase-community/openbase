@@ -36,6 +36,7 @@ from openbase_coder_cli.paths import AUTH_JSON_PATH, MACHINE_TOKEN_JSON_PATH
 from openbase_coder_cli.services.cloud_registration import register_and_report
 
 from .password_auth import exchange_password_for_jwts
+from .tailnet import reconcile_after_login
 
 DESKTOP_LOGIN_COMPLETE_URL = "openbase://open?source=cli-auth&intent=login-complete"
 # How long the local OAuth callback listener waits for the browser redirect
@@ -310,6 +311,17 @@ def _complete_login(
         click.echo(
             click.style(
                 f"Warning: logged in, but could not create an Openbase Cloud machine token: {exc}",
+                fg="yellow",
+            )
+        )
+
+    try:
+        reconcile_after_login()
+    except Exception as exc:  # noqa: BLE001 - login remains valid; surface recovery
+        click.echo(
+            click.style(
+                "Warning: logged in, but the selected phone connection did not "
+                f"finish connecting: {exc}",
                 fg="yellow",
             )
         )

@@ -930,9 +930,7 @@ def test_allowed_hosts_include_staging_netmesh_suffix() -> None:
     assert ".net-staging.obs.so" not in setup_env._allowed_hosts_for("direct")
 
 
-def test_ensure_env_file_persists_process_env_override(
-    tmp_path, monkeypatch
-) -> None:
+def test_ensure_env_file_persists_process_env_override(tmp_path, monkeypatch) -> None:
     """An OPENBASE_CODER_CLI_WEB_BACKEND_URL exported around ./scripts/setup
     (e.g. pointing a dev install at staging) must land in the generated .env;
     it used to be silently dropped, leaving the install targeting prod."""
@@ -1240,6 +1238,11 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
         setup_cli, "_ensure_bundled_sounds", lambda: calls.append("sounds")
     )
     _patch_setup(monkeypatch, "_ensure_env_file", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        setup_cli.TokenManager,
+        "has_refresh_token",
+        property(lambda _self: False),
+    )
     _patch_setup(
         monkeypatch,
         "_ensure_claude_md_symlink",
@@ -1377,10 +1380,48 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
         "configure",
     ]
 
+    calls.clear()
+    result = runner.invoke(
+        setup_cli.setup,
+        [
+            "--workspace-dir",
+            str(workspace),
+            "--env-file",
+            str(env_file),
+            "--backend",
+            "claude-code",
+            "--tailnet-provider",
+            "netmesh-tsnet",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Cloud login will connect it automatically" in result.output
+    assert "Deferred until Cloud login" in result.output
+    assert calls == [
+        "thread-sync",
+        "sounds",
+        "tunneld-binary",
+        "service:openbase-tunneld",
+    ]
+
     _patch_setup(
         monkeypatch,
         "configure_tailscale_serve",
         fake_configure_tailscale_serve,
+    )
+    monkeypatch.setattr(
+        setup_cli.TokenManager,
+        "has_refresh_token",
+        property(lambda _self: True),
+    )
+    monkeypatch.setattr(
+        tailnet_cli,
+        "prepare_embedded_enrollment",
+        lambda _path=None: {
+            "control_url": "https://net-staging.example.test",
+            "auth_key": "staging-single-use-key",
+        },
     )
     calls.clear()
     result = runner.invoke(
@@ -1428,7 +1469,7 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
     )
 
     assert result.exit_code != 0
-    assert "Openbase VPN route setup did not complete" in result.output
+    assert "Openbase Direct route setup did not complete" in result.output
     assert "netmesh control socket is not ready" in result.output
 
     def tunneld_never_becomes_ready(**_kwargs):
@@ -1455,7 +1496,7 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
     )
 
     assert result.exit_code != 0
-    assert "Openbase VPN daemon did not become ready" in result.output
+    assert "Openbase Direct service did not become ready" in result.output
     assert "managed service control API timed out" in result.output
     assert calls == [
         "thread-sync",
@@ -1490,7 +1531,10 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
     )
 
     assert result.exit_code != 0
-    assert "Openbase VPN daemon installation failed: Go is unavailable" in result.output
+    assert (
+        "Openbase Direct service installation failed: Go is unavailable"
+        in result.output
+    )
     assert "configure" not in calls
 
 

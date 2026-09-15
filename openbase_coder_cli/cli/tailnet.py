@@ -342,6 +342,30 @@ def _bootout_legacy_tunneld_agent() -> None:
     )
 
 
+def prepare_embedded_enrollment(env_path=None) -> dict | None:
+    """Mint a Direct key and persist its matching control plane before start.
+
+    Staging and production use separate Headscale instances.  The URL and key
+    returned by Cloud are therefore one atomic enrollment result: starting
+    tunneld before saving the URL can submit a staging key to production,
+    where it is correctly rejected as invalid.
+    """
+    from openbase_coder_cli.services.cloud_registration import netmesh_enroll
+    from openbase_coder_cli.services.tunneld import TSNET_CONTROL_URL_ENV_KEY
+
+    enrollment = netmesh_enroll()
+    if not enrollment:
+        return None
+    control_url = enrollment.get("control_url")
+    auth_key = enrollment.get("auth_key")
+    if not control_url or not auth_key:
+        return None
+    upsert_env_file_values(
+        env_path or _env_path(), {TSNET_CONTROL_URL_ENV_KEY: str(control_url)}
+    )
+    return {"control_url": str(control_url), "auth_key": str(auth_key)}
+
+
 def _bring_up_transport(name: str) -> None:
     if name == tp.PROVIDER_NETMESH and tp.netmesh_uses_stock_tailscale():
         _join_netmesh_with_stock_tailscale()
@@ -381,7 +405,6 @@ def _bring_up_transport(name: str) -> None:
         _apply_serve_best_effort()
         return
 
-    from openbase_coder_cli.services.cloud_registration import netmesh_enroll
     from openbase_coder_cli.services.definitions import TUNNELD_SERVICE
     from openbase_coder_cli.services.installation import InstallationConfig
     from openbase_coder_cli.services.launchd import (
@@ -389,7 +412,6 @@ def _bring_up_transport(name: str) -> None:
         launchctl_kickstart,
     )
     from openbase_coder_cli.services.tunneld import (
-        TSNET_CONTROL_URL_ENV_KEY,
         ensure_tunneld_running,
         install_tunneld_binary,
     )
@@ -398,15 +420,8 @@ def _bring_up_transport(name: str) -> None:
     # control planes. Persist the URL returned alongside this key before the
     # managed service starts; otherwise a staging key gets submitted to the
     # production default and is rejected as an invalid pre-auth key.
-    enrollment = netmesh_enroll()
-    auth_key = None
-    if enrollment:
-        control_url = enrollment.get("control_url")
-        auth_key = enrollment.get("auth_key")
-        if control_url:
-            upsert_env_file_values(
-                _env_path(), {TSNET_CONTROL_URL_ENV_KEY: str(control_url)}
-            )
+    enrollment = prepare_embedded_enrollment()
+    auth_key = enrollment["auth_key"] if enrollment else None
 
     try:
         config = InstallationConfig.load()
@@ -429,7 +444,20 @@ def _bring_up_transport(name: str) -> None:
             return
         except RuntimeError as exc:
             last_error = exc
-    click.echo(click.style(f"Warning: {last_error}", fg="yellow"))
+    raise click.ClickException(f"Openbase Direct did not connect: {last_error}")
+
+
+def reconcile_after_login() -> None:
+    """Finish a deferred Direct enrollment immediately after Cloud login."""
+    from openbase_coder_cli.services.installation import InstallationConfig
+
+    if not InstallationConfig.exists():
+        return
+    if _configured_provider() != tp.PROVIDER_NETMESH_TSNET:
+        return
+    click.echo("Connecting Openbase Direct...")
+    _bring_up_transport(tp.PROVIDER_NETMESH_TSNET)
+    _restart_transport_services()
 
 
 def _join_netmesh_with_stock_tailscale() -> None:
@@ -673,7 +701,9 @@ def enroll(json_: bool) -> None:
 
     from openbase_coder_cli.services.cloud_registration import netmesh_enroll
 
-    enrollment = netmesh_enroll()
+    enrollment = (
+        prepare_embedded_enrollment() if tp.is_netmesh_tsnet() else netmesh_enroll()
+    )
     if not enrollment:
         raise click.ClickException(
             "Could not mint a netmesh key. Run 'openbase-coder login' first "
