@@ -93,6 +93,7 @@ class ThreadInfo(BaseModel):
         default_factory=list,
         serialization_alias="turn_history",
     )
+    history_next_cursor: str | None = None
     queued_turns: list[QueuedTurnInfo] = Field(default_factory=list)
 
     @computed_field
