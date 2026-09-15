@@ -29,7 +29,7 @@ These docs cover the whole product, not just the CLI:
   [developer setup](getting-started/developer-setup.md), or run it in
   [Docker (including on Windows)](docker.md).
 - What can I do in the Mac app? → [Desktop App](desktop-app.md)
-- What can I do on my phone? → [iOS App](ios-tabs.md) (the Android app mirrors it)
+- What can I do on my phone? → [iOS App](ios-tabs.md) or the [Android app](downloads.md) (same features on both)
 - What is app.openbase.cloud for? → [Web Console & Cloud](console.md)
 - Talking to agents by voice, transferring calls → [Voice Routing](voice-routing.md)
 - Something is broken → [Troubleshooting](troubleshooting.md)
@@ -62,6 +62,7 @@ Using the apps:
 
 - [Desktop App](desktop-app.md)
 - [iOS App](ios-tabs.md)
+- [Android app](downloads.md)
 - [Web Console & Openbase Cloud](console.md)
 - [Voice Routing](voice-routing.md)
 

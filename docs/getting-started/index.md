@@ -129,7 +129,7 @@ then either delete or archive `~/.openbase`.
 ## Next Steps
 
 - Tour the Mac interface in [Desktop App](../desktop-app.md)
-- Set up your phone with the [iOS App](../ios-tabs.md) — voice calls, threads,
+- Set up your phone with the [iOS app](../ios-tabs.md) or [Android app](../downloads.md) — voice calls, threads,
   approvals, reports, and diffs from anywhere
 - Open the dashboard in a browser via the [Web Console](../console.md)
 - Learn command details in [Commands](../commands/index.md)
