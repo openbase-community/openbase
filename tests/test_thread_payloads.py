@@ -1,8 +1,35 @@
+import pytest
+
+from openbase_coder_cli.thread_sync.models import ThreadStatus
 from openbase_coder_cli.thread_sync.thread_payloads import (
     _file_edit_paths,
     _run_from_turn,
     _session_from_thread,
 )
+
+
+@pytest.mark.parametrize(
+    ("status", "raw_status", "expected_status", "return_code"),
+    [
+        ("inProgress", None, ThreadStatus.running, None),
+        ("pending", None, ThreadStatus.running, None),
+        ("waiting", None, ThreadStatus.waiting, None),
+        ("inProgress", ThreadStatus.waiting, ThreadStatus.waiting, None),
+        ("completed", None, ThreadStatus.completed, 0),
+        ("failed", None, ThreadStatus.error, -1),
+        ("interrupted", None, ThreadStatus.error, -1),
+    ],
+)
+def test_turn_exit_code_is_unset_until_terminal(
+    status: str,
+    raw_status: ThreadStatus | None,
+    expected_status: ThreadStatus,
+    return_code: int | None,
+) -> None:
+    run = _run_from_turn({"id": "turn_1", "status": status}, raw_status=raw_status)
+
+    assert run.status == expected_status
+    assert run.model_dump(mode="json")["return_code"] == return_code
 
 
 def test_file_edit_paths_reads_normalized_list_shape() -> None:
