@@ -385,7 +385,45 @@ def test_zero_audio_does_not_claim_speech():
     assert client.claimed == []
 
 
-def test_zero_audio_emits_safe_to_unmute_with_reason():
+def _immediate_closure_decision() -> UserTurnClosureDecision:
+    return UserTurnClosureDecision(
+        confidence=0.9,
+        source="test",
+        quiet_grace_seconds=0.0,
+        completion_reason="test",
+    )
+
+
+def test_zero_audio_releases_outstanding_mute_with_reason():
+    events: list[tuple[str, str]] = []
+    ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
+    ledger.set_lifecycle_sink(
+        lambda event, _record, reason: events.append((event, reason))
+    )
+    record = ledger.accept_utterance(message_id="m1", prompt="hello")
+    ledger.mark_user_turn_closed(record, decision=_immediate_closure_decision())
+    assert ("safe_to_mute_user", "test") in events
+    ledger.mark_answer_owed(record, turn_id="turn-1", client=_FakeClient())
+    ledger.mark_text_generated(
+        record,
+        speech_text="Yes.",
+        tts_text=text_for_tts("Yes."),
+    )
+    assert ledger.reserve_for_tts(record)
+
+    ledger.mark_tts_completed(
+        record,
+        audio_events=0,
+        audio_seconds=0.0,
+        role="direct",
+        voice_id="voice-1",
+        voice_name="Corey",
+    )
+
+    assert events[-1] == ("safe_to_unmute", "tts_completed_without_audio")
+
+
+def test_zero_audio_without_outstanding_mute_does_not_unmute():
     events: list[tuple[str, str]] = []
     ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
     ledger.set_lifecycle_sink(
@@ -409,16 +447,17 @@ def test_zero_audio_emits_safe_to_unmute_with_reason():
         voice_name="Corey",
     )
 
-    assert events[-1] == ("safe_to_unmute", "tts_completed_without_audio")
+    assert all(event != "safe_to_unmute" for event, _reason in events)
 
 
-def test_cancelled_accepted_turn_no_longer_blocks_current_route():
+def test_cancelled_turn_releases_outstanding_mute():
     events: list[tuple[str, str]] = []
     ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
     ledger.set_lifecycle_sink(
         lambda event, _record, reason: events.append((event, reason))
     )
     record = ledger.accept_utterance(message_id="m1", prompt="interrupted")
+    ledger.mark_user_turn_closed(record, decision=_immediate_closure_decision())
 
     assert ledger.has_pending_delivery_for_current_route()
 
@@ -428,8 +467,29 @@ def test_cancelled_accepted_turn_no_longer_blocks_current_route():
     assert not ledger.has_pending_delivery_for_current_route()
     assert events == [
         ("utterance_accepted", ""),
+        ("safe_to_mute_user", "test"),
         ("safe_to_unmute", "livekit_llm_stream_cancelled"),
     ]
+
+
+def test_cancelled_turn_with_open_mic_does_not_unmute():
+    """A steered/superseded turn that never spoke must not reopen the mic.
+
+    Spurious safe_to_unmute packets on cancellation were the trigger for the
+    iPhone unmuting with no dispatcher audio during Super Agents MCP turns.
+    """
+    events: list[tuple[str, str]] = []
+    ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
+    ledger.set_lifecycle_sink(
+        lambda event, _record, reason: events.append((event, reason))
+    )
+    record = ledger.accept_utterance(message_id="m1", prompt="interrupted")
+
+    ledger.mark_cancelled(record, reason="livekit_llm_stream_cancelled")
+
+    assert record.status == "cancelled"
+    assert not ledger.has_pending_delivery_for_current_route()
+    assert events == [("utterance_accepted", "")]
 
 
 def test_cancelled_prior_turn_does_not_block_later_safe_to_unmute():
@@ -965,6 +1025,7 @@ def test_safe_to_unmute_rearms_vad_mute_for_next_turn():
             voice_id=None,
             voice_name=None,
         )
+        await asyncio.sleep(0.25)
         assert events[-1] == "safe_to_unmute"
 
         ledger.notify_user_state(new_state="speaking")
@@ -1085,3 +1146,135 @@ def test_fast_transcription_final_logs_no_warning(caplog):
     assert not [
         r for r in caplog.records if "stt_transcription_delayed" in r.getMessage()
     ]
+
+
+def test_safe_to_unmute_deferred_until_estimated_playout_end():
+    """TTS synthesis outruns playback; the mic release must track playout.
+
+    21s of audio finished synthesizing in ~4s during the incident, and the
+    early safe_to_unmute reopened the mic mid-speech.
+    """
+
+    async def run() -> tuple[list[str], list[str]]:
+        events: list[str] = []
+        ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
+        ledger.set_lifecycle_sink(lambda event, _record, _reason: events.append(event))
+
+        record = ledger.track_unmatched_tts(tts_text="A long reply.")
+        ledger.mark_audio_started(
+            record, latency_ms=10, role="direct", voice_id=None, voice_name=None
+        )
+        ledger.mark_tts_completed(
+            record,
+            audio_events=4,
+            audio_seconds=0.3,
+            role="direct",
+            voice_id=None,
+            voice_name=None,
+        )
+        immediate = list(events)
+        await asyncio.sleep(0.4)
+        return immediate, events
+
+    immediate, events = asyncio.run(run())
+
+    assert "agent_audio_finished" not in immediate
+    assert "safe_to_unmute" not in immediate
+    assert events[-2:] == ["agent_audio_finished", "safe_to_unmute"]
+
+
+def test_pending_announcement_holds_safe_to_unmute():
+    """A queued Super Agent intro must keep the mic muted until it plays."""
+    events: list[str] = []
+    announcement_pending = True
+    ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
+    ledger.set_lifecycle_sink(lambda event, _record, _reason: events.append(event))
+    ledger.set_announcement_pending_provider(lambda: announcement_pending)
+
+    reply = ledger.track_unmatched_tts(tts_text="Launched the agent.")
+    ledger.mark_audio_started(
+        reply, latency_ms=10, role="direct", voice_id=None, voice_name=None
+    )
+    ledger.mark_tts_completed(
+        reply,
+        audio_events=1,
+        audio_seconds=0.0,
+        role="direct",
+        voice_id=None,
+        voice_name=None,
+    )
+    assert "safe_to_unmute" not in events
+
+    announcement_pending = False
+    intro = ledger.track_announcement(text="Hey there, I'm Callie.")
+    ledger.mark_audio_started(
+        intro, latency_ms=0, role="announcer", voice_id=None, voice_name=None
+    )
+    ledger.mark_tts_completed(
+        intro,
+        audio_events=1,
+        audio_seconds=0.0,
+        role="announcer",
+        voice_id=None,
+        voice_name=None,
+    )
+    assert events[-1] == "safe_to_unmute"
+
+
+def test_steer_receipt_closure_emits_mute_once():
+    """Accepted proactive steers mute like accepted utterances, without
+    duplicating the mute for rapid follow-up steers."""
+
+    async def run() -> list[str]:
+        events: list[str] = []
+        ledger = VoiceDeliveryLedger(
+            route_snapshot=_snapshot,
+            user_speaking_poll_seconds=0.005,
+            vad_quiet_grace_seconds=0.01,
+        )
+        ledger.set_lifecycle_sink(lambda event, _record, _reason: events.append(event))
+        ledger.set_user_speaking_provider(lambda: False)
+
+        ledger.schedule_steer_receipt_closure()
+        ledger.schedule_steer_receipt_closure()
+        for _ in range(200):
+            if "safe_to_mute_user" in events:
+                break
+            await asyncio.sleep(0.02)
+        await asyncio.sleep(0.05)
+        return events
+
+    events = asyncio.run(run())
+
+    assert events.count("safe_to_mute_user") == 1
+
+
+def test_mute_keepalive_holds_client_watchdog_during_long_turn(monkeypatch):
+    """A sustained mute re-emits safe_to_mute_user so the iOS stuck-muted
+    watchdog does not reopen the mic in the middle of a long backend turn,
+    and stops as soon as the mute is released."""
+    from openbase_coder_cli.livekit_agent import voice_delivery as vd
+
+    monkeypatch.setattr(vd, "MUTE_KEEPALIVE_INTERVAL_SECONDS", 0.02)
+
+    async def run() -> tuple[int, int]:
+        events: list[str] = []
+        ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
+        ledger.set_lifecycle_sink(lambda event, _record, _reason: events.append(event))
+        ledger.set_user_speaking_provider(lambda: False)
+
+        record = ledger.accept_utterance(message_id="m1", prompt="launch an agent")
+        ledger.mark_user_turn_closed(record, decision=_immediate_closure_decision())
+        await asyncio.sleep(0.07)
+        mutes_while_held = events.count("safe_to_mute_user")
+
+        ledger.mark_cancelled(record, reason="livekit_llm_stream_cancelled")
+        assert events[-1] == "safe_to_unmute"
+        settled = events.count("safe_to_mute_user")
+        await asyncio.sleep(0.07)
+        return mutes_while_held, events.count("safe_to_mute_user") - settled
+
+    mutes_while_held, mutes_after_release = asyncio.run(run())
+
+    assert mutes_while_held >= 3
+    assert mutes_after_release == 0

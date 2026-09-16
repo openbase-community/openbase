@@ -1529,3 +1529,55 @@ def test_verify_cloud_audio_subscription_skips_transient_errors(monkeypatch):
     asyncio.run(livekit._verify_cloud_audio_subscription(room, session))
 
     assert room.local_participant.published == []
+
+
+@pytest.mark.asyncio
+async def test_announcer_playout_brackets_voice_lifecycle_events():
+    """Announcements must be bracketed by lifecycle events so the client mic
+    does not reopen exactly as a Super Agent intro starts playing."""
+    from openbase_coder_cli.livekit_agent.voice_delivery import (
+        VoiceDeliveryLedger,
+        VoiceRouteSnapshot,
+    )
+
+    session = FakeSession()
+    fake_tts = FakeTTS()
+    events: list[tuple[str, str]] = []
+    ledger = VoiceDeliveryLedger(
+        route_snapshot=lambda: VoiceRouteSnapshot(
+            route_version=0,
+            active_thread_id="dispatcher",
+            active_voice_id=None,
+            active_voice_name=None,
+            active_route="dispatcher",
+        )
+    )
+    ledger.set_lifecycle_sink(
+        lambda event, record, _reason: events.append((event, record.delivery_id))
+    )
+    queue = AnnouncerSpeechQueue(
+        session=session,
+        announcer_tts=fake_tts,
+        silence_grace_seconds=0,
+        delivery_ledger=ledger,
+    )
+
+    await queue._speak(
+        AnnouncerMessage(
+            message_id="announcer-1",
+            text="Hey there, I'm Callie.",
+            voice_id="requested-voice",
+        )
+    )
+
+    assert session.say_handle.waited is True
+    event_names = [event for event, _delivery_id in events]
+    assert event_names == [
+        "agent_audio_started",
+        "agent_audio_finished",
+        "safe_to_unmute",
+    ]
+    delivery_ids = {delivery_id for _event, delivery_id in events}
+    assert len(delivery_ids) == 1
+    assert next(iter(delivery_ids)).startswith("voice-announcer-")
+    assert not queue.has_pending_announcements()

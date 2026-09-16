@@ -42,6 +42,11 @@ def _register_session_diagnostics(
             if not turn_id:
                 return
             voice_router.mark_proactive_steer(transcript)
+            delivery_ledger = voice_router.delivery_ledger
+            if delivery_ledger is not None:
+                # A steered message is received input: give the user the same
+                # mute-as-receipt the accepted-utterance path provides.
+                delivery_ledger.schedule_steer_receipt_closure()
             logger.info(
                 "dispatch_timing stage=session_user_input_proactive_steer "
                 "turn_id=%s transcript_len=%d transcript_hash=%s",
