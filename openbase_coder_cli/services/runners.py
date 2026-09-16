@@ -38,6 +38,8 @@ def _livekit_config_body(
     loopback_iface: str,
     extra_ifaces: list[str],
     extra_ips: list[str],
+    *,
+    advertise_internal_ip: bool = False,
 ) -> str:
     ifaces = [loopback_iface, *extra_ifaces]
     ips = ["127.0.0.1/32", *extra_ips]
@@ -48,6 +50,7 @@ def _livekit_config_body(
         f"  tcp_port: {tcp_port}\n"
         f"  udp_port: {udp_port}\n"
         "  enable_loopback_candidate: true\n"
+        f"  advertise_internal_ip: {str(advertise_internal_ip).lower()}\n"
         "  interfaces:\n"
         "    includes:\n"
         f"{iface_lines}\n"
@@ -118,7 +121,17 @@ def build_livekit_server(
         if node_ip_v6:
             extra_ips.append(f"{node_ip_v6}/128")
         config_body = _livekit_config_body(
-            tcp_port, udp_port, loopback_iface, [interface], extra_ips
+            tcp_port,
+            udp_port,
+            loopback_iface,
+            [interface],
+            extra_ips,
+            # --node-ip maps every gathered host candidate to the VPN address
+            # unless LiveKit is told to preserve internal candidates too. The
+            # phone needs the VPN candidate, while the same-host voice worker
+            # needs loopback because a packet-tunnel VPN cannot hairpin its own
+            # traffic reliably.
+            advertise_internal_ip=True,
         )
     else:
         print(f"Unsupported LIVEKIT_NETWORK_MODE: {mode}", file=sys.stderr)
