@@ -24,6 +24,8 @@ def onboarding() -> None:
 )
 def onboarding_status_cmd(as_json: bool) -> None:
     """Show local onboarding state (CLI configured, Tailscale, auth)."""
+    from openbase_coder_cli.services.tailnet_experience import tailnet_provider_name
+
     payload = onboarding_status_payload()
     if as_json:
         click.echo(json.dumps(payload, indent=2))
@@ -47,9 +49,10 @@ def onboarding_status_cmd(as_json: bool) -> None:
 
     tailscale_self = payload["tailscale_self"]
     dns_name = tailscale_self["dns_name"]
+    provider_name = tailnet_provider_name()
     line(
         tailscale_self["available"],
-        "tailscale identity" + (f" ({dns_name})" if dns_name else ""),
+        f"{provider_name} identity" + (f" ({dns_name})" if dns_name else ""),
     )
     if tailscale_self["error"]:
         click.echo(f"        {tailscale_self['error']}")
@@ -57,7 +60,7 @@ def onboarding_status_cmd(as_json: bool) -> None:
     serve = payload["tailscale_serve"]
     line(
         serve["healthy"],
-        "tailscale serve"
+        f"{provider_name} routes"
         + (f" ({serve['openbase_url']})" if serve["openbase_url"] else ""),
     )
     if serve["error"]:

@@ -401,6 +401,9 @@ def test_doctor_skips_backend_scoped_services_on_other_backends(monkeypatch, tmp
 
 
 def test_doctor_reports_missing_tailscale_as_setup_action(monkeypatch, tmp_path):
+    from openbase_coder_cli.services import tailnet_experience
+
+    monkeypatch.setattr(tailnet_experience.tp, "provider", lambda: "tailscale")
     env_file = tmp_path / ".env"
     env_file.write_text("OPENBASE_CODER_CLI_SECRET_KEY=x\n", encoding="utf-8")
     monkeypatch.setattr(doctor_cli.InstallationConfig, "exists", lambda: True)
@@ -462,7 +465,7 @@ def test_doctor_reports_missing_tailscale_as_setup_action(monkeypatch, tmp_path)
     result = CliRunner().invoke(doctor_cli.doctor)
 
     assert result.exit_code == 0, result.output
-    assert "SETUP tailscale: not found on PATH" in result.output
+    assert "SETUP Official Tailscale: control tool not found" in result.output
     assert "setup actions" in result.output
     assert "FAIL" not in result.output
 

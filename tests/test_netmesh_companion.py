@@ -309,6 +309,50 @@ def test_netmesh_provisioning_replaces_stale_enabled_helper(
     assert calls == ["init:/workspace", "ensure", "replace", "close"]
 
 
+def test_netmesh_provisioning_repairs_unreachable_enabled_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
+
+    t = importlib.import_module("openbase_coder_cli.cli.tailnet")
+
+    calls: list[str] = []
+
+    class Companion:
+        def __init__(self, workspace_dir=None):
+            calls.append(f"init:{workspace_dir}")
+
+        def ensure_running(self):
+            calls.append("ensure")
+            return nc.CompanionStatus("", "enabled", None, None, {})
+
+        def replace_helper_if_needed(self):
+            calls.append("replace")
+            raise nc.NetmeshCompanionError(
+                "running version could not be verified: Helper unavailable"
+            )
+
+        def repair_helper_after_app_update(self):
+            calls.append("repair")
+            return nc.CompanionStatus(
+                "Running",
+                "enabled",
+                "100.64.0.21",
+                "mac",
+                {"helperReplaced": True},
+            )
+
+        def close(self):
+            calls.append("close")
+
+    monkeypatch.setattr(t, "_dev_workspace_dir_or_none", lambda: "/workspace")
+    monkeypatch.setattr(nc, "NetmeshCompanion", Companion)
+
+    t._provision_netmesh_companion()
+
+    assert calls == ["init:/workspace", "ensure", "replace", "repair", "close"]
+
+
 def test_revoke_old_node_matches_offline_by_captured_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

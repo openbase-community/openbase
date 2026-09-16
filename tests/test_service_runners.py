@@ -81,6 +81,25 @@ def test_livekit_server_tailscale_mode_resolves_node_ip_and_interface(monkeypatc
     assert "tcp_port: 7881" in config_body
     assert "en0" in config_body
     assert "100.64.1.2/32" in config_body
+    assert "advertise_internal_ip: true" in config_body
+
+
+def test_livekit_server_tailscale_mode_preserves_loopback_for_local_agent(monkeypatch):
+    monkeypatch.setattr(runners.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(runners.network, "tailscale_ip", lambda family: "100.64.1.2")
+    monkeypatch.setattr(runners.network, "resolve_interface", lambda ip: "utun9")
+
+    argv, _ = runners.build_livekit_server(
+        {"LIVEKIT_NETWORK_MODE": "tailscale"},
+        {"livekit": "/usr/local/bin/livekit-server"},
+    )
+
+    config_body = argv[argv.index("--config-body") + 1]
+    assert "enable_loopback_candidate: true" in config_body
+    assert "advertise_internal_ip: true" in config_body
+    assert "- lo0" in config_body
+    assert "- 127.0.0.1/32" in config_body
+    assert argv[argv.index("--node-ip") + 1] == "100.64.1.2"
 
 
 def test_livekit_server_tailscale_mode_exits_without_node_ip(monkeypatch):

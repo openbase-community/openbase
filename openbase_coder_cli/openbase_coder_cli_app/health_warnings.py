@@ -151,6 +151,7 @@ def _sync_warnings() -> list[dict[str, str]]:
     )
     from openbase_coder_cli.paths import CODE_SYNC_DIR
     from openbase_coder_cli.services.tailnet_devices import tailscale_self_identity
+    from openbase_coder_cli.services.tailnet_experience import tailnet_provider_name
     from openbase_coder_cli.sync_config import sync_folders
 
     warnings: list[dict[str, str]] = []
@@ -231,16 +232,18 @@ def _sync_warnings() -> list[dict[str, str]]:
     except Exception:  # noqa: BLE001 - conflicts file may be absent/corrupt
         logger.debug("Unable to read sync conflicts", exc_info=True)
 
-    # This device must advertise a tailscale identity or peers will drop it.
+    # This device must advertise an identity on its selected private network or
+    # peers will drop it. Keep the user-facing provider name transport-aware.
     identity = tailscale_self_identity()
     if not identity.get("available"):
+        provider_name = tailnet_provider_name()
         warnings.append(
             _warning(
                 "sync-no-tailscale-identity",
                 "critical",
-                "This device's registration has no Tailscale identity; "
+                f"This device's registration has no {provider_name} identity; "
                 "peers will drop it from their sync configuration.",
-                identity.get("error") or "Check Tailscale is installed and up.",
+                identity.get("error") or f"Check {provider_name} is connected.",
             )
         )
 

@@ -22,3 +22,10 @@ def test_electron_tailnet_choices_are_vpn_or_direct(monkeypatch):
         option["provider"] == "tailscale" and option["electron_onboarding"]
         for option in payload["options"]
     )
+
+
+def test_provider_names_are_user_facing(monkeypatch):
+    assert tailnet_experience.tailnet_provider_name("netmesh") == "Openbase VPN"
+    assert tailnet_experience.tailnet_provider_name("netmesh-tsnet") == "Openbase Direct"
+    assert tailnet_experience.tailnet_provider_name("tailscale") == "Official Tailscale"
+    assert tailnet_experience.tailnet_provider_name("unknown") == "Private network"

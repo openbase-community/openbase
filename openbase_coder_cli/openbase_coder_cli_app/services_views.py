@@ -435,9 +435,9 @@ def service_status(request):
         request.path,
         _auth_debug_value(request),
     )
-    from openbase_coder_cli.services import tailscale_provider as tp
+    from openbase_coder_cli.services.tailnet_experience import tailnet_provider_name
 
-    _tailnet_label = "Openbase Netmesh" if tp.is_netmesh() else "Tailscale"
+    _tailnet_label = tailnet_provider_name()
     services = {
         "django": {"name": "Django (Coder CLI)", "port": 7999, "optional": False},
         "codex_app_server": {
