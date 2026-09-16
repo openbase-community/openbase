@@ -39,6 +39,7 @@ class AnnouncerSpeechQueue:
         announcer_tts: VoiceSelectingTTS,
         max_queue_size: int = ANNOUNCER_MAX_QUEUE_SIZE,
         silence_grace_seconds: float = ANNOUNCER_SILENCE_GRACE_SECONDS,
+        delivery_ledger=None,
     ) -> None:
         self._session = session
         self._announcer_tts = announcer_tts
@@ -49,6 +50,16 @@ class AnnouncerSpeechQueue:
         self._state_changed = asyncio.Event()
         self._closed = False
         self._worker_task: asyncio.Task[None] | None = None
+        self._delivery_ledger = delivery_ledger
+        self._speaking = False
+
+    def has_pending_announcements(self) -> bool:
+        """True while an announcement is queued or playing.
+
+        The delivery ledger holds ``safe_to_unmute`` while this is True so
+        the mic does not reopen right as a queued Super Agent intro starts.
+        """
+        return self._speaking or self._queue.qsize() > 0
 
     def start(self) -> None:
         if self._worker_task is None:
@@ -101,6 +112,7 @@ class AnnouncerSpeechQueue:
             queued_message = await self._queue.get()
             if queued_message is None:
                 return
+            self._speaking = True
             try:
                 await self._speak(
                     queued_message.message,
@@ -112,6 +124,8 @@ class AnnouncerSpeechQueue:
                     queued_message.message.message_id,
                     exc_info=True,
                 )
+            finally:
+                self._speaking = False
 
     async def _speak(
         self,
@@ -170,11 +184,60 @@ class AnnouncerSpeechQueue:
             allow_interruptions=False,
             add_to_chat_ctx=False,
         )
-        await handle.wait_for_playout()
+        await self._bracketed_playout(
+            handle,
+            text=spoken_text,
+            voice_id=self._announcer_tts.resolve_voice_id(message.voice_id),
+            voice_name=self._announcer_tts.resolve_voice_name(message.voice_id),
+        )
         logger.info(
             "dispatch_timing stage=announcer_playout_end message_id=%s elapsed_ms=%d",
             message.message_id,
             int((time.monotonic() - started) * 1000),
+        )
+
+    async def _bracketed_playout(
+        self,
+        handle,
+        *,
+        text: str,
+        voice_id: str | None,
+        voice_name: str | None,
+    ) -> None:
+        """Await playout with voice-lifecycle bracketing around the audio.
+
+        Announcements otherwise play with no lifecycle events at all, so the
+        client mic can reopen exactly as the announcement starts.
+        """
+        ledger = self._delivery_ledger
+        if ledger is None:
+            await handle.wait_for_playout()
+            return
+        record = ledger.track_announcement(text=text)
+        playout_started = time.monotonic()
+        ledger.mark_audio_started(
+            record,
+            latency_ms=0,
+            role="announcer",
+            voice_id=voice_id,
+            voice_name=voice_name,
+        )
+        try:
+            await handle.wait_for_playout()
+        except BaseException:
+            ledger.mark_cancelled(record, reason="announcer_playout_failed")
+            raise
+        # Playout was awaited for real, so completion releases the unmute
+        # immediately; clear the speaking flag first so this announcement
+        # does not hold its own release.
+        self._speaking = False
+        ledger.mark_tts_completed(
+            record,
+            audio_events=1,
+            audio_seconds=time.monotonic() - playout_started,
+            role="announcer",
+            voice_id=voice_id,
+            voice_name=voice_name,
         )
 
     async def _wait_until_both_silent(
@@ -318,7 +381,12 @@ class AnnouncerSpeechQueue:
             allow_interruptions=False,
             add_to_chat_ctx=False,
         )
-        await handle.wait_for_playout()
+        await self._bracketed_playout(
+            handle,
+            text=audio_path.name,
+            voice_id=None,
+            voice_name=None,
+        )
         logger.info(
             "dispatch_timing stage=announcer_audio_playout_end message_id=%s "
             "elapsed_ms=%d audio_basename=%s",

@@ -932,6 +932,10 @@ async def livekit_agent(ctx: JobContext):
     announcer_queue = AnnouncerSpeechQueue(
         session=session,
         announcer_tts=announcer_tts,
+        delivery_ledger=delivery_ledger,
+    )
+    delivery_ledger.set_announcement_pending_provider(
+        announcer_queue.has_pending_announcements
     )
 
     announcer_queue_session_handlers = (
