@@ -44,7 +44,7 @@ TAILNET_EXPERIENCES: tuple[dict[str, Any], ...] = (
     },
     {
         "provider": tp.PROVIDER_TAILSCALE,
-        "name": "Tailscale (expert CLI only)",
+        "name": "Official Tailscale",
         "recommended": False,
         "requires_vpn": True,
         "browser_site_access": True,
@@ -56,6 +56,15 @@ TAILNET_EXPERIENCES: tuple[dict[str, Any], ...] = (
         ),
     },
 )
+
+
+def tailnet_provider_name(provider_name: str | None = None) -> str:
+    """Return the canonical user-facing name for a transport provider."""
+    selected = provider_name or tp.provider()
+    option = next(
+        (item for item in TAILNET_EXPERIENCES if item["provider"] == selected), None
+    )
+    return str(option["name"]) if option is not None else "Private network"
 
 
 def tailnet_experience_payload() -> dict[str, Any]:

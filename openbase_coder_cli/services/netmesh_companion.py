@@ -409,7 +409,21 @@ class NetmeshCompanion:
         return self._parse_status(self._request("POST", "/register"))
 
     def replace_helper_if_needed(self) -> CompanionStatus:
-        status = self._replace_helper_request()
+        return self._complete_helper_replacement("/replace-helper")
+
+    def repair_helper_after_app_update(self) -> CompanionStatus:
+        """Repair a registered helper whose old process cannot be queried.
+
+        Replacing a signed companion bundle underneath an existing SMAppService
+        registration can leave launchd running an older helper that rejects the
+        new control shim. The ordinary version gate must refuse that unverifiable
+        helper; this explicit recovery path mirrors the desktop app's launch-time
+        repair and replaces only the helper registration, not the VPN state.
+        """
+        return self._complete_helper_replacement("/repair-helper")
+
+    def _complete_helper_replacement(self, request_path: str) -> CompanionStatus:
+        status = self._helper_replacement_request(request_path)
         for _attempt in range(10):
             if status.raw.get("helperReplacementPending") is not True:
                 return status
@@ -417,7 +431,12 @@ class NetmeshCompanion:
                 raise NetmeshCompanionError(
                     "Helper replacement cannot continue in state " + status.helper
                 )
-            time.sleep(0.2)
+            # macOS may reject registration from the same process that just
+            # unregistered the old helper. Recycle only this client's private
+            # control listener before continuing the handoff.
+            self.close()
+            time.sleep(0.35)
+            self.ensure_running(build_if_missing=False)
             registration = self.register()
             if registration.raw.get("ok") is False:
                 raise NetmeshCompanionError(
@@ -425,7 +444,7 @@ class NetmeshCompanion:
                 )
             if registration.helper_enabled:
                 # Re-enter the version gate only after a successful registration.
-                verified = self._replace_helper_request()
+                verified = self._helper_replacement_request("/replace-helper")
                 if verified.raw.get("helperReplacementPending") is True:
                     raise NetmeshCompanionError(
                         "Helper replacement verification did not complete."
@@ -437,9 +456,9 @@ class NetmeshCompanion:
                 )
         raise NetmeshCompanionError("Helper replacement registration did not complete.")
 
-    def _replace_helper_request(self) -> CompanionStatus:
+    def _helper_replacement_request(self, request_path: str) -> CompanionStatus:
         try:
-            raw = self._request("POST", "/replace-helper", timeout=20.0)
+            raw = self._request("POST", request_path, timeout=20.0)
         except urllib.error.HTTPError as exc:
             try:
                 payload = json.loads(exc.read().decode() or "{}")

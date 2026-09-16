@@ -21,6 +21,7 @@ from openbase_coder_cli.services.registry import (
     target_services,
 )
 from openbase_coder_cli.services.selection import configured_coding_backends
+from openbase_coder_cli.services.tailnet_experience import tailnet_provider_name
 from openbase_coder_cli.services.tailscale_serve import (
     configure_tailscale_serve,
     tailscale_serve_health,
@@ -40,17 +41,26 @@ def _ensure_started(config, svc: ServiceDefinition, verb: str) -> None:
 
 
 def _ensure_tailscale_serve_routes() -> None:
+    from openbase_coder_cli.services import tailscale_provider as tp
+
+    provider_name = tailnet_provider_name()
     click.echo()
-    click.echo("Configuring Tailscale Serve routes...")
+    click.echo(f"Configuring {provider_name} routes...")
     try:
         configure_tailscale_serve()
     except Exception as exc:
         click.echo(click.style(f"  WARN  {exc}", fg="yellow"))
-        click.echo(
-            "  Run these manually after Tailscale is installed and connected:\n"
-            "    tailscale serve --bg --http=18080 http://127.0.0.1:7999\n"
-            "    tailscale serve --bg --tcp=7880 tcp://127.0.0.1:7880"
-        )
+        if tp.provider() == tp.PROVIDER_TAILSCALE:
+            click.echo(
+                "  Run these manually after Tailscale is installed and connected:\n"
+                "    tailscale serve --bg --http=18080 http://127.0.0.1:7999\n"
+                "    tailscale serve --bg --tcp=7880 tcp://127.0.0.1:7880"
+            )
+        else:
+            click.echo(
+                f"  Reconnect {provider_name} with 'openbase-coder tailnet "
+                f"set-provider {tp.provider()}'."
+            )
     else:
         click.echo("  Configured :18080 -> http://127.0.0.1:7999")
         click.echo("  Configured tcp :7880 -> tcp://127.0.0.1:7880")
@@ -170,22 +180,23 @@ def status() -> None:
 
     serve_health = tailscale_serve_health()
     click.echo()
-    click.echo("Tailscale Serve:")
+    provider_name = tailnet_provider_name()
+    click.echo(f"{provider_name} routes:")
     if serve_health.healthy:
         click.echo(f"  {'openbase-api':<20} reachable at {serve_health.openbase_url}")
         click.echo("  livekit-server      tcp :7880 -> 127.0.0.1:7880")
     else:
         has_failure = True
         if not serve_health.tailscale_available:
-            click.echo("  tailscale           not found on PATH")
+            click.echo(f"  {provider_name:<20} control tool not found")
         elif not serve_health.tailscale_running:
             click.echo(
-                "  tailscale           "
+                f"  {provider_name:<20} "
                 f"not running ({serve_health.error or 'unknown error'})"
             )
         else:
             click.echo(
-                f"  tailscale           running for "
+                f"  {provider_name:<20} running for "
                 f"{serve_health.host or 'unknown host'}"
             )
             click.echo(

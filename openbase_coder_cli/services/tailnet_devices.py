@@ -59,6 +59,8 @@ def _tailscale_status_payload() -> tuple[bool, dict[str, Any] | None, str | None
 
 def tailscale_self_identity() -> dict[str, Any]:
     """Return the local node's Tailscale identity for device registration."""
+    from openbase_coder_cli.services.tailnet_experience import tailnet_provider_name
+
     tailscale_available, status_payload, error = _tailscale_status_payload()
     identity: dict[str, Any] = {
         "available": False,
@@ -74,7 +76,9 @@ def tailscale_self_identity() -> dict[str, Any]:
 
     self_entry = status_payload.get("Self")
     if not isinstance(self_entry, dict):
-        identity["error"] = "tailscale status did not include a Self entry."
+        identity["error"] = (
+            f"{tailnet_provider_name()} status did not include this device."
+        )
         return identity
 
     dns_name = _normalize_dns_name(self_entry.get("DNSName"))
@@ -93,7 +97,11 @@ def tailscale_self_identity() -> dict[str, Any]:
             "node_hostname": str(self_entry.get("HostName") or "") or None,
             "tailnet": _normalize_dns_name(tailnet_name),
             "ips": [str(ip) for ip in ips] if isinstance(ips, list) else [],
-            "error": None if dns_name else "Tailscale DNS name is unavailable.",
+            "error": (
+                None
+                if dns_name
+                else f"{tailnet_provider_name()} device name is unavailable."
+            ),
         }
     )
     return identity

@@ -793,18 +793,24 @@ def doctor() -> None:
 
     _check_local_livekit_tcp_listener(env, sockets, ok, fail)
 
-    # --- Tailscale Serve ---
+    # --- Selected private-network routes ---
+    from openbase_coder_cli.services.tailnet_experience import tailnet_provider_name
+
+    provider_name = tailnet_provider_name()
     click.echo()
-    click.echo(click.style("Tailscale Serve", bold=True))
+    click.echo(click.style(f"{provider_name} routes", bold=True))
     if conflict := stock_tailscale_conflict():
         fail(f"tailnet transport conflict: {conflict}")
     serve_health = tailscale_serve_health()
     if not serve_health.tailscale_available:
-        action("tailscale: not found on PATH")
+        action(f"{provider_name}: control tool not found")
     elif not serve_health.tailscale_running:
-        action(f"tailscale: not running ({serve_health.error or 'unknown error'})")
+        action(
+            f"{provider_name}: not running "
+            f"({serve_health.error or 'unknown error'})"
+        )
     else:
-        ok(f"tailscale: running for {serve_health.host or 'unknown host'}")
+        ok(f"{provider_name}: running for {serve_health.host or 'unknown host'}")
 
     if serve_health.openbase_configured:
         ok("Openbase API Serve route: :18080 -> http://127.0.0.1:7999")

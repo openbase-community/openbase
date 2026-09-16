@@ -27,9 +27,15 @@ def test_pending_replacement_continues_and_verifies(monkeypatch):
         ]
     )
     monkeypatch.setattr(companion, "_request", request)
+    close = Mock()
+    ensure_running = Mock()
+    monkeypatch.setattr(companion, "close", close)
+    monkeypatch.setattr(companion, "ensure_running", ensure_running)
     monkeypatch.setattr(nc.time, "sleep", Mock())
     result = companion.replace_helper_if_needed()
     assert result.running and result.helper_enabled
+    close.assert_called_once_with()
+    ensure_running.assert_called_once_with(build_if_missing=False)
     assert [call.args for call in request.call_args_list] == [
         ("POST", "/replace-helper"),
         ("POST", "/register"),
@@ -47,6 +53,8 @@ def test_pending_replacement_is_bounded(monkeypatch):
         }
     )
     monkeypatch.setattr(companion, "_request", request)
+    monkeypatch.setattr(companion, "close", Mock())
+    monkeypatch.setattr(companion, "ensure_running", Mock())
     monkeypatch.setattr(nc.time, "sleep", Mock())
     with pytest.raises(nc.NetmeshCompanionError, match="did not complete"):
         companion.replace_helper_if_needed()
@@ -88,6 +96,8 @@ def test_successful_registration_still_requires_version_verification(monkeypatch
         ]
     )
     monkeypatch.setattr(companion, "_request", request)
+    monkeypatch.setattr(companion, "close", Mock())
+    monkeypatch.setattr(companion, "ensure_running", Mock())
     monkeypatch.setattr(nc.time, "sleep", Mock())
     with pytest.raises(nc.NetmeshCompanionError, match="wrong helper version"):
         companion.replace_helper_if_needed()
@@ -103,7 +113,38 @@ def test_approval_during_continuation_stops_registration(monkeypatch):
         ]
     )
     monkeypatch.setattr(companion, "_request", request)
+    monkeypatch.setattr(companion, "close", Mock())
+    monkeypatch.setattr(companion, "ensure_running", Mock())
     monkeypatch.setattr(nc.time, "sleep", Mock())
     with pytest.raises(nc.NetmeshCompanionError, match="requiresApproval"):
         companion.replace_helper_if_needed()
     assert request.call_count == 2
+
+
+def test_unverified_app_update_repair_uses_explicit_endpoint(monkeypatch):
+    companion = nc.NetmeshCompanion(None)
+    request = Mock(
+        side_effect=[
+            {"ok": True, "helper": "notRegistered", "helperReplacementPending": True},
+            {"ok": True, "helper": "enabled"},
+            {
+                "ok": True,
+                "helper": "enabled",
+                "backendState": "Running",
+                "helperReplaced": False,
+            },
+        ]
+    )
+    monkeypatch.setattr(companion, "_request", request)
+    monkeypatch.setattr(companion, "close", Mock())
+    monkeypatch.setattr(companion, "ensure_running", Mock())
+    monkeypatch.setattr(nc.time, "sleep", Mock())
+
+    result = companion.repair_helper_after_app_update()
+
+    assert result.running and result.helper_enabled
+    assert [call.args for call in request.call_args_list] == [
+        ("POST", "/repair-helper"),
+        ("POST", "/register"),
+        ("POST", "/replace-helper"),
+    ]
