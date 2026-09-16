@@ -32,7 +32,7 @@ class FakeThreadManager:
 
 
 def test_cached_thread_list_reuses_fresh_result(monkeypatch) -> None:
-    thread_cache.invalidate_thread_list_cache()
+    thread_cache.clear_thread_cache()
     manager = FakeThreadManager()
     now = 100.0
     monkeypatch.setattr(thread_cache.time, "monotonic", lambda: now)
@@ -45,7 +45,7 @@ def test_cached_thread_list_reuses_fresh_result(monkeypatch) -> None:
 
 
 def test_cached_thread_list_expires_after_ttl(monkeypatch) -> None:
-    thread_cache.invalidate_thread_list_cache()
+    thread_cache.clear_thread_cache()
     manager = FakeThreadManager()
     now = 100.0
     monkeypatch.setattr(thread_cache.time, "monotonic", lambda: now)
@@ -58,21 +58,31 @@ def test_cached_thread_list_expires_after_ttl(monkeypatch) -> None:
     assert first != second
 
 
-def test_invalidate_thread_list_cache_forces_refresh(monkeypatch) -> None:
-    thread_cache.invalidate_thread_list_cache()
+def test_invalidate_thread_list_cache_serves_stale_briefly_then_refreshes(
+    monkeypatch,
+) -> None:
+    thread_cache.clear_thread_cache()
     manager = FakeThreadManager()
-    monkeypatch.setattr(thread_cache.time, "monotonic", lambda: 100.0)
+    now = 100.0
+    monkeypatch.setattr(thread_cache.time, "monotonic", lambda: now)
 
     first = thread_cache.get_cached_thread_list(manager)
     thread_cache.invalidate_thread_list_cache()
-    second = thread_cache.get_cached_thread_list(manager)
 
+    # Within the stale-serve floor, mutation churn does not force a
+    # recompute on every poll (2026-09-16 thread/list flood).
+    stale = thread_cache.get_cached_thread_list(manager)
+    assert manager.calls == 1
+    assert stale == first
+
+    now += thread_cache.THREAD_LIST_STALE_SERVE_SECONDS + 0.1
+    second = thread_cache.get_cached_thread_list(manager)
     assert manager.calls == 2
     assert first != second
 
 
 def test_cached_thread_page_reuses_fresh_result(monkeypatch) -> None:
-    thread_cache.invalidate_thread_list_cache()
+    thread_cache.clear_thread_cache()
     manager = FakeThreadManager()
     monkeypatch.setattr(thread_cache.time, "monotonic", lambda: 100.0)
 
@@ -84,7 +94,7 @@ def test_cached_thread_page_reuses_fresh_result(monkeypatch) -> None:
 
 
 def test_cached_thread_page_cache_key_includes_cursor(monkeypatch) -> None:
-    thread_cache.invalidate_thread_list_cache()
+    thread_cache.clear_thread_cache()
     manager = FakeThreadManager()
     monkeypatch.setattr(thread_cache.time, "monotonic", lambda: 100.0)
 
@@ -96,7 +106,7 @@ def test_cached_thread_page_cache_key_includes_cursor(monkeypatch) -> None:
 
 
 def test_cached_thread_state_reuses_fresh_result(monkeypatch) -> None:
-    thread_cache.invalidate_thread_list_cache()
+    thread_cache.clear_thread_cache()
     manager = FakeThreadManager()
     monkeypatch.setattr(thread_cache.time, "monotonic", lambda: 100.0)
 
@@ -108,7 +118,7 @@ def test_cached_thread_state_reuses_fresh_result(monkeypatch) -> None:
 
 
 def test_cached_thread_state_cache_key_includes_thread_id(monkeypatch) -> None:
-    thread_cache.invalidate_thread_list_cache()
+    thread_cache.clear_thread_cache()
     manager = FakeThreadManager()
     monkeypatch.setattr(thread_cache.time, "monotonic", lambda: 100.0)
 

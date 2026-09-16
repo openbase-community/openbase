@@ -12,6 +12,15 @@ from openbase_coder_cli.thread_sync.models import ThreadInfo
 from openbase_coder_cli.thread_sync.session_manager import ThreadListPage
 
 THREAD_LIST_CACHE_TTL_SECONDS = 8.0
+# During an active voice session, turn starts and steers invalidate this
+# cache continuously (~2/s observed 2026-09-16), so every console poll
+# recomputed the full recency window (5+ thread/list RPCs each) and
+# saturated the app-server connection (~1,330 RPCs in 10 minutes).
+# Invalidation therefore only marks entries stale; a value computed within
+# this floor still serves during churn, bounding recomputes to ~1 per floor
+# interval. Mutation responses carry their own fresh state, so the only cost
+# is list polls trailing a mutation by at most this long.
+THREAD_LIST_STALE_SERVE_SECONDS = 2.5
 
 _T = TypeVar("_T")
 
@@ -39,17 +48,26 @@ class _SingleFlightCache:
     misses on the *same* key still share one call and its result (or error).
     """
 
-    def __init__(self, ttl_seconds: float) -> None:
+    def __init__(self, ttl_seconds: float, stale_serve_seconds: float = 0.0) -> None:
         self._ttl = ttl_seconds
+        self._stale_serve = stale_serve_seconds
         self._lock = threading.Lock()
-        self._entries: dict[Hashable, tuple[float, Any]] = {}
+        # key -> (computed_at, value, stale). Invalidation flips stale rather
+        # than dropping the entry so mutation churn cannot force a recompute
+        # on every read (see THREAD_LIST_STALE_SERVE_SECONDS).
+        self._entries: dict[Hashable, tuple[float, Any, bool]] = {}
         self._inflight: dict[Hashable, _InFlight] = {}
 
     def get(self, key: Hashable, compute: Callable[[], _T]) -> _T:
         with self._lock:
             entry = self._entries.get(key)
-            if entry is not None and time.monotonic() - entry[0] < self._ttl:
-                return entry[1]
+            if entry is not None:
+                computed_at, value, stale = entry
+                age = time.monotonic() - computed_at
+                if not stale and age < self._ttl:
+                    return value
+                if stale and age < self._stale_serve:
+                    return value
             inflight = self._inflight.get(key)
             leader = inflight is None
             if leader:
@@ -73,7 +91,7 @@ class _SingleFlightCache:
             inflight.event.set()
             raise
         with self._lock:
-            self._entries[key] = (time.monotonic(), value)
+            self._entries[key] = (time.monotonic(), value, False)
             self._inflight.pop(key, None)
         inflight.value = value
         inflight.event.set()
@@ -81,10 +99,20 @@ class _SingleFlightCache:
 
     def invalidate(self) -> None:
         with self._lock:
+            self._entries = {
+                key: (computed_at, value, True)
+                for key, (computed_at, value, _stale) in self._entries.items()
+            }
+
+    def clear(self) -> None:
+        with self._lock:
             self._entries.clear()
 
 
-_thread_cache = _SingleFlightCache(THREAD_LIST_CACHE_TTL_SECONDS)
+_thread_cache = _SingleFlightCache(
+    THREAD_LIST_CACHE_TTL_SECONDS,
+    stale_serve_seconds=THREAD_LIST_STALE_SERVE_SECONDS,
+)
 
 
 def get_cached_thread_list(manager: Any) -> list[ThreadInfo]:
@@ -121,5 +149,15 @@ def get_cached_thread_state(manager: Any, thread_id: str) -> ThreadInfo | None:
 
 
 def invalidate_thread_list_cache() -> None:
-    """Clear cached thread-list reads after thread mutations."""
+    """Mark cached thread reads stale after thread mutations.
+
+    Recently computed values still serve for a short floor (see
+    THREAD_LIST_STALE_SERVE_SECONDS) so mutation churn during an active
+    voice session cannot force a full recompute on every poll.
+    """
     _thread_cache.invalidate()
+
+
+def clear_thread_cache() -> None:
+    """Drop every cached thread read outright (tests and hard resets)."""
+    _thread_cache.clear()
