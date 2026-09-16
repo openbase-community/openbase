@@ -79,6 +79,13 @@ def test_loopback_and_proxy_headers_do_not_replace_capability(monkeypatch):
 @override_settings(ALLOWED_HOSTS=["testserver"])
 def test_installation_capability_authorizes_intended_local_api_path(monkeypatch):
     monkeypatch.setattr(authentication, "get_local_api_token", lambda: CAPABILITY)
+    identities = []
+
+    def fake_user(*, sub):
+        identities.append(sub)
+        return SimpleNamespace(is_authenticated=True)
+
+    monkeypatch.setattr(authentication, "_get_or_create_user", fake_user)
     monkeypatch.setattr(
         auth_views,
         "get_token_manager",
@@ -96,6 +103,7 @@ def test_installation_capability_authorizes_intended_local_api_path(monkeypatch)
     response = client.get("/api/auth/session/")
 
     assert response.status_code == 200
+    assert identities == ["local-installation"]
     assert response.json() == {
         "logged_in": True,
         "status": "logged_in",

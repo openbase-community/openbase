@@ -2081,6 +2081,13 @@ def test_interactive_login_checks_run_login_when_accepted(
 
     login_calls = []
     reports = []
+    providers = []
+    tailnet_cli = importlib.import_module("openbase_coder_cli.cli.tailnet")
+    monkeypatch.setattr(
+        tailnet_cli,
+        "record_account_provider",
+        lambda provider: providers.append(provider) or True,
+    )
 
     @click.command()
     def fake_login():
@@ -2109,6 +2116,7 @@ def test_interactive_login_checks_run_login_when_accepted(
 
     assert login_calls == [True]
     assert reports == [{"cli_configured": True, "serve_healthy": True}]
+    assert providers == ["tailscale"]
 
 
 def test_interactive_login_checks_report_when_logged_in(tmp_path, monkeypatch) -> None:
