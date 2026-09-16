@@ -427,6 +427,13 @@ def run_reconcile_once(
     if peers and current_auth_header() is None:
         peers = ()
 
+    from openbase_coder_cli.code_sync.advertise import advertise_sibling_branches
+    from openbase_coder_cli.code_sync.echo_heal import (
+        SILENT_ACTIONS as HEAL_SILENT_ACTIONS,
+    )
+    from openbase_coder_cli.code_sync.echo_heal import (
+        heal_repo_echo,
+    )
     from openbase_coder_cli.code_sync.repositories import (
         adopt_repository,
         repository_state,
@@ -435,6 +442,11 @@ def run_reconcile_once(
     from openbase_coder_cli.code_sync.worktrees import (
         adopt_worktree,
         is_linked_worktree,
+    )
+
+    heal_apply = os.environ.get("OPENBASE_CODE_SYNC_ECHO_HEAL", "1") not in (
+        "0",
+        "false",
     )
 
     reconcile_state = read_reconcile_state()
@@ -492,6 +504,17 @@ def run_reconcile_once(
         final_state = repository_state(repo)
         if final_state is not None:
             next_repo_states[state_key] = final_state
+        # Make sibling-worktree branches visible in the trunk repo (a
+        # hydrated worktree's clone is otherwise invisible from the trunk).
+        for entry in advertise_sibling_branches(repo):
+            summary.setdefault("trunk_advertisements", []).append(
+                {"path": repo_relpath, **entry}
+            )
+        # Detect (and by default heal) working-tree dirt that is a pure
+        # sync echo of commits already on origin.
+        heal = heal_repo_echo(repo, apply=heal_apply)
+        if heal["action"] not in HEAL_SILENT_ACTIONS:
+            summary.setdefault("echo_heals", []).append({"path": repo_relpath, **heal})
 
     for folder in sync_folders(config_path):
         folder_root = folder.absolute_path(home)
@@ -724,6 +747,16 @@ def reconcile_counts(summary: dict[str, Any]) -> dict[str, int]:
         ),
         "published": sum(
             1 for action in manifest_actions if action.startswith("published")
+        ),
+        "advertised": sum(
+            1
+            for entry in summary.get("trunk_advertisements", [])
+            if entry.get("action") in ("imported", "fast_forwarded", "mirrored")
+        ),
+        "echo_healed": sum(
+            1
+            for entry in summary.get("echo_heals", [])
+            if entry.get("action") == "healed"
         ),
         "errors": len(summary.get("errors", [])),
     }

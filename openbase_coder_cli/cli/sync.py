@@ -337,6 +337,67 @@ def resolve(conflict_id: str, action: str | None) -> None:
     click.echo(f"Resolved {record['id']} with {action}.")
 
 
+@sync.command("heal-echoes")
+@click.option(
+    "--check",
+    is_flag=True,
+    help="Only report echo state; do not fast-forward anything.",
+)
+@click.option(
+    "--no-fetch",
+    is_flag=True,
+    help="Evaluate against cached origin refs instead of fetching.",
+)
+def heal_echoes(check: bool, no_fetch: bool) -> None:
+    """Fast-forward repos whose dirt is a pure sync echo of pushed commits.
+
+    A peer's commits arrive twice: as pushed history on origin and as
+    Syncthing file changes. Until the local HEAD catches up, the files look
+    like someone's uncommitted work. This proves the dirty files are
+    byte-identical to origin/<branch> with HEAD strictly behind, and only
+    then fast-forwards; any real local change aborts the heal for that repo.
+    """
+    from openbase_coder_cli.code_sync.echo_heal import (
+        SILENT_ACTIONS,
+        heal_repo_echo,
+    )
+    from openbase_coder_cli.code_sync.reconciler import discover_git_repos
+
+    folders = sync_config.sync_folders()
+    if not folders:
+        raise click.ClickException("No synced folders are configured.")
+    healed = 0
+    reported = 0
+    for folder in folders:
+        folder_root = folder.absolute_path()
+        for repo in discover_git_repos(folder_root):
+            result = heal_repo_echo(
+                repo,
+                allow_fetch=not no_fetch,
+                min_fetch_interval=0,
+                apply=not check,
+            )
+            action = result["action"]
+            if action in SILENT_ACTIONS:
+                continue
+            reported += 1
+            relpath = repo.relative_to(folder_root)
+            line = f"~/{folder.relpath}/{relpath}  {action}"
+            if result.get("branch"):
+                line += f"  [{result['branch']}]"
+            if result.get("detail"):
+                line += f"  {result['detail']}"
+            if action == "healed":
+                healed += 1
+                click.echo(click.style(line, fg="green"))
+            else:
+                click.echo(line)
+    if not reported:
+        click.echo("No sync echoes detected; nothing to heal.")
+    else:
+        click.echo(f"Healed {healed} repo(s).")
+
+
 @sync.command()
 @click.option("--loop", is_flag=True, help="Run forever (service mode).")
 @click.option(

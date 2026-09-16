@@ -96,6 +96,42 @@ which repository and branch to attach). Run git commands in a worktree on
 either computer; commits reconcile back through the same branch
 fast-forward machinery as any repository.
 
+When a synced worktree lives in a `<workspace>-worktrees/` sibling folder
+and had to be attached as a **standalone** checkout on the other machine,
+its branches would otherwise be invisible from the main
+`<workspace>/<repo>` checkout there. The reconciler closes that gap
+automatically: branches (and their commits) from the sibling checkout are
+**advertised into the trunk repo** — as a normal local branch when the
+name is free, fast-forwarded when the trunk's branch is strictly behind,
+or mirrored under the `synced/<branch>` name when the trunk's own branch
+diverges or is checked out. The trunk's checked-out branch and working
+files are never touched, and real local branches are never force-moved.
+Each import appears in the service log as a `code_sync trunk_advertise`
+line.
+
+The reconciler also heals **sync echoes**: after one machine commits and
+pushes, Syncthing delivers the changed files to the other machine before
+its git HEAD catches up, so the second machine's checkout looks dirty
+with what appears to be uncommitted work. When every dirty tracked file
+is byte-identical to the same path in `origin/<branch>` and the local
+HEAD is strictly behind it, the repo is fast-forwarded automatically and
+the dirt disappears (`code_sync echo_heal_applied` in the log). Any
+staged change, any file that differs, or any untracked file the
+fast-forward would overwrite aborts the heal for that repo — real
+in-flight work always wins. Run it on demand (or preview with `--check`)
+with:
+
+```bash
+openbase-coder sync heal-echoes
+```
+
+Set `OPENBASE_CODE_SYNC_ECHO_HEAL=0` to keep automatic healing off; the
+reconciler then only logs that a repo's dirt is a pure echo and safe to
+fast-forward. A hydrated worktree showing only `uv.lock` /
+`pnpm-lock.yaml` as deleted is a known cosmetic sync artifact (the origin
+machine keeps those as symlinks, which do not sync); it is logged as such
+and deliberately left alone.
+
 Coding threads (Codex and Claude Code) also travel between your machines
 over the same channel: each device exports snapshots of recent threads and
 imports the other's automatically. Only threads active in the **last 15
