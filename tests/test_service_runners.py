@@ -371,3 +371,23 @@ def test_load_env_without_env_file_returns_process_env(monkeypatch):
         "CODEX_APP_SERVER_URL": "unix://",
         "CODEX_HOME": str(runners.Path.home() / ".codex"),
     }
+
+
+def test_livekit_server_pins_loopback_stun_in_every_mode(monkeypatch):
+    # A non-empty stun_servers list suppresses livekit-server's hardcoded
+    # public STUN defaults (Twilio/Google), which it would otherwise send to
+    # every client in the JoinResponse.
+    monkeypatch.setattr(runners.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(runners.network, "tailscale_ip", lambda family: "100.64.1.2")
+    monkeypatch.setattr(runners.network, "resolve_interface", lambda ip: "en0")
+    binaries = {"livekit": "/usr/local/bin/livekit-server"}
+
+    for mode in ("local", "netmesh", "tailscale"):
+        env = {
+            "LIVEKIT_NETWORK_MODE": mode,
+            "LIVEKIT_API_KEY": "key",
+            "LIVEKIT_API_SECRET": "secret",
+        }
+        argv, _ = runners.build_livekit_server(env, binaries)
+        config_body = argv[argv.index("--config-body") + 1]
+        assert "stun_servers:\n    - 127.0.0.1:3478\n" in config_body, mode

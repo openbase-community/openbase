@@ -45,10 +45,21 @@ def _livekit_config_body(
     ips = ["127.0.0.1/32", *extra_ips]
     iface_lines = "\n".join(f"      - {iface}" for iface in ifaces)
     ip_lines = "\n".join(f"      - {ip}" for ip in ips)
+    # stun_servers must be non-empty: with an empty list, livekit-server sends
+    # its hardcoded public defaults (Twilio/Google STUN) to every client in
+    # the JoinResponse, so clients on the direct-media fallback path leak
+    # their IP to third parties during ICE gathering. No supported topology
+    # can use a server-reflexive candidate — media is either direct over the
+    # tailnet or forced through our TURN relay — so this value only needs to
+    # exist, not answer. Loopback makes client binding requests fail fast
+    # without emitting off-device packets; the port matches tunneld's TURN,
+    # which does answer STUN bindings where it runs.
     return (
         "rtc:\n"
         f"  tcp_port: {tcp_port}\n"
         f"  udp_port: {udp_port}\n"
+        "  stun_servers:\n"
+        "    - 127.0.0.1:3478\n"
         "  enable_loopback_candidate: true\n"
         f"  advertise_internal_ip: {str(advertise_internal_ip).lower()}\n"
         "  interfaces:\n"
