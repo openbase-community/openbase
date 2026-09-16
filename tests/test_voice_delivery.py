@@ -1250,9 +1250,12 @@ def test_steer_receipt_closure_emits_mute_once():
 
 
 def test_mute_keepalive_holds_client_watchdog_during_long_turn(monkeypatch):
-    """A sustained mute re-emits safe_to_mute_user so the iOS stuck-muted
-    watchdog does not reopen the mic in the middle of a long backend turn,
-    and stops as soon as the mute is released."""
+    """A sustained mute emits a distinct mute_keepalive event so the iOS
+    stuck-muted watchdog does not reopen the mic mid-turn, stops as soon as
+    the mute is released, and — because it is NOT a repeated
+    safe_to_mute_user — can never re-mute a user who manually unmuted to
+    interject (clients ignore unknown events but refresh their staleness
+    clock)."""
     from openbase_coder_cli.livekit_agent import voice_delivery as vd
 
     monkeypatch.setattr(vd, "MUTE_KEEPALIVE_INTERVAL_SECONDS", 0.02)
@@ -1266,15 +1269,17 @@ def test_mute_keepalive_holds_client_watchdog_during_long_turn(monkeypatch):
         record = ledger.accept_utterance(message_id="m1", prompt="launch an agent")
         ledger.mark_user_turn_closed(record, decision=_immediate_closure_decision())
         await asyncio.sleep(0.07)
-        mutes_while_held = events.count("safe_to_mute_user")
+        keepalives_while_held = events.count("mute_keepalive")
+        # The real mute is emitted exactly once; keepalives never repeat it.
+        assert events.count("safe_to_mute_user") == 1
 
         ledger.mark_cancelled(record, reason="livekit_llm_stream_cancelled")
         assert events[-1] == "safe_to_unmute"
-        settled = events.count("safe_to_mute_user")
+        settled = events.count("mute_keepalive")
         await asyncio.sleep(0.07)
-        return mutes_while_held, events.count("safe_to_mute_user") - settled
+        return keepalives_while_held, events.count("mute_keepalive") - settled
 
-    mutes_while_held, mutes_after_release = asyncio.run(run())
+    keepalives_while_held, keepalives_after_release = asyncio.run(run())
 
-    assert mutes_while_held >= 3
-    assert mutes_after_release == 0
+    assert keepalives_while_held >= 3
+    assert keepalives_after_release == 0

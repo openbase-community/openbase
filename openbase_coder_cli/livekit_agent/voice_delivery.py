@@ -960,7 +960,11 @@ class VoiceDeliveryLedger:
                 record.delivery_id,
                 self._room_name,
             )
-            self._emit_lifecycle("safe_to_mute_user", record, reason="mute_keepalive")
+            # A distinct event name, NOT a repeated safe_to_mute_user: clients
+            # refresh their stuck-muted staleness clock on any lifecycle
+            # packet but must not re-apply a mute the user manually undid to
+            # interject during a long turn.
+            self._emit_lifecycle("mute_keepalive", record, reason="mute_keepalive")
 
     def _announcement_pending(self) -> bool:
         if self._announcement_pending_provider is None:
