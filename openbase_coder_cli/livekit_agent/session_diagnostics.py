@@ -13,10 +13,19 @@ from openbase_coder_cli.livekit_agent.logging_utils import (
 from openbase_coder_cli.livekit_agent.spoken_commands import (
     _is_exit_to_dispatch_command,
 )
+from openbase_coder_cli.livekit_agent.text_normalization import normalize_spoken_text
 from openbase_coder_cli.livekit_agent.voice_routing import LiveKitVoiceRouter
 from openbase_coder_cli.voice_tags import wrap_voice_prompt
 
 logger = logging.getLogger(__name__)
+
+# When the framework's turn-completion lands while an uninterruptible speech
+# (announcer intro, audio-file playback) is the current speech, it drops the
+# reply entirely — the utterance never even reaches the chat context. A final
+# transcript that was neither steered nor added as a conversation item within
+# this grace window is treated as dropped and recovered once speech frees up.
+DROPPED_UTTERANCE_GRACE_SECONDS = 3.0
+DROPPED_UTTERANCE_SPEECH_WAIT_SECONDS = 30.0
 
 
 def _register_session_diagnostics(
@@ -27,7 +36,68 @@ def _register_session_diagnostics(
     on_unrecoverable_error: Callable[[Exception], Awaitable[None]] | None = None,
 ):
     proactive_steer_tasks: set[asyncio.Task[None]] = set()
+    recovery_tasks: set[asyncio.Task[None]] = set()
+    # normalized final transcript -> raw transcript, pending until steered,
+    # observed as a user conversation item, or recovered.
+    pending_final_transcripts: dict[str, str] = {}
     error_reported = False
+
+    def _mark_transcript_handled(text: str) -> None:
+        if not pending_final_transcripts:
+            return
+        normalized = normalize_spoken_text(text)
+        if not normalized:
+            return
+        for key in list(pending_final_transcripts):
+            if key in normalized:
+                pending_final_transcripts.pop(key, None)
+
+    async def _recover_dropped_utterance(key: str) -> None:
+        await asyncio.sleep(DROPPED_UTTERANCE_GRACE_SECONDS)
+        if key not in pending_final_transcripts:
+            return
+        # Wait out the uninterruptible speech that swallowed the reply.
+        waited = 0.0
+        while waited < DROPPED_UTTERANCE_SPEECH_WAIT_SECONDS:
+            speech = getattr(session, "current_speech", None)
+            if speech is None or speech.allow_interruptions:
+                break
+            await asyncio.sleep(0.25)
+            waited += 0.25
+        if key not in pending_final_transcripts:
+            return
+        # Fold every still-pending fragment into one recovery so a thought
+        # split across finals comes back as a single reply, not several.
+        transcript = " ".join(pending_final_transcripts.values())
+        pending_final_transcripts.clear()
+        logger.warning(
+            "dispatch_timing stage=session_dropped_utterance_recovered "
+            "transcript_len=%d transcript_hash=%s waited_ms=%d",
+            len(transcript),
+            _event_text_hash(transcript),
+            int(waited * 1000),
+        )
+        try:
+            session.generate_reply(user_input=transcript)
+        except Exception:
+            logger.warning(
+                "dispatch_timing stage=session_dropped_utterance_recovery_failed "
+                "transcript_hash=%s",
+                _event_text_hash(transcript),
+                exc_info=True,
+            )
+
+    def _watch_for_dropped_utterance(transcript: str) -> None:
+        key = normalize_spoken_text(transcript)
+        if not key:
+            return
+        pending_final_transcripts[key] = transcript
+        task = asyncio.create_task(
+            _recover_dropped_utterance(key),
+            name="openbase-dropped-utterance-recovery",
+        )
+        recovery_tasks.add(task)
+        task.add_done_callback(recovery_tasks.discard)
 
     async def proactively_steer_final_transcript(transcript: str) -> None:
         try:
@@ -41,6 +111,7 @@ def _register_session_diagnostics(
             turn_id = await steer_active_turn(wrap_voice_prompt(transcript))
             if not turn_id:
                 return
+            _mark_transcript_handled(transcript)
             voice_router.mark_proactive_steer(transcript)
             delivery_ledger = voice_router.delivery_ledger
             if delivery_ledger is not None:
@@ -107,13 +178,20 @@ def _register_session_diagnostics(
                 transcript[:160],
             )
         if is_final and transcript.strip():
-            schedule_proactive_steer(transcript.strip())
+            stripped = transcript.strip()
+            if not _is_exit_to_dispatch_command(stripped):
+                _watch_for_dropped_utterance(stripped)
+            schedule_proactive_steer(stripped)
 
     def on_conversation_item_added(event) -> None:
-        if not enable_logging:
-            return
         item = getattr(event, "item", None)
         text_content = str(getattr(item, "text_content", "") or "")
+        if getattr(item, "role", "") == "user":
+            # The utterance made it into the chat context; the framework did
+            # not drop it, so cancel any pending dropped-utterance recovery.
+            _mark_transcript_handled(text_content)
+        if not enable_logging:
+            return
         logger.info(
             "dispatch_timing stage=session_conversation_item_added item_type=%s "
             "role=%s text_len=%d text_hash=%s text_excerpt=%r",

@@ -1581,3 +1581,105 @@ async def test_announcer_playout_brackets_voice_lifecycle_events():
     assert len(delivery_ids) == 1
     assert next(iter(delivery_ids)).startswith("voice-announcer-")
     assert not queue.has_pending_announcements()
+
+
+@pytest.mark.asyncio
+async def test_dropped_utterance_recovered_after_uninterruptible_speech(monkeypatch):
+    """A turn that lands during uninterruptible speech is replayed, not lost.
+
+    The framework skips the reply entirely ("skipping reply to user input,
+    current speech generation cannot be interrupted") when the current speech
+    is an announcer intro; the utterance never reaches the chat context.
+    """
+    from openbase_coder_cli.livekit_agent import session_diagnostics
+
+    monkeypatch.setattr(
+        session_diagnostics, "DROPPED_UTTERANCE_GRACE_SECONDS", 0.05
+    )
+
+    class FakeSpeech:
+        allow_interruptions = False
+
+    class FakeSession:
+        def __init__(self):
+            self.handlers = {}
+            self.current_speech = FakeSpeech()
+            self.generated = []
+
+        def on(self, event_name, handler):
+            self.handlers[event_name] = handler
+
+        def generate_reply(self, *, user_input):
+            self.generated.append(user_input)
+
+    class FakeClient:
+        async def steer_active_turn(self, prompt):
+            return None  # no active backend turn: nothing catches the input
+
+        def has_active_prompt(self, prompt):
+            return False
+
+    session = FakeSession()
+    router = LiveKitVoiceRouter(FakeClient())
+    livekit._register_session_diagnostics(session, router, enable_logging=False)
+
+    session.handlers["user_input_transcribed"](
+        SimpleNamespace(is_final=True, transcript="are you there")
+    )
+    session.handlers["user_input_transcribed"](
+        SimpleNamespace(is_final=True, transcript="hello again")
+    )
+    await asyncio.sleep(0.2)
+    assert session.generated == []  # still held by the uninterruptible speech
+
+    session.current_speech = None
+    for _ in range(60):
+        if session.generated:
+            break
+        await asyncio.sleep(0.05)
+    # Both dropped fragments fold into one recovered reply.
+    assert session.generated == ["are you there hello again"]
+
+
+@pytest.mark.asyncio
+async def test_dropped_utterance_not_recovered_when_framework_kept_it(monkeypatch):
+    from openbase_coder_cli.livekit_agent import session_diagnostics
+
+    monkeypatch.setattr(
+        session_diagnostics, "DROPPED_UTTERANCE_GRACE_SECONDS", 0.05
+    )
+
+    class FakeSession:
+        def __init__(self):
+            self.handlers = {}
+            self.current_speech = None
+            self.generated = []
+
+        def on(self, event_name, handler):
+            self.handlers[event_name] = handler
+
+        def generate_reply(self, *, user_input):
+            self.generated.append(user_input)
+
+    class FakeClient:
+        async def steer_active_turn(self, prompt):
+            return None
+
+        def has_active_prompt(self, prompt):
+            return False
+
+    session = FakeSession()
+    router = LiveKitVoiceRouter(FakeClient())
+    livekit._register_session_diagnostics(session, router, enable_logging=False)
+
+    session.handlers["user_input_transcribed"](
+        SimpleNamespace(is_final=True, transcript="are you there")
+    )
+    # The framework accepted the turn: the user item reaches the chat context.
+    session.handlers["conversation_item_added"](
+        SimpleNamespace(
+            item=SimpleNamespace(role="user", text_content="Are you there?")
+        )
+    )
+    await asyncio.sleep(0.3)
+    assert session.generated == []
