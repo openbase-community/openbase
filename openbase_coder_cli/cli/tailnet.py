@@ -564,23 +564,33 @@ def _provision_netmesh_companion() -> None:
         warn(str(exc))
         return
 
-    if status.running and status.helper_enabled:
+    if status.helper_enabled:
         try:
-            status = companion.replace_helper_if_needed()
+            try:
+                status = companion.replace_helper_if_needed()
+            except NetmeshCompanionError as exc:
+                # A companion rebuild/update can leave the registered old
+                # helper unable to authenticate the new control shim. Its
+                # version is then intentionally unverifiable, so use the
+                # explicit helper-only repair path also used by Electron.
+                if "running version could not be verified" not in str(exc):
+                    raise
+                status = companion.repair_helper_after_app_update()
             if status.raw.get("helperReplaced") is True:
                 click.echo("Updated the Openbase VPN helper.")
         except NetmeshCompanionError as exc:
             warn(f"could not update the Openbase VPN helper: {exc}")
             companion.close()
             return
-        # Re-apply (e.g. re-running set-provider for serve rules): the tunnel
-        # is already up — don't mint a fresh single-use key or churn the node.
-        click.echo(
-            f"Openbase VPN already connected: {status.dns_name or 'netmesh'} "
-            f"({status.self_ip or '?'})."
-        )
-        companion.close()
-        return
+        if status.running:
+            # Re-apply (e.g. re-running set-provider for serve rules): the tunnel
+            # is already up — don't mint a fresh single-use key or churn the node.
+            click.echo(
+                f"Openbase VPN already connected: {status.dns_name or 'netmesh'} "
+                f"({status.self_ip or '?'})."
+            )
+            companion.close()
+            return
 
     if not status.helper_enabled:
         try:

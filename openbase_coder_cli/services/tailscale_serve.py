@@ -502,7 +502,9 @@ def local_openbase_reachable(
     from openbase_coder_cli.services import tailscale_provider as tp
 
     if not host:
-        return False, "Tailscale DNS name is unavailable."
+        from openbase_coder_cli.services.tailnet_experience import tailnet_provider_name
+
+        return False, f"{tailnet_provider_name()} device name is unavailable."
     if serve_status is None:
         serve_status = tp.serve_status_json()
     if not _openbase_serve_configured(serve_status, host):
@@ -519,7 +521,9 @@ def _openbase_reachable(
     openbase_url: str | None, host_header: str | None = None
 ) -> tuple[bool, str | None]:
     if not openbase_url:
-        return False, "Tailscale DNS name is unavailable."
+        from openbase_coder_cli.services.tailnet_experience import tailnet_provider_name
+
+        return False, f"{tailnet_provider_name()} device name is unavailable."
     url = f"{openbase_url}{OPENBASE_HEALTH_PATH}"
     # When probing by IP, present the MagicDNS name via the Host header so the
     # name-based `tailscale serve --http` mount and Django ALLOWED_HOSTS accept it.
