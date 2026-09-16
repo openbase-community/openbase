@@ -50,6 +50,7 @@ from .thread_sync_common import (
     device_snapshot_dirs,
     file_content_relation,
     get_or_create_device_identity,
+    prune_exchange_snapshots,
     read_device_identity,
     run_snapshot_export,
     run_snapshot_import,
@@ -105,6 +106,9 @@ def sync_claude_thread_snapshots_once(
         super_agents_db_path=super_agents_db_path,
         target_user_home=user_home,
     )
+    # Prune after import so every snapshot removed here was offered to the
+    # local importer at least once.
+    prune_exchange_snapshots(exchange_dir, max_age_days=max_age_days)
     return {"exports": exports, "imports": imports}
 
 
