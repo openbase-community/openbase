@@ -25,6 +25,9 @@ from openbase_coder_cli.livekit_agent.packets import (
 )
 from openbase_coder_cli.livekit_agent.speech_formatter import format_for_speech
 from openbase_coder_cli.livekit_agent.tts_selection import VoiceSelectingTTS
+from openbase_coder_cli.livekit_agent.announcement_audio import (
+    AnnouncementSynthesisOutcome, announcement_audio,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -178,9 +181,11 @@ class AnnouncerSpeechQueue:
             len(message.text),
         )
 
+        outcome = AnnouncementSynthesisOutcome()
         handle = self._session.say(
             spoken_text,
-            audio=self._announcer_audio(spoken_text, voice_id=message.voice_id),
+            audio=announcement_audio(self._announcer_tts, spoken_text,
+                voice_id=message.voice_id, outcome=outcome),
             allow_interruptions=False,
             add_to_chat_ctx=False,
         )
@@ -189,11 +194,14 @@ class AnnouncerSpeechQueue:
             text=spoken_text,
             voice_id=self._announcer_tts.resolve_voice_id(message.voice_id),
             voice_name=self._announcer_tts.resolve_voice_name(message.voice_id),
+            synthesis_outcome=outcome,
         )
         logger.info(
-            "dispatch_timing stage=announcer_playout_end message_id=%s elapsed_ms=%d",
+            "dispatch_timing stage=announcer_playout_end message_id=%s elapsed_ms=%d "
+            "synthesis_completed=%s audio_events=%d",
             message.message_id,
             int((time.monotonic() - started) * 1000),
+            outcome.completed, outcome.audio_events,
         )
 
     async def _bracketed_playout(
@@ -203,6 +211,7 @@ class AnnouncerSpeechQueue:
         text: str,
         voice_id: str | None,
         voice_name: str | None,
+        synthesis_outcome: AnnouncementSynthesisOutcome | None = None,
     ) -> None:
         """Await playout with voice-lifecycle bracketing around the audio.
 
@@ -231,10 +240,20 @@ class AnnouncerSpeechQueue:
         # immediately; clear the speaking flag first so this announcement
         # does not hold its own release.
         self._speaking = False
+        if synthesis_outcome is not None and (
+            not synthesis_outcome.completed or not synthesis_outcome.audio_events
+        ):
+            logger.warning("dispatch_timing stage=announcer_synthesis_incomplete "
+                "delivery_id=%s audio_events=%d audio_seconds=%.2f", record.delivery_id,
+                synthesis_outcome.audio_events, synthesis_outcome.audio_seconds)
+            ledger.mark_tts_failed(record, audio_events=synthesis_outcome.audio_events,
+                audio_seconds=synthesis_outcome.audio_seconds)
+            return
         ledger.mark_tts_completed(
             record,
-            audio_events=1,
-            audio_seconds=time.monotonic() - playout_started,
+            audio_events=synthesis_outcome.audio_events if synthesis_outcome is not None else 1,
+            audio_seconds=synthesis_outcome.audio_seconds if synthesis_outcome is not None
+                else time.monotonic() - playout_started,
             role="announcer",
             voice_id=voice_id,
             voice_name=voice_name,
@@ -312,29 +331,6 @@ class AnnouncerSpeechQueue:
         self._state_changed.clear()
         with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(self._state_changed.wait(), timeout_seconds)
-
-    async def _announcer_audio(
-        self,
-        text: str,
-        *,
-        voice_id: str | None,
-    ) -> AsyncIterator[rtc.AudioFrame]:
-        # Use streaming synthesis (WebSocket) instead of non-streaming
-        # synthesize() (HTTP POST to /tts/bytes) because the Openbase Cloud
-        # audio proxy only supports the WebSocket path.
-        resolved_voice_id = self._announcer_tts.resolve_voice_id(voice_id)
-        tts_stream = self._announcer_tts._tts_for_voice(resolved_voice_id).stream()
-        spoken_text = format_for_speech(text)
-        if not spoken_text:
-            spoken_text = "Technical output omitted, shown on screen."
-        tts_stream.push_text(spoken_text)
-        tts_stream.flush()
-        tts_stream.end_input()
-        try:
-            async for event in tts_stream:
-                yield event.frame
-        finally:
-            await tts_stream.aclose()
 
     async def _play_audio(
         self,

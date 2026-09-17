@@ -141,7 +141,10 @@ class VoiceSelectingTTS(livekit_tts.TTS):
         *,
         conn_options=DEFAULT_API_CONNECT_OPTIONS,
     ):
-        voice_id = self._active_voice_id()
+        return self.stream_for_voice(self._active_voice_id(), conn_options=conn_options)
+
+    def stream_for_voice(self, voice_id: str | None, *, conn_options=DEFAULT_API_CONNECT_OPTIONS):
+        """Keep explicit background voices on the same provider policy and diagnostics."""
         resolved_voice_id = self.resolve_voice_id(voice_id)
         effective_options = tts_connect_options(conn_options)
         logger.info(

@@ -666,6 +666,7 @@ class RecordingCartesiaTTS:
 
     def stream(self, *, conn_options=None):
         self.stream_calls += 1
+        self.conn_options = conn_options
         self.stream_instance = FakeTTSStream()
         return self.stream_instance
 
@@ -722,6 +723,21 @@ def test_voice_selecting_tts_delegates_stream_to_active_voice(monkeypatch):
     assert RecordingCartesiaTTS.created[1].stream_instance.pushed_texts == [
         "Update read me dot M D. Run U V."
     ]
+
+
+def test_explicit_announcement_voice_retains_timeout_policy(monkeypatch):
+    from livekit.agents.types import APIConnectOptions
+    RecordingCartesiaTTS.created = []
+    monkeypatch.setattr(cartesia, "TTS", RecordingCartesiaTTS)
+    tts = VoiceSelectingCartesiaTTS(default_voice_id="default",
+        active_voice_id=lambda: "foreground", api_key="test-placeholder")
+    tts.stream_for_voice("background")
+    selected = RecordingCartesiaTTS.created[-1]
+    assert selected.voice == "background"
+    assert selected.conn_options.timeout == 60
+    override = APIConnectOptions(timeout=7)
+    tts.stream_for_voice("background", conn_options=override)
+    assert selected.conn_options is override
 
 
 def test_voice_selecting_tts_formats_synthesize_text(monkeypatch, caplog):
@@ -1541,7 +1557,29 @@ async def test_announcer_playout_brackets_voice_lifecycle_events():
     )
 
     session = FakeSession()
-    fake_tts = FakeTTS()
+    class AudioTTS(FakeTTS):
+        def stream_for_voice(self, voice_id):
+            class Stream(FakeTTSStream):
+                async def __anext__(self):
+                    if getattr(self, 'emitted', False):
+                        raise StopAsyncIteration
+                    self.emitted = True
+                    return SimpleNamespace(frame=rtc.AudioFrame(
+                        data=bytes(320), sample_rate=16000, num_channels=1,
+                        samples_per_channel=160))
+            return Stream()
+    fake_tts = AudioTTS()
+    original_say = session.say
+    original_wait = session.say_handle.wait_for_playout
+    def consuming_say(text, **kwargs):
+        handle = original_say(text, **kwargs)
+        async def wait():
+            async for _ in kwargs['audio']:
+                pass
+            await original_wait()
+        handle.wait_for_playout = wait
+        return handle
+    session.say = consuming_say
     events: list[tuple[str, str]] = []
     ledger = VoiceDeliveryLedger(
         route_snapshot=lambda: VoiceRouteSnapshot(
