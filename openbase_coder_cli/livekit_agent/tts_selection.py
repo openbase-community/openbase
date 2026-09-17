@@ -143,18 +143,21 @@ class VoiceSelectingTTS(livekit_tts.TTS):
     ):
         voice_id = self._active_voice_id()
         resolved_voice_id = self.resolve_voice_id(voice_id)
+        effective_options = tts_connect_options(conn_options)
         logger.info(
             "dispatch_timing stage=tts_stream_start role=%s requested_voice_id=%s "
-            "resolved_voice_id=%s voice_name=%s conn_options=%s",
+            "resolved_voice_id=%s voice_name=%s conn_options=%s timeout_seconds=%s max_retry=%s",
             self._role,
             voice_id or "",
             resolved_voice_id,
             self._voice_name_for_id(resolved_voice_id) or "",
             type(conn_options).__name__,
+            effective_options.timeout,
+            effective_options.max_retry,
         )
         return SpeechFormattingSynthesizeStream(
             self._tts_for_voice(resolved_voice_id).stream(
-                conn_options=tts_connect_options(conn_options),
+                conn_options=effective_options,
             ),
             role=self._role,
             voice_id=resolved_voice_id,
