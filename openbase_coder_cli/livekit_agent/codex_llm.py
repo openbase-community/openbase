@@ -85,6 +85,7 @@ class CodexLLMStream(llm.LLMStream):
             self._voice_router.active_target_voice_id or "",
         )
         delivery_record = None
+        self._backend_committed = False
         delivery_ledger = self._voice_router.delivery_ledger
         turn_signals = latest_user_turn_signals_from_chat_ctx(
             self._chat_ctx,
@@ -111,10 +112,12 @@ class CodexLLMStream(llm.LLMStream):
             await self._run_accepted_prompt(prompt, delivery_record, delivery_ledger)
         except asyncio.CancelledError:
             if delivery_record is not None:
-                delivery_ledger.mark_cancelled(
-                    delivery_record,
-                    reason="livekit_llm_stream_cancelled",
-                )
+                from openbase_coder_cli.livekit_agent.backend_answer_ownership import preserve_backend_answer_on_cancel
+                if not preserve_backend_answer_on_cancel(self, delivery_record, delivery_ledger):
+                    delivery_ledger.mark_cancelled(
+                        delivery_record,
+                        reason="livekit_llm_stream_cancelled",
+                    )
             raise
         except Exception:
             if delivery_record is not None:
@@ -172,6 +175,8 @@ class CodexLLMStream(llm.LLMStream):
             ):
                 return
             logger.info("dispatch_timing stage=livekit_llm_input_committed message_id=%s prompt_len=%d", self._message_id, delivery_record.prompt_len)
+        self._backend_voice_client = voice_client
+        self._backend_committed = True
         result = await voice_client.run_turn(
             prompt,
             developer_instructions=load_direct_livekit_developer_instructions(),

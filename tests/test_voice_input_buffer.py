@@ -23,6 +23,19 @@ def test_cumulative_transcripts_and_route_changes_never_repeat_old_input():
     assert buffer.add("Make it purple", "super-agent").prompt == "Make it purple"
 
 
+def test_late_merged_tail_does_not_repeat_already_buffered_fragments():
+    buffer = VoiceInputBuffer()
+    fragments = ["Start two agents.", "Build Tetris in Pine.", "Build chess in Birch.",
+        "Have both introduce themselves.", "Write result markdown.", "Keep work independent."]
+    buffer.add(fragments[0], "dispatcher")
+    buffer.add(" ".join(fragments[:2]), "dispatcher")
+    buffer.add(fragments[2], "dispatcher")
+    buffer.add(fragments[3], "dispatcher")
+    buffer.add(" ".join(fragments[-2:]), "dispatcher")
+    item = buffer.add(" ".join(fragments[-3:]), "dispatcher")
+    assert item.prompt == " ".join(fragments)
+
+
 def test_expired_unsubmitted_input_is_not_attached_to_a_new_question(monkeypatch):
     from openbase_coder_cli.livekit_agent import voice_input_buffer
     now = [1.0]

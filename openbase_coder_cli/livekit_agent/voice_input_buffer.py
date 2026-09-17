@@ -23,7 +23,7 @@ class VoiceInputBuffer:
         previous = self._current
         if previous and previous.route == route and time.monotonic() - self._updated_at <= self._ttl_seconds:
             old, new = normalize_spoken_text(previous.prompt), normalize_spoken_text(prompt)
-            if old == new or old.startswith(new + " "):
+            if old == new or old.startswith(new + " ") or old.endswith(" " + new):
                 prompt = previous.prompt
             elif not new.startswith(old + " "):
                 prompt = previous.prompt + " " + prompt
