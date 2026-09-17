@@ -382,11 +382,13 @@ class VoiceDeliveryLedger:
             name="openbase-voice-user-turn-closure",
         )
 
-    async def wait_for_user_turn_closed_before_tts(
+    async def wait_for_user_turn_closed(
         self,
         record: VoiceDeliveryRecord,
+        *,
+        purpose: str = "tts",
     ) -> bool:
-        """Wait until the user turn is closed before allowing agent speech.
+        """Wait for verified quiet before committing input or allowing speech.
 
         The backend may produce text while the user is still adding to their
         thought. The lifecycle ledger is the authority for when the iOS app may
@@ -409,18 +411,22 @@ class VoiceDeliveryLedger:
                 wait_logged = True
                 self._log_user_turn_closure(
                     record,
-                    "tts_waiting_for_user_turn_closed",
+                    f"{purpose}_waiting_for_user_turn_closed",
                 )
             await asyncio.sleep(self._user_speaking_poll_seconds)
         if wait_logged:
             logger.info(
-                "dispatch_timing stage=voice_delivery_tts_user_turn_closed_wait_done "
+                "dispatch_timing stage=voice_delivery_%s_user_turn_closed_wait_done "
                 "delivery_id=%s message_id=%s wait_ms=%d",
+                purpose,
                 record.delivery_id,
                 record.message_id,
                 int((time.monotonic() - wait_started) * 1000),
             )
         return True
+
+    async def wait_for_user_turn_closed_before_tts(self, record: VoiceDeliveryRecord) -> bool:
+        return await self.wait_for_user_turn_closed(record)
 
     def mark_user_turn_closed(
         self,

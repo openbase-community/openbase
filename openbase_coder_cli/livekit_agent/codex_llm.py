@@ -90,6 +90,12 @@ class CodexLLMStream(llm.LLMStream):
             self._chat_ctx,
             turn_signal_tracker=self._turn_signal_tracker,
         )
+        self._buffered_input = None
+        if _is_exit_to_dispatch_command(prompt):
+            self._voice_router.input_buffer.clear()
+        if delivery_ledger is not None and not _is_exit_to_dispatch_command(prompt):
+            self._buffered_input = self._voice_router.input_buffer.add(prompt, self._voice_router.route_snapshot())
+            prompt = self._buffered_input.prompt
         if delivery_ledger is not None:
             delivery_record = delivery_ledger.accept_utterance(
                 message_id=self._message_id,
@@ -156,6 +162,16 @@ class CodexLLMStream(llm.LLMStream):
             prompt = append_onboarding_reminder(prompt)
 
         voice_client = self._voice_router.active_client
+        if delivery_record is not None:
+            # Do not execute a partial request while the user is still finishing it.
+            # Framework cancellation leaves unsubmitted fragments in the buffer.
+            if not await delivery_ledger.wait_for_user_turn_closed(delivery_record, purpose="backend"):
+                return
+            if self._buffered_input is not None and not self._voice_router.input_buffer.consume(
+                self._buffered_input, self._voice_router.route_snapshot()
+            ):
+                return
+            logger.info("dispatch_timing stage=livekit_llm_input_committed message_id=%s prompt_len=%d", self._message_id, delivery_record.prompt_len)
         result = await voice_client.run_turn(
             prompt,
             developer_instructions=load_direct_livekit_developer_instructions(),
