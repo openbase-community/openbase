@@ -920,6 +920,11 @@ async def livekit_agent(ctx: JobContext):
             old_state=str(getattr(event, "old_state", "") or ""),
         )
 
+    def on_final_transcript_for_mute(event) -> None:
+        if getattr(event, "is_final", False) and str(getattr(event, "transcript", "") or "").strip():
+            delivery_ledger.notify_final_transcript()
+
+    session.on("user_input_transcribed", on_final_transcript_for_mute)
     session.on("user_state_changed", on_user_state_changed_for_mute)
     set_vad_backlog_listener(delivery_ledger.notify_vad_gap)
 
@@ -1044,6 +1049,7 @@ async def livekit_agent(ctx: JobContext):
             session.off(event_name, handler)
         for event_name, handler in announcer_queue_session_handlers:
             session.off(event_name, handler)
+        session.off("user_input_transcribed", on_final_transcript_for_mute)
         session.off("user_state_changed", on_user_state_changed_for_mute)
         set_vad_backlog_listener(None)
         await announcer_queue.close()

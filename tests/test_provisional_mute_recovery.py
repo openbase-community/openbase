@@ -52,3 +52,32 @@ def test_pending_announcement_defers_provisional_recovery():
         await asyncio.sleep(0.26)
         assert events[-1] == "safe_to_unmute"
     asyncio.run(run())
+
+
+def test_late_final_preserves_mute_during_adoption_but_dropped_handoff_is_bounded():
+    async def run():
+        events = []
+        ledger = VoiceDeliveryLedger(route_snapshot=route, vad_transcript_timeout_seconds=0.05)
+        ledger.set_lifecycle_sink(lambda event, record, reason: events.append((event, reason)))
+        ledger._emit_vad_quiet_mute()
+        await asyncio.sleep(0.035)
+        ledger.notify_final_transcript()
+        await asyncio.sleep(0.025)
+        assert not any(event == "safe_to_unmute" for event, _ in events)
+        await asyncio.sleep(0.045)
+        assert events[-1] == ("safe_to_unmute", "vad_transcript_handoff_timeout")
+    asyncio.run(run())
+
+
+def test_late_final_adopted_by_backend_cannot_release_its_hold():
+    async def run():
+        events = []
+        ledger = VoiceDeliveryLedger(route_snapshot=route, vad_transcript_timeout_seconds=0.025)
+        ledger.set_lifecycle_sink(lambda event, _record, _reason: events.append(event))
+        ledger._emit_vad_quiet_mute()
+        ledger.notify_final_transcript()
+        ledger.accept_utterance(message_id="late", prompt="finish speaking")
+        ledger.notify_final_transcript()
+        await asyncio.sleep(0.06)
+        assert "safe_to_unmute" not in events
+    asyncio.run(run())
