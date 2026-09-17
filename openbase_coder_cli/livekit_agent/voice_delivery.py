@@ -45,11 +45,14 @@ logger = logging.getLogger(__name__)
 MIN_PLAYOUT_DEFER_SECONDS = 0.05
 
 # The iOS stuck-muted watchdog fails open (unmutes) when the newest lifecycle
-# packet is ~10s old, which used to reopen the mic in the middle of long
+# packet goes stale, which used to reopen the mic in the middle of long
 # coding-backend turns. While a lifecycle mute is outstanding the ledger
-# re-emits the idempotent safe_to_mute_user as a keepalive so the watchdog
-# only fires when the server has actually gone away.
-MUTE_KEEPALIVE_INTERVAL_SECONDS = 4.0
+# emits a mute_keepalive so the watchdog only fires when the server has
+# actually gone away. On a loaded machine asyncio timers jitter badly
+# (nominal 4s beats stretched to 19-26s on 2026-09-17, past the client's
+# tolerance), so the interval stays well below the client threshold to
+# leave room for that jitter.
+MUTE_KEEPALIVE_INTERVAL_SECONDS = 2.0
 
 # STT finals arriving later than this after end of speech dominate perceived
 # mute latency (the quiet floor cannot start until the turn is accepted).
@@ -977,6 +980,48 @@ class VoiceDeliveryLedger:
                 exc_info=True,
             )
             return False
+
+    def mark_tts_stalled(
+        self,
+        record: VoiceDeliveryRecord,
+        *,
+        audio_events: int,
+        audio_seconds: float,
+        role: str,
+        voice_id: str | None,
+        voice_name: str | None,
+    ) -> None:
+        """Finalize a delivery whose provider stream died mid-synthesis.
+
+        Without this the delivery hangs in ``audio_started`` forever: no
+        ``agent_audio_finished``, no ``safe_to_unmute``, and the client's
+        stuck-muted watchdog eventually reopens the mic at an arbitrary
+        moment. Truncation becomes an explicit terminal state instead.
+        """
+        if record.status in _TERMINAL_STATUSES:
+            return
+        self._cancel_user_turn_closure_task(record.delivery_id)
+        record.audio_events = audio_events
+        record.audio_seconds = audio_seconds
+        record.status = "failed"
+        record.terminal_reason = "tts_stalled"
+        record.reserved_for_tts = False
+        self._log(
+            record,
+            "tts_stalled",
+            role=role,
+            voice_id=voice_id,
+            voice_name=voice_name,
+            reason=record.terminal_reason,
+        )
+        if audio_events > 0 and record.audio_started_at is not None:
+            # Partial audio reached the room; close the bracket and release
+            # the mic once what was delivered has played out.
+            self._schedule_playout_release(record)
+        elif self._lifecycle_mute_outstanding and self._may_release_unmute():
+            self._emit_lifecycle(
+                "safe_to_unmute", record, reason=record.terminal_reason
+            )
 
     def mark_suppressed_stale(
         self,

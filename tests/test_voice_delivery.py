@@ -1283,3 +1283,102 @@ def test_mute_keepalive_holds_client_watchdog_during_long_turn(monkeypatch):
 
     assert keepalives_while_held >= 3
     assert keepalives_after_release == 0
+
+
+class _HangingTTSStream(_FakeTTSStream):
+    """Yields its queued events, then hangs forever like a dead provider."""
+
+    async def __anext__(self):
+        if self._events:
+            return self._events.pop(0)
+        await asyncio.Event().wait()
+
+
+def test_tts_stall_after_partial_audio_finalizes_delivery(monkeypatch):
+    """A provider stream dying mid-synthesis must not strand the delivery in
+    audio_started: the truncation becomes terminal, the audio bracket closes,
+    and the mic is released after the partial audio plays out."""
+    from openbase_coder_cli.livekit_agent import tts_selection as ts
+
+    monkeypatch.setattr(ts, "TTS_STREAM_STALL_SECONDS", 0.05)
+
+    async def run() -> tuple[list[str], object]:
+        events: list[str] = []
+        ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
+        ledger.set_lifecycle_sink(lambda event, _record, _reason: events.append(event))
+        client = _FakeClient()
+        record = ledger.accept_utterance(message_id="m1", prompt="long question")
+        ledger.mark_answer_owed(record, turn_id="turn-1", client=client)
+        ledger.mark_text_generated(
+            record,
+            speech_text="A long answer that will be cut off.",
+            tts_text=text_for_tts("A long answer that will be cut off."),
+        )
+        assert ledger.reserve_for_tts(record)
+
+        fake_stream = _HangingTTSStream(events=[_FakeAudioEvent(), _FakeAudioEvent()])
+        stream = SpeechFormattingSynthesizeStream(
+            fake_stream,
+            role="direct",
+            voice_id="voice-1",
+            voice_name="Corey",
+            delivery_ledger=ledger,
+        )
+        stream.push_text("A long answer that will be cut off.")
+        stream.flush()
+
+        async for _event in stream:
+            pass
+        await asyncio.sleep(0.25)
+        return events, record
+
+    events, record = asyncio.run(run())
+
+    assert record.status == "failed"
+    assert record.terminal_reason == "tts_stalled"
+    assert record.audio_events == 2
+    assert events[-2:] == ["agent_audio_finished", "safe_to_unmute"]
+
+
+def test_tts_stall_before_first_audio_releases_outstanding_mute(monkeypatch):
+    from openbase_coder_cli.livekit_agent import tts_selection as ts
+
+    monkeypatch.setattr(ts, "TTS_FIRST_AUDIO_STALL_SECONDS", 0.05)
+
+    async def run() -> tuple[list[tuple[str, str]], object]:
+        events: list[tuple[str, str]] = []
+        ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
+        ledger.set_lifecycle_sink(
+            lambda event, _record, reason: events.append((event, reason))
+        )
+        record = ledger.accept_utterance(message_id="m1", prompt="hello")
+        ledger.mark_user_turn_closed(record, decision=_immediate_closure_decision())
+        ledger.mark_answer_owed(record, turn_id="turn-1", client=_FakeClient())
+        ledger.mark_text_generated(
+            record,
+            speech_text="Never synthesized.",
+            tts_text=text_for_tts("Never synthesized."),
+        )
+        assert ledger.reserve_for_tts(record)
+
+        fake_stream = _HangingTTSStream()
+        stream = SpeechFormattingSynthesizeStream(
+            fake_stream,
+            role="direct",
+            voice_id="voice-1",
+            voice_name="Corey",
+            delivery_ledger=ledger,
+        )
+        stream.push_text("Never synthesized.")
+        stream.flush()
+
+        async for _event in stream:
+            pass
+        return events, record
+
+    events, record = asyncio.run(run())
+
+    assert record.status == "failed"
+    assert record.terminal_reason == "tts_stalled"
+    assert record.audio_events == 0
+    assert events[-1] == ("safe_to_unmute", "tts_stalled")

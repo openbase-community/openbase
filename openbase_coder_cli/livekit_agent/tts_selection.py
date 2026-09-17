@@ -1,5 +1,6 @@
 """Voice-selecting TTS wrapper and speech-formatting synthesis stream."""
 
+import asyncio
 import hashlib
 import logging
 import time
@@ -19,6 +20,15 @@ from openbase_coder_cli.tts_providers import (
 )
 
 logger = logging.getLogger(__name__)
+
+# A provider stream can die silently mid-synthesis (observed 2026-09-17:
+# a Cartesia websocket stalled after ~10s of a 60s answer, the audio cut
+# mid-sentence, and the delivery hung in audio_started forever). Synthesis
+# outruns realtime, so a healthy stream never pauses this long between
+# frames once audio has started. Pre-first-audio waits are longer because
+# connection retries happen there.
+TTS_FIRST_AUDIO_STALL_SECONDS = 30.0
+TTS_STREAM_STALL_SECONDS = 8.0
 
 
 def text_for_tts(text: str) -> str:
@@ -410,9 +420,49 @@ class SpeechFormattingSynthesizeStream:
     def __aiter__(self):
         return self
 
+    def _next_event_timeout_seconds(self) -> float | None:
+        """Stall budget for the next stream event, or None to wait freely.
+
+        Before any text is flushed the stream is legitimately idle. After a
+        flush, first audio is bounded by connection/retry time; once audio
+        flows, synthesis runs faster than realtime, so a long gap between
+        frames means the provider stream is dead, not slow.
+        """
+        if self._flushed_text_monotonic is None:
+            return None
+        if self._audio_event_count == 0:
+            return TTS_FIRST_AUDIO_STALL_SECONDS
+        return TTS_STREAM_STALL_SECONDS
+
     async def __anext__(self):
         try:
-            event = await self._stream.__anext__()
+            timeout = self._next_event_timeout_seconds()
+            if timeout is None:
+                event = await self._stream.__anext__()
+            else:
+                event = await asyncio.wait_for(self._stream.__anext__(), timeout)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "dispatch_timing stage=tts_stream_stalled role=%s voice_id=%s "
+                "voice_name=%s audio_events=%d audio_seconds=%.2f "
+                "stall_timeout_s=%.1f",
+                self._role,
+                self._voice_id or "",
+                self._voice_name or "",
+                self._audio_event_count,
+                self._audio_seconds,
+                timeout,
+            )
+            if self._delivery_ledger is not None and self._delivery_record is not None:
+                self._delivery_ledger.mark_tts_stalled(
+                    self._delivery_record,
+                    audio_events=self._audio_event_count,
+                    audio_seconds=self._audio_seconds,
+                    role=self._role,
+                    voice_id=self._voice_id,
+                    voice_name=self._voice_name,
+                )
+            raise StopAsyncIteration from None
         except StopAsyncIteration:
             logger.info(
                 "dispatch_timing stage=tts_stream_iter_end role=%s voice_id=%s "
