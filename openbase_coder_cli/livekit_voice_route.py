@@ -13,6 +13,9 @@ import livekit.api as livekit_api
 
 from openbase_coder_cli.cli.utils import get_data_dir
 from openbase_coder_cli.codex_session_defaults import codex_permission_defaults
+from openbase_coder_cli.codex_home_instructions import (
+    refresh_openbase_instruction_files_from_installation,
+)
 from openbase_coder_cli.direct_voice_instructions import (
     DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS,
 )
@@ -268,6 +271,8 @@ def load_direct_livekit_developer_instructions(
         if loaded:
             return loaded
 
+    if default_path is None:
+        refresh_openbase_instruction_files_from_installation()
     loaded = _read_instruction_file(
         default_path or CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH
     )

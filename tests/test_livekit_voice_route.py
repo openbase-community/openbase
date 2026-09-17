@@ -400,6 +400,27 @@ def test_direct_livekit_instruction_loader_priority(tmp_path: Path):
     )
 
 
+def test_direct_instruction_loader_refreshes_managed_file_before_reading(tmp_path: Path, monkeypatch):
+    managed = tmp_path / "VOICE_INSTRUCTIONS.md"
+    managed.write_text("stale generated instructions")
+    monkeypatch.setattr(voice_route, "CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH", managed)
+    def refresh():
+        managed.write_text("current managed instructions")
+        return True
+    monkeypatch.setattr(voice_route, "refresh_openbase_instruction_files_from_installation", refresh)
+    assert load_direct_livekit_developer_instructions(env={}) == "current managed instructions"
+
+
+def test_direct_instruction_explicit_override_does_not_refresh_managed_files(tmp_path: Path, monkeypatch):
+    explicit = tmp_path / "custom.md"
+    explicit.write_text("custom instructions")
+    def unexpected_refresh():
+        raise AssertionError("Explicit instruction override must remain independent of managed defaults")
+    monkeypatch.setattr(voice_route, "refresh_openbase_instruction_files_from_installation", unexpected_refresh)
+    assert load_direct_livekit_developer_instructions(
+        env={DIRECT_LIVEKIT_INSTRUCTIONS_PATH_ENV: str(explicit)}) == "custom instructions"
+
+
 def test_transfer_to_thread_prepares_then_publishes(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     voice_instructions_path = tmp_path / "VOICE_INSTRUCTIONS.md"
