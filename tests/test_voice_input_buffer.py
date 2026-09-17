@@ -82,3 +82,21 @@ def test_bridge_does_not_execute_until_quiet_and_preserves_cancelled_input():
         assert len(calls) == 1
         assert "Build Tetris with a score" in calls[0]
     asyncio.run(scenario())
+
+
+def test_replayed_cumulative_tail_with_new_clause_does_not_duplicate_request():
+    buffer = VoiceInputBuffer()
+    first = "For this voice"
+    tail = "Act, tell me a gentle story in about 100 words about a turtle finding a dark. Finish the story with the exact"
+    buffer.add(first, "route")
+    buffer.add(tail, "route")
+    buffer.add(tail + ".", "route")
+    buffer.add(tail + ". Words velvet orchard.", "route")
+    item = buffer.add("Take the whole story aloud and you can go to.", "route")
+    assert item.prompt == first + " " + tail + " Words velvet orchard. Take the whole story aloud and you can go to."
+
+
+def test_single_repeated_word_is_not_assumed_to_be_cumulative_replay():
+    buffer = VoiceInputBuffer()
+    buffer.add("Make it blue", "route")
+    assert buffer.add("Blue is the final choice", "route").prompt == "Make it blue Blue is the final choice"

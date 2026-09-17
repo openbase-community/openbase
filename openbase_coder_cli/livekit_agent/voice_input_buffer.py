@@ -1,6 +1,7 @@
 """Retain speech fragments cancelled before the backend receives the user turn."""
 from dataclasses import dataclass
 import time
+import re
 
 from openbase_coder_cli.livekit_agent.text_normalization import normalize_spoken_text
 
@@ -26,7 +27,16 @@ class VoiceInputBuffer:
             if old == new or old.startswith(new + " ") or old.endswith(" " + new):
                 prompt = previous.prompt
             elif not new.startswith(old + " "):
-                prompt = previous.prompt + " " + prompt
+                old_tokens, new_tokens = old.split(), new.split()
+                overlap = next((size for size in range(min(len(old_tokens), len(new_tokens)), 1, -1)
+                    if old_tokens[-size:] == new_tokens[:size]), 0)
+                if overlap:
+                    # LiveKit may replay a cumulative tail with one new clause.
+                    # Keep only that clause, preserving its original wording.
+                    spans = list(re.finditer(r"\w+(?:['’ʼ]\w+)*", prompt))
+                    prompt = previous.prompt + " " + prompt[spans[overlap].start():] if overlap < len(spans) else previous.prompt
+                else:
+                    prompt = previous.prompt + " " + prompt
         self._revision += 1
         self._current = BufferedVoiceInput(prompt, route, self._revision)
         self._updated_at = time.monotonic()
