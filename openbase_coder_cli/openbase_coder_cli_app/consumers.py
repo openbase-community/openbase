@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from pathlib import Path
 
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
@@ -546,6 +547,8 @@ class IOSAppControlConsumer(AsyncJsonWebsocketConsumer):
         command_id = content.get("command_id")
         if not isinstance(command_id, str) or not COMMAND_ID_RE.match(command_id):
             return
+        logger.info('dispatch_timing stage=ios_control_ack_received command_id=%s server_received_unix_ms=%.3f',
+            command_id, time.time()*1000)
         await self.channel_layer.group_send(
             ack_group_name(command_id),
             {"type": "ios_app_control_ack", "command_id": command_id},

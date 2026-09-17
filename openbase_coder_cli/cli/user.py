@@ -360,8 +360,9 @@ def _report_ios_command_result(data: dict, label: str) -> None:
         return
     click.echo(f"iOS {label} command published (unconfirmed): {command_id}")
     raise click.ClickException(
-        "No iOS app confirmed receipt. The Openbase app is likely closed, "
-        "backgrounded, or signed out; bring it to the foreground and retry."
+        "No iOS app confirmed receipt before the timeout. The command may already "
+        "have executed; inspect the phone before retrying. Check its connection, "
+        "foreground state, and sign-in if it did not execute."
     )
 
 
