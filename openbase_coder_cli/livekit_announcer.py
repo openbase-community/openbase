@@ -259,12 +259,13 @@ class _TargetRoom:
     agent_identities: tuple[str, ...]
 
 
-async def active_voice_room_exists() -> bool:
-    """True when a live voice session (agent + user in a room) is active."""
+async def active_voice_room_exists(*, include_agent_only_rooms: bool = False) -> bool:
+    """Detect active calls, optionally retaining an agent while its user reconnects."""
 
     async def operation(client) -> bool:
         try:
-            await _resolve_target_room(client, room_name=None)
+            await _resolve_target_room(client, room_name=None,
+                require_user=not include_agent_only_rooms)
         except NoActiveLiveKitRoomError:
             return False
         return True
@@ -310,6 +311,7 @@ async def _resolve_target_room(
     client: livekit_api.LiveKitAPI,
     *,
     room_name: str | None,
+    require_user: bool = True,
 ) -> _TargetRoom:
     import livekit.api as livekit_api
 
@@ -342,7 +344,7 @@ async def _resolve_target_room(
             _is_active_standard_participant(p)
             for p in participant_response.participants
         )
-        if agent_identities and has_user:
+        if agent_identities and (has_user or not require_user):
             return _TargetRoom(
                 room_name=room.name,
                 agent_identities=agent_identities,
