@@ -46,6 +46,10 @@ def _livekit_config_body(
     iface_lines = "\n".join(f"      - {iface}" for iface in ifaces)
     ip_lines = "\n".join(f"      - {ip}" for ip in ips)
     return (
+        # A brief phone transport outage must not delete the room while its
+        # agent is still synthesizing or has announcements queued.
+        "room:\n"
+        "  departure_timeout: 300\n"
         "rtc:\n"
         f"  tcp_port: {tcp_port}\n"
         f"  udp_port: {udp_port}\n"

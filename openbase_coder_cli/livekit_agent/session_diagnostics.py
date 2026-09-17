@@ -28,6 +28,14 @@ DROPPED_UTTERANCE_GRACE_SECONDS = 3.0
 DROPPED_UTTERANCE_SPEECH_WAIT_SECONDS = 30.0
 
 
+def _session_error_exception(error) -> Exception | None:
+    """Unwrap SDK provider errors without promoting recoverable retries."""
+    if getattr(error, "recoverable", False):
+        return None
+    underlying = getattr(error, "error", error)
+    return underlying if isinstance(underlying, Exception) else None
+
+
 def _register_session_diagnostics(
     session: AgentSession,
     voice_router: LiveKitVoiceRouter,
@@ -217,42 +225,39 @@ def _register_session_diagnostics(
     def on_error(event) -> None:
         nonlocal error_reported
         error = getattr(event, "error", None)
+        exception = _session_error_exception(error)
         if enable_logging:
             logger.warning(
                 "dispatch_timing stage=session_error source=%s error_type=%s error=%s",
                 type(getattr(event, "source", None)).__name__,
                 type(error).__name__,
-                exception_chain_summary(error)
-                if isinstance(error, Exception)
-                else str(error),
+                exception_chain_summary(exception) if exception is not None else type(error).__name__,
             )
         if (
             not error_reported
             and on_unrecoverable_error is not None
-            and isinstance(error, Exception)
+            and exception is not None
         ):
             error_reported = True
-            asyncio.create_task(on_unrecoverable_error(error))
+            asyncio.create_task(on_unrecoverable_error(exception))
 
     def on_close(event) -> None:
         nonlocal error_reported
         error = getattr(event, "error", None)
-        if enable_logging:
-            logger.info(
-                "dispatch_timing stage=session_close reason=%s error_type=%s error=%s",
-                getattr(event, "reason", ""),
-                type(error).__name__,
-                exception_chain_summary(error)
-                if isinstance(error, Exception)
-                else error,
-            )
+        exception = _session_error_exception(error)
+        logger.info(
+            "dispatch_timing stage=session_close reason=%s error_type=%s error=%s",
+            getattr(event, "reason", ""),
+            type(error).__name__,
+            exception_chain_summary(exception) if exception is not None else type(error).__name__,
+        )
         if (
             not error_reported
             and on_unrecoverable_error is not None
-            and isinstance(error, Exception)
+            and exception is not None
         ):
             error_reported = True
-            asyncio.create_task(on_unrecoverable_error(error))
+            asyncio.create_task(on_unrecoverable_error(exception))
 
     handlers = (
         ("user_state_changed", on_user_state_changed),
