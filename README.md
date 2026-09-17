@@ -143,7 +143,7 @@ uv run pytest
 If you want a persistent `openbase-coder` command backed by your checkout:
 
 ```bash
-uv tool install -e ./cli
+uv tool install -e .
 ```
 
 ### 📘 Documentation
