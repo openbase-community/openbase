@@ -10,6 +10,9 @@ https://docs.djangoproject.com/en/5.2/howto/deployment/asgi/
 import os
 
 from django.core.asgi import get_asgi_application
+from openbase_coder_cli.logging_redaction import install_uvicorn_credential_redaction
+
+install_uvicorn_credential_redaction()
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "openbase_coder_cli.config.settings")
 
