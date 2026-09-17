@@ -308,6 +308,8 @@ class SpeechFormattingSynthesizeStream:
         self._non_audio_event_count = 0
         self._flushed_text_monotonic: float | None = None
         self._audio_seconds = 0.0
+        self._last_audio_event_monotonic = None
+        self._max_audio_event_gap_ms = 0.0
         self._delivery_ledger = delivery_ledger
         self._delivery_record = None
 
@@ -408,7 +410,7 @@ class SpeechFormattingSynthesizeStream:
         logger.info(
             "dispatch_timing stage=tts_stream_close role=%s voice_id=%s "
             "voice_name=%s flush_count=%d audio_events=%d non_audio_events=%d "
-            "audio_seconds=%.2f had_flushed_text=%s",
+            "audio_seconds=%.2f had_flushed_text=%s max_audio_event_gap_ms=%.1f",
             self._role,
             self._voice_id or "",
             self._voice_name or "",
@@ -417,6 +419,7 @@ class SpeechFormattingSynthesizeStream:
             self._non_audio_event_count,
             self._audio_seconds,
             self._flushed_text_monotonic is not None,
+            self._max_audio_event_gap_ms,
         )
         await self._stream.aclose()
 
@@ -437,13 +440,14 @@ class SpeechFormattingSynthesizeStream:
             logger.info(
                 "dispatch_timing stage=tts_stream_iter_end role=%s voice_id=%s "
                 "voice_name=%s audio_events=%d non_audio_events=%d "
-                "audio_seconds=%.2f",
+                "audio_seconds=%.2f max_audio_event_gap_ms=%.1f",
                 self._role,
                 self._voice_id or "",
                 self._voice_name or "",
                 self._audio_event_count,
                 self._non_audio_event_count,
                 self._audio_seconds,
+                self._max_audio_event_gap_ms,
             )
             if self._delivery_ledger is not None and self._delivery_record is not None:
                 self._delivery_ledger.mark_tts_completed(
@@ -457,6 +461,15 @@ class SpeechFormattingSynthesizeStream:
             raise
         frame = getattr(event, "frame", None)
         if frame is not None:
+            now = time.monotonic()
+            if self._last_audio_event_monotonic is not None:
+                gap_ms = (now - self._last_audio_event_monotonic) * 1000
+                self._max_audio_event_gap_ms = max(self._max_audio_event_gap_ms, gap_ms)
+                if gap_ms >= 1000:
+                    logger.info("dispatch_timing stage=tts_stream_audio_gap role=%s voice_id=%s "
+                        "audio_event_count=%d gap_ms=%.1f", self._role, self._voice_id or "",
+                        self._audio_event_count + 1, gap_ms)
+            self._last_audio_event_monotonic = now
             self._audio_event_count += 1
             sample_rate = getattr(frame, "sample_rate", 0)
             samples_per_channel = getattr(frame, "samples_per_channel", 0)
@@ -464,7 +477,7 @@ class SpeechFormattingSynthesizeStream:
                 self._audio_seconds += samples_per_channel / sample_rate
             if self._audio_event_count == 1:
                 latency_ms = (
-                    int((time.monotonic() - self._flushed_text_monotonic) * 1000)
+                    int((now - self._flushed_text_monotonic) * 1000)
                     if self._flushed_text_monotonic is not None
                     else -1
                 )

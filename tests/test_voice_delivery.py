@@ -645,6 +645,22 @@ def test_stale_route_suppresses_tts_text_push():
     assert events == ["utterance_accepted"]
 
 
+def test_tts_stream_records_long_audio_delivery_gaps_without_dropping_frames(monkeypatch, caplog):
+    from types import SimpleNamespace
+    from openbase_coder_cli.livekit_agent import tts_selection
+    ticks = iter([100.0, 112.5])
+    monkeypatch.setattr(tts_selection, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    events = [_FakeAudioEvent(), _FakeAudioEvent()]
+    stream = SpeechFormattingSynthesizeStream(_FakeTTSStream(events=events), role="direct")
+    async def drain():
+        return [event async for event in stream]
+    with caplog.at_level("INFO"):
+        assert asyncio.run(drain()) == events
+    assert stream._max_audio_event_gap_ms == 12500
+    assert "stage=tts_stream_audio_gap" in caplog.text
+    assert "max_audio_event_gap_ms=12500.0" in caplog.text
+
+
 def test_tts_stream_marks_delivery_on_first_audio():
     ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
     client = _FakeClient()
