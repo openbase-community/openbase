@@ -284,7 +284,9 @@ class _FakeFeedResponse:
 
 
 def _install_feed_peer(monkeypatch, payload):
-    peers = [FleetPeer(key="mini.ts.net", name="mini", base_url="http://mini.ts.net:18080")]
+    peers = [
+        FleetPeer(key="mini.ts.net", name="mini", base_url="http://mini.ts.net:18080")
+    ]
     monkeypatch.setattr(fleet, "owner_access_token", lambda: "token")
     monkeypatch.setattr(fleet, "fleet_peers", lambda: peers)
     monkeypatch.setattr(fleet, "peer_get", lambda *a, **k: _FakeFeedResponse(payload))
@@ -310,7 +312,11 @@ def test_fleet_notifications_merges_and_sums_unread(monkeypatch):
         monkeypatch,
         {
             "notifications": [
-                {"id": "report:x", "created_at": "2026-09-12T11:00:00Z", "read_at": None}
+                {
+                    "id": "report:x",
+                    "created_at": "2026-09-12T11:00:00Z",
+                    "read_at": None,
+                }
             ],
             "unread_count": 4,
         },
@@ -351,7 +357,11 @@ def test_fleet_notifications_respects_limit(monkeypatch):
 def test_fleet_recent_projects_merges_by_recency(monkeypatch):
     _install_feed_peer(
         monkeypatch,
-        {"projects": [{"path": "/home/g/newest", "last_worked_on": "2026-09-12T12:00:00Z"}]},
+        {
+            "projects": [
+                {"path": "/home/g/newest", "last_worked_on": "2026-09-12T12:00:00Z"}
+            ]
+        },
     )
     local = [{"path": "/Users/g/older", "last_worked_on": "2026-09-12T10:00:00Z"}]
 
@@ -361,9 +371,44 @@ def test_fleet_recent_projects_merges_by_recency(monkeypatch):
     assert merged[0]["origin_device"] == "mini"
 
 
+def test_fleet_routines_concat_stamp_and_sort_by_name(monkeypatch):
+    _install_feed_peer(
+        monkeypatch,
+        {
+            "routines": [
+                {"name": "backup", "enabled": True},
+                {"name": "Alpha", "enabled": False},
+            ],
+            "count": 2,
+            "nativeSupport": False,
+        },
+    )
+    local = {
+        "routines": [{"name": "backup", "enabled": False}],
+        "count": 1,
+        "nativeSupport": False,
+    }
+
+    merged = fleet.fleet_routines(local)
+
+    assert [item["name"] for item in merged["routines"]] == [
+        "Alpha",
+        "backup",
+        "backup",
+    ]
+    assert merged["count"] == 3
+    assert merged["nativeSupport"] is False
+    # Local copy sorts before the peer's same-named loop and stays unstamped.
+    assert "origin_device" not in merged["routines"][1]
+    assert merged["routines"][2]["origin_device"] == "mini"
+    assert merged["routines"][2]["origin_host"] == "mini.ts.net"
+
+
 def test_fleet_feeds_without_token_stay_local(monkeypatch):
     monkeypatch.setattr(fleet, "owner_access_token", lambda: None)
 
     assert fleet.fleet_approval_requests([{"id": "l1"}]) == [{"id": "l1"}]
     payload = {"notifications": [], "unread_count": 0}
     assert fleet.fleet_notifications(payload, include_read=True, limit=5) == payload
+    routines_payload = {"routines": [{"name": "r"}], "count": 1}
+    assert fleet.fleet_routines(routines_payload) == routines_payload

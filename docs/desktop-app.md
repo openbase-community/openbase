@@ -125,9 +125,11 @@ Call tab is where you actually speak to it. See
 ### Approvals
 
 Pending permission requests from running agents (commands, tool calls) with
-Accept and Decline buttons. The page receives authenticated live snapshots
-from the local approval queue and falls back to 5-second HTTP refreshes when
-the WebSocket is unavailable.
+Accept and Decline buttons. The queue covers every computer you're signed in
+on: requests pending on another desktop appear with a device chip, and
+answering one goes directly to that computer. The page receives
+authenticated live snapshots from the local approval queue and refreshes the
+fleet-wide list every 5 seconds.
 
 **On iPhone:** the Approvals tab shows the same queue with approve/deny
 buttons, and approval push notifications deep-link straight to it — so you
@@ -140,6 +142,11 @@ command (command kind), a daily time + timezone or an interval in seconds, an
 optional target thread (or a fresh thread per run), working directory, model,
 and reasoning effort. Routines show their last run status and next run time,
 and can be edited, disabled, run immediately, or deleted.
+
+The Loops list shows loops from every computer you're signed in on: a loop
+that lives on another desktop appears with a device chip, and editing,
+running, or deleting it acts directly on that computer. Creating a loop
+always targets the computer serving the page you're on.
 
 The Templates tab is browse-only. It shows prompts, commands, schedules, and
 required skills from the managed registry, but never creates or schedules a
