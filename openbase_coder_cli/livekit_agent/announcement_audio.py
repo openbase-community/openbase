@@ -17,11 +17,10 @@ async def announcement_audio(tts, text, *, voice_id, outcome):
         stream.end_input()
         async for event in stream:
             frame = getattr(event, "frame", None)
-            if frame is None:
+            if frame is None or frame.sample_rate <= 0 or frame.samples_per_channel <= 0:
                 continue
             outcome.audio_events += 1
-            if frame.sample_rate:
-                outcome.audio_seconds += frame.samples_per_channel / frame.sample_rate
+            outcome.audio_seconds += frame.samples_per_channel / frame.sample_rate
             yield frame
     finally:
         await stream.aclose()

@@ -13,8 +13,9 @@ from openbase_coder_cli.livekit_agent.voice_delivery import VoiceDeliveryLedger,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failed,empty", [(False, False), (True, False), (False, True)])
-async def test_provider_outcome_survives_framework_swallowing(failed, empty):
+@pytest.mark.parametrize("failed,empty,zero_frame", [
+    (False, False, False), (True, False, False), (False, True, False), (False, False, True)])
+async def test_provider_outcome_survives_framework_swallowing(failed, empty, zero_frame):
     class Stream:
         closed = False
         emitted = False
@@ -39,8 +40,8 @@ async def test_provider_outcome_survives_framework_swallowing(failed, empty):
                     raise APIError("simulated provider failure after audio")
                 raise StopAsyncIteration
             self.emitted = True
-            return SimpleNamespace(frame=rtc.AudioFrame(data=bytes(320), sample_rate=16000,
-                num_channels=1, samples_per_channel=160))
+            return SimpleNamespace(frame=rtc.AudioFrame(data=bytes(0 if zero_frame else 320),
+                sample_rate=16000, num_channels=1, samples_per_channel=0 if zero_frame else 160))
 
         async def aclose(self):
             self.closed = True
@@ -72,11 +73,12 @@ async def test_provider_outcome_survives_framework_swallowing(failed, empty):
         voice_name=None, synthesis_outcome=outcome)
     assert stream.closed
     record = records[0]
-    if failed or empty:
+    no_audio = empty or zero_frame
+    if failed or no_audio:
         assert record.status == 'failed'
         assert record.terminal_reason == ('tts_provider_failed_after_partial_audio' if failed
             else 'tts_provider_failed_without_audio')
     else:
         assert record.status == 'audio_delivered'
-    assert record.audio_events == (0 if empty else 1)
-    assert record.audio_seconds == (0 if empty else .01)
+    assert record.audio_events == (0 if no_audio else 1)
+    assert record.audio_seconds == (0 if no_audio else .01)
