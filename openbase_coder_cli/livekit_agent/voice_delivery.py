@@ -102,6 +102,7 @@ class VoiceDeliveryRecord:
     route_at_tts_flush: VoiceRouteSnapshot | None = None
     first_audio_latency_ms: int | None = None
     audio_started_at: float | None = None
+    queued_audio_playout_end_at: float | None = None
     audio_events: int = 0
     audio_seconds: float = 0.0
     reserved_for_tts: bool = False
@@ -845,6 +846,15 @@ class VoiceDeliveryLedger:
         )
         self._emit_lifecycle("agent_audio_started", record)
 
+    def mark_audio_frame_queued(self, record: VoiceDeliveryRecord, *, audio_seconds: float, queued_at: float) -> None:
+        """Track the local playout queue without counting stream stalls as speech."""
+        if audio_seconds <= 0:
+            return
+        previous_end = record.queued_audio_playout_end_at
+        record.queued_audio_playout_end_at = max(
+            queued_at, previous_end if previous_end is not None else queued_at
+        ) + audio_seconds
+
     def mark_tts_completed(
         self,
         record: VoiceDeliveryRecord,
@@ -914,6 +924,8 @@ class VoiceDeliveryLedger:
         """
         if record.audio_started_at is None or record.audio_seconds <= 0:
             return 0.0
+        if record.queued_audio_playout_end_at is not None:
+            return record.queued_audio_playout_end_at - time.monotonic()
         return (
             record.audio_started_at + record.audio_seconds - time.monotonic()
         )
@@ -963,6 +975,11 @@ class VoiceDeliveryLedger:
         return (
             not self.has_pending_delivery_for_current_route()
             and not self._announcement_pending()
+            and not any(
+                self._remaining_playout_seconds(record) > MIN_PLAYOUT_DEFER_SECONDS
+                for record in self._records.values()
+                if record.delivery_id in self._playout_release_tasks
+            )
         )
 
     def _ensure_mute_keepalive_task(self, record: VoiceDeliveryRecord) -> None:

@@ -1359,6 +1359,28 @@ def test_partial_failure_does_not_release_before_estimated_playout_tail():
     asyncio.run(run())
 
 
+def test_stream_underflow_does_not_count_the_gap_as_played_audio():
+    import time
+    async def run():
+        events = []
+        ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
+        ledger.set_lifecycle_sink(lambda event, record, reason: events.append(event))
+        record = ledger.track_announcement(text="Gapped answer")
+        ledger.mark_audio_started(record, latency_ms=1, role="direct", voice_id="v", voice_name="Test")
+        now = time.monotonic()
+        record.audio_started_at = now - 5
+        ledger.mark_audio_frame_queued(record, audio_seconds=.03, queued_at=now-5)
+        ledger.mark_audio_frame_queued(record, audio_seconds=.08, queued_at=now)
+        ledger.mark_tts_completed(record, audio_events=2, audio_seconds=.11,
+            role="direct", voice_id="v", voice_name="Test")
+        assert "safe_to_unmute" not in events
+        await asyncio.sleep(.03)
+        assert "safe_to_unmute" not in events
+        await asyncio.sleep(.09)
+        assert events[-2:] == ["agent_audio_finished", "safe_to_unmute"]
+    asyncio.run(run())
+
+
 def test_partial_failure_preserves_other_pending_answer_mute():
     events = []
     ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
@@ -1369,3 +1391,22 @@ def test_partial_failure_preserves_other_pending_answer_mute():
     ledger.mark_tts_failed(record, audio_events=1, audio_seconds=.01)
     assert events[-1] == "agent_audio_finished"
     assert "safe_to_unmute" not in events
+
+
+def test_cancelled_other_work_cannot_release_a_delivered_audio_queue():
+    import time
+    async def run():
+        events = []
+        ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
+        ledger.set_lifecycle_sink(lambda event, record, reason: events.append(event))
+        record = ledger.track_announcement(text="Still queued")
+        ledger.mark_audio_started(record, latency_ms=1, role="direct", voice_id="v", voice_name="Test")
+        ledger.mark_audio_frame_queued(record, audio_seconds=.12, queued_at=time.monotonic())
+        ledger.mark_tts_completed(record, audio_events=1, audio_seconds=.12,
+            role="direct", voice_id="v", voice_name="Test")
+        other = ledger.accept_utterance(message_id="other", prompt="Cancelled unrelated work")
+        ledger.mark_cancelled(other, reason="test_cancel")
+        assert "safe_to_unmute" not in events
+        await asyncio.sleep(.16)
+        assert events[-1] == "safe_to_unmute"
+    asyncio.run(run())

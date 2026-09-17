@@ -474,7 +474,12 @@ class SpeechFormattingSynthesizeStream:
             sample_rate = getattr(frame, "sample_rate", 0)
             samples_per_channel = getattr(frame, "samples_per_channel", 0)
             if sample_rate:
-                self._audio_seconds += samples_per_channel / sample_rate
+                duration = samples_per_channel / sample_rate
+                self._audio_seconds += duration
+                if self._delivery_ledger is not None and self._delivery_record is not None:
+                    self._delivery_ledger.mark_audio_frame_queued(
+                        self._delivery_record, audio_seconds=duration, queued_at=now,
+                    )
             if self._audio_event_count == 1:
                 latency_ms = (
                     int((now - self._flushed_text_monotonic) * 1000)
