@@ -80,6 +80,8 @@ After transfer, the user is speaking directly to that target thread over the
 same LiveKit room. The dispatcher is no longer the active voice route until the
 route is returned.
 
+Direct voice instructions ask about unclear transcript portions while continuing clear, independent, reversible work. For example, an unclear note filename should not block a separately specified heading change and production build. Explicit spoken spelling or a correction takes precedence over a conflicting phonetic transcription. The ambiguous portion still requires clarification. Custom direct-voice instruction files override the built-in fallback, so update those separately when testing this behavior.
+
 ## Return To The Dispatcher
 
 From any direct Super Agent voice route, return the active private voice session
