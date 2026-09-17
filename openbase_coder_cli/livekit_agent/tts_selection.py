@@ -8,7 +8,8 @@ from collections.abc import Callable
 from livekit.agents import (
     tts as livekit_tts,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+from livekit.agents import APIError
+from livekit.agents.types import APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
 
 from openbase_coder_cli.livekit_agent.config import LIVEKIT_VERBOSE_LOGGING
 from openbase_coder_cli.livekit_agent.speech_formatter import format_for_speech
@@ -19,6 +20,15 @@ from openbase_coder_cli.tts_providers import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Provider receive timeout is also the maximum gap between audio chunks.
+# The SDK's ten seconds cuts an otherwise live stream under congested links.
+TTS_CONNECT_OPTIONS = APIConnectOptions(timeout=60.0)
+
+
+def tts_connect_options(options):
+    return TTS_CONNECT_OPTIONS if options is DEFAULT_API_CONNECT_OPTIONS else options
+
 
 
 def text_for_tts(text: str) -> str:
@@ -123,7 +133,7 @@ class VoiceSelectingTTS(livekit_tts.TTS):
         )
         return self._tts_for_voice(voice_id).synthesize(
             spoken_text,
-            conn_options=conn_options,
+            conn_options=tts_connect_options(conn_options),
         )
 
     def stream(
@@ -144,7 +154,7 @@ class VoiceSelectingTTS(livekit_tts.TTS):
         )
         return SpeechFormattingSynthesizeStream(
             self._tts_for_voice(resolved_voice_id).stream(
-                conn_options=conn_options,
+                conn_options=tts_connect_options(conn_options),
             ),
             role=self._role,
             voice_id=resolved_voice_id,
@@ -413,6 +423,13 @@ class SpeechFormattingSynthesizeStream:
     async def __anext__(self):
         try:
             event = await self._stream.__anext__()
+        except APIError:
+            if self._delivery_ledger is not None and self._delivery_record is not None:
+                self._delivery_ledger.mark_tts_failed(
+                    self._delivery_record, audio_events=self._audio_event_count,
+                    audio_seconds=self._audio_seconds,
+                )
+            raise
         except StopAsyncIteration:
             logger.info(
                 "dispatch_timing stage=tts_stream_iter_end role=%s voice_id=%s "

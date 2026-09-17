@@ -1283,3 +1283,46 @@ def test_mute_keepalive_holds_client_watchdog_during_long_turn(monkeypatch):
 
     assert keepalives_while_held >= 3
     assert keepalives_after_release == 0
+
+
+def test_failed_synthesis_releases_hold_and_preserves_partial_failure():
+    events = []
+    ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
+    ledger.set_lifecycle_sink(lambda event, record, reason: events.append(event))
+    record = ledger.track_announcement(text="A long answer")
+    ledger.mark_audio_started(record, latency_ms=1, role="direct", voice_id="voice-1", voice_name="Test")
+    ledger.mark_tts_failed(record, audio_events=1, audio_seconds=0.05)
+    assert record.status == "failed"
+    assert record.terminal_reason == "tts_provider_failed_after_partial_audio"
+    assert events[-2:] == ["agent_audio_finished", "safe_to_unmute"]
+
+
+def test_tts_default_timeout_tolerates_congestion_and_explicit_options_survive():
+    from livekit.agents.types import APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
+    from openbase_coder_cli.livekit_agent.tts_selection import tts_connect_options
+    assert tts_connect_options(DEFAULT_API_CONNECT_OPTIONS).timeout == 60
+    explicit = APIConnectOptions(timeout=2)
+    assert tts_connect_options(explicit) is explicit
+
+
+def test_synthesis_error_cleans_up_delivery_instead_of_leaving_mic_hold():
+    from livekit.agents import APITimeoutError
+    class FailingStream(_FakeTTSStream):
+        async def __anext__(self):
+            raise APITimeoutError()
+    async def run():
+        events = []
+        ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
+        ledger.set_lifecycle_sink(lambda event, record, reason: events.append(event))
+        wrapped = SpeechFormattingSynthesizeStream(FailingStream(), role="direct", delivery_ledger=ledger)
+        wrapped.push_text("A complete answer")
+        wrapped.flush()
+        try:
+            await wrapped.__anext__()
+        except APITimeoutError:
+            pass
+        else:
+            raise AssertionError("Provider failure must propagate")
+        assert events[-2:] == ["agent_audio_finished", "safe_to_unmute"]
+        assert not ledger.has_pending_delivery_for_current_route()
+    asyncio.run(run())

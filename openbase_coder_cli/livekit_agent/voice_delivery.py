@@ -892,6 +892,19 @@ class VoiceDeliveryLedger:
                 "safe_to_unmute", record, reason=record.terminal_reason
             )
 
+    def mark_tts_failed(self, record: VoiceDeliveryRecord, *, audio_events: int, audio_seconds: float) -> None:
+        """Release a failed synthesis hold after any partial audio has played."""
+        self._cancel_user_turn_closure_task(record.delivery_id)
+        record.audio_events = audio_events
+        record.audio_seconds = audio_seconds
+        record.status = "failed"
+        record.terminal_reason = "tts_provider_failed_after_partial_audio" if audio_events else "tts_provider_failed_without_audio"
+        record.reserved_for_tts = False
+        self._log(record, "tts_failed", reason=record.terminal_reason)
+        # Preserve failure instead of recording a successful, full delivery.
+        # The phone additionally waits for its own decoded PCM quiet tail.
+        self._schedule_playout_release(record)
+
     def _remaining_playout_seconds(self, record: VoiceDeliveryRecord) -> float:
         """Estimate how much of the delivered audio is still playing out.
 
