@@ -1326,3 +1326,30 @@ def test_synthesis_error_cleans_up_delivery_instead_of_leaving_mic_hold():
         assert events[-2:] == ["agent_audio_finished", "safe_to_unmute"]
         assert not ledger.has_pending_delivery_for_current_route()
     asyncio.run(run())
+
+
+def test_partial_failure_does_not_release_before_estimated_playout_tail():
+    async def run():
+        events = []
+        ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
+        ledger.set_lifecycle_sink(lambda event, record, reason: events.append(event))
+        record = ledger.track_announcement(text="Partial answer")
+        ledger.mark_audio_started(record, latency_ms=1, role="direct", voice_id="v", voice_name="Test")
+        ledger.mark_tts_failed(record, audio_events=2, audio_seconds=.08)
+        assert "safe_to_unmute" not in events
+        await asyncio.sleep(.12)
+        assert events[-2:] == ["agent_audio_finished", "safe_to_unmute"]
+        assert record.status == "failed"
+    asyncio.run(run())
+
+
+def test_partial_failure_preserves_other_pending_answer_mute():
+    events = []
+    ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
+    ledger.set_lifecycle_sink(lambda event, record, reason: events.append(event))
+    record = ledger.track_announcement(text="Partial answer")
+    ledger.mark_audio_started(record, latency_ms=1, role="direct", voice_id="v", voice_name="Test")
+    ledger.accept_utterance(message_id="another", prompt="Another pending answer")
+    ledger.mark_tts_failed(record, audio_events=1, audio_seconds=.01)
+    assert events[-1] == "agent_audio_finished"
+    assert "safe_to_unmute" not in events
