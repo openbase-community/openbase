@@ -19,6 +19,7 @@ on their own.
 from __future__ import annotations
 
 import asyncio
+from .provisional_mute_recovery import ProvisionalMuteRecovery
 import difflib
 import hashlib
 import logging
@@ -128,6 +129,7 @@ class VoiceDeliveryLedger:
         room_id: str = "",
         user_speaking_poll_seconds: float = 0.1,
         vad_quiet_grace_seconds: float = VAD_ONLY_USER_TURN_QUIET_GRACE_SECONDS,
+        vad_transcript_timeout_seconds: float = 15,
     ) -> None:
         self._route_snapshot = route_snapshot
         self._room_name = room_name
@@ -135,6 +137,7 @@ class VoiceDeliveryLedger:
         self._user_speaking_poll_seconds = user_speaking_poll_seconds
         self._vad_quiet_grace_seconds = vad_quiet_grace_seconds
         self._vad_quiet_task: asyncio.Task[None] | None = None
+        self._provisional_mute_recovery = ProvisionalMuteRecovery(vad_transcript_timeout_seconds)
         # True while a safe_to_mute_user has been emitted and neither renewed
         # user speech nor a safe_to_unmute has reopened the mic since.
         self._mute_covers_current_quiet = False
@@ -264,8 +267,18 @@ class VoiceDeliveryLedger:
         self._records[record.delivery_id] = record
         self._log_user_turn_closure(record, "safe_to_mute_user")
         self._emit_lifecycle("safe_to_mute_user", record, reason="vad_quiet_floor")
+        self._provisional_mute_recovery.start(lambda: self._recover_provisional_mute(record))
+
+    def _recover_provisional_mute(self, record: VoiceDeliveryRecord) -> bool:
+        if record.status != "vad_quiet_closure" or not self._lifecycle_mute_outstanding:
+            return True
+        if not self._may_release_unmute():
+            return False
+        self.mark_cancelled(record, reason="vad_transcript_timeout")
+        return True
 
     def accept_utterance(self, *, message_id: str, prompt: str) -> VoiceDeliveryRecord:
+        self._provisional_mute_recovery.cancel()
         self._cancel_superseded_pending_for_current_route()
         route = self._route_snapshot()
         record = VoiceDeliveryRecord(
