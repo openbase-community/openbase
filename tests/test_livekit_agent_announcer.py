@@ -694,6 +694,21 @@ class FakeSession:
         return self.say_handle
 
 
+@pytest.mark.asyncio
+async def test_retried_packet_plays_only_once_after_lost_ack():
+    session = FakeSession()
+    queue = AnnouncerSpeechQueue(session=session, announcer_tts=FakeTTS(),
+        silence_grace_seconds=0)
+    message = AnnouncerMessage(message_id='same-invocation', text='A controlled announcement.',
+        voice_id=None)
+    assert queue.enqueue(message)
+    assert queue.enqueue(message)
+    queue.start()
+    await asyncio.sleep(.03)
+    await queue.close()
+    assert len(session.say_calls) == 1
+
+
 def test_voice_selecting_tts_delegates_stream_to_active_voice(monkeypatch):
     RecordingCartesiaTTS.created = []
     active_voice_id = "voice-2"

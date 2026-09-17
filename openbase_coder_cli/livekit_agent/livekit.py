@@ -200,6 +200,7 @@ from openbase_coder_cli.livekit_agent.vad_backlog_patch import (
     set_vad_backlog_listener,
 )
 from openbase_coder_cli.livekit_agent.voice_delivery import VoiceDeliveryLedger
+from openbase_coder_cli.livekit_agent.provider_recovery import voice_connect_options
 from openbase_coder_cli.livekit_agent.voice_routing import (
     LiveKitVoiceRouter,
     _transfer_voice_route,
@@ -811,6 +812,7 @@ async def _start_voice_session(
 
     # Set up a voice AI pipeline
     session = AgentSession(
+        conn_options=voice_connect_options(),
         stt=_build_stt(session_vad),
         llm=CodexLiveKitLLM(
             voice_router,

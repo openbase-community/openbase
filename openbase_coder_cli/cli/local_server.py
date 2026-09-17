@@ -25,6 +25,7 @@ def local_server_request(
     path: str,
     *,
     ok_statuses: tuple[int, ...] = (),
+    timeout: float = 10,
     **kwargs,
 ) -> httpx.Response:
     url = f"{local_server_url()}{path}"
@@ -33,7 +34,7 @@ def local_server_request(
             method,
             url,
             auth=CloudAccessTokenAuth(get_token_manager()),
-            timeout=10,
+            timeout=timeout,
             **kwargs,
         )
     except httpx.HTTPError as exc:

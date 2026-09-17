@@ -38,6 +38,7 @@ def test_user_say_posts_message(monkeypatch):
 
     def fake_request(method, url, **kwargs):
         assert method == "POST"
+        assert kwargs['timeout'] == 60
         calls.append((url, kwargs))
         return httpx.Response(
             202,

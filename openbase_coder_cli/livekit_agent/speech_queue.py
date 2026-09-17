@@ -5,6 +5,7 @@ import contextlib
 import logging
 import time
 from collections.abc import AsyncIterator
+from collections import deque
 from pathlib import Path
 
 import av
@@ -55,6 +56,8 @@ class AnnouncerSpeechQueue:
         self._worker_task: asyncio.Task[None] | None = None
         self._delivery_ledger = delivery_ledger
         self._speaking = False
+        self._recent_message_ids: deque[str] = deque()
+        self._recent_message_id_set: set[str] = set()
 
     def has_pending_announcements(self) -> bool:
         """True while an announcement is queued or playing.
@@ -72,6 +75,10 @@ class AnnouncerSpeechQueue:
             )
 
     def enqueue(self, message: AnnouncerQueueItem) -> bool:
+        if message.message_id and message.message_id in self._recent_message_id_set:
+            logger.info("dispatch_timing stage=announcer_duplicate_ignored message_id=%s",
+                message.message_id)
+            return True
         try:
             self._queue.put_nowait(
                 QueuedAnnouncerItem(message=message, enqueued_at=time.monotonic())
@@ -85,6 +92,11 @@ class AnnouncerSpeechQueue:
                 self._queue.maxsize,
             )
             return False
+        if message.message_id:
+            if len(self._recent_message_ids) >= 256:
+                self._recent_message_id_set.remove(self._recent_message_ids.popleft())
+            self._recent_message_ids.append(message.message_id)
+            self._recent_message_id_set.add(message.message_id)
         text_len = len(message.text) if isinstance(message, AnnouncerMessage) else 0
         logger.info(
             "dispatch_timing stage=announcer_enqueued message_id=%s kind=%s "
@@ -240,6 +252,12 @@ class AnnouncerSpeechQueue:
         # immediately; clear the speaking flag first so this announcement
         # does not hold its own release.
         self._speaking = False
+        if getattr(handle, "interrupted", False):
+            logger.warning("dispatch_timing stage=announcer_playout_interrupted "
+                "delivery_id=%s synthesis_completed=%s", record.delivery_id,
+                synthesis_outcome.completed if synthesis_outcome is not None else None)
+            ledger.mark_cancelled(record, reason="announcer_playout_interrupted")
+            return
         if synthesis_outcome is not None and (
             not synthesis_outcome.completed or not synthesis_outcome.audio_events
         ):

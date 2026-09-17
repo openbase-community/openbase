@@ -86,7 +86,7 @@ def say(
         payload["room_name"] = room_name.strip()
 
     response = local_server_request(
-        "POST", "/api/user/say/", json=payload, ok_statuses=(502,)
+        "POST", "/api/user/say/", json=payload, ok_statuses=(502,), timeout=60,
     )
 
     try:
@@ -155,7 +155,7 @@ def play(sound_or_path: str, room_name: str) -> None:
     if room_name.strip():
         payload["room_name"] = room_name.strip()
 
-    response = local_server_request("POST", "/api/user/play/", json=payload)
+    response = local_server_request("POST", "/api/user/play/", json=payload, timeout=60)
 
     data = response.json()
     target_room = data.get("room_name") or "active room"

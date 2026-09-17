@@ -73,6 +73,31 @@ class FakeLiveKitClient:
         self.closed = True
 
 
+@pytest.mark.parametrize('audio_file', [False, True])
+def test_retry_after_delivery_loses_ack_but_keeps_message_identity(monkeypatch, audio_file):
+    import aiohttp
+    from openbase_coder_cli import livekit_announcer
+    participants = {'room-retry': [
+        _participant('agent', kind=livekit_api.ParticipantInfo.Kind.AGENT),
+        _participant('user', kind=livekit_api.ParticipantInfo.Kind.STANDARD)]}
+    first = FakeLiveKitClient([_room('room-retry', 100)], participants)
+    second = FakeLiveKitClient([_room('room-retry', 100)], participants)
+    original_send = first.room.send_data
+    async def delivered_without_ack(request):
+        await original_send(request)
+        raise aiohttp.ServerDisconnectedError('simulated lost acknowledgment after delivery')
+    first.room.send_data = delivered_without_ack
+    clients = [first, second]
+    monkeypatch.setattr(livekit_announcer, '_build_livekit_client', lambda: clients.pop(0))
+    result = asyncio.run(publish_announcer_audio_file('controlled.wav') if audio_file
+        else publish_announcer_message('A controlled announcement.'))
+    payloads = [json.loads(request.data) for request in first.room.sent + second.room.sent]
+    assert len(payloads) == 2
+    assert payloads[0] == payloads[1]
+    assert payloads[0]['message_id'] == result.message_id
+    assert first.closed and second.closed
+
+
 def _room(name: str, created: int, participants: int = 2):
     return SimpleNamespace(
         name=name,

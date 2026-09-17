@@ -13,9 +13,11 @@ from openbase_coder_cli.livekit_agent.voice_delivery import VoiceDeliveryLedger,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failed,empty,zero_frame", [
-    (False, False, False), (True, False, False), (False, True, False), (False, False, True)])
-async def test_provider_outcome_survives_framework_swallowing(failed, empty, zero_frame):
+@pytest.mark.parametrize("failed,empty,zero_frame,interrupted", [
+    (False, False, False, False), (True, False, False, False),
+    (False, True, False, False), (False, False, True, False),
+    (False, False, False, True)])
+async def test_provider_outcome_survives_framework_swallowing(failed, empty, zero_frame, interrupted):
     class Stream:
         closed = False
         emitted = False
@@ -69,11 +71,18 @@ async def test_provider_outcome_survives_framework_swallowing(failed, empty, zer
     ledger.set_lifecycle_sink(lambda event, record, reason: records.append(record))
     queue = AnnouncerSpeechQueue(session=SimpleNamespace(), announcer_tts=tts,
         delivery_ledger=ledger)
-    await queue._bracketed_playout(FrameworkHandle(), text='diagnostic', voice_id='background',
+    handle = FrameworkHandle()
+    handle.interrupted = interrupted
+    await queue._bracketed_playout(handle, text='diagnostic', voice_id='background',
         voice_name=None, synthesis_outcome=outcome)
     assert stream.closed
     record = records[0]
     no_audio = empty or zero_frame
+    if interrupted:
+        assert outcome.completed
+        assert record.status == 'cancelled'
+        assert record.terminal_reason == 'announcer_playout_interrupted'
+        return
     if failed or no_audio:
         assert record.status == 'failed'
         assert record.terminal_reason == ('tts_provider_failed_after_partial_audio' if failed
