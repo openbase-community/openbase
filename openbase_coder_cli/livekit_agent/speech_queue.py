@@ -52,6 +52,7 @@ class AnnouncerSpeechQueue:
         )
         self._silence_grace_seconds = max(0.0, silence_grace_seconds)
         self._state_changed = asyncio.Event()
+        self._user_speech_generation = 0
         self._closed = False
         self._worker_task: asyncio.Task[None] | None = None
         self._delivery_ledger = delivery_ledger
@@ -111,6 +112,8 @@ class AnnouncerSpeechQueue:
         return True
 
     def notify_state_changed(self, *_args) -> None:
+        if str(getattr(self._session, "user_state", "") or "") == "speaking":
+            self._user_speech_generation += 1
         self._state_changed.set()
 
     async def close(self) -> None:
@@ -289,12 +292,13 @@ class AnnouncerSpeechQueue:
             current_speech = self._session.current_speech
             has_current_speech = self._speech_active(current_speech)
             user_state = str(getattr(self._session, "user_state", "") or "")
-            if not has_current_speech and user_state != "speaking":
-                await self._wait_for_quiet_grace_period()
+            if self._both_silent():
+                if not await self._wait_for_quiet_grace_period():
+                    continue
                 current_speech = self._session.current_speech
                 has_current_speech = self._speech_active(current_speech)
                 user_state = str(getattr(self._session, "user_state", "") or "")
-                if not has_current_speech and user_state != "speaking":
+                if self._both_silent():
                     if wait_logged:
                         logger.info(
                             "dispatch_timing stage=announcer_silence_wait_end "
@@ -311,12 +315,13 @@ class AnnouncerSpeechQueue:
                 logger.info(
                     "dispatch_timing stage=announcer_silence_wait_start "
                     "message_id=%s queue_size=%d user_state=%s agent_state=%s "
-                    "has_current_speech=%s queue_age_ms=%d",
+                    "has_current_speech=%s user_quiet_pending=%s queue_age_ms=%d",
                     message_id,
                     self._queue.qsize(),
                     user_state,
                     getattr(self._session, "agent_state", "") or "",
                     has_current_speech,
+                    self._user_quiet_pending(),
                     int((time.monotonic() - enqueued_at) * 1000),
                 )
 
@@ -334,16 +339,31 @@ class AnnouncerSpeechQueue:
         return (
             not self._speech_active(self._session.current_speech)
             and str(getattr(self._session, "user_state", "") or "") != "speaking"
+            and not self._user_quiet_pending()
         )
+
+    def _user_quiet_pending(self) -> bool:
+        return (self._delivery_ledger is not None
+                and self._delivery_ledger.user_quiet_verification_pending())
 
     @staticmethod
     def _speech_active(speech_handle) -> bool:
         return speech_handle is not None and not speech_handle.done()
 
-    async def _wait_for_quiet_grace_period(self) -> None:
-        if self._silence_grace_seconds <= 0:
-            return
-        await self._wait_for_state_change_or_timeout(self._silence_grace_seconds)
+    async def _wait_for_quiet_grace_period(self) -> bool:
+        deadline = time.monotonic() + self._silence_grace_seconds
+        generation = self._user_speech_generation
+        while not self._closed:
+            if not self._both_silent() or generation != self._user_speech_generation:
+                return False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return True
+            # State notifications wake observation; they do not prove the
+            # required silence has elapsed. Even a brief speech burst that
+            # ended before this task resumed must restart verification.
+            await self._wait_for_state_change_or_timeout(remaining)
+        return False
 
     async def _wait_for_state_change_or_timeout(self, timeout_seconds: float) -> None:
         self._state_changed.clear()

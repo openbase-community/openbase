@@ -189,6 +189,11 @@ class VoiceDeliveryLedger:
         """
         self._announcement_pending_provider = provider
 
+    def user_quiet_verification_pending(self) -> bool:
+        """Announcements must honor the same quiet floor as user replies."""
+        tasks = [self._vad_quiet_task, *self._user_turn_closure_tasks.values()]
+        return any(task is not None and not task.done() for task in tasks)
+
     def notify_user_state(self, *, new_state: str, old_state: str = "") -> None:
         """Drive the STT-independent provisional mute from VAD user state.
 
