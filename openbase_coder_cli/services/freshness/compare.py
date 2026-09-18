@@ -39,7 +39,7 @@ def compare_build(manifest, component: str, workspace: Path, current: dict) -> d
         "desktop": "Rebuild desktop, then reload the window.",
         "console": "Rebuild console, then reload this page.",
         "desktop-main": "Rebuild if packaged, then quit and relaunch the developer app.",
-        "openbase-tunneld": "Rebuild/install Openbase Direct, then restart openbase-tunneld.",
+        "openbase-tunneld": "Run openbase-coder restart --service openbase-tunneld to rebuild and restart Openbase Direct.",
     }[component]
     unknown = detail(
         label,

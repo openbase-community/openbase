@@ -25,7 +25,7 @@ _lock = threading.Lock()
 
 def _service_detail(service, pid: int, workspace: Path, current: dict) -> dict:
     action = (
-        "Rebuild/install Openbase Direct, then restart openbase-tunneld."
+        "Run openbase-coder restart --service openbase-tunneld to rebuild and restart Openbase Direct."
         if service.freshness_kind == "build"
         else f"Run openbase-coder restart --service {service.name}."
     )
@@ -197,7 +197,7 @@ def _native_coverage() -> list[dict]:
             names[name],
             "unknown",
             "This native component does not report source provenance yet.",
-            "Rebuild/relaunch after native source changes; its app version alone cannot verify the running helper.",
+            "Restarting cannot clear this coverage limitation. Rebuild/relaunch after native source changes; source verification requires native provenance support.",
         )
         for name in sorted(running)
     ]

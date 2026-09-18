@@ -275,4 +275,5 @@ def test_unstamped_compiled_service_requires_rebuild(workspace, monkeypatch):
     service = next(s for s in SERVICES if s.name == "openbase-tunneld")
     result = collector._service_detail(service, os.getpid(), workspace, {})
     assert result["state"] == "unknown"
-    assert "Rebuild/install" in result["action"]
+    assert "restart --service openbase-tunneld" in result["action"]
+    assert "rebuild" in result["action"]

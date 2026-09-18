@@ -15,10 +15,11 @@ openbase-coder restart [OPTIONS]
 openbase-coder self-restart [OPTIONS]
 ```
 
-With no options, this schedules a detached restart of every Openbase-managed launchd service:
+With no options, this schedules a detached restart of the default services plus optional daemons already enabled on this installation, including code sync, the Cloud heartbeat, and Openbase Direct. It does not enable unused optional features or rerun completed one-shot authentication/provisioning jobs. The Openbase Coder API/MCP host restarts through `django-cli`.
 
-- all Openbase launchd services
-- the Openbase Coder API/MCP host through `django-cli`
+In a developer install, a restart that includes `openbase-tunneld` rebuilds and installs Openbase Direct from the configured checkout before scheduling the restart. A failed build leaves the running services alone. The new binary receives a build stamp so runtime freshness can verify it after startup.
+
+The native Openbase VPN app and helper currently do not report source provenance. Their freshness state remains unverified even after restarting; this is a coverage limitation, not evidence that their code is outdated. Rebuild and relaunch them after native source changes. A managed-service restart does not restart these separate native components.
 
 Dispatcher context is preserved by default. Use `--recreate-dispatcher` when
 you need a new dispatcher thread; a normal restart intentionally keeps the
