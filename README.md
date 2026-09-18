@@ -93,7 +93,8 @@ on Windows). See [Run in Docker](docs/docker.md).
 On Windows you can also run the runtime natively (beta): `./scripts/setup`
 works from a Windows checkout, and services are supervised without launchd or
 systemd through the Windows service backend, with Task Scheduler starting them
-at login. The Docker image remains the most battle-tested Windows path.
+at login. Native Windows is the supported Windows host path; use Docker when
+you want the containerized Linux runtime.
 
 ### 🛠️ Developer Setup
 
