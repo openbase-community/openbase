@@ -16,6 +16,7 @@ from pathlib import Path
 from super_agents.app_endpoint import (
     DEFAULT_WEBSOCKET_ENDPOINT,
     AppServerEndpoint,
+    codex_home,
     parse_app_server_endpoint,
 )
 from super_agents.app_server_client import CodexAppServerClient
@@ -23,6 +24,8 @@ from super_agents.app_server_client import CodexAppServerClient
 LEGACY_CODEX_APP_SERVER_ENDPOINT = DEFAULT_WEBSOCKET_ENDPOINT
 LEGACY_CODEX_READINESS_URL = "http://127.0.0.1:4500/readyz"
 CODEX_APP_SERVER_ENDPOINT_ENV = "CODEX_APP_SERVER_URL"
+DISPATCHER_APP_SERVER_ENDPOINT_ENV = "OPENBASE_DISPATCHER_APP_SERVER_URL"
+DISPATCHER_WEBSOCKET_ENDPOINT = "ws://127.0.0.1:4501"
 
 
 def managed_codex_app_server_endpoint(
@@ -47,6 +50,38 @@ def managed_codex_app_server_endpoint(
     elif not configured:
         configured = LEGACY_CODEX_APP_SERVER_ENDPOINT
     return parse_app_server_endpoint(configured, env=values, source="openbase-managed")
+
+
+def dispatcher_codex_app_server_endpoint(
+    env: dict[str, str] | None = None,
+    *,
+    platform: str | None = None,
+) -> AppServerEndpoint:
+    """The voice dispatcher's dedicated app-server endpoint.
+
+    The dispatcher's own conversational thread runs on a second app-server
+    instance so a churning worker turn on the shared instance can never
+    starve the dispatcher's RPCs (2026-09-18: one busy turn made thread/read
+    and turn/steer time out and took the whole call down). Worker threads
+    stay on the shared managed endpoint.
+    """
+    values = env if env is not None else os.environ
+    current_platform = platform or sys.platform
+    configured = values.get(DISPATCHER_APP_SERVER_ENDPOINT_ENV, "").strip()
+    if configured:
+        return parse_app_server_endpoint(
+            configured, env=values, source="dispatcher-explicit"
+        )
+    if current_platform == "win32":
+        return parse_app_server_endpoint(
+            DISPATCHER_WEBSOCKET_ENDPOINT, env=values, source="dispatcher-default"
+        )
+    path = (
+        codex_home(values) / "app-server-control-dispatcher" / "app-server-control.sock"
+    )
+    return parse_app_server_endpoint(
+        f"unix://{path}", env=values, source="dispatcher-default"
+    )
 
 
 def apply_managed_codex_app_server_endpoint(

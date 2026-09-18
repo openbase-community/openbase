@@ -233,6 +233,22 @@ def build_codex_app_server(
     return argv, env
 
 
+def build_codex_app_server_dispatcher(
+    env: dict[str, str], binaries: dict[str, str]
+) -> RunnerArgvEnv:
+    from openbase_coder_cli.codex_control_plane import (
+        dispatcher_codex_app_server_endpoint,
+    )
+
+    # Same construction as the shared instance, but listening on the
+    # dispatcher's own socket. The child env keeps pointing at the shared
+    # endpoint so tools running inside dispatcher turns still manage worker
+    # threads on the shared instance.
+    argv, env = build_codex_app_server(env, binaries)
+    argv[-1] = dispatcher_codex_app_server_endpoint(env).value
+    return argv, env
+
+
 def build_sync_workers(env: dict[str, str], binaries: dict[str, str]) -> RunnerArgvEnv:
     return [binaries["openbase_coder"], "sync-workers", "run"], env
 
@@ -385,6 +401,10 @@ def build_openbase_cloud_heartbeat(
 RUNNERS: dict[str, tuple[callable, tuple[str, ...]]] = {
     "livekit-server": (build_livekit_server, ("livekit",)),
     "codex-app-server": (build_codex_app_server, ("codex", "openbase_coder")),
+    "codex-app-server-dispatcher": (
+        build_codex_app_server_dispatcher,
+        ("codex", "openbase_coder"),
+    ),
     "sync-workers": (build_sync_workers, ("openbase_coder",)),
     "openbase-routines": (build_openbase_routines, ("openbase_coder",)),
     "livekit-agent": (build_livekit_agent, ("python",)),
@@ -445,14 +465,17 @@ def run(name: str) -> None:
     binaries = _resolve_binaries(name, config)
     build, _ = RUNNERS[name]
     argv, env = build(_load_env(config), binaries)
-    if name == "codex-app-server":
+    if name in ("codex-app-server", "codex-app-server-dispatcher"):
         from openbase_coder_cli.codex_control_plane import (
+            dispatcher_codex_app_server_endpoint,
             managed_codex_app_server_endpoint,
             prepare_codex_app_server_start,
         )
 
         prepare_codex_app_server_start(
-            managed_codex_app_server_endpoint(env),
+            managed_codex_app_server_endpoint(env)
+            if name == "codex-app-server"
+            else dispatcher_codex_app_server_endpoint(env),
             binaries["codex"],
         )
     from openbase_coder_cli.services.freshness.runtime import capture_service

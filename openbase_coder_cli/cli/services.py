@@ -163,7 +163,17 @@ def status() -> None:
             else:
                 click.echo(f"{name_col} optional (not installed)")
         elif info["pid"]:
-            if svc.name == "codex-app-server" and not codex_app_server_ready():
+            app_server_endpoint = None
+            if svc.name == "codex-app-server-dispatcher":
+                from openbase_coder_cli.codex_control_plane import (
+                    dispatcher_codex_app_server_endpoint,
+                )
+
+                app_server_endpoint = dispatcher_codex_app_server_endpoint()
+            if svc.name in (
+                "codex-app-server",
+                "codex-app-server-dispatcher",
+            ) and not codex_app_server_ready(app_server_endpoint):
                 click.echo(
                     f"{name_col} running (pid {info['pid']}), but initialize readiness failed"
                 )

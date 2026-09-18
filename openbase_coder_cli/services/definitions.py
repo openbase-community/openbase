@@ -63,6 +63,19 @@ SERVICES: list[ServiceDefinition] = [
         restart_dependents=("openbase-routines", "livekit-agent", "django-cli"),
     ),
     ServiceDefinition(
+        name="codex-app-server-dispatcher",
+        freshness_kind="binary",
+        freshness_packages=(),
+        # Dedicated instance for the voice dispatcher's own thread: a
+        # churning worker turn on the shared instance must never starve the
+        # dispatcher's RPCs (2026-09-18 voice-call failure).
+        description="Codex App Server (dispatcher)",
+        command_template="codex-app-server-dispatcher",
+        workdir_template="{workspace}",
+        backends=(CODEX_BACKEND, OPENBASE_CLOUD_CODEX_BACKEND),
+        restart_dependents=("livekit-agent",),
+    ),
+    ServiceDefinition(
         name="sync-workers",
         description="Sync Workers (thread, device, and code-sync reconcile)",
         # One process runs every periodic sync job on its own thread — the

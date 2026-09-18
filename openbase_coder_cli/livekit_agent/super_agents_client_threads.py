@@ -10,6 +10,7 @@ through ``self``.
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 
@@ -226,7 +227,55 @@ class SuperAgentsClientThreadsMixin:
                 backend_identity=identity,
                 disallowed_tools_for_session=dispatcher_disallowed_tools,
             )
+        endpoint = self._dispatcher_dedicated_endpoint()
+        if endpoint is not None:
+            logger.info(
+                "Dispatcher route using dedicated app-server endpoint %s", endpoint
+            )
+            return CodexAppServerClient(backend_identity=identity, endpoint=endpoint)
         return CodexAppServerClient(backend_identity=identity)
+
+    def _dispatcher_dedicated_endpoint(self) -> str | None:
+        """Endpoint of the dispatcher's dedicated app-server, when usable.
+
+        Only the persistent dispatcher route moves to the dedicated
+        instance; transferred Super Agent threads keep the shared endpoint
+        so each thread has exactly one owning app-server. Falls back to the
+        shared endpoint when the dedicated instance isn't up yet."""
+        if self._state_path is None:
+            return None
+        if os.getenv(
+            "OPENBASE_DISPATCHER_DEDICATED_APP_SERVER", ""
+        ).strip().lower() in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }:
+            return None
+        try:
+            from openbase_coder_cli.codex_control_plane import (
+                dispatcher_codex_app_server_endpoint,
+            )
+
+            endpoint = dispatcher_codex_app_server_endpoint()
+        except Exception:
+            logger.warning(
+                "Could not resolve the dispatcher app-server endpoint", exc_info=True
+            )
+            return None
+        if endpoint.source == "dispatcher-explicit":
+            return endpoint.value
+        if (
+            endpoint.is_unix
+            and endpoint.socket_path is not None
+            and endpoint.socket_path.exists()
+        ):
+            return f"unix://{endpoint.socket_path}"
+        logger.info(
+            "Dispatcher dedicated app-server socket absent; using shared endpoint"
+        )
+        return None
 
     def _dispatcher_execution_backend(self) -> str | None:
         """The engine the dispatcher's configured MODEL requires, if any.

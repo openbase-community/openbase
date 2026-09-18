@@ -102,6 +102,7 @@ Managed services:
 
 - `livekit-server`
 - `codex-app-server`
+- `codex-app-server-dispatcher`
 - `livekit-agent`
 - `django-cli`
 
@@ -110,6 +111,15 @@ On macOS and Linux, `codex-app-server` listens at
 managed server and clients to the shared `~/.codex` home; the socket is runtime
 state and is never committed. A stale socket is removed only after it is
 confirmed not to have a live owner.
+
+`codex-app-server-dispatcher` is a second instance of the same server,
+listening at `$CODEX_HOME/app-server-control-dispatcher/app-server-control.sock`
+(override with `OPENBASE_DISPATCHER_APP_SERVER_URL`). Only the voice
+dispatcher's own conversational thread runs there, so a long-running coding
+turn on the shared instance can never make the dispatcher unresponsive.
+Super Agent threads stay on the shared instance. If the dispatcher instance
+is not running, the dispatcher falls back to the shared socket; setting
+`OPENBASE_DISPATCHER_DEDICATED_APP_SERVER=0` forces that fallback.
 
 ## Runtime Data
 
