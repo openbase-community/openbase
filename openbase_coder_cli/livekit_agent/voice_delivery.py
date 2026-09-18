@@ -48,9 +48,9 @@ MIN_PLAYOUT_DEFER_SECONDS = 0.05
 # The iOS stuck-muted watchdog fails open (unmutes) when the newest lifecycle
 # packet is ~10s old, which used to reopen the mic in the middle of long
 # coding-backend turns. While a lifecycle mute is outstanding the ledger
-# re-emits the idempotent safe_to_mute_user as a keepalive so the watchdog
+# emits a distinct mute_keepalive event so the watchdog
 # only fires when the server has actually gone away.
-MUTE_KEEPALIVE_INTERVAL_SECONDS = 4.0
+MUTE_KEEPALIVE_INTERVAL_SECONDS = 2.0
 
 # STT finals arriving later than this after end of speech dominate perceived
 # mute latency (the quiet floor cannot start until the turn is accepted).
@@ -902,13 +902,15 @@ class VoiceDeliveryLedger:
                 "safe_to_unmute", record, reason=record.terminal_reason
             )
 
-    def mark_tts_failed(self, record: VoiceDeliveryRecord, *, audio_events: int, audio_seconds: float) -> None:
+    def mark_tts_failed(self, record: VoiceDeliveryRecord, *, audio_events: int, audio_seconds: float, reason: str | None = None) -> None:
         """Release a failed synthesis hold after any partial audio has played."""
+        if record.status in _TERMINAL_STATUSES:
+            return
         self._cancel_user_turn_closure_task(record.delivery_id)
         record.audio_events = audio_events
         record.audio_seconds = audio_seconds
         record.status = "failed"
-        record.terminal_reason = "tts_provider_failed_after_partial_audio" if audio_events else "tts_provider_failed_without_audio"
+        record.terminal_reason = reason or ("tts_provider_failed_after_partial_audio" if audio_events else "tts_provider_failed_without_audio")
         record.reserved_for_tts = False
         self._log(record, "tts_failed", reason=record.terminal_reason)
         # Preserve failure instead of recording a successful, full delivery.
@@ -1011,6 +1013,7 @@ class VoiceDeliveryLedger:
         emitting and the client recovery still fails open.
         """
         while self._lifecycle_mute_outstanding:
+            scheduled_at = time.monotonic()
             await asyncio.sleep(MUTE_KEEPALIVE_INTERVAL_SECONDS)
             if not self._lifecycle_mute_outstanding:
                 return
@@ -1019,9 +1022,10 @@ class VoiceDeliveryLedger:
                 continue
             logger.info(
                 "dispatch_timing stage=voice_delivery_mute_keepalive "
-                "delivery_id=%s room=%s",
+                "delivery_id=%s room=%s scheduling_delay_ms=%.1f",
                 record.delivery_id,
                 self._room_name,
+                max(0, time.monotonic() - scheduled_at - MUTE_KEEPALIVE_INTERVAL_SECONDS) * 1000,
             )
             # A distinct event name, NOT a repeated safe_to_mute_user: clients
             # refresh their stuck-muted staleness clock on any lifecycle

@@ -13,6 +13,7 @@ from livekit.agents.types import APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
 
 from openbase_coder_cli.livekit_agent.config import LIVEKIT_VERBOSE_LOGGING
 from openbase_coder_cli.livekit_agent.speech_formatter import format_for_speech
+from openbase_coder_cli.livekit_agent.tts_progress import TTSProgressGuard, TTSStreamStalled
 from openbase_coder_cli.tts_providers import (
     CARTESIA_PROVIDER_ID,
     DEFAULT_CARTESIA_TTS_VOLUME,
@@ -315,6 +316,7 @@ class SpeechFormattingSynthesizeStream:
         self._max_audio_event_gap_ms = 0.0
         self._delivery_ledger = delivery_ledger
         self._delivery_record = None
+        self._progress = TTSProgressGuard()
 
     def push_text(self, token: str) -> None:
         self._buffer += token
@@ -369,6 +371,7 @@ class SpeechFormattingSynthesizeStream:
             )
             if not suppress_stale:
                 self._stream.push_text(final_text)
+                self._progress.submitted()
             self._buffer = ""
             if self._flushed_text_monotonic is None:
                 self._flushed_text_monotonic = time.monotonic()
@@ -431,12 +434,17 @@ class SpeechFormattingSynthesizeStream:
 
     async def __anext__(self):
         try:
-            event = await self._stream.__anext__()
-        except APIError:
+            event = await self._progress.next_event(self._stream)
+        except APIError as error:
+            reason = "tts_stream_stalled" if isinstance(error, TTSStreamStalled) else None
+            if reason:
+                logger.warning("dispatch_timing stage=tts_stream_stalled role=%s audio_events=%d audio_seconds=%.2f",
+                    self._role, self._audio_event_count, self._audio_seconds)
             if self._delivery_ledger is not None and self._delivery_record is not None:
                 self._delivery_ledger.mark_tts_failed(
                     self._delivery_record, audio_events=self._audio_event_count,
                     audio_seconds=self._audio_seconds,
+                    reason=reason,
                 )
             raise
         except StopAsyncIteration:
@@ -476,7 +484,8 @@ class SpeechFormattingSynthesizeStream:
             self._audio_event_count += 1
             sample_rate = getattr(frame, "sample_rate", 0)
             samples_per_channel = getattr(frame, "samples_per_channel", 0)
-            if sample_rate:
+            if sample_rate and samples_per_channel > 0:
+                self._progress.audio_received()
                 duration = samples_per_channel / sample_rate
                 self._audio_seconds += duration
                 if self._delivery_ledger is not None and self._delivery_record is not None:

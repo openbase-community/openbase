@@ -1344,6 +1344,44 @@ def test_synthesis_error_cleans_up_delivery_instead_of_leaving_mic_hold():
     asyncio.run(run())
 
 
+def test_silent_stream_failure_waits_for_partial_playout_and_never_replays():
+    from types import SimpleNamespace
+    from openbase_coder_cli.livekit_agent.tts_progress import TTSProgressGuard, TTSStreamStalled
+
+    class HangingStream(_FakeTTSStream):
+        async def __anext__(self):
+            if self._events:
+                return self._events.pop(0)
+            await asyncio.Event().wait()
+
+    async def run():
+        events = []
+        ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
+        ledger.set_lifecycle_sink(lambda event, record, reason: events.append(event))
+        record = ledger.track_announcement(text="Partial answer")
+        frame = SimpleNamespace(sample_rate=24000, samples_per_channel=6000)
+        underlying = HangingStream(events=[SimpleNamespace(frame=frame)])
+        wrapped = SpeechFormattingSynthesizeStream(underlying, role="direct", delivery_ledger=ledger)
+        wrapped._progress = TTSProgressGuard(first_audio_seconds=.1, audio_gap_seconds=.02)
+        wrapped.push_text("Partial answer")
+        wrapped.flush()
+        await wrapped.__anext__()
+        try:
+            await wrapped.__anext__()
+        except TTSStreamStalled as error:
+            assert not error.retryable
+        else:
+            raise AssertionError("Silent stream must terminate")
+        assert record.status == "failed"
+        assert record.terminal_reason == "tts_stream_stalled"
+        assert "safe_to_unmute" not in events
+        await asyncio.sleep(.3)
+        assert events[-2:] == ["agent_audio_finished", "safe_to_unmute"]
+        assert underlying.pushed_text == [text_for_tts("Partial answer")]
+        assert events.count("safe_to_unmute") == 1
+    asyncio.run(run())
+
+
 def test_partial_failure_does_not_release_before_estimated_playout_tail():
     async def run():
         events = []
