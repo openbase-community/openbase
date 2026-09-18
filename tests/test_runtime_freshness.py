@@ -268,3 +268,11 @@ def test_external_binary_replacement_requires_restart(workspace, monkeypatch):
     binary.write_bytes(b"binary-B")
     service = next(s for s in SERVICES if s.name == "codex-app-server")
     assert collector._service_detail(service, os.getpid(), workspace, {})["state"] == "stale"
+
+
+def test_unstamped_compiled_service_requires_rebuild(workspace, monkeypatch):
+    monkeypatch.setattr(runtime, "RECORD_DIR", workspace / "missing")
+    service = next(s for s in SERVICES if s.name == "openbase-tunneld")
+    result = collector._service_detail(service, os.getpid(), workspace, {})
+    assert result["state"] == "unknown"
+    assert "Rebuild/install" in result["action"]

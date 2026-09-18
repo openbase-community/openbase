@@ -24,7 +24,11 @@ _lock = threading.Lock()
 
 
 def _service_detail(service, pid: int, workspace: Path, current: dict) -> dict:
-    action = f"Restart {service.name}."
+    action = (
+        "Rebuild/install Openbase Direct, then restart openbase-tunneld."
+        if service.freshness_kind == "build"
+        else f"Run openbase-coder restart --service {service.name}."
+    )
     unknown = detail(
         service.description,
         "unknown",
