@@ -16,6 +16,7 @@ from openbase_coder_cli.codex_session_defaults import codex_permission_defaults
 from openbase_coder_cli.codex_home_instructions import (
     refresh_openbase_instruction_files_from_installation,
 )
+from openbase_coder_cli.dispatcher_instructions import with_dispatcher_skill
 from openbase_coder_cli.direct_voice_instructions import (
     DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS,
 )
@@ -466,9 +467,9 @@ async def warm_livekit_dispatcher_thread(
 def _dispatcher_developer_instructions() -> str | None:
     loaded = _read_instruction_file(CODEX_DISPATCHER_INSTRUCTIONS_PATH)
     if loaded:
-        return loaded
+        return with_dispatcher_skill(loaded)
 
-    return DISPATCHER_BUILTIN_DEVELOPER_INSTRUCTIONS
+    return with_dispatcher_skill(DISPATCHER_BUILTIN_DEVELOPER_INSTRUCTIONS)
 
 
 async def publish_exit_to_dispatch(

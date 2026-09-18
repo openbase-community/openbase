@@ -109,6 +109,8 @@ def test_warm_livekit_dispatcher_uses_configured_super_agents_client(
     tmp_path: Path, monkeypatch
 ):
     calls = []
+    from openbase_coder_cli import dispatcher_instructions
+    monkeypatch.setattr(dispatcher_instructions, "canonical_dispatcher_skill", lambda: "Canonical routing procedure")
     instruction_path = tmp_path / "dispatcher.md"
     instruction_path.write_text(
         "dispatcher says random fruit is persimmon\n", encoding="utf-8"
@@ -148,7 +150,7 @@ def test_warm_livekit_dispatcher_uses_configured_super_agents_client(
     assert init_kwargs["state_path"] == str(tmp_path / "route.json")
     assert (
         init_kwargs["developer_instructions"]
-        == "dispatcher says random fruit is persimmon"
+        == dispatcher_instructions.with_dispatcher_skill("dispatcher says random fruit is persimmon")
     )
     assert init_kwargs["fresh_thread"] is False
     assert calls[1:] == [("prepare", {}), ("close", {})]
