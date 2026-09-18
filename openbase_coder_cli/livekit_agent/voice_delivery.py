@@ -897,6 +897,8 @@ class VoiceDeliveryLedger:
         voice_id: str | None,
         voice_name: str | None,
     ) -> None:
+        if record.terminal_reason == "sdk_playout_interrupted":
+            return
         self._cancel_user_turn_closure_task(record.delivery_id)
         record.audio_events = audio_events
         record.audio_seconds = audio_seconds
@@ -948,6 +950,23 @@ class VoiceDeliveryLedger:
         # Preserve failure instead of recording a successful, full delivery.
         # The phone additionally waits for its own decoded PCM quiet tail.
         self._schedule_playout_release(record)
+
+    def mark_playout_interrupted(self, record: VoiceDeliveryRecord) -> None:
+        """Discard synthesized-but-cleared audio only after SDK interruption."""
+        if record.terminal_reason == "sdk_playout_interrupted":
+            return
+        task = self._playout_release_tasks.pop(record.delivery_id, None)
+        if task is not None:
+            task.cancel()
+        self._cancel_user_turn_closure_task(record.delivery_id)
+        now = time.monotonic()
+        record.audio_seconds = min(record.audio_seconds, max(0, now - (record.audio_started_at or now)))
+        record.queued_audio_playout_end_at = now
+        record.status = "cancelled"
+        record.terminal_reason = "sdk_playout_interrupted"
+        record.reserved_for_tts = False
+        self._log(record, "playout_interrupted", reason=record.terminal_reason)
+        self._emit_playout_release(record)
 
     def _remaining_playout_seconds(self, record: VoiceDeliveryRecord) -> float:
         """Estimate how much of the delivered audio is still playing out.
@@ -1017,6 +1036,7 @@ class VoiceDeliveryLedger:
         )
 
     def _ensure_mute_keepalive_task(self, record: VoiceDeliveryRecord) -> None:
+        self._mute_keepalive_record = record
         task = self._mute_keepalive_task
         if task is not None and not task.done():
             return
@@ -1052,6 +1072,7 @@ class VoiceDeliveryLedger:
             if self._user_is_speaking():
                 # The user reopened the mic and is talking; do not fight them.
                 continue
+            record = self._mute_keepalive_record
             logger.info(
                 "dispatch_timing stage=voice_delivery_mute_keepalive "
                 "delivery_id=%s room=%s scheduling_delay_ms=%.1f",

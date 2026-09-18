@@ -12,6 +12,7 @@ from livekit.agents import APIError
 from livekit.agents.types import APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
 
 from openbase_coder_cli.livekit_agent.config import LIVEKIT_VERBOSE_LOGGING
+from openbase_coder_cli.livekit_agent.speech_playout import bind_interruption
 from openbase_coder_cli.livekit_agent.speech_formatter import format_for_speech
 from openbase_coder_cli.livekit_agent.tts_progress import TTSProgressGuard, TTSStreamStalled
 from openbase_coder_cli.tts_providers import (
@@ -365,6 +366,7 @@ class SpeechFormattingSynthesizeStream:
                     self._delivery_record = self._delivery_ledger.track_unmatched_tts(
                         tts_text=final_text,
                     )
+                bind_interruption(self._delivery_ledger, self._delivery_record)
             suppress_stale = (
                 self._delivery_record is not None
                 and getattr(self._delivery_record, "status", "") == "suppressed_stale"
