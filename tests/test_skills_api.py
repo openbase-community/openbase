@@ -272,9 +272,8 @@ def test_skills_auto_link_setting_enables_and_links_personal_skills(
     assert response.data["auto_link_personal_skills"] is True
     assert response.data["codex_skills_dir"] == str(codex_home / "skills")
     assert response.data["claude_skills_dir"] == str(claude_home / "skills")
-    # home skill -> codex + claude, claude skill -> codex; the claude home is
-    # never linked back onto itself.
-    assert response.data["sync"]["created"] == 3
+    # Both original skills become available in all three skill directories.
+    assert response.data["sync"]["created"] == 4
     assert response.data["sync"]["conflicts"] == 0
     assert codex_target_dir.is_symlink()
     assert codex_target_dir.resolve() == source_dir.resolve()
@@ -286,9 +285,8 @@ def test_skills_auto_link_setting_enables_and_links_personal_skills(
     list_response = views.skills_list(_request("get", "/api/skills/"))
     sync = list_response.data["auto_link_personal_skills_sync"]
     assert sync["created"] == 0
-    # The home skill linked into the claude home now also shows up as a
-    # claude-source skill, so the re-sync sees four already-linked entries.
-    assert sync["already_linked"] == 4
+    # Each of the two skills has matching links across all three roots.
+    assert sync["already_linked"] == 12
 
 
 def test_skills_auto_link_reports_conflict_without_overwriting(
@@ -313,10 +311,9 @@ def test_skills_auto_link_reports_conflict_without_overwriting(
     )
 
     assert response.status_code == 200
-    # home -> codex conflicts, home -> claude links; the fresh claude link is
-    # then re-seen as a claude source whose codex target is still the
-    # conflicting real directory.
-    assert response.data["sync"]["conflicts"] == 2
+    # The home and Claude sources conflict with Codex; the distinct Codex
+    # source conflicts with both other locations. All real files survive.
+    assert response.data["sync"]["conflicts"] == 4
     assert response.data["sync"]["results"][0]["status"] == "conflict"
     assert response.data["sync"]["results"][0]["target_scope"] == "codex"
     target_dir = codex_home / "skills" / "shared-skill"

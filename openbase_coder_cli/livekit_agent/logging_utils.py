@@ -1,34 +1,15 @@
 """Shared logging helpers for LiveKit agent diagnostics."""
 
 import hashlib
-import re
 
 from livekit import rtc
+from openbase_coder_cli.logging_redaction import redact_exception_text
 
 from openbase_coder_cli.livekit_agent.config import (
     LIVEKIT_AUDIO_FRAME_LOG_EVERY,
     LIVEKIT_AUDIO_FRAME_LOG_FIRST,
     LIVEKIT_VERBOSE_LOGGING,
 )
-
-_SECRET_VALUE_RE = re.compile(
-    r"(?i)\b(authorization|x-api-key|api[_-]?key|token|access[_-]?token)"
-    r"(['\"]?\s*[:=]\s*['\"]?)([^'\"\s,)}\]]+)"
-)
-_BEARER_RE = re.compile(r"(?i)\bBearer\s+[-._~+/=A-Za-z0-9]+")
-_QUERY_SECRET_RE = re.compile(
-    r"(?i)([?&](?:api[_-]?key|token|access[_-]?token|machine[_-]?token)=)"
-    r"([^&#\s]+)"
-)
-
-
-def redact_exception_text(value: object) -> str:
-    """Return exception/log text with bearer tokens and auth headers removed."""
-    text = str(value)
-    text = _SECRET_VALUE_RE.sub(r"\1\2[redacted]", text)
-    text = _BEARER_RE.sub("Bearer [redacted]", text)
-    return _QUERY_SECRET_RE.sub(r"\1[redacted]", text)
-
 
 def exception_chain_summary(exc: BaseException) -> str:
     """Compact, redacted summary of an exception and its causal chain."""

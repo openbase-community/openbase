@@ -16,6 +16,7 @@ django.setup()
 
 from openbase_coder_cli.thread_sync.models import ThreadInfo, ThreadStatus, TurnInfo
 from openbase_coder_cli.thread_sync.session_manager import ThreadListPage
+from openbase_coder_cli.openbase_coder_cli_app import thread_cache
 from openbase_coder_cli.openbase_coder_cli_app import threads as thread_views
 
 
@@ -86,7 +87,7 @@ def _thread(index: int) -> ThreadInfo:
 
 
 def _get_threads(monkeypatch, url: str, threads: list[ThreadInfo]):
-    thread_views.invalidate_thread_list_cache()
+    thread_cache.clear_thread_cache()
     manager = FakeThreadManager(threads)
     monkeypatch.setattr(
         thread_views,
@@ -207,7 +208,7 @@ def test_thread_list_caps_page_size(monkeypatch) -> None:
 
 
 def test_thread_list_skips_unavailable_livekit_fallback(monkeypatch) -> None:
-    thread_views.invalidate_thread_list_cache()
+    thread_cache.clear_thread_cache()
     monkeypatch.setattr(
         thread_views,
         "get_session_manager",
@@ -233,7 +234,7 @@ def test_thread_list_skips_unavailable_livekit_fallback(monkeypatch) -> None:
 
 
 def test_thread_dispatcher_returns_cached_dispatcher_thread(monkeypatch) -> None:
-    thread_views.invalidate_thread_list_cache()
+    thread_cache.clear_thread_cache()
     dispatcher_thread = _thread(1)
     manager = FakeThreadManager([dispatcher_thread, _thread(2)])
     monkeypatch.setattr(thread_views, "get_session_manager", lambda: manager)
@@ -258,7 +259,7 @@ def test_thread_dispatcher_returns_cached_dispatcher_thread(monkeypatch) -> None
 
 
 def test_thread_dispatcher_warms_missing_dispatcher(monkeypatch) -> None:
-    thread_views.invalidate_thread_list_cache()
+    thread_cache.clear_thread_cache()
     dispatcher_thread = _thread(1)
     manager = FakeThreadManager([dispatcher_thread])
     monkeypatch.setattr(thread_views, "get_session_manager", lambda: manager)
@@ -289,7 +290,7 @@ def test_thread_dispatcher_warms_missing_dispatcher(monkeypatch) -> None:
 
 
 def test_thread_active_voice_returns_active_target_with_turn_text(monkeypatch) -> None:
-    thread_views.invalidate_thread_list_cache()
+    thread_cache.clear_thread_cache()
     active_thread = _thread(3)
     active_thread.current_run = TurnInfo(
         run_id="turn-1",
@@ -333,7 +334,7 @@ def test_thread_active_voice_returns_active_target_with_turn_text(monkeypatch) -
 
 
 def test_thread_active_voice_warms_dispatcher_without_active_thread(monkeypatch) -> None:
-    thread_views.invalidate_thread_list_cache()
+    thread_cache.clear_thread_cache()
     dispatcher_thread = _thread(1)
     manager = FakeThreadManager([dispatcher_thread])
     monkeypatch.setattr(thread_views, "get_session_manager", lambda: manager)
@@ -417,7 +418,7 @@ def test_thread_list_filters_non_favorites(monkeypatch, tmp_path) -> None:
 
 def test_thread_favorite_endpoint_sets_and_clears_favorite(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
-    thread_views.invalidate_thread_list_cache()
+    thread_cache.clear_thread_cache()
     factory = APIRequestFactory()
 
     request = factory.patch(
@@ -470,7 +471,7 @@ def test_thread_favorite_endpoint_rejects_non_boolean(monkeypatch, tmp_path):
 
 def test_thread_tags_endpoint_sets_tags_and_lists_shared_options(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
-    thread_views.invalidate_thread_list_cache()
+    thread_cache.clear_thread_cache()
     factory = APIRequestFactory()
 
     request = factory.patch(
@@ -513,7 +514,7 @@ def test_thread_tags_endpoint_rejects_non_list(monkeypatch, tmp_path):
 
 
 def _activity_response(monkeypatch, threads: list[ThreadInfo]):
-    thread_views.invalidate_thread_list_cache()
+    thread_cache.clear_thread_cache()
     manager = FakeThreadManager(threads)
     monkeypatch.setattr(thread_views, "get_session_manager", lambda: manager)
 

@@ -512,6 +512,10 @@ class SuperAgentsClientTurnsMixin:
     ) -> Callable[["SuperAgentsLiveKitClient", str, str], None] | None:
         return self._on_orphaned_result
 
+    @property
+    def pending_voice_answer_turn_id(self) -> str | None:
+        return self._active_turn_id if self.has_pending_voice_answer() else None
+
     def has_pending_voice_answer(self) -> bool:
         """Whether a backend turn still owes the user a spoken answer.
 

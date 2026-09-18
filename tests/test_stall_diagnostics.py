@@ -426,6 +426,31 @@ def test_scan_stalled_running_turns_ignores_plain_long_turn(tmp_path, monkeypatc
     assert sd.scan_stalled_running_turns(now=now, state_db_path=db) == []
 
 
+@pytest.mark.parametrize("command", [
+    "cd ~/Desktop/demo && npx create-react-app tictactoe --template minimal 2>&1 | head -20",
+    "cd ~/Desktop/demo && mkdir -p app && cd app && npm init -y && npm install react react-dom",
+    "cd ~/Documents/demo && pnpm build",
+])
+def test_package_work_in_protected_folder_is_not_permission_evidence(tmp_path, monkeypatch, command):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(sd, "dialog_presenter_started_after", lambda since: None)
+    now = dt.datetime(2026, 9, 13, 4, 35, 0)
+    created = (now - dt.timedelta(seconds=180)).strftime("%Y-%m-%d %H:%M:%S")
+    db = _running_turn_db(tmp_path, created_at=created, command=command)
+    assert sd.scan_stalled_running_turns(now=now, state_db_path=db) == []
+
+
+def test_package_work_preserves_independent_dialog_evidence(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(sd, "dialog_presenter_started_after", lambda since: "SecurityAgent")
+    now = dt.datetime(2026, 9, 13, 4, 35, 0)
+    created = (now - dt.timedelta(seconds=180)).strftime("%Y-%m-%d %H:%M:%S")
+    db = _running_turn_db(tmp_path, created_at=created, command="cd ~/Desktop/demo && pnpm build")
+    blocked = sd.scan_stalled_running_turns(now=now, state_db_path=db)
+    assert len(blocked) == 1
+    assert blocked[0].diagnosis.likely_blocked_on_dialog
+
+
 def test_scan_stalled_running_turns_ignores_young_turn(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(sd, "dialog_presenter_started_after", lambda since: None)

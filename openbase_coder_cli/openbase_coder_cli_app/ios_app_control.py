@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import time
 import uuid
@@ -16,6 +17,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 IOS_APP_CONTROL_GROUP = "ios_app_control"
+logger = logging.getLogger(__name__)
 IOS_APP_CONTROL_ACK_TIMEOUT_SECONDS = 5.0
 # Channel-layer group names only allow [a-zA-Z0-9._-]; command ids are
 # validated against this before being embedded in an ack group name.
@@ -106,6 +108,11 @@ def publish_ios_app_control(payload: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("Channel layer is not configured.")
     delivered = async_to_sync(_publish_and_await_ack)(
         channel_layer, command, IOS_APP_CONTROL_ACK_TIMEOUT_SECONDS
+    )
+    logger.info(
+        "dispatch_timing stage=ios_control_round_trip command_id=%s "
+        "server_sent_unix_ms=%.3f server_ack_unix_ms=%.3f delivered=%s",
+        command["command_id"], command["created_at"] * 1000, time.time() * 1000, delivered,
     )
     return {**command, "delivered": delivered}
 

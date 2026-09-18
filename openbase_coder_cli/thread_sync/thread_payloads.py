@@ -317,7 +317,7 @@ def _run_from_turn(
         status=status,
         accumulated_output=_extract_agent_output(turn),
         accumulated_stderr=stderr,
-        return_code=0 if status == SessionStatus.completed else -1,
+        return_code={SessionStatus.completed: 0, SessionStatus.error: -1}.get(status),
         message=message,
         model=_optional_turn_string(turn, "model"),
         reasoning_effort=_optional_turn_string(

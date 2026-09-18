@@ -86,7 +86,7 @@ def say(
         payload["room_name"] = room_name.strip()
 
     response = local_server_request(
-        "POST", "/api/user/say/", json=payload, ok_statuses=(502,)
+        "POST", "/api/user/say/", json=payload, ok_statuses=(502,), timeout=60,
     )
 
     try:
@@ -155,7 +155,7 @@ def play(sound_or_path: str, room_name: str) -> None:
     if room_name.strip():
         payload["room_name"] = room_name.strip()
 
-    response = local_server_request("POST", "/api/user/play/", json=payload)
+    response = local_server_request("POST", "/api/user/play/", json=payload, timeout=60)
 
     data = response.json()
     target_room = data.get("room_name") or "active room"
@@ -360,8 +360,9 @@ def _report_ios_command_result(data: dict, label: str) -> None:
         return
     click.echo(f"iOS {label} command published (unconfirmed): {command_id}")
     raise click.ClickException(
-        "No iOS app confirmed receipt. The Openbase app is likely closed, "
-        "backgrounded, or signed out; bring it to the foreground and retry."
+        "No iOS app confirmed receipt before the timeout. The command may already "
+        "have executed; inspect the phone before retrying. Check its connection, "
+        "foreground state, and sign-in if it did not execute."
     )
 
 

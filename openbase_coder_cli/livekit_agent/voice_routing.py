@@ -26,6 +26,7 @@ from openbase_coder_cli.livekit_agent.voice_delivery import (
     VoiceRouteSnapshot,
 )
 from openbase_coder_cli.livekit_agent.voices import stable_super_agent_voice
+from openbase_coder_cli.livekit_agent.voice_input_buffer import VoiceInputBuffer
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ class LiveKitVoiceRouter:
         self._orphaned_result_handler = None
         self._route_version = 0
         self.delivery_ledger = delivery_ledger
+        self.input_buffer = VoiceInputBuffer()
 
     def set_orphaned_result_handler(self, handler) -> None:
         """Deliver completed turn answers that no voice dispatch consumed."""

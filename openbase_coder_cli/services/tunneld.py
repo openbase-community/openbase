@@ -55,6 +55,7 @@ def install_tunneld_binary(config: InstallationConfig) -> Path:
 
     source_binary: Path | None = None
     build_command: list[str] | None = None
+    build_provenance = None
     if source_dir and (source_dir / "go.mod").is_file():
         go = _go_binary()
         if not go:
@@ -63,6 +64,10 @@ def install_tunneld_binary(config: InstallationConfig) -> Path:
                 "install Go and re-run setup"
             )
         build_command = [go, "build"]
+        if not config.standalone:
+            from openbase_coder_cli.services.freshness.build import capture_build
+
+            build_provenance = capture_build(workspace, "openbase-tunneld", ("cli",))
     else:
         packaged = _packaged_binary()
         if packaged:
@@ -99,6 +104,10 @@ def install_tunneld_binary(config: InstallationConfig) -> Path:
             shutil.copy2(source_binary, temporary)
         temporary.chmod(0o755)
         os.replace(temporary, target)
+        if build_provenance:
+            from openbase_coder_cli.services.freshness.build import finish_build
+
+            finish_build(target, workspace, build_provenance)
     finally:
         temporary.unlink(missing_ok=True)
     return target

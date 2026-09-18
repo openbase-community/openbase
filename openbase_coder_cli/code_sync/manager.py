@@ -315,6 +315,11 @@ def ensure_product_state_folders(config_path: Path | None = None) -> list[str]:
         (Path.home() / relpath).mkdir(parents=True, exist_ok=True)
         add_sync_folder(relpath, config_path)
         added.append(relpath)
+    from openbase_coder_cli import skills_sync
+
+    if config_path is None:
+        skill_changes = skills_sync.reconcile()
+        added.extend(skill_changes["added"] + skill_changes["removed"])
     return added
 
 
@@ -358,6 +363,10 @@ def accept_pending_folders(config_path: Path | None = None) -> list[str]:
             try:
                 relpath = validate_relpath(label)
             except ValueError:
+                continue
+            from openbase_coder_cli import skills_sync
+
+            if not skills_sync.accepts_peer_folder(relpath):
                 continue
             if folder_id_for_relpath(relpath) != folder_id:
                 continue

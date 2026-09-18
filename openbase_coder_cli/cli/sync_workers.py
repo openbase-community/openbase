@@ -224,8 +224,8 @@ def _code_sync_reconcile_tick() -> None:
     logger.info(
         "code_sync tick_complete repos=%s up_to_date=%s fast_forwarded=%s "
         "awaiting_files=%s remote_behind=%s diverged=%s skipped=%s "
-        "fetch_failed=%s converged=%s published=%s conflicts=%s errors=%s "
-        "lease=%s",
+        "fetch_failed=%s converged=%s published=%s advertised=%s "
+        "echo_healed=%s conflicts=%s errors=%s lease=%s",
         counts["repo_count"],
         counts["up_to_date"],
         counts["fast_forwarded"],
@@ -236,10 +236,36 @@ def _code_sync_reconcile_tick() -> None:
         counts["fetch_failed"],
         counts["converged"],
         counts["published"],
+        counts["advertised"],
+        counts["echo_healed"],
         summary.get("conflicts_count"),
         counts["errors"],
         summary.get("lease", {}).get("action"),
     )
+    for entry in summary.get("trunk_advertisements", []):
+        # One line per branch made visible in (or blocked from) a trunk
+        # repo, so agents can find cross-machine worktree commits.
+        logger.info(
+            "code_sync trunk_advertise repo=%s branch=%s action=%s detail=%s",
+            entry.get("path"),
+            entry.get("branch"),
+            entry.get("action"),
+            entry.get("detail"),
+        )
+    for entry in summary.get("echo_heals", []):
+        event = (
+            "echo_heal_applied"
+            if entry.get("action") == "healed"
+            else "echo_heal_skipped"
+        )
+        logger.info(
+            "code_sync %s repo=%s branch=%s action=%s detail=%s",
+            event,
+            entry.get("path"),
+            entry.get("branch"),
+            entry.get("action"),
+            entry.get("detail"),
+        )
     if summary.get("errors"):
         logger.warning("code_sync tick_errors %s", summary["errors"])
 

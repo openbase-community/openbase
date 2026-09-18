@@ -18,6 +18,8 @@ restart_module = importlib.import_module("openbase_coder_cli.services.restart")
 
 @pytest.fixture(autouse=True)
 def isolate_restart_installation(monkeypatch, tmp_path):
+    monkeypatch.setattr(restart_module, "launchctl_status", lambda _svc: {"installed": False})
+    monkeypatch.setattr(restart_module, "install_tunneld_binary", lambda _config: tmp_path / "openbase-tunneld")
     monkeypatch.setattr(
         restart_module,
         "require_installation",
@@ -200,6 +202,45 @@ def test_restart_optional_device_sync_can_be_targeted_explicitly(monkeypatch):
     command = popen_calls[0][0][0][2]
     assert "code-sync" in command
     assert "sync-workers" not in command
+
+
+def test_full_restart_includes_enabled_optional_daemons_not_oneshots(monkeypatch):
+    enabled = {"code-sync", "openbase-cloud-heartbeat", "openbase-tunneld", "openbase-cloud-auth-rehydrate"}
+    monkeypatch.setattr(
+        restart_module, "launchctl_status",
+        lambda svc: {"installed": svc.name in enabled, "pid": None},
+    )
+    plan = build_restart_plan(RestartRequest())
+    assert {"code-sync", "openbase-cloud-heartbeat", "openbase-tunneld"} <= set(plan.services)
+    assert "openbase-cloud-auth-rehydrate" not in plan.services
+    # An explicit target remains narrow, even with other services enabled.
+    assert build_restart_plan(RestartRequest(services=("sync-workers",))).services == ("sync-workers",)
+
+
+@pytest.mark.parametrize("standalone", [False, True])
+def test_tunneld_restart_prepares_dev_build_before_scheduling(monkeypatch, standalone):
+    calls = []
+    monkeypatch.setattr(restart_module, "require_installation", lambda: InstallationConfig(standalone=standalone))
+    monkeypatch.setattr(restart_module, "install_tunneld_binary", lambda _config: calls.append("build"))
+    monkeypatch.setattr(restart_module.subprocess, "Popen", lambda *_args, **_kwargs: calls.append("schedule"))
+    restart_module.schedule_restart(RestartRequest(services=("openbase-tunneld",)))
+    assert calls == (["schedule"] if standalone else ["build", "schedule"])
+
+
+def test_failed_tunneld_build_leaves_services_running(monkeypatch):
+    def fail_build(_config):
+        raise RuntimeError("compiler failed")
+
+    def unexpected_call(*_args, **_kwargs):
+        pytest.fail("failed build must not interrupt services")
+
+    monkeypatch.setattr(restart_module, "install_tunneld_binary", fail_build)
+    monkeypatch.setattr(restart_module.subprocess, "Popen", unexpected_call)
+    monkeypatch.setattr(restart_module, "warn_before_voice_interruption", unexpected_call)
+    result = CliRunner().invoke(restart, ["--service", "openbase-tunneld"])
+    assert result.exit_code != 0
+    assert "restart was not scheduled" in result.output
+    assert "compiler failed" in result.output
 
 
 def test_restart_codex_app_server_restarts_control_plane_consumers():

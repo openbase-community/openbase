@@ -220,7 +220,12 @@ class SuperAgentsClientThreadsMixin:
         if execution_backend == CLAUDE_CODE_BACKEND:
             from super_agents.claude_sdk import ClaudeAgentSdkClient
 
-            return ClaudeAgentSdkClient(backend_identity=identity)
+            from .dispatcher_task_context import dispatcher_disallowed_tools
+
+            return ClaudeAgentSdkClient(
+                backend_identity=identity,
+                disallowed_tools_for_session=dispatcher_disallowed_tools,
+            )
         return CodexAppServerClient(backend_identity=identity)
 
     def _dispatcher_execution_backend(self) -> str | None:
@@ -303,6 +308,12 @@ class SuperAgentsClientThreadsMixin:
             for part in (self._developer_instructions, developer_instructions)
             if part and part.strip()
         ]
+        from .dispatcher_task_context import registered_dispatcher_task_context
+
+        if context := registered_dispatcher_task_context(
+            self._backend_client, self._super_agent_name
+        ):
+            parts.append(context)
         return _with_super_agent_identity_instructions(
             "\n\n".join(parts) if parts else None,
             self._super_agent_name,

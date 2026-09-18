@@ -502,7 +502,15 @@ def collect_warnings_cached() -> list[dict[str, str]]:
         return warnings
 
 
-@api_view(["GET"])
+@api_view(["GET", "POST"])
 def health_warnings(request):
     """Warnings the console surfaces in its top banner."""
-    return Response({"warnings": collect_warnings_cached()}, status=status.HTTP_200_OK)
+    from openbase_coder_cli.services.freshness.collector import collect_freshness
+
+    payload = {"warnings": collect_warnings_cached()}
+    # An opt-in read-only POST carries the loaded renderer/main build stamps.
+    # Existing GET consumers and production clients do no source scanning.
+    if request.method == "POST":
+        client = request.data if isinstance(request.data, dict) else None
+        payload["freshness"] = collect_freshness(client)
+    return Response(payload, status=status.HTTP_200_OK)

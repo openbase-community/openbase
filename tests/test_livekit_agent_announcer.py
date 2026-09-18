@@ -666,6 +666,7 @@ class RecordingCartesiaTTS:
 
     def stream(self, *, conn_options=None):
         self.stream_calls += 1
+        self.conn_options = conn_options
         self.stream_instance = FakeTTSStream()
         return self.stream_instance
 
@@ -691,6 +692,21 @@ class FakeSession:
     def say(self, text, **kwargs):
         self.say_calls.append((text, kwargs))
         return self.say_handle
+
+
+@pytest.mark.asyncio
+async def test_retried_packet_plays_only_once_after_lost_ack():
+    session = FakeSession()
+    queue = AnnouncerSpeechQueue(session=session, announcer_tts=FakeTTS(),
+        silence_grace_seconds=0)
+    message = AnnouncerMessage(message_id='same-invocation', text='A controlled announcement.',
+        voice_id=None)
+    assert queue.enqueue(message)
+    assert queue.enqueue(message)
+    queue.start()
+    await asyncio.sleep(.03)
+    await queue.close()
+    assert len(session.say_calls) == 1
 
 
 def test_voice_selecting_tts_delegates_stream_to_active_voice(monkeypatch):
@@ -722,6 +738,21 @@ def test_voice_selecting_tts_delegates_stream_to_active_voice(monkeypatch):
     assert RecordingCartesiaTTS.created[1].stream_instance.pushed_texts == [
         "Update read me dot M D. Run U V."
     ]
+
+
+def test_explicit_announcement_voice_retains_timeout_policy(monkeypatch):
+    from livekit.agents.types import APIConnectOptions
+    RecordingCartesiaTTS.created = []
+    monkeypatch.setattr(cartesia, "TTS", RecordingCartesiaTTS)
+    tts = VoiceSelectingCartesiaTTS(default_voice_id="default",
+        active_voice_id=lambda: "foreground", api_key="test-placeholder")
+    tts.stream_for_voice("background")
+    selected = RecordingCartesiaTTS.created[-1]
+    assert selected.voice == "background"
+    assert selected.conn_options.timeout == 60
+    override = APIConnectOptions(timeout=7)
+    tts.stream_for_voice("background", conn_options=override)
+    assert selected.conn_options is override
 
 
 def test_voice_selecting_tts_formats_synthesize_text(monkeypatch, caplog):
@@ -1529,3 +1560,179 @@ def test_verify_cloud_audio_subscription_skips_transient_errors(monkeypatch):
     asyncio.run(livekit._verify_cloud_audio_subscription(room, session))
 
     assert room.local_participant.published == []
+
+
+@pytest.mark.asyncio
+async def test_announcer_playout_brackets_voice_lifecycle_events():
+    """Announcements must be bracketed by lifecycle events so the client mic
+    does not reopen exactly as a Super Agent intro starts playing."""
+    from openbase_coder_cli.livekit_agent.voice_delivery import (
+        VoiceDeliveryLedger,
+        VoiceRouteSnapshot,
+    )
+
+    session = FakeSession()
+    class AudioTTS(FakeTTS):
+        def stream_for_voice(self, voice_id):
+            class Stream(FakeTTSStream):
+                async def __anext__(self):
+                    if getattr(self, 'emitted', False):
+                        raise StopAsyncIteration
+                    self.emitted = True
+                    return SimpleNamespace(frame=rtc.AudioFrame(
+                        data=bytes(320), sample_rate=16000, num_channels=1,
+                        samples_per_channel=160))
+            return Stream()
+    fake_tts = AudioTTS()
+    original_say = session.say
+    original_wait = session.say_handle.wait_for_playout
+    def consuming_say(text, **kwargs):
+        handle = original_say(text, **kwargs)
+        async def wait():
+            async for _ in kwargs['audio']:
+                pass
+            await original_wait()
+        handle.wait_for_playout = wait
+        return handle
+    session.say = consuming_say
+    events: list[tuple[str, str]] = []
+    ledger = VoiceDeliveryLedger(
+        route_snapshot=lambda: VoiceRouteSnapshot(
+            route_version=0,
+            active_thread_id="dispatcher",
+            active_voice_id=None,
+            active_voice_name=None,
+            active_route="dispatcher",
+        )
+    )
+    ledger.set_lifecycle_sink(
+        lambda event, record, _reason: events.append((event, record.delivery_id))
+    )
+    queue = AnnouncerSpeechQueue(
+        session=session,
+        announcer_tts=fake_tts,
+        silence_grace_seconds=0,
+        delivery_ledger=ledger,
+    )
+
+    await queue._speak(
+        AnnouncerMessage(
+            message_id="announcer-1",
+            text="Hey there, I'm Callie.",
+            voice_id="requested-voice",
+        )
+    )
+
+    assert session.say_handle.waited is True
+    event_names = [event for event, _delivery_id in events]
+    assert event_names == [
+        "agent_audio_started",
+        "agent_audio_finished",
+        "safe_to_unmute",
+    ]
+    delivery_ids = {delivery_id for _event, delivery_id in events}
+    assert len(delivery_ids) == 1
+    assert next(iter(delivery_ids)).startswith("voice-announcer-")
+    assert not queue.has_pending_announcements()
+
+
+@pytest.mark.asyncio
+async def test_dropped_utterance_recovered_after_uninterruptible_speech(monkeypatch):
+    """A turn that lands during uninterruptible speech is replayed, not lost.
+
+    The framework skips the reply entirely ("skipping reply to user input,
+    current speech generation cannot be interrupted") when the current speech
+    is an announcer intro; the utterance never reaches the chat context.
+    """
+    from openbase_coder_cli.livekit_agent import session_diagnostics
+
+    monkeypatch.setattr(
+        session_diagnostics, "DROPPED_UTTERANCE_GRACE_SECONDS", 0.05
+    )
+
+    class FakeSpeech:
+        allow_interruptions = False
+
+    class FakeSession:
+        def __init__(self):
+            self.handlers = {}
+            self.current_speech = FakeSpeech()
+            self.generated = []
+
+        def on(self, event_name, handler):
+            self.handlers[event_name] = handler
+
+        def generate_reply(self, *, user_input):
+            self.generated.append(user_input)
+
+    class FakeClient:
+        async def steer_active_turn(self, prompt):
+            return None  # no active backend turn: nothing catches the input
+
+        def has_active_prompt(self, prompt):
+            return False
+
+    session = FakeSession()
+    router = LiveKitVoiceRouter(FakeClient())
+    livekit._register_session_diagnostics(session, router, enable_logging=False)
+
+    session.handlers["user_input_transcribed"](
+        SimpleNamespace(is_final=True, transcript="are you there")
+    )
+    session.handlers["user_input_transcribed"](
+        SimpleNamespace(is_final=True, transcript="hello again")
+    )
+    await asyncio.sleep(0.2)
+    assert session.generated == []  # still held by the uninterruptible speech
+
+    session.current_speech = None
+    for _ in range(60):
+        if session.generated:
+            break
+        await asyncio.sleep(0.05)
+    # Both dropped fragments fold into one recovered reply.
+    assert session.generated == ["are you there hello again"]
+
+
+@pytest.mark.asyncio
+async def test_dropped_utterance_not_recovered_when_framework_kept_it(monkeypatch):
+    from openbase_coder_cli.livekit_agent import session_diagnostics
+
+    monkeypatch.setattr(
+        session_diagnostics, "DROPPED_UTTERANCE_GRACE_SECONDS", 0.05
+    )
+
+    class FakeSession:
+        def __init__(self):
+            self.handlers = {}
+            self.current_speech = None
+            self.generated = []
+
+        def on(self, event_name, handler):
+            self.handlers[event_name] = handler
+
+        def generate_reply(self, *, user_input):
+            self.generated.append(user_input)
+
+    class FakeClient:
+        async def steer_active_turn(self, prompt):
+            return None
+
+        def has_active_prompt(self, prompt):
+            return False
+
+    session = FakeSession()
+    router = LiveKitVoiceRouter(FakeClient())
+    livekit._register_session_diagnostics(session, router, enable_logging=False)
+
+    session.handlers["user_input_transcribed"](
+        SimpleNamespace(is_final=True, transcript="are you there")
+    )
+    # The framework accepted the turn: the user item reaches the chat context.
+    session.handlers["conversation_item_added"](
+        SimpleNamespace(
+            item=SimpleNamespace(role="user", text_content="Are you there?")
+        )
+    )
+    await asyncio.sleep(0.3)
+    assert session.generated == []

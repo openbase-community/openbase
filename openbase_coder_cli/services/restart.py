@@ -20,6 +20,7 @@ from openbase_coder_cli.services.launchd import (
 )
 from openbase_coder_cli.services.registry import find_service, require_installation
 from openbase_coder_cli.services.selection import configured_default_services
+from openbase_coder_cli.services.tunneld import install_tunneld_binary
 from openbase_coder_cli.services.voice_warning import (
     any_service_action_interrupts_voice,
     warn_before_voice_interruption,
@@ -53,7 +54,19 @@ def build_restart_plan(request: RestartRequest) -> RestartPlan:
     default_service_names = [service.name for service in configured_default_services()]
     valid_targets = set(service_names)
 
-    requested_targets = list(request.services) or default_service_names
+    requested_targets = list(request.services)
+    if not requested_targets:
+        requested_targets = default_service_names
+        # Optional daemons can already be enabled on this installation. A full
+        # restart must refresh those too, without enabling unused features or
+        # replaying completed one-shot provisioning/auth jobs.
+        for service in SERVICES:
+            if (
+                service.name not in requested_targets
+                and service.service_type != "oneshot"
+                and launchctl_status(service).get("installed")
+            ):
+                requested_targets.append(service.name)
     unknown = [target for target in requested_targets if target not in valid_targets]
     if unknown:
         valid = ", ".join(restart_target_names())
@@ -93,6 +106,13 @@ def schedule_restart(
                 "Could not prepare the pinned LiveKit engine; restart was not "
                 "scheduled. Resolve the download error above and retry."
             )
+    if not config.standalone and "openbase-tunneld" in plan.services:
+        try:
+            install_tunneld_binary(config)
+        except RuntimeError as exc:
+            raise click.ClickException(
+                f"Could not prepare Openbase Direct; restart was not scheduled: {exc}"
+            ) from exc
     if warn and plan.interrupts_voice:
         warn_before_voice_interruption(
             reason="restart",

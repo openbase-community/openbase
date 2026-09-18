@@ -1,9 +1,9 @@
 """Auto-link personal agent skills into the shared agent homes.
 
 When ``auto_link_personal_skills`` is enabled in the dispatcher config,
-skills under ``~/.agents/skills`` (and Claude-installed skills) are symlinked
-into the shared ``~/.codex/skills`` and ``~/.claude/skills`` so both backends
-discover them.
+skills under ``~/.agents/skills``, ``~/.codex/skills``, and ``~/.claude/skills``
+are linked across all three locations so both backends discover them.
+Existing files and links are preserved, including when linking is disabled.
 
 Standalone (no Django imports) so it can run from the Django app startup, the
 skills API, and the ``openbase-coder routines run-loop`` service, which
@@ -12,6 +12,7 @@ re-syncs periodically so newly added skills appear without a restart.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from openbase_coder_cli import dispatcher_config
@@ -32,12 +33,14 @@ def claude_skills_dir() -> Path:
 def personal_skill_source_dirs() -> dict[str, Path]:
     return {
         "home": home_skills_dir(),
+        "codex": CODEX_HOME_DIR / "skills",
         "claude": claude_skills_dir(),
     }
 
 
 def auto_link_target_dirs() -> dict[str, Path]:
     return {
+        "home": home_skills_dir(),
         "codex": CODEX_HOME_DIR / "skills",
         "claude": claude_skills_dir(),
     }
@@ -60,13 +63,16 @@ def link_skill_dir(source_dir: Path, target_dir: Path) -> bool:
     points at the source. Raises FileExistsError for a conflicting entry.
     """
     if target_dir.exists() or target_dir.is_symlink():
-        if target_dir.is_symlink() and _same_resolved_path(target_dir, source_dir):
+        if _same_resolved_path(target_dir, source_dir):
             return False
         raise FileExistsError(
             f"Skill '{target_dir.name}' already exists in {target_dir.parent}"
         )
     target_dir.parent.mkdir(parents=True, exist_ok=True)
-    target_dir.symlink_to(source_dir, target_is_directory=True)
+    target_dir.symlink_to(
+        os.path.relpath(source_dir.resolve(), target_dir.parent),
+        target_is_directory=True,
+    )
     return True
 
 

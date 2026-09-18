@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import urlparse
 
 import click
 import httpx
+
+from openbase_coder_cli.config.local_api_token import get_local_api_token
 
 from openbase_coder_cli.config.token_manager import (
     CloudAccessTokenAuth,
@@ -11,6 +14,24 @@ from openbase_coder_cli.config.token_manager import (
 )
 
 DEFAULT_LOCAL_SERVER_URL = "http://127.0.0.1:7999"
+
+
+class LocalInstallationAuth(httpx.Auth):
+    """Use the existing host capability without depending on cloud reachability."""
+
+    def auth_flow(self, request: httpx.Request):
+        request.headers["Authorization"] = f"Bearer {get_local_api_token()}"
+        yield request
+
+
+def server_auth(url: str) -> httpx.Auth:
+    destination = urlparse(url)
+    if destination.scheme in {"http", "https"} and destination.hostname in {
+        "127.0.0.1", "::1", "localhost",
+    }:
+        return LocalInstallationAuth()
+    # Never send this installation's capability to a configured remote server.
+    return CloudAccessTokenAuth(get_token_manager())
 
 
 def local_server_url() -> str:
@@ -25,15 +46,18 @@ def local_server_request(
     path: str,
     *,
     ok_statuses: tuple[int, ...] = (),
+    timeout: float = 10,
     **kwargs,
 ) -> httpx.Response:
     url = f"{local_server_url()}{path}"
+    # A local redirect must not carry an installation capability off this host.
+    kwargs["follow_redirects"] = False
     try:
         response = httpx.request(
             method,
             url,
-            auth=CloudAccessTokenAuth(get_token_manager()),
-            timeout=10,
+            auth=server_auth(url),
+            timeout=timeout,
             **kwargs,
         )
     except httpx.HTTPError as exc:

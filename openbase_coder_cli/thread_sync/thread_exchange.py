@@ -48,6 +48,7 @@ from .thread_sync_common import (
     device_snapshot_dirs,
     file_content_relation,
     find_snapshot_record,
+    prune_exchange_snapshots,
     read_device_ledger,
     record_device_snapshot,
     remove_empty_dir,
@@ -138,6 +139,9 @@ def sync_thread_snapshots_once(
         ledger_path=ledger_path,
         target_user_home=user_home,
     )
+    # Prune after import so every snapshot removed here was offered to the
+    # local importer at least once.
+    prune_exchange_snapshots(exchange_dir, max_age_days=max_age_days)
     return {"exports": exports, "imports": imports}
 
 

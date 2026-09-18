@@ -520,9 +520,7 @@ def _fan_out_peer_payloads(
         except ValueError as exc:
             _mark_peer_failed(peer, exc)
             return None
-        if not isinstance(payload, dict) or not isinstance(
-            payload.get(list_key), list
-        ):
+        if not isinstance(payload, dict) or not isinstance(payload.get(list_key), list):
             return None
         for item in payload[list_key]:
             if isinstance(item, dict):
@@ -577,6 +575,30 @@ def fleet_notifications(
         int(payload.get("unread_count") or 0) for _, payload in payloads
     )
     return {"notifications": notifications[:limit], "unread_count": unread_count}
+
+
+def fleet_routines(local_payload: dict[str, Any]) -> dict[str, Any]:
+    """Routine (loop) lists across the fleet.
+
+    Loops are device-local and name-keyed per device, so this is concat +
+    origin stamp with no dedup; clients edit/delete/run peer loops directly
+    against the stamped origin_host. Ordered by name so devices interleave
+    deterministically (local copy first on a name tie).
+    """
+    payloads = _fan_out_peer_payloads("/api/routines/", list_key="routines")
+    routines = list(local_payload.get("routines") or [])
+    routines.extend(_peer_list_items(payloads, "routines"))
+    routines.sort(
+        key=lambda item: (
+            str(item.get("name") or "").lower(),
+            item.get(ORIGIN_DEVICE_KEY) is not None,
+            str(item.get(ORIGIN_DEVICE_KEY) or ""),
+        )
+    )
+    payload = dict(local_payload)
+    payload["routines"] = routines
+    payload["count"] = len(routines)
+    return payload
 
 
 def fleet_recent_projects(
