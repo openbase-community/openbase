@@ -8,10 +8,13 @@ from collections.abc import Callable
 from livekit.agents import (
     tts as livekit_tts,
 )
-from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+from livekit.agents import APIError
+from livekit.agents.types import APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
 
 from openbase_coder_cli.livekit_agent.config import LIVEKIT_VERBOSE_LOGGING
+from openbase_coder_cli.livekit_agent.speech_playout import bind_interruption
 from openbase_coder_cli.livekit_agent.speech_formatter import format_for_speech
+from openbase_coder_cli.livekit_agent.tts_progress import TTSProgressGuard, TTSStreamStalled
 from openbase_coder_cli.tts_providers import (
     CARTESIA_PROVIDER_ID,
     DEFAULT_CARTESIA_TTS_VOLUME,
@@ -19,6 +22,15 @@ from openbase_coder_cli.tts_providers import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Provider receive timeout is also the maximum gap between audio chunks.
+# The SDK's ten seconds cuts an otherwise live stream under congested links.
+TTS_CONNECT_OPTIONS = APIConnectOptions(timeout=60.0)
+
+
+def tts_connect_options(options):
+    return TTS_CONNECT_OPTIONS if options is DEFAULT_API_CONNECT_OPTIONS else options
+
 
 
 def text_for_tts(text: str) -> str:
@@ -123,7 +135,7 @@ class VoiceSelectingTTS(livekit_tts.TTS):
         )
         return self._tts_for_voice(voice_id).synthesize(
             spoken_text,
-            conn_options=conn_options,
+            conn_options=tts_connect_options(conn_options),
         )
 
     def stream(
@@ -131,20 +143,26 @@ class VoiceSelectingTTS(livekit_tts.TTS):
         *,
         conn_options=DEFAULT_API_CONNECT_OPTIONS,
     ):
-        voice_id = self._active_voice_id()
+        return self.stream_for_voice(self._active_voice_id(), conn_options=conn_options)
+
+    def stream_for_voice(self, voice_id: str | None, *, conn_options=DEFAULT_API_CONNECT_OPTIONS):
+        """Keep explicit background voices on the same provider policy and diagnostics."""
         resolved_voice_id = self.resolve_voice_id(voice_id)
+        effective_options = tts_connect_options(conn_options)
         logger.info(
             "dispatch_timing stage=tts_stream_start role=%s requested_voice_id=%s "
-            "resolved_voice_id=%s voice_name=%s conn_options=%s",
+            "resolved_voice_id=%s voice_name=%s conn_options=%s timeout_seconds=%s max_retry=%s",
             self._role,
             voice_id or "",
             resolved_voice_id,
             self._voice_name_for_id(resolved_voice_id) or "",
             type(conn_options).__name__,
+            effective_options.timeout,
+            effective_options.max_retry,
         )
         return SpeechFormattingSynthesizeStream(
             self._tts_for_voice(resolved_voice_id).stream(
-                conn_options=conn_options,
+                conn_options=effective_options,
             ),
             role=self._role,
             voice_id=resolved_voice_id,
@@ -295,8 +313,11 @@ class SpeechFormattingSynthesizeStream:
         self._non_audio_event_count = 0
         self._flushed_text_monotonic: float | None = None
         self._audio_seconds = 0.0
+        self._last_audio_event_monotonic = None
+        self._max_audio_event_gap_ms = 0.0
         self._delivery_ledger = delivery_ledger
         self._delivery_record = None
+        self._progress = TTSProgressGuard()
 
     def push_text(self, token: str) -> None:
         self._buffer += token
@@ -345,12 +366,14 @@ class SpeechFormattingSynthesizeStream:
                     self._delivery_record = self._delivery_ledger.track_unmatched_tts(
                         tts_text=final_text,
                     )
+                bind_interruption(self._delivery_ledger, self._delivery_record)
             suppress_stale = (
                 self._delivery_record is not None
                 and getattr(self._delivery_record, "status", "") == "suppressed_stale"
             )
             if not suppress_stale:
                 self._stream.push_text(final_text)
+                self._progress.submitted()
             self._buffer = ""
             if self._flushed_text_monotonic is None:
                 self._flushed_text_monotonic = time.monotonic()
@@ -395,7 +418,7 @@ class SpeechFormattingSynthesizeStream:
         logger.info(
             "dispatch_timing stage=tts_stream_close role=%s voice_id=%s "
             "voice_name=%s flush_count=%d audio_events=%d non_audio_events=%d "
-            "audio_seconds=%.2f had_flushed_text=%s",
+            "audio_seconds=%.2f had_flushed_text=%s max_audio_event_gap_ms=%.1f",
             self._role,
             self._voice_id or "",
             self._voice_name or "",
@@ -404,6 +427,7 @@ class SpeechFormattingSynthesizeStream:
             self._non_audio_event_count,
             self._audio_seconds,
             self._flushed_text_monotonic is not None,
+            self._max_audio_event_gap_ms,
         )
         await self._stream.aclose()
 
@@ -412,18 +436,31 @@ class SpeechFormattingSynthesizeStream:
 
     async def __anext__(self):
         try:
-            event = await self._stream.__anext__()
+            event = await self._progress.next_event(self._stream)
+        except APIError as error:
+            reason = "tts_stream_stalled" if isinstance(error, TTSStreamStalled) else None
+            if reason:
+                logger.warning("dispatch_timing stage=tts_stream_stalled role=%s audio_events=%d audio_seconds=%.2f",
+                    self._role, self._audio_event_count, self._audio_seconds)
+            if self._delivery_ledger is not None and self._delivery_record is not None:
+                self._delivery_ledger.mark_tts_failed(
+                    self._delivery_record, audio_events=self._audio_event_count,
+                    audio_seconds=self._audio_seconds,
+                    reason=reason,
+                )
+            raise
         except StopAsyncIteration:
             logger.info(
                 "dispatch_timing stage=tts_stream_iter_end role=%s voice_id=%s "
                 "voice_name=%s audio_events=%d non_audio_events=%d "
-                "audio_seconds=%.2f",
+                "audio_seconds=%.2f max_audio_event_gap_ms=%.1f",
                 self._role,
                 self._voice_id or "",
                 self._voice_name or "",
                 self._audio_event_count,
                 self._non_audio_event_count,
                 self._audio_seconds,
+                self._max_audio_event_gap_ms,
             )
             if self._delivery_ledger is not None and self._delivery_record is not None:
                 self._delivery_ledger.mark_tts_completed(
@@ -437,14 +474,29 @@ class SpeechFormattingSynthesizeStream:
             raise
         frame = getattr(event, "frame", None)
         if frame is not None:
+            now = time.monotonic()
+            if self._last_audio_event_monotonic is not None:
+                gap_ms = (now - self._last_audio_event_monotonic) * 1000
+                self._max_audio_event_gap_ms = max(self._max_audio_event_gap_ms, gap_ms)
+                if gap_ms >= 1000:
+                    logger.info("dispatch_timing stage=tts_stream_audio_gap role=%s voice_id=%s "
+                        "audio_event_count=%d gap_ms=%.1f", self._role, self._voice_id or "",
+                        self._audio_event_count + 1, gap_ms)
+            self._last_audio_event_monotonic = now
             self._audio_event_count += 1
             sample_rate = getattr(frame, "sample_rate", 0)
             samples_per_channel = getattr(frame, "samples_per_channel", 0)
-            if sample_rate:
-                self._audio_seconds += samples_per_channel / sample_rate
+            if sample_rate and samples_per_channel > 0:
+                self._progress.audio_received()
+                duration = samples_per_channel / sample_rate
+                self._audio_seconds += duration
+                if self._delivery_ledger is not None and self._delivery_record is not None:
+                    self._delivery_ledger.mark_audio_frame_queued(
+                        self._delivery_record, audio_seconds=duration, queued_at=now,
+                    )
             if self._audio_event_count == 1:
                 latency_ms = (
-                    int((time.monotonic() - self._flushed_text_monotonic) * 1000)
+                    int((now - self._flushed_text_monotonic) * 1000)
                     if self._flushed_text_monotonic is not None
                     else -1
                 )

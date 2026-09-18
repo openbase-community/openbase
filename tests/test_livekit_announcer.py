@@ -73,6 +73,31 @@ class FakeLiveKitClient:
         self.closed = True
 
 
+@pytest.mark.parametrize('audio_file', [False, True])
+def test_retry_after_delivery_loses_ack_but_keeps_message_identity(monkeypatch, audio_file):
+    import aiohttp
+    from openbase_coder_cli import livekit_announcer
+    participants = {'room-retry': [
+        _participant('agent', kind=livekit_api.ParticipantInfo.Kind.AGENT),
+        _participant('user', kind=livekit_api.ParticipantInfo.Kind.STANDARD)]}
+    first = FakeLiveKitClient([_room('room-retry', 100)], participants)
+    second = FakeLiveKitClient([_room('room-retry', 100)], participants)
+    original_send = first.room.send_data
+    async def delivered_without_ack(request):
+        await original_send(request)
+        raise aiohttp.ServerDisconnectedError('simulated lost acknowledgment after delivery')
+    first.room.send_data = delivered_without_ack
+    clients = [first, second]
+    monkeypatch.setattr(livekit_announcer, '_build_livekit_client', lambda: clients.pop(0))
+    result = asyncio.run(publish_announcer_audio_file('controlled.wav') if audio_file
+        else publish_announcer_message('A controlled announcement.'))
+    payloads = [json.loads(request.data) for request in first.room.sent + second.room.sent]
+    assert len(payloads) == 2
+    assert payloads[0] == payloads[1]
+    assert payloads[0]['message_id'] == result.message_id
+    assert first.closed and second.closed
+
+
 def _room(name: str, created: int, participants: int = 2):
     return SimpleNamespace(
         name=name,
@@ -84,6 +109,46 @@ def _room(name: str, created: int, participants: int = 2):
 
 def _participant(identity: str, *, kind, state=livekit_api.ParticipantInfo.State.ACTIVE):
     return SimpleNamespace(identity=identity, kind=kind, state=state)
+
+
+def test_watchdog_preserves_speaking_agent_while_phone_reconnects(monkeypatch):
+    from openbase_coder_cli import livekit_announcer
+    from openbase_coder_cli.services import livekit_pool_watchdog as watchdog
+    client = FakeLiveKitClient([_room('retained', 100, participants=1)], {'retained': [
+        _participant('agent-speaking', kind=livekit_api.ParticipantInfo.Kind.AGENT)]})
+    monkeypatch.setattr(livekit_announcer, '_build_livekit_client', lambda: client)
+    # Ordinary automatic announcement selection still requires a present user.
+    assert not asyncio.run(livekit_announcer.active_voice_room_exists())
+    bounces = []
+    monkeypatch.setattr(watchdog, '_execute_bounce', lambda services: bounces.append(services))
+    assert not watchdog._bounce_idle({'baseline_ts': 1}, watchdog.IDLE_RECYCLE_SECONDS + 2)
+    assert not bounces
+    assert client.closed
+
+
+def test_watchdog_can_recycle_room_without_a_connected_agent(monkeypatch):
+    from openbase_coder_cli import livekit_announcer
+    from openbase_coder_cli.services import livekit_pool_watchdog as watchdog
+    client = FakeLiveKitClient([_room('retained', 100, participants=1)], {'retained': [
+        _participant('agent-gone', kind=livekit_api.ParticipantInfo.Kind.AGENT,
+            state=livekit_api.ParticipantInfo.State.DISCONNECTED)]})
+    monkeypatch.setattr(livekit_announcer, '_build_livekit_client', lambda: client)
+    bounces = []
+    monkeypatch.setattr(watchdog, '_execute_bounce', lambda services: bounces.append(services))
+    assert watchdog._bounce_idle({'baseline_ts': 1}, watchdog.IDLE_RECYCLE_SECONDS + 2)
+    assert bounces == [('livekit-agent',)]
+
+
+def test_watchdog_room_query_failure_cannot_authorize_worker_restart(monkeypatch):
+    from openbase_coder_cli import livekit_announcer
+    from openbase_coder_cli.services import livekit_pool_watchdog as watchdog
+    async def unavailable(**kwargs):
+        raise ConnectionError('Local room query unavailable')
+    monkeypatch.setattr(livekit_announcer, 'active_voice_room_exists', unavailable)
+    bounces = []
+    monkeypatch.setattr(watchdog, '_execute_bounce', lambda services: bounces.append(services))
+    assert not watchdog._bounce_idle({'baseline_ts': 1}, watchdog.IDLE_RECYCLE_SECONDS + 2)
+    assert not bounces
 
 
 def test_publish_announcer_message_selects_latest_active_room(tmp_path, monkeypatch, caplog):

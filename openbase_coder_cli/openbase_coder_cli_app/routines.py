@@ -13,6 +13,11 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from openbase_coder_cli.openbase_coder_cli_app.common import _clean_serializer_data
+from openbase_coder_cli.services.fleet_aggregation import (
+    FLEET_SCOPE_PARAM,
+    FLEET_SCOPE_VALUE,
+    fleet_routines,
+)
 from openbase_coder_cli.thread_sync.session_manager import get_session_manager
 
 # Never hand inbound credentials to the delivery layer; the capability token
@@ -259,6 +264,10 @@ def routines_list(request):
         return Response(result, status=status.HTTP_201_CREATED)
 
     routines = async_to_sync(manager.list_routines)()
+    if request.query_params.get(FLEET_SCOPE_PARAM) == FLEET_SCOPE_VALUE:
+        # Loops are device-local; peer items carry origin_host and clients
+        # edit/delete/run them directly on the owning device.
+        routines = fleet_routines(routines)
     return Response(routines, status=status.HTTP_200_OK)
 
 

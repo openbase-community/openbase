@@ -28,6 +28,12 @@ class ServiceDefinition:
     keep_alive: bool = True
     # Services that must restart after this service to reconnect cleanly.
     restart_dependents: tuple[str, ...] = ()
+    # Provenance of code loaded by this service, not every sibling repository.
+    freshness_kind: str = "python"
+    freshness_packages: tuple[tuple[str, str], ...] = (
+        ("cli", "openbase_coder_cli"),
+        ("super-agents", "super_agents"),
+    )
 
     def supports_backend(self, coding_backend: str) -> bool:
         return self.backends is None or coding_backend in self.backends
@@ -36,6 +42,8 @@ class ServiceDefinition:
 SERVICES: list[ServiceDefinition] = [
     ServiceDefinition(
         name="livekit-server",
+        freshness_kind="binary",
+        freshness_packages=(),
         description="LiveKit Server",
         command_template="livekit-server",
         workdir_template="{workspace}",
@@ -46,6 +54,8 @@ SERVICES: list[ServiceDefinition] = [
     ),
     ServiceDefinition(
         name="codex-app-server",
+        freshness_kind="binary",
+        freshness_packages=(),
         description="Codex App Server",
         command_template="codex-app-server",
         workdir_template="{workspace}",
@@ -87,6 +97,8 @@ SERVICES: list[ServiceDefinition] = [
     ),
     ServiceDefinition(
         name="code-sync",
+        freshness_kind="binary",
+        freshness_packages=(),
         description="Code Sync (managed Syncthing)",
         command_template="code-sync",
         workdir_template="{data_dir}",
@@ -116,6 +128,8 @@ SERVICES: list[ServiceDefinition] = [
     ),
     ServiceDefinition(
         name="openbase-tunneld",
+        freshness_kind="build",
+        freshness_packages=(),
         description="Openbase Tunneld (embedded tailnet, no VPN)",
         command_template="openbase-tunneld",
         workdir_template="{data_dir}",

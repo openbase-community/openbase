@@ -125,9 +125,11 @@ Call tab is where you actually speak to it. See
 ### Approvals
 
 Pending permission requests from running agents (commands, tool calls) with
-Accept and Decline buttons. The page receives authenticated live snapshots
-from the local approval queue and falls back to 5-second HTTP refreshes when
-the WebSocket is unavailable.
+Accept and Decline buttons. The queue covers every computer you're signed in
+on: requests pending on another desktop appear with a device chip, and
+answering one goes directly to that computer. The page receives
+authenticated live snapshots from the local approval queue and refreshes the
+fleet-wide list every 5 seconds.
 
 **On iPhone:** the Approvals tab shows the same queue with approve/deny
 buttons, and approval push notifications deep-link straight to it — so you
@@ -140,6 +142,11 @@ command (command kind), a daily time + timezone or an interval in seconds, an
 optional target thread (or a fresh thread per run), working directory, model,
 and reasoning effort. Routines show their last run status and next run time,
 and can be edited, disabled, run immediately, or deleted.
+
+The Loops list shows loops from every computer you're signed in on: a loop
+that lives on another desktop appears with a device chip, and editing,
+running, or deleting it acts directly on that computer. Creating a loop
+always targets the computer serving the page you're on.
 
 The Templates tab is browse-only. It shows prompts, commands, schedules, and
 required skills from the managed registry, but never creates or schedules a
@@ -159,9 +166,12 @@ and the selected agent homes; installation never runs catalog dependencies or
 scripts. Existing skills with the same name are treated as conflicts rather
 than overwritten.
 
-You can also edit installed skill sources and enable auto-linking of personal
-skills (`~/.agents/skills`, the `home` scope) into the shared agent homes at
-`~/.codex/skills` and `~/.claude/skills`.
+You can edit installed skill sources here. The **Skill settings** link jumps directly to **Settings → Agents → Skills**, where sharing controls live:
+
+- **Symlink my skills across backends (Codex/Claude Code)** adds missing links between the personal, Codex, and Claude Code skill directories. Existing files and conflicting links are never replaced. Turning it off stops new automatic links and preserves existing links.
+- **Sync my skills across devices** shares `~/.agents/skills` and linked skill-source folders under your home directory through device sync. Turning it off removes only the personal skill-folder share and source-folder shares added by this setting; files and independently configured folder shares remain. An explicit off preference prevents peers from re-enabling these shares. Enabling requires a second paired computer when device sync is not already enabled. Existing personal skill-folder shares appear as enabled.
+
+These two settings are independent and initially off on a fresh installation. Plugin caches and backend credentials are not included.
 
 **On iPhone:** skills are not managed from the iOS app.
 
@@ -178,8 +188,7 @@ Codex per-thread memories are read-only.
 
 ### Templates
 
-BoilerSync project templates. Browse templates by source repository, inspect
-a template's fields (variables and options), and scaffold projects from them.
+BoilerSync project templates. Import the featured Openbase community templates or add any public GitHub template repository, remove local repository checkouts, browse templates by source, and inspect a template's fields (variables and options). The featured repository is optional: dismiss its suggestion on the Templates page, or restore the suggestion under Settings → Interface.
 
 **On iPhone:** not available; templates are tied to the local filesystem.
 

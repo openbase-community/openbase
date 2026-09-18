@@ -109,6 +109,8 @@ def test_warm_livekit_dispatcher_uses_configured_super_agents_client(
     tmp_path: Path, monkeypatch
 ):
     calls = []
+    from openbase_coder_cli import dispatcher_instructions
+    monkeypatch.setattr(dispatcher_instructions, "canonical_dispatcher_skill", lambda: "Canonical routing procedure")
     instruction_path = tmp_path / "dispatcher.md"
     instruction_path.write_text(
         "dispatcher says random fruit is persimmon\n", encoding="utf-8"
@@ -148,7 +150,7 @@ def test_warm_livekit_dispatcher_uses_configured_super_agents_client(
     assert init_kwargs["state_path"] == str(tmp_path / "route.json")
     assert (
         init_kwargs["developer_instructions"]
-        == "dispatcher says random fruit is persimmon"
+        == dispatcher_instructions.with_dispatcher_skill("dispatcher says random fruit is persimmon")
     )
     assert init_kwargs["fresh_thread"] is False
     assert calls[1:] == [("prepare", {}), ("close", {})]
@@ -398,6 +400,27 @@ def test_direct_livekit_instruction_loader_priority(tmp_path: Path):
         )
         == DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS
     )
+
+
+def test_direct_instruction_loader_refreshes_managed_file_before_reading(tmp_path: Path, monkeypatch):
+    managed = tmp_path / "VOICE_INSTRUCTIONS.md"
+    managed.write_text("stale generated instructions")
+    monkeypatch.setattr(voice_route, "CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH", managed)
+    def refresh():
+        managed.write_text("current managed instructions")
+        return True
+    monkeypatch.setattr(voice_route, "refresh_openbase_instruction_files_from_installation", refresh)
+    assert load_direct_livekit_developer_instructions(env={}) == "current managed instructions"
+
+
+def test_direct_instruction_explicit_override_does_not_refresh_managed_files(tmp_path: Path, monkeypatch):
+    explicit = tmp_path / "custom.md"
+    explicit.write_text("custom instructions")
+    def unexpected_refresh():
+        raise AssertionError("Explicit instruction override must remain independent of managed defaults")
+    monkeypatch.setattr(voice_route, "refresh_openbase_instruction_files_from_installation", unexpected_refresh)
+    assert load_direct_livekit_developer_instructions(
+        env={DIRECT_LIVEKIT_INSTRUCTIONS_PATH_ENV: str(explicit)}) == "custom instructions"
 
 
 def test_transfer_to_thread_prepares_then_publishes(tmp_path: Path, monkeypatch):

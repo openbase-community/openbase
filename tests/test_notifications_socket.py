@@ -109,12 +109,6 @@ async def test_notification_store_watcher_broadcasts_file_changes(
                 changed.set()
 
     monkeypatch.setattr("channels.layers.get_channel_layer", lambda: ChannelLayer())
-    # Keep the sweep inert so the watcher's tick loop can't hit real state.
-    monkeypatch.setattr(
-        "openbase_coder_cli.openbase_coder_cli_app.notification_producers."
-        "sync_notification_producers",
-        lambda force=False: None,
-    )
     watcher = consumers._NotificationStoreWatcher()
     watcher.acquire()
     try:

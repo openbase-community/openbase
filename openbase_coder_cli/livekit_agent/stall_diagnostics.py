@@ -63,6 +63,12 @@ PROTECTED_FOLDERS = ("Desktop", "Documents", "Downloads")
 _PROTECTED_FOLDER_RE = re.compile(
     r"(?:^|[\s/~'\"=])(" + "|".join(PROTECTED_FOLDERS) + r")(?:$|[/\s'\"])"
 )
+# A package command can legitimately spend minutes fetching or compiling after
+# successfully entering Desktop. A path in its command is not evidence that
+# filesystem consent is blocking it. Keep the independent presenter signal.
+_PACKAGE_WORK_RE = re.compile(
+    r"(?:^|[;&|])\s*(?:npm|npx|pnpm|yarn|bun|uv|pip3?|cargo|go)\s"
+)
 #: A running turn must be stalled at least this long before its in-flight
 #: protected-folder access is treated as a likely permission block (rather than
 #: ordinary in-progress work), so brief legitimate accesses never trigger a
@@ -267,12 +273,15 @@ def diagnose(
     thread_id: str,
 ) -> StallDiagnosis:
     tool, command = in_flight_tool_call(thread_id)
+    folder = protected_folder_in_command(command)
+    if command and _PACKAGE_WORK_RE.search(command):
+        folder = None
     return StallDiagnosis(
         elapsed_seconds=elapsed_seconds,
         blocking_dialog_process=dialog_presenter_started_after(turn_started_at),
         in_flight_tool=tool,
         in_flight_command=command,
-        protected_folder=protected_folder_in_command(command),
+        protected_folder=folder,
     )
 
 

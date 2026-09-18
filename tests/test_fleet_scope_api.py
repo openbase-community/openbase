@@ -150,14 +150,40 @@ def test_approvals_fleet_scope_merges(monkeypatch):
     assert [r["id"] for r in fleet.data["requests"]] == ["l1", "p1"]
 
 
+def test_routines_fleet_scope_merges(monkeypatch):
+    from openbase_coder_cli.openbase_coder_cli_app import routines as routine_views
+
+    class FakeManager:
+        async def list_routines(self):
+            return {"routines": [{"name": "local-loop"}], "count": 1}
+
+    monkeypatch.setattr(routine_views, "get_session_manager", FakeManager)
+    monkeypatch.setattr(
+        routine_views,
+        "fleet_routines",
+        lambda payload: {
+            "routines": [
+                *payload["routines"],
+                {"name": "peer-loop", "origin_device": "mini"},
+            ],
+            "count": 2,
+        },
+    )
+
+    plain = _get("/api/routines/", routine_views.routines_list)
+    fleet = _get("/api/routines/?scope=fleet", routine_views.routines_list)
+
+    assert [r["name"] for r in plain.data["routines"]] == ["local-loop"]
+    assert [r["name"] for r in fleet.data["routines"]] == ["local-loop", "peer-loop"]
+    assert fleet.data["routines"][1]["origin_device"] == "mini"
+
+
 def test_notifications_fleet_scope_merges(monkeypatch):
     from openbase_coder_cli.openbase_coder_cli_app import (
         notifications as notification_views,
     )
 
-    monkeypatch.setattr(
-        notification_views, "sync_notification_producers", lambda: None
-    )
+    monkeypatch.setattr(notification_views, "sync_notification_producers", lambda: None)
     monkeypatch.setattr(
         notification_views.notification_store,
         "list_notifications",

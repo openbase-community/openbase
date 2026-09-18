@@ -92,10 +92,12 @@ async def publish_announcer_message(
     livekit_client: livekit_api.LiveKitAPI | None = None,
 ) -> AnnouncerPublishResult:
     normalized_text = validate_announcer_text(text)
+    message_id = f"announcer-{uuid.uuid4().hex}"
 
     async def operation(client) -> AnnouncerPublishResult:
         return await _publish_announcer_message_with(
-            client, normalized_text, room_name=room_name, voice_id=voice_id
+            client, normalized_text, room_name=room_name, voice_id=voice_id,
+            message_id=message_id,
         )
 
     return await _run_with_livekit_client(operation, livekit_client)
@@ -107,6 +109,7 @@ async def _publish_announcer_message_with(
     *,
     room_name: str | None,
     voice_id: str | None,
+    message_id: str,
 ) -> AnnouncerPublishResult:
     import livekit.api as livekit_api
 
@@ -117,7 +120,6 @@ async def _publish_announcer_message_with(
         len(normalized_text),
     )
     target = await _resolve_target_room(client, room_name=room_name)
-    message_id = f"announcer-{uuid.uuid4().hex}"
     logger.info(
         "dispatch_timing stage=announcer_target_resolved message_id=%s "
         "room_name=%s agent_count=%d elapsed_ms=%d",
@@ -167,10 +169,11 @@ async def publish_announcer_audio_file(
     normalized_path = str(audio_path).strip()
     if not normalized_path:
         raise AnnouncerValidationError("audio_path is required")
+    message_id = f"announcer-audio-{uuid.uuid4().hex}"
 
     async def operation(client) -> AnnouncerPublishResult:
         return await _publish_announcer_audio_file_with(
-            client, normalized_path, room_name=room_name
+            client, normalized_path, room_name=room_name, message_id=message_id,
         )
 
     return await _run_with_livekit_client(operation, livekit_client)
@@ -181,6 +184,7 @@ async def _publish_announcer_audio_file_with(
     normalized_path: str,
     *,
     room_name: str | None,
+    message_id: str,
 ) -> AnnouncerPublishResult:
     import livekit.api as livekit_api
 
@@ -190,7 +194,6 @@ async def _publish_announcer_audio_file_with(
         room_name or "",
     )
     target = await _resolve_target_room(client, room_name=room_name)
-    message_id = f"announcer-audio-{uuid.uuid4().hex}"
     payload = {
         "kind": AUDIO_PLAYBACK_KIND,
         "message_id": message_id,
@@ -256,12 +259,13 @@ class _TargetRoom:
     agent_identities: tuple[str, ...]
 
 
-async def active_voice_room_exists() -> bool:
-    """True when a live voice session (agent + user in a room) is active."""
+async def active_voice_room_exists(*, include_agent_only_rooms: bool = False) -> bool:
+    """Detect active calls, optionally retaining an agent while its user reconnects."""
 
     async def operation(client) -> bool:
         try:
-            await _resolve_target_room(client, room_name=None)
+            await _resolve_target_room(client, room_name=None,
+                require_user=not include_agent_only_rooms)
         except NoActiveLiveKitRoomError:
             return False
         return True
@@ -307,6 +311,7 @@ async def _resolve_target_room(
     client: livekit_api.LiveKitAPI,
     *,
     room_name: str | None,
+    require_user: bool = True,
 ) -> _TargetRoom:
     import livekit.api as livekit_api
 
@@ -339,7 +344,7 @@ async def _resolve_target_room(
             _is_active_standard_participant(p)
             for p in participant_response.participants
         )
-        if agent_identities and has_user:
+        if agent_identities and (has_user or not require_user):
             return _TargetRoom(
                 room_name=room.name,
                 agent_identities=agent_identities,

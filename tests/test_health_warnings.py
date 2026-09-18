@@ -242,3 +242,28 @@ def test_thread_exchange_warnings(monkeypatch, tmp_path) -> None:
     )
     (devices / "them-uuid").rmdir()
     assert hw._thread_exchange_warnings() == []
+
+
+def test_freshness_handshake_is_opt_in_and_passes_loaded_stamp(monkeypatch):
+    from types import SimpleNamespace
+
+    from rest_framework.test import APIRequestFactory, force_authenticate
+
+    calls = []
+    monkeypatch.setattr(hw, "collect_warnings_cached", lambda: [])
+    monkeypatch.setattr(
+        "openbase_coder_cli.services.freshness.collector.collect_freshness",
+        lambda client: calls.append(client) or {"enabled": True, "components": []},
+    )
+    factory = APIRequestFactory()
+    request = factory.get("/api/health/warnings/")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+    assert hw.health_warnings(request).data == {"warnings": []}
+    assert calls == []
+    body = {"component": "desktop", "build": {"schema_version": 1}}
+    request = factory.post("/api/health/warnings/", body, format="json")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+    response = hw.health_warnings(request)
+    assert response.status_code == 200
+    assert response.data["freshness"]["enabled"] is True
+    assert calls == [body]

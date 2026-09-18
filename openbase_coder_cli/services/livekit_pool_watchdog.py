@@ -84,17 +84,17 @@ def _env_float(name: str, default: float) -> float:
 
 
 def _voice_session_active() -> bool:
-    """True while a voice room exists; indeterminate (no creds / livekit down)
-    counts as no session. Mirrors self_update._voice_session_active so the
-    guard is identical without importing that private helper."""
+    """Protect retained agent rooms and defer when inactivity cannot be proven."""
     import asyncio
 
     from openbase_coder_cli.livekit_announcer import active_voice_room_exists
 
     try:
-        return asyncio.run(active_voice_room_exists())
+        return asyncio.run(active_voice_room_exists(include_agent_only_rooms=True))
     except Exception:
-        return False
+        # A failed room query cannot authorize killing a possibly speaking worker.
+        logger.warning("livekit_pool_watchdog deferred voice_room_query_unavailable")
+        return True
 
 
 def _agent_service_running() -> bool:

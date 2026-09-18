@@ -200,6 +200,7 @@ from openbase_coder_cli.livekit_agent.vad_backlog_patch import (
     set_vad_backlog_listener,
 )
 from openbase_coder_cli.livekit_agent.voice_delivery import VoiceDeliveryLedger
+from openbase_coder_cli.livekit_agent.provider_recovery import voice_connect_options
 from openbase_coder_cli.livekit_agent.voice_routing import (
     LiveKitVoiceRouter,
     _transfer_voice_route,
@@ -811,6 +812,7 @@ async def _start_voice_session(
 
     # Set up a voice AI pipeline
     session = AgentSession(
+        conn_options=voice_connect_options(),
         stt=_build_stt(session_vad),
         llm=CodexLiveKitLLM(
             voice_router,
@@ -920,6 +922,11 @@ async def livekit_agent(ctx: JobContext):
             old_state=str(getattr(event, "old_state", "") or ""),
         )
 
+    def on_final_transcript_for_mute(event) -> None:
+        if getattr(event, "is_final", False) and str(getattr(event, "transcript", "") or "").strip():
+            delivery_ledger.notify_final_transcript()
+
+    session.on("user_input_transcribed", on_final_transcript_for_mute)
     session.on("user_state_changed", on_user_state_changed_for_mute)
     set_vad_backlog_listener(delivery_ledger.notify_vad_gap)
 
@@ -932,6 +939,14 @@ async def livekit_agent(ctx: JobContext):
     announcer_queue = AnnouncerSpeechQueue(
         session=session,
         announcer_tts=announcer_tts,
+        delivery_ledger=delivery_ledger,
+    )
+    from .transcription_notice import TranscriptionTimeoutNotice
+
+    transcription_notice = TranscriptionTimeoutNotice(announcer_queue)
+    delivery_ledger.set_transcript_timeout_sink(transcription_notice.timed_out)
+    delivery_ledger.set_announcement_pending_provider(
+        announcer_queue.has_pending_announcements
     )
 
     announcer_queue_session_handlers = (
@@ -1040,8 +1055,10 @@ async def livekit_agent(ctx: JobContext):
             session.off(event_name, handler)
         for event_name, handler in announcer_queue_session_handlers:
             session.off(event_name, handler)
+        session.off("user_input_transcribed", on_final_transcript_for_mute)
         session.off("user_state_changed", on_user_state_changed_for_mute)
         set_vad_backlog_listener(None)
+        delivery_ledger.set_transcript_timeout_sink(None)
         await announcer_queue.close()
         await voice_router.close()
 

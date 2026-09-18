@@ -95,7 +95,7 @@ fingerprints side by side. Device conflicts offer **Keep Local** and
 
 ## Approvals
 
-Pending permission requests from running agents, with approve/deny buttons and 5-second auto-refresh. The iPhone app polls for requests and generates local alerts for newly detected requests. These alerts open the Approvals screen; they are not cloud push notifications and cannot detect new requests while the app is suspended or stopped. The initial load populates the list without alerting for existing requests.
+Pending permission requests from running agents, with approve/deny buttons and 5-second auto-refresh. The runtime creates notification feed entries for pending approvals and submits cloud pushes independently of the iPhone app. Approval alerts open the Approvals screen. The app also supports local alerts; see [Push Notifications](#push-notifications) for delivery requirements.
 
 ## Reports
 
@@ -144,10 +144,11 @@ Diagnostics are separate from product analytics. The app keeps up to 1,000 recen
 
 ## Push Notifications
 
-There are two notification delivery paths:
+Notifications arrive through cloud push or local app alerts:
 
 - **Cloud push for agent announcements:** when `openbase-coder user say` finds no active voice room, the CLI submits the announcement to the authenticated Openbase Cloud endpoint. A cloud worker sends an Apple Push Notification service (APNs) alert to the account's registered iPhone token. After registration, this path does not require the iPhone app to be open. Cloud acceptance means the request was queued, not that Apple accepted it or the phone displayed it.
-- **App-generated alerts for approvals, reports, and sync conflicts:** monitors in the iPhone app poll the selected runtime and schedule local notifications. They cannot detect new events while iOS suspends the app or the app is stopped. These monitors do not provide cloud push delivery.
+- **Notification feed alerts:** the running Openbase API server discovers reports, approvals, and sync conflicts at startup and every 30 seconds, and reconciles them after thread turns finish. New feed notifications are submitted to Openbase Cloud for push delivery, including reports written by agent threads. The server must remain running, but no phone, desktop, or web client needs to be connected. When report tracking is first initialized, existing reports are baselined without alerts. Manual-thread completions also submit cloud pushes.
+- **App-generated alerts:** the iPhone also polls the notification feed and can schedule local alerts. This polling only runs while iOS permits the app to run; it is not required for server-side discovery or cloud push submission.
 
 Opening the signed-in app requests or retries remote-notification registration. This registration step is distinct from receiving later APNs alerts. Notification permission, a valid registered token, and successful cloud/APNs delivery are required for cloud alerts; presentation remains subject to iOS notification settings.
 

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import platform
+import shutil
 import tempfile
 import time
 import uuid
@@ -29,7 +31,9 @@ SUPER_AGENTS_STORE_HOME_ENV = "SUPER_AGENTS_CLAUDE_CODE_HOME"
 # signature, so unchanged invalid snapshots are not re-parsed every sweep.
 INVALID_SNAPSHOT_CACHE_KEY = "invalid_snapshots"
 
-
+# Newest exchange fingerprints preserved per entity when pruning, so recent
+# parent chains stay available for conflict resolution.
+KEEP_LATEST_SNAPSHOTS_PER_ENTITY = 3
 
 
 def translate_home_path(
@@ -139,10 +143,6 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
         tmp.write(body)
         tmp_name = tmp.name
     os.replace(tmp_name, path)
-
-
-
-
 
 
 def read_device_ledger(
@@ -306,14 +306,6 @@ def parent_fingerprint_for_export(
     if not isinstance(parent, str):
         return None
     return parent if parent and parent != fingerprint_id else None
-
-
-
-
-
-
-
-
 
 
 def sync_cutoff_ms(max_age_days: int | None) -> int | None:
@@ -554,6 +546,71 @@ def _snapshot_exported_at(snapshot_dir: Path) -> float:
         return 0.0
     value = raw.get("exported_at") if isinstance(raw, dict) else None
     return float(value) if isinstance(value, int | float) else 0.0
+
+
+def _snapshot_prune_timestamp(snapshot_dir: Path) -> float:
+    exported_at = _snapshot_exported_at(snapshot_dir)
+    if exported_at > 0:
+        return exported_at
+    try:
+        return snapshot_dir.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def prune_exchange_snapshots(
+    exchange_dir: Path,
+    *,
+    max_age_days: int | None,
+    keep_latest: int = KEEP_LATEST_SNAPSHOTS_PER_ENTITY,
+) -> int:
+    """Delete exchange snapshots that no device will import again.
+
+    Exports never clean up after themselves, so every fingerprint of every
+    thread accumulates in the (Syncthing-shared) exchange forever. Remove a
+    snapshot once it is older than the export window — the exporter already
+    skips such threads as ``skipped_old`` — or once ``keep_latest`` newer
+    fingerprints of the same entity supersede it. The newest fingerprints are
+    retained even within the window so conflict resolution keeps its recent
+    parent chain. Returns the number of snapshot directories removed.
+    """
+    if max_age_days is None:
+        return 0
+    cutoff = sync_cutoff_ms(max_age_days) / 1000
+    root = exchange_dir / "devices"
+    if not root.is_dir():
+        return 0
+    removed = 0
+    for entity_dir in sorted(root.glob("*/snapshots/*")):
+        if not entity_dir.is_dir():
+            continue
+        snapshots = sorted(
+            (
+                path
+                for path in entity_dir.iterdir()
+                # A directory without metadata may still be materializing.
+                if path.is_dir() and (path / "metadata.json").exists()
+            ),
+            key=_snapshot_prune_timestamp,
+            reverse=True,
+        )
+        for index, snapshot_dir in enumerate(snapshots):
+            if (
+                index < keep_latest
+                and _snapshot_prune_timestamp(snapshot_dir) >= cutoff
+            ):
+                continue
+            shutil.rmtree(snapshot_dir, ignore_errors=True)
+            removed += 1
+        with contextlib.suppress(OSError):
+            entity_dir.rmdir()
+    if removed:
+        logger.info(
+            "thread_sync event=prune_exchange removed=%d exchange_dir=%s",
+            removed,
+            exchange_dir,
+        )
+    return removed
 
 
 def _import_one_snapshot(

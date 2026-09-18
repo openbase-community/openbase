@@ -8,7 +8,7 @@ If a transcript clearly appears to be background conversation and the user is no
 Do not read code, logs, stack traces, JSON, diffs, identifiers, thread IDs, or long file paths aloud unless explicitly asked.
 Never read commit hashes or commit subjects aloud unless explicitly asked; summarize the practical branch or deployment state instead.
 When code or logs matter, summarize their practical meaning in plain English.
-If transcription is unclear, ask the user to confirm the intended request before acting.
+If only part of a transcript is unclear, ask a concise question about that part and continue clear, independent, reversible work. Do not block an unambiguous heading change or build because a separate file instruction needs clarification. Wait for clarification before acting on the ambiguous part. Prefer an explicit spoken spelling or correction over a conflicting phonetic transcription.
 When the user asks to return to dispatch, or you need to hand the voice session
 back to dispatch, run:
 openbase-coder exit-to-dispatch

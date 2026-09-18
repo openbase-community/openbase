@@ -47,6 +47,7 @@ resets onboarding. Remove both when fully uninstalling (see
 | `~/.openbase/instructions/VOICE_INSTRUCTIONS.md` | `openbase-coder setup` | Generated default direct voice-session instructions |
 | `~/.openbase/instructions/DISPATCHER_INSTRUCTIONS.md` | `openbase-coder setup` | Generated default dispatcher-only instructions |
 | `~/.openbase/instructions/SUPER_AGENT_INSTRUCTIONS.md` | `openbase-coder setup` | Generated default Super Agent thread instructions |
+| `~/.openbase/skill-sync.json` | Skills settings | Versioned device skill-sharing preference and the source-folder shares it owns; never synced |
 | `~/.openbase/dispatcher-config.json` | `openbase-coder setup`, `openbase-coder defaults`, settings API | Dispatcher runtime settings, including default reasoning and backend-specific model defaults |
 | `~/.openbase/hooks/inject-session-id.sh` | `openbase-coder setup` | Bundled SessionStart hook script, registered in the Openbase profiles; supplies session attribution for commits and agent-aware commands |
 | `~/.openbase/packages/standalone/previous` | `openbase-coder self-update` | Symlink to the prior release, kept for rollback |
@@ -72,12 +73,8 @@ Workspace skills are symlink-installed, not copied, so edits to source skills
 are visible to agents immediately. In the console and skills API, skill scopes
 are `home` (personal skills under `~/.agents/skills`), `codex`
 (`~/.codex/skills`), and `claude` (`~/.claude/skills`).
-When the skills auto-link setting is enabled (default off; toggled from the
-console skills settings), personal skills under `~/.agents/skills` are also
-symlinked into both `~/.codex/skills` and
-`~/.claude/skills`, and the `openbase-routines` service
-re-syncs the links roughly every five minutes so newly added personal skills
-appear without a restart.
+**Settings → Agents → Skills** controls backend symlinking and device skill sharing independently. Backend symlinking adds missing links across `~/.agents/skills`, `~/.codex/skills`, and `~/.claude/skills`; it never overwrites existing skills. Turning it off leaves existing links intact. The routines service scans for new links roughly every five minutes. Device skill sharing registers the personal skill folder and linked source folders with code sync; the sync worker discovers new linked sources on later ticks. Turning it off keeps all files and unrelated folder shares. An explicit opt-out prevents peer offers from restoring the skill shares.
+
 Openbase never keeps a separate agent credential: Codex sessions read
 `~/.codex/auth.json` and Claude Code sessions use your own Claude Code login.
 The Super Agents MCP entries use the workspace venv MCP executable when

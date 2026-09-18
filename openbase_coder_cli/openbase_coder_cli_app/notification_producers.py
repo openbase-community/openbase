@@ -1,9 +1,9 @@
 """Producers that materialize notifications from reports, approvals, and sync conflicts.
 
-The sweep is pull-driven: it runs before notification list requests, on
-``ws/notifications/`` connects, and on a periodic tick while any socket is
-open. Thread-completion notifications are produced separately at the event
-source (``thread_sync.session_manager``), not here.
+The API server sweeps at startup, periodically, and after thread turns finish.
+Notification list requests and explicit socket refreshes also reconcile the
+feed. Manual-thread completion notifications originate separately in
+``thread_sync.session_manager``.
 """
 
 from __future__ import annotations
@@ -46,13 +46,15 @@ def sync_notification_producers(*, force: bool = False) -> None:
             return
         _last_sweep_monotonic = now
 
-    for producer in (_sweep_reports, _sweep_approvals, _sweep_sync_conflicts):
-        try:
-            producer()
-        except Exception:
-            logger.exception("Notification producer %s failed", producer.__name__)
+        # Serialize forced turn-finish sweeps with periodic/request sweeps so
+        # report discovery cannot consume or regress another sweep's watermark.
+        for producer in (_sweep_reports, _sweep_approvals, _sweep_sync_conflicts):
+            try:
+                producer()
+            except Exception:
+                logger.exception("Notification producer %s failed", producer.__name__)
 
-    # Piggyback on the same pull-driven tick to keep cloud shares fresh when
+    # Piggyback on the same sweep to keep cloud shares fresh when
     # agents rewrite shared report files directly on disk. Runs on its own
     # thread with its own debounce, so this never adds request latency.
     sharing_service.sync_shared_reports_in_background()
@@ -85,9 +87,9 @@ def _sweep_reports() -> None:
     from openbase_coder_cli.reports_service import list_report_items
 
     items = list_report_items()
-    if not items:
-        return
-    newest_mtime = max(float(item.get("updated_at") or 0) for item in items)
+    newest_mtime = max(
+        (float(item.get("updated_at") or 0) for item in items), default=0.0
+    )
     watermark, baselined = notification_store.get_report_watermark()
     if not baselined:
         # First run: never flood with pre-existing reports.

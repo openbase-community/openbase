@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 os.environ.setdefault("OPENBASE_CODER_CLI_SECRET_KEY", "test-secret")
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "openbase_coder_cli.config.settings")
@@ -49,6 +51,11 @@ def _empty_producer_sources(monkeypatch):
 
     monkeypatch.setattr(
         "openbase_coder_cli.reports_service.list_report_items", lambda: []
+    )
+    monkeypatch.setattr(
+        notification_producers.sharing_service,
+        "sync_shared_reports_in_background",
+        lambda: None,
     )
     monkeypatch.setattr(
         "openbase_coder_cli.openbase_coder_cli_app.approvals.pending_approval_requests",
@@ -177,6 +184,118 @@ def test_report_sweep_baselines_then_notifies(monkeypatch):
     notification_store.mark_all_read()
     notification_producers.sync_notification_producers(force=True)
     assert notification_store.list_notifications()["unread_count"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["turn/completed", "turn/failed"])
+@pytest.mark.parametrize("has_state", [True, False])
+async def test_agent_turn_sweeps_reports_without_a_feed_client(
+    monkeypatch, _no_cloud_push, method, has_state
+):
+    from openbase_coder_cli.openbase_coder_cli_app.notification_runtime import (
+        run_notification_sweep,
+    )
+    from openbase_coder_cli.thread_sync import session_manager
+
+    # Baseline an empty installation immediately before a turn completes:
+    # the forced sweep must bypass the normal five-second debounce.
+    await run_notification_sweep()
+    items = [_report_item("/proj:first.md", time.time())]
+    monkeypatch.setattr(
+        "openbase_coder_cli.reports_service.list_report_items",
+        lambda: items,
+    )
+    manager = session_manager.CodexAppServerSessionManager(client=SimpleNamespace())
+    state = _session_state(queued_turns=[{"prompt": "next"}]) if has_state else None
+    if state:
+        state.model_dump = lambda **kwargs: {}
+    monkeypatch.setattr(manager, "get_session_state", AsyncMock(return_value=state))
+    monkeypatch.setattr(session_manager, "_broadcast", AsyncMock())
+
+    await manager._handle_client_event(
+        method, {"threadId": "agent-1", "turnId": "turn-1"}
+    )
+
+    assert [entry["id"] for entry in _no_cloud_push] == ["report:/proj:first.md"]
+    notification_store.mark_all_read()
+    await manager._handle_client_event(
+        method, {"threadId": "agent-1", "turnId": "turn-1"}
+    )
+    assert len(_no_cloud_push) == 1
+    assert notification_store.list_notifications()["unread_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_server_lifespan_produces_reports_without_clients(
+    monkeypatch, _no_cloud_push
+):
+    from asgiref.testing import ApplicationCommunicator
+
+    from openbase_coder_cli.config.asgi import application
+    from openbase_coder_cli.openbase_coder_cli_app import notification_runtime
+
+    monkeypatch.setattr(
+        "openbase_coder_cli.openbase_coder_cli_app.projects.start_project_metadata_warmer",
+        lambda: None,
+    )
+    monkeypatch.setattr(notification_runtime, "SWEEP_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(notification_producers, "SWEEP_DEBOUNCE_SECONDS", 0)
+    items = []
+    monkeypatch.setattr(
+        "openbase_coder_cli.reports_service.list_report_items", lambda: list(items)
+    )
+    communicator = ApplicationCommunicator(application, {"type": "lifespan"})
+
+    async def wait_until(predicate):
+        async with asyncio.timeout(5):
+            while not predicate():
+                await asyncio.sleep(0.01)
+
+    await communicator.send_input({"type": "lifespan.startup"})
+    assert await communicator.receive_output() == {"type": "lifespan.startup.complete"}
+    try:
+        await wait_until(lambda: notification_store.get_report_watermark()[1])
+        items.append(_report_item("/proj:background.md", time.time()))
+        await wait_until(lambda: len(_no_cloud_push) == 1)
+        assert _no_cloud_push[0]["id"] == "report:/proj:background.md"
+        assert notification_store.list_notifications()["unread_count"] == 1
+    finally:
+        await communicator.send_input({"type": "lifespan.shutdown"})
+        assert await communicator.receive_output() == {
+            "type": "lifespan.shutdown.complete"
+        }
+        await communicator.wait()
+    assert not any(
+        task.get_name() == "notification-producers" and not task.done()
+        for task in asyncio.all_tasks()
+    )
+
+
+@pytest.mark.asyncio
+async def test_periodic_sweep_retries_after_failure(monkeypatch):
+    from openbase_coder_cli.openbase_coder_cli_app import notification_runtime
+
+    calls = 0
+    recovered = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def sweep(*, force=False):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("Temporary discovery failure")
+        loop.call_soon_threadsafe(recovered.set)
+
+    monkeypatch.setattr(notification_runtime, "sync_notification_producers", sweep)
+    monkeypatch.setattr(notification_runtime, "SWEEP_INTERVAL_SECONDS", 0.01)
+    task = asyncio.create_task(notification_runtime.run_notification_sweeps())
+    try:
+        await asyncio.wait_for(recovered.wait(), timeout=5)
+        assert calls >= 2
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
 
 # --- approval sweep ---
