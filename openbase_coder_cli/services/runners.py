@@ -455,6 +455,9 @@ def run(name: str) -> None:
             managed_codex_app_server_endpoint(env),
             binaries["codex"],
         )
+    from openbase_coder_cli.services.freshness.runtime import capture_service
+
+    capture_service(name, config, argv)
     os.execvpe(argv[0], argv, env)
 
 
