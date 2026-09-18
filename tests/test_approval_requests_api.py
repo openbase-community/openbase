@@ -149,3 +149,40 @@ def test_skill_approval_request_api_allows_authenticated_local_post_without_csrf
     assert response.json()["request"]["id"] == "skill-approval-1"
     assert captured["skill"] == "whatsapp-cli"
     assert captured["details"] == {"contact_id": "207829222858962@lid"}
+
+
+def test_remote_approval_never_answers_same_id_locally(monkeypatch):
+    from unittest.mock import Mock
+
+    local_answer = Mock()
+    peer_answer = Mock(return_value=(200, {"success": True}))
+    manager = FakeApprovalManager([])
+    monkeypatch.setattr(approvals, "answer_skill_approval_request", local_answer)
+    monkeypatch.setattr(approvals, "get_session_manager", lambda: manager)
+    monkeypatch.setattr(approvals, "answer_peer_approval", peer_answer)
+    request = APIRequestFactory().post(
+        "/api/approval-requests/shared-id/",
+        {"decision": "accept", "origin_host": "mini.example"},
+        format="json",
+    )
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+    response = approvals.approval_request_detail(request, "shared-id")
+    assert response.status_code == 200
+    peer_answer.assert_called_once_with("mini.example", "shared-id", "accept")
+    local_answer.assert_not_called()
+    assert manager.answered == []
+
+
+def test_remote_approval_requires_local_authentication(monkeypatch):
+    from unittest.mock import Mock
+
+    peer_answer = Mock()
+    monkeypatch.setattr(approvals, "answer_peer_approval", peer_answer)
+    request = APIRequestFactory().post(
+        "/api/approval-requests/id/",
+        {"decision": "accept", "origin_host": "mini.example"},
+        format="json",
+    )
+    response = approvals.approval_request_detail(request, "id")
+    assert response.status_code in (401, 403)
+    peer_answer.assert_not_called()

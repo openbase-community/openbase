@@ -12,6 +12,7 @@ from openbase_coder_cli.services.fleet_aggregation import (
     FLEET_SCOPE_VALUE,
     fleet_approval_requests,
 )
+from openbase_coder_cli.services.peer_approvals import answer_peer_approval
 from openbase_coder_cli.skill_approvals import (
     answer_skill_approval_request,
     consume_skill_approval_decision,
@@ -26,6 +27,7 @@ from openbase_coder_cli.thread_sync.session_manager import get_session_manager
 
 class ApprovalRequestActionSerializer(serializers.Serializer):
     decision = serializers.ChoiceField(choices=["accept", "decline", "cancel"])
+    origin_host = serializers.CharField(required=False, allow_null=True, allow_blank=False)
 
 
 class SkillApprovalRequestCreateSerializer(serializers.Serializer):
@@ -54,7 +56,7 @@ def approval_requests(request):
     requests = async_to_sync(pending_approval_requests)()
     if request.query_params.get(FLEET_SCOPE_PARAM) == FLEET_SCOPE_VALUE:
         # Approvals are device-local; peer items carry origin_host and are
-        # answered by the client directly on the owning device.
+        # answered through this authenticated backend on the owning device.
         requests = fleet_approval_requests(requests)
     return Response({"requests": requests}, status=status.HTTP_200_OK)
 
@@ -65,6 +67,10 @@ def approval_request_detail(request, request_id):
     serializer = ApprovalRequestActionSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     decision = serializer.validated_data["decision"]
+    origin_host = serializer.validated_data.get("origin_host")
+    if origin_host:
+        status_code, payload = answer_peer_approval(origin_host, request_id, decision)
+        return Response(payload, status=status_code)
     try:
         result = answer_skill_approval_request(request_id, decision)
     except ValueError:
