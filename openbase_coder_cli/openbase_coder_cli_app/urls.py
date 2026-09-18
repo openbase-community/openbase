@@ -15,6 +15,7 @@ from openbase_coder_cli.openbase_coder_cli_app.notifications import (
     notification_mark_all_read,
     notification_mark_read,
 )
+from openbase_coder_cli.openbase_coder_cli_app.skill_settings import skill_sharing_settings
 from openbase_coder_cli.openbase_coder_cli_app.sync_settings import (
     sync_conflicts,
     sync_conflicts_ignore_containing_folder,
@@ -320,6 +321,7 @@ urlpatterns = [
     path("memories/", memories_list, name="memories-list"),
     path("memories/<path:memory_name>/", memory_detail, name="memory-detail"),
     path("skills/", skills_list, name="skills-list"),
+    path("skills/settings/", skill_sharing_settings, name="skill-sharing-settings"),
     path(
         "marketplace/skills/",
         marketplace_skills,

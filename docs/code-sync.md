@@ -24,6 +24,10 @@ leaves your tailnet.
   secrets cannot actually run your project. Only machines you own (they are
   all inside your tailnet) ever receive them.
 
+## Personal skills
+
+Use **Settings → Agents → Skills → Sync my skills across devices** to share your personal skills. The setting manages `~/.agents/skills` and linked skill-source directories inside your home folder, reusing any broader folders already selected for sync. It does not sync entire backend homes, credentials, or plugin caches. Linked sources outside your home folder or in machine-local Openbase state are reported as unavailable for sharing. Disabling preserves files on every device and keeps independently configured folder shares.
+
 ## What never syncs
 
 - **`.git` and all other VCS metadata (`.jj`, `.hg`) — categorically.** A git

@@ -166,9 +166,12 @@ and the selected agent homes; installation never runs catalog dependencies or
 scripts. Existing skills with the same name are treated as conflicts rather
 than overwritten.
 
-You can also edit installed skill sources and enable auto-linking of personal
-skills (`~/.agents/skills`, the `home` scope) into the shared agent homes at
-`~/.codex/skills` and `~/.claude/skills`.
+You can edit installed skill sources here. The **Skill settings** link jumps directly to **Settings → Agents → Skills**, where sharing controls live:
+
+- **Symlink my skills across backends (Codex/Claude Code)** adds missing links between the personal, Codex, and Claude Code skill directories. Existing files and conflicting links are never replaced. Turning it off stops new automatic links and preserves existing links.
+- **Sync my skills across devices** shares `~/.agents/skills` and linked skill-source folders under your home directory through device sync. Turning it off removes only the personal skill-folder share and source-folder shares added by this setting; files and independently configured folder shares remain. An explicit off preference prevents peers from re-enabling these shares. Enabling requires a second paired computer when device sync is not already enabled. Existing personal skill-folder shares appear as enabled.
+
+These two settings are independent and initially off on a fresh installation. Plugin caches and backend credentials are not included.
 
 **On iPhone:** skills are not managed from the iOS app.
 
