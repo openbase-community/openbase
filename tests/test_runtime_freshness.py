@@ -240,7 +240,7 @@ def test_stopped_and_inactive_services_are_not_freshness_failures(
     monkeypatch.setattr(
         "openbase_coder_cli.services.launchd.launchctl_status", lambda _: {"pid": None}
     )
-    monkeypatch.setattr(collector, "_native_coverage", lambda: [])
+    monkeypatch.setattr("openbase_coder_cli.services.freshness.native.collect_native", lambda *_: [])
     assert collector._collect(workspace)["components"] == []
 
 

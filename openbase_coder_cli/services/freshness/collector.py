@@ -168,7 +168,9 @@ def _collect(workspace: Path) -> dict:
     # Separate native processes are outside the managed-service registry. Do
     # not silently report an old helper current based on its app bundle.
     try:
-        components.extend(_native_coverage())
+        from openbase_coder_cli.services.freshness.native import collect_native
+
+        components.extend(collect_native(workspace, current))
     except psutil.Error:
         components.append(
             detail(
@@ -179,28 +181,6 @@ def _collect(workspace: Path) -> dict:
             )
         )
     return {"checked_at": time.time(), "components": components, "revisions": current}
-
-
-def _native_coverage() -> list[dict]:
-    names = {
-        "OpenbaseNetmesh": "Openbase VPN app",
-        "OpenbaseNetmeshCompanion": "Openbase VPN companion",
-        "NetmeshHelper": "Openbase VPN helper",
-        "OpenbaseScreenShareCompanion": "Screen sharing companion",
-    }
-    running = set()
-    for proc in psutil.process_iter(["name"]):
-        if proc.info["name"] in names:
-            running.add(proc.info["name"])
-    return [
-        detail(
-            names[name],
-            "unknown",
-            "This native component does not report source provenance yet.",
-            "Restarting cannot clear this coverage limitation. Rebuild/relaunch after native source changes; source verification requires native provenance support.",
-        )
-        for name in sorted(running)
-    ]
 
 
 def collect_freshness(client=None) -> dict:

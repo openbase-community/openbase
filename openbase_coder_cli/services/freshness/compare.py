@@ -16,6 +16,9 @@ COMPONENT_REPOS = {
     "console": ("console", *RENDERER_REPOS),
     "desktop-main": ("desktop",),
     "openbase-tunneld": ("cli",),
+    "OpenbaseNetmesh": ("netmesh-macos",),
+    "OpenbaseNetmeshCompanion": ("netmesh-macos",),
+    "NetmeshHelper": ("netmesh-macos",),
 }
 
 
@@ -40,7 +43,7 @@ def compare_build(manifest, component: str, workspace: Path, current: dict) -> d
         "console": "Rebuild console, then reload this page.",
         "desktop-main": "Rebuild if packaged, then quit and relaunch the developer app.",
         "openbase-tunneld": "Run openbase-coder restart --service openbase-tunneld to rebuild and restart Openbase Direct.",
-    }[component]
+    }.get(component, "Rebuild and relaunch the native component.")
     unknown = detail(
         label,
         "unknown",
