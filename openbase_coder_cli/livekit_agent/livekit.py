@@ -917,10 +917,6 @@ async def livekit_agent(ctx: JobContext):
     )
 
     def on_user_state_changed_for_mute(event) -> None:
-        transcription_notice.user_state_changed(
-            new_state=str(getattr(event, "new_state", "") or ""),
-            old_state=str(getattr(event, "old_state", "") or ""),
-        )
         delivery_ledger.notify_user_state(
             new_state=str(getattr(event, "new_state", "") or ""),
             old_state=str(getattr(event, "old_state", "") or ""),
@@ -928,7 +924,6 @@ async def livekit_agent(ctx: JobContext):
 
     def on_final_transcript_for_mute(event) -> None:
         if getattr(event, "is_final", False) and str(getattr(event, "transcript", "") or "").strip():
-            transcription_notice.final_transcript()
             delivery_ledger.notify_final_transcript()
 
     session.on("user_input_transcribed", on_final_transcript_for_mute)

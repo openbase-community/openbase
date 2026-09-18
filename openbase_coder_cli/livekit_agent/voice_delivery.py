@@ -34,6 +34,7 @@ from typing import Any
 from openbase_coder_cli.livekit_agent.turn_detection import (
     MAX_PRE_ACCEPT_QUIET_CREDIT_SECONDS,
     VAD_ONLY_USER_TURN_QUIET_GRACE_SECONDS,
+    VAD_ONLY_MIN_SPEECH_SECONDS,
     UserTurnClosureDecision,
     UserTurnClosureSignals,
 )
@@ -117,6 +118,7 @@ class VoiceDeliveryRecord:
     user_turn_silence_ms: int | None = None
     user_turn_transcript_confidence: float | None = None
     user_turn_transcription_delay_ms: int | None = None
+    user_speech_seconds: float = 0.0
 
 
 class VoiceDeliveryLedger:
@@ -131,12 +133,16 @@ class VoiceDeliveryLedger:
         user_speaking_poll_seconds: float = 0.1,
         vad_quiet_grace_seconds: float = VAD_ONLY_USER_TURN_QUIET_GRACE_SECONDS,
         vad_transcript_timeout_seconds: float = 15,
+        vad_min_speech_seconds: float = VAD_ONLY_MIN_SPEECH_SECONDS,
     ) -> None:
         self._route_snapshot = route_snapshot
         self._room_name = room_name
         self._room_id = room_id
         self._user_speaking_poll_seconds = user_speaking_poll_seconds
         self._vad_quiet_grace_seconds = vad_quiet_grace_seconds
+        self._vad_min_speech_seconds = vad_min_speech_seconds
+        self._vad_speech_started_at: float | None = None
+        self._vad_last_speech_seconds = 0.0
         self._vad_quiet_task: asyncio.Task[None] | None = None
         self._provisional_mute_recovery = ProvisionalMuteRecovery(vad_transcript_timeout_seconds)
         self._provisional_record: VoiceDeliveryRecord | None = None
@@ -211,10 +217,17 @@ class VoiceDeliveryLedger:
         cancels it; a transcript-informed closure supersedes it.
         """
         if new_state == "speaking":
+            if self._vad_speech_started_at is None:
+                self._vad_speech_started_at = time.monotonic()
             self._mute_covers_current_quiet = False
             self._cancel_vad_quiet_task()
             return
         if old_state == "speaking":
+            self._vad_last_speech_seconds = (
+                max(0.0, time.monotonic() - self._vad_speech_started_at)
+                if self._vad_speech_started_at is not None else 0.0
+            )
+            self._vad_speech_started_at = None
             self._start_vad_quiet_closure_task()
 
     def notify_vad_gap(self, dropped_seconds: float) -> None:
@@ -258,6 +271,11 @@ class VoiceDeliveryLedger:
             if time.monotonic() >= deadline:
                 break
             await asyncio.sleep(self._user_speaking_poll_seconds)
+        if self._vad_last_speech_seconds < self._vad_min_speech_seconds:
+            logger.info("dispatch_timing stage=vad_brief_trigger_no_provisional_mute "
+                        "speech_ms=%d room=%s", int(self._vad_last_speech_seconds * 1000),
+                        self._room_name)
+            return
         self._emit_vad_quiet_mute()
 
     def _emit_vad_quiet_mute(self) -> None:
@@ -270,6 +288,7 @@ class VoiceDeliveryLedger:
             room_id=self._room_id,
             route_at_acceptance=self._route_snapshot(),
             status="vad_quiet_closure",
+            user_speech_seconds=self._vad_last_speech_seconds,
         )
         record.user_turn_closed = True
         record.user_turn_closure_source = "vad_quiet_floor"

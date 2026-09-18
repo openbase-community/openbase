@@ -39,6 +39,7 @@ STALE_EOU_TRANSCRIPTION_DELAY_SECONDS = 2.0
 # exists. Slightly above the confident transcript-informed floor because
 # there is no semantic end-of-turn signal backing it.
 VAD_ONLY_USER_TURN_QUIET_GRACE_SECONDS = 2.5
+VAD_ONLY_MIN_SPEECH_SECONDS = 0.75
 # The quiet floor measures total verified silence. LiveKit's endpointing has
 # already verified `end_of_turn_delay` seconds of silence before the
 # utterance is even accepted; credit it (bounded, in case the metric is

@@ -58,7 +58,7 @@ async def test_announcements_wait_for_shared_user_quiet_verification(has_transcr
     ledger = VoiceDeliveryLedger(route_snapshot=lambda: VoiceRouteSnapshot(
         route_version=0, active_thread_id="dispatcher", active_voice_id=None,
         active_voice_name=None, active_route="dispatcher"),
-        vad_quiet_grace_seconds=.12, user_speaking_poll_seconds=.005)
+        vad_min_speech_seconds=0, vad_quiet_grace_seconds=.12, user_speaking_poll_seconds=.005)
     ledger.set_user_speaking_provider(lambda: session.user_state == "speaking")
     records = []
     ledger.set_lifecycle_sink(lambda event, record, reason: records.append(record))

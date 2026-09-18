@@ -10,49 +10,28 @@ def fixture():
     messages = []
     queue = SimpleNamespace(enqueue=lambda message: messages.append(message) or True)
     notice = TranscriptionTimeoutNotice(queue, clock=lambda: now[0])
-    record = SimpleNamespace(delivery_id="missing", route_at_acceptance=SimpleNamespace(active_voice_id="voice"))
+    record = SimpleNamespace(user_speech_seconds=4.0, delivery_id="missing", route_at_acceptance=SimpleNamespace(active_voice_id="voice"))
     return notice, now, messages, record
-
-
-def speak(notice, now, seconds):
-    notice.user_state_changed(new_state="speaking")
-    now[0] += seconds
-    notice.user_state_changed(new_state="listening", old_state="speaking")
 
 
 def test_missing_sustained_speech_gets_a_bounded_notice_not_task_replay():
     notice, now, messages, record = fixture()
-    speak(notice, now, 4)
     notice.timed_out(record)
     assert len(messages) == 1
     assert messages[0].voice_id == "voice"
     assert "before repeating" in messages[0].text
-    speak(notice, now, 4)
     notice.timed_out(record)
     assert len(messages) == 1
     now[0] += 60
-    speak(notice, now, 1)
     notice.timed_out(record)
     assert len(messages) == 2
 
 
-def test_brief_noise_and_successful_transcription_do_not_prompt_a_retry():
+def test_brief_noise_does_not_prompt_a_retry():
     notice, now, messages, record = fixture()
-    speak(notice, now, .2)
-    notice.timed_out(record)
-    speak(notice, now, 4)
-    notice.final_transcript()
+    record.user_speech_seconds = .2
     notice.timed_out(record)
     assert messages == []
-
-
-def test_partial_vad_pauses_accumulate_without_counting_the_silence():
-    notice, now, messages, record = fixture()
-    speak(notice, now, .4)
-    now[0] += 10
-    speak(notice, now, .4)
-    notice.timed_out(record)
-    assert len(messages) == 1
 
 
 def test_only_missing_transcript_timeout_not_handoff_failure_notifies():

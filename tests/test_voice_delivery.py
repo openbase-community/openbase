@@ -899,6 +899,7 @@ def test_vad_quiet_floor_mutes_before_any_transcript_exists():
         ledger = VoiceDeliveryLedger(
             route_snapshot=_snapshot,
             user_speaking_poll_seconds=0.005,
+            vad_min_speech_seconds=0,  # This test isolates the quiet floor.
             vad_quiet_grace_seconds=0.03,
         )
         ledger.set_lifecycle_sink(
@@ -928,6 +929,7 @@ def test_vad_quiet_floor_cancelled_when_user_resumes_speaking():
         ledger = VoiceDeliveryLedger(
             route_snapshot=_snapshot,
             user_speaking_poll_seconds=0.005,
+            vad_min_speech_seconds=0,  # This test isolates the quiet floor.
             vad_quiet_grace_seconds=0.03,
         )
         ledger.set_lifecycle_sink(lambda event, _record, _reason: events.append(event))
@@ -951,6 +953,7 @@ def test_transcript_closure_adopts_prior_vad_mute_without_reemitting():
         ledger = VoiceDeliveryLedger(
             route_snapshot=_snapshot,
             user_speaking_poll_seconds=0.005,
+            vad_min_speech_seconds=0,  # This test isolates the quiet floor.
             vad_quiet_grace_seconds=0.01,
         )
         ledger.set_lifecycle_sink(lambda event, _record, _reason: events.append(event))
@@ -986,6 +989,7 @@ def test_transcript_closure_supersedes_pending_vad_timer():
         ledger = VoiceDeliveryLedger(
             route_snapshot=_snapshot,
             user_speaking_poll_seconds=0.005,
+            vad_min_speech_seconds=0,  # This test isolates the quiet floor.
             vad_quiet_grace_seconds=0.05,
         )
         ledger.set_lifecycle_sink(
@@ -1020,6 +1024,7 @@ def test_safe_to_unmute_rearms_vad_mute_for_next_turn():
         ledger = VoiceDeliveryLedger(
             route_snapshot=_snapshot,
             user_speaking_poll_seconds=0.005,
+            vad_min_speech_seconds=0,  # This test isolates the quiet floor.
             vad_quiet_grace_seconds=0.01,
         )
         ledger.set_lifecycle_sink(lambda event, _record, _reason: events.append(event))
@@ -1063,6 +1068,7 @@ def test_vad_gap_restarts_provisional_quiet_floor():
         ledger = VoiceDeliveryLedger(
             route_snapshot=_snapshot,
             user_speaking_poll_seconds=0.005,
+            vad_min_speech_seconds=0,  # This test isolates the quiet floor.
             vad_quiet_grace_seconds=0.05,
         )
         ledger.set_lifecycle_sink(lambda event, _record, _reason: events.append(event))
@@ -1246,6 +1252,7 @@ def test_steer_receipt_closure_emits_mute_once():
         ledger = VoiceDeliveryLedger(
             route_snapshot=_snapshot,
             user_speaking_poll_seconds=0.005,
+            vad_min_speech_seconds=0,  # This test isolates the quiet floor.
             vad_quiet_grace_seconds=0.01,
         )
         ledger.set_lifecycle_sink(lambda event, _record, _reason: events.append(event))
@@ -1447,4 +1454,44 @@ def test_cancelled_other_work_cannot_release_a_delivered_audio_queue():
         assert "safe_to_unmute" not in events
         await asyncio.sleep(.16)
         assert events[-1] == "safe_to_unmute"
+    asyncio.run(run())
+
+
+def test_brief_vad_noise_does_not_mute_but_recognized_short_request_does():
+    async def run():
+        events = []
+        ledger = VoiceDeliveryLedger(route_snapshot=_snapshot, vad_quiet_grace_seconds=.01, user_speaking_poll_seconds=.005)
+        ledger.set_lifecycle_sink(lambda event, record, reason: events.append(event))
+        ledger.set_user_speaking_provider(lambda: False)
+        # Repeated room clicks must not accumulate into a speech turn.
+        for _ in range(5):
+            ledger.notify_user_state(new_state="speaking")
+            ledger._vad_speech_started_at -= .2
+            ledger.notify_user_state(new_state="listening", old_state="speaking")
+            assert ledger.user_quiet_verification_pending()
+            await asyncio.sleep(.02)
+        assert events == []
+        record = ledger.accept_utterance(message_id="short", prompt="Yes")
+        ledger.schedule_user_turn_closure(record, UserTurnClosureDecision(
+            confidence=.9, source="turn_detector", quiet_grace_seconds=.01,
+            completion_reason="quiet_floor"))
+        await asyncio.sleep(.04)
+        assert events == ["utterance_accepted", "safe_to_mute_user"]
+    asyncio.run(run())
+
+
+def test_sustained_vad_speech_keeps_provisional_mute_and_duration():
+    async def run():
+        records = []
+        ledger = VoiceDeliveryLedger(route_snapshot=_snapshot, vad_quiet_grace_seconds=.01, user_speaking_poll_seconds=.005)
+        ledger.set_lifecycle_sink(lambda event, record, reason: records.append(record))
+        ledger.set_user_speaking_provider(lambda: False)
+        ledger.notify_user_state(new_state="speaking")
+        ledger._vad_speech_started_at -= .8
+        ledger.notify_user_state(new_state="listening", old_state="speaking")
+        await asyncio.sleep(.04)
+        assert len(records) == 1
+        assert records[0].user_speech_seconds >= .8
+        ledger.mark_cancelled(records[0], reason="test_finished")
+        ledger._provisional_mute_recovery.cancel()
     asyncio.run(run())
