@@ -7,10 +7,11 @@ from pathlib import Path
 
 import click
 from django.http import FileResponse, Http404, HttpRequest, HttpResponse
-from rest_framework import status
+from rest_framework import serializers, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+from openbase_coder_cli.openbase_coder_cli_app.common import ExactFieldsSerializer
 from openbase_coder_cli.paths import PLUGIN_CONSOLE_ASSETS_DIR
 from openbase_coder_cli.plugins.api import (
     get_console_registry_payload,
@@ -18,7 +19,14 @@ from openbase_coder_cli.plugins.api import (
     list_plugins_payload,
     run_bootstrapper_payload,
 )
-from openbase_coder_cli.services.boilersync import boilersync_templates_payload
+from openbase_coder_cli.services.boilersync import (
+    add_boilersync_source,
+    boilersync_templates_payload,
+    remove_boilersync_source,
+)
+from openbase_coder_cli.services.console_settings import (
+    set_featured_template_prompt_dismissed,
+)
 from openbase_coder_cli.services.uv_tools import (
     list_uv_tools_payload,
     uninstall_uv_tool,
@@ -84,9 +92,63 @@ def uv_tool_executable_help(request, tool_name, executable_name):
     return Response(payload, status=response_status)
 
 
-@api_view(["GET"])
+class BoilerSyncSourceAddSerializer(ExactFieldsSerializer):
+    repo_url = serializers.CharField(allow_blank=False, trim_whitespace=True)
+    dismiss_featured_prompt = serializers.BooleanField(required=False, default=False)
+
+
+class BoilerSyncSourceRemoveSerializer(ExactFieldsSerializer):
+    org = serializers.CharField(allow_blank=False, trim_whitespace=True)
+    repo = serializers.CharField(allow_blank=False, trim_whitespace=True)
+
+
+class BoilerSyncFeaturedPromptSerializer(ExactFieldsSerializer):
+    dismissed = serializers.BooleanField()
+
+
+@api_view(["GET", "POST", "DELETE", "PATCH"])
 def boilersync_templates(request):
-    """List BoilerSync template sources/templates using the real CLI JSON output."""
+    """List and manage BoilerSync template sources and featured prompt state."""
+    if request.method == "POST":
+        serializer = BoilerSyncSourceAddSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            add_boilersync_source(serializer.validated_data["repo_url"])
+        except RuntimeError as exc:
+            return Response(
+                {"error": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if serializer.validated_data["dismiss_featured_prompt"]:
+            set_featured_template_prompt_dismissed(True)
+        return Response(boilersync_templates_payload(), status=status.HTTP_201_CREATED)
+
+    if request.method == "DELETE":
+        serializer = BoilerSyncSourceRemoveSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            remove_boilersync_source(
+                serializer.validated_data["org"],
+                serializer.validated_data["repo"],
+            )
+        except ValueError as exc:
+            return Response(
+                {"error": str(exc)},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except RuntimeError as exc:
+            return Response(
+                {"error": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(boilersync_templates_payload())
+
+    if request.method == "PATCH":
+        serializer = BoilerSyncFeaturedPromptSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        set_featured_template_prompt_dismissed(serializer.validated_data["dismissed"])
+        return Response(boilersync_templates_payload())
+
     template_ref = request.query_params.get("template_ref") or None
     return Response(boilersync_templates_payload(template_ref=template_ref))
 

@@ -17,6 +17,7 @@ from super_agents.app_server_client import (
     find_latest_turn,
 )
 
+from .inbox_steer_hint import notify_inbox_steer_hint
 from .models import QueuedTurnInfo
 from .models import ThreadInfo as SessionInfo
 from .models import TurnSteerInfo as SteerInfo
@@ -30,6 +31,26 @@ from .session_manager_base import (
 from .thread_payloads import (
     _timestamp_to_datetime,
 )
+
+
+def _has_live_inbox(backend_session_id: str | None) -> bool:
+    """Whether a Claude Code inbox socket is recorded and present on disk.
+
+    A cheap check (record + socket path exists) used only to decide whether a
+    thread with no store-side active turn is still steerable — a terminal
+    Claude session. Real reachability is proven by the delivery attempt; a
+    dead socket there falls back cleanly. Non-Claude backends never have a
+    record, so this returns False and the ordinary guard applies.
+    """
+    if not backend_session_id:
+        return False
+    try:
+        from super_agents.claude_inbox import resolve_inbox
+
+        record = resolve_inbox(backend_session_id)
+    except Exception:  # noqa: BLE001 - never let a probe break steering
+        return False
+    return record is not None and record.path_exists
 
 
 class SessionManagerTurnsMixin:
@@ -80,7 +101,12 @@ class SessionManagerTurnsMixin:
             raise ValueError(f"Thread {thread_id} is missing its cwd")
 
         turn_id = await self._active_turn_id(thread_id)
-        if turn_id is None:
+        if turn_id is None and not _has_live_inbox(thread.backend_session_id):
+            # No store-side active turn and no reachable inbox socket: nothing
+            # to steer. A terminal-started Claude session has no active turn in
+            # our store even while it runs, so a live inbox record (below) is
+            # what lets us steer it; without one there is genuinely nothing to
+            # reach.
             raise ValueError(f"Thread {thread_id} has no active turn to steer")
 
         result = await self._client.steer_by_label(
@@ -93,20 +119,27 @@ class SessionManagerTurnsMixin:
             prompt,
             {"cwd": thread.directory},
         )
+        if result.get("delivery") == "inbox":
+            # Delivered into a terminal session's inbox socket. Tell the user
+            # about the crossSessionInbound caveat once (see module docstring).
+            notify_inbox_steer_hint(thread_id, project_path=thread.directory)
         resolved_turn_id = extract_turn_id(result) or turn_id
         # steer_by_label can fall back to starting or queueing a fresh turn
         # when the resolved turn is no longer steerable.
         steered = not result.get("queued") and not result.get("startedImmediately")
-        async with self._state_lock:
-            self._turn_to_session[resolved_turn_id] = thread_id
-            self._delivered_text.setdefault(resolved_turn_id, "")
-            if steered:
-                self._remember_turn_steer_locked(
-                    resolved_turn_id,
-                    SteerInfo(text=prompt, created_at=datetime.now(UTC)),
-                )
-            else:
-                self._remember_turn_prompt_locked(resolved_turn_id, prompt)
+        # An inbox delivery to a terminal session has no turn in our store to
+        # attach bookkeeping to; skip it and report the steer directly.
+        if resolved_turn_id is not None:
+            async with self._state_lock:
+                self._turn_to_session[resolved_turn_id] = thread_id
+                self._delivered_text.setdefault(resolved_turn_id, "")
+                if steered:
+                    self._remember_turn_steer_locked(
+                        resolved_turn_id,
+                        SteerInfo(text=prompt, created_at=datetime.now(UTC)),
+                    )
+                else:
+                    self._remember_turn_prompt_locked(resolved_turn_id, prompt)
         await self._broadcast_thread_state(thread_id)
         return {**result, "turn_id": resolved_turn_id, "steered": steered}
 
