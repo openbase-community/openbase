@@ -2385,11 +2385,9 @@ def test_resume_thread_without_explicit_instructions_uses_super_agent_instructio
 
 
 def test_turn_failed_broadcasts_error_envelope(monkeypatch, tmp_path: Path) -> None:
-    from unittest.mock import AsyncMock
-
     monkeypatch.setattr(
-        "openbase_coder_cli.openbase_coder_cli_app.notification_runtime.run_notification_sweep",
-        AsyncMock(),
+        "openbase_coder_cli.openbase_coder_cli_app.notification_runtime.request_notification_sweep",
+        lambda: None,
     )
     project_dir = tmp_path / "project"
     project_dir.mkdir()

@@ -102,7 +102,7 @@ Pending permission requests from running agents, with approve/deny buttons and 5
 Browse agent-written reports across projects: search, tag filter chips, and
 date grouping (Today, This Week, This Month, Earlier). Tap a report for
 rendered Markdown with previous/next navigation, a share-sheet export, and
-delete. Locally generated report alerts open the specific report; detection requires the app's report monitor to be running.
+delete. Report alerts open the specific report; the running API server discovers reports independently of whether the phone app is open.
 
 ## Diff
 
@@ -147,8 +147,8 @@ Diagnostics are separate from product analytics. The app keeps up to 1,000 recen
 Notifications arrive through cloud push or local app alerts:
 
 - **Cloud push for agent announcements:** when `openbase-coder user say` finds no active voice room, the CLI submits the announcement to the authenticated Openbase Cloud endpoint. A cloud worker sends an Apple Push Notification service (APNs) alert to the account's registered iPhone token. After registration, this path does not require the iPhone app to be open. Cloud acceptance means the request was queued, not that Apple accepted it or the phone displayed it.
-- **Notification feed alerts:** the running Openbase API server discovers reports, approvals, and sync conflicts at startup and every 30 seconds, and reconciles them after thread turns finish. New feed notifications are submitted to Openbase Cloud for push delivery, including reports written by agent threads. The server must remain running, but no phone, desktop, or web client needs to be connected. When report tracking is first initialized, existing reports are baselined without alerts. Manual-thread completions also submit cloud pushes.
-- **App-generated alerts:** the iPhone also polls the notification feed and can schedule local alerts. This polling only runs while iOS permits the app to run; it is not required for server-side discovery or cloud push submission.
+- **Notification feed alerts:** the running Openbase API server discovers reports, approvals, and sync conflicts at startup and every 30 seconds. Thread completions queue a background reconciliation without waiting for discovery, so report scans do not hold up turn-completion or voice UI events. New feed notifications are submitted to Openbase Cloud for push delivery, including reports written by agent threads. The server must remain running, but no phone, desktop, or web client needs to be connected. Report discovery covers all files in known projects' report directories and tracks each file independently, including new files arriving with older modification times. When report tracking is first initialized, existing reports are baselined without alerts. Manual-thread completions also submit cloud pushes.
+- **App-generated alerts:** the iPhone also polls the notification feed and can schedule local alerts. The first successful refresh after launch or foregrounding reconciles the unread badge and feed quietly, without replaying the backlog. Later refreshes suppress local duplicates of notifications already delivered by APNs. This polling only runs while iOS permits the app to run; it is not required for server-side discovery or cloud push submission.
 
 Opening the signed-in app requests or retries remote-notification registration. This registration step is distinct from receiving later APNs alerts. Notification permission, a valid registered token, and successful cloud/APNs delivery are required for cloud alerts; presentation remains subject to iOS notification settings.
 

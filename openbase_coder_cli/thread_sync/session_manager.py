@@ -384,7 +384,7 @@ class CodexAppServerSessionManager(
 
         if method in {"turn/completed", "turn/failed"}:
             from openbase_coder_cli.openbase_coder_cli_app.notification_runtime import (
-                run_notification_sweep,
+                request_notification_sweep,
             )
 
             if turn_id:
@@ -392,7 +392,7 @@ class CodexAppServerSessionManager(
                     self._forget_turn_locked(turn_id)
             # Agent turns can write reports too, even when another turn is queued
             # or the completed thread is no longer available to read.
-            await run_notification_sweep(force=True)
+            request_notification_sweep()
             if method == "turn/failed":
                 failure_message = _turn_failure_message(params)
                 logger.error(

@@ -19,6 +19,7 @@ from typing import Any
 from openbase_coder_cli.cli.utils import get_data_dir
 
 NOTIFICATIONS_FILE = "notifications.json"
+STORE_VERSION = 2
 
 KIND_THREAD = "thread"
 KIND_REPORT = "report"
@@ -161,22 +162,19 @@ def unresolved_ids(kind: str) -> set[str]:
     }
 
 
-def get_report_watermark() -> tuple[float | None, bool]:
-    """Return (last seen report mtime, whether the baseline has been taken)."""
+def get_report_observations() -> tuple[
+    dict[str, list[float | int]] | None, float | None
+]:
+    """Return per-report versions and a one-time cutoff for migrating an old baseline."""
     with _lock:
-        watermarks = _read_state_unlocked()["watermarks"]
-    mtime = watermarks.get("reports_last_seen_mtime")
-    return (
-        float(mtime) if isinstance(mtime, (int, float)) else None,
-        bool(watermarks.get("reports_baselined_at")),
-    )
+        discovery = _read_state_unlocked()["report_discovery"]
+    return discovery["observations"], discovery.get("initial_cutoff")
 
 
-def set_report_watermark(mtime: float) -> None:
+def set_report_observations(observations: dict[str, list[float | int]]) -> None:
     with _lock:
         state = _read_state_unlocked()
-        state["watermarks"]["reports_last_seen_mtime"] = mtime
-        state["watermarks"].setdefault("reports_baselined_at", _utc_now())
+        state["report_discovery"] = {"observations": observations}
         _write_state_unlocked(state)
 
 
@@ -225,11 +223,17 @@ def _read_state_unlocked() -> dict[str, Any]:
     except (FileNotFoundError, OSError, json.JSONDecodeError):
         payload = None
     if not isinstance(payload, dict):
-        return {"version": 1, "notifications": {}, "watermarks": {}}
+        return {
+            "version": STORE_VERSION,
+            "notifications": {},
+            "report_discovery": {"observations": None},
+        }
+    version = payload.get("version", 1)
+    if version not in (1, STORE_VERSION):
+        raise ValueError("Unsupported notification store version; update the CLI")
     notifications = payload.get("notifications")
-    watermarks = payload.get("watermarks")
-    return {
-        "version": 1,
+    state = {
+        "version": STORE_VERSION,
         "notifications": {
             note_id: entry
             for note_id, entry in (
@@ -237,8 +241,24 @@ def _read_state_unlocked() -> dict[str, Any]:
             )
             if isinstance(entry, dict) and isinstance(note_id, str)
         },
-        "watermarks": watermarks if isinstance(watermarks, dict) else {},
+        "report_discovery": payload.get("report_discovery", {"observations": None}),
     }
+    if version == 1:
+        watermarks = payload.get("watermarks")
+        if not isinstance(watermarks, dict):
+            watermarks = {}
+        cutoff = watermarks.get("reports_last_seen_mtime")
+        state["report_discovery"] = {
+            "observations": None,
+            "initial_cutoff": (
+                float(cutoff)
+                if watermarks.get("reports_baselined_at")
+                and isinstance(cutoff, (int, float))
+                else None
+            ),
+        }
+        _write_state_unlocked(state)
+    return state
 
 
 def _write_state_unlocked(state: dict[str, Any]) -> None:

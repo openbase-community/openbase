@@ -87,16 +87,29 @@ def _sweep_reports() -> None:
     from openbase_coder_cli.reports_service import list_report_items
 
     items = list_report_items()
-    newest_mtime = max(
-        (float(item.get("updated_at") or 0) for item in items), default=0.0
-    )
-    watermark, baselined = notification_store.get_report_watermark()
-    if not baselined:
-        # First run: never flood with pre-existing reports.
-        notification_store.set_report_watermark(newest_mtime)
-        return
-    threshold = watermark or 0.0
-    fresh = [item for item in items if float(item.get("updated_at") or 0) > threshold]
+    observed, initial_cutoff = notification_store.get_report_observations()
+    versions = {
+        str(item["id"]): [
+            float(item.get("updated_at") or 0),
+            int((item.get("file") or {}).get("size") or 0),
+        ]
+        for item in items
+    }
+    if observed is None:
+        # Baseline existing files once; an upgraded store still catches reports
+        # written since its last sweep. No global timestamp gates later arrivals.
+        fresh = [
+            item
+            for item in items
+            if initial_cutoff is not None
+            and versions[str(item["id"])][0] > initial_cutoff
+        ]
+    else:
+        fresh = [
+            item
+            for item in items
+            if observed.get(str(item["id"])) != versions[str(item["id"])]
+        ]
     for item in fresh:
         file_payload = item.get("file") or {}
         project_payload = item.get("project") or {}
@@ -111,8 +124,11 @@ def _sweep_reports() -> None:
         )
         if entry:
             _push_in_background(entry)
-    if newest_mtime > threshold:
-        notification_store.set_report_watermark(newest_mtime)
+    # Retain observations for temporarily unavailable projects so reconnecting
+    # a project does not turn unchanged reports into fresh notifications.
+    next_observed = (observed or {}) | versions
+    if observed != next_observed:
+        notification_store.set_report_observations(next_observed)
 
 
 def _sweep_approvals() -> None:

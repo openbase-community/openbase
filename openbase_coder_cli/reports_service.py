@@ -21,7 +21,6 @@ from openbase_coder_cli.thread_sync.projects import (
 REPORTS_DIRECTORY = ".reports"
 REPORTS_TEXT_EXTENSIONS = {".md", ".markdown", ".txt"}
 REPORTS_IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"}
-REPORTS_MAX_FILES = 200
 REPORTS_MAX_TEXT_BYTES = 1024 * 1024
 REPORTS_MAX_IMAGE_BYTES = 5 * 1024 * 1024
 REPORTS_TITLE_SCAN_BYTES = 64 * 1024
@@ -162,8 +161,6 @@ def _list_reports_files(project_path: str) -> list[dict[str, Any]]:
         return []
     files: list[dict[str, Any]] = []
     for candidate in sorted(reports_dir.rglob("*")):
-        if len(files) >= REPORTS_MAX_FILES:
-            break
         if not candidate.is_file():
             continue
         try:
