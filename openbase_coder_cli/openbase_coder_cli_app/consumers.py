@@ -19,6 +19,9 @@ from openbase_coder_cli.openbase_coder_cli_app.ios_app_control import (
     COMMAND_ID_RE,
     ack_group_name,
 )
+from openbase_coder_cli.openbase_coder_cli_app.notification_runtime import (
+    run_notification_sweep as _run_notification_sweep,
+)
 from openbase_coder_cli.openbase_coder_cli_app.thread_errors import (
     thread_error_code,
     thread_error_message,
@@ -381,32 +384,15 @@ class ApprovalRequestsConsumer(AsyncJsonWebsocketConsumer):
         )
 
 
-async def _run_notification_sweep(*, force: bool = False) -> None:
-    """Run the sync producer sweep off the event loop; never raise."""
-    from asgiref.sync import sync_to_async
-
-    from openbase_coder_cli.openbase_coder_cli_app.notification_producers import (
-        sync_notification_producers,
-    )
-
-    try:
-        await sync_to_async(sync_notification_producers, thread_sensitive=False)(
-            force=force
-        )
-    except Exception:
-        logger.exception("Notification producer sweep failed")
-
-
 class _NotificationStoreWatcher:
     """Broadcast notification-store changes while socket clients exist.
 
     Every producer mutation rewrites the store file atomically, so the file
-    watcher is the only push mechanism needed. A periodic sweep tick keeps
-    report notifications flowing while any client is connected.
+    watcher broadcasts the resulting feed changes. The server lifespan owns
+    notification production independently of these connections.
     """
 
     group_name = "notifications"
-    sweep_interval_seconds = 15
 
     def __init__(self) -> None:
         self._connections = 0
@@ -434,10 +420,7 @@ class _NotificationStoreWatcher:
             notifications_store_path,
         )
 
-        await asyncio.gather(
-            self._watch(notifications_store_path()),
-            self._sweep_loop(),
-        )
+        await self._watch(notifications_store_path())
 
     async def _watch(self, store_path: Path) -> None:
         from channels.layers import get_channel_layer
@@ -466,11 +449,6 @@ class _NotificationStoreWatcher:
                     self.group_name,
                     {"type": "notifications_unavailable"},
                 )
-
-    async def _sweep_loop(self) -> None:
-        while True:
-            await _run_notification_sweep()
-            await asyncio.sleep(self.sweep_interval_seconds)
 
 
 _notification_store_watcher = _NotificationStoreWatcher()
