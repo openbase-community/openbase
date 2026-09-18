@@ -917,6 +917,10 @@ async def livekit_agent(ctx: JobContext):
     )
 
     def on_user_state_changed_for_mute(event) -> None:
+        transcription_notice.user_state_changed(
+            new_state=str(getattr(event, "new_state", "") or ""),
+            old_state=str(getattr(event, "old_state", "") or ""),
+        )
         delivery_ledger.notify_user_state(
             new_state=str(getattr(event, "new_state", "") or ""),
             old_state=str(getattr(event, "old_state", "") or ""),
@@ -924,6 +928,7 @@ async def livekit_agent(ctx: JobContext):
 
     def on_final_transcript_for_mute(event) -> None:
         if getattr(event, "is_final", False) and str(getattr(event, "transcript", "") or "").strip():
+            transcription_notice.final_transcript()
             delivery_ledger.notify_final_transcript()
 
     session.on("user_input_transcribed", on_final_transcript_for_mute)
@@ -941,6 +946,10 @@ async def livekit_agent(ctx: JobContext):
         announcer_tts=announcer_tts,
         delivery_ledger=delivery_ledger,
     )
+    from .transcription_notice import TranscriptionTimeoutNotice
+
+    transcription_notice = TranscriptionTimeoutNotice(announcer_queue)
+    delivery_ledger.set_transcript_timeout_sink(transcription_notice.timed_out)
     delivery_ledger.set_announcement_pending_provider(
         announcer_queue.has_pending_announcements
     )
@@ -1054,6 +1063,7 @@ async def livekit_agent(ctx: JobContext):
         session.off("user_input_transcribed", on_final_transcript_for_mute)
         session.off("user_state_changed", on_user_state_changed_for_mute)
         set_vad_backlog_listener(None)
+        delivery_ledger.set_transcript_timeout_sink(None)
         await announcer_queue.close()
         await voice_router.close()
 

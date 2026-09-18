@@ -140,6 +140,7 @@ class VoiceDeliveryLedger:
         self._vad_quiet_task: asyncio.Task[None] | None = None
         self._provisional_mute_recovery = ProvisionalMuteRecovery(vad_transcript_timeout_seconds)
         self._provisional_record: VoiceDeliveryRecord | None = None
+        self._transcript_timeout_sink: Callable[[VoiceDeliveryRecord], None] | None = None
         # True while a safe_to_mute_user has been emitted and neither renewed
         # user speech nor a safe_to_unmute has reopened the mic since.
         self._mute_covers_current_quiet = False
@@ -177,6 +178,11 @@ class VoiceDeliveryLedger:
 
     def set_user_speaking_provider(self, provider: Callable[[], bool] | None) -> None:
         self._user_speaking_provider = provider
+
+    def set_transcript_timeout_sink(
+        self, sink: Callable[[VoiceDeliveryRecord], None] | None
+    ) -> None:
+        self._transcript_timeout_sink = sink
 
     def set_announcement_pending_provider(
         self, provider: Callable[[], bool] | None
@@ -294,6 +300,8 @@ class VoiceDeliveryLedger:
             return False
         self._provisional_record = None
         self.mark_cancelled(record, reason=reason)
+        if reason == "vad_transcript_timeout" and self._transcript_timeout_sink is not None:
+            self._transcript_timeout_sink(record)
         return True
 
     def accept_utterance(self, *, message_id: str, prompt: str) -> VoiceDeliveryRecord:
