@@ -22,6 +22,7 @@ from openbase_coder_cli.openbase_coder_cli_app.item_tags import (
     thread_tags_payload,
 )
 from openbase_coder_cli.openbase_coder_cli_app.thread_cache import (
+    get_cached_thread_history_page,
     get_cached_thread_list,
     get_cached_thread_page,
     get_cached_thread_state,
@@ -586,9 +587,13 @@ def thread_detail(request, thread_id):
         # keeps live-streamed turns that post-date the snapshot.
         history_cursor = request.query_params.get("history_cursor")
         if history_cursor:
-            thread = async_to_sync(manager.get_thread_state)(
+            # Older pages cache too: a not-loaded thread's page read can force
+            # a full rollout-file parse, so re-reading a scrolled-back page
+            # must not repeat that work within the TTL.
+            thread = get_cached_thread_history_page(
+                manager,
                 thread_id,
-                history_cursor=history_cursor,
+                history_cursor,
             )
         else:
             thread = get_cached_thread_state(manager, thread_id)
