@@ -21,6 +21,43 @@ def test_config_update_preserves_user_dotfile_symlinks(tmp_path):
     )
 
 
+def test_codex_migration_keeps_super_agents_when_not_stripping(tmp_path, monkeypatch):
+    path = tmp_path / "config.toml"
+    command = tmp_path / "inject-session-id.sh"
+    monkeypatch.setattr(migration, "INJECT_SESSION_ID_HOOK_PATH", command)
+    path.write_text(
+        "[mcp_servers.super-agents]\n"
+        'command = "super-agents-mcp"\n'
+        'env = { SUPER_AGENTS_BASE_INSTRUCTIONS_PATH = "/x/AGENTS.md" }\n'
+    )
+
+    migration.migrate_codex_user_config(path, strip_super_agents=False)
+    assert "super-agents" in tomllib.loads(path.read_text())["mcp_servers"]
+
+    # Default behavior still retires the legacy shared-home entry.
+    migration.migrate_codex_user_config(path)
+    assert "super-agents" not in tomllib.loads(path.read_text()).get("mcp_servers", {})
+
+
+def test_claude_migration_keeps_super_agents_when_not_stripping(tmp_path, monkeypatch):
+    command = tmp_path / "inject-session-id.sh"
+    monkeypatch.setattr(migration, "INJECT_SESSION_ID_HOOK_PATH", command)
+    state = tmp_path / ".claude.json"
+    settings = tmp_path / "settings.json"
+    entry = {
+        "command": "super-agents-mcp",
+        "env": {"SUPER_AGENTS_BASE_INSTRUCTIONS_PATH": "/x/AGENTS.md"},
+    }
+    state.write_text(json.dumps({"mcpServers": {"super-agents": entry}}))
+
+    migration.migrate_claude_user_config(state, settings, strip_super_agents=False)
+    assert "super-agents" in json.loads(state.read_text())["mcpServers"]
+
+    # Default behavior still retires the legacy shared-home entry.
+    migration.migrate_claude_user_config(state, settings)
+    assert "super-agents" not in json.loads(state.read_text()).get("mcpServers", {})
+
+
 def test_codex_migration_preserves_defaults_unrelated_mcp_and_hook_trust(
     tmp_path, monkeypatch
 ):

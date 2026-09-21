@@ -623,6 +623,59 @@ def test_ensure_codex_config_registers_super_agents_mcp(tmp_path, monkeypatch) -
     assert not (codex_home / "config.toml").exists()
 
 
+def test_ensure_codex_config_registers_shared_super_agents(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    command = workspace / ".venv" / "bin" / "super-agents-mcp"
+    codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    command.parent.mkdir(parents=True)
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    setup_cli._ensure_codex_config(str(workspace), register_shared_super_agents=True)
+
+    shared = tomllib.loads((codex_home / "config.toml").read_text())
+    assert shared["mcp_servers"]["super-agents"]["command"] == str(command)
+
+
+def test_ensure_codex_config_shared_preserves_existing_super_agents(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    command = workspace / ".venv" / "bin" / "super-agents-mcp"
+    codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    command.parent.mkdir(parents=True)
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+    shared_path = codex_home / "config.toml"
+    shared_path.parent.mkdir(parents=True, exist_ok=True)
+    shared_path.write_text(
+        '[mcp_servers.super-agents]\ncommand = "my-own-super-agents"\n',
+        encoding="utf-8",
+    )
+
+    setup_cli._ensure_codex_config(str(workspace), register_shared_super_agents=True)
+
+    shared = tomllib.loads(shared_path.read_text())
+    assert shared["mcp_servers"]["super-agents"]["command"] == "my-own-super-agents"
+
+
+def test_ensure_claude_hooks_registers_shared_super_agents(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    command = workspace / ".venv" / "bin" / "super-agents-mcp"
+    _codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    command.parent.mkdir(parents=True)
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    setup_cli._ensure_claude_hooks(
+        register_shared_super_agents=True, workspace_dir=str(workspace)
+    )
+
+    payload = json.loads((tmp_path / ".claude.json").read_text(encoding="utf-8"))
+    assert payload["mcpServers"]["super-agents"]["command"] == str(command)
+
+
 def test_ensure_codex_config_preserves_user_config_values(
     tmp_path, monkeypatch
 ) -> None:
@@ -1283,7 +1336,7 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
     _patch_setup(
         monkeypatch, "_ensure_claude_mcp", lambda _workspace_dir, **_kwargs: None
     )
-    _patch_setup(monkeypatch, "_ensure_claude_hooks", lambda: None)
+    _patch_setup(monkeypatch, "_ensure_claude_hooks", lambda **_kwargs: None)
     _patch_setup(monkeypatch, "_install_cli_shim", lambda _workspace_dir: None)
     _patch_setup(monkeypatch, "_build_console", lambda _workspace_dir: None)
     _patch_setup(monkeypatch, "install_all_services", lambda _config: None)
