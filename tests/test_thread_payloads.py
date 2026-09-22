@@ -152,3 +152,46 @@ def test_session_from_thread_backfills_model_and_effort_from_newest_turn() -> No
     payload = session.model_dump(mode="json")
     assert payload["turn_history"][-1]["model"] == "claude-fable-5"
     assert payload["turn_history"][-1]["reasoning_effort"] == "high"
+
+
+def test_run_from_turn_maps_recorded_steers() -> None:
+    # Claude Code turns record steering texts on the turn row (there are no
+    # userMessage items); every steer must render in thread views, in order.
+    run = _run_from_turn(
+        {
+            "id": "turn_1",
+            "status": "inProgress",
+            "prompt": "<voice>start the fix</voice>",
+            "steers": [
+                {"text": "<voice>also update docs</voice>", "createdAt": "2026-09-22T12:00:00.000Z"},
+                {"text": "<voice>and push it</voice>", "createdAt": "2026-09-22T12:01:00.000Z"},
+                {"text": "   "},
+                "bogus",
+            ],
+        }
+    )
+
+    assert run.message == "<voice>start the fix</voice>"
+    assert [steer.text for steer in run.steers] == [
+        "<voice>also update docs</voice>",
+        "<voice>and push it</voice>",
+    ]
+    assert run.steers[0].created_at is not None
+
+
+def test_run_from_turn_prefers_user_message_items_over_recorded_steers() -> None:
+    # Codex turns carry steering input as extra userMessage items; recorded
+    # steers must not double them.
+    run = _run_from_turn(
+        {
+            "id": "turn_1",
+            "status": "inProgress",
+            "items": [
+                {"type": "userMessage", "content": [{"type": "text", "text": "start"}]},
+                {"type": "userMessage", "content": [{"type": "text", "text": "steer via item"}]},
+            ],
+            "steers": [{"text": "recorded steer"}],
+        }
+    )
+
+    assert [steer.text for steer in run.steers] == ["steer via item"]
