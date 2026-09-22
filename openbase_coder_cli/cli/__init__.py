@@ -30,6 +30,7 @@ from .onboarding import onboarding
 from .plugins import plugins
 from .profiles import profiles
 from .provision import provision
+from .report import report
 from .reports import reports
 from .restart import restart, self_restart
 from .routines import routines
@@ -119,6 +120,7 @@ main.add_command(auth)
 main.add_command(plugins)
 main.add_command(profiles)
 main.add_command(provision)
+main.add_command(report)
 main.add_command(reports)
 main.add_command(bootstrap)
 main.add_command(restart)
