@@ -40,6 +40,14 @@ STALE_EOU_TRANSCRIPTION_DELAY_SECONDS = 2.0
 # there is no semantic end-of-turn signal backing it.
 VAD_ONLY_USER_TURN_QUIET_GRACE_SECONDS = 2.5
 VAD_ONLY_MIN_SPEECH_SECONDS = 0.75
+# Floor for announcing "speech recognition is having trouble" out loud. This is
+# deliberately higher than the provisional-mute floor above: muting quickly on a
+# 0.75s VAD blip is cheap and reversible, but crying "speech recognition is
+# having trouble" on a brief blip that produced no transcript is a false alarm —
+# a cough, lip-smack, background sound, or echo of the agent's own audio can
+# clear 0.75s without ever being real speech. Only a sustained VAD stretch with
+# no transcript at all is a confident signal that a real utterance was lost.
+TRANSCRIPTION_NOTICE_MIN_SPEECH_SECONDS = 2.0
 # The quiet floor measures total verified silence. LiveKit's endpointing has
 # already verified `end_of_turn_delay` seconds of silence before the
 # utterance is even accepted; credit it (bounded, in case the metric is
