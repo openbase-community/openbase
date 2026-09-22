@@ -82,7 +82,7 @@ openbase-coder setup --backend claude-code
 openbase-coder setup --backend openbase-cloud
 ```
 
-- `codex`: native Codex app-server with OpenAI models.
+- `codex`: native Codex app-server with OpenAI models (`gpt-5.5` by default; `gpt-5`, `sol`, and `astra` are selectable in Settings or with `openbase-coder defaults`).
 - `claude-code`: Claude Code backend using local Claude auth/billing for Super
   Agents UI-driver sessions.
 - `openbase-cloud`: Cloud-proxied Claude Code through Openbase Cloud with
