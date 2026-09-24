@@ -32,7 +32,8 @@ openbase-coder plugins COMMAND [ARGS]
 openbase-coder plugins add ~/code/my-openbase-plugin
 ```
 
-- Installed editable (`-e`) into the CLI Python environment
+- Installed from the local path into the stable plugin site directory
+  `~/.openbase/plugins/site`
 - Useful for active plugin development
 
 ### GitHub URL

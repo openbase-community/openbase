@@ -21,6 +21,7 @@ openbase-coder services COMMAND [ARGS]
 | `up` | Alias for `install`; also configures Tailscale Serve routes |
 | [`start`](services-start.md) | Start default services or one named service |
 | [`stop`](services-stop.md) | Stop all or one service |
+| `uninstall` | Stop services and remove their plists/unit files and wrapper scripts |
 | [`status`](services-status.md) | Show service state summary |
 | [`logs`](services-logs.md) | Tail one service's logs |
 | [`regenerate`](services-regenerate.md) | Rebuild wrappers/plists from `installation.json` |
@@ -30,6 +31,7 @@ openbase-coder services COMMAND [ARGS]
 - `livekit-server` (port `7880`)
 - `codex-app-server` (standard Unix control socket on macOS/Linux; legacy port
   `4500` only for explicit compatibility deployments)
+- `codex-app-server-dispatcher` (dedicated dispatcher control socket)
 - `sync-workers` (cross-device thread snapshot sync, Claude desktop app
   index sync, code-sync reconcile, and other periodic jobs in one process;
   state-dependent jobs no-op until their feature is enabled)
@@ -37,6 +39,9 @@ openbase-coder services COMMAND [ARGS]
 - `livekit-agent`
 - `django-cli` (port `7999`)
 - `code-sync` (optional; installed when code sync is enabled)
+- `openbase-cloud-auth-rehydrate` (optional; cloud workspace auth rehydrate)
+- `openbase-cloud-heartbeat` (optional; cloud workspace idle heartbeat)
+- `openbase-tunneld` (optional; embedded Openbase Direct transport, port `7998`)
 
 ## Examples
 
