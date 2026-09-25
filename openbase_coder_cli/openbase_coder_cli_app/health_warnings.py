@@ -378,6 +378,34 @@ def _livekit_skew_warnings() -> list[dict[str, str]]:
     ]
 
 
+def _codex_version_skew_warnings() -> list[dict[str, str]]:
+    """Warn when a running codex-app-server predates the installed Codex.
+
+    Long-lived services keep the old binary in memory after an upgrade, and
+    every new Codex CLI launch then warns about the stale background
+    service. The banner offers a one-click restart for these ids; the
+    sync-workers tick also restarts them itself once nothing is in flight.
+    """
+    from openbase_coder_cli.services.codex_version_skew import (
+        collect_codex_version_skews,
+    )
+
+    try:
+        skews = collect_codex_version_skews()
+    except Exception:  # noqa: BLE001 - version probe must never break health
+        return []
+    return [
+        _warning(
+            f"service-restart-needed:{skew.service}",
+            "warning",
+            skew.message,
+            "Restart the service to pick up the installed version; it "
+            "restarts automatically once no agent turn or voice call is active.",
+        )
+        for skew in skews
+    ]
+
+
 def _resolve_livekit_binary() -> str | None:
     import os
     import shutil
@@ -469,6 +497,7 @@ def collect_warnings() -> list[dict[str, str]]:
     warnings = _service_warnings()
     warnings.extend(_installation_warnings())
     warnings.extend(_livekit_skew_warnings())
+    warnings.extend(_codex_version_skew_warnings())
     if _code_sync_expected():
         warnings.extend(_sync_warnings())
         warnings.extend(_thread_exchange_warnings())

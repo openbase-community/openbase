@@ -267,3 +267,34 @@ def test_freshness_handshake_is_opt_in_and_passes_loaded_stamp(monkeypatch):
     assert response.status_code == 200
     assert response.data["freshness"]["enabled"] is True
     assert calls == [body]
+
+
+def test_codex_version_skew_warning_offers_restart(monkeypatch) -> None:
+    from openbase_coder_cli.services import codex_version_skew as skew_module
+
+    monkeypatch.setattr(
+        skew_module,
+        "collect_codex_version_skews",
+        lambda: [
+            skew_module.CodexVersionSkew(
+                service="codex-app-server",
+                running_version="0.155.0",
+                installed_version="0.156.1",
+                installed_path="/opt/codex",
+            )
+        ],
+    )
+    warnings = hw._codex_version_skew_warnings()
+    assert [w["id"] for w in warnings] == ["service-restart-needed:codex-app-server"]
+    assert warnings[0]["severity"] == "warning"
+    assert "0.155.0" in warnings[0]["message"]
+    assert "0.156.1" in warnings[0]["message"]
+
+    monkeypatch.setattr(skew_module, "collect_codex_version_skews", lambda: [])
+    assert hw._codex_version_skew_warnings() == []
+
+    def boom():
+        raise RuntimeError("probe exploded")
+
+    monkeypatch.setattr(skew_module, "collect_codex_version_skews", boom)
+    assert hw._codex_version_skew_warnings() == []

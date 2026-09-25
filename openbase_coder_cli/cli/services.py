@@ -6,6 +6,10 @@ import click
 
 from openbase_coder_cli.codex_control_plane import codex_app_server_ready
 from openbase_coder_cli.paths import DEFAULT_LOG_DIR
+from openbase_coder_cli.services.codex_version_skew import (
+    CODEX_APP_SERVER_SERVICE_NAMES,
+    service_version_skew,
+)
 from openbase_coder_cli.services.definitions import SERVICES, ServiceDefinition
 from openbase_coder_cli.services.launchd import (
     install_all_services,
@@ -178,6 +182,14 @@ def status() -> None:
                     f"{name_col} running (pid {info['pid']}), but initialize readiness failed"
                 )
                 has_failure = True
+            elif svc.name in CODEX_APP_SERVER_SERVICE_NAMES and (
+                skew := service_version_skew(svc.name)
+            ):
+                click.echo(
+                    f"{name_col} running (pid {info['pid']}), Codex "
+                    f"{skew.running_version} but {skew.installed_version} is "
+                    "installed — restart to update"
+                )
             else:
                 click.echo(f"{name_col} running (pid {info['pid']})")
         else:
