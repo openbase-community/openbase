@@ -1,6 +1,6 @@
 # services status
 
-Show launchd install/running state for all managed services.
+Show install/running state for all managed services.
 
 ## Usage
 
@@ -14,7 +14,7 @@ Output includes whether each service is:
 - `running (pid ...)`
 - `loaded (not running, last exit: ...)`
 
-The command also verifies the Tailscale Serve routes that the iOS app uses:
+The command also verifies the Openbase VPN/Serve routes that the iOS app uses:
 
 ```bash
 tailscale serve --bg --http=18080 http://127.0.0.1:7999

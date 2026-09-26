@@ -1,6 +1,6 @@
 # services logs
 
-Tail stdout/stderr logs for one service.
+Tail logs for one service.
 
 ## Usage
 
@@ -14,4 +14,7 @@ openbase-coder services logs NAME
 openbase-coder services logs django-cli
 ```
 
-Log files live at `~/.openbase/logs/<service>.stdout.log` and `.stderr.log`.
+Log files live at `~/.openbase/logs/<service>.log`. Older installs may still
+have `~/.openbase/logs/<service>.stdout.log` and
+`~/.openbase/logs/<service>.stderr.log`; the command tails those legacy files
+when present.

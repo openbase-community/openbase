@@ -34,7 +34,7 @@ openbase-coder [OPTIONS] COMMAND [ARGS]
 | [`restart`](restart.md) | Restart Openbase-managed services |
 | [`self-update`](self-update.md) | Update a standalone install to the latest release |
 | [`version`](self-update.md) | Print CLI and package versions plus update availability |
-| [`services`](services.md) | Manage launchd services |
+| [`services`](services.md) | Manage Openbase background services |
 | [`doctor`](doctor.md) | Verify install, service health, and secrets |
 | [`onboarding`](onboarding.md) | Inspect onboarding state and report it to Openbase cloud |
 | [`login`](login.md) | Email-code login to Openbase cloud |
