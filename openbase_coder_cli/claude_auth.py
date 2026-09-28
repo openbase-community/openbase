@@ -63,7 +63,9 @@ class ClaudeAuthStatus:
     returncode: int
 
 
-def claude_auth_status(*, claude_command: str | None = None) -> ClaudeAuthStatus:
+def claude_auth_status(
+    *, claude_command: str | None = None, timeout: float | None = None
+) -> ClaudeAuthStatus:
     command = claude_command or shutil.which("claude") or "claude"
     try:
         completed = subprocess.run(
@@ -71,12 +73,19 @@ def claude_auth_status(*, claude_command: str | None = None) -> ClaudeAuthStatus
             check=False,
             capture_output=True,
             text=True,
+            timeout=timeout,
         )
     except FileNotFoundError:
         return ClaudeAuthStatus(
             logged_in=False,
             raw_output="Claude Code CLI not found on PATH.",
             returncode=127,
+        )
+    except subprocess.TimeoutExpired:
+        return ClaudeAuthStatus(
+            logged_in=False,
+            raw_output=f"Timed out waiting for `{command} auth status`.",
+            returncode=124,
         )
 
     output = (completed.stdout or completed.stderr).strip()

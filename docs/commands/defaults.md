@@ -9,6 +9,10 @@ settings.
 Service tiers (Fast mode) apply to the Codex backend only; Claude Code turns
 always run at the standard tier. Reasoning levels apply to both backends.
 
+The model implies the engine. Codex models are `gpt-5.5` (default), `gpt-5`,
+`sol`, and `astra`; Claude Code models are `fable`, `opus`, `sonnet`, and
+`haiku`. Codex models are listed but not selectable on Openbase Cloud.
+
 Fresh Openbase Cloud installs default both dispatcher and Super Agents to Claude Haiku, and the Settings UI marks it as the default. Existing Sonnet selections remain supported; trial accounts run those requests on Haiku and the UI explains that compatibility behavior.
 
 ## Usage
@@ -33,4 +37,5 @@ openbase-coder defaults dispatcher-reasoning low
 openbase-coder defaults dispatcher-model gpt-5.5
 openbase-coder defaults super-agents-reasoning high
 openbase-coder defaults super-agents-model opus
+openbase-coder defaults super-agents-model sol
 ```

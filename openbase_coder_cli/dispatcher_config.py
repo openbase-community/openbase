@@ -116,11 +116,28 @@ BACKEND_MODEL_OPTIONS = {
     OPENBASE_CLOUD_BACKEND: OPENBASE_CLOUD_CLAUDE_MODEL_OPTIONS,
 }
 CLAUDE_CODE_MODEL_ALIASES = {option["id"] for option in CLAUDE_CODE_MODEL_OPTIONS}
+# Canonical Codex slugs; must stay a subset of super-agents'
+# MODEL_CATALOG[CODEX_BACKEND] so model_engine() classifies each as codex.
 CODEX_MODEL_OPTIONS = (
     {
         "id": "gpt-5.5",
         "label": "GPT-5.5",
         "description": "Codex default model (speed is controlled by the service tier setting).",
+    },
+    {
+        "id": "gpt-5",
+        "label": "GPT-5",
+        "description": "OpenAI GPT-5 via Codex.",
+    },
+    {
+        "id": "sol",
+        "label": "Sol",
+        "description": "OpenAI Sol via Codex.",
+    },
+    {
+        "id": "astra",
+        "label": "Astra",
+        "description": "OpenAI Astra via Codex.",
     },
 )
 
@@ -134,6 +151,15 @@ CLOUD_BACKENDS = {OPENBASE_CLOUD_BACKEND, OPENBASE_CLOUD_CODEX_BACKEND}
 CLAUDE_ENGINE = "claude"
 CODEX_ENGINE = "codex"
 ROLE_MODELS_KEY = "role_models"
+# Why an engine cannot run on this install; surfaced per model option as
+# ``unavailable_reason`` and echoed back as the PUT rejection error.
+CODEX_CLOUD_UNAVAILABLE_REASON = (
+    "Codex isn't available on Openbase Cloud (Codex threads are read-only there)."
+)
+CODEX_NOT_INSTALLED_REASON = (
+    "Codex isn't set up on this install. Rerun setup with --backend codex."
+)
+CLAUDE_NOT_LOGGED_IN_REASON = "Claude Code isn't logged in. Run `claude login`."
 
 
 def model_engine(model: str | None) -> str | None:
@@ -178,26 +204,84 @@ def identity_for_model(model: str, location: str) -> str:
     return CODEX_BACKEND if engine == CODEX_ENGINE else CLAUDE_CODE_BACKEND
 
 
+def engine_unavailable_reason(engine: str, location: str) -> str | None:
+    """Why `engine` cannot run on this install at `location`, or None if it can.
+
+    Codex needs the Codex app-server services, which setup only installs for
+    a Codex backend (the same backend gating ``services status`` and the
+    doctor report as "not used"); on Openbase Cloud it is read-only. Claude
+    Code runs on the user's own Claude login locally (the check the doctor
+    and backend settings use) and through the Openbase Cloud proxy on cloud.
+    """
+    if engine == CODEX_ENGINE:
+        if location == LOCATION_CLOUD:
+            return CODEX_CLOUD_UNAVAILABLE_REASON
+        from openbase_coder_cli.services.definitions import SERVICES
+        from openbase_coder_cli.services.selection import (
+            service_supports_configured_backends,
+        )
+
+        codex_app_server = next(
+            (svc for svc in SERVICES if svc.name == "codex-app-server"), None
+        )
+        if codex_app_server is not None and not service_supports_configured_backends(
+            codex_app_server
+        ):
+            return CODEX_NOT_INSTALLED_REASON
+        return None
+    if engine == CLAUDE_ENGINE:
+        if location == LOCATION_CLOUD:
+            return None
+        from openbase_coder_cli.claude_auth import claude_auth_status
+
+        # Fail open: only a definite "not logged in" answer from the CLI
+        # marks Claude unavailable. A missing binary on the service's PATH,
+        # a timeout, or any probe error must not block picking Claude
+        # models on an install that otherwise works.
+        try:
+            auth = claude_auth_status(timeout=5)
+        except Exception:
+            return None
+        if auth.returncode == 0 and not auth.logged_in:
+            return CLAUDE_NOT_LOGGED_IN_REASON
+        return None
+    return None
+
+
 def combined_model_options(location: str) -> tuple[dict[str, Any], ...]:
     """Every selectable model across both engines, engine-labeled.
 
     On Openbase Cloud, Codex models are listed but unavailable (Codex threads
-    are read-only there; only Claude Code executes).
+    are read-only there; only Claude Code executes). Locally an engine is
+    unavailable when it cannot run on this install (see
+    :func:`engine_unavailable_reason`); the option then carries
+    ``unavailable_reason`` so the UI can say why. The currently configured
+    model stays listed either way.
     """
     claude_options = (
         OPENBASE_CLOUD_CLAUDE_MODEL_OPTIONS
         if location == LOCATION_CLOUD
         else CLAUDE_CODE_MODEL_OPTIONS
     )
+    claude_reason = engine_unavailable_reason(CLAUDE_ENGINE, location)
+    codex_reason = engine_unavailable_reason(CODEX_ENGINE, location)
     combined: list[dict[str, Any]] = []
     for option in claude_options:
-        combined.append({**option, "engine": CLAUDE_ENGINE, "available": True})
+        combined.append(
+            {
+                **option,
+                "engine": CLAUDE_ENGINE,
+                "available": claude_reason is None,
+                "unavailable_reason": claude_reason,
+            }
+        )
     for option in CODEX_MODEL_OPTIONS:
         combined.append(
             {
                 **option,
                 "engine": CODEX_ENGINE,
-                "available": location != LOCATION_CLOUD,
+                "available": codex_reason is None,
+                "unavailable_reason": codex_reason,
             }
         )
     return tuple(combined)

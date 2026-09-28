@@ -831,6 +831,24 @@ def test_default_dispatcher_model_sets_config_file(monkeypatch, tmp_path):
     )
 
 
+def test_default_dispatcher_model_accepts_other_codex_models(monkeypatch, tmp_path):
+    config_path = tmp_path / "dispatcher-config.json"
+    monkeypatch.setenv("OPENBASE_CODING_BACKEND", "codex")
+    monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
+
+    for model in ("gpt-5", "sol", "astra"):
+        result = CliRunner().invoke(defaults_cli.defaults, ["dispatcher-model", model])
+
+        assert result.exit_code == 0, result.output
+        assert f"Default dispatcher model set to {model}" in result.output
+        assert (
+            json.loads(config_path.read_text(encoding="utf-8"))["backend_models"][
+                "codex"
+            ]["dispatcher"]
+            == model
+        )
+
+
 def test_default_super_agents_model_sets_config_file(monkeypatch, tmp_path):
     config_path = tmp_path / "dispatcher-config.json"
     monkeypatch.setenv("OPENBASE_CODING_BACKEND", "codex")
