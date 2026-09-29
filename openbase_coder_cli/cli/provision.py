@@ -322,6 +322,10 @@ def provision(
         tailnet_provider="netmesh-tsnet" if kind == "container" else None,
         skip_services=kind == "container",
         json_progress=False,
+        # ctx.invoke passes no command-line flags, so setup's interactivity
+        # check falls through to isatty(); on Maritime the VM console is a tty
+        # and the "Log in to Openbase Cloud now?" prompt blocked boot forever.
+        interactive_mode=False,
     )
     if post_setup_env:
         # Setup must create the complete env file on a new volume before we
