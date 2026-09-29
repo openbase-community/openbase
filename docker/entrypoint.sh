@@ -37,8 +37,25 @@ if [ "${OPENBASE_CODER_RUNTIME:-}" = "maritime" ]; then
     # env value can never silently boot the tailscale path.
     NETWORK_MODE="${OPENBASE_CODER_NETWORK_MODE:-netmesh}"
     if [ "$(id -u)" = "0" ]; then
-        echo "[entrypoint] Refusing to run the Maritime workspace as root." >&2
-        exit 1
+        # Maritime's VM init launches the image entrypoint as root regardless
+        # of the Dockerfile USER (observed 2026-09-28: "Refusing to run ... as
+        # root" followed by a kernel panic because PID 1 exited). The workspace
+        # must never run as root, so reparent the durable volume to the image
+        # user and re-exec this script unprivileged with the environment
+        # intact. A bare `id -u` check stays below for anything that slips
+        # through (for example a missing user) so root can still not proceed.
+        if ! id openbase >/dev/null 2>&1; then
+            echo "[entrypoint] Refusing to run the Maritime workspace as root (no 'openbase' user)." >&2
+            exit 1
+        fi
+        mkdir -p /data
+        # Reparent only root-owned entries (the platform-created mount and
+        # first-boot directories); never rewrite a user's existing files.
+        find /data -maxdepth 2 -user root -exec chown openbase:openbase {} + 2>/dev/null || true
+        echo "[entrypoint] Started as root; re-executing as 'openbase'." >&2
+        exec setpriv --reuid=openbase --regid=openbase --init-groups \
+            env HOME=/home/openbase USER=openbase LOGNAME=openbase \
+            "$0" "$@"
     fi
     case "$DATA_DIR" in
         /data/*) ;;
