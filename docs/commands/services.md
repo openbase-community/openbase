@@ -1,6 +1,6 @@
 # services
 
-Manage Openbase launchd background services.
+Manage Openbase-managed background services.
 
 In the apps: the [desktop app](../desktop-app.md) and
 [console](../console.md) show the same services on their **Status** page and
@@ -21,15 +21,17 @@ openbase-coder services COMMAND [ARGS]
 | `up` | Alias for `install`; also configures Tailscale Serve routes |
 | [`start`](services-start.md) | Start default services or one named service |
 | [`stop`](services-stop.md) | Stop all or one service |
+| `uninstall` | Stop services and remove generated service files |
 | [`status`](services-status.md) | Show service state summary |
 | [`logs`](services-logs.md) | Tail one service's logs |
-| [`regenerate`](services-regenerate.md) | Rebuild wrappers/plists from `installation.json` |
+| [`regenerate`](services-regenerate.md) | Rebuild generated service files from `installation.json` |
 
 ## Managed Service Names
 
 - `livekit-server` (port `7880`)
 - `codex-app-server` (standard Unix control socket on macOS/Linux; legacy port
   `4500` only for explicit compatibility deployments)
+- `codex-app-server-dispatcher` (dedicated dispatcher app-server)
 - `sync-workers` (cross-device thread snapshot sync, Claude desktop app
   index sync, code-sync reconcile, and other periodic jobs in one process;
   state-dependent jobs no-op until their feature is enabled)
@@ -37,6 +39,9 @@ openbase-coder services COMMAND [ARGS]
 - `livekit-agent`
 - `django-cli` (port `7999`)
 - `code-sync` (optional; installed when code sync is enabled)
+- `openbase-cloud-auth-rehydrate` (optional one-shot Cloud workspace auth rehydrate)
+- `openbase-cloud-heartbeat` (optional Cloud workspace idle heartbeat)
+- `openbase-tunneld` (optional embedded tailnet transport; port `7998`)
 
 ## Examples
 
