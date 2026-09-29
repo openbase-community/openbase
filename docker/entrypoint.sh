@@ -20,6 +20,20 @@
 set -euo pipefail
 umask 077
 
+# The Dockerfile ENV is not guaranteed to reach us: Maritime's VM init rebuilds
+# the environment from its own store and drops the image's ENV, so the cli
+# venv fell off PATH ("openbase-coder: command not found", 2026-09-28).
+# Re-assert the image defaults here; explicit platform values still win.
+case ":${PATH:-}:" in
+    *":/opt/openbase-coder/workspace/cli/.venv/bin:"*) ;;
+    *)
+        export PATH="/home/openbase/.openbase/bin:/opt/openbase-coder/workspace/cli/.venv/bin:${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
+        ;;
+esac
+export OPENBASE_CODER_WORKSPACE_DIR="${OPENBASE_CODER_WORKSPACE_DIR:-/opt/openbase-coder/workspace}"
+export OPENBASE_CODER_CLI_CONSOLE_BUILD_DIR="${OPENBASE_CODER_CLI_CONSOLE_BUILD_DIR:-/opt/openbase-coder/console-dist}"
+export UV_PYTHON_DOWNLOADS="${UV_PYTHON_DOWNLOADS:-never}"
+
 if [ "$#" -gt 0 ]; then
     exec "$@"
 fi
