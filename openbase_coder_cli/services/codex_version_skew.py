@@ -113,44 +113,60 @@ def installed_codex_version(binary: Path | None = None) -> tuple[str, str] | Non
     return (key[0], version) if version else None
 
 
-async def _running_version_async(endpoint) -> str | None:
+class _RpcError(RuntimeError):
+    """The app-server answered a request with a JSON-RPC error."""
+
+
+async def _open_connection(endpoint):
     from super_agents.app_endpoint import open_app_server_connection
 
-    connection = await asyncio.wait_for(
+    return await asyncio.wait_for(
         open_app_server_connection(endpoint, open_timeout=_HANDSHAKE_TIMEOUT_SECONDS),
         timeout=_HANDSHAKE_TIMEOUT_SECONDS,
     )
-    try:
-        await connection.send(
-            json.dumps(
-                {
-                    "id": 0,
-                    "method": "initialize",
-                    "params": {
-                        "clientInfo": {
-                            "name": "openbase-coder-version-probe",
-                            "title": "Openbase Coder version probe",
-                            "version": "0.1.0",
-                        },
-                        "capabilities": {"experimentalApi": True},
-                    },
-                }
-            )
+
+
+async def _rpc(connection, request_id: int, method: str, params: dict) -> dict:
+    """One request/response over an already-open app-server connection.
+
+    Notifications and other responses that arrive first are skipped.
+    """
+    await connection.send(
+        json.dumps({"id": request_id, "method": method, "params": params})
+    )
+    while True:
+        raw = await asyncio.wait_for(
+            connection.recv(), timeout=_HANDSHAKE_TIMEOUT_SECONDS
         )
-        while True:
-            raw = await asyncio.wait_for(
-                connection.recv(), timeout=_HANDSHAKE_TIMEOUT_SECONDS
-            )
-            if isinstance(raw, bytes):
-                raw = raw.decode("utf-8")
-            message = json.loads(raw)
-            if not isinstance(message, dict) or message.get("id") != 0:
-                continue
-            if message.get("error"):
-                return None
-            result = message.get("result")
-            user_agent = result.get("userAgent") if isinstance(result, dict) else None
-            return parse_user_agent_version(user_agent)
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        message = json.loads(raw)
+        if not isinstance(message, dict) or message.get("id") != request_id:
+            continue
+        if message.get("error"):
+            raise _RpcError(f"{method}: {message['error']}")
+        result = message.get("result")
+        return result if isinstance(result, dict) else {}
+
+
+_INITIALIZE_PARAMS = {
+    "clientInfo": {
+        "name": "openbase-coder-version-probe",
+        "title": "Openbase Coder version probe",
+        "version": "0.1.0",
+    },
+    "capabilities": {"experimentalApi": True},
+}
+
+
+async def _running_version_async(endpoint) -> str | None:
+    connection = await _open_connection(endpoint)
+    try:
+        try:
+            result = await _rpc(connection, 0, "initialize", _INITIALIZE_PARAMS)
+        except _RpcError:
+            return None
+        return parse_user_agent_version(result.get("userAgent"))
     finally:
         await connection.close()
 
@@ -318,10 +334,156 @@ def voice_session_active() -> bool | None:
         return None
 
 
+# --- attached Codex sessions -------------------------------------------------
+
+# A loaded thread that changed this recently is a conversation someone is in
+# the middle of even when no turn is running at the instant of the probe: the
+# user is reading the reply or typing the next message. Loaded threads idle
+# for longer are open tabs nobody is using; a restart drops their session,
+# which ``codex resume`` restores.
+RECENT_THREAD_ACTIVITY_SECONDS = 10 * 60.0
+RECENT_THREAD_ACTIVITY_ENV = "OPENBASE_CODEX_RECENT_THREAD_SECONDS"
+_THREAD_PROBE_TIMEOUT_SECONDS = 20.0
+_LOADED_THREAD_PAGE_LIMIT = 100
+_LOADED_THREAD_MAX_PAGES = 10
+
+
+def recent_thread_activity_seconds() -> float:
+    raw = os.environ.get(RECENT_THREAD_ACTIVITY_ENV, "").strip()
+    try:
+        return float(raw) if raw else RECENT_THREAD_ACTIVITY_SECONDS
+    except ValueError:
+        return RECENT_THREAD_ACTIVITY_SECONDS
+
+
+def _epoch_seconds(value: object) -> float:
+    if isinstance(value, bool):
+        return 0.0
+    if isinstance(value, (int, float)):
+        seconds = float(value)
+        return seconds / 1000.0 if seconds > 1e12 else seconds  # ms timestamps
+    if isinstance(value, str):
+        return _iso_to_epoch(value)
+    return 0.0
+
+
+def thread_in_use(thread: dict | None, *, now: float, recent_seconds: float) -> bool:
+    """Whether a loaded app-server thread must hold off a restart.
+
+    The app-server reports ``status.type`` as ``active`` (a turn is running
+    or waiting on an approval), ``idle``, ``notLoaded`` or ``systemError``.
+    Active threads and idle threads with recent activity are in use. A
+    thread that could not be read (``None``) or reports an unknown status
+    counts as in use: restarting under an unknown conversation is the one
+    thing this must not do.
+    """
+    if not isinstance(thread, dict):
+        return True
+    status = thread.get("status")
+    status_type = status.get("type") if isinstance(status, dict) else status
+    if status_type in {"notLoaded", "systemError"}:
+        return False
+    if status_type != "idle":
+        return True
+    return now - _epoch_seconds(thread.get("updatedAt")) <= recent_seconds
+
+
+async def _in_use_thread_ids_async(
+    endpoint, *, now: float, recent_seconds: float
+) -> list[str]:
+    connection = await _open_connection(endpoint)
+    try:
+        await _rpc(connection, 0, "initialize", _INITIALIZE_PARAMS)
+        loaded: list[str] = []
+        cursor: object = None
+        request_id = 1
+        for _ in range(_LOADED_THREAD_MAX_PAGES):
+            params: dict = {"limit": _LOADED_THREAD_PAGE_LIMIT}
+            if cursor:
+                params["cursor"] = cursor
+            page = await _rpc(connection, request_id, "thread/loaded/list", params)
+            request_id += 1
+            for item in page.get("data") or []:
+                thread_id = item if isinstance(item, str) else None
+                if isinstance(item, dict):
+                    thread_id = item.get("id")
+                if isinstance(thread_id, str) and thread_id:
+                    loaded.append(thread_id)
+            cursor = page.get("nextCursor")
+            if not cursor:
+                break
+        in_use: list[str] = []
+        for thread_id in loaded:
+            try:
+                result = await _rpc(
+                    connection,
+                    request_id,
+                    "thread/read",
+                    {"threadId": thread_id, "includeTurns": False},
+                )
+                thread = result.get("thread")
+            except _RpcError:
+                thread = None
+            request_id += 1
+            if thread_in_use(thread, now=now, recent_seconds=recent_seconds):
+                in_use.append(thread_id)
+        return in_use
+    finally:
+        await connection.close()
+
+
+def attached_sessions_in_use(
+    service_names: tuple[str, ...],
+    *,
+    now: float | None = None,
+    recent_seconds: float | None = None,
+) -> int | None:
+    """Loaded threads someone is using on the given services' app-servers.
+
+    Interactive ``codex`` TUIs attach to the shared app-server, so their
+    conversations are invisible to the Super Agents state file; the server
+    itself knows which loaded threads are mid-turn or freshly active.
+    ``None`` when any probe failed, which callers treat as busy.
+    """
+    import time
+
+    current = time.time() if now is None else now
+    window = (
+        recent_thread_activity_seconds() if recent_seconds is None else recent_seconds
+    )
+    total = 0
+    for name in service_names:
+        try:
+            in_use = asyncio.run(
+                asyncio.wait_for(
+                    _in_use_thread_ids_async(
+                        service_endpoint(name), now=current, recent_seconds=window
+                    ),
+                    timeout=_THREAD_PROBE_TIMEOUT_SECONDS,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - unknown workload blocks
+            logger.info(
+                "codex_version_skew session probe failed service=%s error=%s",
+                name,
+                exc,
+            )
+            return None
+        if in_use:
+            logger.info(
+                "codex_version_skew sessions_in_use service=%s threads=%s",
+                name,
+                in_use,
+            )
+        total += len(in_use)
+    return total
+
+
 def restart_blockers(
     *,
     active_turns: int | None,
     voice_active: bool | None,
+    sessions_in_use: int | None = 0,
 ) -> list[str]:
     """Why an automatic restart must wait; empty means it is safe now."""
     blockers: list[str] = []
@@ -333,6 +495,10 @@ def restart_blockers(
         blockers.append("voice session state unknown")
     elif voice_active:
         blockers.append("voice session in progress")
+    if sessions_in_use is None:
+        blockers.append("Codex session state unknown")
+    elif sessions_in_use:
+        blockers.append(f"{sessions_in_use} Codex session(s) in use")
     return blockers
 
 
@@ -346,6 +512,10 @@ _last_scheduled_lock = threading.Lock()
 
 def run_auto_restart_tick() -> dict[str, object]:
     """Restart skewed codex services when nothing is in flight.
+
+    "In flight" covers Super Agents turns, voice calls, and conversations
+    attached to the app-server itself (interactive ``codex`` TUIs): a loaded
+    thread that is mid-turn or changed within the recent-activity window.
 
     Returns a summary for logging/tests: ``skews`` found, ``blockers`` (why
     the restart waited), and ``restarted`` (service names scheduled).
@@ -371,9 +541,11 @@ def run_auto_restart_tick() -> dict[str, object]:
         summary["blockers"] = ["already restarted for this version pair"]
         return summary
 
+    names = tuple(skew.service for skew in pending)
     blockers = restart_blockers(
         active_turns=super_agents_active_turn_count(),
         voice_active=voice_session_active(),
+        sessions_in_use=attached_sessions_in_use(names),
     )
     summary["blockers"] = blockers
     if blockers:
@@ -381,7 +553,6 @@ def run_auto_restart_tick() -> dict[str, object]:
 
     from openbase_coder_cli.services.restart import RestartRequest, schedule_restart
 
-    names = tuple(skew.service for skew in pending)
     schedule_restart(RestartRequest(services=names), warn=False)
     with _last_scheduled_lock:
         for skew in pending:

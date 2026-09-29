@@ -174,9 +174,14 @@ Openbase handles this itself:
 - `openbase-coder services status` prints the same mismatch next to the
   service.
 - The `sync-workers` service restarts the affected services automatically
-  once no agent turn or voice call has been active recently. Set
-  `OPENBASE_CODEX_AUTO_RESTART=0` in `~/.openbase/.env` to keep the warning
-  but never restart automatically.
+  once nothing is in flight: no Super Agents turn, no voice call, and no
+  conversation attached to the app-server (an interactive `codex` chat)
+  that is mid-turn, waiting on an approval, or was active in the last ten
+  minutes. An open `codex` tab that has been idle longer than that does not
+  hold the restart back; it loses its connection and `codex resume` brings
+  the conversation back. Set `OPENBASE_CODEX_AUTO_RESTART=0` in
+  `~/.openbase/.env` to keep the warning but never restart automatically;
+  `OPENBASE_CODEX_RECENT_THREAD_SECONDS` changes the ten-minute window.
 
 To restart by hand: `openbase-coder restart --service codex-app-server`
 (and `--service codex-app-server-dispatcher`). This briefly interrupts
