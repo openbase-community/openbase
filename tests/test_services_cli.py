@@ -165,6 +165,29 @@ def test_services_status_allows_optional_stopped_service(monkeypatch):
     )
 
 
+def test_services_status_handles_uninstalled_codex_app_server(monkeypatch):
+    monkeypatch.setattr(services_cli, "require_installation", lambda: None)
+    monkeypatch.setattr(services_cli, "configured_coding_backends", lambda: ["codex"])
+    monkeypatch.setattr(
+        services_cli,
+        "SERVICES",
+        [SimpleNamespace(name="codex-app-server", install_by_default=True)],
+    )
+    monkeypatch.setattr(
+        services_cli, "launchctl_status", lambda _svc: {"installed": False}
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.codex_control_plane.shared_codex_daemon_ready",
+        lambda: False,
+    )
+
+    result = CliRunner().invoke(services_cli.services, ["status"])
+
+    assert result.exit_code != 0
+    assert "codex-app-server     not installed" in result.output
+    assert not isinstance(result.exception, KeyError)
+
+
 def test_uninstall_sweeps_all_services_without_installation(monkeypatch):
     removed = []
     monkeypatch.setattr(
