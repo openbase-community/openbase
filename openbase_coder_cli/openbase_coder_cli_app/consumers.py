@@ -29,6 +29,10 @@ from openbase_coder_cli.openbase_coder_cli_app.thread_errors import (
 from openbase_coder_cli.openbase_coder_cli_app.thread_metadata import (
     annotate_thread_payload,
 )
+from openbase_coder_cli.openbase_coder_cli_app.thread_models import (
+    validate_model_for_thread,
+)
+from openbase_coder_cli.thread_model_overrides import set_thread_model_override
 from openbase_coder_cli.thread_sync.session_manager import get_session_manager
 
 logger = logging.getLogger(__name__)
@@ -37,6 +41,24 @@ logger = logging.getLogger(__name__)
 def _friendly_error(exc: Exception) -> str:
     """Extract a safe human-readable message from manager errors."""
     return thread_error_message(exc)
+
+
+async def _apply_turn_model(manager, thread_id: str, content: dict) -> str | None:
+    """Validate and persist an optional per-turn model switch.
+
+    Mirrors the HTTP turn endpoints: a `model` in the payload must stay on the
+    thread's own backend and is stored as the thread's model override so later
+    turns keep using it. Raises ValueError on unknown or cross-backend models.
+    """
+    model = content.get("model")
+    if not model or not isinstance(model, str):
+        return None
+    thread = await manager.get_thread_state(thread_id)
+    if thread is None:
+        raise ValueError(f"Thread {thread_id} not found")
+    model = validate_model_for_thread(thread.backend, model)
+    set_thread_model_override(thread_id, model)
+    return model
 
 
 class ThreadConsumer(AsyncJsonWebsocketConsumer):
@@ -100,7 +122,8 @@ class ThreadConsumer(AsyncJsonWebsocketConsumer):
                 )
                 return
             try:
-                await manager.start_turn(self.thread_id, prompt)
+                model = await _apply_turn_model(manager, self.thread_id, content)
+                await manager.start_turn(self.thread_id, prompt, model=model)
             except (ValueError, RuntimeError) as exc:
                 logger.warning(
                     "start_turn failed for thread %s: %s", self.thread_id, exc
@@ -118,7 +141,8 @@ class ThreadConsumer(AsyncJsonWebsocketConsumer):
                 return
             try:
                 # queue_turn broadcasts refreshed thread_state to the group.
-                result = await manager.queue_turn(self.thread_id, prompt)
+                model = await _apply_turn_model(manager, self.thread_id, content)
+                result = await manager.queue_turn(self.thread_id, prompt, model=model)
                 await self.send_json({"type": "turn_queued", "data": result})
             except (ValueError, RuntimeError) as exc:
                 logger.warning(
@@ -525,8 +549,11 @@ class IOSAppControlConsumer(AsyncJsonWebsocketConsumer):
         command_id = content.get("command_id")
         if not isinstance(command_id, str) or not COMMAND_ID_RE.match(command_id):
             return
-        logger.info('dispatch_timing stage=ios_control_ack_received command_id=%s server_received_unix_ms=%.3f',
-            command_id, time.time()*1000)
+        logger.info(
+            "dispatch_timing stage=ios_control_ack_received command_id=%s server_received_unix_ms=%.3f",
+            command_id,
+            time.time() * 1000,
+        )
         await self.channel_layer.group_send(
             ack_group_name(command_id),
             {"type": "ios_app_control_ack", "command_id": command_id},

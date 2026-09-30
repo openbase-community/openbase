@@ -35,7 +35,9 @@ class FakeManager:
     async def get_session_state(self, session_id: str) -> ThreadInfo | None:
         return self.threads.get(session_id)
 
-    async def start_turn(self, thread_id: str, prompt: str) -> str:
+    async def start_turn(
+        self, thread_id: str, prompt: str, model: str | None = None
+    ) -> str:
         self.calls.append(("start_turn", thread_id))
         return f"turn-{self.backend}"
 

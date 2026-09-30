@@ -260,13 +260,17 @@ class MultiBackendSessionManager:
             history_cursor=history_cursor,
         )
 
-    async def start_turn(self, thread_id: str, prompt: str) -> str:
+    async def start_turn(
+        self, thread_id: str, prompt: str, model: str | None = None
+    ) -> str:
         manager = await self._manager_for_thread(thread_id)
-        return await manager.start_turn(thread_id, prompt)
+        return await manager.start_turn(thread_id, prompt, model=model)
 
-    async def queue_turn(self, thread_id: str, prompt: str) -> dict[str, Any]:
+    async def queue_turn(
+        self, thread_id: str, prompt: str, model: str | None = None
+    ) -> dict[str, Any]:
         manager = await self._manager_for_thread(thread_id)
-        return await manager.queue_turn(thread_id, prompt)
+        return await manager.queue_turn(thread_id, prompt, model=model)
 
     async def steer_turn(self, thread_id: str, prompt: str) -> dict[str, Any]:
         manager = await self._manager_for_thread(thread_id)
@@ -276,9 +280,11 @@ class MultiBackendSessionManager:
         manager = await self._manager_for_thread(thread_id)
         return await manager.interrupt_turn(thread_id)
 
-    async def send_message(self, session_id: str, message: str) -> str:
+    async def send_message(
+        self, session_id: str, message: str, model: str | None = None
+    ) -> str:
         manager = await self._manager_for_thread(session_id)
-        return await manager.send_message(session_id, message)
+        return await manager.send_message(session_id, message, model=model)
 
     async def archive_thread(self, thread_id: str) -> bool:
         manager = await self._manager_for_thread(thread_id)
