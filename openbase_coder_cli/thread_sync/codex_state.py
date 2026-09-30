@@ -43,7 +43,6 @@ FINGERPRINT_MATCH_KEYS = (
 logger = logging.getLogger(__name__)
 
 
-
 def state_db_path(home: Path) -> Path:
     """Path of the newest-schema ``state_<N>.sqlite`` in ``home``.
 
@@ -63,17 +62,21 @@ def state_db_path(home: Path) -> Path:
             best_path = candidate
     return best_path
 
+
 def _state_db_version(path: Path) -> int | None:
     match = _STATE_DB_PATTERN.fullmatch(path.name)
     return int(match.group(1)) if match else None
 
+
 class ThreadTransferError(RuntimeError):
     """Raised when a thread cannot be transferred conservatively."""
+
 
 @dataclass(frozen=True)
 class ThreadSyncSafety:
     safe: bool
     reason: str
+
 
 def _row_updated_ms(row: dict[str, Any]) -> int:
     updated_at_ms = row.get("updated_at_ms")
@@ -83,6 +86,7 @@ def _row_updated_ms(row: dict[str, Any]) -> int:
     if isinstance(updated_at, int):
         return updated_at * 1000
     return 0
+
 
 def _thread_safe_for_sync(
     row: dict[str, Any],
@@ -107,6 +111,7 @@ def _thread_safe_for_sync(
         return ThreadSyncSafety(False, "non_terminal")
     return ThreadSyncSafety(True, "safe")
 
+
 def _target_row_safe_for_overwrite(
     row: dict[str, Any],
     home: Path,
@@ -117,6 +122,7 @@ def _target_row_safe_for_overwrite(
         return False
     terminal, _ = _rollout_terminal_event(rollout)
     return terminal in TERMINAL_EVENT_TYPES
+
 
 def _rollout_terminal_event(path: Path) -> tuple[str | None, bool]:
     """Last parseable event type, plus whether any line failed to decode.
@@ -129,24 +135,29 @@ def _rollout_terminal_event(path: Path) -> tuple[str | None, bool]:
     """
     last_event_type: str | None = None
     has_undecodable_lines = False
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            has_undecodable_lines = True
-            continue
-        if not isinstance(event, dict):
-            has_undecodable_lines = True
-            continue
-        event_type = _string(event.get("type"))
-        payload = event.get("payload")
-        if event_type == "event_msg" and isinstance(payload, dict):
-            last_event_type = _string(payload.get("type"))
-        elif event_type:
-            last_event_type = event_type
+    # Stream line by line: Codex rollouts can exceed a gigabyte, and
+    # read_text().splitlines() held the whole file plus a line list in memory
+    # on every sync-workers sweep.
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                has_undecodable_lines = True
+                continue
+            if not isinstance(event, dict):
+                has_undecodable_lines = True
+                continue
+            event_type = _string(event.get("type"))
+            payload = event.get("payload")
+            if event_type == "event_msg" and isinstance(payload, dict):
+                last_event_type = _string(payload.get("type"))
+            elif event_type:
+                last_event_type = event_type
     return last_event_type, has_undecodable_lines
+
 
 def _rollout_open_for_write(path: Path) -> bool:
     try:
@@ -169,6 +180,7 @@ def _rollout_open_for_write(path: Path) -> bool:
             return True
     return False
 
+
 def _rollout_has_prefix(candidate: Path, prefix: Path) -> bool:
     try:
         candidate_size = candidate.stat().st_size
@@ -184,6 +196,7 @@ def _rollout_has_prefix(candidate: Path, prefix: Path) -> bool:
                 return False
     return True
 
+
 def _thread_fingerprint(
     row: dict[str, Any],
     home: Path,
@@ -191,6 +204,7 @@ def _thread_fingerprint(
 ) -> dict[str, Any] | None:
     rollout = _source_rollout_path(row, home, thread_id)
     return _fingerprint_from_rollout_path(rollout, row)
+
 
 def _fingerprint_from_rollout_path(
     rollout: Path | None,
@@ -209,6 +223,7 @@ def _fingerprint_from_rollout_path(
         "updated_at_ms": row.get("updated_at_ms") if row else None,
         "updated_at": row.get("updated_at") if row else None,
     }
+
 
 def _active_super_agent_thread_ids(
     state_path: Path = DEFAULT_SUPER_AGENTS_STATE_PATH,
@@ -237,6 +252,7 @@ def _active_super_agent_thread_ids(
             active.add(thread_id)
     return active
 
+
 def _active_super_agent_thread_ids_from_db(db_path: Path | None = None) -> set[str]:
     """Read active Super Agents thread ids from the SQLite agent store."""
     resolved_db = db_path or super_agents_state_db_path()
@@ -262,6 +278,7 @@ def _active_super_agent_thread_ids_from_db(db_path: Path | None = None) -> set[s
             active.add(thread_id)
     return active
 
+
 def _thread_id_from_store_id(store_id: str | None) -> str | None:
     """Recover a Codex thread UUID from a prefixed agent-store session id."""
     if not store_id or not store_id.startswith("codex_"):
@@ -270,6 +287,7 @@ def _thread_id_from_store_id(store_id: str | None) -> str | None:
         return str(uuid.UUID(hex=store_id.removeprefix("codex_")))
     except ValueError:
         return None
+
 
 def _thread_rows(db_path: Path) -> list[dict[str, Any]]:
     if not db_path.exists():
@@ -283,6 +301,7 @@ def _thread_rows(db_path: Path) -> list[dict[str, Any]]:
             )
         ]
 
+
 def _thread_row(db_path: Path, thread_id: str) -> dict[str, Any] | None:
     if not db_path.exists():
         return None
@@ -293,6 +312,7 @@ def _thread_row(db_path: Path, thread_id: str) -> dict[str, Any] | None:
             (thread_id,),
         ).fetchone()
     return dict(row) if row is not None else None
+
 
 def _copy_thread_state_row(
     source_db: Path,
@@ -327,6 +347,7 @@ def _copy_thread_state_row(
             f"{verb} INTO {table} ({column_sql}) VALUES ({placeholders})",
             [values.get(column) for column in columns],
         )
+
 
 def _copy_thread_dynamic_tools(
     source_db: Path,
@@ -370,6 +391,7 @@ def _copy_thread_dynamic_tools(
                 [values.get(column) for column in columns],
             )
 
+
 def _source_rollout_path(
     row: dict[str, Any],
     normal_home: Path,
@@ -383,6 +405,7 @@ def _source_rollout_path(
     matches = sorted((normal_home / "sessions").glob(f"**/*{thread_id}.jsonl"))
     return matches[-1] if matches else None
 
+
 def _target_rollout_path(
     source_rollout: Path, normal_home: Path, voice_home: Path
 ) -> Path:
@@ -391,6 +414,7 @@ def _target_rollout_path(
     except ValueError:
         relative = Path("sessions") / source_rollout.name
     return voice_home / relative
+
 
 def _latest_session_index_entries(index_path: Path) -> dict[str, dict[str, Any]]:
     entries: dict[str, dict[str, Any]] = {}
@@ -407,6 +431,7 @@ def _latest_session_index_entries(index_path: Path) -> dict[str, dict[str, Any]]
         if thread_id:
             entries[thread_id] = entry
     return entries
+
 
 def _append_session_index_entry(
     thread_id: str,
@@ -436,8 +461,10 @@ def _append_session_index_entry(
     with target_index.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry, separators=(",", ":")) + "\n")
 
+
 def _connect(path: Path) -> sqlite3.Connection:
     return sqlite3.connect(path)
+
 
 @contextmanager
 def _managed_connect(path: Path):
@@ -452,8 +479,10 @@ def _managed_connect(path: Path):
     finally:
         conn.close()
 
+
 def _table_columns(conn: sqlite3.Connection, table: str) -> list[str]:
     return [row[1] for row in conn.execute(f"PRAGMA table_info({table})")]
+
 
 def _has_table(conn: sqlite3.Connection, table: str) -> bool:
     row = conn.execute(
@@ -462,8 +491,10 @@ def _has_table(conn: sqlite3.Connection, table: str) -> bool:
     ).fetchone()
     return row is not None
 
+
 def _string(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
+
 
 def _timestamp_to_iso(value: Any) -> str | None:
     if not isinstance(value, int):
