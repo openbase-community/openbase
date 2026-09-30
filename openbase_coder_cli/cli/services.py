@@ -158,6 +158,12 @@ def status() -> None:
             supports(backend) for backend in coding_backends
         )
         required = getattr(svc, "install_by_default", True) and backend_supported
+        if svc.name == "codex-app-server" and not info["pid"]:
+            from openbase_coder_cli.codex_control_plane import shared_codex_daemon_ready
+
+            if shared_codex_daemon_ready():
+                click.echo(f"{name_col} available through the shared Codex daemon")
+                continue
         if not info["installed"]:
             if required:
                 click.echo(f"{name_col} not installed")

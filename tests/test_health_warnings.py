@@ -44,6 +44,24 @@ def test_expected_service_not_running_warns(monkeypatch) -> None:
     assert warnings[0]["severity"] == "critical"
 
 
+def test_shared_codex_daemon_satisfies_stopped_openbase_service(monkeypatch) -> None:
+    from openbase_coder_cli import codex_control_plane
+
+    services = [FakeService("codex-app-server", backends=("codex",))]
+    monkeypatch.setattr("openbase_coder_cli.services.definitions.SERVICES", services)
+    monkeypatch.setattr(
+        "openbase_coder_cli.services.launchd.launchctl_status",
+        lambda _service: {"installed": True, "pid": None, "last_exit_code": 1},
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.services.selection.configured_coding_backend",
+        lambda: "codex",
+    )
+    monkeypatch.setattr(codex_control_plane, "shared_codex_daemon_ready", lambda: True)
+
+    assert hw._service_warnings() == []
+
+
 def test_conditional_service_expected_only_when_enabled(monkeypatch) -> None:
     services = [FakeService("code-sync", install_by_default=False)]
     monkeypatch.setattr("openbase_coder_cli.services.definitions.SERVICES", services)
@@ -72,6 +90,9 @@ def test_conditional_service_expected_only_when_enabled(monkeypatch) -> None:
 
 
 def test_backend_scoped_service_not_expected_on_other_backend(monkeypatch) -> None:
+    from openbase_coder_cli import codex_control_plane
+
+    monkeypatch.setattr(codex_control_plane, "shared_codex_daemon_ready", lambda: False)
     services = [
         FakeService("django-cli"),
         FakeService("codex-app-server", backends=("codex", "openbase_cloud_codex")),

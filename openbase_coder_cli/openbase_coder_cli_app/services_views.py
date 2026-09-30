@@ -467,6 +467,34 @@ def service_status(request):
         codex_app_server
     ):
         del services["codex_app_server"]
+    elif codex_app_server is not None:
+        from openbase_coder_cli.codex_control_plane import shared_codex_daemon_ready
+
+        status_payload = launchctl_status(codex_app_server)
+        services["codex_app_server"]["running"] = (
+            shared_codex_daemon_ready()
+            or bool(status_payload.get("pid")) and _check_codex_app_server()
+        )
+    dispatcher = next(
+        (svc for svc in SERVICES if svc.name == "codex-app-server-dispatcher"), None
+    )
+    if dispatcher is not None and service_supports_configured_backends(dispatcher):
+        from openbase_coder_cli.codex_control_plane import (
+            codex_app_server_ready,
+            dispatcher_codex_app_server_endpoint,
+        )
+
+        status_payload = launchctl_status(dispatcher)
+        services["codex_app_server_dispatcher"] = {
+            "name": dispatcher.description,
+            "port": dispatcher.port,
+            "running": bool(status_payload.get("pid")) and codex_app_server_ready(
+                dispatcher_codex_app_server_endpoint()
+            ),
+            "installed": bool(status_payload.get("installed")),
+            "last_exit_code": status_payload.get("last_exit_code"),
+            "optional": not dispatcher.install_by_default,
+        }
     for service_name in (
         "sync-workers",
         "openbase-routines",

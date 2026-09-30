@@ -5,7 +5,8 @@ configuration *expects* is not actually healthy. Expectations follow
 configuration, not a fixed list: services installed by default are always
 expected; conditional services (code-sync) are expected exactly when their
 feature is enabled — and conversely are flagged when running without their
-feature enabled.
+feature enabled. The shared Codex service may instead be provided by Codex's
+own responsive managed daemon.
 """
 
 from __future__ import annotations
@@ -107,7 +108,13 @@ def _service_warnings() -> list[dict[str, str]]:
             continue
         installed = bool(info.get("installed"))
         running = bool(info.get("pid"))
-        if expected and not installed:
+        shared_daemon = False
+        if service.name == "codex-app-server" and not running:
+            from openbase_coder_cli.codex_control_plane import shared_codex_daemon_ready
+
+            shared_daemon = shared_codex_daemon_ready()
+            running = shared_daemon
+        if expected and not installed and not shared_daemon:
             warnings.append(
                 _warning(
                     f"service-missing:{service.name}",

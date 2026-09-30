@@ -134,11 +134,21 @@ def _socket_accepts_connections(path: Path, timeout: float = 0.25) -> bool:
 
 
 def recover_stale_codex_control_socket(path: Path) -> bool:
-    """Remove only a proven-stale socket; never disturb a live or non-socket path."""
+    """Remove only a proven-stale socket or Codex daemon link."""
     try:
         mode = path.lstat().st_mode
     except FileNotFoundError:
         return False
+    if stat.S_ISLNK(mode):
+        try:
+            mode = path.stat().st_mode
+        except FileNotFoundError:
+            path.unlink(missing_ok=True)
+            return True
+        except OSError as exc:
+            raise RuntimeError(
+                f"Could not verify Codex control socket link {path}; refusing to remove it: {exc}"
+            ) from exc
     if not stat.S_ISSOCK(mode):
         raise RuntimeError(
             f"Codex control path {path} exists but is not a Unix socket; refusing to replace it."
@@ -151,6 +161,9 @@ def recover_stale_codex_control_socket(path: Path) -> bool:
         ) from exc
     except OSError as exc:
         if exc.errno == errno.ENOENT:
+            if path.is_symlink():
+                path.unlink(missing_ok=True)
+                return True
             return False
         if exc.errno != errno.ECONNREFUSED:
             raise RuntimeError(
@@ -207,3 +220,14 @@ def codex_app_server_ready(
         return asyncio.run(_codex_app_server_ready_async(resolved))
     except (OSError, RuntimeError):
         return False
+
+
+def shared_codex_daemon_ready() -> bool:
+    """Recognize Codex's live managed-daemon link as a valid shared server."""
+    endpoint = managed_codex_app_server_endpoint()
+    return bool(
+        endpoint.is_unix
+        and endpoint.socket_path
+        and endpoint.socket_path.is_symlink()
+        and codex_app_server_ready(endpoint)
+    )

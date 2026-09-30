@@ -31,6 +31,14 @@ def _reset_tailnet_status_cache():
     services_views._tailnet_snapshot["monotonic"] = 0.0
 
 
+@pytest.fixture(autouse=True)
+def _mock_codex_daemon_probes(monkeypatch):
+    from openbase_coder_cli import codex_control_plane
+
+    monkeypatch.setattr(codex_control_plane, "shared_codex_daemon_ready", lambda: False)
+    monkeypatch.setattr(codex_control_plane, "codex_app_server_ready", lambda _endpoint: True)
+
+
 def test_service_status_caches_tailnet_probe_across_polls(monkeypatch) -> None:
     """Repeated /api/status/ polls must not re-run the (possibly wedged)
     netmesh-ctl probes; the first poll computes, later polls serve the cache."""
@@ -179,7 +187,8 @@ def test_service_status_includes_background_openbase_services(monkeypatch) -> No
             {"flag": "-d", "label": "Prevent display sleep"},
         ],
     }
-    assert len(response.data["services"]) == 11
+    assert response.data["services"]["codex_app_server_dispatcher"]["running"] is False
+    assert len(response.data["services"]) == 12
 
 
 def test_service_status_reports_each_serve_route_independently(monkeypatch) -> None:
@@ -275,6 +284,48 @@ def test_service_status_omits_codex_app_server_on_claude_code_backend(
     assert "codex_app_server" not in response.data["services"]
     assert "sync_workers" in response.data["services"]
     assert len(response.data["services"]) == 10
+
+
+def test_service_status_distinguishes_shared_daemon_from_stopped_dispatcher(
+    monkeypatch,
+) -> None:
+    from openbase_coder_cli import codex_control_plane
+
+    monkeypatch.setattr(
+        services_views, "service_supports_configured_backends", lambda service: True
+    )
+    monkeypatch.setattr(services_views, "_check_port", lambda port: True)
+    monkeypatch.setattr(services_views, "_check_web_backend", lambda: True)
+    monkeypatch.setattr(services_views, "_check_codex_app_server", lambda: True)
+    monkeypatch.setattr(codex_control_plane, "shared_codex_daemon_ready", lambda: True)
+    monkeypatch.setattr(
+        services_views,
+        "launchctl_status",
+        lambda service: {"installed": True, "pid": None, "last_exit_code": 1},
+    )
+    monkeypatch.setattr(
+        services_views,
+        "tailscale_serve_status",
+        lambda: SimpleNamespace(
+            tailscale_running=True,
+            host="mac.tailnet.ts.net",
+            openbase_url="http://mac.tailnet.ts.net:18080",
+            openbase_configured=True,
+            livekit_configured=True,
+        ),
+    )
+    monkeypatch.setattr(
+        services_views,
+        "keep_awake_status_payload",
+        lambda: {"name": "Keep Awake", "running": True, "optional": False},
+    )
+
+    request = APIRequestFactory().get("/api/status/")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+    response = views.service_status(request)
+
+    assert response.data["services"]["codex_app_server"]["running"] is True
+    assert response.data["services"]["codex_app_server_dispatcher"]["running"] is False
 
 
 def test_thread_device_sync_status_returns_snapshot_payload(monkeypatch) -> None:
