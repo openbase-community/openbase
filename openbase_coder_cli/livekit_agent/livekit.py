@@ -155,6 +155,7 @@ from openbase_coder_cli.livekit_agent.packets import (  # noqa: F401
 from openbase_coder_cli.livekit_agent.proc_pool_patch import (
     install_proc_pool_liveness_patch,
 )
+from openbase_coder_cli.livekit_agent.provider_recovery import voice_connect_options
 from openbase_coder_cli.livekit_agent.room_diagnostics import (  # noqa: F401
     _participant_log_fields,
     _register_room_diagnostics,
@@ -200,7 +201,6 @@ from openbase_coder_cli.livekit_agent.vad_backlog_patch import (
     set_vad_backlog_listener,
 )
 from openbase_coder_cli.livekit_agent.voice_delivery import VoiceDeliveryLedger
-from openbase_coder_cli.livekit_agent.provider_recovery import voice_connect_options
 from openbase_coder_cli.livekit_agent.voice_routing import (
     LiveKitVoiceRouter,
     _transfer_voice_route,
@@ -282,10 +282,15 @@ def _livekit_agent_server_options() -> dict[str, float | int]:
     elif uses_local_model:
         options["load_threshold"] = float("inf")
 
+    # livekit-agents defaults num_idle_processes to the CPU count, which on a
+    # 16-core machine prewarms 16 job processes (each holding a VAD model,
+    # ~130 MB apiece, ~2.5 GB total) for a single-user agent that services one
+    # or two calls at a time. Always keep the pool at one idle process unless
+    # the env override asks for more.
     num_idle_processes = _optional_int_env(LIVEKIT_AGENT_NUM_IDLE_PROCESSES_ENV)
     if num_idle_processes is not None:
         options["num_idle_processes"] = num_idle_processes
-    elif uses_local_model:
+    else:
         options["num_idle_processes"] = 1
 
     return options
@@ -923,7 +928,10 @@ async def livekit_agent(ctx: JobContext):
         )
 
     def on_final_transcript_for_mute(event) -> None:
-        if getattr(event, "is_final", False) and str(getattr(event, "transcript", "") or "").strip():
+        if (
+            getattr(event, "is_final", False)
+            and str(getattr(event, "transcript", "") or "").strip()
+        ):
             delivery_ledger.notify_final_transcript()
 
     session.on("user_input_transcribed", on_final_transcript_for_mute)
