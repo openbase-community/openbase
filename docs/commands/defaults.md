@@ -26,9 +26,15 @@ openbase-coder defaults COMMAND [ARGS]
 | Command | Description |
 |---|---|
 | `dispatcher-reasoning [LEVEL]` | Show or set the default dispatcher reasoning effort |
-| `dispatcher-model [MODEL]` | Show or set the default dispatcher model |
+| `dispatcher-model [MODEL] [--backend BACKEND]` | Show or set the default dispatcher model |
 | `super-agents-reasoning [LEVEL]` | Show or set the default Super Agents reasoning effort |
-| `super-agents-model [MODEL]` | Show or set the default Super Agents model |
+| `super-agents-model [MODEL] [--backend BACKEND]` | Show or set the default Super Agents model |
+
+## Options
+
+| Option | Command | Description |
+|---|---|---|
+| `--backend BACKEND` | `dispatcher-model`, `super-agents-model` | Configure the named backend instead of the selected coding backend |
 
 ## Examples
 

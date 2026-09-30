@@ -38,9 +38,10 @@ layout), and whether a newer release is available.
 
 1. Refuses in development-workspace installs (git-managed; no auto-update).
 2. Fetches `update-manifest.json` for the install's channel — `stable` from
-   the latest GitHub release, `beta` from the newest release including
-   prereleases — and verifies its Ed25519 signature when the build embeds the
-   release public key.
+   the latest GitHub release, `beta` from the newest non-`.dev` release with a
+   manifest, and `staging` from the newest `.dev` release with a manifest —
+   and verifies its Ed25519 signature when the build embeds the release public
+   key.
 3. Compares versions and honors `min_supported_version` and the package
    `layout_version`; a release with a newer layout than the updater
    understands is reported as `blocked` (reinstall via the desktop app or
