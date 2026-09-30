@@ -130,7 +130,10 @@ auth token automatically.
   real machines never trigger Cloud startup.
 - **Dispatcher Voice** — choose the dispatcher's voice and recreate the
   dispatcher thread to apply it.
-- **Call Audio** — custom mute sounds and volume; optional music while muted
+- **Call Audio** — custom mute sounds and volume; **Line Static While
+  Unmuted** (on by default, with its own volume), a faint phone-call static
+  bed that plays only while you are unmuted on a connected call so an open
+  line is audible; optional music while muted
   with many agents running (bundled "Vibes" loop, or Apple Music with an
   Openbase Cloud subscription); the concurrent-agent threshold for music
   (driven by the Brain Readiness score when available — see
