@@ -345,13 +345,14 @@ class _SetupProgress:
 @click.option(
     "--shared-super-agents-mcp/--no-shared-super-agents-mcp",
     "shared_super_agents_mcp",
-    default=None,
+    default=True,
+    show_default=True,
     help=(
         "Also register the Super Agents MCP in the default (non-Openbase) "
-        "Codex and Claude Code homes so plain terminal sessions can use it "
-        "(a pre-existing entry is left untouched). Defaults on for UI-driven "
-        "desktop installs (--json-progress) and off for developer terminal "
-        "setup; pass explicitly to override."
+        "Codex and Claude Code homes so plain terminal codex/claude sessions "
+        "can dispatch Super Agents (a pre-existing entry is left untouched). "
+        "Pass --no-shared-super-agents-mcp to keep it out of those homes; "
+        "Openbase's own session profiles are always configured."
     ),
 )
 @click.option(
@@ -378,7 +379,7 @@ def setup(
     audio_provider: str | None,
     tailnet_provider: str | None,
     json_progress: bool,
-    shared_super_agents_mcp: bool | None,
+    shared_super_agents_mcp: bool,
     interactive_mode: bool | None,
 ) -> None:
     """Full install flow for Openbase Coder.
@@ -415,14 +416,6 @@ def setup(
         interactive=interactive,
     )
 
-    # UI-driven desktop installs (--json-progress) opt in by default; developer
-    # terminal setup stays off unless the flag is passed explicitly.
-    register_shared_super_agents = (
-        shared_super_agents_mcp
-        if shared_super_agents_mcp is not None
-        else json_progress
-    )
-
     progress = _SetupProgress(json_progress)
     try:
         serve_healthy = _run_setup_phases(
@@ -436,7 +429,7 @@ def setup(
             coding_backend=coding_backend,
             audio_provider=audio_provider,
             tailnet_provider=tailnet_provider,
-            register_shared_super_agents=register_shared_super_agents,
+            register_shared_super_agents=shared_super_agents_mcp,
         )
     except Exception as exc:
         progress.abort(str(exc))
@@ -796,7 +789,7 @@ def _run_setup_phases(
     coding_backend: str | None,
     audio_provider: str | None,
     tailnet_provider: str | None = None,
-    register_shared_super_agents: bool = False,
+    register_shared_super_agents: bool = True,
 ) -> bool:
     """Run the setup phases, returning whether Tailscale Serve is healthy."""
     progress.step("workspace", "start")

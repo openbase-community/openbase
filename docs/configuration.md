@@ -36,7 +36,7 @@ such as backend host and call audio. This page is the underlying reference.
 
 ## Conversation Profiles
 
-Setup installs Openbase profiles for both Codex and Claude Code. Normal terminal sessions retain their own model, reasoning, permissions, hooks, and MCP settings. Openbase may add shared skills, but setup does not create or replace the user's `AGENTS.md` or `CLAUDE.md` instructions.
+Setup installs Openbase profiles for both Codex and Claude Code. Normal terminal sessions retain their own model, reasoning, permissions, hooks, and MCP settings. Openbase may add shared skills and, by default, registers the Super Agents MCP server in the default Codex and Claude Code configurations so plain terminal sessions can dispatch Super Agents (pass `--no-shared-super-agents-mcp` to `setup` or `profiles install` to opt out; an existing entry of your own is never replaced). Setup does not create or replace the user's `AGENTS.md` or `CLAUDE.md` instructions.
 
 Codex's `openbase.config.toml` is also usable with `codex -p openbase`. Codex does not accept `--profile` on `app-server`, so Openbase loads the same TOML file through `thread/start` and `thread/resume` configuration overrides. The shared daemon receives no global model, provider, reasoning, or service-tier overrides, including for the internal Cloud Codex backend. Role-specific model and reasoning choices are applied to the relevant conversation.
 

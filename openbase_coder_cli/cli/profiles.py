@@ -33,14 +33,35 @@ def profiles() -> None:
     is_flag=True,
     help="Also register the session-ID hook in the default Codex and Claude Code configurations.",
 )
-def install(include_default_hooks: bool) -> None:
+@click.option(
+    "--shared-super-agents-mcp/--no-shared-super-agents-mcp",
+    "shared_super_agents_mcp",
+    default=True,
+    show_default=True,
+    help=(
+        "Also register the Super Agents MCP in the default (non-Openbase) "
+        "Codex and Claude Code homes so plain terminal codex/claude sessions "
+        "can dispatch Super Agents (a pre-existing entry is left untouched). "
+        "Pass --no-shared-super-agents-mcp to strip it from those homes."
+    ),
+)
+def install(include_default_hooks: bool, shared_super_agents_mcp: bool) -> None:
     """Install profiles and migrate identifiable legacy user-config entries."""
     config = require_installation()
     backend = selected_backend_from_env_file(Path(config.env_file))
+    workspace_dir = config.workspace_path or ""
     ensure_session_id_hook_script()
-    _ensure_codex_config(config.workspace_path or "", coding_backend=backend)
-    _ensure_claude_mcp(config.workspace_path or "", coding_backend=backend)
-    _ensure_claude_hooks()
+    _ensure_codex_config(
+        workspace_dir,
+        coding_backend=backend,
+        register_shared_super_agents=shared_super_agents_mcp,
+    )
+    _ensure_claude_mcp(workspace_dir, coding_backend=backend)
+    _ensure_claude_hooks(
+        register_shared_super_agents=shared_super_agents_mcp,
+        workspace_dir=workspace_dir,
+        coding_backend=backend,
+    )
     upsert_env_file_values(Path(config.env_file), profile_environment())
     if include_default_hooks:
         # Profile installation migrates legacy Openbase hooks out of the shared

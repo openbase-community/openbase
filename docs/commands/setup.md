@@ -141,6 +141,7 @@ to keep local audio available.
 | `--audio-provider NAME` | picker on fresh interactive installs, else `openbase-cloud` for new dispatcher configs | Voice audio provider. Existing configs are only changed when provided |
 | `--interactive/--non-interactive` | interactive only for flagless terminal runs | Force or forbid the first-run pickers. Passing any other flag implies `--non-interactive` |
 | `--json-progress` | `false` | Emit NDJSON step events on stdout for UI-driven setup; human-readable output moves to stderr |
+| `--shared-super-agents-mcp/--no-shared-super-agents-mcp` | `true` | Also register the Super Agents MCP in your default Codex and Claude Code configurations so plain terminal sessions can dispatch Super Agents. An existing entry of your own is never replaced |
 
 ## Behavior Details
 
@@ -213,6 +214,7 @@ openbase-coder setup \
 - If `dispatcher-config.json` already exists, setup preserves it.
 - Existing skill symlinks in `~/.codex/skills` and `~/.claude/skills` are updated to the bundled or workspace source. Real skill directories or files are left unchanged.
 - Setup installs session profiles for both backends and preserves your normal terminal defaults. See [Conversation profiles](../configuration.md#conversation-profiles) for profile selection, migration, and the `openbase-coder profiles install` repair command. Pass `--include-default-hooks` to that repair command when ordinary Codex and Claude Code terminal sessions should also run Openbase's session-ID hook.
+- Setup registers the Super Agents MCP server in your default Codex and Claude Code configurations so ordinary terminal sessions can use it. Pass `--no-shared-super-agents-mcp` to keep it only in the Openbase profiles.
 - If `npm` or `uv` are missing in development mode, related steps are skipped with messages.
 - With the expert `tailscale` provider, setup fails with install/connect
   guidance when it cannot configure Serve. With Openbase VPN or Openbase

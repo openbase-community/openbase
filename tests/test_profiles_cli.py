@@ -31,7 +31,9 @@ def _patch_profile_install(monkeypatch, tmp_path: Path, events: list[object]) ->
     monkeypatch.setattr(
         profiles_module,
         "_ensure_codex_config",
-        lambda *_args, **_kwargs: events.append("codex-profile"),
+        lambda *_args, **kwargs: events.append(
+            ("codex-profile", kwargs.get("register_shared_super_agents"))
+        ),
     )
     monkeypatch.setattr(
         profiles_module,
@@ -41,7 +43,9 @@ def _patch_profile_install(monkeypatch, tmp_path: Path, events: list[object]) ->
     monkeypatch.setattr(
         profiles_module,
         "_ensure_claude_hooks",
-        lambda: events.append("claude-settings-profile"),
+        lambda **kwargs: events.append(
+            ("claude-settings-profile", kwargs.get("register_shared_super_agents"))
+        ),
     )
     monkeypatch.setattr(
         profiles_module,
@@ -76,6 +80,35 @@ def test_profiles_install_keeps_default_hooks_opt_in(
     assert not any(
         isinstance(event, tuple) and event[0].startswith("default-") for event in events
     )
+
+
+def test_profiles_install_registers_shared_super_agents_by_default(
+    monkeypatch, tmp_path: Path
+) -> None:
+    events: list[object] = []
+    _patch_profile_install(monkeypatch, tmp_path, events)
+
+    result = CliRunner().invoke(profiles_module.profiles, ["install"])
+
+    assert result.exit_code == 0
+    assert ("codex-profile", True) in events
+    assert ("claude-settings-profile", True) in events
+
+
+def test_profiles_install_can_opt_out_of_shared_super_agents(
+    monkeypatch, tmp_path: Path
+) -> None:
+    events: list[object] = []
+    _patch_profile_install(monkeypatch, tmp_path, events)
+
+    result = CliRunner().invoke(
+        profiles_module.profiles,
+        ["install", "--no-shared-super-agents-mcp"],
+    )
+
+    assert result.exit_code == 0
+    assert ("codex-profile", False) in events
+    assert ("claude-settings-profile", False) in events
 
 
 def test_profiles_install_can_include_default_hooks(

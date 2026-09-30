@@ -177,15 +177,16 @@ def _register_shared_claude_super_agents(
 
 def _ensure_claude_hooks(
     *,
-    register_shared_super_agents: bool = False,
+    register_shared_super_agents: bool = True,
     workspace_dir: str = "",
     coding_backend: str = DEFAULT_CODING_BACKEND,
 ) -> None:
     """Configure Openbase's settings layer before removing legacy entries.
 
-    When ``register_shared_super_agents`` is set, the super-agents MCP is kept in
-    (and, if absent, added to) the default Claude Code home so plain terminal
-    ``claude`` sessions can use it, instead of being stripped as a legacy entry.
+    By default the super-agents MCP is kept in (and, if absent, added to) the
+    default Claude Code home so plain terminal ``claude`` sessions can use it.
+    With ``register_shared_super_agents`` off it is stripped as a legacy entry
+    instead, leaving only Openbase's own session profile configured.
     """
     settings = _read_json_object(CLAUDE_PROFILE_SETTINGS_PATH)
     settings.setdefault("model", "sonnet")

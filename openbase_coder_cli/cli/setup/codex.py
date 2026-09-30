@@ -185,14 +185,14 @@ def _ensure_codex_config(
     workspace_dir: str,
     *,
     coding_backend: str = DEFAULT_CODING_BACKEND,
-    register_shared_super_agents: bool = False,
+    register_shared_super_agents: bool = True,
 ) -> None:
     """Install session profiles, then retire our legacy shared-home entries.
 
-    When ``register_shared_super_agents`` is set, the super-agents MCP is also
-    registered in the default (non-Openbase) Codex home so plain ``codex``
-    sessions can use it, and the shared-home migration keeps that entry instead
-    of stripping it.
+    By default the super-agents MCP is also registered in the default
+    (non-Openbase) Codex home so plain ``codex`` sessions can use it, and the
+    shared-home migration keeps that entry. With ``register_shared_super_agents``
+    off the entry is stripped instead.
     """
     command_path, args = _super_agents_mcp_command(Path(workspace_dir))
 

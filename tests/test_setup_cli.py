@@ -613,7 +613,7 @@ def test_ensure_codex_config_registers_super_agents_mcp(tmp_path, monkeypatch) -
     command.parent.mkdir(parents=True)
     command.write_text("#!/bin/sh\n", encoding="utf-8")
 
-    setup_cli._ensure_codex_config(str(workspace))
+    setup_cli._ensure_codex_config(str(workspace), register_shared_super_agents=False)
 
     config_path = codex_home / "openbase.config.toml"
     config = tomllib.loads(config_path.read_text())
@@ -657,6 +657,82 @@ def test_ensure_codex_config_shared_preserves_existing_super_agents(
 
     shared = tomllib.loads(shared_path.read_text())
     assert shared["mcp_servers"]["super-agents"]["command"] == "my-own-super-agents"
+
+
+def test_setup_shares_super_agents_mcp_by_default() -> None:
+    """Plain terminal codex/claude sessions get the Super Agents MCP unless
+    the installer opts out explicitly."""
+    ctx = setup_cli.setup.make_context("setup", ["--non-interactive"])
+    assert ctx.params["shared_super_agents_mcp"] is True
+
+    ctx = setup_cli.setup.make_context(
+        "setup", ["--non-interactive", "--no-shared-super-agents-mcp"]
+    )
+    assert ctx.params["shared_super_agents_mcp"] is False
+
+
+def test_ensure_codex_config_shares_super_agents_by_default(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    command = workspace / ".venv" / "bin" / "super-agents-mcp"
+    codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    command.parent.mkdir(parents=True)
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    setup_cli._ensure_codex_config(str(workspace))
+
+    shared = tomllib.loads((codex_home / "config.toml").read_text())
+    assert shared["mcp_servers"]["super-agents"]["command"] == str(command)
+
+
+def test_ensure_codex_config_opt_out_strips_shared_super_agents(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    command = workspace / ".venv" / "bin" / "super-agents-mcp"
+    codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    command.parent.mkdir(parents=True)
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+    setup_cli._ensure_codex_config(str(workspace))
+
+    setup_cli._ensure_codex_config(str(workspace), register_shared_super_agents=False)
+
+    shared = tomllib.loads((codex_home / "config.toml").read_text())
+    assert "super-agents" not in shared.get("mcp_servers", {})
+
+
+def test_ensure_claude_hooks_shares_super_agents_by_default(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    command = workspace / ".venv" / "bin" / "super-agents-mcp"
+    _codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    command.parent.mkdir(parents=True)
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    setup_cli._ensure_claude_hooks(workspace_dir=str(workspace))
+
+    payload = json.loads((tmp_path / ".claude.json").read_text(encoding="utf-8"))
+    assert payload["mcpServers"]["super-agents"]["command"] == str(command)
+
+
+def test_ensure_claude_hooks_opt_out_strips_shared_super_agents(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    command = workspace / ".venv" / "bin" / "super-agents-mcp"
+    _codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    command.parent.mkdir(parents=True)
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+    setup_cli._ensure_claude_hooks(workspace_dir=str(workspace))
+
+    setup_cli._ensure_claude_hooks(
+        register_shared_super_agents=False, workspace_dir=str(workspace)
+    )
+
+    payload = json.loads((tmp_path / ".claude.json").read_text(encoding="utf-8"))
+    assert "super-agents" not in payload.get("mcpServers", {})
 
 
 def test_ensure_claude_hooks_registers_shared_super_agents(
@@ -739,6 +815,7 @@ def test_ensure_codex_config_preserves_cloud_codex_child_default(
     setup_cli._ensure_codex_config(
         str(workspace),
         coding_backend="openbase_cloud_codex",
+        register_shared_super_agents=False,
     )
 
     cloud = tomllib.loads((codex_home / "openbase-cloud.config.toml").read_text())
@@ -2156,8 +2233,10 @@ def test_interactive_login_checks_run_login_when_accepted(
     monkeypatch.setattr(
         setup_cli,
         "register_and_report",
-        lambda **kwargs: reports.append(kwargs)
-        or SimpleNamespace(ok=True, supported=True, error=None),
+        lambda **kwargs: (
+            reports.append(kwargs)
+            or SimpleNamespace(ok=True, supported=True, error=None)
+        ),
     )
     _fake_tty_stdin(monkeypatch, "y\n")
 
