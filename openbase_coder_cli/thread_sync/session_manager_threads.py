@@ -7,7 +7,9 @@ unchanged and reaches sibling state through ``self``.
 
 from __future__ import annotations
 
+import asyncio
 import os
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -281,19 +283,37 @@ class SessionManagerThreadsMixin:
             next_cursor=str(end) if end < len(sorted_sessions) else None,
         )
 
+    # The full session listing (a Claude-home sweep plus every store row) is
+    # the same call behind list_thread_page and list_threads; a thread-open
+    # burst asks for both at once, so briefly share one result.
+    BACKEND_SESSIONS_SHARE_SECONDS = 2.0
+
     async def _backend_sessions(self) -> list[SessionInfo]:
         sessions_method = getattr(self._client, "sessions", None)
         if not callable(sessions_method):
             return []
-        raw_sessions = await sessions_method()
-        return [
-            _session_from_thread(
-                _normalize_backend_thread_payload(session),
-                include_turns=False,
-            )
-            for session in raw_sessions
-            if isinstance(session, dict)
-        ]
+        lock = self.__dict__.setdefault("_backend_sessions_lock", asyncio.Lock())
+        # Single-flight: concurrent callers wait for one scan instead of
+        # each starting their own.
+        async with lock:
+            now = time.monotonic()
+            cached = getattr(self, "_backend_sessions_cache", None)
+            if (
+                cached is not None
+                and now - cached[0] < self.BACKEND_SESSIONS_SHARE_SECONDS
+            ):
+                return list(cached[1])
+            raw_sessions = await sessions_method()
+            sessions = [
+                _session_from_thread(
+                    _normalize_backend_thread_payload(session),
+                    include_turns=False,
+                )
+                for session in raw_sessions
+                if isinstance(session, dict)
+            ]
+            self._backend_sessions_cache = (time.monotonic(), sessions)
+            return list(sessions)
 
     async def _list_thread_page_result(
         self,

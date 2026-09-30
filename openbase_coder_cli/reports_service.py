@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -135,47 +136,130 @@ def _report_markdown_title(path: Path) -> str | None:
     return None
 
 
-def _reports_file_payload(path: Path, reports_dir: Path) -> dict[str, Any]:
-    from openbase_coder_cli.openbase_coder_cli_app.item_tags import report_tags
+# Per-file payloads (minus tags) keyed by resolved path, valid for one
+# (mtime_ns, size) version. Report discovery runs every 30s, after every turn,
+# and on each project-metadata refresh over thousands of files; without this
+# every sweep re-read every markdown title. Bounded so a project that churns
+# through many one-off files does not grow it forever.
+_FILE_PAYLOAD_CACHE: dict[str, tuple[int, int, dict[str, Any]]] = {}
+_FILE_PAYLOAD_CACHE_MAX_ENTRIES = 20_000
+_FILE_PAYLOAD_CACHE_LOCK = threading.Lock()
 
-    stat = path.stat()
-    relative_path = str(path.relative_to(reports_dir))
+
+def _reports_file_payload(
+    path: Path,
+    reports_dir: Path,
+    stat: os.stat_result | None = None,
+    relative_path: str | None = None,
+    tags: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    from openbase_coder_cli.openbase_coder_cli_app.item_tags import (
+        item_tag_labels,
+        report_item_id,
+        tags_snapshot,
+    )
+
+    stat = stat or path.stat()
+    if relative_path is None:
+        relative_path = str(path.relative_to(reports_dir))
     project_path = str(reports_dir.parent)
-    kind = _reports_kind(path)
-    return {
-        "path": relative_path,
-        "name": path.name,
-        "kind": kind,
-        "title": _report_markdown_title(path) if kind == "markdown" else None,
-        "size": stat.st_size,
-        "updated_at": stat.st_mtime,
-        "filename_date": _report_filename_date(relative_path),
-        "date_basis": "modified_time",
-        "tags": report_tags(project_path, relative_path),
-    }
+    key = str(path)
+    with _FILE_PAYLOAD_CACHE_LOCK:
+        cached = _FILE_PAYLOAD_CACHE.get(key)
+    if cached is None or cached[0] != stat.st_mtime_ns or cached[1] != stat.st_size:
+        kind = _reports_kind(path)
+        base = {
+            "path": relative_path,
+            "name": path.name,
+            "kind": kind,
+            "title": _report_markdown_title(path) if kind == "markdown" else None,
+            "size": stat.st_size,
+            "updated_at": stat.st_mtime,
+            "filename_date": _report_filename_date(relative_path),
+            "date_basis": "modified_time",
+        }
+        with _FILE_PAYLOAD_CACHE_LOCK:
+            if len(_FILE_PAYLOAD_CACHE) >= _FILE_PAYLOAD_CACHE_MAX_ENTRIES:
+                _FILE_PAYLOAD_CACHE.clear()
+            _FILE_PAYLOAD_CACHE[key] = (stat.st_mtime_ns, stat.st_size, base)
+    else:
+        base = cached[2]
+    # Tags live in a separate, mutable store; resolve them on every read so a
+    # tag change shows up without waiting for the file itself to change.
+    if tags is None:
+        tags = tags_snapshot()
+    labels = item_tag_labels(tags, "report", report_item_id(project_path, relative_path))
+    return {**base, "tags": labels}
+
+
+def _iter_reports_files(reports_dir: Path):
+    """Yield ``(path, relative_path, stat)`` for every regular file under a
+    (resolved) reports dir, in sorted order.
+
+    A plain ``os.scandir`` walk: ``rglob`` + ``resolve`` + ``relative_to`` per
+    file cost more than everything else in a sweep over thousands of reports.
+    Symlinks are followed only when they resolve inside the reports dir.
+    """
+    root = str(reports_dir)
+    prefix_len = len(root) + 1
+    stack = [root]
+    while stack:
+        directory = stack.pop()
+        try:
+            entries = sorted(os.scandir(directory), key=lambda entry: entry.path)
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                if entry.is_symlink():
+                    resolved = Path(entry.path).resolve()
+                    resolved.relative_to(reports_dir)
+                    if resolved.is_dir():
+                        stack.append(str(resolved))
+                        continue
+                    if not resolved.is_file():
+                        continue
+                    yield resolved, entry.path[prefix_len:], resolved.stat()
+                elif entry.is_dir(follow_symlinks=False):
+                    stack.append(entry.path)
+                elif entry.is_file(follow_symlinks=False):
+                    yield Path(entry.path), entry.path[prefix_len:], entry.stat(
+                        follow_symlinks=False
+                    )
+            except (OSError, ValueError):
+                continue
 
 
 def _list_reports_files(project_path: str) -> list[dict[str, Any]]:
     reports_dir = _reports_dir(project_path).resolve()
     if not reports_dir.is_dir():
         return []
-    files: list[dict[str, Any]] = []
-    for candidate in sorted(reports_dir.rglob("*")):
-        if not candidate.is_file():
-            continue
-        try:
-            resolved = candidate.resolve()
-            resolved.relative_to(reports_dir)
-            files.append(_reports_file_payload(resolved, reports_dir))
-        except (OSError, ValueError):
-            continue
+    from openbase_coder_cli.openbase_coder_cli_app.item_tags import tags_snapshot
+
+    tags = tags_snapshot()
+    files = [
+        _reports_file_payload(path, reports_dir, stat, relative_path, tags)
+        for path, relative_path, stat in _iter_reports_files(reports_dir)
+    ]
     return sorted(files, key=lambda item: item["updated_at"], reverse=True)
 
 
 def _reports_summary(project_path: str) -> dict[str, Any]:
-    files = _list_reports_files(project_path)
-    updated_at = files[0]["updated_at"] if files else None
-    return {"reports_count": len(files), "reports_updated_at": updated_at}
+    """Count and newest mtime only — no titles or tags.
+
+    Project metadata refreshes call this for every recent project on a short
+    cycle; a summary must never pay the full per-file listing cost.
+    """
+    reports_dir = _reports_dir(project_path).resolve()
+    if not reports_dir.is_dir():
+        return {"reports_count": 0, "reports_updated_at": None}
+    count = 0
+    updated_at: float | None = None
+    for _path, _relative_path, stat in _iter_reports_files(reports_dir):
+        count += 1
+        if updated_at is None or stat.st_mtime > updated_at:
+            updated_at = stat.st_mtime
+    return {"reports_count": count, "reports_updated_at": updated_at}
 
 
 def _global_reports_projects() -> list[dict[str, Any]]:
