@@ -23,6 +23,7 @@ import base64
 import binascii
 import json
 import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -47,6 +48,14 @@ FLEET_SCOPE_VALUE = "fleet"
 PEER_TIMEOUT_SECONDS = 2.5
 PEER_LIST_CACHE_SECONDS = 30.0
 PEER_FAILURE_CACHE_SECONDS = 60.0
+# Peer thread pages are served stale-while-revalidate: a page younger than
+# the fresh window is returned as-is; an older one is returned immediately
+# while a background fetch replaces it; only a never-fetched (or expired)
+# page blocks on the peer. The console polls the fleet list every 15s, and
+# a reachable-but-slow peer was otherwise a fixed multi-second tax on every
+# poll.
+PEER_PAGE_FRESH_SECONDS = 10.0
+PEER_PAGE_STALE_SECONDS = 120.0
 # Cap on refetch rounds while filling one aggregate page, so a pathological
 # interleaving can't turn one request into an unbounded crawl of peer pages.
 MAX_FILL_ROUNDS = 5
@@ -197,7 +206,80 @@ def _cursor_from_next_url(next_url: str | None) -> str | None:
     return values[0] if values else None
 
 
+_peer_page_cache: dict[tuple[str, int, int, str | None], tuple[float, SourcePage]] = {}
+_peer_page_refreshing: set[tuple[str, int, int, str | None]] = set()
+_peer_page_lock = threading.Lock()
+
+
 def _fetch_peer_thread_page(
+    peer: FleetPeer,
+    token: str,
+    *,
+    page: int,
+    page_size: int,
+    cursor: str | None,
+) -> SourcePage | None:
+    key = (peer.key, page, page_size, cursor)
+    now = time.monotonic()
+    with _peer_page_lock:
+        cached = _peer_page_cache.get(key)
+        if cached is not None and now - cached[0] < PEER_PAGE_STALE_SECONDS:
+            age = now - cached[0]
+            refresh = (
+                age >= PEER_PAGE_FRESH_SECONDS and key not in _peer_page_refreshing
+            )
+            if refresh:
+                _peer_page_refreshing.add(key)
+        else:
+            cached = None
+            refresh = False
+    if cached is not None:
+        if refresh:
+            threading.Thread(
+                target=_refresh_peer_thread_page,
+                args=(peer, token, key),
+                name="fleet-peer-page-refresh",
+                daemon=True,
+            ).start()
+        # Items are handed to a merge that mutates windows in place.
+        return SourcePage(
+            items=[dict(item) for item in cached[1].items],
+            next_cursor=cached[1].next_cursor,
+        )
+    fetched = _fetch_peer_thread_page_uncached(
+        peer, token, page=page, page_size=page_size, cursor=cursor
+    )
+    if fetched is not None:
+        _store_peer_thread_page(key, fetched)
+        return SourcePage(
+            items=[dict(item) for item in fetched.items],
+            next_cursor=fetched.next_cursor,
+        )
+    return None
+
+
+def _refresh_peer_thread_page(
+    peer: FleetPeer, token: str, key: tuple[str, int, int, str | None]
+) -> None:
+    try:
+        fetched = _fetch_peer_thread_page_uncached(
+            peer, token, page=key[1], page_size=key[2], cursor=key[3]
+        )
+        if fetched is not None:
+            _store_peer_thread_page(key, fetched)
+    finally:
+        with _peer_page_lock:
+            _peer_page_refreshing.discard(key)
+
+
+def _store_peer_thread_page(
+    key: tuple[str, int, int, str | None], page: SourcePage
+) -> None:
+    with _peer_page_lock:
+        _peer_page_cache[key] = (time.monotonic(), page)
+
+
+def _fetch_peer_thread_page_uncached(
     peer: FleetPeer,
     token: str,
     *,

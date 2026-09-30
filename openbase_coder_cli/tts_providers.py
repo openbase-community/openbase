@@ -84,7 +84,18 @@ class BaseTTSProvider:
     def voice_for_id(self, voice_id: str | None) -> TTSVoice | None:
         if not voice_id:
             return None
-        return next((voice for voice in self.voices() if voice.id == voice_id), None)
+        return self._voices_by_id().get(voice_id)
+
+    def _voices_by_id(self) -> dict[str, TTSVoice]:
+        # Voice lookups run once per thread on list annotation; indexing the
+        # (immutable) catalog once beats a linear scan per lookup. The index
+        # is rebuilt whenever ``voices()`` hands back a different tuple.
+        voices = self.voices()
+        cached = self.__dict__.get("_voice_index")
+        if cached is None or cached[0] is not voices:
+            cached = (voices, {voice.id: voice for voice in voices})
+            self.__dict__["_voice_index"] = cached
+        return cached[1]
 
     def voice_for_name(self, name: str | None) -> TTSVoice | None:
         normalized = _normalize_voice_name(name)
@@ -156,17 +167,21 @@ class CartesiaTTSProvider(BaseTTSProvider):
     display_name = "Cartesia"
 
     def voices(self) -> tuple[TTSVoice, ...]:
-        return tuple(
-            TTSVoice(
-                id=voice.id,
-                name=voice.name,
-                provider=self.provider_id,
-                language=voice.language,
-                country=voice.country,
-                gender=voice.gender,
+        cached = self.__dict__.get("_voices")
+        if cached is None:
+            cached = tuple(
+                TTSVoice(
+                    id=voice.id,
+                    name=voice.name,
+                    provider=self.provider_id,
+                    language=voice.language,
+                    country=voice.country,
+                    gender=voice.gender,
+                )
+                for voice in CARTESIA_VOICE_CATALOG
             )
-            for voice in CARTESIA_VOICE_CATALOG
-        )
+            self.__dict__["_voices"] = cached
+        return cached
 
     def default_dispatcher_voice(self) -> TTSVoice:
         return (
@@ -181,12 +196,15 @@ class CartesiaTTSProvider(BaseTTSProvider):
         )
 
     def super_agent_voices(self) -> tuple[TTSVoice, ...]:
-        voices = tuple(
-            voice
-            for voice_id in DEFAULT_SUPER_AGENT_VOICE_IDS
-            if (voice := self.voice_for_id(voice_id)) is not None
-        )
-        return voices or super().super_agent_voices()
+        cached = self.__dict__.get("_super_agent_voices")
+        if cached is None:
+            cached = tuple(
+                voice
+                for voice_id in DEFAULT_SUPER_AGENT_VOICE_IDS
+                if (voice := self.voice_for_id(voice_id)) is not None
+            ) or super().super_agent_voices()
+            self.__dict__["_super_agent_voices"] = cached
+        return cached
 
     def create_livekit_tts(
         self,
