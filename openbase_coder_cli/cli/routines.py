@@ -10,6 +10,11 @@ from typing import Any
 import click
 from super_agents.app_server_client import CodexAppServerClient
 
+from openbase_coder_cli.routine_projects import (
+    annotate_routines_payload,
+    filter_routines_by_project,
+)
+
 REASONING_EFFORTS = ("low", "medium", "high", "xhigh")
 SANDBOX_TYPES = ("readOnly", "workspaceWrite", "dangerFullAccess")
 MODES = ("default", "plan")
@@ -149,16 +154,30 @@ def routines() -> None:
 
 
 @routines.command("list")
-def list_routines() -> None:
-    """List persisted routines."""
-    _json_echo(_run_client(lambda client: client.list_routines()))
+@click.option(
+    "--project",
+    "project_path",
+    type=click.Path(file_okay=False),
+    default=None,
+    help="Only routines whose cwd falls inside this tracked project.",
+)
+def list_routines(project_path: str | None) -> None:
+    """List persisted routines (each stamped with its tracked projectPath)."""
+    payload = annotate_routines_payload(
+        _run_client(lambda client: client.list_routines())
+    )
+    if project_path:
+        payload = filter_routines_by_project(payload, project_path)
+    _json_echo(payload)
 
 
 @routines.command("show")
 @click.argument("name")
 def show_routine(name: str) -> None:
     """Show one persisted routine."""
-    _json_echo(_run_client(lambda client: client.read_routine(name)))
+    _json_echo(
+        annotate_routines_payload(_run_client(lambda client: client.read_routine(name)))
+    )
 
 
 @routines.command("create")
