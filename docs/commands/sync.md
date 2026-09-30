@@ -25,6 +25,7 @@ openbase-coder sync COMMAND [ARGS]
 | `ignores remove PATTERN [--folder RELPATH]` | Remove a custom Syncthing ignore pattern from a synced folder |
 | `conflicts` | List unresolved repo and file conflicts |
 | `resolve ID --keep-local\|--use-remote` | Resolve one conflict (`--use-remote` safety-stashes the working tree first) |
+| `heal-echoes` | Fast-forward repos whose dirty files exactly match already-pushed peer commits |
 | `reconcile [--loop]` | Run one git-state reconcile tick, or loop forever |
 
 ## Options
@@ -32,6 +33,8 @@ openbase-coder sync COMMAND [ARGS]
 | Option | Command | Description |
 |---|---|---|
 | `--force` | `enable` | Enable before the cloud registry shows a second device (used by DevSpace provisioning) |
+| `--check` | `heal-echoes` | Report sync-echo state without fast-forwarding |
+| `--no-fetch` | `heal-echoes` | Evaluate against cached origin refs instead of fetching |
 | `--interval SECONDS` | `reconcile --loop` | Loop interval (default 60) |
 
 ## Examples
