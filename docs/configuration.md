@@ -55,6 +55,7 @@ Useful keys:
 
 | Key | Purpose |
 | --- | --- |
+| `voice_mode` | `dispatcher` (default) routes voice calls through the dispatcher thread; `direct` starts a fresh ordinary thread per call with no dispatcher. See [Voice Routing](voice-routing.md#direct-voice-mode) |
 | `dispatcher_reasoning_effort` | Default dispatcher reasoning effort |
 | `super_agents_reasoning_effort` | Default Super Agents reasoning effort |
 | `backend_models` | Backend-specific default dispatcher and default Super Agents models for `codex`, `openbase_cloud`, and `claude_code`. Codex accepts `gpt-5.5` (default), `gpt-5`, `sol`, and `astra` |

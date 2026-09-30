@@ -128,6 +128,12 @@ auth token automatically.
   Once a DevSpace has positively identified itself as an Openbase Cloud
   Workspace, starting a call automatically resumes it after idle shutdown;
   real machines never trigger Cloud startup.
+- **Voice Mode** — **Dispatcher** (default) sends every call to the
+  dispatcher thread, which delegates to Super Agents and transfers you between
+  them. **Direct** skips the dispatcher: each call starts a fresh thread you
+  talk to directly, like any other coding thread (see
+  [Voice Routing](voice-routing.md#direct-voice-mode)). Applies to the next
+  call.
 - **Dispatcher Voice** — choose the dispatcher's voice and recreate the
   dispatcher thread to apply it.
 - **Call Audio** — custom mute sounds and volume; optional music while muted

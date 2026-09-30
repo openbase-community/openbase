@@ -55,6 +55,14 @@ SERVICE_TIERS = {"fast", "standard"}
 DEFAULT_DISPATCHER_SERVICE_TIER = "fast"
 DEFAULT_SUPER_AGENTS_SERVICE_TIER = "standard"
 AUTO_LINK_PERSONAL_SKILLS_KEY = "auto_link_personal_skills"
+# How a voice call picks the thread it talks to. ``dispatcher`` routes every
+# call through the shared dispatcher thread (the default); ``direct`` skips
+# the dispatcher and starts a fresh ordinary Super Agent thread per call.
+VOICE_MODE_KEY = "voice_mode"
+VOICE_MODE_DISPATCHER = "dispatcher"
+VOICE_MODE_DIRECT = "direct"
+VOICE_MODES = (VOICE_MODE_DISPATCHER, VOICE_MODE_DIRECT)
+DEFAULT_VOICE_MODE = VOICE_MODE_DISPATCHER
 BACKEND_MODELS_KEY = "backend_models"
 DISPATCHER_MODEL_ROLE = "dispatcher"
 SUPER_AGENTS_MODEL_ROLE = "super_agents"
@@ -392,6 +400,31 @@ def set_dispatcher_service_tier(value: str, path: Path | None = None) -> Path:
 
 def set_super_agents_service_tier(value: str, path: Path | None = None) -> Path:
     return _set_service_tier(SUPER_AGENTS_SERVICE_TIER_KEY, value, path)
+
+
+def voice_mode(path: Path | None = None) -> str:
+    configured = _optional_str(read_dispatcher_config(path).get(VOICE_MODE_KEY))
+    if configured in VOICE_MODES:
+        return configured
+    env_value = _optional_str(os.getenv("OPENBASE_VOICE_MODE"))
+    if env_value in VOICE_MODES:
+        return env_value
+    return DEFAULT_VOICE_MODE
+
+
+def set_voice_mode(value: str, path: Path | None = None) -> Path:
+    normalized = value.strip().lower()
+    if normalized not in VOICE_MODES:
+        allowed = ", ".join(VOICE_MODES)
+        raise ValueError(f"Voice mode must be one of: {allowed}.")
+
+    config_path = path or CODEX_DISPATCHER_CONFIG_PATH
+    payload = {
+        **read_dispatcher_config(config_path),
+        VOICE_MODE_KEY: normalized,
+    }
+    _write_dispatcher_config(payload, config_path)
+    return config_path
 
 
 def auto_link_personal_skills(path: Path | None = None) -> bool:

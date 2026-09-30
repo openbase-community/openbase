@@ -18,6 +18,7 @@ from openbase_coder_cli.config.token_manager import DEFAULT_WEB_BACKEND_URL
 from openbase_coder_cli.dispatcher_instructions import with_dispatcher_skill
 from openbase_coder_cli.direct_voice_instructions import (
     DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS,
+    DIRECT_VOICE_MODE_BUILTIN_DEVELOPER_INSTRUCTIONS,
 )
 from openbase_coder_cli.paths import (
     CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH,
@@ -233,6 +234,7 @@ def load_direct_livekit_developer_instructions(
     *,
     env: dict[str, str] | None = None,
     default_path: Path | None = None,
+    builtin: str = DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS,
 ) -> str:
     values = env if env is not None else os.environ
     explicit_path = values.get(DIRECT_LIVEKIT_INSTRUCTIONS_PATH_ENV, "").strip()
@@ -251,7 +253,20 @@ def load_direct_livekit_developer_instructions(
     if text:
         return text
 
-    return DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS
+    return builtin
+
+
+def load_direct_voice_mode_developer_instructions(
+    *,
+    env: dict[str, str] | None = None,
+    default_path: Path | None = None,
+) -> str:
+    """Instructions for the call's own thread when no dispatcher is in play."""
+    return load_direct_livekit_developer_instructions(
+        env=env,
+        default_path=default_path,
+        builtin=DIRECT_VOICE_MODE_BUILTIN_DEVELOPER_INSTRUCTIONS,
+    )
 
 
 def _read_instruction_file(path: Path) -> str | None:

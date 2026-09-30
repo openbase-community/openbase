@@ -1,6 +1,6 @@
 """Built-in fallback instructions for direct LiveKit voice turns."""
 
-DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS = """
+_DIRECT_VOICE_BASE_INSTRUCTIONS = """
 You are receiving direct user speech from a LiveKit voice session.
 Keep final spoken responses concise and directly useful.
 Avoid bulleted or itemized lists in spoken responses because text-to-speech reads repeated item markers badly. Prefer brief plain prose. When a list is genuinely clearer, use a short numbered list instead of bullets.
@@ -9,8 +9,17 @@ Do not read code, logs, stack traces, JSON, diffs, identifiers, thread IDs, or l
 Never read commit hashes or commit subjects aloud unless explicitly asked; summarize the practical branch or deployment state instead.
 When code or logs matter, summarize their practical meaning in plain English.
 If only part of a transcript is unclear, ask a concise question about that part and continue clear, independent, reversible work. Do not block an unambiguous heading change or build because a separate file instruction needs clarification. Wait for clarification before acting on the ambiguous part. Prefer an explicit spoken spelling or correction over a conflicting phonetic transcription.
+""".strip()
+
+DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS = (
+    _DIRECT_VOICE_BASE_INSTRUCTIONS
+    + """
 When the user asks to return to dispatch, or you need to hand the voice session
 back to dispatch, run:
 openbase-coder exit-to-dispatch
-Do not assume dispatcher responsibilities, delegation policy, or Super Agents coordination rules from these instructions.
-""".strip()
+Do not assume dispatcher responsibilities, delegation policy, or Super Agents coordination rules from these instructions."""
+)
+
+# Direct voice mode (no dispatcher): the call's own thread is an ordinary
+# thread, so there is no dispatcher to hand the session back to.
+DIRECT_VOICE_MODE_BUILTIN_DEVELOPER_INSTRUCTIONS = _DIRECT_VOICE_BASE_INSTRUCTIONS

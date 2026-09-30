@@ -172,11 +172,12 @@ class CodexLLMStream(llm.LLMStream):
         delivery_record,
         delivery_ledger,
     ) -> None:
-        # When the dispatcher is already active, "exit to dispatch" is a no-op;
-        # treat the utterance as a normal prompt instead of swallowing it.
+        # When the home route (dispatcher, or the call's own thread in direct
+        # voice mode) is already active, "exit to dispatch" is a no-op; treat
+        # the utterance as a normal prompt instead of swallowing it.
         if (
             _is_exit_to_dispatch_command(prompt)
-            and not self._voice_router.is_dispatcher_active
+            and not self._voice_router.is_home_active
         ):
             self._voice_router.exit_to_dispatch()
             if delivery_record is not None:
@@ -184,7 +185,7 @@ class CodexLLMStream(llm.LLMStream):
                     delivery_record,
                     reason="exit_to_dispatch_command",
                 )
-            self._emit_delta("Back to dispatch.")
+            self._emit_delta(f"Back to {self._voice_router.home_route_label}.")
             return
 
         prompt = wrap_voice_prompt(prompt)

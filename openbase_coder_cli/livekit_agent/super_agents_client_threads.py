@@ -151,7 +151,20 @@ class SuperAgentsClientThreadsMixin:
         self._fresh_thread = False
         self._persist_thread_id(thread_id)
         logger.info("Started LiveKit Super Agents thread %s", thread_id)
+        if self._on_thread_started is not None:
+            try:
+                self._on_thread_started(self, thread_id)
+            except Exception:
+                logger.warning(
+                    "LiveKit thread-started handler failed for %s",
+                    thread_id,
+                    exc_info=True,
+                )
         return thread_id
+
+    def set_thread_started_handler(self, handler) -> None:
+        """Observe the lazily created thread id (e.g. to persist route state)."""
+        self._on_thread_started = handler
 
     async def _resume_thread(self, thread_id: str) -> str:
         if self._backend_is_codex() and hasattr(self._backend_client, "resume_thread"):

@@ -3,6 +3,7 @@
 import logging
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 from openbase_coder_cli.dispatcher_config import super_agents_service_tier
@@ -11,6 +12,9 @@ from openbase_coder_cli.livekit_agent.config import (
     LIVEKIT_CODEX_SANDBOX,
     LIVEKIT_DISPATCHER_CONFIG_PATH,
     PROACTIVE_STEER_PROMPT_CACHE_SECONDS,
+)
+from openbase_coder_cli.livekit_agent.codex_thread_state import (
+    persist_active_voice_target,
 )
 from openbase_coder_cli.livekit_agent.packets import (
     AnnouncerMessage,
@@ -31,18 +35,52 @@ from openbase_coder_cli.livekit_agent.voice_input_buffer import VoiceInputBuffer
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class DirectVoiceHome:
+    """Route description for direct voice mode, where the call's home client
+    is an ordinary Super Agent thread rather than the dispatcher."""
+
+    label: str
+    voice_id: str | None
+    voice_name: str | None
+    route_state_path: Path | None
+    cwd: str
+
+    @property
+    def spoken_name(self) -> str:
+        return self.voice_name or self.label
+
+
 class LiveKitVoiceRouter:
     def __init__(
         self,
         dispatcher_client,
         *,
         delivery_ledger: VoiceDeliveryLedger | None = None,
+        direct_home: DirectVoiceHome | None = None,
     ) -> None:
+        # The "home" client is where exit-to-dispatch lands: the dispatcher in
+        # dispatcher mode, the call's own thread in direct voice mode.
         self._dispatcher_client = dispatcher_client
+        self._direct_home = direct_home
         self._active_client = dispatcher_client
         self._target_clients: dict[str, SuperAgentsLiveKitClient] = {}
-        self._active_target_voice_id: str | None = None
-        self._active_target_voice_name: str | None = None
+        self._active_target_voice_id: str | None = (
+            direct_home.voice_id if direct_home else None
+        )
+        self._active_target_voice_name: str | None = (
+            direct_home.voice_name if direct_home else None
+        )
+        if direct_home is not None:
+            set_started = getattr(
+                dispatcher_client, "set_thread_started_handler", None
+            )
+            if callable(set_started):
+                set_started(self._on_home_thread_started)
+            # A new call starts on a not-yet-created thread; drop whatever
+            # target the previous call left behind so the apps do not show it
+            # as live.
+            self._persist_home_route(thread_id=None)
         self._proactive_steer_prompt_hashes: dict[str, float] = {}
         self._orphaned_result_handler = None
         self._route_version = 0
@@ -62,8 +100,44 @@ class LiveKitVoiceRouter:
         return self._active_client
 
     @property
-    def is_dispatcher_active(self) -> bool:
+    def is_direct_mode(self) -> bool:
+        return self._direct_home is not None
+
+    @property
+    def is_home_active(self) -> bool:
         return self._active_client is self._dispatcher_client
+
+    @property
+    def is_dispatcher_active(self) -> bool:
+        """True only when the shared dispatcher thread is taking turns.
+
+        In direct voice mode there is no dispatcher, so dispatcher-only
+        behavior (onboarding reminders, dispatch policy) never applies even
+        while the home client is active.
+        """
+        return self._direct_home is None and self.is_home_active
+
+    @property
+    def home_route_label(self) -> str:
+        return "dispatch" if self._direct_home is None else "your call thread"
+
+    def _persist_home_route(self, *, thread_id: str | None) -> None:
+        home = self._direct_home
+        if home is None:
+            return
+        persist_active_voice_target(
+            home.route_state_path,
+            active_target_thread_id=thread_id,
+            active_target_kind="direct" if thread_id else None,
+            active_target_label=home.label if thread_id else None,
+            active_target_voice_id=home.voice_id if thread_id else None,
+            active_target_voice_name=home.voice_name if thread_id else None,
+            cwd=home.cwd,
+        )
+
+    def _on_home_thread_started(self, _client, thread_id: str) -> None:
+        if self.is_home_active:
+            self._persist_home_route(thread_id=thread_id)
 
     @property
     def active_target_voice_id(self) -> str | None:
@@ -75,7 +149,12 @@ class LiveKitVoiceRouter:
 
     def route_snapshot(self) -> VoiceRouteSnapshot:
         thread_id = getattr(self._active_client, "_thread_id", "") or ""
-        active_route = "dispatcher" if self.is_dispatcher_active else "codex_thread"
+        if self.is_dispatcher_active:
+            active_route = "dispatcher"
+        elif self.is_home_active:
+            active_route = "direct"
+        else:
+            active_route = "codex_thread"
         return VoiceRouteSnapshot(
             route_version=self._route_version,
             active_thread_id=thread_id,
@@ -85,17 +164,23 @@ class LiveKitVoiceRouter:
         )
 
     def exit_to_dispatch(self) -> bool:
-        if self.is_dispatcher_active:
+        if self.is_home_active:
             logger.info(
                 "dispatch_timing stage=voice_route_unchanged "
-                "action=exit_to_dispatch reason=dispatcher_already_active"
+                "action=exit_to_dispatch reason=home_already_active"
             )
             return False
         self._active_client = self._dispatcher_client
-        self._active_target_voice_id = None
-        self._active_target_voice_name = None
+        home = self._direct_home
+        self._active_target_voice_id = home.voice_id if home else None
+        self._active_target_voice_name = home.voice_name if home else None
         self._route_version += 1
-        self._dispatcher_client.reset_voice_route_to_dispatcher()
+        if home is None:
+            self._dispatcher_client.reset_voice_route_to_dispatcher()
+        else:
+            self._persist_home_route(
+                thread_id=getattr(self._dispatcher_client, "_thread_id", None)
+            )
         logger.info(
             "dispatch_timing stage=voice_route_changed action=exit_to_dispatch "
             "route_version=%d active_thread_id=%s",
@@ -143,13 +228,24 @@ class LiveKitVoiceRouter:
         self._active_target_voice_id = target_voice_id
         self._active_target_voice_name = target_voice_name
         self._route_version += 1
-        self._dispatcher_client.persist_voice_route(
-            active_target_thread_id=thread_id,
-            active_target_kind="codex_thread",
-            active_target_label=label,
-            active_target_voice_id=target_voice_id,
-            active_target_voice_name=target_voice_name,
-        )
+        if self._direct_home is None:
+            self._dispatcher_client.persist_voice_route(
+                active_target_thread_id=thread_id,
+                active_target_kind="codex_thread",
+                active_target_label=label,
+                active_target_voice_id=target_voice_id,
+                active_target_voice_name=target_voice_name,
+            )
+        else:
+            persist_active_voice_target(
+                self._direct_home.route_state_path,
+                active_target_thread_id=thread_id,
+                active_target_kind="codex_thread",
+                active_target_label=label,
+                active_target_voice_id=target_voice_id,
+                active_target_voice_name=target_voice_name,
+                cwd=cwd,
+            )
         logger.info(
             "dispatch_timing stage=voice_route_changed action=transfer_to_thread "
             "route_version=%d active_thread_id=%s active_voice_id=%s "

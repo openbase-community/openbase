@@ -86,6 +86,29 @@ def super_agents_model(model: str | None, backend: str | None) -> None:
     click.echo(f"Default Super Agents model set to {normalized}.")
 
 
+@defaults.command("voice-mode")
+@click.argument("mode", required=False)
+def voice_mode(mode: str | None) -> None:
+    """Show or set how voice calls pick their thread.
+
+    ``dispatcher`` routes calls through the shared dispatcher thread;
+    ``direct`` starts a fresh ordinary thread per call with no dispatcher.
+    The next voice call picks up the change; no restart is needed.
+    """
+    if mode is None:
+        click.echo(f"Voice mode: {dispatcher_config.voice_mode()}")
+        return
+
+    try:
+        dispatcher_config.set_voice_mode(mode)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(
+        f"Voice mode set to {dispatcher_config.voice_mode()}. "
+        "Applies to the next voice call."
+    )
+
+
 def _normalize_reasoning_effort(level: str) -> str:
     normalized = level.strip().lower()
     if normalized not in dispatcher_config.REASONING_EFFORTS:

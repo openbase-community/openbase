@@ -16,6 +16,9 @@ from openbase_coder_cli.openbase_coder_cli_app.notifications import (
     notification_mark_read,
 )
 from openbase_coder_cli.openbase_coder_cli_app.skill_settings import skill_sharing_settings
+from openbase_coder_cli.openbase_coder_cli_app.voice_mode_settings import (
+    voice_mode_settings,
+)
 from openbase_coder_cli.openbase_coder_cli_app.sync_settings import (
     sync_conflicts,
     sync_conflicts_ignore_containing_folder,
@@ -458,6 +461,11 @@ urlpatterns = [
         "settings/service-tier/",
         service_tier_settings,
         name="service-tier-settings",
+    ),
+    path(
+        "settings/voice-mode/",
+        voice_mode_settings,
+        name="voice-mode-settings",
     ),
     path(
         "settings/env/",

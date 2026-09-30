@@ -335,6 +335,9 @@ class SuperAgentsLiveKitClient(
         self._on_orphaned_result: (
             Callable[[SuperAgentsLiveKitClient, str, str], None] | None
         ) = None
+        self._on_thread_started: (
+            Callable[[SuperAgentsLiveKitClient, str], None] | None
+        ) = None
         self._claimed_speech_turns: set[str] = set()
         self._turn_prompt_hashes: dict[str, set[str]] = {}
         self._turn_submitted_transcripts: dict[str, list[str]] = {}

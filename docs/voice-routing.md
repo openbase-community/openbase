@@ -15,6 +15,29 @@ Dispatch**. The [desktop app](desktop-app.md) and [console](console.md) show
 the dispatcher thread as text chat on their Dispatch page. The commands below
 are how agents (and scripts) drive the same routing.
 
+## Direct Voice Mode
+
+If you would rather not talk to a dispatcher at all, switch the voice mode to
+**Direct** (Settings → Voice Mode in the apps, or on the command line):
+
+```bash
+openbase-coder defaults voice-mode direct
+openbase-coder defaults voice-mode dispatcher   # back to the default
+```
+
+In direct mode every call starts a fresh, ordinary thread that you talk to
+directly. It has no dispatcher role or delegation policy — it is just a coding
+thread that happens to be on the phone — but like every thread it has the
+dispatch skill installed, so you can still ask it to start Super Agents. The
+thread is created on your first utterance (a call where you say nothing
+leaves nothing behind), is named after the call time (for example "Voice call
+Sep 29 2:14 PM"), and shows up in the thread list like any other thread.
+
+Transfers still work: `transfer-to-agent` and `transfer-to-thread` move the
+call to another thread, and `exit-to-dispatch` returns to the call's own
+thread instead of a dispatcher. The change applies to the next call; nothing
+needs restarting.
+
 ## Check The Current Route
 
 ```bash

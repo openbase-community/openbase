@@ -12,6 +12,7 @@ import inspect
 import logging
 import os
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from livekit import rtc
@@ -50,9 +51,12 @@ from openbase_coder_cli.config.token_manager import (  # noqa: F401
     AuthTransientError,
 )
 from openbase_coder_cli.dispatcher_config import (
+    VOICE_MODE_DIRECT,
     dispatcher_service_tier,
     selected_stt_provider_id,
     selected_tts_provider_id,
+    super_agents_service_tier,
+    voice_mode,
 )
 from openbase_coder_cli.livekit_agent.audio_diagnostics import (  # noqa: F401
     LoggingRecognizeStream,
@@ -128,6 +132,7 @@ from openbase_coder_cli.livekit_agent.config import (  # noqa: F401
     _optional_int_env,
     _read_instruction_file,
     load_direct_livekit_developer_instructions,
+    load_direct_voice_mode_developer_instructions,
 )
 from openbase_coder_cli.livekit_agent.logging_utils import (  # noqa: F401
     _event_text_hash,
@@ -202,6 +207,7 @@ from openbase_coder_cli.livekit_agent.vad_backlog_patch import (
 from openbase_coder_cli.livekit_agent.voice_delivery import VoiceDeliveryLedger
 from openbase_coder_cli.livekit_agent.provider_recovery import voice_connect_options
 from openbase_coder_cli.livekit_agent.voice_routing import (
+    DirectVoiceHome,
     LiveKitVoiceRouter,
     _transfer_voice_route,
 )
@@ -331,6 +337,43 @@ def _build_voice_backend_client(*, persist_thread: bool) -> SuperAgentsLiveKitCl
 
 
 _shared_voice_backend_client = _build_voice_backend_client(persist_thread=True)
+
+
+def _direct_voice_thread_label(now: datetime | None = None) -> str:
+    stamp = (now or datetime.now()).strftime("%b %-d %-I:%M %p")
+    return f"Voice call {stamp}"
+
+
+def _build_direct_voice_home() -> tuple[SuperAgentsLiveKitClient, DirectVoiceHome]:
+    """Direct voice mode: the call talks to a fresh ordinary Super Agent thread.
+
+    The thread is created lazily on the first utterance so silent calls leave
+    no empty threads behind; the router persists its id once it exists.
+    """
+    label = _direct_voice_thread_label()
+    voice = stable_super_agent_voice(None, label)
+    client = SuperAgentsLiveKitClient(
+        cwd=LIVEKIT_CODEX_THREAD_CWD,
+        state_path=None,
+        developer_instructions=load_direct_voice_mode_developer_instructions(),
+        approval_policy=LIVEKIT_CODEX_APPROVAL_POLICY,
+        sandbox=LIVEKIT_CODEX_SANDBOX,
+        service_tier=super_agents_service_tier(Path(LIVEKIT_DISPATCHER_CONFIG_PATH)),
+        persist_thread=False,
+        super_agent_name=label,
+        super_agent_agent_name=voice.name if voice else None,
+        use_super_agent_reasoning=True,
+    )
+    home = DirectVoiceHome(
+        label=label,
+        voice_id=voice.voice_id if voice else None,
+        voice_name=voice.name if voice else None,
+        route_state_path=Path(LIVEKIT_CODEX_THREAD_STATE_PATH)
+        if LIVEKIT_CODEX_THREAD_STATE_PATH
+        else Path.home() / ".openbase" / "livekit-voice-route.json",
+        cwd=LIVEKIT_CODEX_THREAD_CWD,
+    )
+    return client, home
 
 
 def _build_stt(vad_model=None):
@@ -859,14 +902,23 @@ async def livekit_agent(ctx: JobContext):
         "Connecting LiveKit voice session to Super Agents backend with cwd=%s",
         LIVEKIT_CODEX_THREAD_CWD,
     )
-    voice_backend_client = (
-        _build_voice_backend_client(persist_thread=False)
-        if LIVEKIT_CODEX_FRESH_THREAD_PER_SESSION
-        else _shared_voice_backend_client
-    )
-    prepare_task = asyncio.create_task(voice_backend_client.prepare())
-    prepare_task.add_done_callback(_log_prepare_result)
-    voice_router = LiveKitVoiceRouter(voice_backend_client)
+    direct_home: DirectVoiceHome | None = None
+    if voice_mode(Path(LIVEKIT_DISPATCHER_CONFIG_PATH)) == VOICE_MODE_DIRECT:
+        voice_backend_client, direct_home = _build_direct_voice_home()
+        logger.info(
+            "dispatch_timing stage=voice_mode_direct label=%s voice=%s",
+            direct_home.label,
+            direct_home.voice_name or "",
+        )
+    else:
+        voice_backend_client = (
+            _build_voice_backend_client(persist_thread=False)
+            if LIVEKIT_CODEX_FRESH_THREAD_PER_SESSION
+            else _shared_voice_backend_client
+        )
+        prepare_task = asyncio.create_task(voice_backend_client.prepare())
+        prepare_task.add_done_callback(_log_prepare_result)
+    voice_router = LiveKitVoiceRouter(voice_backend_client, direct_home=direct_home)
 
     logger.info("Connecting to LiveKit room")
     try:
@@ -1021,7 +1073,8 @@ async def livekit_agent(ctx: JobContext):
                 announcer_queue.enqueue(
                     AnnouncerMessage(
                         message_id=f"voice-route-{uuid.uuid4().hex}",
-                        text="Back to dispatch.",
+                        text=f"Back to {voice_router.home_route_label}.",
+                        voice_id=voice_router.active_target_voice_id,
                     )
                 )
         elif route_command.action == "transfer_to_thread":

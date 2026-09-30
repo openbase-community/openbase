@@ -244,6 +244,10 @@ The Settings page groups configuration into sections:
   dispatcher automatically.
 - **Backend Model**, **Service Tier**, **Reasoning** — model and reasoning defaults for agents (same as `openbase-coder defaults ...`). Service tiers (Fast mode) apply to the Codex backend only; on Claude Code the tier cannot be set and turns always run at the standard tier. Reasoning levels apply to both backends and are the Claude speed/quality knob. Fresh Openbase Cloud installs show Claude Haiku as the default for both dispatcher and Super Agents. Existing Sonnet selections remain visible; trial accounts explain that their requests run on Haiku.
 - **LiveKit Companion Screen Sharing** (desktop app only) — see below.
+- **Voice Mode** — whether calls go through the **Dispatcher** (default) or
+  **Direct** to a fresh thread per call with no dispatcher in between (same as
+  `openbase-coder defaults voice-mode`; see
+  [Voice Routing](voice-routing.md#direct-voice-mode)).
 - **Dispatcher Voice** — TTS/STT provider and voice selection, voice API
   keys, local model downloads, and a "Recreate LiveKit thread" action.
 - **Ignored Launchctl** — services to hide from the Launchctl page.
@@ -256,7 +260,7 @@ The Settings page groups configuration into sections:
 
 **On iPhone:** iOS Settings covers the phone-side equivalents: account and
 security (email, password, two-factor, sessions), backend host selection,
-dispatcher voice picker, call audio behavior (mute sounds, muted-call music,
+voice mode, dispatcher voice picker, call audio behavior (mute sounds, muted-call music,
 concurrent-agent threshold), and diagnostics log upload.
 
 ## Screen Sharing (LiveKit Companion)

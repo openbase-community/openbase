@@ -62,7 +62,7 @@ def test_bridge_does_not_execute_until_quiet_and_preserves_cancelled_input():
         async def wait_for_close(record, **kwargs):
             await closed.wait()
             return True
-        router = SimpleNamespace(is_dispatcher_active=False, active_client=SimpleNamespace(run_turn=run_turn),
+        router = SimpleNamespace(is_dispatcher_active=False, is_home_active=False, home_route_label="dispatch", active_client=SimpleNamespace(run_turn=run_turn),
             input_buffer=buffer, route_snapshot=lambda: "route")
         ledger = SimpleNamespace(wait_for_user_turn_closed=wait_for_close, mark_cancelled=lambda *args, **kwargs: None)
         stream = SimpleNamespace(_voice_router=router, _buffered_input=ticket, _message_id="first", _event_ch=SimpleNamespace(closed=False))

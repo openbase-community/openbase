@@ -106,3 +106,65 @@ def persist_voice_route_state(
             )
     except Exception:
         pass
+
+
+def persist_active_voice_target(
+    state_path: Path | None,
+    *,
+    active_target_thread_id: str | None,
+    active_target_kind: str | None,
+    active_target_label: str | None,
+    active_target_voice_id: str | None,
+    active_target_voice_name: str | None,
+    cwd: str | None = None,
+) -> None:
+    """Update only the active-target fields of the persisted voice route.
+
+    Direct voice mode has no dispatcher client of its own, so it patches the
+    route file in place instead of rewriting it around a dispatcher thread id;
+    whatever dispatcher state the file already holds is preserved.
+    """
+    if state_path is None:
+        return
+    route_path = (
+        state_path
+        if state_path.name == "livekit-voice-route.json"
+        else state_path.with_name("livekit-voice-route.json")
+    )
+    payload: dict = {}
+    if route_path.is_file():
+        try:
+            loaded = json.loads(route_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            loaded = None
+        if isinstance(loaded, dict):
+            payload = loaded
+    payload.update(
+        {
+            "active_target_thread_id": active_target_thread_id,
+            "active_target_kind": active_target_kind,
+            "active_target_label": active_target_label,
+            "active_target_voice_id": active_target_voice_id,
+            "active_target_voice_name": active_target_voice_name,
+            "updated_at": time.time(),
+            "instruction_override_supported": True,
+        }
+    )
+    route_path.parent.mkdir(parents=True, exist_ok=True)
+    route_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    if not active_target_thread_id:
+        return
+    try:
+        from openbase_coder_cli.livekit_voice_history import record_voice_assignment
+
+        record_voice_assignment(
+            thread_id=active_target_thread_id,
+            agent_name=active_target_voice_name,
+            cwd=cwd,
+            voice_id=active_target_voice_id,
+            voice_name=active_target_voice_name,
+            kind=active_target_kind or "codex_thread",
+            source="route_state",
+        )
+    except Exception:
+        pass
