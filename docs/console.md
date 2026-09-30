@@ -51,6 +51,11 @@ Differences in a browser:
 Useful shortcuts: **Cmd/Ctrl+B** toggles the sidebar; in a thread,
 **Enter** sends the prompt and **Shift+Enter** inserts a newline.
 
+To rename a thread, double-click its title in the thread view, choose
+**Rename thread** from the thread's **⋯** menu, or use the pencil that appears
+when hovering a row on the Threads page. The name is stored on the thread's
+coding backend, so it also shows in voice sessions and the native CLI.
+
 ## Thread Terminal
 
 Turn on **Settings > Interface > Thread terminal** to add a **Terminal** tab

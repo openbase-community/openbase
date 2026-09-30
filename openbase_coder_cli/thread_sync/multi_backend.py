@@ -286,6 +286,10 @@ class MultiBackendSessionManager:
         manager = await self._manager_for_thread(session_id)
         return await manager.send_message(session_id, message, model=model)
 
+    async def rename_thread(self, thread_id: str, name: str) -> ThreadInfo | None:
+        manager = await self._manager_for_thread(thread_id)
+        return await manager.rename_thread(thread_id, name)
+
     async def archive_thread(self, thread_id: str) -> bool:
         manager = await self._manager_for_thread(thread_id)
         result = await manager.archive_thread(thread_id)

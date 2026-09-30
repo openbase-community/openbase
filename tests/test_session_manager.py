@@ -5,6 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 import openbase_coder_cli.thread_sync.session_manager as session_manager_module
 from openbase_coder_cli.thread_sync.session_manager import (
     CodexAppServerSessionManager,
@@ -2703,3 +2705,84 @@ def test_resolve_turn_model_explicit_switch_must_match_backend(
     assert manager._resolve_turn_model(thread, "gpt-5.5") == "gpt-5.5"
     with _pytest.raises(ValueError, match="same backend"):
         manager._resolve_turn_model(thread, "opus")
+
+
+def test_rename_thread_uses_backend_label_api_and_broadcasts(
+    monkeypatch, tmp_path: Path
+) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    events: list[tuple[str, dict[str, Any]]] = []
+
+    async def fake_broadcast(session_id: str, event: dict[str, Any]) -> None:
+        events.append((session_id, event))
+
+    monkeypatch.setattr(
+        "openbase_coder_cli.thread_sync.session_manager._broadcast",
+        fake_broadcast,
+    )
+    renamed_thread = {
+        "thread": {
+            **_thread("thr-1", str(project_dir), status="idle"),
+            "name": "Fix login",
+        }
+    }
+
+    class RenamingClient(FakeBackendSessionClient):
+        async def rename_by_label(self, input_data, new_name: str) -> dict[str, Any]:
+            self.calls.append(
+                (
+                    "rename_by_label",
+                    {"thread_id": input_data.thread_id, "name": new_name},
+                )
+            )
+            return {"renamed": True, "name": new_name}
+
+    client = RenamingClient({"read_by_label": [renamed_thread, renamed_thread]})
+
+    result = asyncio.run(_manager(client).rename_thread("thr-1", "  Fix   login "))
+
+    assert (
+        "rename_by_label",
+        {"thread_id": "thr-1", "name": "Fix login"},
+    ) in client.calls
+    assert result is not None and result.name == "Fix login"
+    assert [event["type"] for _, event in events] == ["thread_state"]
+
+
+def test_rename_thread_rejects_blank_names(tmp_path: Path) -> None:
+    client = FakeBackendSessionClient({})
+
+    with pytest.raises(ValueError):
+        asyncio.run(_manager(client).rename_thread("thr-1", "   "))
+    assert client.calls == []
+
+
+def test_rename_thread_sets_codex_thread_name(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+
+    async def fake_broadcast(session_id: str, event: dict[str, Any]) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "openbase_coder_cli.thread_sync.session_manager._broadcast",
+        fake_broadcast,
+    )
+    thread = {"thread": _thread("thr-1", str(project_dir), status="idle")}
+
+    class CodexClient(FakeSuperAgentsClient):
+        async def set_thread_name(self, thread_id: str, name: str) -> dict[str, Any]:
+            self.calls.append(
+                ("set_thread_name", {"thread_id": thread_id, "name": name})
+            )
+            return {}
+
+    client = CodexClient({"read_thread": [thread, thread]})
+
+    asyncio.run(_manager(client).rename_thread("thr-1", "Renamed"))
+
+    assert (
+        "set_thread_name",
+        {"thread_id": "thr-1", "name": "Renamed"},
+    ) in client.calls
