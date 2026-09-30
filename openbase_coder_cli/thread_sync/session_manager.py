@@ -216,7 +216,9 @@ class CodexAppServerSessionManager(
             execution_backend=execution_backend,
         )
 
-    async def send_message(self, session_id: str, message: str) -> str:
+    async def send_message(
+        self, session_id: str, message: str, model: str | None = None
+    ) -> str:
         """Start a turn on a Codex app-server thread."""
         thread = await self.get_session_state(session_id)
         if thread is None:
@@ -233,7 +235,7 @@ class CodexAppServerSessionManager(
 
         message = _with_dispatcher_onboarding_reminder(session_id, message)
 
-        model = self._model_for_thread(thread)
+        model = self._resolve_turn_model(thread, model)
         role_turn_input = {
             "prompt": message,
             "cwd": thread.directory,

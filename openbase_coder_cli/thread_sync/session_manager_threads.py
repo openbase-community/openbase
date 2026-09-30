@@ -26,6 +26,7 @@ from openbase_coder_cli.dispatcher_config import (
     DISPATCHER_MODEL_ROLE,
     SUPER_AGENTS_MODEL_ROLE,
 )
+from openbase_coder_cli.thread_model_overrides import get_thread_model_override
 
 from .models import ThreadInfo as SessionInfo
 from .session_manager_base import (
@@ -70,6 +71,15 @@ class SessionManagerThreadsMixin:
         return codex_permission_defaults()
 
     def _model_for_thread(self, thread: SessionInfo) -> str | None:
+        override = get_thread_model_override(thread.session_id)
+        if override:
+            family = execution_backend_for_model(override)
+            if family is None or family == self._execution_backend:
+                # The thread's model switcher selection (console/iOS/Android
+                # composer dropdown) wins over role defaults. A stale
+                # cross-backend override (e.g. left behind by a backend
+                # continuation) falls through to the ordinary resolution.
+                return override
         role = (
             DISPATCHER_MODEL_ROLE
             if thread.name and thread.name.casefold() == "dispatcher"
@@ -85,6 +95,21 @@ class SessionManagerThreadsMixin:
             # with a cross-backend model error.
             return thread.model or None
         return model
+
+    def _resolve_turn_model(
+        self, thread: SessionInfo, explicit_model: str | None
+    ) -> str | None:
+        """The model for one turn: an explicit per-turn switch, else defaults."""
+        if not explicit_model:
+            return self._model_for_thread(thread)
+        family = execution_backend_for_model(explicit_model)
+        if family is not None and family != self._execution_backend:
+            raise ValueError(
+                f"Model {explicit_model} runs on the {family} backend; thread "
+                f"{thread.session_id} runs on {self._execution_backend}. Threads "
+                "can only switch between models of the same backend."
+            )
+        return explicit_model
 
     async def create_thread(
         self,

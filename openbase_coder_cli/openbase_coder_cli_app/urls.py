@@ -15,7 +15,9 @@ from openbase_coder_cli.openbase_coder_cli_app.notifications import (
     notification_mark_all_read,
     notification_mark_read,
 )
-from openbase_coder_cli.openbase_coder_cli_app.skill_settings import skill_sharing_settings
+from openbase_coder_cli.openbase_coder_cli_app.skill_settings import (
+    skill_sharing_settings,
+)
 from openbase_coder_cli.openbase_coder_cli_app.sync_settings import (
     sync_conflicts,
     sync_conflicts_ignore_containing_folder,
@@ -124,6 +126,7 @@ from openbase_coder_cli.openbase_coder_cli_app.views import (
     thread_favorite,
     thread_interrupt,
     thread_list,
+    thread_model_settings,
     thread_queue_turn,
     thread_start_turn,
     thread_steer_turn,
@@ -201,6 +204,11 @@ urlpatterns = [
         "threads/<str:thread_id>/interrupt/",
         thread_interrupt,
         name="thread-interrupt",
+    ),
+    path(
+        "threads/<str:thread_id>/models/",
+        thread_model_settings,
+        name="thread-model-settings",
     ),
     path("threads/<str:thread_id>/turns/", thread_start_turn, name="thread-start-turn"),
     path(

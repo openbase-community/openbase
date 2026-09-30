@@ -17,6 +17,7 @@ from openbase_coder_cli.livekit_voice_route import (
 )
 from openbase_coder_cli.openbase_coder_cli_app.item_tags import thread_tags
 from openbase_coder_cli.openbase_coder_cli_app.thread_favorites import favorite_payload
+from openbase_coder_cli.thread_model_overrides import get_thread_model_override
 from openbase_coder_cli.tts_providers import voice_name_for_id
 
 VoiceRouteRole = Literal["none", "dispatcher", "active_target"]
@@ -118,6 +119,7 @@ def annotate_thread_payload(
         "display_name": display_name,
         "is_favorite": favorite["is_favorite"],
         "favorited_at": favorite["favorited_at"],
+        "model_override": get_thread_model_override(resolved_thread_id),
         "tags": thread_tags(resolved_thread_id),
         "voice_route": {
             "role": role,

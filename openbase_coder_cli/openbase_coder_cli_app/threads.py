@@ -42,6 +42,9 @@ from openbase_coder_cli.openbase_coder_cli_app.thread_metadata import (
     annotate_thread_payload,
     get_livekit_shared_thread_id,
 )
+from openbase_coder_cli.openbase_coder_cli_app.thread_models import (
+    validate_model_for_thread,
+)
 from openbase_coder_cli.openbase_coder_cli_app.thread_origins import (
     MANUAL_ORIGIN,
     set_thread_origin,
@@ -55,6 +58,7 @@ from openbase_coder_cli.services.fleet_aggregation import (
     fleet_thread_page,
     thread_payload_sort_key,
 )
+from openbase_coder_cli.thread_model_overrides import set_thread_model_override
 from openbase_coder_cli.thread_sync.models import ThreadStatus
 from openbase_coder_cli.thread_sync.projects import (
     refresh_projects_from_thread_directories as _refresh_projects_from_threads,
@@ -683,6 +687,27 @@ def thread_interrupt(request, thread_id):
     return Response({"success": True})
 
 
+def _requested_turn_model(request, manager, thread_id) -> str | None:
+    """Validate and persist an optional per-turn model switch.
+
+    A `model` in a turn payload is the composer's model dropdown: it must stay
+    on the thread's own backend, and it sticks — later turns without a model
+    keep using it (stored as the thread's model override).
+
+    Raises ValueError with a user-facing message on unknown or cross-backend
+    models.
+    """
+    model = request.data.get("model")
+    if not model or not isinstance(model, str):
+        return None
+    thread = async_to_sync(manager.get_thread_state)(thread_id)
+    if thread is None:
+        raise ValueError(f"Thread {thread_id} not found")
+    model = validate_model_for_thread(thread.backend, model)
+    set_thread_model_override(thread_id, model)
+    return model
+
+
 @api_view(["POST"])
 def thread_start_turn(request, thread_id):
     """Start a new turn on a thread (non-blocking).
@@ -698,7 +723,8 @@ def thread_start_turn(request, thread_id):
             status=status.HTTP_400_BAD_REQUEST,
         )
     try:
-        turn_id = async_to_sync(manager.start_turn)(thread_id, prompt)
+        model = _requested_turn_model(request, manager, thread_id)
+        turn_id = async_to_sync(manager.start_turn)(thread_id, prompt, model=model)
     except (ValueError, RuntimeError) as e:
         # Surface the app-server's human-readable message (e.g. "thread not
         # loaded: <id>") rather than its raw JSON-RPC error envelope.
@@ -722,7 +748,8 @@ def thread_queue_turn(request, thread_id):
             status=status.HTTP_400_BAD_REQUEST,
         )
     try:
-        result = async_to_sync(manager.queue_turn)(thread_id, prompt)
+        model = _requested_turn_model(request, manager, thread_id)
+        result = async_to_sync(manager.queue_turn)(thread_id, prompt, model=model)
     except (ValueError, RuntimeError) as e:
         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
     invalidate_thread_list_cache()

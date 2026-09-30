@@ -2662,3 +2662,44 @@ def test_steer_turn_without_active_turn_or_inbox_still_raises(
     except ValueError as exc:
         raised = exc
     assert raised is not None and "no active turn to steer" in str(raised)
+
+
+def test_model_for_thread_prefers_same_backend_override(monkeypatch, tmp_path) -> None:
+    from openbase_coder_cli.thread_model_overrides import set_thread_model_override
+    from openbase_coder_cli.thread_sync.models import ThreadInfo
+
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    manager = CodexAppServerSessionManager(
+        client=FakeBackendSessionClient({}),
+        model_for_role=lambda _role: "fable",
+        execution_backend="claude_code",
+    )
+    thread = ThreadInfo(session_id="s1", directory="/tmp/p", model="fable")
+
+    set_thread_model_override("s1", "opus")
+    assert manager._model_for_thread(thread) == "opus"
+
+    # A stale cross-backend override never leaks into this backend's turns.
+    set_thread_model_override("s1", "gpt-5.5")
+    assert manager._model_for_thread(thread) == "fable"
+
+
+def test_resolve_turn_model_explicit_switch_must_match_backend(
+    monkeypatch, tmp_path
+) -> None:
+    import pytest as _pytest
+
+    from openbase_coder_cli.thread_sync.models import ThreadInfo
+
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    manager = CodexAppServerSessionManager(
+        client=FakeBackendSessionClient({}),
+        model_for_role=lambda _role: "gpt-5.5",
+        execution_backend="codex",
+    )
+    thread = ThreadInfo(session_id="s1", directory="/tmp/p")
+
+    assert manager._resolve_turn_model(thread, None) == "gpt-5.5"
+    assert manager._resolve_turn_model(thread, "gpt-5.5") == "gpt-5.5"
+    with _pytest.raises(ValueError, match="same backend"):
+        manager._resolve_turn_model(thread, "opus")
