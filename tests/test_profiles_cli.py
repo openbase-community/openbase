@@ -54,21 +54,12 @@ def _patch_profile_install(monkeypatch, tmp_path: Path, events: list[object]) ->
     )
     monkeypatch.setattr(
         profiles_module,
-        "ensure_codex_session_id_hook",
-        lambda path, *, backup=False: events.append(
-            ("default-codex-hook", path, backup)
-        ),
-    )
-    monkeypatch.setattr(
-        profiles_module,
-        "ensure_claude_session_id_hook",
-        lambda path, *, backup=False: events.append(
-            ("default-claude-hook", path, backup)
-        ),
+        "ensure_default_session_id_hooks",
+        lambda: events.append("default-hooks"),
     )
 
 
-def test_profiles_install_keeps_default_hooks_opt_in(
+def test_profiles_install_includes_default_hooks_by_default(
     monkeypatch, tmp_path: Path
 ) -> None:
     events: list[object] = []
@@ -77,9 +68,7 @@ def test_profiles_install_keeps_default_hooks_opt_in(
     result = CliRunner().invoke(profiles_module.profiles, ["install"])
 
     assert result.exit_code == 0
-    assert not any(
-        isinstance(event, tuple) and event[0].startswith("default-") for event in events
-    )
+    assert events[-1] == "default-hooks"
 
 
 def test_profiles_install_registers_shared_super_agents_by_default(
@@ -111,7 +100,7 @@ def test_profiles_install_can_opt_out_of_shared_super_agents(
     assert ("claude-settings-profile", False) in events
 
 
-def test_profiles_install_can_include_default_hooks(
+def test_profiles_install_can_disable_default_hooks(
     monkeypatch, tmp_path: Path
 ) -> None:
     events: list[object] = []
@@ -119,11 +108,8 @@ def test_profiles_install_can_include_default_hooks(
 
     result = CliRunner().invoke(
         profiles_module.profiles,
-        ["install", "--include-default-hooks"],
+        ["install", "--no-include-default-hooks"],
     )
 
     assert result.exit_code == 0
-    assert events[-2:] == [
-        ("default-codex-hook", profiles_module.CODEX_CONFIG_PATH, True),
-        ("default-claude-hook", profiles_module.CLAUDE_SETTINGS_PATH, True),
-    ]
+    assert "default-hooks" not in events

@@ -82,8 +82,13 @@ from openbase_coder_cli.cli.setup.env import (
     _upsert_env_file_values,  # noqa: F401
 )
 from openbase_coder_cli.cli.setup.hooks import (
+    ensure_default_session_id_hooks,
+    include_default_hooks_option,
+)
+from openbase_coder_cli.cli.setup.hooks import (
     ensure_session_id_hook_script as _ensure_session_id_hook_script,
 )
+from openbase_coder_cli.cli.setup.summary import print_agent_setup_summary
 from openbase_coder_cli.cli.setup.workspace import (
     BUNDLED_SOUND_FILES,  # noqa: F401
     BUNDLED_SOUNDS_PACKAGE,  # noqa: F401
@@ -342,6 +347,7 @@ class _SetupProgress:
         "human-readable output moves to stderr."
     ),
 )
+@include_default_hooks_option
 @click.option(
     "--shared-super-agents-mcp/--no-shared-super-agents-mcp",
     "shared_super_agents_mcp",
@@ -380,6 +386,7 @@ def setup(
     tailnet_provider: str | None,
     json_progress: bool,
     shared_super_agents_mcp: bool,
+    include_default_hooks: bool,
     interactive_mode: bool | None,
 ) -> None:
     """Full install flow for Openbase Coder.
@@ -430,6 +437,7 @@ def setup(
             audio_provider=audio_provider,
             tailnet_provider=tailnet_provider,
             register_shared_super_agents=shared_super_agents_mcp,
+            include_default_hooks=include_default_hooks,
         )
     except Exception as exc:
         progress.abort(str(exc))
@@ -445,6 +453,11 @@ def setup(
     if interactive:
         _interactive_cloud_login_and_checks(env_file, cli_configured=cli_configured)
         _print_app_download_qr()
+        if current_runtime_package() is None:
+            print_agent_setup_summary(
+                include_default_hooks=include_default_hooks,
+                shared_super_agents_mcp=shared_super_agents_mcp,
+            )
     else:
         web_backend_url = (
             _env_file_values(Path(env_file)).get("OPENBASE_CODER_CLI_WEB_BACKEND_URL")
@@ -790,6 +803,7 @@ def _run_setup_phases(
     audio_provider: str | None,
     tailnet_provider: str | None = None,
     register_shared_super_agents: bool = True,
+    include_default_hooks: bool = True,
 ) -> bool:
     """Run the setup phases, returning whether Tailscale Serve is healthy."""
     progress.step("workspace", "start")
@@ -880,6 +894,8 @@ def _run_setup_phases(
         workspace_dir=shared_workspace_dir,
         coding_backend=selected_coding_backend,
     )
+    if include_default_hooks:
+        ensure_default_session_id_hooks()
     if selected_coding_backend == CLAUDE_CODE_BACKEND:
         status = claude_auth_status()
         if not status.logged_in:

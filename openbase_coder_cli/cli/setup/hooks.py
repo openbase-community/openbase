@@ -1,8 +1,7 @@
-"""Session-ID hooks: SessionStart hooks for both Openbase agent homes.
+"""Session-ID hooks for Openbase profiles and default agent configurations.
 
 Installs the bundled ``inject-session-id.sh`` script into ``~/.openbase/hooks``
-and registers it as a SessionStart hook in the Openbase Claude settings and
-the Openbase Codex home config. The hook feeds each session's thread/session
+and registers it as a SessionStart hook in Codex and Claude settings. The hook feeds each session's thread/session
 ID back into the conversation as additionalContext so agents can stamp
 commits with the ``Agent-Thread-Id`` trailer.
 
@@ -24,6 +23,8 @@ import click
 
 from openbase_coder_cli.cli.setup.profile_migration import write_if_changed
 from openbase_coder_cli.paths import (
+    CLAUDE_SETTINGS_PATH,
+    CODEX_CONFIG_PATH,
     CODEX_HOME_DIR,
     INJECT_SESSION_ID_HOOK_PATH,
     OPENBASE_HOOKS_DIR,
@@ -34,6 +35,23 @@ SESSION_ID_HOOK_FILENAME = "inject-session-id.sh"
 # Codex normalizes an absent hook timeout to 600s before hashing, so the
 # timeout is part of the trust identity even though we never write it.
 _CODEX_HOOK_DEFAULT_TIMEOUT_SEC = 600
+
+
+include_default_hooks_option = click.option(
+    "--include-default-hooks/--no-include-default-hooks",
+    default=True,
+    show_default=True,
+    help=(
+        "Install the session-ID hook in the default Codex and Claude Code "
+        "configurations so ordinary sessions receive their Agent-Thread-Id."
+    ),
+)
+
+
+def ensure_default_session_id_hooks() -> None:
+    """Restore default-home hooks after profile migration, preserving user settings."""
+    ensure_codex_session_id_hook(CODEX_CONFIG_PATH, backup=True)
+    ensure_claude_session_id_hook(CLAUDE_SETTINGS_PATH, backup=True)
 
 
 def ensure_session_id_hook_script() -> None:

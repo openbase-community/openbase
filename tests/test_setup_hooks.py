@@ -307,3 +307,31 @@ def test_ensure_codex_session_id_hook_reuses_managed_group_after_user_hook(
     assert "stale-source" not in text
     state_key = f"{config.parent.resolve() / config.name}:session_start:1:0"
     assert f'[hooks.state."{state_key}"]' in text
+
+
+def test_default_hooks_restore_both_homes_after_profile_migration(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from openbase_coder_cli.cli.setup.profile_migration import (
+        migrate_claude_user_config,
+        migrate_codex_user_config,
+    )
+
+    codex = tmp_path / "codex" / "config.toml"
+    claude = tmp_path / "claude" / "settings.json"
+    monkeypatch.setattr(hooks, "CODEX_CONFIG_PATH", codex)
+    monkeypatch.setattr(hooks, "CLAUDE_SETTINGS_PATH", claude)
+    hooks.ensure_default_session_id_hooks()
+    initial = (codex.read_text(), claude.read_text())
+
+    migrate_codex_user_config(codex)
+    migrate_claude_user_config(tmp_path / "claude.json", claude)
+    assert not tomllib.loads(codex.read_text())["hooks"]["SessionStart"]
+    assert not json.loads(claude.read_text())["hooks"]["SessionStart"]
+
+    hooks.ensure_default_session_id_hooks()
+    restored = (codex.read_text(), claude.read_text())
+    assert tomllib.loads(restored[0]) == tomllib.loads(initial[0])
+    assert json.loads(restored[1]) == json.loads(initial[1])
+    hooks.ensure_default_session_id_hooks()
+    assert (codex.read_text(), claude.read_text()) == restored

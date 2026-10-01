@@ -54,6 +54,10 @@ The workspace script is for a clean source-workspace install. If it finds an
 existing standalone install or a different development workspace install, it
 stops and directs you to [Uninstall](../uninstall.md) before making changes.
 
+## Session Identity Hooks
+
+Setup installs session identity hooks for both Codex and Claude Code, including their default configurations. The `--include-default-hooks` option defaults on; pass `--no-include-default-hooks` to keep the hook in Openbase's own profiles only. The developer `./scripts/setup` script accepts the same options. Existing installations can restore the hooks with `openbase-coder profiles install`, which uses the same default. Start or resume a new agent process to receive the session ID and `Agent-Thread-Id` commit instructions. Interactive developer setup ends with an ℹ️ paragraph summarizing the Codex and Claude Code configuration, including the selected hook and MCP options.
+
 ## Interactive Mode
 
 Setup is only interactive when run with no flags at all on a terminal, or

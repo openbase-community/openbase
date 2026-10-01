@@ -1407,6 +1407,10 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
         lambda _workspace_dir, **_kwargs: None,
     )
     _patch_setup(monkeypatch, "_ensure_session_id_hook_script", lambda: None)
+    hook_calls = []
+    monkeypatch.setattr(
+        setup_cli, "ensure_default_session_id_hooks", lambda: hook_calls.append("hooks")
+    )
     monkeypatch.setattr(
         setup_cli, "_ensure_codex_config", lambda *_args, **_kwargs: None
     )
@@ -1482,6 +1486,7 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
 
     assert result.exit_code == 0, result.output
     assert calls == ["thread-sync", "sounds", "configure"]
+    assert hook_calls == ["hooks"]
     assert "Claude Code is not logged in" in result.output
 
     calls.clear()
@@ -1511,10 +1516,12 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
             "claude-code",
             "--tailnet-provider",
             "netmesh",
+            "--no-include-default-hooks",
         ],
     )
 
     assert result.exit_code == 0, result.output
+    assert hook_calls == ["hooks"]
     assert "Setup complete." in result.output
     assert "networking choice was saved" in result.output
     assert calls == [
