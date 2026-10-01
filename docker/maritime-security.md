@@ -27,7 +27,12 @@ routine, developer machine, or one-off deployment.
   (`7881/tcp`) cannot loopback-bind (its TCP mux ignores the bind address),
   so in netmesh mode that one listener is on all container interfaces and
   isolation relies on the provider exposing no non-tunnel interface.
-- The container runs as an unprivileged user and refuses Maritime startup as
+- The container runs as an unprivileged user. Maritime's VM init starts the
+  entrypoint as root (it ignores the image `USER`) and without the image
+  `ENV`, so the entrypoint's first act is to drop privileges with `setpriv`
+  (no inheritable capabilities, empty bounding set, `no_new_privs`) using a
+  fixed system PATH and absolute paths; user-owned directories reach PATH
+  only after the drop, and the entrypoint refuses to continue if it is still
   root. Runtime-created credential files use mode `0600`; the state directory
   uses mode `0700`.
 - Durable runtime state is below `/data`. Image filesystem state is disposable.
@@ -83,8 +88,10 @@ or non-container grant receives the same generic rejection.
 
 ## Runtime bootstrap sequence
 
-1. Maritime starts the digest-pinned Openbase image as the image's unprivileged
-   user with its durable disk mounted at `/data`.
+1. Maritime starts the digest-pinned Openbase image (passed as `imageName` on
+   agent creation, so no second deploy call is needed) with its durable disk
+   mounted at `/data`; the entrypoint drops from root to the image's
+   unprivileged user before anything else runs.
 2. `openbase-coder provision --kind container` exchanges the one-time grant.
 3. The CLI atomically persists the machine token and owner pin under `/data`
    with mode `0600`. It stages the one-time Netmesh key there for the supervisor.

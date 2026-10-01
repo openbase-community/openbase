@@ -20,10 +20,42 @@
 set -euo pipefail
 umask 077
 
+# --- Privilege drop (Maritime) ----------------------------------------------
+# Maritime's VM init launches the image entrypoint as root regardless of the
+# Dockerfile USER and without the image ENV (observed 2026-09-28; without
+# this the root guard below exited PID 1 and the VM kernel-panicked). The
+# image's own bin directories (~/.openbase/bin, the cli venv) are owned by
+# the unprivileged user, so they must never be searched while we are root: a
+# binary planted there would run as root at the next boot. Keep a fixed
+# system PATH and absolute paths until the drop is done, then re-exec this
+# script as the image user with no inheritable capabilities, an empty
+# bounding set and no_new_privs, environment otherwise intact.
+if [ "${OPENBASE_CODER_RUNTIME:-}" = "maritime" ] && [ "$(/usr/bin/id -u)" = "0" ]; then
+    export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    if ! /usr/bin/id openbase >/dev/null 2>&1; then
+        echo "[entrypoint] Refusing to run the Maritime workspace as root (no 'openbase' user)." >&2
+        exit 1
+    fi
+    /bin/mkdir -p /data
+    # Reparent only root-owned entries (the platform-created mount and
+    # first-boot directories); never rewrite a user's existing files, and
+    # never follow links (-h) so nothing under /data can redirect the chown.
+    /usr/bin/find /data -maxdepth 2 -user root \
+        -exec /bin/chown -h openbase:openbase {} + 2>/dev/null || true
+    echo "[entrypoint] Started as root; re-executing as 'openbase'." >&2
+    exec /usr/bin/setpriv --reuid=openbase --regid=openbase --init-groups \
+        --inh-caps=-all --bounding-set=-all --no-new-privs \
+        /usr/bin/env HOME=/home/openbase USER=openbase LOGNAME=openbase \
+        "$0" "$@"
+fi
+
 # The Dockerfile ENV is not guaranteed to reach us: Maritime's VM init rebuilds
 # the environment from its own store and drops the image's ENV, so the cli
 # venv fell off PATH ("openbase-coder: command not found", 2026-09-28).
-# Re-assert the image defaults here; explicit platform values still win.
+# Re-assert the image defaults here (mirrors the Dockerfile ENV block; keep
+# the two in sync); explicit platform values still win. This runs only after
+# the privilege drop above, so the user-owned directories it puts on PATH are
+# never searched by root.
 case ":${PATH:-}:" in
     *":/opt/openbase-coder/workspace/cli/.venv/bin:"*) ;;
     *)
@@ -50,26 +82,11 @@ if [ "${OPENBASE_CODER_RUNTIME:-}" = "maritime" ]; then
     # tunneld) is the only mode that works there. Default to it so a missing
     # env value can never silently boot the tailscale path.
     NETWORK_MODE="${OPENBASE_CODER_NETWORK_MODE:-netmesh}"
+    # The privilege drop at the top of this script already re-executed us as
+    # the image user; nothing past this point may run as root.
     if [ "$(id -u)" = "0" ]; then
-        # Maritime's VM init launches the image entrypoint as root regardless
-        # of the Dockerfile USER (observed 2026-09-28: "Refusing to run ... as
-        # root" followed by a kernel panic because PID 1 exited). The workspace
-        # must never run as root, so reparent the durable volume to the image
-        # user and re-exec this script unprivileged with the environment
-        # intact. A bare `id -u` check stays below for anything that slips
-        # through (for example a missing user) so root can still not proceed.
-        if ! id openbase >/dev/null 2>&1; then
-            echo "[entrypoint] Refusing to run the Maritime workspace as root (no 'openbase' user)." >&2
-            exit 1
-        fi
-        mkdir -p /data
-        # Reparent only root-owned entries (the platform-created mount and
-        # first-boot directories); never rewrite a user's existing files.
-        find /data -maxdepth 2 -user root -exec chown openbase:openbase {} + 2>/dev/null || true
-        echo "[entrypoint] Started as root; re-executing as 'openbase'." >&2
-        exec setpriv --reuid=openbase --regid=openbase --init-groups \
-            env HOME=/home/openbase USER=openbase LOGNAME=openbase \
-            "$0" "$@"
+        echo "[entrypoint] Refusing to run the Maritime workspace as root." >&2
+        exit 1
     fi
     case "$DATA_DIR" in
         /data/*) ;;
