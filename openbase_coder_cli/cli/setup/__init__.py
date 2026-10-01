@@ -81,6 +81,7 @@ from openbase_coder_cli.cli.setup.env import (
     _selected_coding_backend,
     _upsert_env_file_values,  # noqa: F401
 )
+from openbase_coder_cli.cli.setup.git_ignore import ensure_global_git_ignore
 from openbase_coder_cli.cli.setup.hooks import (
     ensure_default_session_id_hooks,
     include_default_hooks_option,
@@ -832,6 +833,7 @@ def _run_setup_phases(
     progress.step("workspace", "start")
     OPENBASE_BASE_DIR.mkdir(parents=True, exist_ok=True)
     _ensure_thread_sync_exchange_dir()
+    ensure_global_git_ignore()
     _ensure_bundled_sounds()
     runtime_package = current_runtime_package()
     use_dev_workspace = runtime_package is None

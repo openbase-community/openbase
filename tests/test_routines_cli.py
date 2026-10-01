@@ -407,3 +407,44 @@ def test_add_webhook_trigger_cloud_flag_creates_relay_endpoint(monkeypatch) -> N
     call = FakeRoutinesClient.instances[0].calls[0]
     assert call[1]["relayEndpointId"] == "ep-1"
     assert call[1]["relayUrl"] == "https://cloud/api/openbase/hooks/t/obhk_x/"
+
+
+def test_add_file_trigger_builds_trigger_input(monkeypatch) -> None:
+    FakeRoutinesClient.instances = []
+    monkeypatch.setattr(routines_cli, "CodexAppServerClient", FakeTriggerClient)
+
+    result = CliRunner().invoke(
+        routines_cli.routines,
+        [
+            "add-file-trigger",
+            "review-loop",
+            "--path",
+            "~/Projects/*/.triggers/review-request.md",
+            "--description",
+            "Review requests",
+            "--filter",
+            "name",
+            "endsWith",
+            "-request.md",
+            "--fire-existing",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    call = FakeRoutinesClient.instances[0].calls[0]
+    assert call == (
+        "add_routine_trigger",
+        {
+            "name": "review-loop",
+            "type": "file",
+            "watchPath": "~/Projects/*/.triggers/review-request.md",
+            "description": "Review requests",
+            "filters": [{"path": "name", "op": "endsWith", "value": "-request.md"}],
+            "fireExisting": True,
+        },
+    )
+
+    missing = CliRunner().invoke(
+        routines_cli.routines, ["add-file-trigger", "review-loop"]
+    )
+    assert missing.exit_code != 0

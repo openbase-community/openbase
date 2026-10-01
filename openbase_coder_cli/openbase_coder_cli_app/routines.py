@@ -195,6 +195,14 @@ class TriggerFilterSerializer(serializers.Serializer):
 
 
 class TriggerCreateSerializer(serializers.Serializer):
+    type = serializers.ChoiceField(choices=["webhook", "file"], required=False)
+    watchPath = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        trim_whitespace=True,
+        max_length=1024,
+    )
+    fireExisting = serializers.BooleanField(required=False)
     description = serializers.CharField(
         required=False,
         allow_blank=True,
@@ -327,7 +335,7 @@ def routines_run_due(request):
 
 @api_view(["POST"])
 def routine_triggers(request, name):
-    """Add a webhook trigger to a persisted routine (loop)."""
+    """Add a webhook or file trigger to a persisted routine (loop)."""
     serializer = TriggerCreateSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     payload = _clean_serializer_data(dict(serializer.validated_data))
