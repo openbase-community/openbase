@@ -333,7 +333,9 @@ def test_thread_active_voice_returns_active_target_with_turn_text(monkeypatch) -
     ]
 
 
-def test_thread_active_voice_warms_dispatcher_without_active_thread(monkeypatch) -> None:
+def test_thread_active_voice_warms_dispatcher_without_active_thread(
+    monkeypatch,
+) -> None:
     thread_cache.clear_thread_cache()
     dispatcher_thread = _thread(1)
     manager = FakeThreadManager([dispatcher_thread])
@@ -549,3 +551,62 @@ def test_thread_activity_reports_zero_when_no_runs_active(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.data["active_run_count"] == 0
     assert response.data["thread_count"] == 2
+
+
+class RenamingThreadManager(FakeThreadManager):
+    def __init__(self, threads: list[ThreadInfo]) -> None:
+        super().__init__(threads)
+        self.renames: list[tuple[str, str]] = []
+
+    async def rename_thread(self, thread_id: str, name: str) -> ThreadInfo | None:
+        self.renames.append((thread_id, name))
+        thread = await self.get_thread_state(thread_id)
+        return thread.model_copy(update={"name": name}) if thread else None
+
+
+def _rename(monkeypatch, manager, thread_id: str, body: dict):
+    thread_cache.clear_thread_cache()
+    monkeypatch.setattr(thread_views, "get_session_manager", lambda: manager)
+    factory = APIRequestFactory()
+    request = factory.patch(f"/api/threads/{thread_id}/name/", body, format="json")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+    return thread_views.thread_name(request, thread_id)
+
+
+def test_thread_name_endpoint_renames_on_backend(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    manager = RenamingThreadManager([_thread(1)])
+
+    response = _rename(monkeypatch, manager, "thread-001", {"name": "  Fix login  "})
+
+    assert response.status_code == 200
+    assert response.data["thread_id"] == "thread-001"
+    assert response.data["name"] == "  Fix login  "
+    assert manager.renames == [("thread-001", "  Fix login  ")]
+
+
+def test_thread_name_endpoint_rejects_blank_and_unknown(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    manager = RenamingThreadManager([_thread(1)])
+
+    blank = _rename(monkeypatch, manager, "thread-001", {"name": "   "})
+    assert blank.status_code == 400
+    assert manager.renames == []
+
+    missing = _rename(monkeypatch, manager, "thread-404", {"name": "x"})
+    assert missing.status_code == 404
+
+
+def test_thread_name_endpoint_reports_backend_failure(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+
+    class FailingManager(RenamingThreadManager):
+        async def rename_thread(self, thread_id: str, name: str):
+            raise RuntimeError("app-server unavailable")
+
+    response = _rename(
+        monkeypatch, FailingManager([_thread(1)]), "thread-001", {"name": "x"}
+    )
+
+    assert response.status_code == 502
+    assert "app-server unavailable" in response.data["error"]

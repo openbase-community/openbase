@@ -129,6 +129,20 @@ class SessionManagerThreadsMixin:
         """Archive a Codex app-server thread."""
         return await self.close_session(thread_id)
 
+    async def rename_thread(self, thread_id: str, name: str) -> SessionInfo | None:
+        """Rename a thread on its backend and broadcast the new snapshot."""
+        cleaned = " ".join(name.split())
+        if not cleaned:
+            raise ValueError("Thread name cannot be empty")
+        if self._uses_backend_session_api():
+            await self._client.rename_by_label(
+                LabelQueryInput(thread_id=thread_id), cleaned
+            )
+        else:
+            await self._client.set_thread_name(thread_id, cleaned)
+        await self._broadcast_thread_state(thread_id)
+        return await self.get_thread_state(thread_id)
+
     async def get_thread_state(
         self,
         thread_id: str,

@@ -51,6 +51,30 @@ Differences in a browser:
 Useful shortcuts: **Cmd/Ctrl+B** toggles the sidebar; in a thread,
 **Enter** sends the prompt and **Shift+Enter** inserts a newline.
 
+To rename a thread, double-click its title in the thread view, choose
+**Rename thread** from the thread's **⋯** menu, or use the pencil that appears
+when hovering a row on the Threads page. The name is stored on the thread's
+coding backend, so it also shows in voice sessions and the native CLI.
+
+## Thread Terminal
+
+Turn on **Settings > Interface > Thread terminal** to add a **Terminal** tab
+next to **Chat** in thread views (it is off by default and saved per device).
+The tab runs the thread's native coding CLI — the full Codex or Claude Code
+TUI — on the computer that owns the thread, with the conversation already
+loaded:
+
+- Codex threads open `codex resume <thread>` attached to the same Codex
+  app-server Openbase uses, so turns started from the terminal, from chat, or
+  by voice all appear in one live conversation.
+- Claude Code threads open `claude --resume <session>` in the thread's
+  directory.
+
+Switching between Chat and Terminal, or reloading the page, keeps the same
+TUI running. With no viewer attached, the TUI is closed after 15 minutes;
+**Restart** starts a fresh one. The Dispatcher's own chat has no Terminal tab,
+and the terminal is not yet available on Windows hosts.
+
 ## Tabs and Panes
 
 Normal navigation replaces the focused tab's view. Right-click a thread, report, or project and choose **Open in new tab**, **Open to the right**, or **Open below** to keep several views open. The tab strip appears when more than one tab is open. Each pane has its own tabs, and the layout can be resized, rearranged, maximized, or restored with the layout undo and redo controls.

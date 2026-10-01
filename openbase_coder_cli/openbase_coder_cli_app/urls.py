@@ -127,6 +127,7 @@ from openbase_coder_cli.openbase_coder_cli_app.views import (
     thread_interrupt,
     thread_list,
     thread_model_settings,
+    thread_name,
     thread_queue_turn,
     thread_start_turn,
     thread_steer_turn,
@@ -199,6 +200,11 @@ urlpatterns = [
         "threads/<str:thread_id>/favorite/",
         offloaded_view(thread_favorite),
         name="thread-favorite",
+    ),
+    path(
+        "threads/<str:thread_id>/name/",
+        thread_name,
+        name="thread-name",
     ),
     path(
         "threads/<str:thread_id>/interrupt/",

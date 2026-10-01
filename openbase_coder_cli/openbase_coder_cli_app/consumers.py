@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import shlex
 import time
 from pathlib import Path
+from urllib.parse import parse_qs
 
-from channels.generic.websocket import AsyncJsonWebsocketConsumer
+from channels.generic.websocket import (
+    AsyncJsonWebsocketConsumer,
+    AsyncWebsocketConsumer,
+)
 from super_agents.app_permissions import DEFAULT_APPROVAL_REQUESTS_FILE
 from watchfiles import awatch
 
@@ -31,6 +37,15 @@ from openbase_coder_cli.openbase_coder_cli_app.thread_metadata import (
 )
 from openbase_coder_cli.openbase_coder_cli_app.thread_models import (
     validate_model_for_thread,
+)
+from openbase_coder_cli.openbase_coder_cli_app.thread_terminal import (
+    DEFAULT_COLS,
+    DEFAULT_ROWS,
+    TerminalSession,
+    TerminalUnavailableError,
+    get_terminal_registry,
+    resolve_terminal_launch,
+    terminal_supported,
 )
 from openbase_coder_cli.thread_model_overrides import set_thread_model_override
 from openbase_coder_cli.thread_sync.session_manager import get_session_manager
@@ -220,6 +235,155 @@ class ThreadConsumer(AsyncJsonWebsocketConsumer):
 
     async def error(self, event):
         await self.send_json({"type": "error", "data": event["data"]})
+
+
+def _as_int(value: object, default: int) -> int:
+    try:
+        return int(value)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        return default
+
+
+class ThreadTerminalConsumer(AsyncWebsocketConsumer):
+    """A thread's native backend TUI (Codex / Claude Code) over a PTY.
+
+    Binary frames carry raw terminal bytes both ways. Text frames are JSON
+    control messages: client ``resize`` / ``restart``; server ``ready`` /
+    ``exit`` / ``error``. The PTY outlives the socket (see thread_terminal),
+    so reconnecting resumes the same TUI instead of relaunching it.
+    """
+
+    session: TerminalSession | None = None
+
+    async def connect(self):
+        if self.scope.get("user") != "authenticated":
+            await self.close(code=4001)
+            return
+        self.thread_id = self.scope["url_route"]["kwargs"]["thread_id"]
+        params = parse_qs(self.scope.get("query_string", b"").decode("utf-8"))
+        self._cols = _as_int(params.get("cols", [None])[0], DEFAULT_COLS)
+        self._rows = _as_int(params.get("rows", [None])[0], DEFAULT_ROWS)
+        self._outbox: asyncio.Queue[tuple[str, object] | None] = asyncio.Queue()
+        await self.accept()
+        self._sender = asyncio.create_task(self._drain_outbox())
+        await self._attach(restart=False)
+
+    async def _attach(self, *, restart: bool) -> None:
+        registry = get_terminal_registry()
+        session = None if restart else registry.get(self.thread_id)
+        reattached = session is not None and session.running
+        if not reattached:
+            try:
+                launch = await self._resolve_launch()
+                session = registry.open(
+                    self.thread_id, launch, self._cols, self._rows
+                )
+            except TerminalUnavailableError as exc:
+                await self._send_control("error", {"message": str(exc)})
+                return
+            except OSError as exc:
+                logger.exception(
+                    "thread_terminal launch failed thread=%s", self.thread_id
+                )
+                await self._send_control(
+                    "error", {"message": f"Unable to start the terminal: {exc}"}
+                )
+                return
+        assert session is not None
+        self.session = session
+        replay = session.attach(self._on_session_event)
+        launch = session.launch
+        await self._send_control(
+            "ready",
+            {
+                "backend": launch.backend,
+                "target": launch.target,
+                "command": shlex.join(
+                    [Path(launch.argv[0]).name, *launch.argv[1:]]
+                ),
+                "cwd": launch.cwd,
+                "reattached": reattached,
+            },
+        )
+        if replay:
+            self._outbox.put_nowait(("bytes", replay))
+        # A reattached TUI repaints at this viewer's size.
+        session.resize(self._cols, self._rows, force_redraw=reattached)
+
+    async def _resolve_launch(self):
+        if not terminal_supported():
+            raise TerminalUnavailableError(
+                "The thread terminal is not available on Windows yet."
+            )
+        manager = get_session_manager()
+        try:
+            thread = await manager.get_thread_state(self.thread_id)
+        except (ValueError, RuntimeError) as exc:
+            raise TerminalUnavailableError(_friendly_error(exc)) from exc
+        if thread is None:
+            raise TerminalUnavailableError("Thread not found.")
+        return resolve_terminal_launch(
+            thread_id=self.thread_id,
+            backend=thread.backend,
+            backend_session_id=thread.backend_session_id,
+            directory=thread.directory,
+        )
+
+    def _on_session_event(self, kind: str, payload: object) -> None:
+        if kind == "output":
+            self._outbox.put_nowait(("bytes", payload))
+        elif kind == "exit":
+            self._outbox.put_nowait(("exit", payload))
+
+    async def _drain_outbox(self) -> None:
+        while True:
+            item = await self._outbox.get()
+            if item is None:
+                return
+            kind, payload = item
+            if kind == "bytes":
+                await self.send(bytes_data=payload)
+            elif kind == "exit":
+                await self._send_control("exit", {"code": payload})
+            else:
+                await self.send(text_data=payload)
+
+    async def _send_control(self, kind: str, data: dict) -> None:
+        self._outbox.put_nowait(("text", json.dumps({"type": kind, "data": data})))
+
+    async def receive(self, text_data=None, bytes_data=None):
+        if bytes_data is not None:
+            if self.session is not None:
+                self.session.write(bytes_data)
+            return
+        if not text_data:
+            return
+        try:
+            message = json.loads(text_data)
+        except json.JSONDecodeError:
+            return
+        kind = message.get("type") if isinstance(message, dict) else None
+        if kind == "input" and isinstance(message.get("data"), str):
+            if self.session is not None:
+                self.session.write(message["data"].encode("utf-8"))
+        elif kind == "resize":
+            self._cols = _as_int(message.get("cols"), self._cols)
+            self._rows = _as_int(message.get("rows"), self._rows)
+            if self.session is not None:
+                self.session.resize(self._cols, self._rows)
+        elif kind == "restart":
+            self._detach()
+            await self._attach(restart=True)
+
+    def _detach(self) -> None:
+        if self.session is not None:
+            self.session.detach(self._on_session_event)
+            self.session = None
+
+    async def disconnect(self, close_code):
+        self._detach()
+        if hasattr(self, "_outbox"):
+            self._outbox.put_nowait(None)
 
 
 class AllThreadsConsumer(AsyncJsonWebsocketConsumer):

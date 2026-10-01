@@ -72,6 +72,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_THREAD_PAGE_SIZE = 25
 MAX_THREAD_PAGE_SIZE = 100
+MAX_THREAD_NAME_LENGTH = 200
 RUN_ACTIVITY_FRESHNESS = timedelta(minutes=5)
 DISPATCHER_THREAD_WARM_TIMEOUT_SECONDS = 20.0
 
@@ -647,6 +648,41 @@ def thread_favorite(request, thread_id):
         return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
     invalidate_thread_list_cache()
     return Response(payload)
+
+
+@api_view(["PATCH"])
+def thread_name(request, thread_id):
+    """Rename a thread on its coding backend."""
+    name = request.data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return Response(
+            {"error": "name must be a non-empty string"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if len(name) > MAX_THREAD_NAME_LENGTH:
+        return Response(
+            {"error": f"name must be at most {MAX_THREAD_NAME_LENGTH} characters"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    manager = get_session_manager()
+    try:
+        thread = async_to_sync(manager.rename_thread)(thread_id, name)
+    except ValueError as exc:
+        return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    except RuntimeError as exc:
+        return Response(
+            {"error": thread_error_message(exc)},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+    invalidate_thread_list_cache()
+    if thread is None:
+        return Response(
+            {"error": f"Thread {thread_id} not found"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    return Response(
+        annotate_thread_payload(thread.model_dump(mode="json"), thread_id=thread_id)
+    )
 
 
 @api_view(["GET", "PATCH"])
