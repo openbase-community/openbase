@@ -479,6 +479,62 @@ def add_webhook_trigger(
     _json_echo(result)
 
 
+@routines.command("add-file-trigger")
+@click.argument("name")
+@click.option(
+    "--path",
+    "watch_path",
+    required=True,
+    help=(
+        "Absolute glob (a leading ~ is expanded) of files to watch, e.g. "
+        "'~/Projects/*/.triggers/review-request.md'. The loop runs once per "
+        "created or modified file; touching a file runs it again."
+    ),
+)
+@click.option("--description", help="What this trigger listens for.")
+@click.option(
+    "--filter",
+    "filters",
+    nargs=3,
+    multiple=True,
+    metavar="PATH OP VALUE",
+    help=(
+        "Event payload filter over path, name, dir, mtime, change, contents, "
+        "e.g. --filter name endsWith -request.md. Ops: equals, notEquals, "
+        "contains, startsWith, endsWith, exists, regex."
+    ),
+)
+@click.option(
+    "--fire-existing",
+    is_flag=True,
+    help=(
+        "Also run for files that already match when the trigger is added. "
+        "By default existing files are recorded silently and only later "
+        "changes fire."
+    ),
+)
+def add_file_trigger(
+    name: str,
+    watch_path: str,
+    description: str | None,
+    filters: tuple[tuple[str, str, str], ...],
+    fire_existing: bool,
+) -> None:
+    """Add a file (flag) trigger: run the loop when a matching file appears or changes."""
+    trigger_input: dict[str, Any] = {"type": "file", "watchPath": watch_path}
+    if description:
+        trigger_input["description"] = description
+    if filters:
+        trigger_input["filters"] = [
+            {"path": path, "op": op, "value": value} for path, op, value in filters
+        ]
+    if fire_existing:
+        trigger_input["fireExisting"] = True
+    _json_echo(
+        _run_client(lambda client: client.add_routine_trigger(name, trigger_input))
+    )
+
+
 @routines.command("remove-trigger")
 @click.argument("name")
 @click.argument("trigger_id")

@@ -58,6 +58,7 @@ resets onboarding. Remove both when fully uninstalling (see
 | `~/.openbase/claude-app-index-ledger.json` | `sync-workers` (Claude app index sync, macOS) | Ledger of Openbase Claude sessions injected into the Claude desktop app's private session index so they appear in the app (best-effort) |
 | `<workspace>/cli/.venv/` | `openbase-coder setup` (development mode) | CLI and bundled LiveKit worker environment |
 | `~/.openbase/bin/codex` | `openbase-coder setup` | Codex CLI installed on demand from GitHub release binaries |
+| Global Git ignore (`core.excludesFile`, or `~/.config/git/ignore`) | `openbase-coder setup` | Setup appends `.triggers/` if missing so agent-to-agent trigger messages are never committed; a read-only file only produces a warning |
 | `~/.local/bin/openbase-coder` | `openbase-coder setup` | User CLI shim; points at the standalone package launcher or the workspace CLI venv (never overwrites a `uv tool install`-managed script) |
 
 Generated instruction files are rendered from the workspace or bundled
@@ -82,6 +83,16 @@ available; otherwise setup records the resolved absolute `uv` path for the
 current machine. Openbase's permission posture is not written into
 `~/.codex/config.toml` or `~/.claude/settings.json`; super-agents passes it
 per session via profiles and role overrides. The shared Codex app-server has no Openbase model or provider launch overrides.
+
+## Project Artifact Directories
+
+Agents create these inside a project, workspace, or worktree root. Neither is
+product state; they are conventions the CLI, console, and loops understand.
+
+| Path | Purpose |
+|---|---|
+| `<project>/.reports/` | Markdown (or image/PDF) reports written for people; discovered by `openbase-coder reports` and the console Reports page |
+| `<project>/.triggers/` | Messages written for other agents and loops (requests and responses, questions); watched by loop file triggers, never committed (see [loops](commands/loops.md#the-triggers-convention)) |
 
 ## Service Artifacts
 

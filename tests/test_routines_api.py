@@ -71,3 +71,24 @@ def test_emit_serializer_accepts_payload() -> None:
     )
     assert serializer.is_valid(), serializer.errors
     assert serializer.validated_data["payload"] == {"note": "manual"}
+
+
+def test_trigger_create_serializer_accepts_file_triggers() -> None:
+    from openbase_coder_cli.openbase_coder_cli_app.routines import (
+        TriggerCreateSerializer,
+    )
+
+    serializer = TriggerCreateSerializer(
+        data={
+            "type": "file",
+            "watchPath": "~/Projects/*/.triggers/review-request.md",
+            "fireExisting": True,
+            "filters": [{"path": "name", "op": "endsWith", "value": "-request.md"}],
+        }
+    )
+    assert serializer.is_valid(), serializer.errors
+    assert serializer.validated_data["type"] == "file"
+    assert serializer.validated_data["fireExisting"] is True
+
+    bad = TriggerCreateSerializer(data={"type": "cron"})
+    assert not bad.is_valid()
