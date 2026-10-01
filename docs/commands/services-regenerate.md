@@ -1,6 +1,7 @@
 # services regenerate
 
-Recreate launchd wrappers and plists from current install config.
+Recreate wrappers and platform supervisor entries from the current install
+config.
 
 ## Usage
 
