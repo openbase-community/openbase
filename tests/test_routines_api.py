@@ -81,7 +81,7 @@ def test_trigger_create_serializer_accepts_file_triggers() -> None:
     serializer = TriggerCreateSerializer(
         data={
             "type": "file",
-            "watchPath": "~/Projects/*/.triggers/review-request.md",
+            "watchPath": "/path/to/checkouts/*/.triggers/review-request.md",
             "fireExisting": True,
             "filters": [{"path": "name", "op": "endsWith", "value": "-request.md"}],
         }

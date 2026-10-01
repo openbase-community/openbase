@@ -419,7 +419,7 @@ def test_add_file_trigger_builds_trigger_input(monkeypatch) -> None:
             "add-file-trigger",
             "review-loop",
             "--path",
-            "~/Projects/*/.triggers/review-request.md",
+            "/path/to/checkouts/*/.triggers/review-request.md",
             "--description",
             "Review requests",
             "--filter",
@@ -437,7 +437,7 @@ def test_add_file_trigger_builds_trigger_input(monkeypatch) -> None:
         {
             "name": "review-loop",
             "type": "file",
-            "watchPath": "~/Projects/*/.triggers/review-request.md",
+            "watchPath": "/path/to/checkouts/*/.triggers/review-request.md",
             "description": "Review requests",
             "filters": [{"path": "name", "op": "endsWith", "value": "-request.md"}],
             "fireExisting": True,

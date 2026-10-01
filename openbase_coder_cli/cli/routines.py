@@ -487,7 +487,7 @@ def add_webhook_trigger(
     required=True,
     help=(
         "Absolute glob (a leading ~ is expanded) of files to watch, e.g. "
-        "'~/Projects/*/.triggers/review-request.md'. The loop runs once per "
+        "'/path/to/checkouts/*/.triggers/review-request.md'. The loop runs once per "
         "created or modified file; touching a file runs it again."
     ),
 )
