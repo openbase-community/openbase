@@ -31,6 +31,11 @@ def test_interactive_setup_summarizes_developer_agent_configuration(
         setup_cli, "_interactive_cloud_login_and_checks", lambda *_a, **_kw: None
     )
     monkeypatch.setattr(setup_cli, "_print_app_download_qr", lambda: None)
+    monkeypatch.setattr(
+        setup_cli.SystemSetupSnapshot,
+        "capture",
+        lambda _path: setup_cli.SystemSetupSnapshot(),
+    )
 
     result = CliRunner().invoke(
         setup_cli.setup,
@@ -57,7 +62,11 @@ def test_interactive_setup_summarizes_developer_agent_configuration(
     if not developer_install:
         assert "Your Codex and Claude Code setup" not in result.output
         return
-    paragraph = result.output.rstrip().split("\n")[-1]
+    paragraph = next(
+        line
+        for line in result.output.splitlines()
+        if line.startswith("ℹ️ Your Codex and Claude Code setup")
+    )
     assert paragraph.startswith("ℹ️ Your Codex and Claude Code setup")
     assert "session profiles" in paragraph
     assert "bundled Openbase skills" in paragraph
@@ -70,3 +79,4 @@ def test_interactive_setup_summarizes_developer_agent_configuration(
     assert ("registration is enabled" in paragraph) == shared_mcp
     assert ("configurations is disabled" in paragraph) == (not shared_mcp)
     assert paragraph.endswith("process to load these settings.")
+    assert result.output.rstrip().split("\n")[-1].startswith("ℹ️ System changes:")

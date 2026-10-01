@@ -89,6 +89,10 @@ from openbase_coder_cli.cli.setup.hooks import (
     ensure_session_id_hook_script as _ensure_session_id_hook_script,
 )
 from openbase_coder_cli.cli.setup.summary import print_agent_setup_summary
+from openbase_coder_cli.cli.setup.system_summary import (
+    SystemSetupSnapshot,
+    print_system_setup_summary,
+)
 from openbase_coder_cli.cli.setup.workspace import (
     BUNDLED_SOUND_FILES,  # noqa: F401
     BUNDLED_SOUNDS_PACKAGE,  # noqa: F401
@@ -423,6 +427,11 @@ def setup(
         interactive=interactive,
     )
 
+    system_before = (
+        SystemSetupSnapshot.capture(Path(env_file))
+        if interactive and current_runtime_package() is None
+        else None
+    )
     progress = _SetupProgress(json_progress)
     try:
         serve_healthy = _run_setup_phases(
@@ -451,12 +460,23 @@ def setup(
     click.echo("Setup complete.")
     click.echo()
     if interactive:
-        _interactive_cloud_login_and_checks(env_file, cli_configured=cli_configured)
+        post_login_health = _interactive_cloud_login_and_checks(
+            env_file, cli_configured=cli_configured
+        )
         _print_app_download_qr()
-        if current_runtime_package() is None:
+        if system_before is not None:
             print_agent_setup_summary(
                 include_default_hooks=include_default_hooks,
                 shared_super_agents_mcp=shared_super_agents_mcp,
+            )
+            print_system_setup_summary(
+                system_before,
+                SystemSetupSnapshot.capture(Path(env_file)),
+                service_manager=service_manager_name(),
+                skip_services=skip_services,
+                serve_healthy=(
+                    serve_healthy if post_login_health is None else post_login_health
+                ),
             )
     else:
         web_backend_url = (
@@ -516,7 +536,9 @@ def _report_cloud_readiness(
         )
 
 
-def _interactive_cloud_login_and_checks(env_file: str, *, cli_configured: bool) -> None:
+def _interactive_cloud_login_and_checks(
+    env_file: str, *, cli_configured: bool
+) -> bool | None:
     """Interactive setup tail: login, then verify cloud registration and Serve.
 
     Only ever called on interactive runs; non-interactive runs (including the
@@ -553,6 +575,7 @@ def _interactive_cloud_login_and_checks(env_file: str, *, cli_configured: bool) 
         serve_healthy=serve_health.healthy,
         tailnet_provider=provider,
     )
+    return serve_health.healthy
 
 
 def _print_app_download_qr() -> None:
