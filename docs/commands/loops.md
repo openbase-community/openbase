@@ -79,14 +79,7 @@ The event payload is:
 {"path": "/abs/dir/review-request.md", "name": "review-request.md", "dir": "/abs/dir", "mtime": 1790000000, "change": "created", "contents": "…"}
 ```
 
-`change` is `created` or `modified`; `contents` is included for UTF-8 files up
-to 16 KB. `--filter PATH OP VALUE` applies to this payload (for example
-`--filter name endsWith -request.md`). File triggers need no sender allowlist,
-even on agent loops: a local file carries the same trust as a locally emitted
-event. Each file event runs the loop independently, so with
-`--fresh-thread-per-run` several files can be handled in parallel; prompts
-should claim their file (for example by writing a response next to it) rather
-than assume they are the only run.
+`change` is `created` or `modified`; `contents` is included for UTF-8 files up to 16 KB. Each sweep tracks at most 500 currently matching files per trigger, so narrow the glob or split it across loops when a directory can exceed that. `--filter PATH OP VALUE` applies to this payload (for example `--filter name endsWith -request.md`). File triggers need no sender allowlist, even on agent loops: a local file carries the same trust as a locally emitted event. Each file event runs the loop independently, so with `--fresh-thread-per-run` several files can be handled in parallel; prompts should claim their file (for example by writing a response next to it) rather than assume they are the only run.
 
 ### The `.triggers/` convention
 
@@ -98,7 +91,7 @@ body. A request file (`review-request.md`) is answered by a response file next
 to it (`review-response.md`); the request is pending while the response is
 missing or older than it. `.triggers/` is never committed: setup adds it to the
 global Git ignore. Loops watch these files with file triggers, for example
-`--path '~/Projects/*/.triggers/review-request.md'`. The
+`--path '/path/to/checkouts/*/.triggers/review-request.md'`. The
 `openbase-recommended-loops` skill ships ready-made loops built on this
 convention.
 
@@ -122,5 +115,5 @@ openbase-coder loops create local-review \
   --prompt "Review the worktree whose .triggers/review-request.md is in the triggering event." \
   --time 04:00 --fresh-thread-per-run
 openbase-coder loops add-file-trigger local-review \
-  --path '~/Projects/*/code/*-worktrees/*/.triggers/review-request.md'
+  --path '/path/to/*-worktrees/*/.triggers/review-request.md'
 ```
