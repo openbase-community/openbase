@@ -1,6 +1,6 @@
 """Keep agent-only artifact directories out of every repository via the global Git ignore.
 
-``.triggers/`` holds agent-to-agent messages (the counterpart of ``.reports/``
+``.signals/`` holds agent-to-agent messages (the counterpart of ``.reports/``
 for people) and must never be committed, so setup adds it to the user's global
 Git ignore file. ``.reports/`` is deliberately not added: private workspaces
 may version their reports. The developer-setup system summary reports any
@@ -15,7 +15,7 @@ from pathlib import Path
 
 import click
 
-GLOBAL_GIT_IGNORE_ENTRIES: tuple[str, ...] = (".triggers/",)
+GLOBAL_GIT_IGNORE_ENTRIES: tuple[str, ...] = (".signals/",)
 
 
 def global_git_ignore_path() -> Path:

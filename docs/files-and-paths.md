@@ -58,7 +58,7 @@ resets onboarding. Remove both when fully uninstalling (see
 | `~/.openbase/claude-app-index-ledger.json` | `sync-workers` (Claude app index sync, macOS) | Ledger of Openbase Claude sessions injected into the Claude desktop app's private session index so they appear in the app (best-effort) |
 | `<workspace>/cli/.venv/` | `openbase-coder setup` (development mode) | CLI and bundled LiveKit worker environment |
 | `~/.openbase/bin/codex` | `openbase-coder setup` | Codex CLI installed on demand from GitHub release binaries |
-| Global Git ignore (`core.excludesFile`, or `~/.config/git/ignore`) | `openbase-coder setup` | Setup appends `.triggers/` if missing so agent-to-agent trigger messages are never committed; a read-only file only produces a warning |
+| Global Git ignore (`core.excludesFile`, or `~/.config/git/ignore`) | `openbase-coder setup` | Setup appends `.signals/` if missing so agent-to-agent signal messages are never committed; a read-only file only produces a warning |
 | `~/.local/bin/openbase-coder` | `openbase-coder setup` | User CLI shim; points at the standalone package launcher or the workspace CLI venv (never overwrites a `uv tool install`-managed script) |
 
 Generated instruction files are rendered from the workspace or bundled
@@ -92,7 +92,7 @@ product state; they are conventions the CLI, console, and loops understand.
 | Path | Purpose |
 |---|---|
 | `<project>/.reports/` | Markdown (or image/PDF) reports written for people; discovered by `openbase-coder reports` and the console Reports page |
-| `<project>/.triggers/` | Messages written for other agents and loops (requests and responses, questions); watched by loop file triggers, never committed (see [loops](commands/loops.md#the-triggers-convention)) |
+| `<project>/.signals/` | Messages written for other agents and loops (requests and responses, questions); watched by loop file triggers, never committed (see [loops](commands/loops.md#the-signals-convention)) |
 
 ## Service Artifacts
 

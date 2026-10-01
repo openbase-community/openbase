@@ -487,7 +487,7 @@ def add_webhook_trigger(
     required=True,
     help=(
         "Absolute glob (a leading ~ is expanded) of files to watch, e.g. "
-        "'/path/to/checkouts/*/.triggers/review-request.md'. The loop runs once per "
+        "'/path/to/checkouts/*/.signals/ready-for-review.md'. The loop runs once per "
         "created or modified file; touching a file runs it again."
     ),
 )
@@ -500,7 +500,7 @@ def add_webhook_trigger(
     metavar="PATH OP VALUE",
     help=(
         "Event payload filter over path, name, dir, mtime, change, contents, "
-        "e.g. --filter name endsWith -request.md. Ops: equals, notEquals, "
+        "e.g. --filter name startsWith ready-for-. Ops: equals, notEquals, "
         "contains, startsWith, endsWith, exists, regex."
     ),
 )

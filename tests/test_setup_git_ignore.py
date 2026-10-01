@@ -25,11 +25,11 @@ def test_ensure_entries_appends_missing_entries_once(monkeypatch, tmp_path) -> N
 
     path, added = git_ignore.ensure_global_git_ignore_entries()
     assert path == excludes
-    assert added == [".triggers/"]
-    assert excludes.read_text() == ".DS_Store\n.reports/\n.triggers/\n"
+    assert added == [".signals/"]
+    assert excludes.read_text() == ".DS_Store\n.reports/\n.signals/\n"
 
     assert git_ignore.ensure_global_git_ignore_entries() == (excludes, [])
-    assert excludes.read_text() == ".DS_Store\n.reports/\n.triggers/\n"
+    assert excludes.read_text() == ".DS_Store\n.reports/\n.signals/\n"
 
 
 def test_ensure_entries_creates_gits_default_ignore_file(monkeypatch, tmp_path) -> None:
@@ -37,8 +37,8 @@ def test_ensure_entries_creates_gits_default_ignore_file(monkeypatch, tmp_path) 
 
     path, added = git_ignore.ensure_global_git_ignore_entries()
     assert path == tmp_path / "xdg" / "git" / "ignore"
-    assert added == [".triggers/"]
-    assert path.read_text() == ".triggers/\n"
+    assert added == [".signals/"]
+    assert path.read_text() == ".signals/\n"
 
 
 def test_setup_step_warns_instead_of_failing_on_unwritable_ignore(
@@ -51,7 +51,7 @@ def test_setup_step_warns_instead_of_failing_on_unwritable_ignore(
     git_ignore.ensure_global_git_ignore()
     text = capsys.readouterr().out
     assert "Could not update the global Git ignore" in text
-    assert ".triggers/" in text
+    assert ".signals/" in text
 
 
 def test_setup_step_reports_added_entries(monkeypatch, tmp_path, capsys) -> None:
@@ -59,6 +59,6 @@ def test_setup_step_reports_added_entries(monkeypatch, tmp_path, capsys) -> None
     _use_global_config(monkeypatch, tmp_path, excludes)
     git_ignore.ensure_global_git_ignore()
     assert (
-        f"Added .triggers/ to the global Git ignore at {excludes}"
+        f"Added .signals/ to the global Git ignore at {excludes}"
         in capsys.readouterr().out
     )

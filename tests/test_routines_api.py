@@ -81,9 +81,9 @@ def test_trigger_create_serializer_accepts_file_triggers() -> None:
     serializer = TriggerCreateSerializer(
         data={
             "type": "file",
-            "watchPath": "/path/to/checkouts/*/.triggers/review-request.md",
+            "watchPath": "/path/to/checkouts/*/.signals/ready-for-review.md",
             "fireExisting": True,
-            "filters": [{"path": "name", "op": "endsWith", "value": "-request.md"}],
+            "filters": [{"path": "name", "op": "startsWith", "value": "ready-for-"}],
         }
     )
     assert serializer.is_valid(), serializer.errors
