@@ -86,8 +86,7 @@ per session via profiles and role overrides. The shared Codex app-server has no 
 
 ## Project Artifact Directories
 
-Agents create these inside a project, workspace, or worktree root. Neither is
-product state; they are conventions the CLI, console, and loops understand.
+Agents create these inside a project, workspace, or worktree root. Neither is product state; they are conventions the CLI, console, and loops understand.
 
 | Path | Purpose |
 |---|---|

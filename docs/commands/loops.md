@@ -1,8 +1,6 @@
 # loops
 
-Manage loops: recurring or event-triggered work. A loop pairs a **When**
-(schedule, webhook triggers, and/or file triggers) with a **Then** (an agent
-prompt or a shell command) and runs on this machine.
+Manage loops: recurring or event-triggered work. A loop pairs a **When** (schedule, webhook triggers, and/or file triggers) with a **Then** (an agent prompt or a shell command) and runs on this machine.
 
 In the apps: the **Loops** page in the [console](../console.md) and
 [desktop app](../desktop-app.md) lists loops, shows When → Then, and manages
@@ -65,13 +63,7 @@ variable.
 
 ## File Triggers
 
-`add-file-trigger NAME --path GLOB` runs the loop when a file matching the glob
-is created or modified. The glob must be absolute (a leading `~` is expanded)
-and may use `*`, `?`, and `**`. The `openbase-routines` scheduler scans every
-file trigger on each sweep (about once a minute). Each `(path, mtime)` pair
-fires once, so touching a file fires the loop again, and a file that is deleted
-and recreated fires as a new file. Existing matches are recorded silently when
-the trigger is added; pass `--fire-existing` to run for them too.
+`add-file-trigger NAME --path GLOB` runs the loop when a file matching the glob is created or modified. The glob must be absolute (a leading `~` is expanded) and may use `*`, `?`, and `**`. The `openbase-routines` scheduler scans every file trigger on each sweep (about once a minute). Each `(path, mtime)` pair fires once, so touching a file fires the loop again, and a file that is deleted and recreated fires as a new file. Existing matches are recorded silently when the trigger is added; pass `--fire-existing` to run for them too.
 
 The event payload is:
 
@@ -83,17 +75,7 @@ The event payload is:
 
 ### The `.signals/` convention
 
-Just as agents write reports for people under `.reports/`, they leave messages
-for other agents and loops under a `.signals/` directory at a project,
-workspace, or worktree root: one Markdown file per message, with a small YAML
-front matter (`kind`, `status`, `from`, `created_at`) and the message as the
-body. A request file (`ready-for-review.md`) is answered by a response file next
-to it (`review-response.md`); the request is pending while the response is
-missing or older than it. `.signals/` is never committed: setup adds it to the
-global Git ignore. Loops watch these files with file triggers, for example
-`--path '/path/to/checkouts/*/.signals/ready-for-review.md'`. The
-`openbase-recommended-loops` skill ships ready-made loops built on this
-convention.
+Just as agents write reports for people under `.reports/`, they leave messages for other agents and loops under a `.signals/` directory at a project, workspace, or worktree root: one Markdown file per message, with a small YAML front matter (`kind`, `status`, `from`, `created_at`) and the message as the body. A request file (`ready-for-review.md`) is answered by a response file next to it (`review-response.md`); the request is pending while the response is missing or older than it. `.signals/` is never committed: setup adds it to the global Git ignore. Loops watch these files with file triggers, for example `--path '/path/to/checkouts/*/.signals/ready-for-review.md'`. The `openbase-recommended-loops` skill ships ready-made loops built on this convention.
 
 ## Example
 
