@@ -1,0 +1,1424 @@
+<!doctype html><html><head><meta charset=utf-8><title>Dispatcher routing eval - case review</title>
+<style>
+body{font:15px/1.45 -apple-system,system-ui,sans-serif;max-width:1100px;margin:24px auto;padding:0 16px;color:#222}
+section{border-top:2px solid #ddd;padding:18px 0} h2{font-size:17px;margin:0 0 8px} h3{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:#666;margin:12px 0 4px}
+blockquote{background:#f6f7f9;border-left:4px solid #5b8def;margin:0;padding:10px 14px;font-size:16px}
+pre{background:#f3f3f3;padding:10px;overflow:auto;font-size:12.5px} .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.tag{display:inline-block;background:#eef;border-radius:10px;padding:1px 8px;font-size:12px;margin-left:4px} .h{background:#fafafa;border:1px solid #eee;padding:6px 8px;margin:4px 0;font-size:13.5px}
+.obs{color:#555;font-size:13.5px} .note{color:#8a4b00;font-size:13.5px} ul{margin:4px 0;padding-left:18px} li{font-size:13.5px}
+.summary{background:#f6f7f9;padding:12px 16px;border-radius:8px}
+</style></head><body>
+<h1>Dispatcher routing eval - proposed inputs</h1>
+<div class=summary>
+<p><b>74 cases.</b> By category: answer-only 25, new-thread 17, existing-thread 20, cancel-replace 2, mixed 2, clarify 4, transfer 3, cancel 1.<br>By source: real 30, synth 23, scenario 19, memo 2.</p>
+<p>Each case is one voice turn into the dispatcher. The <b>fleet</b> is the registered-Super-Agent snapshot the dispatcher sees (and what the stubbed MCP tools will report); <b>conversation so far</b> is injected as the session prefix; the <b>expected routing</b> is the proposed gold label you are asked to confirm or correct. Dispositions: new_thread, existing_thread, cancel_replace, transfer, cancel, answer_only, clarify, mixed.</p>
+<p>Review question: are these representative of what the dispatcher actually sees? Any obvious missing cases, cases that do not matter, or gold labels you would score differently?</p>
+</div>
+
+<section id="real-hello">
+<h2>1. <code>real-hello</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>real</span> <span class=tag>easy</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>empty</code></h3><ul><li><i>no registered Super Agents</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Hey, are you there?</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;existing_thread&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> Answered: I&#x27;m here! What can I do for you?</p>
+</section>
+<section id="real-fable-model-check">
+<h2>2. <code>real-fable-model-check</code> <span class=tags><span class=tag>new-thread</span> <span class=tag>real</span> <span class=tag>model-override</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>empty</code></h3><ul><li><i>no registered Super Agents</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Launching a new Fable Super Agent and ask it what model are you and have it announced from the background not only its name, but what model it is?</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;new_thread&quot;,
+ &quot;new_threads&quot;: 1,
+ &quot;model&quot;: &quot;fable&quot;,
+ &quot;must_include&quot;: [
+  &quot;model&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;answer_the_question_itself&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> start fable-model-check (Rachel, model=fable) + start_turn asking it to announce name and model via user say.</p>
+</section>
+<section id="real-rachel-transcript">
+<h2>3. <code>real-rachel-transcript</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>real</span> <span class=tag>verify</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-early</code></h3><ul><li><code>fable-model-check</code> (Rachel, completed, fable, 1 min ago) - <i>I&#x27;m Rachel, running on Claude Fable 5.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><div class=h><b>User:</b> Launching a new Fable Super Agent and ask it what model are you ...<br><b>Dispatcher:</b> Done - I launched a new Fable Super Agent named Rachel.</div></div>
+</div>
+<h3>Utterance under test</h3><blockquote>What model did Rachel say she was running on? Check for transcripts rather than the super agent metadata?</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;target&quot;: &quot;fable-model-check&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> Grepped Rachel&#x27;s session log; answered Claude Fable 5.</p>
+</section>
+<section id="real-spike-wifi-diagnostics">
+<h2>4. <code>real-spike-wifi-diagnostics</code> <span class=tags><span class=tag>new-thread</span> <span class=tag>real</span> <span class=tag>long-utterance</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-early</code></h3><ul><li><code>fable-model-check</code> (Rachel, completed, fable, 1 min ago) - <i>I&#x27;m Rachel, running on Claude Fable 5.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><div class=h><b>User:</b> In there there&#x27;s a directory called spike Or something with spike in the name.<br><b>Dispatcher:</b> Found it: psg-ai-spike under ~/Projects/psg/code.</div></div>
+</div>
+<h3>Utterance under test</h3><blockquote>So the question is how can we get it so that I can see a visualization of everything that went on including network timing and what was said when on the iOS side versus on the MacBook Pro side and and how can we get enough logs where we actually can diagnose why my words are getting chopped off because you can see that one of my messages about the particular subdirectory of the PSG project was it was completely lost. Well actually first start a new super agent to diagnose why as I walked out of my Wi-Fi range you didn&#x27;t hear the folder name about Spike the first time because I definitely said it the first time. And in particular I imagine you won&#x27;t have enough diagnostics even though I&#x27;ll</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;new_thread&quot;,
+ &quot;new_threads&quot;: 1,
+ &quot;must_include&quot;: [
+  &quot;Wi-Fi&quot;,
+  &quot;Spike&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> start voice-transcript-diagnostics (Casper) with a diagnostics brief.</p>
+</section>
+<section id="real-report-issue-start">
+<h2>5. <code>real-report-issue-start</code> <span class=tags><span class=tag>new-thread</span> <span class=tag>real</span> <span class=tag>dedupe-check</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-casper</code></h3><ul><li><code>fable-model-check</code> (Rachel, completed, fable, 16 min ago)</li><li><code>voice-transcript-diagnostics</code> (Casper, running, opus, 4 min ago) - <i>Mapping the iOS and desktop voice pipelines.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>So I don&#x27;t know if you already did this but start a super agent to implement in a new multi workspace work tree for open base the future of basically the CLI should report issue and basically when that CLI command is called to report an issue it should capture the most recent interaction by user and the thread or out of it particularly the message and the metadata and add it to some problems database within open base for for diagnostics. And after Yeah yeah that&#x27;s that&#x27;s good enough for now. It&#x27;s kind of just. Like for internal use mostly, but it can it can go to production. Too.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;new_thread&quot;,
+ &quot;new_threads&quot;: 1,
+ &quot;must_include&quot;: [
+  &quot;report issue&quot;,
+  &quot;worktree&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> start cli-report-issue (Dorothy) in a new multi-workspace worktree.</p>
+</section>
+<section id="synth-report-issue-already-running">
+<h2>6. <code>synth-report-issue-already-running</code> <span class=tags><span class=tag>existing-thread</span> <span class=tag>synth</span> <span class=tag>dedupe-check</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-casper-dorothy</code></h3><ul><li><code>fable-model-check</code> (Rachel, completed, fable, 23 min ago)</li><li><code>voice-transcript-diagnostics</code> (Casper, running, opus, 9 min ago) - <i>Mapping the iOS and desktop voice pipelines.</i></li><li><code>cli-report-issue</code> (Dorothy, running, opus, 1 min ago) - <i>Exploring the CLI command structure.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>So I don&#x27;t know if you already did this but start a super agent to implement in a new multi workspace work tree for open base the CLI should report issue command that captures the most recent interaction and adds it to a problems database for diagnostics.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;target&quot;: &quot;cli-report-issue&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;
+ ],
+ &quot;accept_also&quot;: [
+  &quot;existing_thread&quot;
+ ]
+}</pre>
+<p class=note><b>Note:</b> Same request as real-report-issue-start but Dorothy already owns it one minute ago. Gold: say Dorothy is on it (optionally steer her), never start a second owner.</p>
+</section>
+<section id="real-vpn-diagnostics">
+<h2>7. <code>real-vpn-diagnostics</code> <span class=tags><span class=tag>new-thread</span> <span class=tag>real</span> <span class=tag>garbled</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-casper-dorothy</code></h3><ul><li><code>fable-model-check</code> (Rachel, completed, fable, 23 min ago)</li><li><code>voice-transcript-diagnostics</code> (Casper, running, opus, 9 min ago) - <i>Mapping the iOS and desktop voice pipelines.</i></li><li><code>cli-report-issue</code> (Dorothy, running, opus, 1 min ago) - <i>Exploring the CLI command structure.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>No, that&#x27;s okay. What I want to do is to. Do some open based stuff. So right now I&#x27;m pretty sure that the VPN keeps auto disconnect. Ing. I&#x27;m not sure if that&#x27;s because I have multiple VPNs installed on my iPhone between the staging app VPN. And the normal app reform. But basically, yeah, every time I open the app or many times when I open the app, it prompts me to hit the connect to VPN button. And maybe it&#x27;s a red herring because I&#x27;m getting new builds installed onto my iPhone. And it wipes the VPN from before. So that could be it. But I&#x27;m also paranoid that the VPN is just auto disconnect. Ing. But I know it was active last night, so I&#x27;m not 100% sure what&#x27;s going on. But what would be</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;new_thread&quot;,
+ &quot;new_threads&quot;: 1,
+ &quot;must_include&quot;: [
+  &quot;VPN&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> start vpn-disconnect-diagnostics (Cindy, opus); then asked whether &#x27;table agent&#x27; meant plan mode.</p>
+</section>
+<section id="real-not-fable-correction">
+<h2>8. <code>real-not-fable-correction</code> <span class=tags><span class=tag>cancel-replace</span> <span class=tag>real</span> <span class=tag>correction</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-cindy-just-started</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 600 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, failed, opus, 590 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>vpn-disconnect-diagnostics</code> (Cindy, running, opus, 1 min ago) - <i>Reading the iOS VPN manager.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><div class=h><b>User:</b> ... I&#x27;m pretty sure that the VPN keeps auto disconnecting ... (long)<br><b>Dispatcher:</b> Quick check - that came through garbled (&quot;table agent&quot;/&quot;papal agent&quot;), so I want to confirm before changing anything. My best guess is you want this VPN investigation run as a plan-mode agent?</div></div>
+</div>
+<h3>Utterance under test</h3><blockquote>No, no, not Fable. F-A-B-L-E fable agent.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;cancel_replace&quot;,
+ &quot;target&quot;: &quot;vpn-disconnect-diagnostics&quot;,
+ &quot;new_threads&quot;: 1,
+ &quot;model&quot;: &quot;fable&quot;,
+ &quot;must_include&quot;: [
+  &quot;VPN&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;two_live_owners_for_same_task&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> cancel vpn-disconnect-diagnostics; start vpn-disconnect-diagnostics-fable (Skylar, model=fable) with the same brief.</p>
+</section>
+<section id="real-ios-dispatcher-view">
+<h2>9. <code>real-ios-dispatcher-view</code> <span class=tags><span class=tag>new-thread</span> <span class=tag>real</span> <span class=tag>model-override</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-cindy-just-started</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 600 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, failed, opus, 590 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>vpn-disconnect-diagnostics</code> (Cindy, running, opus, 1 min ago) - <i>Reading the iOS VPN manager.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Great. So why don&#x27;t you know look into how to start a new also payable super agent or basically making it so that iOS is less glitchy because right now I&#x27;m looking in the dispatcher view. On iOS trying to get a visual indication of what I told you to do. And I just see my long prompt cut off. So like, and I also see voice tags being rendered in iOS, which I thought we already fixed, but I see XML because it&#x27;s injecting the voice tags and those are currently rendered when they&#x27;re not supposed to be. So startup Fable agent for fixing that. I can fix it right on the develop branch.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;new_thread&quot;,
+ &quot;new_threads&quot;: 1,
+ &quot;model&quot;: &quot;fable&quot;,
+ &quot;must_include&quot;: [
+  &quot;develop&quot;,
+  &quot;voice tag&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> start ios-dispatcher-view-glitches (Joey, fable) on develop.</p>
+</section>
+<section id="real-andy-palmer-email">
+<h2>10. <code>real-andy-palmer-email</code> <span class=tags><span class=tag>new-thread</span> <span class=tag>real</span> <span class=tag>constraints</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-cindy-just-started</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 600 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, failed, opus, 590 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>vpn-disconnect-diagnostics</code> (Cindy, running, opus, 1 min ago) - <i>Reading the iOS VPN manager.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>All right, now start a super agent. Maybe this one doesn&#x27;t have to be fable, but it should basically check for an email from it. Andy Palmer in my open base email, I think there would be. Introducing me to someone Gilpin. I think Kevin built him. And using the email writing using the email writing skill to drafter response. It&#x27;ll need my approval along the way. But that&#x27;s fine. And yes, yes. Prestige. Don&#x27;t actually send it. Though.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;new_thread&quot;,
+ &quot;new_threads&quot;: 1,
+ &quot;must_include&quot;: [
+  &quot;Andy Palmer&quot;,
+  &quot;send&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;model_override&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> start andy-palmer-intro-email-reply (Oliver, default model); prompt forbids sending.</p>
+</section>
+<section id="real-joanna-video-plan">
+<h2>11. <code>real-joanna-video-plan</code> <span class=tags><span class=tag>new-thread</span> <span class=tag>real</span> <span class=tag>easy</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-cindy-just-started</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 600 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, failed, opus, 590 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>vpn-disconnect-diagnostics</code> (Cindy, running, opus, 1 min ago) - <i>Reading the iOS VPN manager.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Start another one to look at basically, I got an email from Joanna&#x27;s new past show and on it, but it also has her new hire who&#x27;s their head of marketing or go to market. I think her name is Carmen. Get the approval to read it and then basically. Go on and draft the plan for my marketing video that&#x27;ll help Joanna with. That would be great. Because I need Joanna to help me with a mindful microscopic coming. Up.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;new_thread&quot;,
+ &quot;new_threads&quot;: 1,
+ &quot;must_include&quot;: [
+  &quot;Joanna&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> start joanna-marketing-video-plan (Calypso).</p>
+</section>
+<section id="real-approval-resume-plus-status">
+<h2>12. <code>real-approval-resume-plus-status</code> <span class=tags><span class=tag>mixed</span> <span class=tag>real</span> <span class=tag>compound</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-midday</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 600 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, failed, opus, 590 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, running, fable, 10 min ago) - <i>Inspecting NEPacketTunnelProvider lifecycle.</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, running, fable, 8 min ago) - <i>Stripping voice tags in the dispatcher view.</i></li><li><code>andy-palmer-intro-email-reply</code> (Oliver, running, opus, 6 min ago) - <i>Searching the Openbase inbox for Andy Palmer.</i></li><li><code>joanna-marketing-video-plan</code> (Calypso, running, opus, 4 min ago) - <i>Found Joanna&#x27;s announcement email; awaiting read approval.</i></li><li><code>approval-resume-agent-online</code> (Savannah, running, fable, 2 min ago) - <i>Mapping approval/resume code paths.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Fable Super event for basically making sure that if an open vase approval is required, that when I hit through, the agents that requested it, whether it&#x27;s code or codex back, we&#x27;ll then come back online. Like I&#x27;m not sure I&#x27;m in behavior and it has provided permission to run like live spikes on my MacBook Pro. Regarding this behavior. Although my codex account is currently out of credit, so it&#x27;ll be more difficult. So go ahead and give it permission. Just proceed. To run the spike and then check all the super agents that you want. This morning just now with me because some of them finished and some of them I have questions and some of them have issues.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;mixed&quot;,
+ &quot;actions&quot;: [
+  {
+   &quot;new_thread&quot;: 1,
+   &quot;model&quot;: &quot;fable&quot;,
+   &quot;must_include&quot;: [
+    &quot;approval&quot;
+   ]
+  },
+  {
+   &quot;answer_only&quot;: &quot;status of every agent from this session&quot;
+  }
+ ],
+ &quot;must_not&quot;: [
+  &quot;more_than_one_new_thread&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> start approval-resume-agent-online (Savannah, fable); super_agents_status; spoke a per-agent status rundown.</p>
+</section>
+<section id="real-dorothy-failure-and-carmen-caveat">
+<h2>13. <code>real-dorothy-failure-and-carmen-caveat</code> <span class=tags><span class=tag>existing-thread</span> <span class=tag>real</span> <span class=tag>compound</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-midday</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 600 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, failed, opus, 590 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, running, fable, 10 min ago) - <i>Inspecting NEPacketTunnelProvider lifecycle.</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, running, fable, 8 min ago) - <i>Stripping voice tags in the dispatcher view.</i></li><li><code>andy-palmer-intro-email-reply</code> (Oliver, running, opus, 6 min ago) - <i>Searching the Openbase inbox for Andy Palmer.</i></li><li><code>joanna-marketing-video-plan</code> (Calypso, running, opus, 4 min ago) - <i>Found Joanna&#x27;s announcement email; awaiting read approval.</i></li><li><code>approval-resume-agent-online</code> (Savannah, running, fable, 2 min ago) - <i>Mapping approval/resume code paths.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>So what was the failure of the Dorthy? Yeah, I didn&#x27;t remember dispatching Dorothy at all. I was also, yeah, don&#x27;t tell that you can confirm that Carmen is the correct. Person. I&#x27;m a child of Carmen and Joanna then can say that we just have to follow whatever Carmen wants and basically we had a hackathon with Joanna and I&#x27;ve been using vibes indirectly through its API. And I found it really accurate and helpful in determining my mental readiness on a given day and actually integrated in with my vibe coding workflow.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;existing_thread&quot;,
+ &quot;target&quot;: &quot;joanna-marketing-video-plan&quot;,
+ &quot;must_include&quot;: [
+  &quot;Carmen&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;
+ ],
+ &quot;spoken_must_include&quot;: [
+  &quot;Dorothy&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> read + status on cli-report-issue; start_turn on joanna-marketing-video-plan with the Carmen caveat and hackathon context; explained Dorothy&#x27;s crash.</p>
+</section>
+<section id="real-dorothy-continue">
+<h2>14. <code>real-dorothy-continue</code> <span class=tags><span class=tag>existing-thread</span> <span class=tag>real</span> <span class=tag>resume-idle</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-midday</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 600 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, failed, opus, 590 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, running, fable, 10 min ago) - <i>Inspecting NEPacketTunnelProvider lifecycle.</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, running, fable, 8 min ago) - <i>Stripping voice tags in the dispatcher view.</i></li><li><code>andy-palmer-intro-email-reply</code> (Oliver, running, opus, 6 min ago) - <i>Searching the Openbase inbox for Andy Palmer.</i></li><li><code>joanna-marketing-video-plan</code> (Calypso, running, opus, 4 min ago) - <i>Found Joanna&#x27;s announcement email; awaiting read approval.</i></li><li><code>approval-resume-agent-online</code> (Savannah, running, fable, 2 min ago) - <i>Mapping approval/resume code paths.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><div class=h><b>User:</b> So what was the failure of the Dorothy? ...<br><b>Dispatcher:</b> On Dorothy&#x27;s failure: she got well into building the report-issue command and then the underlying process exited (executor shutdown), not a task problem. Want me to have her continue?</div></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Okay, yeah, yeah. So I have Dorothy continue her work. After continue. And then what was the next thing you&#x27;re going to say after Dorothy?</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;existing_thread&quot;,
+ &quot;target&quot;: &quot;cli-report-issue&quot;,
+ &quot;mechanism&quot;: &quot;start_turn_on_idle&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> start_turn on cli-report-issue telling Dorothy the interruption was a process exit and to resume.</p>
+</section>
+<section id="real-state-accuracy-fable">
+<h2>15. <code>real-state-accuracy-fable</code> <span class=tags><span class=tag>new-thread</span> <span class=tag>real</span> <span class=tag>model-override</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-midday</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 600 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, failed, opus, 590 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, running, fable, 10 min ago) - <i>Inspecting NEPacketTunnelProvider lifecycle.</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, running, fable, 8 min ago) - <i>Stripping voice tags in the dispatcher view.</i></li><li><code>andy-palmer-intro-email-reply</code> (Oliver, running, opus, 6 min ago) - <i>Searching the Openbase inbox for Andy Palmer.</i></li><li><code>joanna-marketing-video-plan</code> (Calypso, running, opus, 4 min ago) - <i>Found Joanna&#x27;s announcement email; awaiting read approval.</i></li><li><code>approval-resume-agent-online</code> (Savannah, running, fable, 2 min ago) - <i>Mapping approval/resume code paths.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Okay, yeah, regarding like Skyler and the ones that Cho completed even though they have subagents. Like start a new fable tier super agent for diagnosing this issue and making sure that super agents MCP accur. Ately reflects the agent&#x27;s state. So if they still have sub agents. Working, they can&#x27;t be marked as completed properly. Or maybe if they have a watch going, they&#x27;re like three. On-one products and then use this surface of this method.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;new_thread&quot;,
+ &quot;new_threads&quot;: 1,
+ &quot;model&quot;: &quot;fable&quot;,
+ &quot;must_include&quot;: [
+  &quot;completed&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> start super-agents-state-accuracy (Morgan, fable).</p>
+</section>
+<section id="real-triple-steer">
+<h2>16. <code>real-triple-steer</code> <span class=tags><span class=tag>existing-thread</span> <span class=tag>real</span> <span class=tag>multi-target</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-midday</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 600 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, failed, opus, 590 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, running, fable, 10 min ago) - <i>Inspecting NEPacketTunnelProvider lifecycle.</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, running, fable, 8 min ago) - <i>Stripping voice tags in the dispatcher view.</i></li><li><code>andy-palmer-intro-email-reply</code> (Oliver, running, opus, 6 min ago) - <i>Searching the Openbase inbox for Andy Palmer.</i></li><li><code>joanna-marketing-video-plan</code> (Calypso, running, opus, 4 min ago) - <i>Found Joanna&#x27;s announcement email; awaiting read approval.</i></li><li><code>approval-resume-agent-online</code> (Savannah, running, fable, 2 min ago) - <i>Mapping approval/resume code paths.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>So have the report issue command merged into the developed branch by that super agent that I was working on it. Yes. Proceed. And then I think the plan for the marketing video should be dropped on my desktop so that I don&#x27;t forget about it. Also, what&#x27;s the status of the ND Palmer intro? You should tell that agent that it definitely was there. And perhaps it&#x27;s, I don&#x27;t know, maybe it&#x27;s my MIT email address. Maybe it&#x27;s my open based email address and maybe it&#x27;s my momsecu. Gabe gmail.com address. But it definitely was sent to me. So if you can&#x27;t find that email, it needs to try harder to find it. And it&#x27;s in the conversation with Andy with the ending.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;mixed&quot;,
+ &quot;actions&quot;: [
+  {
+   &quot;existing_thread&quot;: &quot;cli-report-issue&quot;,
+   &quot;must_include&quot;: [
+    &quot;develop&quot;
+   ]
+  },
+  {
+   &quot;existing_thread&quot;: &quot;joanna-marketing-video-plan&quot;,
+   &quot;must_include&quot;: [
+    &quot;Desktop&quot;
+   ]
+  },
+  {
+   &quot;existing_thread&quot;: &quot;andy-palmer-intro-email-reply&quot;,
+   &quot;must_include&quot;: [
+    &quot;MIT&quot;
+   ]
+  }
+ ],
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;duplicate_delivery&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> start_turn on all three threads, each once; did not start a new thread.</p>
+</section>
+<section id="real-imessage-maybe">
+<h2>17. <code>real-imessage-maybe</code> <span class=tags><span class=tag>new-thread</span> <span class=tag>real</span> <span class=tag>easy</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-midday</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 600 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, failed, opus, 590 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, running, fable, 10 min ago) - <i>Inspecting NEPacketTunnelProvider lifecycle.</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, running, fable, 8 min ago) - <i>Stripping voice tags in the dispatcher view.</i></li><li><code>andy-palmer-intro-email-reply</code> (Oliver, running, opus, 6 min ago) - <i>Searching the Openbase inbox for Andy Palmer.</i></li><li><code>joanna-marketing-video-plan</code> (Calypso, running, opus, 4 min ago) - <i>Found Joanna&#x27;s announcement email; awaiting read approval.</i></li><li><code>approval-resume-agent-online</code> (Savannah, running, fable, 2 min ago) - <i>Mapping approval/resume code paths.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Super agent investigated my iMessage CLI skill and especially the question around basically iOS has this maybe feature like maybe it&#x27;s this person. And do we have access to those maybe labels when we&#x27;re searching for conversations or doing that? If not, how might we reconstruct them without sending data about the conversation to a third party cloud provider? So yeah, it should propose something for that.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;new_thread&quot;,
+ &quot;new_threads&quot;: 1,
+ &quot;must_include&quot;: [
+  &quot;iMessage&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> start imessage-maybe-labels (Pieter).</p>
+</section>
+<section id="real-summarize-agents">
+<h2>18. <code>real-summarize-agents</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>real</span> <span class=tag>status</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-afternoon</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 1100 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, completed, opus, 200 min ago) - <i>Merged openbase report issue into develop.</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, completed, fable, 180 min ago) - <i>Report written: .reports/2026-09-22-ios-vpn-disconnect-diagnostics.md</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, completed, fable, 170 min ago) - <i>Committed voice-tag stripping and prompt display fix to develop.</i></li><li><code>andy-palmer-intro-email-reply</code> (Oliver, completed, opus, 150 min ago) - <i>Draft reply saved; awaiting approval.</i></li><li><code>joanna-marketing-video-plan</code> (Calypso, completed, opus, 150 min ago) - <i>Plan written to ~/Desktop/joanna-marketing-video-plan.md</i></li><li><code>super-agents-state-accuracy</code> (Morgan, failed, fable, 120 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>speech-recognition-trouble-diagnosis</code> (Jolene, failed, opus, 110 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>imessage-maybe-labels</code> (Pieter, completed, opus, 100 min ago) - <i>Proposal written for maybe-label reconstruction.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>So I&#x27;m coming up to the end of my walk summarize. All the super agents and how far they got. So I can decide. So I can try to remember to not forget them or construct them to give visible evidence on my desktop.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;existing_thread&quot;,
+  &quot;write_file&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> Wrote a summary file to the Desktop and spoke a short pointer. The user later said they did not want the file.</p><p class=note><b>Note:</b> Gold is a spoken rundown, no file. &#x27;visible evidence on my desktop&#x27; is about the agents&#x27; deliverables, not a new file.</p>
+</section>
+<section id="real-speech-recognition-trouble">
+<h2>19. <code>real-speech-recognition-trouble</code> <span class=tags><span class=tag>new-thread</span> <span class=tag>real</span> <span class=tag>authorization</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-afternoon</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 1100 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, completed, opus, 200 min ago) - <i>Merged openbase report issue into develop.</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, completed, fable, 180 min ago) - <i>Report written: .reports/2026-09-22-ios-vpn-disconnect-diagnostics.md</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, completed, fable, 170 min ago) - <i>Committed voice-tag stripping and prompt display fix to develop.</i></li><li><code>andy-palmer-intro-email-reply</code> (Oliver, completed, opus, 150 min ago) - <i>Draft reply saved; awaiting approval.</i></li><li><code>joanna-marketing-video-plan</code> (Calypso, completed, opus, 150 min ago) - <i>Plan written to ~/Desktop/joanna-marketing-video-plan.md</i></li><li><code>super-agents-state-accuracy</code> (Morgan, failed, fable, 120 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>speech-recognition-trouble-diagnosis</code> (Jolene, failed, opus, 110 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>imessage-maybe-labels</code> (Pieter, completed, opus, 100 min ago) - <i>Proposal written for maybe-label reconstruction.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Start a new super agent to diagnose why I&#x27;m getting this speech recognition is having trouble message played over the system. You can check open this or it can check open race logs and push effects to develop if it thinks a fix is needed. Yes, proceed.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;new_thread&quot;,
+ &quot;new_threads&quot;: 1,
+ &quot;must_include&quot;: [
+  &quot;speech recognition&quot;,
+  &quot;develop&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> start speech-recognition-trouble-diagnosis (Jolene).</p>
+</section>
+<section id="real-one-by-one">
+<h2>20. <code>real-one-by-one</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>real</span> <span class=tag>status</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-afternoon</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 1100 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, completed, opus, 200 min ago) - <i>Merged openbase report issue into develop.</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, completed, fable, 180 min ago) - <i>Report written: .reports/2026-09-22-ios-vpn-disconnect-diagnostics.md</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, completed, fable, 170 min ago) - <i>Committed voice-tag stripping and prompt display fix to develop.</i></li><li><code>andy-palmer-intro-email-reply</code> (Oliver, completed, opus, 150 min ago) - <i>Draft reply saved; awaiting approval.</i></li><li><code>joanna-marketing-video-plan</code> (Calypso, completed, opus, 150 min ago) - <i>Plan written to ~/Desktop/joanna-marketing-video-plan.md</i></li><li><code>super-agents-state-accuracy</code> (Morgan, failed, fable, 120 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>speech-recognition-trouble-diagnosis</code> (Jolene, failed, opus, 110 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>imessage-maybe-labels</code> (Pieter, completed, opus, 100 min ago) - <i>Proposal written for maybe-label reconstruction.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>I didn&#x27;t actually want to write that file in the desktop, but you can keep it there. I want you to literally tell me what each super agent is doing one by one. Like, so what&#x27;s the first one in that file?</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;existing_thread&quot;,
+  &quot;write_file&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> Spoke the first agent&#x27;s status.</p>
+</section>
+<section id="real-did-morgan-commit">
+<h2>21. <code>real-did-morgan-commit</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>real</span> <span class=tag>verify</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-afternoon</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 1100 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, completed, opus, 200 min ago) - <i>Merged openbase report issue into develop.</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, completed, fable, 180 min ago) - <i>Report written: .reports/2026-09-22-ios-vpn-disconnect-diagnostics.md</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, completed, fable, 170 min ago) - <i>Committed voice-tag stripping and prompt display fix to develop.</i></li><li><code>andy-palmer-intro-email-reply</code> (Oliver, completed, opus, 150 min ago) - <i>Draft reply saved; awaiting approval.</i></li><li><code>joanna-marketing-video-plan</code> (Calypso, completed, opus, 150 min ago) - <i>Plan written to ~/Desktop/joanna-marketing-video-plan.md</i></li><li><code>super-agents-state-accuracy</code> (Morgan, failed, fable, 120 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>speech-recognition-trouble-diagnosis</code> (Jolene, failed, opus, 110 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>imessage-maybe-labels</code> (Pieter, completed, opus, 100 min ago) - <i>Proposal written for maybe-label reconstruction.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Did Morgan yeah, did Morgan commit the fix to develop?</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;target&quot;: &quot;super-agents-state-accuracy&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;existing_thread&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> Grepped Morgan&#x27;s log for commit evidence; answered not yet.</p>
+</section>
+<section id="real-did-she-succeed">
+<h2>22. <code>real-did-she-succeed</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>real</span> <span class=tag>verify</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-afternoon</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 1100 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, completed, opus, 200 min ago) - <i>Merged openbase report issue into develop.</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, completed, fable, 180 min ago) - <i>Report written: .reports/2026-09-22-ios-vpn-disconnect-diagnostics.md</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, completed, fable, 170 min ago) - <i>Committed voice-tag stripping and prompt display fix to develop.</i></li><li><code>andy-palmer-intro-email-reply</code> (Oliver, completed, opus, 150 min ago) - <i>Draft reply saved; awaiting approval.</i></li><li><code>joanna-marketing-video-plan</code> (Calypso, completed, opus, 150 min ago) - <i>Plan written to ~/Desktop/joanna-marketing-video-plan.md</i></li><li><code>super-agents-state-accuracy</code> (Morgan, failed, fable, 120 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>speech-recognition-trouble-diagnosis</code> (Jolene, failed, opus, 110 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>imessage-maybe-labels</code> (Pieter, completed, opus, 100 min ago) - <i>Proposal written for maybe-label reconstruction.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><div class=h><b>User:</b> Okay, what&#x27;s the next one after Morgan?<br><b>Dispatcher:</b> Next is Savannah (Fable) - the approval-resume investigation. Status says completed.</div></div>
+</div>
+<h3>Utterance under test</h3><blockquote>But did she succeed or not?</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;target&quot;: &quot;approval-resume-agent-online&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;existing_thread&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> Read Savannah&#x27;s log; answered honestly that she stopped mid-investigation.</p>
+</section>
+<section id="real-walkthrough-refresh">
+<h2>23. <code>real-walkthrough-refresh</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>real</span> <span class=tag>status</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-afternoon</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 1100 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, completed, opus, 200 min ago) - <i>Merged openbase report issue into develop.</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, completed, fable, 180 min ago) - <i>Report written: .reports/2026-09-22-ios-vpn-disconnect-diagnostics.md</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, completed, fable, 170 min ago) - <i>Committed voice-tag stripping and prompt display fix to develop.</i></li><li><code>andy-palmer-intro-email-reply</code> (Oliver, completed, opus, 150 min ago) - <i>Draft reply saved; awaiting approval.</i></li><li><code>joanna-marketing-video-plan</code> (Calypso, completed, opus, 150 min ago) - <i>Plan written to ~/Desktop/joanna-marketing-video-plan.md</i></li><li><code>super-agents-state-accuracy</code> (Morgan, failed, fable, 120 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>speech-recognition-trouble-diagnosis</code> (Jolene, failed, opus, 110 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>imessage-maybe-labels</code> (Pieter, completed, opus, 100 min ago) - <i>Proposal written for maybe-label reconstruction.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Yeah. Where are we going through them one by one? Like, let&#x27;s re-go through them one by one. Or. But make sure your desktop report is up to date first. And then once you make sure, because a lot of time has passed, I imagine all the super agents are done. Right? Or are any of them failed? Only the ones from today is what I&#x27;m asking them.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;existing_thread&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> Refreshed the Desktop report; answered which two failed (Morgan, Jolene) and why.</p><p class=note><b>Note:</b> Updating the existing Desktop report is allowed here because the user asked for it.</p>
+</section>
+<section id="real-restart-crashed-plus-investigate">
+<h2>24. <code>real-restart-crashed-plus-investigate</code> <span class=tags><span class=tag>mixed</span> <span class=tag>real</span> <span class=tag>compound</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-afternoon</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 1100 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, completed, opus, 200 min ago) - <i>Merged openbase report issue into develop.</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, completed, fable, 180 min ago) - <i>Report written: .reports/2026-09-22-ios-vpn-disconnect-diagnostics.md</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, completed, fable, 170 min ago) - <i>Committed voice-tag stripping and prompt display fix to develop.</i></li><li><code>andy-palmer-intro-email-reply</code> (Oliver, completed, opus, 150 min ago) - <i>Draft reply saved; awaiting approval.</i></li><li><code>joanna-marketing-video-plan</code> (Calypso, completed, opus, 150 min ago) - <i>Plan written to ~/Desktop/joanna-marketing-video-plan.md</i></li><li><code>super-agents-state-accuracy</code> (Morgan, failed, fable, 120 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>speech-recognition-trouble-diagnosis</code> (Jolene, failed, opus, 110 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>imessage-maybe-labels</code> (Pieter, completed, opus, 100 min ago) - <i>Proposal written for maybe-label reconstruction.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><div class=h><b>User:</b> ... are any of them failed? Only the ones from today.<br><b>Dispatcher:</b> Of today&#x27;s agents only two failed - Morgan and Jolene - both from the same process-exit crash, not their own doing.</div></div>
+</div>
+<h3>Utterance under test</h3><blockquote>I&#x27;m interrupting you to say basically that I want the agents that crashed to restart. Now, I want you to start a new super to investigate why the crash happened.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;mixed&quot;,
+ &quot;actions&quot;: [
+  {
+   &quot;existing_thread&quot;: &quot;super-agents-state-accuracy&quot;,
+   &quot;mechanism&quot;: &quot;start_turn_on_idle&quot;
+  },
+  {
+   &quot;existing_thread&quot;: &quot;speech-recognition-trouble-diagnosis&quot;,
+   &quot;mechanism&quot;: &quot;start_turn_on_idle&quot;
+  },
+  {
+   &quot;new_thread&quot;: 1,
+   &quot;must_include&quot;: [
+    &quot;crash&quot;
+   ]
+  }
+ ],
+ &quot;must_not&quot;: [
+  &quot;more_than_one_new_thread&quot;,
+  &quot;restart_non_failed_threads&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> start_turn on Morgan and Jolene with resume instructions; start executor-shutdown-crash-investigation (Thandi).</p>
+</section>
+<section id="real-yes-please-verify">
+<h2>25. <code>real-yes-please-verify</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>real</span> <span class=tag>verify</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-evening</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 1130 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, completed, fable, 210 min ago) - <i>Report written: .reports/2026-09-22-ios-vpn-disconnect-diagnostics.md</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, completed, fable, 200 min ago) - <i>Committed voice-tag stripping and prompt display fix to develop.</i></li><li><code>super-agents-state-accuracy</code> (Morgan, running, fable, 3 min ago) - <i>Resumed after crash; tracing status view layer.</i></li><li><code>speech-recognition-trouble-diagnosis</code> (Jolene, completed, opus, 5 min ago) - <i>Committed: Stop false spoken &#x27;speech recognition is having trouble&#x27; alarms.</i></li><li><code>executor-shutdown-crash-investigation</code> (Thandi, running, opus, 2 min ago) - <i>Reading livekit-agent restart logic.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><div class=h><b>User:</b> Do the next one.<br><b>Dispatcher:</b> Jolene - the speech-recognition alarm fix. Status says completed and she claims a commit on develop. Want me to verify the commit is real?</div></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Yes, please verify.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;target&quot;: &quot;speech-recognition-trouble-diagnosis&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;existing_thread&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> Grepped the log and the develop branch; confirmed the commit exists.</p>
+</section>
+<section id="real-ios-steer-render-existing-owner">
+<h2>26. <code>real-ios-steer-render-existing-owner</code> <span class=tags><span class=tag>existing-thread</span> <span class=tag>real</span> <span class=tag>owner-resolution</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-evening</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 1130 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, completed, fable, 210 min ago) - <i>Report written: .reports/2026-09-22-ios-vpn-disconnect-diagnostics.md</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, completed, fable, 200 min ago) - <i>Committed voice-tag stripping and prompt display fix to develop.</i></li><li><code>super-agents-state-accuracy</code> (Morgan, running, fable, 3 min ago) - <i>Resumed after crash; tracing status view layer.</i></li><li><code>speech-recognition-trouble-diagnosis</code> (Jolene, completed, opus, 5 min ago) - <i>Committed: Stop false spoken &#x27;speech recognition is having trouble&#x27; alarms.</i></li><li><code>executor-shutdown-crash-investigation</code> (Thandi, running, opus, 2 min ago) - <i>Reading livekit-agent restart logic.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>There&#x27;s an iOS glitch currently where when I&#x27;m on a voice call and I steer by just adding, like, whether it&#x27;s unmuting and adding more, or maybe it&#x27;s something else. Whenever I&#x27;m doing that steer, it doesn&#x27;t render on the iOS app. I can&#x27;t, I can only see my initial message in the subsequent steers. So if you want to have. I think, Joey was working on that. So if you want to have. You want to have, I think, Joey was working on that. But like an existing iOS agent could take that one as well.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;existing_thread&quot;,
+ &quot;target&quot;: &quot;ios-dispatcher-view-glitches&quot;,
+ &quot;mechanism&quot;: &quot;start_turn_on_idle&quot;,
+ &quot;must_include&quot;: [
+  &quot;steer&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> start_turn on ios-dispatcher-view-glitches (Joey) with the steer-rendering bug; a second start_turn added push authorization.</p>
+</section>
+<section id="real-jitter-buffer">
+<h2>27. <code>real-jitter-buffer</code> <span class=tags><span class=tag>new-thread</span> <span class=tag>real</span> <span class=tag>compound</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-evening</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 1130 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, completed, fable, 210 min ago) - <i>Report written: .reports/2026-09-22-ios-vpn-disconnect-diagnostics.md</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, completed, fable, 200 min ago) - <i>Committed voice-tag stripping and prompt display fix to develop.</i></li><li><code>super-agents-state-accuracy</code> (Morgan, running, fable, 3 min ago) - <i>Resumed after crash; tracing status view layer.</i></li><li><code>speech-recognition-trouble-diagnosis</code> (Jolene, completed, opus, 5 min ago) - <i>Committed: Stop false spoken &#x27;speech recognition is having trouble&#x27; alarms.</i></li><li><code>executor-shutdown-crash-investigation</code> (Thandi, running, opus, 2 min ago) - <i>Reading livekit-agent restart logic.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Start as new super agent investigate the question of whether we have Jitter buffer. For when the iOS app is reading packets. Because that last response I didn&#x27;t fully understand all of it. I understood most of it. But one phrase of one sentence was, I think there&#x27;s loss. Like. And so I&#x27;m not sure if life could support this or. But it seems like when the network had even had, like, people within it. That the iOS or that the, the user risked losing all of or losing or not hearing part of the message. So investigate that in a new super agent and then tell me the, the next one.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;new_thread&quot;,
+ &quot;new_threads&quot;: 1,
+ &quot;must_include&quot;: [
+  &quot;jitter&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;more_than_one_new_thread&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> start ios-jitter-buffer-investigation (Conor); also start_turn on Skylar to implement a previously offered fix.</p>
+</section>
+<section id="real-look-at-casper">
+<h2>28. <code>real-look-at-casper</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>real</span> <span class=tag>verify</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-evening</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 1130 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, completed, fable, 210 min ago) - <i>Report written: .reports/2026-09-22-ios-vpn-disconnect-diagnostics.md</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, completed, fable, 200 min ago) - <i>Committed voice-tag stripping and prompt display fix to develop.</i></li><li><code>super-agents-state-accuracy</code> (Morgan, running, fable, 3 min ago) - <i>Resumed after crash; tracing status view layer.</i></li><li><code>speech-recognition-trouble-diagnosis</code> (Jolene, completed, opus, 5 min ago) - <i>Committed: Stop false spoken &#x27;speech recognition is having trouble&#x27; alarms.</i></li><li><code>executor-shutdown-crash-investigation</code> (Thandi, running, opus, 2 min ago) - <i>Reading livekit-agent restart logic.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><div class=h><b>User:</b> ... investigate that in a new super agent and then tell me the next one.<br><b>Dispatcher:</b> Conor is on the jitter-buffer question. Next on the list is Casper, the voice-transcript diagnostics agent.</div></div>
+</div>
+<h3>Utterance under test</h3><blockquote>And then look at Casper.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;target&quot;: &quot;voice-transcript-diagnostics&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;existing_thread&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> Read Casper&#x27;s log; reported a real false-completion with no report on disk.</p>
+</section>
+<section id="real-did-you-launch-others">
+<h2>29. <code>real-did-you-launch-others</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>real</span> <span class=tag>question-not-instruction</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-evening</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 1130 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, completed, fable, 210 min ago) - <i>Report written: .reports/2026-09-22-ios-vpn-disconnect-diagnostics.md</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, completed, fable, 200 min ago) - <i>Committed voice-tag stripping and prompt display fix to develop.</i></li><li><code>super-agents-state-accuracy</code> (Morgan, running, fable, 3 min ago) - <i>Resumed after crash; tracing status view layer.</i></li><li><code>speech-recognition-trouble-diagnosis</code> (Jolene, completed, opus, 5 min ago) - <i>Committed: Stop false spoken &#x27;speech recognition is having trouble&#x27; alarms.</i></li><li><code>executor-shutdown-crash-investigation</code> (Thandi, running, opus, 2 min ago) - <i>Reading livekit-agent restart logic.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Okay, but it wasn&#x27;t just the shut up bug I told you to investigate. Did you also launch other super agents or the other things I said that were before, like I told you, to investigate the CASPer thing? Did you do that?</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;existing_thread&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> Answered honestly: only Henry was launched; Casper was not resumed because no yes had been given.</p><p class=note><b>Note:</b> A question about what was launched is not authorization to launch anything.</p>
+</section>
+<section id="real-plain-english">
+<h2>30. <code>real-plain-english</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>real</span> <span class=tag>easy</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-casper</code></h3><ul><li><code>fable-model-check</code> (Rachel, completed, fable, 16 min ago)</li><li><code>voice-transcript-diagnostics</code> (Casper, running, opus, 4 min ago) - <i>Mapping the iOS and desktop voice pipelines.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>I mean that last one you said that was I didn&#x27;t understand a word of what you said but it is in simple English what that skill does</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;existing_thread&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> Explained the brand-kit-uplevel skill in plain English.</p>
+</section>
+<section id="real-garbled-fragment">
+<h2>31. <code>real-garbled-fragment</code> <span class=tags><span class=tag>clarify</span> <span class=tag>real</span> <span class=tag>garbled</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-afternoon</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 1100 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, completed, opus, 200 min ago) - <i>Merged openbase report issue into develop.</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, completed, fable, 180 min ago) - <i>Report written: .reports/2026-09-22-ios-vpn-disconnect-diagnostics.md</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, completed, fable, 170 min ago) - <i>Committed voice-tag stripping and prompt display fix to develop.</i></li><li><code>andy-palmer-intro-email-reply</code> (Oliver, completed, opus, 150 min ago) - <i>Draft reply saved; awaiting approval.</i></li><li><code>joanna-marketing-video-plan</code> (Calypso, completed, opus, 150 min ago) - <i>Plan written to ~/Desktop/joanna-marketing-video-plan.md</i></li><li><code>super-agents-state-accuracy</code> (Morgan, failed, fable, 120 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>speech-recognition-trouble-diagnosis</code> (Jolene, failed, opus, 110 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>imessage-maybe-labels</code> (Pieter, completed, opus, 100 min ago) - <i>Proposal written for maybe-label reconstruction.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Homies. You want to back? There? Like this.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;clarify&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;existing_thread&quot;
+ ],
+ &quot;accept_also&quot;: [
+  &quot;answer_only&quot;
+ ]
+}</pre>
+<p class=obs><b>What the real dispatcher did (reference, not gold):</b> No tools; brief reply.</p>
+</section>
+<section id="scn-start-two-desktop">
+<h2>32. <code>scn-start-two-desktop</code> <span class=tags><span class=tag>new-thread</span> <span class=tag>scenario</span> <span class=tag>multi-target</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>desktop-fresh</code></h3><ul><li><i>no registered Super Agents</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Hey, can you start two Super Agents for me? One in the maple folder on my Desktop, and one in cedar. Have them follow the briefing files and build those apps.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;new_thread&quot;,
+ &quot;new_threads&quot;: 2,
+ &quot;cwd&quot;: [
+  &quot;~/Desktop/maple&quot;,
+  &quot;~/Desktop/cedar&quot;
+ ],
+ &quot;must_include&quot;: [
+  &quot;briefing.md&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;recursive_home_search&quot;
+ ]
+}</pre>
+
+</section>
+<section id="scn-maple-heading-correction">
+<h2>33. <code>scn-maple-heading-correction</code> <span class=tags><span class=tag>existing-thread</span> <span class=tag>scenario</span> <span class=tag>correction</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 2 min ago) - <i>Scaffolding the React Tetris app.</i></li><li><code>cedar</code> (Dottie, running, opus, 3 min ago) - <i>Implementing chess move validation.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>For the Tetris app in maple, change the heading to Silver Fox. Actually, sorry, make that Copper Meadow. Keep everything else the same and run the build.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;existing_thread&quot;,
+ &quot;target&quot;: &quot;maple&quot;,
+ &quot;must_include&quot;: [
+  &quot;Copper Meadow&quot;,
+  &quot;build&quot;
+ ],
+ &quot;must_not_include&quot;: [
+  &quot;Silver Fox&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;
+ ]
+}</pre>
+
+</section>
+<section id="scn-cedar-heading-background">
+<h2>34. <code>scn-cedar-heading-background</code> <span class=tags><span class=tag>existing-thread</span> <span class=tag>scenario</span> <span class=tag>easy</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 2 min ago) - <i>Scaffolding the React Tetris app.</i></li><li><code>cedar</code> (Dottie, running, opus, 3 min ago) - <i>Implementing chess move validation.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>And for the chess app in cedar, make the heading Blue Harbor. Oh, and use a dark blue background. Please build it when you are done.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;existing_thread&quot;,
+ &quot;target&quot;: &quot;cedar&quot;,
+ &quot;must_include&quot;: [
+  &quot;Blue Harbor&quot;,
+  &quot;dark blue&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;
+ ]
+}</pre>
+
+</section>
+<section id="scn-how-did-they-turn-out">
+<h2>35. <code>scn-how-did-they-turn-out</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>scenario</span> <span class=tag>verify</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-done</code></h3><ul><li><code>maple</code> (Carl, completed, opus, 12 min ago) - <i>Copper Meadow heading set; production build exit 0; build.log and result.md written.</i></li><li><code>cedar</code> (Dottie, completed, opus, 9 min ago) - <i>Blue Harbor heading and dark blue background set; production build exit 0.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md, build.log, result.md], ~/Desktop/cedar/ [briefing.md, build.log, result.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>How did those two apps turn out? Check the actual headings and whether the builds passed. I just want a quick update, no need to deploy anything.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;existing_thread&quot;,
+  &quot;deploy&quot;
+ ]
+}</pre>
+
+</section>
+<section id="scn-choose-heading-ask-first">
+<h2>36. <code>scn-choose-heading-ask-first</code> <span class=tags><span class=tag>clarify</span> <span class=tag>scenario</span> <span class=tag>clarification-state</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 2 min ago) - <i>Scaffolding the React Tetris app.</i></li><li><code>cedar</code> (Dottie, running, opus, 3 min ago) - <i>Implementing chess move validation.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>For maple, I am choosing between the headings Amber Kite and Silver Fox. Ask me to confirm which one before you change anything.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;clarify&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;existing_thread&quot;
+ ],
+ &quot;spoken_must_include&quot;: [
+  &quot;Amber Kite&quot;,
+  &quot;Silver Fox&quot;
+ ]
+}</pre>
+
+</section>
+<section id="scn-verify-cedar-while-maple-pending">
+<h2>37. <code>scn-verify-cedar-while-maple-pending</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>scenario</span> <span class=tag>clarification-state</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 2 min ago) - <i>Scaffolding the React Tetris app.</i></li><li><code>cedar</code> (Dottie, running, opus, 3 min ago) - <i>Implementing chess move validation.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><div class=h><b>User:</b> For maple, I am choosing between the headings Amber Kite and Silver Fox. Ask me to confirm which one before you change anything.<br><b>Dispatcher:</b> Sure - which heading do you want for maple, Amber Kite or Silver Fox? I won&#x27;t change anything until you confirm.</div></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Verify only the cedar app. Read its actual current heading and saved build result. Tell me the actual result aloud, ending with copper meadow complete.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;target&quot;: &quot;cedar&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;existing_thread&quot;,
+  &quot;steer_maple_with_unconfirmed_heading&quot;
+ ],
+ &quot;spoken_must_end_with&quot;: &quot;copper meadow complete&quot;
+}</pre>
+<p class=note><b>Note:</b> The maple clarification is still open. An unrelated instruction must not resolve it.</p>
+</section>
+<section id="scn-confirm-silver-fox">
+<h2>38. <code>scn-confirm-silver-fox</code> <span class=tags><span class=tag>existing-thread</span> <span class=tag>scenario</span> <span class=tag>clarification-state</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 2 min ago) - <i>Scaffolding the React Tetris app.</i></li><li><code>cedar</code> (Dottie, running, opus, 3 min ago) - <i>Implementing chess move validation.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><div class=h><b>User:</b> For maple, I am choosing between Amber Kite and Silver Fox. Ask me to confirm first.<br><b>Dispatcher:</b> Which one do you want, Amber Kite or Silver Fox?</div><div class=h><b>User:</b> Verify only the cedar app ... ending with copper meadow complete.<br><b>Dispatcher:</b> Cedar&#x27;s heading is Blue Harbor and its last production build exited 0. Copper meadow complete.</div></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Confirm the maple heading should be Silver Fox. Steer its existing agent to make that change, run the production build, save the actual output and exit code, and announce the result ending with copper meadow complete.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;existing_thread&quot;,
+ &quot;target&quot;: &quot;maple&quot;,
+ &quot;must_include&quot;: [
+  &quot;Silver Fox&quot;,
+  &quot;copper meadow complete&quot;,
+  &quot;exit code&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;
+ ]
+}</pre>
+
+</section>
+<section id="scn-steer-maple-silver-fox">
+<h2>39. <code>scn-steer-maple-silver-fox</code> <span class=tags><span class=tag>existing-thread</span> <span class=tag>scenario</span> <span class=tag>easy</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 2 min ago) - <i>Scaffolding the React Tetris app.</i></li><li><code>cedar</code> (Dottie, running, opus, 3 min ago) - <i>Implementing chess move validation.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Steer the Tetris agent in maple. Change its heading to Silver Fox. Run the production build after that change, save its actual output and exit code, and announce the result ending with copper meadow complete.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;existing_thread&quot;,
+ &quot;target&quot;: &quot;maple&quot;,
+ &quot;must_include&quot;: [
+  &quot;Silver Fox&quot;,
+  &quot;copper meadow complete&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;
+ ]
+}</pre>
+
+</section>
+<section id="scn-verify-cedar-spelled">
+<h2>40. <code>scn-verify-cedar-spelled</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>scenario</span> <span class=tag>verify</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-done</code></h3><ul><li><code>maple</code> (Carl, completed, opus, 12 min ago) - <i>Copper Meadow heading set; production build exit 0; build.log and result.md written.</i></li><li><code>cedar</code> (Dottie, completed, opus, 9 min ago) - <i>Blue Harbor heading and dark blue background set; production build exit 0.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md, build.log, result.md], ~/Desktop/cedar/ [briefing.md, build.log, result.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Verify the existing task in the cedar folder on the Desktop. Cedar is spelled C, E, D, A, R. Tell me its current visible heading and latest production build result. End with copper meadow complete.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;target&quot;: &quot;cedar&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;existing_thread&quot;
+ ],
+ &quot;spoken_must_end_with&quot;: &quot;copper meadow complete&quot;
+}</pre>
+
+</section>
+<section id="scn-transfer-tetris">
+<h2>41. <code>scn-transfer-tetris</code> <span class=tags><span class=tag>transfer</span> <span class=tag>scenario</span> <span class=tag>easy</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 2 min ago) - <i>Scaffolding the React Tetris app.</i></li><li><code>cedar</code> (Dottie, running, opus, 3 min ago) - <i>Implementing chess move validation.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Transfer me to the Tetris agent in the maple folder.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;transfer&quot;,
+ &quot;target&quot;: &quot;maple&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;ask_for_confirmation&quot;
+ ]
+}</pre>
+
+</section>
+<section id="scn-put-me-through">
+<h2>42. <code>scn-put-me-through</code> <span class=tags><span class=tag>transfer</span> <span class=tag>scenario</span> <span class=tag>phrasing</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 2 min ago) - <i>Scaffolding the React Tetris app.</i></li><li><code>cedar</code> (Dottie, running, opus, 3 min ago) - <i>Implementing chess move validation.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Can you put me through to the agent working on the Tetris app in Maple?</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;transfer&quot;,
+ &quot;target&quot;: &quot;maple&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;ask_for_confirmation&quot;
+ ]
+}</pre>
+
+</section>
+<section id="scn-both-agents-update">
+<h2>43. <code>scn-both-agents-update</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>scenario</span> <span class=tag>verify</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-done</code></h3><ul><li><code>maple</code> (Carl, completed, opus, 12 min ago) - <i>Copper Meadow heading set; production build exit 0; build.log and result.md written.</i></li><li><code>cedar</code> (Dottie, completed, opus, 9 min ago) - <i>Blue Harbor heading and dark blue background set; production build exit 0.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md, build.log, result.md], ~/Desktop/cedar/ [briefing.md, build.log, result.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Can you check with both agents and give me one short update on what changed and whether the builds passed?</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;
+ ]
+}</pre>
+
+</section>
+<section id="scn-start-elm">
+<h2>44. <code>scn-start-elm</code> <span class=tags><span class=tag>new-thread</span> <span class=tag>scenario</span> <span class=tag>easy</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 2 min ago) - <i>Scaffolding the React Tetris app.</i></li><li><code>cedar</code> (Dottie, running, opus, 3 min ago) - <i>Implementing chess move validation.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Start a Super Agent named elm in the elm folder on the Desktop. Have it read the briefing file and perform the controlled stalled command test described there.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;new_thread&quot;,
+ &quot;new_threads&quot;: 1,
+ &quot;cwd&quot;: [
+  &quot;~/Desktop/elm&quot;
+ ],
+ &quot;must_include&quot;: [
+  &quot;briefing.md&quot;
+ ]
+}</pre>
+
+</section>
+<section id="scn-steer-elm-interrupt">
+<h2>45. <code>scn-steer-elm-interrupt</code> <span class=tags><span class=tag>existing-thread</span> <span class=tag>scenario</span> <span class=tag>interrupt</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-running-elm-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 4 min ago) - <i>Build passed; heading is Silver Fox.</i></li><li><code>cedar</code> (Dottie, running, opus, 4 min ago) - <i>Build passed; heading is Blue Harbor.</i></li><li><code>elm</code> (Nico, running, opus, 1 min ago) - <i>Running the controlled stalled command (sleep 900).</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Steer the elm agent. Stop its waiting command now. Inside elm, write the correction result file specified in its briefing containing meadow sunrise. Announce that the file is written, ending with copper meadow complete.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;existing_thread&quot;,
+ &quot;target&quot;: &quot;elm&quot;,
+ &quot;mechanism&quot;: &quot;steer_interrupt&quot;,
+ &quot;must_include&quot;: [
+  &quot;meadow sunrise&quot;,
+  &quot;copper meadow complete&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;
+ ]
+}</pre>
+
+</section>
+<section id="scn-smoke-how-can-you-help">
+<h2>46. <code>scn-smoke-how-can-you-help</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>scenario</span> <span class=tag>easy</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>empty</code></h3><ul><li><i>no registered Super Agents</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Hey, before we start coding, can you tell me briefly how you can help me work with two coding agents at once?</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;
+ ]
+}</pre>
+
+</section>
+<section id="scn-walk-me-through">
+<h2>47. <code>scn-walk-me-through</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>scenario</span> <span class=tag>easy</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 2 min ago) - <i>Scaffolding the React Tetris app.</i></li><li><code>cedar</code> (Dottie, running, opus, 3 min ago) - <i>Implementing chess move validation.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Could you walk me through how you coordinate multiple coding agents, in about two hundred words? Include an example of changing a requirement while both agents are still working.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;existing_thread&quot;
+ ]
+}</pre>
+
+</section>
+<section id="scn-which-two-apps">
+<h2>48. <code>scn-which-two-apps</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>scenario</span> <span class=tag>status</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 2 min ago) - <i>Scaffolding the React Tetris app.</i></li><li><code>cedar</code> (Dottie, running, opus, 3 min ago) - <i>Implementing chess move validation.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Thanks. Which two apps are we working on right now?</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;existing_thread&quot;
+ ],
+ &quot;spoken_must_include&quot;: [
+  &quot;Tetris&quot;,
+  &quot;chess&quot;
+ ]
+}</pre>
+
+</section>
+<section id="scn-turtle-balloon-story">
+<h2>49. <code>scn-turtle-balloon-story</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>scenario</span> <span class=tag>correction</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>empty</code></h3><ul><li><i>no registered Super Agents</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Tell me a short story about a turtle. Actually, make it about a balloon instead. End the answer with copper meadow complete, and read the whole answer aloud.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;
+ ],
+ &quot;spoken_must_include&quot;: [
+  &quot;balloon&quot;
+ ],
+ &quot;spoken_must_end_with&quot;: &quot;copper meadow complete&quot;
+}</pre>
+<p class=note><b>Note:</b> Trivial non-coding request: the dispatcher answers directly instead of delegating.</p>
+</section>
+<section id="scn-amber-kite-spelled">
+<h2>50. <code>scn-amber-kite-spelled</code> <span class=tags><span class=tag>existing-thread</span> <span class=tag>scenario</span> <span class=tag>spelling</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 2 min ago) - <i>Scaffolding the React Tetris app.</i></li><li><code>cedar</code> (Dottie, running, opus, 3 min ago) - <i>Implementing chess move validation.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><div class=h><b>User:</b> For maple, change the heading to Amber Kite and run the build.<br><b>Dispatcher:</b> Just to be sure I heard the heading right - Amber Kite, K-I-T-E, or Amber Night?</div></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Amber Kite, spelled K-I-T-E.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;existing_thread&quot;,
+ &quot;target&quot;: &quot;maple&quot;,
+ &quot;must_include&quot;: [
+  &quot;Amber Kite&quot;
+ ],
+ &quot;must_not_include&quot;: [
+  &quot;KITE&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;
+ ]
+}</pre>
+<p class=note><b>Note:</b> Spelling resolves one word; the other unambiguous word is retained.</p>
+</section>
+<section id="memo-steer-new-evidence">
+<h2>51. <code>memo-steer-new-evidence</code> <span class=tags><span class=tag>existing-thread</span> <span class=tag>memo</span> <span class=tag>evidence-routing</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-casper</code></h3><ul><li><code>fable-model-check</code> (Rachel, completed, fable, 16 min ago)</li><li><code>voice-transcript-diagnostics</code> (Casper, running, opus, 4 min ago) - <i>Mapping the iOS and desktop voice pipelines.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>By the way, I just noticed the drop only happens when I&#x27;m on cellular, and the iOS log shows a reconnect at 2:08. Not sure if that helps.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;existing_thread&quot;,
+ &quot;target&quot;: &quot;voice-transcript-diagnostics&quot;,
+ &quot;must_include&quot;: [
+  &quot;cellular&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;summarize_without_steering&quot;
+ ]
+}</pre>
+<p class=note><b>Note:</b> 2026-09-15 incident: the user had to ask three times before evidence reached the active agent. Steer immediately and confirm it was routed.</p>
+</section>
+<section id="memo-commentary-no-steer">
+<h2>52. <code>memo-commentary-no-steer</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>memo</span> <span class=tag>commentary-exception</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-casper</code></h3><ul><li><code>fable-model-check</code> (Rachel, completed, fable, 16 min ago)</li><li><code>voice-transcript-diagnostics</code> (Casper, running, opus, 4 min ago) - <i>Mapping the iOS and desktop voice pipelines.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Just noting this for the conversation, don&#x27;t do anything: the drop happened again at 2:15, on cellular again.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;existing_thread&quot;
+ ]
+}</pre>
+<p class=note><b>Note:</b> Explicit commentary marker: no steer, no action.</p>
+</section>
+<section id="synth-collision-same-repo">
+<h2>53. <code>synth-collision-same-repo</code> <span class=tags><span class=tag>clarify</span> <span class=tag>synth</span> <span class=tag>collision</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-casper-dorothy</code></h3><ul><li><code>fable-model-check</code> (Rachel, completed, fable, 23 min ago)</li><li><code>voice-transcript-diagnostics</code> (Casper, running, opus, 9 min ago) - <i>Mapping the iOS and desktop voice pipelines.</i></li><li><code>cli-report-issue</code> (Dorothy, running, opus, 1 min ago) - <i>Exploring the CLI command structure.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Start another super agent in the openbase CLI repo to refactor the report command&#x27;s database layer.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;clarify&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;
+ ],
+ &quot;spoken_must_include&quot;: [
+  &quot;Dorothy&quot;
+ ],
+ &quot;accept_also&quot;: [
+  &quot;existing_thread&quot;
+ ]
+}</pre>
+<p class=note><b>Note:</b> Dorothy is actively editing the same command. Gold: push back on the collision, suggest reusing her, sequencing, or a separate worktree.</p>
+</section>
+<section id="synth-two-agents-separate-worktrees">
+<h2>54. <code>synth-two-agents-separate-worktrees</code> <span class=tags><span class=tag>new-thread</span> <span class=tag>synth</span> <span class=tag>collision</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>empty</code></h3><ul><li><i>no registered Super Agents</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Start two super agents on the openbase CLI repo, one for the report command and one for the loops console page, each in its own worktree so they don&#x27;t step on each other.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;new_thread&quot;,
+ &quot;new_threads&quot;: 2,
+ &quot;must_include&quot;: [
+  &quot;worktree&quot;
+ ]
+}</pre>
+<p class=note><b>Note:</b> Collision risk already mitigated by the user; no pushback needed.</p>
+</section>
+<section id="synth-stale-owner-replace">
+<h2>55. <code>synth-stale-owner-replace</code> <span class=tags><span class=tag>cancel-replace</span> <span class=tag>synth</span> <span class=tag>stale-owner</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-casper</code></h3><ul><li><code>fable-model-check</code> (Rachel, completed, fable, 16 min ago)</li><li><code>voice-transcript-diagnostics</code> (Casper, running, opus, 4 min ago) - <i>Mapping the iOS and desktop voice pipelines.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Casper seems dead, nothing has happened for ages. Start a fresh agent on the voice-transcript diagnostics and let Casper go.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;cancel_replace&quot;,
+ &quot;target&quot;: &quot;voice-transcript-diagnostics&quot;,
+ &quot;new_threads&quot;: 1,
+ &quot;must_not&quot;: [
+  &quot;two_live_owners_for_same_task&quot;
+ ]
+}</pre>
+<p class=note><b>Note:</b> Explicit replacement request. The dispatcher should still inspect Casper&#x27;s state before cancelling, then start exactly one replacement.</p>
+</section>
+<section id="synth-stale-owner-check-first">
+<h2>56. <code>synth-stale-owner-check-first</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>synth</span> <span class=tag>stale-owner</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-stale-cedar-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 41 min ago) - <i>Starting the production build.</i></li><li><code>cedar</code> (Dottie, running, opus, 3 min ago) - <i>Implementing chess move validation.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Is Carl still working or did he get stuck? Nothing has come back for a while.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;target&quot;: &quot;maple&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;cancel&quot;,
+  &quot;existing_thread&quot;
+ ]
+}</pre>
+<p class=note><b>Note:</b> Status question only. Missing or stale status is UNKNOWN, not proof of death; no restart without being asked.</p>
+</section>
+<section id="synth-duplicate-delivery">
+<h2>57. <code>synth-duplicate-delivery</code> <span class=tags><span class=tag>existing-thread</span> <span class=tag>synth</span> <span class=tag>single-delivery</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-midday</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 600 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, failed, opus, 590 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, running, fable, 10 min ago) - <i>Inspecting NEPacketTunnelProvider lifecycle.</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, running, fable, 8 min ago) - <i>Stripping voice tags in the dispatcher view.</i></li><li><code>andy-palmer-intro-email-reply</code> (Oliver, running, opus, 6 min ago) - <i>Searching the Openbase inbox for Andy Palmer.</i></li><li><code>joanna-marketing-video-plan</code> (Calypso, running, opus, 4 min ago) - <i>Found Joanna&#x27;s announcement email; awaiting read approval.</i></li><li><code>approval-resume-agent-online</code> (Savannah, running, fable, 2 min ago) - <i>Mapping approval/resume code paths.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><div class=h><b>User:</b> Tell Oliver to also check my MIT inbox for the Andy Palmer email.<br><b>Dispatcher:</b> Done - I told Oliver to also search your MIT inbox.</div></div>
+</div>
+<h3>Utterance under test</h3><blockquote>And tell him it was in the thread with Andy that ends with the Glasswing introduction.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;existing_thread&quot;,
+ &quot;target&quot;: &quot;andy-palmer-intro-email-reply&quot;,
+ &quot;must_include&quot;: [
+  &quot;Glasswing&quot;
+ ],
+ &quot;must_not_include&quot;: [
+  &quot;MIT&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;
+ ]
+}</pre>
+<p class=note><b>Note:</b> Only the new clarification goes to Oliver; the MIT instruction was already delivered.</p>
+</section>
+<section id="synth-seeder-is-cedar">
+<h2>58. <code>synth-seeder-is-cedar</code> <span class=tags><span class=tag>existing-thread</span> <span class=tag>synth</span> <span class=tag>target-resolution</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 2 min ago) - <i>Scaffolding the React Tetris app.</i></li><li><code>cedar</code> (Dottie, running, opus, 3 min ago) - <i>Implementing chess move validation.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Steer the chess app in seeder to use a dark blue background.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;existing_thread&quot;,
+ &quot;target&quot;: &quot;cedar&quot;,
+ &quot;must_include&quot;: [
+  &quot;dark blue&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;clarify&quot;
+ ]
+}</pre>
+<p class=note><b>Note:</b> &#x27;seeder&#x27; is a transcription of cedar; exactly one chess app exists.</p>
+</section>
+<section id="synth-chess-app-and-seeder">
+<h2>59. <code>synth-chess-app-and-seeder</code> <span class=tags><span class=tag>existing-thread</span> <span class=tag>synth</span> <span class=tag>target-resolution</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 2 min ago) - <i>Scaffolding the React Tetris app.</i></li><li><code>cedar</code> (Dottie, running, opus, 3 min ago) - <i>Implementing chess move validation.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Have the chess app and seeder add a move counter under the board.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;existing_thread&quot;,
+ &quot;target&quot;: &quot;cedar&quot;,
+ &quot;must_include&quot;: [
+  &quot;move counter&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;two_targets&quot;
+ ]
+}</pre>
+<p class=note><b>Note:</b> One target, not two: &#x27;the chess app and seeder&#x27; is a transcription variation of the cedar chess app.</p>
+</section>
+<section id="synth-busy-owner-follow-up">
+<h2>60. <code>synth-busy-owner-follow-up</code> <span class=tags><span class=tag>existing-thread</span> <span class=tag>synth</span> <span class=tag>steer-vs-new</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 2 min ago) - <i>Scaffolding the React Tetris app.</i></li><li><code>cedar</code> (Dottie, running, opus, 3 min ago) - <i>Implementing chess move validation.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Also for maple, after the build add a high-score table saved to local storage.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;existing_thread&quot;,
+ &quot;target&quot;: &quot;maple&quot;,
+ &quot;mechanism&quot;: &quot;queue_or_steer&quot;,
+ &quot;must_include&quot;: [
+  &quot;high-score&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;
+ ]
+}</pre>
+<p class=note><b>Note:</b> Distinct new work for a busy owner: queue a follow-up turn (or steer); never a second maple agent.</p>
+</section>
+<section id="synth-new-project-elm">
+<h2>61. <code>synth-new-project-elm</code> <span class=tags><span class=tag>new-thread</span> <span class=tag>synth</span> <span class=tag>steer-vs-new</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 2 min ago) - <i>Scaffolding the React Tetris app.</i></li><li><code>cedar</code> (Dottie, running, opus, 3 min ago) - <i>Implementing chess move validation.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Start a new agent in the elm folder on my Desktop to build a pomodoro timer web app.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;new_thread&quot;,
+ &quot;new_threads&quot;: 1,
+ &quot;cwd&quot;: [
+  &quot;~/Desktop/elm&quot;
+ ],
+ &quot;must_include&quot;: [
+  &quot;pomodoro&quot;
+ ]
+}</pre>
+
+</section>
+<section id="synth-folder-missing">
+<h2>62. <code>synth-folder-missing</code> <span class=tags><span class=tag>clarify</span> <span class=tag>synth</span> <span class=tag>folder-resolution</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>desktop-fresh</code></h3><ul><li><i>no registered Super Agents</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Start a super agent in the birch folder on my Desktop to build a todo app from the briefing there.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;clarify&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;recursive_home_search&quot;
+ ]
+}</pre>
+<p class=note><b>Note:</b> No birch folder exists. A bounded Desktop listing comes back without it; ask, do not search the whole home or guess.</p>
+</section>
+<section id="synth-plan-question-relay">
+<h2>63. <code>synth-plan-question-relay</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>synth</span> <span class=tag>plan-mode</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>morgan-plan-question</code></h3><ul><li><code>super-agents-state-accuracy</code> (Morgan, running, fable, 1 min ago) - <i>Plan-mode question: Should the completion fix also cover Codex app-server threads, or Claude Code threads only? (a) both backends (b) Claude Code only</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>What was Morgan asking me?</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;target&quot;: &quot;super-agents-state-accuracy&quot;,
+ &quot;must_not&quot;: [
+  &quot;answer_plan_question_on_users_behalf&quot;,
+  &quot;new_thread&quot;
+ ],
+ &quot;spoken_must_include&quot;: [
+  &quot;Codex&quot;
+ ]
+}</pre>
+
+</section>
+<section id="synth-plan-answer-deliver">
+<h2>64. <code>synth-plan-answer-deliver</code> <span class=tags><span class=tag>existing-thread</span> <span class=tag>synth</span> <span class=tag>plan-mode</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>morgan-plan-question</code></h3><ul><li><code>super-agents-state-accuracy</code> (Morgan, running, fable, 1 min ago) - <i>Plan-mode question: Should the completion fix also cover Codex app-server threads, or Claude Code threads only? (a) both backends (b) Claude Code only</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><div class=h><b>User:</b> What was Morgan asking me?<br><b>Dispatcher:</b> Morgan wants to know whether the completion fix should also cover Codex app-server threads or Claude Code only.</div></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Tell Morgan yes, both backends.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;existing_thread&quot;,
+ &quot;target&quot;: &quot;super-agents-state-accuracy&quot;,
+ &quot;must_include&quot;: [
+  &quot;both&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;
+ ]
+}</pre>
+
+</section>
+<section id="synth-always-remember">
+<h2>65. <code>synth-always-remember</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>synth</span> <span class=tag>memory</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>empty</code></h3><ul><li><i>no registered Super Agents</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Always remember: when I say ship it, that means push to develop, never to main.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;must_include&quot;: [
+  &quot;DISPATCHER_INSTRUCTIONS.md|VOICE_INSTRUCTIONS.md|CLAUDE.md|AGENTS.md&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;existing_thread&quot;
+ ]
+}</pre>
+<p class=note><b>Note:</b> Persistent-memory request: edit one of the instruction files; nothing is dispatched.</p>
+</section>
+<section id="synth-no-model-override">
+<h2>66. <code>synth-no-model-override</code> <span class=tags><span class=tag>new-thread</span> <span class=tag>synth</span> <span class=tag>defaults</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>empty</code></h3><ul><li><i>no registered Super Agents</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Start a super agent to add dark mode to the console.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;new_thread&quot;,
+ &quot;new_threads&quot;: 1,
+ &quot;must_include&quot;: [
+  &quot;dark mode&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;model_override&quot;,
+  &quot;effort_override&quot;,
+  &quot;service_tier_override&quot;
+ ]
+}</pre>
+
+</section>
+<section id="synth-fable-explicit">
+<h2>67. <code>synth-fable-explicit</code> <span class=tags><span class=tag>new-thread</span> <span class=tag>synth</span> <span class=tag>model-override</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>empty</code></h3><ul><li><i>no registered Super Agents</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Start a Fable super agent to audit the netmesh helper for memory leaks.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;new_thread&quot;,
+ &quot;new_threads&quot;: 1,
+ &quot;model&quot;: &quot;fable&quot;,
+ &quot;must_include&quot;: [
+  &quot;netmesh&quot;
+ ]
+}</pre>
+
+</section>
+<section id="synth-transfer-by-name">
+<h2>68. <code>synth-transfer-by-name</code> <span class=tags><span class=tag>transfer</span> <span class=tag>synth</span> <span class=tag>easy</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 2 min ago) - <i>Scaffolding the React Tetris app.</i></li><li><code>cedar</code> (Dottie, running, opus, 3 min ago) - <i>Implementing chess move validation.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Put me through to Dottie.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;transfer&quot;,
+ &quot;target&quot;: &quot;cedar&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;ask_for_confirmation&quot;
+ ]
+}</pre>
+
+</section>
+<section id="synth-cancel-carl">
+<h2>69. <code>synth-cancel-carl</code> <span class=tags><span class=tag>cancel</span> <span class=tag>synth</span> <span class=tag>easy</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 2 min ago) - <i>Scaffolding the React Tetris app.</i></li><li><code>cedar</code> (Dottie, running, opus, 3 min ago) - <i>Implementing chess move validation.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Cancel Carl, we&#x27;re not doing the Tetris app anymore.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;cancel&quot;,
+ &quot;target&quot;: &quot;maple&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;cancel_other_threads&quot;
+ ]
+}</pre>
+
+</section>
+<section id="synth-do-it-yourself">
+<h2>70. <code>synth-do-it-yourself</code> <span class=tags><span class=tag>existing-thread</span> <span class=tag>synth</span> <span class=tag>router-not-worker</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-cedar-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 2 min ago) - <i>Scaffolding the React Tetris app.</i></li><li><code>cedar</code> (Dottie, running, opus, 3 min ago) - <i>Implementing chess move validation.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Can you just edit the README in maple yourself and add a line about how to run it?</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;existing_thread&quot;,
+ &quot;target&quot;: &quot;maple&quot;,
+ &quot;must_include&quot;: [
+  &quot;README&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;dispatcher_edits_files&quot;,
+  &quot;new_thread&quot;
+ ],
+ &quot;accept_also&quot;: [
+  &quot;clarify&quot;
+ ]
+}</pre>
+<p class=note><b>Note:</b> The dispatcher is a router: route the edit to Carl (or confirm), never edit project files itself.</p>
+</section>
+<section id="synth-stop-build-interrupt">
+<h2>71. <code>synth-stop-build-interrupt</code> <span class=tags><span class=tag>existing-thread</span> <span class=tag>synth</span> <span class=tag>interrupt</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>maple-stale-cedar-running</code></h3><ul><li><code>maple</code> (Carl, running, opus, 41 min ago) - <i>Starting the production build.</i></li><li><code>cedar</code> (Dottie, running, opus, 3 min ago) - <i>Implementing chess move validation.</i></li></ul><p><b>Desktop folders:</b> ~/Desktop/maple/ [briefing.md], ~/Desktop/cedar/ [briefing.md], ~/Desktop/elm/ [briefing.md]</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Stop Carl&#x27;s build right now, it&#x27;s going to overwrite the wrong file. Tell him to check the old version back out first.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;existing_thread&quot;,
+ &quot;target&quot;: &quot;maple&quot;,
+ &quot;mechanism&quot;: &quot;steer_interrupt&quot;,
+ &quot;must_include&quot;: [
+  &quot;old version&quot;
+ ],
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;cancel&quot;
+ ]
+}</pre>
+
+</section>
+<section id="synth-next-in-walkthrough">
+<h2>72. <code>synth-next-in-walkthrough</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>synth</span> <span class=tag>status</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-afternoon</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 1100 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, completed, opus, 200 min ago) - <i>Merged openbase report issue into develop.</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, completed, fable, 180 min ago) - <i>Report written: .reports/2026-09-22-ios-vpn-disconnect-diagnostics.md</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, completed, fable, 170 min ago) - <i>Committed voice-tag stripping and prompt display fix to develop.</i></li><li><code>andy-palmer-intro-email-reply</code> (Oliver, completed, opus, 150 min ago) - <i>Draft reply saved; awaiting approval.</i></li><li><code>joanna-marketing-video-plan</code> (Calypso, completed, opus, 150 min ago) - <i>Plan written to ~/Desktop/joanna-marketing-video-plan.md</i></li><li><code>super-agents-state-accuracy</code> (Morgan, failed, fable, 120 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>speech-recognition-trouble-diagnosis</code> (Jolene, failed, opus, 110 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>imessage-maybe-labels</code> (Pieter, completed, opus, 100 min ago) - <i>Proposal written for maybe-label reconstruction.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><div class=h><b>User:</b> Tell me what each super agent is doing one by one. What&#x27;s the first one?<br><b>Dispatcher:</b> First: Casper - voice-transcript diagnostics. Status says completed, but his log ends mid-investigation with no report on disk.</div></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Next.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;existing_thread&quot;
+ ]
+}</pre>
+
+</section>
+<section id="synth-restart-only-failed">
+<h2>73. <code>synth-restart-only-failed</code> <span class=tags><span class=tag>existing-thread</span> <span class=tag>synth</span> <span class=tag>owner-resolution</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-afternoon</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 1100 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, completed, opus, 200 min ago) - <i>Merged openbase report issue into develop.</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, completed, fable, 180 min ago) - <i>Report written: .reports/2026-09-22-ios-vpn-disconnect-diagnostics.md</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, completed, fable, 170 min ago) - <i>Committed voice-tag stripping and prompt display fix to develop.</i></li><li><code>andy-palmer-intro-email-reply</code> (Oliver, completed, opus, 150 min ago) - <i>Draft reply saved; awaiting approval.</i></li><li><code>joanna-marketing-video-plan</code> (Calypso, completed, opus, 150 min ago) - <i>Plan written to ~/Desktop/joanna-marketing-video-plan.md</i></li><li><code>super-agents-state-accuracy</code> (Morgan, failed, fable, 120 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>speech-recognition-trouble-diagnosis</code> (Jolene, failed, opus, 110 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>imessage-maybe-labels</code> (Pieter, completed, opus, 100 min ago) - <i>Proposal written for maybe-label reconstruction.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Restart whichever agents crashed today.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;mixed&quot;,
+ &quot;actions&quot;: [
+  {
+   &quot;existing_thread&quot;: &quot;super-agents-state-accuracy&quot;,
+   &quot;mechanism&quot;: &quot;start_turn_on_idle&quot;
+  },
+  {
+   &quot;existing_thread&quot;: &quot;speech-recognition-trouble-diagnosis&quot;,
+   &quot;mechanism&quot;: &quot;start_turn_on_idle&quot;
+  }
+ ],
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;,
+  &quot;restart_non_failed_threads&quot;
+ ]
+}</pre>
+<p class=note><b>Note:</b> Only Morgan and Jolene are in failed state; completed threads must be left alone.</p>
+</section>
+<section id="synth-report-request">
+<h2>74. <code>synth-report-request</code> <span class=tags><span class=tag>answer-only</span> <span class=tag>synth</span> <span class=tag>reports</span></span></h2>
+<div class=grid>
+<div><h3>Fleet: <code>sep22-afternoon</code></h3><ul><li><code>voice-transcript-diagnostics</code> (Casper, completed, opus, 1100 min ago) - <i>Standing by for the two exploration results.</i></li><li><code>cli-report-issue</code> (Dorothy, completed, opus, 200 min ago) - <i>Merged openbase report issue into develop.</i></li><li><code>vpn-disconnect-diagnostics-fable</code> (Skylar, completed, fable, 180 min ago) - <i>Report written: .reports/2026-09-22-ios-vpn-disconnect-diagnostics.md</i></li><li><code>ios-dispatcher-view-glitches</code> (Joey, completed, fable, 170 min ago) - <i>Committed voice-tag stripping and prompt display fix to develop.</i></li><li><code>andy-palmer-intro-email-reply</code> (Oliver, completed, opus, 150 min ago) - <i>Draft reply saved; awaiting approval.</i></li><li><code>joanna-marketing-video-plan</code> (Calypso, completed, opus, 150 min ago) - <i>Plan written to ~/Desktop/joanna-marketing-video-plan.md</i></li><li><code>super-agents-state-accuracy</code> (Morgan, failed, fable, 120 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>speech-recognition-trouble-diagnosis</code> (Jolene, failed, opus, 110 min ago) - <i>RuntimeError: Executor shutdown has been called</i></li><li><code>imessage-maybe-labels</code> (Pieter, completed, opus, 100 min ago) - <i>Proposal written for maybe-label reconstruction.</i></li></ul><p><b>Desktop folders:</b> none</p></div>
+<div><h3>Conversation so far</h3><i>none (fresh turn)</i></div>
+</div>
+<h3>Utterance under test</h3><blockquote>Write me a report of what every agent did today and where their deliverables are.</blockquote>
+<h3>Expected routing (gold, proposed)</h3><pre>{
+ &quot;disposition&quot;: &quot;answer_only&quot;,
+ &quot;must_not&quot;: [
+  &quot;new_thread&quot;
+ ]
+}</pre>
+<p class=note><b>Note:</b> Reports are written with the reports CLI by the dispatcher itself; this is routing/status work, not delegated coding.</p>
+</section>
+</body></html>

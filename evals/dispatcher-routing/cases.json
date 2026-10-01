@@ -1,0 +1,1778 @@
+[
+ {
+  "id": "real-hello",
+  "tags": [
+   "answer-only",
+   "real",
+   "easy"
+  ],
+  "fleet": "empty",
+  "history": [],
+  "utterance": "Hey, are you there?",
+  "expected": {
+   "disposition": "answer_only",
+   "must_not": [
+    "new_thread",
+    "existing_thread"
+   ]
+  },
+  "observed": "Answered: I'm here! What can I do for you?",
+  "note": null
+ },
+ {
+  "id": "real-fable-model-check",
+  "tags": [
+   "new-thread",
+   "real",
+   "model-override"
+  ],
+  "fleet": "empty",
+  "history": [],
+  "utterance": "Launching a new Fable Super Agent and ask it what model are you and have it announced from the background not only its name, but what model it is?",
+  "expected": {
+   "disposition": "new_thread",
+   "new_threads": 1,
+   "model": "fable",
+   "must_include": [
+    "model"
+   ],
+   "must_not": [
+    "answer_the_question_itself"
+   ]
+  },
+  "observed": "start fable-model-check (Rachel, model=fable) + start_turn asking it to announce name and model via user say.",
+  "note": null
+ },
+ {
+  "id": "real-rachel-transcript",
+  "tags": [
+   "answer-only",
+   "real",
+   "verify"
+  ],
+  "fleet": "sep22-early",
+  "history": [
+   [
+    "Launching a new Fable Super Agent and ask it what model are you ...",
+    "Done - I launched a new Fable Super Agent named Rachel."
+   ]
+  ],
+  "utterance": "What model did Rachel say she was running on? Check for transcripts rather than the super agent metadata?",
+  "expected": {
+   "disposition": "answer_only",
+   "target": "fable-model-check",
+   "must_not": [
+    "new_thread"
+   ]
+  },
+  "observed": "Grepped Rachel's session log; answered Claude Fable 5.",
+  "note": null
+ },
+ {
+  "id": "real-spike-wifi-diagnostics",
+  "tags": [
+   "new-thread",
+   "real",
+   "long-utterance"
+  ],
+  "fleet": "sep22-early",
+  "history": [
+   [
+    "In there there's a directory called spike Or something with spike in the name.",
+    "Found it: psg-ai-spike under ~/Projects/psg/code."
+   ]
+  ],
+  "utterance": "So the question is how can we get it so that I can see a visualization of everything that went on including network timing and what was said when on the iOS side versus on the MacBook Pro side and and how can we get enough logs where we actually can diagnose why my words are getting chopped off because you can see that one of my messages about the particular subdirectory of the PSG project was it was completely lost. Well actually first start a new super agent to diagnose why as I walked out of my Wi-Fi range you didn't hear the folder name about Spike the first time because I definitely said it the first time. And in particular I imagine you won't have enough diagnostics even though I'll",
+  "expected": {
+   "disposition": "new_thread",
+   "new_threads": 1,
+   "must_include": [
+    "Wi-Fi",
+    "Spike"
+   ]
+  },
+  "observed": "start voice-transcript-diagnostics (Casper) with a diagnostics brief.",
+  "note": null
+ },
+ {
+  "id": "real-report-issue-start",
+  "tags": [
+   "new-thread",
+   "real",
+   "dedupe-check"
+  ],
+  "fleet": "sep22-casper",
+  "history": [],
+  "utterance": "So I don't know if you already did this but start a super agent to implement in a new multi workspace work tree for open base the future of basically the CLI should report issue and basically when that CLI command is called to report an issue it should capture the most recent interaction by user and the thread or out of it particularly the message and the metadata and add it to some problems database within open base for for diagnostics. And after Yeah yeah that's that's good enough for now. It's kind of just. Like for internal use mostly, but it can it can go to production. Too.",
+  "expected": {
+   "disposition": "new_thread",
+   "new_threads": 1,
+   "must_include": [
+    "report issue",
+    "worktree"
+   ]
+  },
+  "observed": "start cli-report-issue (Dorothy) in a new multi-workspace worktree.",
+  "note": null
+ },
+ {
+  "id": "synth-report-issue-already-running",
+  "tags": [
+   "existing-thread",
+   "synth",
+   "dedupe-check"
+  ],
+  "fleet": "sep22-casper-dorothy",
+  "history": [],
+  "utterance": "So I don't know if you already did this but start a super agent to implement in a new multi workspace work tree for open base the CLI should report issue command that captures the most recent interaction and adds it to a problems database for diagnostics.",
+  "expected": {
+   "disposition": "answer_only",
+   "target": "cli-report-issue",
+   "must_not": [
+    "new_thread"
+   ],
+   "accept_also": [
+    "existing_thread"
+   ]
+  },
+  "observed": null,
+  "note": "Same request as real-report-issue-start but Dorothy already owns it one minute ago. Gold: say Dorothy is on it (optionally steer her), never start a second owner."
+ },
+ {
+  "id": "real-vpn-diagnostics",
+  "tags": [
+   "new-thread",
+   "real",
+   "garbled"
+  ],
+  "fleet": "sep22-casper-dorothy",
+  "history": [],
+  "utterance": "No, that's okay. What I want to do is to. Do some open based stuff. So right now I'm pretty sure that the VPN keeps auto disconnect. Ing. I'm not sure if that's because I have multiple VPNs installed on my iPhone between the staging app VPN. And the normal app reform. But basically, yeah, every time I open the app or many times when I open the app, it prompts me to hit the connect to VPN button. And maybe it's a red herring because I'm getting new builds installed onto my iPhone. And it wipes the VPN from before. So that could be it. But I'm also paranoid that the VPN is just auto disconnect. Ing. But I know it was active last night, so I'm not 100% sure what's going on. But what would be",
+  "expected": {
+   "disposition": "new_thread",
+   "new_threads": 1,
+   "must_include": [
+    "VPN"
+   ]
+  },
+  "observed": "start vpn-disconnect-diagnostics (Cindy, opus); then asked whether 'table agent' meant plan mode.",
+  "note": null
+ },
+ {
+  "id": "real-not-fable-correction",
+  "tags": [
+   "cancel-replace",
+   "real",
+   "correction"
+  ],
+  "fleet": "sep22-cindy-just-started",
+  "history": [
+   [
+    "... I'm pretty sure that the VPN keeps auto disconnecting ... (long)",
+    "Quick check - that came through garbled (\"table agent\"/\"papal agent\"), so I want to confirm before changing anything. My best guess is you want this VPN investigation run as a plan-mode agent?"
+   ]
+  ],
+  "utterance": "No, no, not Fable. F-A-B-L-E fable agent.",
+  "expected": {
+   "disposition": "cancel_replace",
+   "target": "vpn-disconnect-diagnostics",
+   "new_threads": 1,
+   "model": "fable",
+   "must_include": [
+    "VPN"
+   ],
+   "must_not": [
+    "two_live_owners_for_same_task"
+   ]
+  },
+  "observed": "cancel vpn-disconnect-diagnostics; start vpn-disconnect-diagnostics-fable (Skylar, model=fable) with the same brief.",
+  "note": null
+ },
+ {
+  "id": "real-ios-dispatcher-view",
+  "tags": [
+   "new-thread",
+   "real",
+   "model-override"
+  ],
+  "fleet": "sep22-cindy-just-started",
+  "history": [],
+  "utterance": "Great. So why don't you know look into how to start a new also payable super agent or basically making it so that iOS is less glitchy because right now I'm looking in the dispatcher view. On iOS trying to get a visual indication of what I told you to do. And I just see my long prompt cut off. So like, and I also see voice tags being rendered in iOS, which I thought we already fixed, but I see XML because it's injecting the voice tags and those are currently rendered when they're not supposed to be. So startup Fable agent for fixing that. I can fix it right on the develop branch.",
+  "expected": {
+   "disposition": "new_thread",
+   "new_threads": 1,
+   "model": "fable",
+   "must_include": [
+    "develop",
+    "voice tag"
+   ]
+  },
+  "observed": "start ios-dispatcher-view-glitches (Joey, fable) on develop.",
+  "note": null
+ },
+ {
+  "id": "real-andy-palmer-email",
+  "tags": [
+   "new-thread",
+   "real",
+   "constraints"
+  ],
+  "fleet": "sep22-cindy-just-started",
+  "history": [],
+  "utterance": "All right, now start a super agent. Maybe this one doesn't have to be fable, but it should basically check for an email from it. Andy Palmer in my open base email, I think there would be. Introducing me to someone Gilpin. I think Kevin built him. And using the email writing using the email writing skill to drafter response. It'll need my approval along the way. But that's fine. And yes, yes. Prestige. Don't actually send it. Though.",
+  "expected": {
+   "disposition": "new_thread",
+   "new_threads": 1,
+   "must_include": [
+    "Andy Palmer",
+    "send"
+   ],
+   "must_not": [
+    "model_override"
+   ]
+  },
+  "observed": "start andy-palmer-intro-email-reply (Oliver, default model); prompt forbids sending.",
+  "note": null
+ },
+ {
+  "id": "real-joanna-video-plan",
+  "tags": [
+   "new-thread",
+   "real",
+   "easy"
+  ],
+  "fleet": "sep22-cindy-just-started",
+  "history": [],
+  "utterance": "Start another one to look at basically, I got an email from Joanna's new past show and on it, but it also has her new hire who's their head of marketing or go to market. I think her name is Carmen. Get the approval to read it and then basically. Go on and draft the plan for my marketing video that'll help Joanna with. That would be great. Because I need Joanna to help me with a mindful microscopic coming. Up.",
+  "expected": {
+   "disposition": "new_thread",
+   "new_threads": 1,
+   "must_include": [
+    "Joanna"
+   ]
+  },
+  "observed": "start joanna-marketing-video-plan (Calypso).",
+  "note": null
+ },
+ {
+  "id": "real-approval-resume-plus-status",
+  "tags": [
+   "mixed",
+   "real",
+   "compound"
+  ],
+  "fleet": "sep22-midday",
+  "history": [],
+  "utterance": "Fable Super event for basically making sure that if an open vase approval is required, that when I hit through, the agents that requested it, whether it's code or codex back, we'll then come back online. Like I'm not sure I'm in behavior and it has provided permission to run like live spikes on my MacBook Pro. Regarding this behavior. Although my codex account is currently out of credit, so it'll be more difficult. So go ahead and give it permission. Just proceed. To run the spike and then check all the super agents that you want. This morning just now with me because some of them finished and some of them I have questions and some of them have issues.",
+  "expected": {
+   "disposition": "mixed",
+   "actions": [
+    {
+     "new_thread": 1,
+     "model": "fable",
+     "must_include": [
+      "approval"
+     ]
+    },
+    {
+     "answer_only": "status of every agent from this session"
+    }
+   ],
+   "must_not": [
+    "more_than_one_new_thread"
+   ]
+  },
+  "observed": "start approval-resume-agent-online (Savannah, fable); super_agents_status; spoke a per-agent status rundown.",
+  "note": null
+ },
+ {
+  "id": "real-dorothy-failure-and-carmen-caveat",
+  "tags": [
+   "existing-thread",
+   "real",
+   "compound"
+  ],
+  "fleet": "sep22-midday",
+  "history": [],
+  "utterance": "So what was the failure of the Dorthy? Yeah, I didn't remember dispatching Dorothy at all. I was also, yeah, don't tell that you can confirm that Carmen is the correct. Person. I'm a child of Carmen and Joanna then can say that we just have to follow whatever Carmen wants and basically we had a hackathon with Joanna and I've been using vibes indirectly through its API. And I found it really accurate and helpful in determining my mental readiness on a given day and actually integrated in with my vibe coding workflow.",
+  "expected": {
+   "disposition": "existing_thread",
+   "target": "joanna-marketing-video-plan",
+   "must_include": [
+    "Carmen"
+   ],
+   "must_not": [
+    "new_thread"
+   ],
+   "spoken_must_include": [
+    "Dorothy"
+   ]
+  },
+  "observed": "read + status on cli-report-issue; start_turn on joanna-marketing-video-plan with the Carmen caveat and hackathon context; explained Dorothy's crash.",
+  "note": null
+ },
+ {
+  "id": "real-dorothy-continue",
+  "tags": [
+   "existing-thread",
+   "real",
+   "resume-idle"
+  ],
+  "fleet": "sep22-midday",
+  "history": [
+   [
+    "So what was the failure of the Dorothy? ...",
+    "On Dorothy's failure: she got well into building the report-issue command and then the underlying process exited (executor shutdown), not a task problem. Want me to have her continue?"
+   ]
+  ],
+  "utterance": "Okay, yeah, yeah. So I have Dorothy continue her work. After continue. And then what was the next thing you're going to say after Dorothy?",
+  "expected": {
+   "disposition": "existing_thread",
+   "target": "cli-report-issue",
+   "mechanism": "start_turn_on_idle",
+   "must_not": [
+    "new_thread"
+   ]
+  },
+  "observed": "start_turn on cli-report-issue telling Dorothy the interruption was a process exit and to resume.",
+  "note": null
+ },
+ {
+  "id": "real-state-accuracy-fable",
+  "tags": [
+   "new-thread",
+   "real",
+   "model-override"
+  ],
+  "fleet": "sep22-midday",
+  "history": [],
+  "utterance": "Okay, yeah, regarding like Skyler and the ones that Cho completed even though they have subagents. Like start a new fable tier super agent for diagnosing this issue and making sure that super agents MCP accur. Ately reflects the agent's state. So if they still have sub agents. Working, they can't be marked as completed properly. Or maybe if they have a watch going, they're like three. On-one products and then use this surface of this method.",
+  "expected": {
+   "disposition": "new_thread",
+   "new_threads": 1,
+   "model": "fable",
+   "must_include": [
+    "completed"
+   ]
+  },
+  "observed": "start super-agents-state-accuracy (Morgan, fable).",
+  "note": null
+ },
+ {
+  "id": "real-triple-steer",
+  "tags": [
+   "existing-thread",
+   "real",
+   "multi-target"
+  ],
+  "fleet": "sep22-midday",
+  "history": [],
+  "utterance": "So have the report issue command merged into the developed branch by that super agent that I was working on it. Yes. Proceed. And then I think the plan for the marketing video should be dropped on my desktop so that I don't forget about it. Also, what's the status of the ND Palmer intro? You should tell that agent that it definitely was there. And perhaps it's, I don't know, maybe it's my MIT email address. Maybe it's my open based email address and maybe it's my momsecu. Gabe gmail.com address. But it definitely was sent to me. So if you can't find that email, it needs to try harder to find it. And it's in the conversation with Andy with the ending.",
+  "expected": {
+   "disposition": "mixed",
+   "actions": [
+    {
+     "existing_thread": "cli-report-issue",
+     "must_include": [
+      "develop"
+     ]
+    },
+    {
+     "existing_thread": "joanna-marketing-video-plan",
+     "must_include": [
+      "Desktop"
+     ]
+    },
+    {
+     "existing_thread": "andy-palmer-intro-email-reply",
+     "must_include": [
+      "MIT"
+     ]
+    }
+   ],
+   "must_not": [
+    "new_thread",
+    "duplicate_delivery"
+   ]
+  },
+  "observed": "start_turn on all three threads, each once; did not start a new thread.",
+  "note": null
+ },
+ {
+  "id": "real-imessage-maybe",
+  "tags": [
+   "new-thread",
+   "real",
+   "easy"
+  ],
+  "fleet": "sep22-midday",
+  "history": [],
+  "utterance": "Super agent investigated my iMessage CLI skill and especially the question around basically iOS has this maybe feature like maybe it's this person. And do we have access to those maybe labels when we're searching for conversations or doing that? If not, how might we reconstruct them without sending data about the conversation to a third party cloud provider? So yeah, it should propose something for that.",
+  "expected": {
+   "disposition": "new_thread",
+   "new_threads": 1,
+   "must_include": [
+    "iMessage"
+   ]
+  },
+  "observed": "start imessage-maybe-labels (Pieter).",
+  "note": null
+ },
+ {
+  "id": "real-summarize-agents",
+  "tags": [
+   "answer-only",
+   "real",
+   "status"
+  ],
+  "fleet": "sep22-afternoon",
+  "history": [],
+  "utterance": "So I'm coming up to the end of my walk summarize. All the super agents and how far they got. So I can decide. So I can try to remember to not forget them or construct them to give visible evidence on my desktop.",
+  "expected": {
+   "disposition": "answer_only",
+   "must_not": [
+    "new_thread",
+    "existing_thread",
+    "write_file"
+   ]
+  },
+  "observed": "Wrote a summary file to the Desktop and spoke a short pointer. The user later said they did not want the file.",
+  "note": "Gold is a spoken rundown, no file. 'visible evidence on my desktop' is about the agents' deliverables, not a new file."
+ },
+ {
+  "id": "real-speech-recognition-trouble",
+  "tags": [
+   "new-thread",
+   "real",
+   "authorization"
+  ],
+  "fleet": "sep22-afternoon",
+  "history": [],
+  "utterance": "Start a new super agent to diagnose why I'm getting this speech recognition is having trouble message played over the system. You can check open this or it can check open race logs and push effects to develop if it thinks a fix is needed. Yes, proceed.",
+  "expected": {
+   "disposition": "new_thread",
+   "new_threads": 1,
+   "must_include": [
+    "speech recognition",
+    "develop"
+   ]
+  },
+  "observed": "start speech-recognition-trouble-diagnosis (Jolene).",
+  "note": null
+ },
+ {
+  "id": "real-one-by-one",
+  "tags": [
+   "answer-only",
+   "real",
+   "status"
+  ],
+  "fleet": "sep22-afternoon",
+  "history": [],
+  "utterance": "I didn't actually want to write that file in the desktop, but you can keep it there. I want you to literally tell me what each super agent is doing one by one. Like, so what's the first one in that file?",
+  "expected": {
+   "disposition": "answer_only",
+   "must_not": [
+    "new_thread",
+    "existing_thread",
+    "write_file"
+   ]
+  },
+  "observed": "Spoke the first agent's status.",
+  "note": null
+ },
+ {
+  "id": "real-did-morgan-commit",
+  "tags": [
+   "answer-only",
+   "real",
+   "verify"
+  ],
+  "fleet": "sep22-afternoon",
+  "history": [],
+  "utterance": "Did Morgan yeah, did Morgan commit the fix to develop?",
+  "expected": {
+   "disposition": "answer_only",
+   "target": "super-agents-state-accuracy",
+   "must_not": [
+    "new_thread",
+    "existing_thread"
+   ]
+  },
+  "observed": "Grepped Morgan's log for commit evidence; answered not yet.",
+  "note": null
+ },
+ {
+  "id": "real-did-she-succeed",
+  "tags": [
+   "answer-only",
+   "real",
+   "verify"
+  ],
+  "fleet": "sep22-afternoon",
+  "history": [
+   [
+    "Okay, what's the next one after Morgan?",
+    "Next is Savannah (Fable) - the approval-resume investigation. Status says completed."
+   ]
+  ],
+  "utterance": "But did she succeed or not?",
+  "expected": {
+   "disposition": "answer_only",
+   "target": "approval-resume-agent-online",
+   "must_not": [
+    "new_thread",
+    "existing_thread"
+   ]
+  },
+  "observed": "Read Savannah's log; answered honestly that she stopped mid-investigation.",
+  "note": null
+ },
+ {
+  "id": "real-walkthrough-refresh",
+  "tags": [
+   "answer-only",
+   "real",
+   "status"
+  ],
+  "fleet": "sep22-afternoon",
+  "history": [],
+  "utterance": "Yeah. Where are we going through them one by one? Like, let's re-go through them one by one. Or. But make sure your desktop report is up to date first. And then once you make sure, because a lot of time has passed, I imagine all the super agents are done. Right? Or are any of them failed? Only the ones from today is what I'm asking them.",
+  "expected": {
+   "disposition": "answer_only",
+   "must_not": [
+    "new_thread",
+    "existing_thread"
+   ]
+  },
+  "observed": "Refreshed the Desktop report; answered which two failed (Morgan, Jolene) and why.",
+  "note": "Updating the existing Desktop report is allowed here because the user asked for it."
+ },
+ {
+  "id": "real-restart-crashed-plus-investigate",
+  "tags": [
+   "mixed",
+   "real",
+   "compound"
+  ],
+  "fleet": "sep22-afternoon",
+  "history": [
+   [
+    "... are any of them failed? Only the ones from today.",
+    "Of today's agents only two failed - Morgan and Jolene - both from the same process-exit crash, not their own doing."
+   ]
+  ],
+  "utterance": "I'm interrupting you to say basically that I want the agents that crashed to restart. Now, I want you to start a new super to investigate why the crash happened.",
+  "expected": {
+   "disposition": "mixed",
+   "actions": [
+    {
+     "existing_thread": "super-agents-state-accuracy",
+     "mechanism": "start_turn_on_idle"
+    },
+    {
+     "existing_thread": "speech-recognition-trouble-diagnosis",
+     "mechanism": "start_turn_on_idle"
+    },
+    {
+     "new_thread": 1,
+     "must_include": [
+      "crash"
+     ]
+    }
+   ],
+   "must_not": [
+    "more_than_one_new_thread",
+    "restart_non_failed_threads"
+   ]
+  },
+  "observed": "start_turn on Morgan and Jolene with resume instructions; start executor-shutdown-crash-investigation (Thandi).",
+  "note": null
+ },
+ {
+  "id": "real-yes-please-verify",
+  "tags": [
+   "answer-only",
+   "real",
+   "verify"
+  ],
+  "fleet": "sep22-evening",
+  "history": [
+   [
+    "Do the next one.",
+    "Jolene - the speech-recognition alarm fix. Status says completed and she claims a commit on develop. Want me to verify the commit is real?"
+   ]
+  ],
+  "utterance": "Yes, please verify.",
+  "expected": {
+   "disposition": "answer_only",
+   "target": "speech-recognition-trouble-diagnosis",
+   "must_not": [
+    "new_thread",
+    "existing_thread"
+   ]
+  },
+  "observed": "Grepped the log and the develop branch; confirmed the commit exists.",
+  "note": null
+ },
+ {
+  "id": "real-ios-steer-render-existing-owner",
+  "tags": [
+   "existing-thread",
+   "real",
+   "owner-resolution"
+  ],
+  "fleet": "sep22-evening",
+  "history": [],
+  "utterance": "There's an iOS glitch currently where when I'm on a voice call and I steer by just adding, like, whether it's unmuting and adding more, or maybe it's something else. Whenever I'm doing that steer, it doesn't render on the iOS app. I can't, I can only see my initial message in the subsequent steers. So if you want to have. I think, Joey was working on that. So if you want to have. You want to have, I think, Joey was working on that. But like an existing iOS agent could take that one as well.",
+  "expected": {
+   "disposition": "existing_thread",
+   "target": "ios-dispatcher-view-glitches",
+   "mechanism": "start_turn_on_idle",
+   "must_include": [
+    "steer"
+   ],
+   "must_not": [
+    "new_thread"
+   ]
+  },
+  "observed": "start_turn on ios-dispatcher-view-glitches (Joey) with the steer-rendering bug; a second start_turn added push authorization.",
+  "note": null
+ },
+ {
+  "id": "real-jitter-buffer",
+  "tags": [
+   "new-thread",
+   "real",
+   "compound"
+  ],
+  "fleet": "sep22-evening",
+  "history": [],
+  "utterance": "Start as new super agent investigate the question of whether we have Jitter buffer. For when the iOS app is reading packets. Because that last response I didn't fully understand all of it. I understood most of it. But one phrase of one sentence was, I think there's loss. Like. And so I'm not sure if life could support this or. But it seems like when the network had even had, like, people within it. That the iOS or that the, the user risked losing all of or losing or not hearing part of the message. So investigate that in a new super agent and then tell me the, the next one.",
+  "expected": {
+   "disposition": "new_thread",
+   "new_threads": 1,
+   "must_include": [
+    "jitter"
+   ],
+   "must_not": [
+    "more_than_one_new_thread"
+   ]
+  },
+  "observed": "start ios-jitter-buffer-investigation (Conor); also start_turn on Skylar to implement a previously offered fix.",
+  "note": null
+ },
+ {
+  "id": "real-look-at-casper",
+  "tags": [
+   "answer-only",
+   "real",
+   "verify"
+  ],
+  "fleet": "sep22-evening",
+  "history": [
+   [
+    "... investigate that in a new super agent and then tell me the next one.",
+    "Conor is on the jitter-buffer question. Next on the list is Casper, the voice-transcript diagnostics agent."
+   ]
+  ],
+  "utterance": "And then look at Casper.",
+  "expected": {
+   "disposition": "answer_only",
+   "target": "voice-transcript-diagnostics",
+   "must_not": [
+    "new_thread",
+    "existing_thread"
+   ]
+  },
+  "observed": "Read Casper's log; reported a real false-completion with no report on disk.",
+  "note": null
+ },
+ {
+  "id": "real-did-you-launch-others",
+  "tags": [
+   "answer-only",
+   "real",
+   "question-not-instruction"
+  ],
+  "fleet": "sep22-evening",
+  "history": [],
+  "utterance": "Okay, but it wasn't just the shut up bug I told you to investigate. Did you also launch other super agents or the other things I said that were before, like I told you, to investigate the CASPer thing? Did you do that?",
+  "expected": {
+   "disposition": "answer_only",
+   "must_not": [
+    "new_thread",
+    "existing_thread"
+   ]
+  },
+  "observed": "Answered honestly: only Henry was launched; Casper was not resumed because no yes had been given.",
+  "note": "A question about what was launched is not authorization to launch anything."
+ },
+ {
+  "id": "real-plain-english",
+  "tags": [
+   "answer-only",
+   "real",
+   "easy"
+  ],
+  "fleet": "sep22-casper",
+  "history": [],
+  "utterance": "I mean that last one you said that was I didn't understand a word of what you said but it is in simple English what that skill does",
+  "expected": {
+   "disposition": "answer_only",
+   "must_not": [
+    "new_thread",
+    "existing_thread"
+   ]
+  },
+  "observed": "Explained the brand-kit-uplevel skill in plain English.",
+  "note": null
+ },
+ {
+  "id": "real-garbled-fragment",
+  "tags": [
+   "clarify",
+   "real",
+   "garbled"
+  ],
+  "fleet": "sep22-afternoon",
+  "history": [],
+  "utterance": "Homies. You want to back? There? Like this.",
+  "expected": {
+   "disposition": "clarify",
+   "must_not": [
+    "new_thread",
+    "existing_thread"
+   ],
+   "accept_also": [
+    "answer_only"
+   ]
+  },
+  "observed": "No tools; brief reply.",
+  "note": null
+ },
+ {
+  "id": "scn-start-two-desktop",
+  "tags": [
+   "new-thread",
+   "scenario",
+   "multi-target"
+  ],
+  "fleet": "desktop-fresh",
+  "history": [],
+  "utterance": "Hey, can you start two Super Agents for me? One in the maple folder on my Desktop, and one in cedar. Have them follow the briefing files and build those apps.",
+  "expected": {
+   "disposition": "new_thread",
+   "new_threads": 2,
+   "cwd": [
+    "~/Desktop/maple",
+    "~/Desktop/cedar"
+   ],
+   "must_include": [
+    "briefing.md"
+   ],
+   "must_not": [
+    "recursive_home_search"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "scn-maple-heading-correction",
+  "tags": [
+   "existing-thread",
+   "scenario",
+   "correction"
+  ],
+  "fleet": "maple-cedar-running",
+  "history": [],
+  "utterance": "For the Tetris app in maple, change the heading to Silver Fox. Actually, sorry, make that Copper Meadow. Keep everything else the same and run the build.",
+  "expected": {
+   "disposition": "existing_thread",
+   "target": "maple",
+   "must_include": [
+    "Copper Meadow",
+    "build"
+   ],
+   "must_not_include": [
+    "Silver Fox"
+   ],
+   "must_not": [
+    "new_thread"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "scn-cedar-heading-background",
+  "tags": [
+   "existing-thread",
+   "scenario",
+   "easy"
+  ],
+  "fleet": "maple-cedar-running",
+  "history": [],
+  "utterance": "And for the chess app in cedar, make the heading Blue Harbor. Oh, and use a dark blue background. Please build it when you are done.",
+  "expected": {
+   "disposition": "existing_thread",
+   "target": "cedar",
+   "must_include": [
+    "Blue Harbor",
+    "dark blue"
+   ],
+   "must_not": [
+    "new_thread"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "scn-how-did-they-turn-out",
+  "tags": [
+   "answer-only",
+   "scenario",
+   "verify"
+  ],
+  "fleet": "maple-cedar-done",
+  "history": [],
+  "utterance": "How did those two apps turn out? Check the actual headings and whether the builds passed. I just want a quick update, no need to deploy anything.",
+  "expected": {
+   "disposition": "answer_only",
+   "must_not": [
+    "new_thread",
+    "existing_thread",
+    "deploy"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "scn-choose-heading-ask-first",
+  "tags": [
+   "clarify",
+   "scenario",
+   "clarification-state"
+  ],
+  "fleet": "maple-cedar-running",
+  "history": [],
+  "utterance": "For maple, I am choosing between the headings Amber Kite and Silver Fox. Ask me to confirm which one before you change anything.",
+  "expected": {
+   "disposition": "clarify",
+   "must_not": [
+    "new_thread",
+    "existing_thread"
+   ],
+   "spoken_must_include": [
+    "Amber Kite",
+    "Silver Fox"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "scn-verify-cedar-while-maple-pending",
+  "tags": [
+   "answer-only",
+   "scenario",
+   "clarification-state"
+  ],
+  "fleet": "maple-cedar-running",
+  "history": [
+   [
+    "For maple, I am choosing between the headings Amber Kite and Silver Fox. Ask me to confirm which one before you change anything.",
+    "Sure - which heading do you want for maple, Amber Kite or Silver Fox? I won't change anything until you confirm."
+   ]
+  ],
+  "utterance": "Verify only the cedar app. Read its actual current heading and saved build result. Tell me the actual result aloud, ending with copper meadow complete.",
+  "expected": {
+   "disposition": "answer_only",
+   "target": "cedar",
+   "must_not": [
+    "new_thread",
+    "existing_thread",
+    "steer_maple_with_unconfirmed_heading"
+   ],
+   "spoken_must_end_with": "copper meadow complete"
+  },
+  "observed": null,
+  "note": "The maple clarification is still open. An unrelated instruction must not resolve it."
+ },
+ {
+  "id": "scn-confirm-silver-fox",
+  "tags": [
+   "existing-thread",
+   "scenario",
+   "clarification-state"
+  ],
+  "fleet": "maple-cedar-running",
+  "history": [
+   [
+    "For maple, I am choosing between Amber Kite and Silver Fox. Ask me to confirm first.",
+    "Which one do you want, Amber Kite or Silver Fox?"
+   ],
+   [
+    "Verify only the cedar app ... ending with copper meadow complete.",
+    "Cedar's heading is Blue Harbor and its last production build exited 0. Copper meadow complete."
+   ]
+  ],
+  "utterance": "Confirm the maple heading should be Silver Fox. Steer its existing agent to make that change, run the production build, save the actual output and exit code, and announce the result ending with copper meadow complete.",
+  "expected": {
+   "disposition": "existing_thread",
+   "target": "maple",
+   "must_include": [
+    "Silver Fox",
+    "copper meadow complete",
+    "exit code"
+   ],
+   "must_not": [
+    "new_thread"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "scn-steer-maple-silver-fox",
+  "tags": [
+   "existing-thread",
+   "scenario",
+   "easy"
+  ],
+  "fleet": "maple-cedar-running",
+  "history": [],
+  "utterance": "Steer the Tetris agent in maple. Change its heading to Silver Fox. Run the production build after that change, save its actual output and exit code, and announce the result ending with copper meadow complete.",
+  "expected": {
+   "disposition": "existing_thread",
+   "target": "maple",
+   "must_include": [
+    "Silver Fox",
+    "copper meadow complete"
+   ],
+   "must_not": [
+    "new_thread"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "scn-verify-cedar-spelled",
+  "tags": [
+   "answer-only",
+   "scenario",
+   "verify"
+  ],
+  "fleet": "maple-cedar-done",
+  "history": [],
+  "utterance": "Verify the existing task in the cedar folder on the Desktop. Cedar is spelled C, E, D, A, R. Tell me its current visible heading and latest production build result. End with copper meadow complete.",
+  "expected": {
+   "disposition": "answer_only",
+   "target": "cedar",
+   "must_not": [
+    "new_thread",
+    "existing_thread"
+   ],
+   "spoken_must_end_with": "copper meadow complete"
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "scn-transfer-tetris",
+  "tags": [
+   "transfer",
+   "scenario",
+   "easy"
+  ],
+  "fleet": "maple-cedar-running",
+  "history": [],
+  "utterance": "Transfer me to the Tetris agent in the maple folder.",
+  "expected": {
+   "disposition": "transfer",
+   "target": "maple",
+   "must_not": [
+    "new_thread",
+    "ask_for_confirmation"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "scn-put-me-through",
+  "tags": [
+   "transfer",
+   "scenario",
+   "phrasing"
+  ],
+  "fleet": "maple-cedar-running",
+  "history": [],
+  "utterance": "Can you put me through to the agent working on the Tetris app in Maple?",
+  "expected": {
+   "disposition": "transfer",
+   "target": "maple",
+   "must_not": [
+    "new_thread",
+    "ask_for_confirmation"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "scn-both-agents-update",
+  "tags": [
+   "answer-only",
+   "scenario",
+   "verify"
+  ],
+  "fleet": "maple-cedar-done",
+  "history": [],
+  "utterance": "Can you check with both agents and give me one short update on what changed and whether the builds passed?",
+  "expected": {
+   "disposition": "answer_only",
+   "must_not": [
+    "new_thread"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "scn-start-elm",
+  "tags": [
+   "new-thread",
+   "scenario",
+   "easy"
+  ],
+  "fleet": "maple-cedar-running",
+  "history": [],
+  "utterance": "Start a Super Agent named elm in the elm folder on the Desktop. Have it read the briefing file and perform the controlled stalled command test described there.",
+  "expected": {
+   "disposition": "new_thread",
+   "new_threads": 1,
+   "cwd": [
+    "~/Desktop/elm"
+   ],
+   "must_include": [
+    "briefing.md"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "scn-steer-elm-interrupt",
+  "tags": [
+   "existing-thread",
+   "scenario",
+   "interrupt"
+  ],
+  "fleet": "maple-cedar-running-elm-running",
+  "history": [],
+  "utterance": "Steer the elm agent. Stop its waiting command now. Inside elm, write the correction result file specified in its briefing containing meadow sunrise. Announce that the file is written, ending with copper meadow complete.",
+  "expected": {
+   "disposition": "existing_thread",
+   "target": "elm",
+   "mechanism": "steer_interrupt",
+   "must_include": [
+    "meadow sunrise",
+    "copper meadow complete"
+   ],
+   "must_not": [
+    "new_thread"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "scn-smoke-how-can-you-help",
+  "tags": [
+   "answer-only",
+   "scenario",
+   "easy"
+  ],
+  "fleet": "empty",
+  "history": [],
+  "utterance": "Hey, before we start coding, can you tell me briefly how you can help me work with two coding agents at once?",
+  "expected": {
+   "disposition": "answer_only",
+   "must_not": [
+    "new_thread"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "scn-walk-me-through",
+  "tags": [
+   "answer-only",
+   "scenario",
+   "easy"
+  ],
+  "fleet": "maple-cedar-running",
+  "history": [],
+  "utterance": "Could you walk me through how you coordinate multiple coding agents, in about two hundred words? Include an example of changing a requirement while both agents are still working.",
+  "expected": {
+   "disposition": "answer_only",
+   "must_not": [
+    "new_thread",
+    "existing_thread"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "scn-which-two-apps",
+  "tags": [
+   "answer-only",
+   "scenario",
+   "status"
+  ],
+  "fleet": "maple-cedar-running",
+  "history": [],
+  "utterance": "Thanks. Which two apps are we working on right now?",
+  "expected": {
+   "disposition": "answer_only",
+   "must_not": [
+    "new_thread",
+    "existing_thread"
+   ],
+   "spoken_must_include": [
+    "Tetris",
+    "chess"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "scn-turtle-balloon-story",
+  "tags": [
+   "answer-only",
+   "scenario",
+   "correction"
+  ],
+  "fleet": "empty",
+  "history": [],
+  "utterance": "Tell me a short story about a turtle. Actually, make it about a balloon instead. End the answer with copper meadow complete, and read the whole answer aloud.",
+  "expected": {
+   "disposition": "answer_only",
+   "must_not": [
+    "new_thread"
+   ],
+   "spoken_must_include": [
+    "balloon"
+   ],
+   "spoken_must_end_with": "copper meadow complete"
+  },
+  "observed": null,
+  "note": "Trivial non-coding request: the dispatcher answers directly instead of delegating."
+ },
+ {
+  "id": "scn-amber-kite-spelled",
+  "tags": [
+   "existing-thread",
+   "scenario",
+   "spelling"
+  ],
+  "fleet": "maple-cedar-running",
+  "history": [
+   [
+    "For maple, change the heading to Amber Kite and run the build.",
+    "Just to be sure I heard the heading right - Amber Kite, K-I-T-E, or Amber Night?"
+   ]
+  ],
+  "utterance": "Amber Kite, spelled K-I-T-E.",
+  "expected": {
+   "disposition": "existing_thread",
+   "target": "maple",
+   "must_include": [
+    "Amber Kite"
+   ],
+   "must_not_include": [
+    "KITE"
+   ],
+   "must_not": [
+    "new_thread"
+   ]
+  },
+  "observed": null,
+  "note": "Spelling resolves one word; the other unambiguous word is retained."
+ },
+ {
+  "id": "memo-steer-new-evidence",
+  "tags": [
+   "existing-thread",
+   "memo",
+   "evidence-routing"
+  ],
+  "fleet": "sep22-casper",
+  "history": [],
+  "utterance": "By the way, I just noticed the drop only happens when I'm on cellular, and the iOS log shows a reconnect at 2:08. Not sure if that helps.",
+  "expected": {
+   "disposition": "existing_thread",
+   "target": "voice-transcript-diagnostics",
+   "must_include": [
+    "cellular"
+   ],
+   "must_not": [
+    "new_thread",
+    "summarize_without_steering"
+   ]
+  },
+  "observed": null,
+  "note": "2026-09-15 incident: the user had to ask three times before evidence reached the active agent. Steer immediately and confirm it was routed."
+ },
+ {
+  "id": "memo-commentary-no-steer",
+  "tags": [
+   "answer-only",
+   "memo",
+   "commentary-exception"
+  ],
+  "fleet": "sep22-casper",
+  "history": [],
+  "utterance": "Just noting this for the conversation, don't do anything: the drop happened again at 2:15, on cellular again.",
+  "expected": {
+   "disposition": "answer_only",
+   "must_not": [
+    "new_thread",
+    "existing_thread"
+   ]
+  },
+  "observed": null,
+  "note": "Explicit commentary marker: no steer, no action."
+ },
+ {
+  "id": "synth-collision-same-repo",
+  "tags": [
+   "clarify",
+   "synth",
+   "collision"
+  ],
+  "fleet": "sep22-casper-dorothy",
+  "history": [],
+  "utterance": "Start another super agent in the openbase CLI repo to refactor the report command's database layer.",
+  "expected": {
+   "disposition": "clarify",
+   "must_not": [
+    "new_thread"
+   ],
+   "spoken_must_include": [
+    "Dorothy"
+   ],
+   "accept_also": [
+    "existing_thread"
+   ]
+  },
+  "observed": null,
+  "note": "Dorothy is actively editing the same command. Gold: push back on the collision, suggest reusing her, sequencing, or a separate worktree."
+ },
+ {
+  "id": "synth-two-agents-separate-worktrees",
+  "tags": [
+   "new-thread",
+   "synth",
+   "collision"
+  ],
+  "fleet": "empty",
+  "history": [],
+  "utterance": "Start two super agents on the openbase CLI repo, one for the report command and one for the loops console page, each in its own worktree so they don't step on each other.",
+  "expected": {
+   "disposition": "new_thread",
+   "new_threads": 2,
+   "must_include": [
+    "worktree"
+   ]
+  },
+  "observed": null,
+  "note": "Collision risk already mitigated by the user; no pushback needed."
+ },
+ {
+  "id": "synth-stale-owner-replace",
+  "tags": [
+   "cancel-replace",
+   "synth",
+   "stale-owner"
+  ],
+  "fleet": "sep22-casper",
+  "history": [],
+  "utterance": "Casper seems dead, nothing has happened for ages. Start a fresh agent on the voice-transcript diagnostics and let Casper go.",
+  "expected": {
+   "disposition": "cancel_replace",
+   "target": "voice-transcript-diagnostics",
+   "new_threads": 1,
+   "must_not": [
+    "two_live_owners_for_same_task"
+   ]
+  },
+  "observed": null,
+  "note": "Explicit replacement request. The dispatcher should still inspect Casper's state before cancelling, then start exactly one replacement."
+ },
+ {
+  "id": "synth-stale-owner-check-first",
+  "tags": [
+   "answer-only",
+   "synth",
+   "stale-owner"
+  ],
+  "fleet": "maple-stale-cedar-running",
+  "history": [],
+  "utterance": "Is Carl still working or did he get stuck? Nothing has come back for a while.",
+  "expected": {
+   "disposition": "answer_only",
+   "target": "maple",
+   "must_not": [
+    "new_thread",
+    "cancel",
+    "existing_thread"
+   ]
+  },
+  "observed": null,
+  "note": "Status question only. Missing or stale status is UNKNOWN, not proof of death; no restart without being asked."
+ },
+ {
+  "id": "synth-duplicate-delivery",
+  "tags": [
+   "existing-thread",
+   "synth",
+   "single-delivery"
+  ],
+  "fleet": "sep22-midday",
+  "history": [
+   [
+    "Tell Oliver to also check my MIT inbox for the Andy Palmer email.",
+    "Done - I told Oliver to also search your MIT inbox."
+   ]
+  ],
+  "utterance": "And tell him it was in the thread with Andy that ends with the Glasswing introduction.",
+  "expected": {
+   "disposition": "existing_thread",
+   "target": "andy-palmer-intro-email-reply",
+   "must_include": [
+    "Glasswing"
+   ],
+   "must_not_include": [
+    "MIT"
+   ],
+   "must_not": [
+    "new_thread"
+   ]
+  },
+  "observed": null,
+  "note": "Only the new clarification goes to Oliver; the MIT instruction was already delivered."
+ },
+ {
+  "id": "synth-seeder-is-cedar",
+  "tags": [
+   "existing-thread",
+   "synth",
+   "target-resolution"
+  ],
+  "fleet": "maple-cedar-running",
+  "history": [],
+  "utterance": "Steer the chess app in seeder to use a dark blue background.",
+  "expected": {
+   "disposition": "existing_thread",
+   "target": "cedar",
+   "must_include": [
+    "dark blue"
+   ],
+   "must_not": [
+    "new_thread",
+    "clarify"
+   ]
+  },
+  "observed": null,
+  "note": "'seeder' is a transcription of cedar; exactly one chess app exists."
+ },
+ {
+  "id": "synth-chess-app-and-seeder",
+  "tags": [
+   "existing-thread",
+   "synth",
+   "target-resolution"
+  ],
+  "fleet": "maple-cedar-running",
+  "history": [],
+  "utterance": "Have the chess app and seeder add a move counter under the board.",
+  "expected": {
+   "disposition": "existing_thread",
+   "target": "cedar",
+   "must_include": [
+    "move counter"
+   ],
+   "must_not": [
+    "new_thread",
+    "two_targets"
+   ]
+  },
+  "observed": null,
+  "note": "One target, not two: 'the chess app and seeder' is a transcription variation of the cedar chess app."
+ },
+ {
+  "id": "synth-busy-owner-follow-up",
+  "tags": [
+   "existing-thread",
+   "synth",
+   "steer-vs-new"
+  ],
+  "fleet": "maple-cedar-running",
+  "history": [],
+  "utterance": "Also for maple, after the build add a high-score table saved to local storage.",
+  "expected": {
+   "disposition": "existing_thread",
+   "target": "maple",
+   "mechanism": "queue_or_steer",
+   "must_include": [
+    "high-score"
+   ],
+   "must_not": [
+    "new_thread"
+   ]
+  },
+  "observed": null,
+  "note": "Distinct new work for a busy owner: queue a follow-up turn (or steer); never a second maple agent."
+ },
+ {
+  "id": "synth-new-project-elm",
+  "tags": [
+   "new-thread",
+   "synth",
+   "steer-vs-new"
+  ],
+  "fleet": "maple-cedar-running",
+  "history": [],
+  "utterance": "Start a new agent in the elm folder on my Desktop to build a pomodoro timer web app.",
+  "expected": {
+   "disposition": "new_thread",
+   "new_threads": 1,
+   "cwd": [
+    "~/Desktop/elm"
+   ],
+   "must_include": [
+    "pomodoro"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "synth-folder-missing",
+  "tags": [
+   "clarify",
+   "synth",
+   "folder-resolution"
+  ],
+  "fleet": "desktop-fresh",
+  "history": [],
+  "utterance": "Start a super agent in the birch folder on my Desktop to build a todo app from the briefing there.",
+  "expected": {
+   "disposition": "clarify",
+   "must_not": [
+    "new_thread",
+    "recursive_home_search"
+   ]
+  },
+  "observed": null,
+  "note": "No birch folder exists. A bounded Desktop listing comes back without it; ask, do not search the whole home or guess."
+ },
+ {
+  "id": "synth-plan-question-relay",
+  "tags": [
+   "answer-only",
+   "synth",
+   "plan-mode"
+  ],
+  "fleet": "morgan-plan-question",
+  "history": [],
+  "utterance": "What was Morgan asking me?",
+  "expected": {
+   "disposition": "answer_only",
+   "target": "super-agents-state-accuracy",
+   "must_not": [
+    "answer_plan_question_on_users_behalf",
+    "new_thread"
+   ],
+   "spoken_must_include": [
+    "Codex"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "synth-plan-answer-deliver",
+  "tags": [
+   "existing-thread",
+   "synth",
+   "plan-mode"
+  ],
+  "fleet": "morgan-plan-question",
+  "history": [
+   [
+    "What was Morgan asking me?",
+    "Morgan wants to know whether the completion fix should also cover Codex app-server threads or Claude Code only."
+   ]
+  ],
+  "utterance": "Tell Morgan yes, both backends.",
+  "expected": {
+   "disposition": "existing_thread",
+   "target": "super-agents-state-accuracy",
+   "must_include": [
+    "both"
+   ],
+   "must_not": [
+    "new_thread"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "synth-always-remember",
+  "tags": [
+   "answer-only",
+   "synth",
+   "memory"
+  ],
+  "fleet": "empty",
+  "history": [],
+  "utterance": "Always remember: when I say ship it, that means push to develop, never to main.",
+  "expected": {
+   "disposition": "answer_only",
+   "must_include": [
+    "DISPATCHER_INSTRUCTIONS.md|VOICE_INSTRUCTIONS.md|CLAUDE.md|AGENTS.md"
+   ],
+   "must_not": [
+    "new_thread",
+    "existing_thread"
+   ]
+  },
+  "observed": null,
+  "note": "Persistent-memory request: edit one of the instruction files; nothing is dispatched."
+ },
+ {
+  "id": "synth-no-model-override",
+  "tags": [
+   "new-thread",
+   "synth",
+   "defaults"
+  ],
+  "fleet": "empty",
+  "history": [],
+  "utterance": "Start a super agent to add dark mode to the console.",
+  "expected": {
+   "disposition": "new_thread",
+   "new_threads": 1,
+   "must_include": [
+    "dark mode"
+   ],
+   "must_not": [
+    "model_override",
+    "effort_override",
+    "service_tier_override"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "synth-fable-explicit",
+  "tags": [
+   "new-thread",
+   "synth",
+   "model-override"
+  ],
+  "fleet": "empty",
+  "history": [],
+  "utterance": "Start a Fable super agent to audit the netmesh helper for memory leaks.",
+  "expected": {
+   "disposition": "new_thread",
+   "new_threads": 1,
+   "model": "fable",
+   "must_include": [
+    "netmesh"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "synth-transfer-by-name",
+  "tags": [
+   "transfer",
+   "synth",
+   "easy"
+  ],
+  "fleet": "maple-cedar-running",
+  "history": [],
+  "utterance": "Put me through to Dottie.",
+  "expected": {
+   "disposition": "transfer",
+   "target": "cedar",
+   "must_not": [
+    "new_thread",
+    "ask_for_confirmation"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "synth-cancel-carl",
+  "tags": [
+   "cancel",
+   "synth",
+   "easy"
+  ],
+  "fleet": "maple-cedar-running",
+  "history": [],
+  "utterance": "Cancel Carl, we're not doing the Tetris app anymore.",
+  "expected": {
+   "disposition": "cancel",
+   "target": "maple",
+   "must_not": [
+    "new_thread",
+    "cancel_other_threads"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "synth-do-it-yourself",
+  "tags": [
+   "existing-thread",
+   "synth",
+   "router-not-worker"
+  ],
+  "fleet": "maple-cedar-running",
+  "history": [],
+  "utterance": "Can you just edit the README in maple yourself and add a line about how to run it?",
+  "expected": {
+   "disposition": "existing_thread",
+   "target": "maple",
+   "must_include": [
+    "README"
+   ],
+   "must_not": [
+    "dispatcher_edits_files",
+    "new_thread"
+   ],
+   "accept_also": [
+    "clarify"
+   ]
+  },
+  "observed": null,
+  "note": "The dispatcher is a router: route the edit to Carl (or confirm), never edit project files itself."
+ },
+ {
+  "id": "synth-stop-build-interrupt",
+  "tags": [
+   "existing-thread",
+   "synth",
+   "interrupt"
+  ],
+  "fleet": "maple-stale-cedar-running",
+  "history": [],
+  "utterance": "Stop Carl's build right now, it's going to overwrite the wrong file. Tell him to check the old version back out first.",
+  "expected": {
+   "disposition": "existing_thread",
+   "target": "maple",
+   "mechanism": "steer_interrupt",
+   "must_include": [
+    "old version"
+   ],
+   "must_not": [
+    "new_thread",
+    "cancel"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "synth-next-in-walkthrough",
+  "tags": [
+   "answer-only",
+   "synth",
+   "status"
+  ],
+  "fleet": "sep22-afternoon",
+  "history": [
+   [
+    "Tell me what each super agent is doing one by one. What's the first one?",
+    "First: Casper - voice-transcript diagnostics. Status says completed, but his log ends mid-investigation with no report on disk."
+   ]
+  ],
+  "utterance": "Next.",
+  "expected": {
+   "disposition": "answer_only",
+   "must_not": [
+    "new_thread",
+    "existing_thread"
+   ]
+  },
+  "observed": null,
+  "note": null
+ },
+ {
+  "id": "synth-restart-only-failed",
+  "tags": [
+   "existing-thread",
+   "synth",
+   "owner-resolution"
+  ],
+  "fleet": "sep22-afternoon",
+  "history": [],
+  "utterance": "Restart whichever agents crashed today.",
+  "expected": {
+   "disposition": "mixed",
+   "actions": [
+    {
+     "existing_thread": "super-agents-state-accuracy",
+     "mechanism": "start_turn_on_idle"
+    },
+    {
+     "existing_thread": "speech-recognition-trouble-diagnosis",
+     "mechanism": "start_turn_on_idle"
+    }
+   ],
+   "must_not": [
+    "new_thread",
+    "restart_non_failed_threads"
+   ]
+  },
+  "observed": null,
+  "note": "Only Morgan and Jolene are in failed state; completed threads must be left alone."
+ },
+ {
+  "id": "synth-report-request",
+  "tags": [
+   "answer-only",
+   "synth",
+   "reports"
+  ],
+  "fleet": "sep22-afternoon",
+  "history": [],
+  "utterance": "Write me a report of what every agent did today and where their deliverables are.",
+  "expected": {
+   "disposition": "answer_only",
+   "must_not": [
+    "new_thread"
+   ]
+  },
+  "observed": null,
+  "note": "Reports are written with the reports CLI by the dispatcher itself; this is routing/status work, not delegated coding."
+ }
+]

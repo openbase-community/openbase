@@ -27,6 +27,11 @@ from openbase_coder_cli.openbase_coder_cli_app.sync_settings import (
     sync_status,
     sync_versions_purge,
 )
+from openbase_coder_cli.openbase_coder_cli_app.thread_continuations import (
+    thread_continuation_context,
+    thread_continuation_options,
+    thread_continuations,
+)
 from openbase_coder_cli.openbase_coder_cli_app.update import (
     update_apply,
     update_status,
@@ -177,6 +182,9 @@ urlpatterns = [
     path("update/apply/", update_apply, name="update-apply"),
     path("threads/", offloaded_view(thread_list), name="thread-list"),
     path("threads/activity/", offloaded_view(thread_activity), name="thread-activity"),
+    path("threads/<str:thread_id>/continuation-options/", offloaded_view(thread_continuation_options), name="thread-continuation-options"),
+    path("threads/<str:thread_id>/continuations/", offloaded_view(thread_continuations), name="thread-continuations"),
+    path("threads/<str:thread_id>/continuation-context/", offloaded_view(thread_continuation_context), name="thread-continuation-context"),
     path(
         "threads/active-voice/",
         offloaded_view(thread_active_voice),

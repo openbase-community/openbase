@@ -20,6 +20,7 @@ from super_agents.app_server_client import (
     extract_turn_id,
     is_permission_request,
 )
+from super_agents.initial_context import strip_initial_context
 
 from .models import ThreadInfo as SessionInfo
 from .models import ThreadStatus as SessionStatus
@@ -154,7 +155,7 @@ def _user_message_texts(turn: dict[str, Any]) -> list[str]:
             if content.get("type") == "text" and content.get("text", "").strip()
         ]
         if text_parts:
-            texts.append("\n\n".join(text_parts))
+            texts.append(strip_initial_context("\n\n".join(text_parts)))
     return texts
 
 

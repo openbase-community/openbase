@@ -51,6 +51,14 @@ Differences in a browser:
 Useful shortcuts: **Cmd/Ctrl+B** toggles the sidebar; in a thread,
 **Enter** sends the prompt and **Shift+Enter** inserts a newline.
 
+### Continue with another coding backend
+
+In an ordinary thread, open **Thread actions → Switch backend → Codex / Claude Code**. Openbase creates a new conversation in the same project, adds the destination backend to its name, carries your unsent draft across, and opens the new thread. Links connect the original and its continuations. Switching back creates a fresh continuation with the latest context.
+
+The new thread stays idle until your next message. Openbase reads available history through the supported Codex app-server and Claude Agent SDK interfaces. For Codex, its history-injection API saves an attributed handoff without running a turn; for Claude Code, normal SDK input carries the handoff with your first message. It does not convert or rewrite native session files. **View context** shows the saved snapshot; long histories use selected earlier requests and recent messages, with omissions disclosed. Hidden reasoning, native tool state, and attachments are not transferred as executable history.
+
+Both local engines must be configured and signed in on the computer hosting the thread. The Local backend-location setting enables mixed Codex/Claude operation; older configurations may require enabling both engines. Finish or stop running turns, resolve approvals and queued prompts, and leave the thread's voice call before switching. Dispatcher threads and automatic voice-call transfers are not supported by this menu. Switching does not change the global backend or restart services.
+
 ## Tabs and Panes
 
 Normal navigation replaces the focused tab's view. Right-click a thread, report, or project and choose **Open in new tab**, **Open to the right**, or **Open below** to keep several views open. The tab strip appears when more than one tab is open. Each pane has its own tabs, and the layout can be resized, rearranged, maximized, or restored with the layout undo and redo controls.

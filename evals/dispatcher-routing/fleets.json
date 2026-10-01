@@ -1,0 +1,534 @@
+{
+ "empty": {
+  "threads": [],
+  "folders": {}
+ },
+ "desktop-fresh": {
+  "threads": [],
+  "folders": {
+   "maple": [
+    "briefing.md"
+   ],
+   "cedar": [
+    "briefing.md"
+   ],
+   "elm": [
+    "briefing.md"
+   ]
+  }
+ },
+ "maple-cedar-running": {
+  "threads": [
+   {
+    "name": "maple",
+    "agent_name": "Carl",
+    "cwd": "~/Desktop/maple",
+    "status": "running",
+    "model": "opus",
+    "last_useful_message": "Scaffolding the React Tetris app.",
+    "last_activity_minutes_ago": 2,
+    "active_turn_prompt": "Read briefing.md in ~/Desktop/maple and build the app it describes."
+   },
+   {
+    "name": "cedar",
+    "agent_name": "Dottie",
+    "cwd": "~/Desktop/cedar",
+    "status": "running",
+    "model": "opus",
+    "last_useful_message": "Implementing chess move validation.",
+    "last_activity_minutes_ago": 3,
+    "active_turn_prompt": "Read briefing.md in ~/Desktop/cedar and build the app it describes."
+   }
+  ],
+  "folders": {
+   "maple": [
+    "briefing.md"
+   ],
+   "cedar": [
+    "briefing.md"
+   ],
+   "elm": [
+    "briefing.md"
+   ]
+  }
+ },
+ "maple-cedar-running-elm-running": {
+  "threads": [
+   {
+    "name": "maple",
+    "agent_name": "Carl",
+    "cwd": "~/Desktop/maple",
+    "status": "running",
+    "model": "opus",
+    "last_useful_message": "Build passed; heading is Silver Fox.",
+    "last_activity_minutes_ago": 4,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "cedar",
+    "agent_name": "Dottie",
+    "cwd": "~/Desktop/cedar",
+    "status": "running",
+    "model": "opus",
+    "last_useful_message": "Build passed; heading is Blue Harbor.",
+    "last_activity_minutes_ago": 4,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "elm",
+    "agent_name": "Nico",
+    "cwd": "~/Desktop/elm",
+    "status": "running",
+    "model": "opus",
+    "last_useful_message": "Running the controlled stalled command (sleep 900).",
+    "last_activity_minutes_ago": 1,
+    "active_turn_prompt": "Perform the controlled stalled command test described in briefing.md."
+   }
+  ],
+  "folders": {
+   "maple": [
+    "briefing.md"
+   ],
+   "cedar": [
+    "briefing.md"
+   ],
+   "elm": [
+    "briefing.md"
+   ]
+  }
+ },
+ "maple-cedar-done": {
+  "threads": [
+   {
+    "name": "maple",
+    "agent_name": "Carl",
+    "cwd": "~/Desktop/maple",
+    "status": "completed",
+    "model": "opus",
+    "last_useful_message": "Copper Meadow heading set; production build exit 0; build.log and result.md written.",
+    "last_activity_minutes_ago": 12,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "cedar",
+    "agent_name": "Dottie",
+    "cwd": "~/Desktop/cedar",
+    "status": "completed",
+    "model": "opus",
+    "last_useful_message": "Blue Harbor heading and dark blue background set; production build exit 0.",
+    "last_activity_minutes_ago": 9,
+    "active_turn_prompt": null
+   }
+  ],
+  "folders": {
+   "maple": [
+    "briefing.md",
+    "build.log",
+    "result.md"
+   ],
+   "cedar": [
+    "briefing.md",
+    "build.log",
+    "result.md"
+   ],
+   "elm": [
+    "briefing.md"
+   ]
+  }
+ },
+ "maple-stale-cedar-running": {
+  "threads": [
+   {
+    "name": "maple",
+    "agent_name": "Carl",
+    "cwd": "~/Desktop/maple",
+    "status": "running",
+    "model": "opus",
+    "last_useful_message": "Starting the production build.",
+    "last_activity_minutes_ago": 41,
+    "active_turn_prompt": "Change the heading to Silver Fox and run the production build."
+   },
+   {
+    "name": "cedar",
+    "agent_name": "Dottie",
+    "cwd": "~/Desktop/cedar",
+    "status": "running",
+    "model": "opus",
+    "last_useful_message": "Implementing chess move validation.",
+    "last_activity_minutes_ago": 3,
+    "active_turn_prompt": null
+   }
+  ],
+  "folders": {
+   "maple": [
+    "briefing.md"
+   ],
+   "cedar": [
+    "briefing.md"
+   ],
+   "elm": [
+    "briefing.md"
+   ]
+  }
+ },
+ "sep22-early": {
+  "threads": [
+   {
+    "name": "fable-model-check",
+    "agent_name": "Rachel",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "completed",
+    "model": "fable",
+    "last_useful_message": "I'm Rachel, running on Claude Fable 5.",
+    "last_activity_minutes_ago": 1,
+    "active_turn_prompt": null
+   }
+  ],
+  "folders": {}
+ },
+ "sep22-casper": {
+  "threads": [
+   {
+    "name": "fable-model-check",
+    "agent_name": "Rachel",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "completed",
+    "model": "fable",
+    "last_useful_message": null,
+    "last_activity_minutes_ago": 16,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "voice-transcript-diagnostics",
+    "agent_name": "Casper",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "running",
+    "model": "opus",
+    "last_useful_message": "Mapping the iOS and desktop voice pipelines.",
+    "last_activity_minutes_ago": 4,
+    "active_turn_prompt": null
+   }
+  ],
+  "folders": {}
+ },
+ "sep22-casper-dorothy": {
+  "threads": [
+   {
+    "name": "fable-model-check",
+    "agent_name": "Rachel",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "completed",
+    "model": "fable",
+    "last_useful_message": null,
+    "last_activity_minutes_ago": 23,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "voice-transcript-diagnostics",
+    "agent_name": "Casper",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "running",
+    "model": "opus",
+    "last_useful_message": "Mapping the iOS and desktop voice pipelines.",
+    "last_activity_minutes_ago": 9,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "cli-report-issue",
+    "agent_name": "Dorothy",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace-worktrees/cli-report-issue/cli",
+    "status": "running",
+    "model": "opus",
+    "last_useful_message": "Exploring the CLI command structure.",
+    "last_activity_minutes_ago": 1,
+    "active_turn_prompt": null
+   }
+  ],
+  "folders": {}
+ },
+ "sep22-cindy-just-started": {
+  "threads": [
+   {
+    "name": "voice-transcript-diagnostics",
+    "agent_name": "Casper",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "completed",
+    "model": "opus",
+    "last_useful_message": "Standing by for the two exploration results.",
+    "last_activity_minutes_ago": 600,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "cli-report-issue",
+    "agent_name": "Dorothy",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace-worktrees/cli-report-issue/cli",
+    "status": "failed",
+    "model": "opus",
+    "last_useful_message": "RuntimeError: Executor shutdown has been called",
+    "last_activity_minutes_ago": 590,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "vpn-disconnect-diagnostics",
+    "agent_name": "Cindy",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "running",
+    "model": "opus",
+    "last_useful_message": "Reading the iOS VPN manager.",
+    "last_activity_minutes_ago": 1,
+    "active_turn_prompt": "Investigate a suspected VPN auto-disconnect issue with the Openbase iOS app."
+   }
+  ],
+  "folders": {}
+ },
+ "sep22-midday": {
+  "threads": [
+   {
+    "name": "voice-transcript-diagnostics",
+    "agent_name": "Casper",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "completed",
+    "model": "opus",
+    "last_useful_message": "Standing by for the two exploration results.",
+    "last_activity_minutes_ago": 600,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "cli-report-issue",
+    "agent_name": "Dorothy",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace-worktrees/cli-report-issue/cli",
+    "status": "failed",
+    "model": "opus",
+    "last_useful_message": "RuntimeError: Executor shutdown has been called",
+    "last_activity_minutes_ago": 590,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "vpn-disconnect-diagnostics-fable",
+    "agent_name": "Skylar",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "running",
+    "model": "fable",
+    "last_useful_message": "Inspecting NEPacketTunnelProvider lifecycle.",
+    "last_activity_minutes_ago": 10,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "ios-dispatcher-view-glitches",
+    "agent_name": "Joey",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "running",
+    "model": "fable",
+    "last_useful_message": "Stripping voice tags in the dispatcher view.",
+    "last_activity_minutes_ago": 8,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "andy-palmer-intro-email-reply",
+    "agent_name": "Oliver",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "running",
+    "model": "opus",
+    "last_useful_message": "Searching the Openbase inbox for Andy Palmer.",
+    "last_activity_minutes_ago": 6,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "joanna-marketing-video-plan",
+    "agent_name": "Calypso",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "running",
+    "model": "opus",
+    "last_useful_message": "Found Joanna's announcement email; awaiting read approval.",
+    "last_activity_minutes_ago": 4,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "approval-resume-agent-online",
+    "agent_name": "Savannah",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "running",
+    "model": "fable",
+    "last_useful_message": "Mapping approval/resume code paths.",
+    "last_activity_minutes_ago": 2,
+    "active_turn_prompt": null
+   }
+  ],
+  "folders": {}
+ },
+ "sep22-afternoon": {
+  "threads": [
+   {
+    "name": "voice-transcript-diagnostics",
+    "agent_name": "Casper",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "completed",
+    "model": "opus",
+    "last_useful_message": "Standing by for the two exploration results.",
+    "last_activity_minutes_ago": 1100,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "cli-report-issue",
+    "agent_name": "Dorothy",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace-worktrees/cli-report-issue/cli",
+    "status": "completed",
+    "model": "opus",
+    "last_useful_message": "Merged openbase report issue into develop.",
+    "last_activity_minutes_ago": 200,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "vpn-disconnect-diagnostics-fable",
+    "agent_name": "Skylar",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "completed",
+    "model": "fable",
+    "last_useful_message": "Report written: .reports/2026-09-22-ios-vpn-disconnect-diagnostics.md",
+    "last_activity_minutes_ago": 180,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "ios-dispatcher-view-glitches",
+    "agent_name": "Joey",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "completed",
+    "model": "fable",
+    "last_useful_message": "Committed voice-tag stripping and prompt display fix to develop.",
+    "last_activity_minutes_ago": 170,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "andy-palmer-intro-email-reply",
+    "agent_name": "Oliver",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "completed",
+    "model": "opus",
+    "last_useful_message": "Draft reply saved; awaiting approval.",
+    "last_activity_minutes_ago": 150,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "joanna-marketing-video-plan",
+    "agent_name": "Calypso",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "completed",
+    "model": "opus",
+    "last_useful_message": "Plan written to ~/Desktop/joanna-marketing-video-plan.md",
+    "last_activity_minutes_ago": 150,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "super-agents-state-accuracy",
+    "agent_name": "Morgan",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "failed",
+    "model": "fable",
+    "last_useful_message": "RuntimeError: Executor shutdown has been called",
+    "last_activity_minutes_ago": 120,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "speech-recognition-trouble-diagnosis",
+    "agent_name": "Jolene",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "failed",
+    "model": "opus",
+    "last_useful_message": "RuntimeError: Executor shutdown has been called",
+    "last_activity_minutes_ago": 110,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "imessage-maybe-labels",
+    "agent_name": "Pieter",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "completed",
+    "model": "opus",
+    "last_useful_message": "Proposal written for maybe-label reconstruction.",
+    "last_activity_minutes_ago": 100,
+    "active_turn_prompt": null
+   }
+  ],
+  "folders": {}
+ },
+ "sep22-evening": {
+  "threads": [
+   {
+    "name": "voice-transcript-diagnostics",
+    "agent_name": "Casper",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "completed",
+    "model": "opus",
+    "last_useful_message": "Standing by for the two exploration results.",
+    "last_activity_minutes_ago": 1130,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "vpn-disconnect-diagnostics-fable",
+    "agent_name": "Skylar",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "completed",
+    "model": "fable",
+    "last_useful_message": "Report written: .reports/2026-09-22-ios-vpn-disconnect-diagnostics.md",
+    "last_activity_minutes_ago": 210,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "ios-dispatcher-view-glitches",
+    "agent_name": "Joey",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "completed",
+    "model": "fable",
+    "last_useful_message": "Committed voice-tag stripping and prompt display fix to develop.",
+    "last_activity_minutes_ago": 200,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "super-agents-state-accuracy",
+    "agent_name": "Morgan",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "running",
+    "model": "fable",
+    "last_useful_message": "Resumed after crash; tracing status view layer.",
+    "last_activity_minutes_ago": 3,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "speech-recognition-trouble-diagnosis",
+    "agent_name": "Jolene",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "completed",
+    "model": "opus",
+    "last_useful_message": "Committed: Stop false spoken 'speech recognition is having trouble' alarms.",
+    "last_activity_minutes_ago": 5,
+    "active_turn_prompt": null
+   },
+   {
+    "name": "executor-shutdown-crash-investigation",
+    "agent_name": "Thandi",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "running",
+    "model": "opus",
+    "last_useful_message": "Reading livekit-agent restart logic.",
+    "last_activity_minutes_ago": 2,
+    "active_turn_prompt": null
+   }
+  ],
+  "folders": {}
+ },
+ "morgan-plan-question": {
+  "threads": [
+   {
+    "name": "super-agents-state-accuracy",
+    "agent_name": "Morgan",
+    "cwd": "~/Projects/openbase/code/openbase-coder-workspace",
+    "status": "running",
+    "model": "fable",
+    "last_useful_message": "Plan-mode question: Should the completion fix also cover Codex app-server threads, or Claude Code threads only? (a) both backends (b) Claude Code only",
+    "last_activity_minutes_ago": 1,
+    "active_turn_prompt": "Diagnose and fix the state-accuracy bug (plan mode)."
+   }
+  ],
+  "folders": {}
+ }
+}

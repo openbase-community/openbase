@@ -19,6 +19,9 @@ from openbase_coder_cli.livekit_voice_route import (
 from openbase_coder_cli.openbase_coder_cli_app.item_tags import thread_tags
 from openbase_coder_cli.openbase_coder_cli_app.thread_favorites import favorite_payload
 from openbase_coder_cli.thread_model_overrides import get_thread_model_override
+from openbase_coder_cli.thread_sync.continuation_store import (
+    links as continuation_links,
+)
 from openbase_coder_cli.tts_providers import voice_name_for_id
 
 VoiceRouteRole = Literal["none", "dispatcher", "active_target"]
@@ -38,6 +41,7 @@ def annotate_thread_payload(
     resolved_thread_id = thread_id or str(
         payload.get("thread_id") or payload.get("session_id") or ""
     )
+    payload.update(continuation_links(resolved_thread_id))
     route_state = get_livekit_voice_route_state()
     is_dispatcher = bool(
         resolved_thread_id

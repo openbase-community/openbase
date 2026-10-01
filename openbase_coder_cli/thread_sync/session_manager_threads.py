@@ -465,6 +465,8 @@ class SessionManagerThreadsMixin:
         if result is None:
             return None
         session = _session_from_thread(result, include_turns=True)
+        if session.backend is None:
+            session.backend = getattr(self._client, "backend", self._execution_backend)
         await self._apply_local_turn_state(session_id, session)
         return session
 
