@@ -358,10 +358,12 @@ def test_load_env_merges_env_file_over_process_env(tmp_path, monkeypatch):
     assert env["PATH"] == "/bin"
 
 
-def test_load_env_without_env_file_returns_process_env(monkeypatch):
+def test_load_env_without_env_file_returns_process_env(monkeypatch, tmp_path):
     from openbase_coder_cli.agent_profiles import profile_environment
     from openbase_coder_cli.services.installation import InstallationConfig
 
+    codex_home = tmp_path / "codex"
+    monkeypatch.setattr("openbase_coder_cli.paths.CODEX_HOME_DIR", codex_home)
     monkeypatch.setattr(runners.os, "environ", {"PATH": "/bin"})
     config = InstallationConfig(env_file="")
 
@@ -369,7 +371,7 @@ def test_load_env_without_env_file_returns_process_env(monkeypatch):
         **profile_environment(),
         "PATH": "/bin",
         "CODEX_APP_SERVER_URL": "unix://",
-        "CODEX_HOME": str(runners.Path.home() / ".codex"),
+        "CODEX_HOME": str(codex_home),
     }
 
 
