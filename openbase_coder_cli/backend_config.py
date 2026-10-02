@@ -136,3 +136,13 @@ def configured_execution_backends(
     if primary in backends:
         backends.remove(primary)
     return [primary, *backends]
+
+
+# A named Super Agent thread greets the user on its first turn through this
+# command, run by the super-agents runtime itself, so the introduction never
+# depends on the model obeying an instruction. Placeholders are substituted
+# per argument after shell-style splitting (see super_agents.thread_intro).
+SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV = "SUPER_AGENTS_THREAD_INTRO_COMMAND"
+OPENBASE_THREAD_INTRO_COMMAND = (
+    'openbase-coder user say {agent_name} "Hey there, I\'m {agent_name}."'
+)

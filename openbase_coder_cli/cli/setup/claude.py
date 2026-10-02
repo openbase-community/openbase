@@ -14,7 +14,9 @@ from openbase_coder_cli.backend_config import (
     CLAUDE_CODE_BACKEND,
     DEFAULT_CODING_BACKEND,
     OPENBASE_CLOUD_BACKEND,
+    OPENBASE_THREAD_INTRO_COMMAND,
     SUPER_AGENTS_DEFAULT_BACKEND_ENV_KEY,
+    SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV,
 )
 from openbase_coder_cli.cli.setup.codex import _super_agents_mcp_command
 from openbase_coder_cli.cli.setup.hooks import ensure_claude_session_id_hook
@@ -102,6 +104,7 @@ def _claude_super_agents_entry(
                 CODEX_SUPER_AGENT_INSTRUCTIONS_PATH
             ),
             SUPER_AGENTS_BASE_INSTRUCTIONS_ENV: str(OPENBASE_AGENTS_MD_PATH),
+            SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV: OPENBASE_THREAD_INTRO_COMMAND,
             SUPER_AGENTS_DEFAULT_BACKEND_ENV_KEY: (
                 OPENBASE_CLOUD_BACKEND
                 if coding_backend == OPENBASE_CLOUD_BACKEND

@@ -17,7 +17,9 @@ from openbase_coder_cli.backend_config import (
     DEFAULT_CODING_BACKEND,
     OPENBASE_CLOUD_BACKEND,
     OPENBASE_CLOUD_CODEX_BACKEND,
+    OPENBASE_THREAD_INTRO_COMMAND,
     SUPER_AGENTS_DEFAULT_BACKEND_ENV_KEY,
+    SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV,
 )
 from openbase_coder_cli.cli.setup.hooks import ensure_codex_session_id_hook
 from openbase_coder_cli.cli.setup.profile_migration import (
@@ -345,6 +347,7 @@ def _toml_env_line(backend: str) -> str:
             "CODEX_SUPER_AGENT_INSTRUCTIONS_PATH",
             str(CODEX_SUPER_AGENT_INSTRUCTIONS_PATH),
         ),
+        (SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV, OPENBASE_THREAD_INTRO_COMMAND),
         *profile_environment().items(),
     )
     body = ", ".join(f"{key} = {json.dumps(value)}" for key, value in env_pairs)

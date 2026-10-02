@@ -13,6 +13,7 @@ import pytest
 from click.testing import CliRunner
 
 from openbase_coder_cli.cli.setup.hooks import session_start_hook_trusted_hash
+from openbase_coder_cli.env_file import env_file_values
 from openbase_coder_cli.paths import (
     INJECT_SESSION_ID_HOOK_PATH,
     OPENBASE_AGENTS_MD_PATH,
@@ -912,6 +913,9 @@ def test_ensure_claude_mcp_installs_super_agents(tmp_path, monkeypatch) -> None:
                 instructions / "SUPER_AGENT_INSTRUCTIONS.md"
             ),
             "SUPER_AGENTS_BASE_INSTRUCTIONS_PATH": str(instructions / "AGENTS.md"),
+            "SUPER_AGENTS_THREAD_INTRO_COMMAND": (
+                'openbase-coder user say {agent_name} "Hey there, I\'m {agent_name}."'
+            ),
             "SUPER_AGENTS_DEFAULT_BACKEND": "claude_code",
         },
     }
@@ -988,6 +992,9 @@ def test_ensure_env_file_documents_coding_backend_default(tmp_path) -> None:
     assert "SUPER_AGENTS_CODEX_APPROVAL_POLICY=never" in content
     assert "SUPER_AGENTS_CODEX_SANDBOX_POLICY=danger-full-access" in content
     assert f"SUPER_AGENTS_BASE_INSTRUCTIONS_PATH={OPENBASE_AGENTS_MD_PATH}" in content
+    assert env_file_values(env_file)["SUPER_AGENTS_THREAD_INTRO_COMMAND"] == (
+        'openbase-coder user say {agent_name} "Hey there, I\'m {agent_name}."'
+    )
     assert "CLAUDE_CODE_ENABLE_TELEMETRY=0" in content
     assert "CODEX_MODEL=" not in content
     assert "CODEX_APP_SERVER_URL=unix://" in content
@@ -1107,6 +1114,9 @@ def test_ensure_env_file_migrates_existing_env_to_shared_homes(tmp_path) -> None
     assert "SUPER_AGENTS_CODEX_APPROVAL_POLICY=never" in content
     assert "SUPER_AGENTS_CODEX_SANDBOX_POLICY=danger-full-access" in content
     assert f"SUPER_AGENTS_BASE_INSTRUCTIONS_PATH={OPENBASE_AGENTS_MD_PATH}" in content
+    assert env_file_values(env_file)["SUPER_AGENTS_THREAD_INTRO_COMMAND"] == (
+        'openbase-coder user say {agent_name} "Hey there, I\'m {agent_name}."'
+    )
     assert "SUPER_AGENTS_DEFAULT_CONFIG_PATH=" in content
     assert "CODEX_APP_SERVER_URL=unix://" in content
     assert env_file.stat().st_mode & 0o777 == 0o600
