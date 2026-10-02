@@ -32,8 +32,9 @@ openbase-coder plugins COMMAND [ARGS]
 openbase-coder plugins add ~/code/my-openbase-plugin
 ```
 
-- Installed editable (`-e`) into the CLI Python environment
-- Useful for active plugin development
+- Installed as a regular package copy into the stable plugin site directory
+- Re-run `openbase-coder plugins update PLUGIN_ID` after local source changes
+  you want the runtime to pick up
 
 ### GitHub URL
 
@@ -61,7 +62,7 @@ Mutating plugin commands will:
 2. Sync plugin-declared Claude skills into `~/.claude/skills`
 3. Copy each console page's `asset_dir` into `~/.openbase/plugins/console-assets/`
    and regenerate the runtime console page registry
-4. Restart managed launchd services
+4. Restart managed services when Openbase services are installed
 
 ## Plugin Declaration Model
 
