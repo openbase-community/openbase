@@ -126,6 +126,50 @@ openbase-coder user play success
 openbase-coder user play /path/to/sound.wav
 ```
 
+## A Guided Meditation While A Long Task Runs
+
+When the dispatcher hands a task to a new Super Agent, the agent's first
+turn greets you ("Hey there, I'm Dottie.") and Openbase Coder quietly
+estimates how long the task will take. When the estimate is longer than a
+minute and a half, it writes a short guided meditation from the recent
+conversation and plays it over the same call while the agent works. The
+meditation moves through three themes: letting go of attachment to the work,
+gratitude that the work is being done, and the people you will connect with
+and influence by doing it. It ends with a gentle return, ready for the agent
+to report back.
+
+The estimate comes from a fast Codex model at low reasoning effort; the
+meditation is written by GPT-6 Sol at medium reasoning effort and spoken by an
+ElevenLabs voice, with the pauses in the script rendered as real silence.
+Set `ELEVENLABS_API_KEY` in the Openbase `.env` file to enable the audio;
+without it the script is saved but nothing plays. Scripts, audio, and a
+JSON record of each run land in `~/.openbase/meditations/`.
+
+Tuning, in `~/.openbase/.env` or under `"task_meditation"` in
+`~/.openbase/dispatcher-config.json`:
+
+| Setting | Default | Purpose |
+| ------- | ------- | ------- |
+| `OPENBASE_TASK_MEDITATION_ENABLED` / `enabled` | `true` | Turn the feature off entirely |
+| `OPENBASE_TASK_MEDITATION_THRESHOLD_SECONDS` / `threshold_seconds` | `90` | Minimum estimated task length that earns a meditation |
+| `OPENBASE_TASK_ESTIMATE_MODEL` / `estimator_model` | `gpt-5.5` | Codex model that estimates the task length |
+| `OPENBASE_TASK_ESTIMATE_REASONING_EFFORT` / `estimator_reasoning_effort` | `low` | Reasoning effort for the estimate |
+| `OPENBASE_TASK_MEDITATION_MODEL` / `meditation_model` | `gpt-6-sol` | Codex model that writes the meditation |
+| `OPENBASE_TASK_MEDITATION_REASONING_EFFORT` / `meditation_reasoning_effort` | `medium` | Reasoning effort for the meditation |
+| `ELEVENLABS_MEDITATION_VOICE_ID` / `voice_id` | Sarah | ElevenLabs voice for the meditation |
+
+To hear one on demand, or to check a voice without waiting for a long task:
+
+```bash
+openbase-coder meditation run --thread-name "Refactor the billing module" --agent-name Dottie --force
+openbase-coder meditation render ~/.openbase/meditations/<script>.txt --play
+```
+
+`meditation run --force` skips the estimate and always produces one;
+`--no-play` renders the WAV without playing it. `meditation render` turns a
+saved script (with `<pause N seconds>` markers) back into audio without any
+model call. The worker's log is `~/.openbase/logs/task-meditation.log`.
+
 ## Ring The User For An Urgent Voice Handoff
 
 Use an inbound call only when the user explicitly asked to be called or the

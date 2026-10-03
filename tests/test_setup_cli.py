@@ -914,7 +914,7 @@ def test_ensure_claude_mcp_installs_super_agents(tmp_path, monkeypatch) -> None:
             ),
             "SUPER_AGENTS_BASE_INSTRUCTIONS_PATH": str(instructions / "AGENTS.md"),
             "SUPER_AGENTS_THREAD_INTRO_COMMAND": (
-                'openbase-coder user say {agent_name} "Hey there, I\'m {agent_name}."'
+                "openbase-coder user intro {agent_name} --thread-id {thread_id} --thread-name {thread_name}"
             ),
             "SUPER_AGENTS_DEFAULT_BACKEND": "claude_code",
         },
@@ -993,7 +993,7 @@ def test_ensure_env_file_documents_coding_backend_default(tmp_path) -> None:
     assert "SUPER_AGENTS_CODEX_SANDBOX_POLICY=danger-full-access" in content
     assert f"SUPER_AGENTS_BASE_INSTRUCTIONS_PATH={OPENBASE_AGENTS_MD_PATH}" in content
     assert env_file_values(env_file)["SUPER_AGENTS_THREAD_INTRO_COMMAND"] == (
-        'openbase-coder user say {agent_name} "Hey there, I\'m {agent_name}."'
+        "openbase-coder user intro {agent_name} --thread-id {thread_id} --thread-name {thread_name}"
     )
     assert "CLAUDE_CODE_ENABLE_TELEMETRY=0" in content
     assert "CODEX_MODEL=" not in content
@@ -1115,7 +1115,7 @@ def test_ensure_env_file_migrates_existing_env_to_shared_homes(tmp_path) -> None
     assert "SUPER_AGENTS_CODEX_SANDBOX_POLICY=danger-full-access" in content
     assert f"SUPER_AGENTS_BASE_INSTRUCTIONS_PATH={OPENBASE_AGENTS_MD_PATH}" in content
     assert env_file_values(env_file)["SUPER_AGENTS_THREAD_INTRO_COMMAND"] == (
-        'openbase-coder user say {agent_name} "Hey there, I\'m {agent_name}."'
+        "openbase-coder user intro {agent_name} --thread-id {thread_id} --thread-name {thread_name}"
     )
     assert "SUPER_AGENTS_DEFAULT_CONFIG_PATH=" in content
     assert "CODEX_APP_SERVER_URL=unix://" in content
@@ -2354,3 +2354,48 @@ def test_ensure_env_file_defaults_to_tailscale_when_detected(
 
     content = env_file.read_text(encoding="utf-8")
     assert "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER=tailscale\n" in content
+
+
+def test_ensure_env_file_upgrades_legacy_thread_intro_command(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "LIVEKIT_API_KEY=APIkeyServer\n"
+        "LIVEKIT_API_SECRET=server-secret\n"
+        "SUPER_AGENTS_THREAD_INTRO_COMMAND='openbase-coder user say {agent_name} "
+        "\"Hey there, I'\"'\"'m {agent_name}.\"'\n",
+        encoding="utf-8",
+    )
+    assert env_file_values(env_file)["SUPER_AGENTS_THREAD_INTRO_COMMAND"] == (
+        'openbase-coder user say {agent_name} "Hey there, I\'m {agent_name}."'
+    )
+
+    setup_cli._ensure_env_file(
+        str(env_file),
+        assembly_ai_api_key="",
+        cartesia_api_key="",
+    )
+
+    assert env_file_values(env_file)["SUPER_AGENTS_THREAD_INTRO_COMMAND"] == (
+        "openbase-coder user intro {agent_name} "
+        "--thread-id {thread_id} --thread-name {thread_name}"
+    )
+
+
+def test_ensure_env_file_keeps_custom_thread_intro_command(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "LIVEKIT_API_KEY=APIkeyServer\n"
+        "LIVEKIT_API_SECRET=server-secret\n"
+        "SUPER_AGENTS_THREAD_INTRO_COMMAND='my-greeter {agent_name}'\n",
+        encoding="utf-8",
+    )
+
+    setup_cli._ensure_env_file(
+        str(env_file),
+        assembly_ai_api_key="",
+        cartesia_api_key="",
+    )
+
+    assert env_file_values(env_file)["SUPER_AGENTS_THREAD_INTRO_COMMAND"] == (
+        "my-greeter {agent_name}"
+    )

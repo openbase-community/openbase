@@ -73,6 +73,8 @@ Fresh Openbase Cloud installs write `haiku` for both roles, so the stored config
 | `ASSEMBLY_AI_API_KEY`      | Optional | Speech-to-text provider      |
 | `CARTESIA_API_KEY`         | Optional | Text-to-speech provider      |
 | `CARTESIA_VOICE_ID`        | Optional | Text-to-speech voice ID      |
+| `ELEVENLABS_API_KEY`       | Optional | Voice for the guided meditation played during long tasks (see [Voice Routing](voice-routing.md#a-guided-meditation-while-a-long-task-runs)) |
+| `ELEVENLABS_MEDITATION_VOICE_ID` | Optional | ElevenLabs voice ID for that meditation |
 | `OPENBASE_CODER_TTS_REPLACEMENTS_PATH` | Optional | Override the editable TTS replacements file path |
 
 ## TTS Replacements

@@ -1,0 +1,1126 @@
+"""Guided meditation while a long Super Agent task runs.
+
+Flow (see :func:`run_task_meditation`):
+
+1. A named Super Agent thread's first turn fires the Super Agents thread intro
+   hook, which runs ``openbase-coder user intro``. That command greets the
+   user and detaches ``openbase-coder meditation run`` for the new thread.
+2. The estimator model (fast, low effort) guesses how long the task will take
+   from the task name and the recent voice conversation.
+3. Past the threshold (90 seconds by default) the meditation model (Sol at
+   medium reasoning by default) writes a short guided meditation grounded in
+   that conversation, with ``<pause N seconds>`` markers between phrases.
+4. ElevenLabs synthesizes each spoken segment; the segments are stitched with
+   silence into one WAV file, which plays over the active voice call through
+   the announcer audio path (``openbase-coder user play``).
+
+Every stage is optional-failure: a missing API key, an unreachable model, or
+no active call ends the run with a recorded outcome and never touches the
+Super Agent turn that triggered it.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import wave
+from collections.abc import Awaitable, Callable, Iterable, Mapping
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+TASK_MEDITATION_CONFIG_KEY = "task_meditation"
+ENABLED_ENV = "OPENBASE_TASK_MEDITATION_ENABLED"
+THRESHOLD_ENV = "OPENBASE_TASK_MEDITATION_THRESHOLD_SECONDS"
+ESTIMATOR_MODEL_ENV = "OPENBASE_TASK_ESTIMATE_MODEL"
+ESTIMATOR_REASONING_EFFORT_ENV = "OPENBASE_TASK_ESTIMATE_REASONING_EFFORT"
+MEDITATION_MODEL_ENV = "OPENBASE_TASK_MEDITATION_MODEL"
+MEDITATION_REASONING_EFFORT_ENV = "OPENBASE_TASK_MEDITATION_REASONING_EFFORT"
+ELEVENLABS_API_KEY_ENV = "ELEVENLABS_API_KEY"
+ELEVENLABS_VOICE_ID_ENV = "ELEVENLABS_MEDITATION_VOICE_ID"
+ELEVENLABS_MODEL_ID_ENV = "ELEVENLABS_MEDITATION_MODEL_ID"
+
+DEFAULT_THRESHOLD_SECONDS = 90.0
+DEFAULT_ESTIMATOR_MODEL = "gpt-5.5"
+DEFAULT_ESTIMATOR_REASONING_EFFORT = "low"
+# The app-server wants the provider slug here, not the Openbase "sol" alias:
+# a ChatGPT-account Codex rejects the alias with "model is not supported".
+DEFAULT_MEDITATION_MODEL = "gpt-6-sol"
+DEFAULT_MEDITATION_REASONING_EFFORT = "medium"
+# ElevenLabs premade "Sarah": calm, even delivery that suits guided practice.
+DEFAULT_ELEVENLABS_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"
+DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2"
+DEFAULT_MAX_PAUSE_SECONDS = 20.0
+DEFAULT_PAUSE_SECONDS = 3.0
+# Breathing room between spoken segments that the script did not separate
+# with an explicit pause; avoids clipped joins between synthesized chunks.
+SEGMENT_GAP_SECONDS = 0.35
+SAMPLE_RATE = 24_000
+SAMPLE_WIDTH_BYTES = 2
+MEDITATIONS_DIR_NAME = "meditations"
+RUN_LOCK_FILE = ".run-lock.json"
+RUN_LOCK_STALE_SECONDS = 20 * 60
+LOG_FILE_NAME = "task-meditation.log"
+MAX_CONVERSATION_CHARS = 3_500
+MAX_CONVERSATION_TURNS = 8
+ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+ELEVENLABS_OUTPUT_FORMAT = "pcm_24000"
+
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+_FALSE_VALUES = {"0", "false", "no", "off"}
+
+PAUSE_PATTERN = re.compile(
+    r"[<\[(]\s*pause\s*[:=]?\s*(?P<seconds>\d+(?:\.\d+)?)?\s*"
+    r"(?:s|sec|secs|second|seconds)?\s*[>\])]",
+    re.IGNORECASE,
+)
+_VOICE_TAG_PATTERN = re.compile(r"</?voice>", re.IGNORECASE)
+_CODE_FENCE_PATTERN = re.compile(r"^```[a-zA-Z]*\s*$|^```\s*$", re.MULTILINE)
+_ESTIMATE_JSON_PATTERN = re.compile(
+    r'"estimated_seconds"\s*:\s*"?(?P<seconds>\d+(?:\.\d+)?)"?'
+)
+_ESTIMATE_UNIT_PATTERN = re.compile(
+    r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)\b",
+    re.IGNORECASE,
+)
+_ESTIMATE_BARE_PATTERN = re.compile(r"\d+(?:\.\d+)?")
+
+
+# --------------------------------------------------------------------------
+# Settings
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TaskMeditationSettings:
+    enabled: bool = True
+    threshold_seconds: float = DEFAULT_THRESHOLD_SECONDS
+    estimator_model: str = DEFAULT_ESTIMATOR_MODEL
+    estimator_reasoning_effort: str = DEFAULT_ESTIMATOR_REASONING_EFFORT
+    meditation_model: str = DEFAULT_MEDITATION_MODEL
+    meditation_reasoning_effort: str = DEFAULT_MEDITATION_REASONING_EFFORT
+    elevenlabs_api_key: str | None = None
+    elevenlabs_voice_id: str = DEFAULT_ELEVENLABS_VOICE_ID
+    elevenlabs_model_id: str = DEFAULT_ELEVENLABS_MODEL_ID
+    max_pause_seconds: float = DEFAULT_MAX_PAUSE_SECONDS
+    output_dir: Path = field(default_factory=lambda: _default_output_dir())
+
+    def payload(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["output_dir"] = str(self.output_dir)
+        data["elevenlabs_api_key"] = "set" if self.elevenlabs_api_key else "missing"
+        return data
+
+
+def _default_output_dir() -> Path:
+    from openbase_coder_cli.cli.utils import get_data_dir
+
+    return get_data_dir() / MEDITATIONS_DIR_NAME
+
+
+def _parse_bool(value: object, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in _TRUE_VALUES:
+            return True
+        if lowered in _FALSE_VALUES:
+            return False
+    return default
+
+
+def _parse_positive_float(value: object, default: float) -> float:
+    try:
+        parsed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _parse_str(value: object, default: str) -> str:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return default
+
+
+def load_task_meditation_settings(
+    *,
+    env: Mapping[str, str] | None = None,
+    config_path: Path | None = None,
+) -> TaskMeditationSettings:
+    """Resolve settings: defaults, then ``dispatcher-config.json``, then env."""
+    from openbase_coder_cli.dispatcher_config import read_dispatcher_config
+
+    source = os.environ if env is None else env
+    try:
+        config = read_dispatcher_config(config_path).get(TASK_MEDITATION_CONFIG_KEY)
+    except ValueError:
+        config = None
+    config = config if isinstance(config, dict) else {}
+
+    def pick(env_key: str, config_key: str) -> object:
+        env_value = source.get(env_key)
+        if isinstance(env_value, str) and env_value.strip():
+            return env_value
+        return config.get(config_key)
+
+    defaults = TaskMeditationSettings()
+    return TaskMeditationSettings(
+        enabled=_parse_bool(pick(ENABLED_ENV, "enabled"), defaults.enabled),
+        threshold_seconds=_parse_positive_float(
+            pick(THRESHOLD_ENV, "threshold_seconds"), defaults.threshold_seconds
+        ),
+        estimator_model=_parse_str(
+            pick(ESTIMATOR_MODEL_ENV, "estimator_model"), defaults.estimator_model
+        ),
+        estimator_reasoning_effort=_parse_str(
+            pick(ESTIMATOR_REASONING_EFFORT_ENV, "estimator_reasoning_effort"),
+            defaults.estimator_reasoning_effort,
+        ),
+        meditation_model=_parse_str(
+            pick(MEDITATION_MODEL_ENV, "meditation_model"), defaults.meditation_model
+        ),
+        meditation_reasoning_effort=_parse_str(
+            pick(MEDITATION_REASONING_EFFORT_ENV, "meditation_reasoning_effort"),
+            defaults.meditation_reasoning_effort,
+        ),
+        elevenlabs_api_key=_parse_str(source.get(ELEVENLABS_API_KEY_ENV), "") or None,
+        elevenlabs_voice_id=_parse_str(
+            pick(ELEVENLABS_VOICE_ID_ENV, "voice_id"), defaults.elevenlabs_voice_id
+        ),
+        elevenlabs_model_id=_parse_str(
+            pick(ELEVENLABS_MODEL_ID_ENV, "elevenlabs_model_id"),
+            defaults.elevenlabs_model_id,
+        ),
+        max_pause_seconds=_parse_positive_float(
+            config.get("max_pause_seconds"), defaults.max_pause_seconds
+        ),
+        output_dir=Path(
+            _parse_str(config.get("output_dir"), str(_default_output_dir()))
+        ).expanduser(),
+    )
+
+
+# --------------------------------------------------------------------------
+# Script parsing and audio stitching (pure)
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Speech:
+    text: str
+
+
+@dataclass(frozen=True)
+class Pause:
+    seconds: float
+
+
+Segment = Speech | Pause
+
+
+def strip_code_fences(text: str) -> str:
+    return _CODE_FENCE_PATTERN.sub("", text).strip()
+
+
+def parse_meditation_script(
+    text: str,
+    *,
+    max_pause_seconds: float = DEFAULT_MAX_PAUSE_SECONDS,
+    default_pause_seconds: float = DEFAULT_PAUSE_SECONDS,
+) -> list[Segment]:
+    """Split a transcript into spoken segments and pauses.
+
+    Pause markers are tolerant of model drift: ``<pause 5 seconds>``,
+    ``<pause 5s>``, ``<pause: 5>``, ``[pause 5 seconds]`` and a bare
+    ``<pause>`` (``default_pause_seconds``) all count. Consecutive pauses merge
+    and every pause is clamped to ``max_pause_seconds``; leading and trailing
+    pauses are dropped because silence before the first word or after the last
+    one only delays the call.
+    """
+    cleaned = strip_code_fences(text)
+    segments: list[Segment] = []
+    cursor = 0
+
+    def push_speech(chunk: str) -> None:
+        spoken = " ".join(chunk.split())
+        if spoken:
+            segments.append(Speech(spoken))
+
+    def push_pause(seconds: float) -> None:
+        clamped = max(0.0, min(seconds, max_pause_seconds))
+        if clamped <= 0:
+            return
+        if segments and isinstance(segments[-1], Pause):
+            merged = min(segments[-1].seconds + clamped, max_pause_seconds)
+            segments[-1] = Pause(merged)
+            return
+        segments.append(Pause(clamped))
+
+    for match in PAUSE_PATTERN.finditer(cleaned):
+        push_speech(cleaned[cursor : match.start()])
+        raw_seconds = match.group("seconds")
+        push_pause(float(raw_seconds) if raw_seconds else default_pause_seconds)
+        cursor = match.end()
+    push_speech(cleaned[cursor:])
+
+    while segments and isinstance(segments[0], Pause):
+        segments.pop(0)
+    while segments and isinstance(segments[-1], Pause):
+        segments.pop()
+    return segments
+
+
+def script_speech_text(segments: Iterable[Segment]) -> str:
+    return " ".join(segment.text for segment in segments if isinstance(segment, Speech))
+
+
+def script_pause_seconds(segments: Iterable[Segment]) -> float:
+    return sum(segment.seconds for segment in segments if isinstance(segment, Pause))
+
+
+def parse_estimate_seconds(text: str) -> float | None:
+    """Pull a duration in seconds out of the estimator's reply.
+
+    Prefers the requested JSON field; falls back to the first unit-bearing
+    number (``2 minutes``, ``90s``, ``1.5 hours``), then to a bare number read
+    as seconds. ``None`` when nothing usable is present.
+    """
+    if not text:
+        return None
+    json_match = _ESTIMATE_JSON_PATTERN.search(text)
+    if json_match:
+        return float(json_match.group("seconds"))
+    unit_match = _ESTIMATE_UNIT_PATTERN.search(text)
+    if unit_match:
+        value = float(unit_match.group("value"))
+        unit = unit_match.group("unit").lower()
+        if unit.startswith("h"):
+            return value * 3600
+        if unit.startswith("m"):
+            return value * 60
+        return value
+    bare_match = _ESTIMATE_BARE_PATTERN.search(text)
+    if bare_match:
+        return float(bare_match.group(0))
+    return None
+
+
+def should_meditate(estimate_seconds: float | None, threshold_seconds: float) -> bool:
+    return estimate_seconds is not None and estimate_seconds > threshold_seconds
+
+
+def silence_pcm(seconds: float, *, sample_rate: int = SAMPLE_RATE) -> bytes:
+    frames = max(0, int(round(seconds * sample_rate)))
+    return b"\x00" * (frames * SAMPLE_WIDTH_BYTES)
+
+
+def pcm_duration_seconds(pcm: bytes, *, sample_rate: int = SAMPLE_RATE) -> float:
+    return len(pcm) / SAMPLE_WIDTH_BYTES / sample_rate
+
+
+def stitch_pcm(
+    rendered: Iterable[bytes | Pause],
+    *,
+    sample_rate: int = SAMPLE_RATE,
+    segment_gap_seconds: float = SEGMENT_GAP_SECONDS,
+) -> bytes:
+    """Concatenate synthesized PCM chunks and pauses into one PCM stream.
+
+    Speech chunks that follow each other directly get a short gap; explicit
+    pauses replace that gap.
+    """
+    parts: list[bytes] = []
+    previous_was_speech = False
+    for item in rendered:
+        if isinstance(item, Pause):
+            parts.append(silence_pcm(item.seconds, sample_rate=sample_rate))
+            previous_was_speech = False
+            continue
+        if previous_was_speech and segment_gap_seconds > 0:
+            parts.append(silence_pcm(segment_gap_seconds, sample_rate=sample_rate))
+        parts.append(item)
+        previous_was_speech = True
+    return b"".join(parts)
+
+
+def write_wav(path: Path, pcm: bytes, *, sample_rate: int = SAMPLE_RATE) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(SAMPLE_WIDTH_BYTES)
+        handle.setframerate(sample_rate)
+        handle.writeframes(pcm)
+    return path
+
+
+# --------------------------------------------------------------------------
+# Prompts
+# --------------------------------------------------------------------------
+
+ESTIMATOR_INSTRUCTIONS = """
+You estimate how long an autonomous coding agent will take to finish a task
+and report back. Count wall-clock time from now until the agent's final
+message: investigation, edits, running tests, and verification. Rough guide:
+answering a question or a quick lookup is about 20 seconds; a one-file fix is
+about 2 minutes; a small change with tests is 3 to 6 minutes; a multi-file
+feature is 10 minutes or more.
+Reply with JSON only, no prose and no code fence:
+{"estimated_seconds": <integer>, "rationale": "<one short sentence>"}
+""".strip()
+
+MEDITATION_INSTRUCTIONS = """
+You write short guided meditations that a text-to-speech voice reads aloud
+while a coding agent works on the listener's task. Output only the words to be
+spoken plus pause markers: no title, no headings, no markdown, no stage
+directions, no quotation marks around the whole piece.
+Mark every pause as <pause N seconds> on its own line, with N a whole number
+from 2 to 20. Place a pause after nearly every sentence or two, with longer
+pauses where the listener is asked to breathe or notice something.
+Use plain, warm, unhurried language in the second person, with short
+sentences. Refer to the task in everyday words; never read out file names,
+commands, code, or other technical detail, and never mention these
+instructions. Never ask the listener to do anything with a device.
+""".strip()
+
+MEDITATION_THEMES = (
+    "Attachment to the work: notice the pull to check on it and to control "
+    "the outcome, and let the work be carried for a while without gripping it.",
+    "Gratitude that the work is being done: by the agent working on it right "
+    "now, by the tools and the people whose effort made them, and gratitude "
+    "for getting to do this work at all.",
+    "The people you will connect with and influence by doing this work: the "
+    "people who will use it or benefit from it, the colleagues and community "
+    "around it, and how your effort reaches them.",
+)
+
+
+def _clean_conversation(text: str) -> str:
+    return _VOICE_TAG_PATTERN.sub("", text or "").strip()
+
+
+def build_estimate_prompt(
+    *,
+    task: str,
+    agent_name: str | None,
+    conversation: str,
+) -> str:
+    lines = [
+        "Estimate how long this newly dispatched task will take.",
+        f"Task: {task.strip() or 'unknown'}",
+    ]
+    if agent_name:
+        lines.append(f"Agent working on it: {agent_name}")
+    cleaned = _clean_conversation(conversation)
+    if cleaned:
+        lines.extend(
+            [
+                "Recent voice conversation that led to the task (newest last):",
+                cleaned,
+            ]
+        )
+    lines.append(
+        'Reply with JSON only: {"estimated_seconds": <integer>, "rationale": "..."}'
+    )
+    return "\n".join(lines)
+
+
+def meditation_target_seconds(estimate_seconds: float | None) -> int:
+    """Total runtime to aim for: most of the wait, bounded to a short sit."""
+    if estimate_seconds is None:
+        return 150
+    return int(max(75.0, min(300.0, estimate_seconds * 0.7)))
+
+
+def build_meditation_prompt(
+    *,
+    task: str,
+    agent_name: str | None,
+    conversation: str,
+    estimate_seconds: float | None,
+) -> str:
+    target = meditation_target_seconds(estimate_seconds)
+    who = agent_name or "the agent"
+    lines = [
+        "Write a guided meditation for someone whose task was just handed to "
+        f"{who}, a coding agent that will work on it for a few minutes.",
+        f"Task, in the listener's words: {task.strip() or 'their work'}",
+    ]
+    if estimate_seconds is not None:
+        lines.append(
+            f"Expected wait: about {int(round(estimate_seconds / 60)) or 1} minutes."
+        )
+    lines.append(
+        f"Aim for about {target} seconds in total, with roughly forty percent of "
+        "that as pauses."
+    )
+    lines.append("Move through these three themes in order, briefly settling in first:")
+    for index, theme in enumerate(MEDITATION_THEMES, start=1):
+        lines.append(f"{index}. {theme}")
+    lines.append(
+        "Close with a gentle return: one breath, eyes opening, and an easy "
+        f"readiness to hear from {who} when the work is done."
+    )
+    cleaned = _clean_conversation(conversation)
+    if cleaned:
+        lines.extend(
+            [
+                "Recent conversation, for grounding only (use its spirit, not its "
+                "details):",
+                cleaned,
+            ]
+        )
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------
+# Recent conversation
+# --------------------------------------------------------------------------
+
+
+def _text_from_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    parts: list[str] = []
+    for block in content if isinstance(content, list) else []:
+        if isinstance(block, dict):
+            kind = block.get("type")
+            if kind in {"text", "input_text", "output_text"}:
+                parts.append(str(block.get("text") or ""))
+        elif isinstance(block, str):
+            parts.append(block)
+    return "\n".join(part for part in parts if part)
+
+
+def conversation_lines_from_thread(payload: Mapping[str, Any]) -> list[str]:
+    """Flatten a Super Agents thread read into ``User:``/``Agent:`` lines.
+
+    Tolerates both backends' shapes: Claude turn views carry ``prompt`` plus a
+    final message field; Codex turns carry ``items`` with ``userMessage`` and
+    ``agentMessage`` entries. Turns are ordered by ``createdAt`` when present.
+    """
+    turns: Any = payload.get("turns")
+    if not isinstance(turns, list):
+        thread = payload.get("thread")
+        turns = thread.get("turns") if isinstance(thread, dict) else None
+    if not isinstance(turns, list):
+        turns = payload.get("recentTurns")
+    if not isinstance(turns, list):
+        return []
+    dict_turns = [turn for turn in turns if isinstance(turn, dict)]
+    if all(isinstance(turn.get("createdAt"), str) for turn in dict_turns):
+        dict_turns.sort(key=lambda turn: str(turn.get("createdAt")))
+
+    lines: list[str] = []
+    for turn in dict_turns:
+        user_text = ""
+        agent_text = ""
+        for key in ("prompt", "promptPreview", "input"):
+            value = turn.get(key)
+            if isinstance(value, str) and value.strip():
+                user_text = value
+                break
+        for key in (
+            "finalMessage",
+            "lastUsefulMessage",
+            "lastAgentMessage",
+            "reply",
+            "summary",
+        ):
+            value = turn.get(key)
+            if isinstance(value, str) and value.strip():
+                agent_text = value
+                break
+        items = turn.get("items")
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            kind = item.get("type")
+            if kind == "userMessage" and not user_text:
+                user_text = _text_from_content(item.get("content") or item.get("text"))
+            elif kind == "agentMessage":
+                text = str(item.get("text") or "")
+                if text.strip():
+                    agent_text = text
+        user_text = _clean_conversation(user_text)
+        agent_text = _clean_conversation(agent_text)
+        if user_text:
+            lines.append(f"User: {' '.join(user_text.split())}")
+        if agent_text:
+            lines.append(f"Agent: {' '.join(agent_text.split())}")
+    return lines
+
+
+def trim_conversation(
+    lines: list[str], *, max_chars: int = MAX_CONVERSATION_CHARS
+) -> str:
+    """Keep the newest lines that fit in ``max_chars``, clipping long ones."""
+    kept: list[str] = []
+    used = 0
+    for line in reversed(lines):
+        clipped = line if len(line) <= 600 else line[:597] + "..."
+        if used + len(clipped) + 1 > max_chars:
+            break
+        kept.append(clipped)
+        used += len(clipped) + 1
+    return "\n".join(reversed(kept))
+
+
+async def recent_conversation_text(
+    *,
+    max_chars: int = MAX_CONVERSATION_CHARS,
+    max_turns: int = MAX_CONVERSATION_TURNS,
+    exclude_thread_id: str | None = None,
+) -> str:
+    """The latest voice conversation (active route first, then dispatcher)."""
+    try:
+        from openbase_coder_cli.livekit_voice_route import get_livekit_voice_route_state
+
+        state = get_livekit_voice_route_state()
+    except Exception:
+        logger.debug("task_meditation: voice route state unavailable", exc_info=True)
+        return ""
+    thread_ids: list[str] = []
+    for candidate in (state.active_target_thread_id, state.dispatcher_thread_id):
+        if candidate and candidate != exclude_thread_id and candidate not in thread_ids:
+            thread_ids.append(candidate)
+    if not thread_ids:
+        return ""
+
+    try:
+        from super_agents.app_models import LabelQueryInput
+        from super_agents.multi_backend import MultiBackendClient
+    except Exception:
+        logger.debug("task_meditation: super_agents unavailable", exc_info=True)
+        return ""
+
+    client = MultiBackendClient()
+    try:
+        for thread_id in thread_ids:
+            try:
+                payload = await client.read_by_label(
+                    LabelQueryInput(thread_id=thread_id, max_items=max_turns),
+                    include_turns=True,
+                )
+            except Exception:
+                logger.info(
+                    "task_meditation stage=conversation_read_failed thread_id=%s",
+                    thread_id,
+                    exc_info=True,
+                )
+                continue
+            lines = conversation_lines_from_thread(payload)
+            if lines:
+                return trim_conversation(lines, max_chars=max_chars)
+    finally:
+        await _close_quietly(client)
+    return ""
+
+
+async def _close_quietly(client: Any) -> None:
+    for attribute in ("aclose", "close"):
+        closer = getattr(client, attribute, None)
+        if callable(closer):
+            try:
+                result = closer()
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception:
+                logger.debug("task_meditation: client close failed", exc_info=True)
+            return
+
+
+# --------------------------------------------------------------------------
+# Model and speech providers
+# --------------------------------------------------------------------------
+
+Completer = Callable[..., Awaitable[str]]
+Synthesizer = Callable[[str], bytes]
+Publisher = Callable[[Path], None]
+ConversationReader = Callable[[], Awaitable[str]]
+
+
+class CodexOneShotCompleter:
+    """Run a single prompt on a throwaway Codex app-server thread.
+
+    Reuses the voice dispatcher's app-server client so model, effort, and
+    endpoint handling match the rest of the runtime; the thread is read-only
+    and never persisted as a voice route.
+    """
+
+    def __init__(self, *, endpoint: str | None = None, cwd: str | None = None) -> None:
+        self._endpoint = endpoint
+        self._cwd = cwd or str(Path.home())
+
+    def _resolve_endpoint(self) -> str:
+        if self._endpoint:
+            return self._endpoint
+        from openbase_coder_cli.codex_control_plane import (
+            managed_codex_app_server_endpoint,
+        )
+
+        return managed_codex_app_server_endpoint().value
+
+    async def __call__(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        reasoning_effort: str,
+        developer_instructions: str,
+    ) -> str:
+        from openbase_coder_cli.livekit_agent.codex_app_client import (
+            CodexAppServerClient,
+        )
+
+        effort = reasoning_effort
+
+        class _OneShotClient(CodexAppServerClient):
+            def _configured_reasoning_effort(self) -> str | None:
+                return effort
+
+            def _speech_text_for_turn(self, active_turn) -> str:  # type: ignore[override]
+                messages = active_turn.agent_messages or []
+                return messages[-1] if messages else ""
+
+        client = _OneShotClient(
+            ws_url=self._resolve_endpoint(),
+            cwd=self._cwd,
+            developer_instructions=developer_instructions,
+            approval_policy="never",
+            sandbox="read-only",
+            model_name=model,
+            persist_thread=False,
+        )
+        try:
+            result = await client.run_turn(prompt)
+        finally:
+            await client.aclose()
+        if str(result.get("status") or "").lower() == "failed":
+            raise RuntimeError(f"Codex turn failed: {_turn_error_message(result)}")
+        return str(result.get("_livekit_speech_text") or "")
+
+
+def _turn_error_message(turn: Mapping[str, Any]) -> str:
+    error = turn.get("error")
+    if isinstance(error, Mapping):
+        message = error.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+    if isinstance(error, str) and error.strip():
+        return error.strip()
+    return "no error detail from the app-server"
+
+
+class ElevenLabsSynthesizer:
+    """Synthesize one spoken segment to 24 kHz mono 16-bit PCM."""
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        voice_id: str = DEFAULT_ELEVENLABS_VOICE_ID,
+        model_id: str = DEFAULT_ELEVENLABS_MODEL_ID,
+        timeout_seconds: float = 120.0,
+    ) -> None:
+        self._api_key = api_key
+        self._voice_id = voice_id
+        self._model_id = model_id
+        self._timeout_seconds = timeout_seconds
+
+    def __call__(self, text: str) -> bytes:
+        import httpx
+
+        response = httpx.post(
+            ELEVENLABS_TTS_URL.format(voice_id=self._voice_id),
+            params={"output_format": ELEVENLABS_OUTPUT_FORMAT},
+            headers={
+                "xi-api-key": self._api_key,
+                "accept": "application/octet-stream",
+                "content-type": "application/json",
+            },
+            json={
+                "text": text,
+                "model_id": self._model_id,
+                "voice_settings": {
+                    "stability": 0.7,
+                    "similarity_boost": 0.8,
+                    "style": 0.1,
+                    "use_speaker_boost": True,
+                },
+            },
+            timeout=self._timeout_seconds,
+        )
+        if response.status_code >= 400:
+            detail = response.text[:300]
+            raise RuntimeError(
+                f"ElevenLabs text-to-speech failed with HTTP {response.status_code}: {detail}"
+            )
+        audio = response.content
+        if len(audio) < SAMPLE_WIDTH_BYTES * 100:
+            raise RuntimeError("ElevenLabs returned no audio for a segment.")
+        return audio
+
+
+def publish_meditation_audio(path: Path, *, room_name: str | None = None) -> None:
+    """Play the file in the active call through the local server's play API."""
+    from openbase_coder_cli.cli.local_server import local_server_request
+
+    payload: dict[str, str] = {"audio_path": str(path)}
+    if room_name:
+        payload["room_name"] = room_name
+    response = local_server_request(
+        "POST",
+        "/api/user/play/",
+        json=payload,
+        ok_statuses=(502,),
+        timeout=60,
+    )
+    if response.status_code >= 400:
+        try:
+            detail = response.json().get("detail")
+        except ValueError:
+            detail = None
+        raise RuntimeError(
+            str(detail or f"Playback request failed ({response.status_code}).")
+        )
+
+
+# --------------------------------------------------------------------------
+# Orchestration
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class MeditationOutcome:
+    status: str
+    reason: str = ""
+    thread_id: str = ""
+    task: str = ""
+    estimate_seconds: float | None = None
+    threshold_seconds: float | None = None
+    script_path: str | None = None
+    audio_path: str | None = None
+    audio_seconds: float | None = None
+    record_path: str | None = None
+
+    def payload(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+STATUS_SKIPPED = "skipped"
+STATUS_PLAYED = "played"
+STATUS_RENDERED = "rendered"
+STATUS_FAILED = "failed"
+
+
+def _slug(value: str, *, limit: int = 40) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return cleaned[:limit].strip("-") or "task"
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def acquire_run_lock(output_dir: Path) -> Path | None:
+    """Claim the single meditation slot; ``None`` when another run is live.
+
+    A lock whose process is gone or that is older than
+    ``RUN_LOCK_STALE_SECONDS`` is taken over.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = output_dir / RUN_LOCK_FILE
+    try:
+        existing = json.loads(lock_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        existing = None
+    if isinstance(existing, dict):
+        pid = existing.get("pid")
+        started = existing.get("started_at")
+        fresh = (
+            isinstance(started, (int, float))
+            and (time.time() - started) < RUN_LOCK_STALE_SECONDS
+        )
+        if isinstance(pid, int) and pid != os.getpid() and fresh and _pid_alive(pid):
+            return None
+    lock_path.write_text(
+        json.dumps({"pid": os.getpid(), "started_at": time.time()}), encoding="utf-8"
+    )
+    return lock_path
+
+
+def release_run_lock(lock_path: Path | None) -> None:
+    if lock_path is None:
+        return
+    try:
+        lock_path.unlink()
+    except OSError:
+        pass
+
+
+async def run_task_meditation(
+    *,
+    thread_id: str,
+    thread_name: str,
+    agent_name: str | None,
+    settings: TaskMeditationSettings,
+    complete: Completer,
+    synthesize: Synthesizer | None,
+    publish: Publisher | None,
+    read_conversation: ConversationReader,
+    task_text: str | None = None,
+    force: bool = False,
+    play: bool = True,
+) -> MeditationOutcome:
+    """Estimate the task, and when it is long enough write, render, and play a meditation."""
+    task = " ".join((task_text or thread_name or "").split())
+    outcome = MeditationOutcome(
+        status=STATUS_SKIPPED,
+        thread_id=thread_id,
+        task=task,
+        threshold_seconds=settings.threshold_seconds,
+    )
+    if not settings.enabled and not force:
+        outcome.reason = "disabled"
+        return outcome
+
+    conversation = ""
+    try:
+        conversation = await read_conversation()
+    except Exception:
+        logger.info("task_meditation stage=conversation_unavailable", exc_info=True)
+
+    if force:
+        estimate: float | None = None
+        logger.info(
+            "task_meditation stage=estimate_skipped reason=force thread_id=%s",
+            thread_id,
+        )
+    else:
+        try:
+            reply = await complete(
+                build_estimate_prompt(
+                    task=task, agent_name=agent_name, conversation=conversation
+                ),
+                model=settings.estimator_model,
+                reasoning_effort=settings.estimator_reasoning_effort,
+                developer_instructions=ESTIMATOR_INSTRUCTIONS,
+            )
+        except Exception as exc:
+            logger.warning(
+                "task_meditation stage=estimate_failed thread_id=%s",
+                thread_id,
+                exc_info=True,
+            )
+            outcome.status = STATUS_FAILED
+            outcome.reason = f"estimate failed: {exc}"
+            return outcome
+        estimate = parse_estimate_seconds(reply)
+        outcome.estimate_seconds = estimate
+        logger.info(
+            "task_meditation stage=estimated thread_id=%s estimate_seconds=%s threshold=%s reply=%r",
+            thread_id,
+            estimate,
+            settings.threshold_seconds,
+            reply[:200],
+        )
+        if estimate is None:
+            outcome.reason = "estimate unparsable"
+            return outcome
+        if not should_meditate(estimate, settings.threshold_seconds):
+            outcome.reason = "under threshold"
+            return outcome
+
+    try:
+        script_text = await complete(
+            build_meditation_prompt(
+                task=task,
+                agent_name=agent_name,
+                conversation=conversation,
+                estimate_seconds=estimate,
+            ),
+            model=settings.meditation_model,
+            reasoning_effort=settings.meditation_reasoning_effort,
+            developer_instructions=MEDITATION_INSTRUCTIONS,
+        )
+    except Exception as exc:
+        logger.warning(
+            "task_meditation stage=script_failed thread_id=%s", thread_id, exc_info=True
+        )
+        outcome.status = STATUS_FAILED
+        outcome.reason = f"meditation script failed: {exc}"
+        return outcome
+
+    segments = parse_meditation_script(
+        script_text, max_pause_seconds=settings.max_pause_seconds
+    )
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    base = settings.output_dir / f"{stamp}-{_slug(task)}"
+    settings.output_dir.mkdir(parents=True, exist_ok=True)
+    script_path = base.with_suffix(".txt")
+    script_path.write_text(strip_code_fences(script_text) + "\n", encoding="utf-8")
+    outcome.script_path = str(script_path)
+    if not any(isinstance(segment, Speech) for segment in segments):
+        outcome.status = STATUS_FAILED
+        outcome.reason = "meditation script had no spoken text"
+        _write_record(base, outcome)
+        return outcome
+    logger.info(
+        "task_meditation stage=script_ready thread_id=%s segments=%d speech_chars=%d pause_seconds=%.0f",
+        thread_id,
+        len(segments),
+        len(script_speech_text(segments)),
+        script_pause_seconds(segments),
+    )
+
+    if synthesize is None:
+        outcome.reason = "no ElevenLabs API key; script saved without audio"
+        _write_record(base, outcome)
+        return outcome
+
+    rendered: list[bytes | Pause] = []
+    try:
+        for segment in segments:
+            if isinstance(segment, Pause):
+                rendered.append(segment)
+                continue
+            rendered.append(await asyncio.to_thread(synthesize, segment.text))
+    except Exception as exc:
+        logger.warning(
+            "task_meditation stage=synthesis_failed thread_id=%s",
+            thread_id,
+            exc_info=True,
+        )
+        outcome.status = STATUS_FAILED
+        outcome.reason = f"speech synthesis failed: {exc}"
+        _write_record(base, outcome)
+        return outcome
+
+    pcm = stitch_pcm(rendered)
+    audio_path = write_wav(base.with_suffix(".wav"), pcm)
+    outcome.audio_path = str(audio_path)
+    outcome.audio_seconds = round(pcm_duration_seconds(pcm), 1)
+    outcome.status = STATUS_RENDERED
+    logger.info(
+        "task_meditation stage=audio_ready thread_id=%s audio_path=%s audio_seconds=%.1f",
+        thread_id,
+        audio_path,
+        outcome.audio_seconds,
+    )
+
+    if play and publish is not None:
+        try:
+            await asyncio.to_thread(publish, audio_path)
+        except Exception as exc:
+            logger.warning(
+                "task_meditation stage=playback_failed thread_id=%s",
+                thread_id,
+                exc_info=True,
+            )
+            outcome.status = STATUS_FAILED
+            outcome.reason = f"playback failed: {exc}"
+            _write_record(base, outcome)
+            return outcome
+        outcome.status = STATUS_PLAYED
+    elif not play:
+        outcome.reason = "playback disabled"
+    _write_record(base, outcome)
+    return outcome
+
+
+def _write_record(base: Path, outcome: MeditationOutcome) -> None:
+    record_path = base.with_suffix(".json")
+    outcome.record_path = str(record_path)
+    try:
+        record_path.write_text(
+            json.dumps(outcome.payload(), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        logger.debug(
+            "task_meditation: unable to write record %s", record_path, exc_info=True
+        )
+
+
+# --------------------------------------------------------------------------
+# Detached worker
+# --------------------------------------------------------------------------
+
+
+def openbase_coder_command() -> str:
+    """The ``openbase-coder`` executable next to this interpreter, else on PATH."""
+    venv_command = Path(sys.executable).with_name("openbase-coder")
+    if venv_command.is_file():
+        return str(venv_command)
+    return shutil.which("openbase-coder") or "openbase-coder"
+
+
+def meditation_worker_argv(
+    *,
+    thread_id: str,
+    thread_name: str,
+    agent_name: str | None,
+    command: str | None = None,
+) -> list[str]:
+    argv = [
+        command or openbase_coder_command(),
+        "meditation",
+        "run",
+        "--thread-id",
+        thread_id,
+        "--thread-name",
+        thread_name,
+    ]
+    if agent_name:
+        argv.extend(["--agent-name", agent_name])
+    return argv
+
+
+def worker_log_path() -> Path:
+    from openbase_coder_cli.paths import DEFAULT_LOG_DIR
+
+    return DEFAULT_LOG_DIR / LOG_FILE_NAME
+
+
+def spawn_meditation_worker(
+    argv: list[str],
+    *,
+    log_path: Path | None = None,
+    env: Mapping[str, str] | None = None,
+) -> int:
+    """Start the worker detached from the caller; returns its pid.
+
+    The intro hook that calls us is bounded by a short timeout, so the
+    estimate and synthesis must outlive this process.
+    """
+    log_file = log_path or worker_log_path()
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_file, "ab") as handle:
+        process = subprocess.Popen(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            env=dict(env) if env is not None else None,
+        )
+    return process.pid

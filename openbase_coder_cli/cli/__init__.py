@@ -26,6 +26,7 @@ from .computer_use import computer_use
 from .defaults import defaults
 from .desktop import desktop
 from .doctor import doctor
+from .meditation import meditation
 from .onboarding import onboarding
 from .plugins import plugins
 from .profiles import profiles
@@ -142,6 +143,7 @@ main.add_command(threads)
 main.add_command(defaults)
 main.add_command(exit_to_dispatch)
 main.add_command(vibes)
+main.add_command(meditation)
 main.add_command(self_update)
 main.add_command(version_command)
 

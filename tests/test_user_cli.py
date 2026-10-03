@@ -38,7 +38,7 @@ def test_user_say_posts_message(monkeypatch):
 
     def fake_request(method, url, **kwargs):
         assert method == "POST"
-        assert kwargs['timeout'] == 60
+        assert kwargs["timeout"] == 60
         calls.append((url, kwargs))
         return httpx.Response(
             202,
@@ -934,3 +934,118 @@ def test_user_say_publish_failure_without_thread_still_errors(monkeypatch):
 
     assert result.exit_code != 0
     assert "No agent thread was available" in result.output
+
+
+def test_user_intro_greets_then_starts_meditation_worker(monkeypatch):
+    from openbase_coder_cli import task_meditation
+
+    calls = []
+    spawned = []
+
+    def fake_request(method, url, **kwargs):
+        calls.append((url, kwargs["json"]))
+        return httpx.Response(
+            202, json={"message_id": "announcer-1", "room_name": "room-1"}
+        )
+
+    patch_local_server_request(monkeypatch, fake_request)
+    monkeypatch.setattr(
+        task_meditation,
+        "load_task_meditation_settings",
+        lambda: task_meditation.TaskMeditationSettings(enabled=True),
+    )
+    monkeypatch.setattr(
+        task_meditation, "openbase_coder_command", lambda: "/venv/bin/openbase-coder"
+    )
+
+    def fake_spawn(argv, **kwargs):
+        spawned.append(argv)
+        return 777
+
+    monkeypatch.setattr(task_meditation, "spawn_meditation_worker", fake_spawn)
+
+    result = CliRunner().invoke(
+        user_cli.user,
+        [
+            "intro",
+            "Dottie",
+            "--thread-id",
+            "thread-9",
+            "--thread-name",
+            "Fix the login bug",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls[0][0].endswith("/api/user/say/")
+    assert calls[0][1] == {"agent_name": "Dottie", "text": "Hey there, I'm Dottie."}
+    assert spawned == [
+        [
+            "/venv/bin/openbase-coder",
+            "meditation",
+            "run",
+            "--thread-id",
+            "thread-9",
+            "--thread-name",
+            "Fix the login bug",
+            "--agent-name",
+            "Dottie",
+        ]
+    ]
+    assert "pid 777" in result.output
+
+
+def test_user_intro_skips_worker_when_meditation_disabled(monkeypatch):
+    from openbase_coder_cli import task_meditation
+
+    def fake_request(method, url, **kwargs):
+        return httpx.Response(
+            202, json={"message_id": "announcer-1", "room_name": "room-1"}
+        )
+
+    patch_local_server_request(monkeypatch, fake_request)
+    monkeypatch.setattr(
+        task_meditation,
+        "load_task_meditation_settings",
+        lambda: task_meditation.TaskMeditationSettings(enabled=False),
+    )
+
+    def fail_spawn(argv, **kwargs):
+        raise AssertionError("worker must not start when disabled")
+
+    monkeypatch.setattr(task_meditation, "spawn_meditation_worker", fail_spawn)
+
+    result = CliRunner().invoke(
+        user_cli.user, ["intro", "Dottie", "--greeting", "Hi, {agent_name} here."]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "worker" not in result.output
+
+
+def test_user_intro_survives_worker_spawn_failure(monkeypatch):
+    from openbase_coder_cli import task_meditation
+
+    def fake_request(method, url, **kwargs):
+        return httpx.Response(
+            202, json={"message_id": "announcer-1", "room_name": "room-1"}
+        )
+
+    patch_local_server_request(monkeypatch, fake_request)
+    monkeypatch.setattr(
+        task_meditation,
+        "load_task_meditation_settings",
+        lambda: task_meditation.TaskMeditationSettings(enabled=True),
+    )
+
+    def broken_spawn(argv, **kwargs):
+        raise OSError("no exec")
+
+    monkeypatch.setattr(task_meditation, "spawn_meditation_worker", broken_spawn)
+
+    result = CliRunner().invoke(user_cli.user, ["intro", "Dottie"])
+
+    # The intro hook treats a non-zero exit as a failed greeting; the greeting
+    # already went out, so a missing meditation must not fail the turn.
+    assert result.exit_code == 0, result.output
+    assert "Unable to start the task meditation worker" in result.output
