@@ -77,15 +77,7 @@ def run(
         )
         return
 
-    synthesize = (
-        task_meditation.ElevenLabsSynthesizer(
-            api_key=settings.elevenlabs_api_key,
-            voice_id=settings.elevenlabs_voice_id,
-            model_id=settings.elevenlabs_model_id,
-        )
-        if settings.elevenlabs_api_key
-        else None
-    )
+    synthesize = task_meditation.build_synthesizer(settings)
 
     estimate = (
         task_meditation.JevEstimator(
@@ -126,6 +118,7 @@ def run(
         )
     finally:
         task_meditation.release_run_lock(lock_path)
+        task_meditation.close_synthesizer(synthesize)
     click.echo(json.dumps(outcome.payload(), sort_keys=True))
     if outcome.status == task_meditation.STATUS_FAILED:
         raise SystemExit(1)
@@ -147,9 +140,12 @@ def run(
 def render(script_path: Path, output_path: Path | None, play: bool) -> None:
     """Synthesize a saved meditation script (with <pause N seconds> markers) to WAV."""
     settings = task_meditation.load_task_meditation_settings()
-    if not settings.elevenlabs_api_key:
+    synthesize = task_meditation.build_synthesizer(settings)
+    if synthesize is None:
         raise click.ClickException(
-            f"{task_meditation.ELEVENLABS_API_KEY_ENV} is not set; add it to the Openbase .env file."
+            "No voice engine is available: set "
+            f"{task_meditation.ELEVENLABS_API_KEY_ENV} or switch "
+            f"{task_meditation.TTS_ENGINE_ENV} to product."
         )
     segments = task_meditation.parse_meditation_script(
         script_path.read_text(encoding="utf-8"),
@@ -157,17 +153,15 @@ def render(script_path: Path, output_path: Path | None, play: bool) -> None:
     )
     if not any(isinstance(segment, task_meditation.Speech) for segment in segments):
         raise click.ClickException("The script has no spoken text.")
-    synthesize = task_meditation.ElevenLabsSynthesizer(
-        api_key=settings.elevenlabs_api_key,
-        voice_id=settings.elevenlabs_voice_id,
-        model_id=settings.elevenlabs_model_id,
-    )
     rendered: list[bytes | task_meditation.Pause] = []
-    for segment in segments:
-        if isinstance(segment, task_meditation.Pause):
-            rendered.append(segment)
-        else:
-            rendered.append(synthesize(segment.text))
+    try:
+        for segment in segments:
+            if isinstance(segment, task_meditation.Pause):
+                rendered.append(segment)
+            else:
+                rendered.append(synthesize(segment.text))
+    finally:
+        task_meditation.close_synthesizer(synthesize)
     pcm = task_meditation.stitch_pcm(rendered)
     target = output_path or script_path.with_suffix(".wav")
     task_meditation.write_wav(target, pcm)
@@ -177,6 +171,7 @@ def render(script_path: Path, output_path: Path | None, play: bool) -> None:
                 "audio_path": str(target),
                 "audio_seconds": round(task_meditation.pcm_duration_seconds(pcm), 1),
                 "segments": len(segments),
+                "voice": getattr(synthesize, "describe", lambda: None)(),
             },
             sort_keys=True,
         )

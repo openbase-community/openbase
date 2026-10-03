@@ -141,11 +141,13 @@ and influence by doing it. It ends with a gentle return, ready for the agent
 to report back.
 
 The meditation is written by GPT-6 Sol at medium reasoning effort and
-spoken by an ElevenLabs voice, with the pauses in the script rendered as real
-silence. Set `JEV_API_KEY` (or `TYPESAFE_API_KEY`) and `ELEVENLABS_API_KEY`
-in the Openbase `.env` file; without a Jev key a fast Codex model estimates
-instead, and without an ElevenLabs key the script is saved but nothing
-plays. Scripts, audio, and a
+spoken by the same voice engine the call uses (Cartesia through Openbase
+Cloud, a direct Cartesia key, or local Kokoro), in the catalog voice
+"Brooke" by default, with the pauses in the script rendered as real
+silence. Set `JEV_API_KEY` (or `TYPESAFE_API_KEY`) in the Openbase `.env`
+file; without it a fast Codex model estimates instead. ElevenLabs is an
+alternative engine (`OPENBASE_TASK_MEDITATION_TTS=elevenlabs` plus
+`ELEVENLABS_API_KEY`). Scripts, audio, and a
 JSON record of each run land in `~/.openbase/meditations/`.
 
 Tuning, in `~/.openbase/.env` or under `"task_meditation"` in
@@ -161,7 +163,9 @@ Tuning, in `~/.openbase/.env` or under `"task_meditation"` in
 | `OPENBASE_TASK_ESTIMATE_REASONING_EFFORT` / `estimator_reasoning_effort` | `low` | Reasoning effort for that fallback estimate |
 | `OPENBASE_TASK_MEDITATION_MODEL` / `meditation_model` | `gpt-6-sol` | Codex model that writes the meditation |
 | `OPENBASE_TASK_MEDITATION_REASONING_EFFORT` / `meditation_reasoning_effort` | `medium` | Reasoning effort for the meditation |
-| `ELEVENLABS_MEDITATION_VOICE_ID` / `voice_id` | Sarah | ElevenLabs voice for the meditation |
+| `OPENBASE_TASK_MEDITATION_TTS` / `tts_engine` | `product` | `product` (the call's voice engine) or `elevenlabs` |
+| `OPENBASE_TASK_MEDITATION_VOICE` / `voice` | `Brooke` | Catalog voice name or id for the product engine |
+| `ELEVENLABS_MEDITATION_VOICE_ID` / `voice_id` | Sarah | ElevenLabs voice when that engine is selected |
 
 To hear one on demand, or to check a voice without waiting for a long task:
 

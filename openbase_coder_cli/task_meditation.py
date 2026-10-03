@@ -13,9 +13,11 @@ Flow (see :func:`run_task_meditation`):
 3. Past the threshold (90 seconds by default) the meditation model (Sol at
    medium reasoning by default) writes a short guided meditation grounded in
    that conversation, with ``<pause N seconds>`` markers between phrases.
-4. ElevenLabs synthesizes each spoken segment; the segments are stitched with
-   silence into one WAV file, which plays over the active voice call through
-   the announcer audio path (``openbase-coder user play``).
+4. The voice engine the call itself uses (Cartesia through Openbase Cloud or a
+   direct key, or local Kokoro) synthesizes each spoken segment with a calm
+   catalog voice; ElevenLabs is an alternative engine. The segments are
+   stitched with silence into one WAV file, which plays over the active voice
+   call through the announcer audio path (``openbase-coder user play``).
 
 Every stage is optional-failure: a missing API key, an unreachable model, or
 no active call ends the run with a recorded outcome and never touches the
@@ -32,6 +34,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import wave
 from collections.abc import Awaitable, Callable, Iterable, Mapping
@@ -52,6 +55,8 @@ ESTIMATOR_MODEL_ENV = "OPENBASE_TASK_ESTIMATE_MODEL"
 ESTIMATOR_REASONING_EFFORT_ENV = "OPENBASE_TASK_ESTIMATE_REASONING_EFFORT"
 MEDITATION_MODEL_ENV = "OPENBASE_TASK_MEDITATION_MODEL"
 MEDITATION_REASONING_EFFORT_ENV = "OPENBASE_TASK_MEDITATION_REASONING_EFFORT"
+TTS_ENGINE_ENV = "OPENBASE_TASK_MEDITATION_TTS"
+VOICE_ENV = "OPENBASE_TASK_MEDITATION_VOICE"
 ELEVENLABS_API_KEY_ENV = "ELEVENLABS_API_KEY"
 ELEVENLABS_VOICE_ID_ENV = "ELEVENLABS_MEDITATION_VOICE_ID"
 ELEVENLABS_MODEL_ID_ENV = "ELEVENLABS_MEDITATION_MODEL_ID"
@@ -80,6 +85,14 @@ DEFAULT_ESTIMATOR_REASONING_EFFORT = "low"
 # a ChatGPT-account Codex rejects the alias with "model is not supported".
 DEFAULT_MEDITATION_MODEL = "gpt-6-sol"
 DEFAULT_MEDITATION_REASONING_EFFORT = "medium"
+TTS_ENGINE_PRODUCT = "product"
+TTS_ENGINE_ELEVENLABS = "elevenlabs"
+TTS_ENGINES = (TTS_ENGINE_PRODUCT, TTS_ENGINE_ELEVENLABS)
+DEFAULT_TTS_ENGINE = TTS_ENGINE_PRODUCT
+# Catalog voice (by name or id) for the product engine; Brooke reads evenly
+# and sits lower than the dispatcher's default voice.
+DEFAULT_MEDITATION_VOICE = "Brooke"
+DEFAULT_PRODUCT_TTS_MODEL = "sonic-3"
 # ElevenLabs premade "Sarah": calm, even delivery that suits guided practice.
 DEFAULT_ELEVENLABS_VOICE_ID = "EXAVITQu4vr4xnSDxMaL"
 DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2"
@@ -135,6 +148,8 @@ class TaskMeditationSettings:
     estimator_reasoning_effort: str = DEFAULT_ESTIMATOR_REASONING_EFFORT
     meditation_model: str = DEFAULT_MEDITATION_MODEL
     meditation_reasoning_effort: str = DEFAULT_MEDITATION_REASONING_EFFORT
+    tts_engine: str = DEFAULT_TTS_ENGINE
+    voice: str = DEFAULT_MEDITATION_VOICE
     elevenlabs_api_key: str | None = None
     elevenlabs_voice_id: str = DEFAULT_ELEVENLABS_VOICE_ID
     elevenlabs_model_id: str = DEFAULT_ELEVENLABS_MODEL_ID
@@ -181,6 +196,12 @@ def _parse_probability(value: object, default: float) -> float:
     except (TypeError, ValueError):
         return default
     return parsed if 0.0 <= parsed <= 1.0 else default
+
+
+def _parse_choice(value: object, choices: tuple[str, ...], default: str) -> str:
+    if isinstance(value, str) and value.strip().lower() in choices:
+        return value.strip().lower()
+    return default
 
 
 def _parse_str(value: object, default: str) -> str:
@@ -240,6 +261,10 @@ def load_task_meditation_settings(
             pick(MEDITATION_REASONING_EFFORT_ENV, "meditation_reasoning_effort"),
             defaults.meditation_reasoning_effort,
         ),
+        tts_engine=_parse_choice(
+            pick(TTS_ENGINE_ENV, "tts_engine"), TTS_ENGINES, defaults.tts_engine
+        ),
+        voice=_parse_str(pick(VOICE_ENV, "voice"), defaults.voice),
         elevenlabs_api_key=_parse_str(source.get(ELEVENLABS_API_KEY_ENV), "") or None,
         elevenlabs_voice_id=_parse_str(
             pick(ELEVENLABS_VOICE_ID_ENV, "voice_id"), defaults.elevenlabs_voice_id
@@ -979,8 +1004,247 @@ def _turn_error_message(turn: Mapping[str, Any]) -> str:
     return "no error detail from the app-server"
 
 
+class ProductVoiceSynthesizer:
+    """Synthesize with the voice engine the call itself uses.
+
+    Resolves the selected TTS provider (Cartesia via Openbase Cloud, a direct
+    Cartesia key, or local Kokoro) exactly as the voice agent does, picks a
+    catalog voice by name or id, and streams each segment through the
+    provider's LiveKit TTS on a private event loop thread. Output is 24 kHz
+    mono 16-bit PCM so it stitches with the pause silence.
+    """
+
+    def __init__(
+        self,
+        *,
+        voice: str | None = None,
+        provider_id: str | None = None,
+        model: str = DEFAULT_PRODUCT_TTS_MODEL,
+        sample_rate: int = SAMPLE_RATE,
+    ) -> None:
+        from openbase_coder_cli.dispatcher_config import selected_tts_provider_id
+        from openbase_coder_cli.tts_providers import get_tts_provider
+
+        self._provider = get_tts_provider(provider_id or selected_tts_provider_id())
+        requested = (voice or "").strip() or DEFAULT_MEDITATION_VOICE
+        self._voice = (
+            self._provider.voice_for_id(requested)
+            or self._provider.voice_for_name(requested)
+            or self._provider.voice_for_name(DEFAULT_MEDITATION_VOICE)
+            or self._provider.default_announcer_voice()
+        )
+        self._model = model
+        self._sample_rate = sample_rate
+        _preload_livekit_plugins(self._provider.provider_id)
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._tts: Any | None = None
+
+    @property
+    def voice_name(self) -> str:
+        return self._voice.name
+
+    @property
+    def voice_id(self) -> str:
+        return self._voice.id
+
+    @property
+    def provider_id(self) -> str:
+        return self._provider.provider_id
+
+    def describe(self) -> str:
+        return f"{self._provider.display_name} voice {self._voice.name}"
+
+    def _credentials(self) -> dict[str, Any]:
+        """Mirror the voice agent's TTS wiring for the selected provider."""
+        from openbase_coder_cli.tts_providers import (
+            CARTESIA_PROVIDER_ID,
+            OPENBASE_CLOUD_TTS_PROVIDER_ID,
+        )
+
+        provider_id = self._provider.provider_id
+        if provider_id == OPENBASE_CLOUD_TTS_PROVIDER_ID:
+            from openbase_coder_cli.config.machine_token_manager import (
+                MachineTokenManager,
+            )
+            from openbase_coder_cli.livekit_agent.config import (
+                OPENBASE_CLOUD_AUDIO_BASE_URL,
+                OPENBASE_CLOUD_AUDIO_CARTESIA_VERSION,
+                WEB_BACKEND_URL,
+            )
+
+            token = MachineTokenManager(WEB_BACKEND_URL).get_machine_token()
+            if not token:
+                raise RuntimeError(
+                    "Openbase Cloud audio is selected but no machine token is available; "
+                    "run `openbase-coder login`."
+                )
+            return {
+                "api_key": token,
+                "base_url": f"{OPENBASE_CLOUD_AUDIO_BASE_URL}/cartesia",
+                "api_version": OPENBASE_CLOUD_AUDIO_CARTESIA_VERSION,
+                "model": self._model,
+            }
+        if provider_id == CARTESIA_PROVIDER_ID:
+            api_key = os.getenv("CARTESIA_API_KEY", "").strip()
+            if not api_key:
+                raise RuntimeError(
+                    "CARTESIA_API_KEY is not set for the Cartesia voice engine."
+                )
+            return {"api_key": api_key, "model": self._model}
+        return {}
+
+    def _ensure_loop(self) -> asyncio.AbstractEventLoop:
+        if self._loop is not None:
+            return self._loop
+        # LiveKit plugins fetch their aiohttp session from a context variable
+        # the agent worker sets per job. ``run_coroutine_threadsafe`` copies
+        # the *calling* thread's context into each task, so the session
+        # factory is installed here, on the caller's thread, before any task
+        # is scheduled; the factory lazily creates one session on the loop.
+        from livekit.agents.utils import http_context
+
+        http_context._new_session_ctx()
+        loop = asyncio.new_event_loop()
+        thread = threading.Thread(
+            target=_serve_tts_loop,
+            args=(loop,),
+            name="openbase-meditation-tts",
+            daemon=True,
+        )
+        thread.start()
+        self._loop, self._thread = loop, thread
+        return loop
+
+    def _run(self, coroutine):
+        loop = self._ensure_loop()
+        return asyncio.run_coroutine_threadsafe(coroutine, loop).result()
+
+    async def _ensure_tts(self) -> Any:
+        if self._tts is None:
+            self._tts = self._provider.create_livekit_tts(
+                voice_id=self._voice.id, **self._credentials()
+            )
+        return self._tts
+
+    async def _synthesize(self, text: str) -> bytes:
+        tts = await self._ensure_tts()
+        stream = tts.stream()
+        frames: list[Any] = []
+        try:
+            stream.push_text(text)
+            stream.flush()
+            stream.end_input()
+            async for event in stream:
+                frame = getattr(event, "frame", None)
+                if frame is not None and frame.samples_per_channel > 0:
+                    frames.append(frame)
+        finally:
+            await stream.aclose()
+        return _frames_to_pcm(frames, sample_rate=self._sample_rate)
+
+    def __call__(self, text: str) -> bytes:
+        audio = self._run(self._synthesize(text))
+        if len(audio) < SAMPLE_WIDTH_BYTES * 100:
+            raise RuntimeError(f"{self.describe()} returned no audio for a segment.")
+        return audio
+
+    def close(self) -> None:
+        loop = self._loop
+        if loop is None:
+            return
+
+        async def _shutdown() -> None:
+            if self._tts is not None:
+                closer = getattr(self._tts, "aclose", None)
+                if callable(closer):
+                    await closer()
+                self._tts = None
+            from livekit.agents.utils import http_context
+
+            await http_context._close_http_ctx()
+
+        try:
+            asyncio.run_coroutine_threadsafe(_shutdown(), loop).result(timeout=10)
+        except Exception:
+            logger.debug("task_meditation: tts close failed", exc_info=True)
+        loop.call_soon_threadsafe(loop.stop)
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+        self._loop, self._thread = None, None
+
+
+def _serve_tts_loop(loop: asyncio.AbstractEventLoop) -> None:
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+
+def _preload_livekit_plugins(provider_id: str) -> None:
+    """Import the TTS plugin on the main thread.
+
+    LiveKit registers plugins at import time and refuses to do so from any
+    other thread; the synthesizer streams on a worker loop, so the import
+    must happen here, while the constructor still runs on the main thread.
+    """
+    from openbase_coder_cli.tts_providers import (
+        CARTESIA_PROVIDER_ID,
+        OPENBASE_CLOUD_TTS_PROVIDER_ID,
+    )
+
+    if provider_id in {CARTESIA_PROVIDER_ID, OPENBASE_CLOUD_TTS_PROVIDER_ID}:
+        try:
+            from livekit.plugins import cartesia  # noqa: F401
+        except Exception:
+            logger.debug(
+                "task_meditation: cartesia plugin preload failed", exc_info=True
+            )
+
+
+def _frames_to_pcm(frames: list[Any], *, sample_rate: int) -> bytes:
+    """Join LiveKit audio frames into mono 16-bit PCM at ``sample_rate``."""
+    parts: list[bytes] = []
+    resampler = None
+    for frame in frames:
+        channels = int(getattr(frame, "num_channels", 1) or 1)
+        rate = int(getattr(frame, "sample_rate", sample_rate) or sample_rate)
+        if rate == sample_rate and channels == 1:
+            parts.append(bytes(frame.data))
+            continue
+        from livekit import rtc
+
+        if resampler is None:
+            resampler = rtc.AudioResampler(
+                input_rate=rate, output_rate=sample_rate, num_channels=channels
+            )
+        for resampled in resampler.push(frame):
+            parts.append(_downmix(bytes(resampled.data), channels))
+    if resampler is not None:
+        for resampled in resampler.flush():
+            parts.append(_downmix(bytes(resampled.data), int(frames[-1].num_channels)))
+    return b"".join(parts)
+
+
+def _downmix(data: bytes, channels: int) -> bytes:
+    if channels <= 1:
+        return data
+    import array
+
+    samples = array.array("h", data)
+    mono = array.array(
+        "h",
+        (
+            int(sum(samples[i : i + channels]) / channels)
+            for i in range(0, len(samples) - len(samples) % channels, channels)
+        ),
+    )
+    return mono.tobytes()
+
+
 class ElevenLabsSynthesizer:
     """Synthesize one spoken segment to 24 kHz mono 16-bit PCM."""
+
+    def describe(self) -> str:
+        return f"ElevenLabs voice {self._voice_id}"
 
     def __init__(
         self,
@@ -1029,6 +1293,25 @@ class ElevenLabsSynthesizer:
         return audio
 
 
+def build_synthesizer(settings: TaskMeditationSettings) -> Synthesizer | None:
+    """The configured voice engine, or ``None`` when it cannot be used."""
+    if settings.tts_engine == TTS_ENGINE_ELEVENLABS:
+        if not settings.elevenlabs_api_key:
+            return None
+        return ElevenLabsSynthesizer(
+            api_key=settings.elevenlabs_api_key,
+            voice_id=settings.elevenlabs_voice_id,
+            model_id=settings.elevenlabs_model_id,
+        )
+    return ProductVoiceSynthesizer(voice=settings.voice)
+
+
+def close_synthesizer(synthesizer: Synthesizer | None) -> None:
+    closer = getattr(synthesizer, "close", None)
+    if callable(closer):
+        closer()
+
+
 def publish_meditation_audio(path: Path, *, room_name: str | None = None) -> None:
     """Play the file in the active call through the local server's play API."""
     from openbase_coder_cli.cli.local_server import local_server_request
@@ -1071,6 +1354,7 @@ class MeditationOutcome:
     script_path: str | None = None
     audio_path: str | None = None
     audio_seconds: float | None = None
+    voice: str | None = None
     record_path: str | None = None
 
     def payload(self) -> dict[str, Any]:
@@ -1269,8 +1553,10 @@ async def run_task_meditation(
         script_pause_seconds(segments),
     )
 
+    describe = getattr(synthesize, "describe", None)
+    outcome.voice = describe() if callable(describe) else None
     if synthesize is None:
-        outcome.reason = "no ElevenLabs API key; script saved without audio"
+        outcome.reason = "no voice engine available; script saved without audio"
         _write_record(base, outcome)
         return outcome
 

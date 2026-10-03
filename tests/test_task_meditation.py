@@ -479,7 +479,7 @@ def test_run_without_api_key_saves_script_only(tmp_path):
         _settings(tmp_path, elevenlabs_api_key=None), completer, synthesize=None
     )
     assert outcome.status == "skipped"
-    assert "ElevenLabs" in outcome.reason
+    assert "no voice engine" in outcome.reason
     assert Path(outcome.script_path).is_file()
     assert outcome.audio_path is None
     assert published == []
@@ -1024,3 +1024,224 @@ def test_settings_read_jev_keys(tmp_path):
     )
     assert settings.jev_api_key == "tk"
     assert settings.decision_probability == 0.5
+
+
+# --- product voice engine ---------------------------------------------------
+
+
+class _FakeFrame:
+    def __init__(self, data: bytes, sample_rate: int = 24000, num_channels: int = 1):
+        self.data = data
+        self.sample_rate = sample_rate
+        self.num_channels = num_channels
+        self.samples_per_channel = len(data) // (2 * num_channels)
+
+
+class _FakeStream:
+    def __init__(self, frames):
+        self._frames = frames
+        self.pushed: list[str] = []
+        self.closed = False
+
+    def push_text(self, text):
+        self.pushed.append(text)
+
+    def flush(self):
+        pass
+
+    def end_input(self):
+        pass
+
+    def __aiter__(self):
+        async def gen():
+            for frame in self._frames:
+                yield type("Event", (), {"frame": frame})()
+
+        return gen()
+
+    async def aclose(self):
+        self.closed = True
+
+
+class _FakeTTS:
+    def __init__(self, frames):
+        self.frames = frames
+        self.streams: list[_FakeStream] = []
+        self.closed = False
+
+    def stream(self):
+        stream = _FakeStream(self.frames)
+        self.streams.append(stream)
+        return stream
+
+    async def aclose(self):
+        self.closed = True
+
+
+class _FakeVoice:
+    def __init__(self, id, name):
+        self.id = id
+        self.name = name
+
+
+class _FakeProvider:
+    provider_id = "openbase_cloud"
+    display_name = "Openbase Cloud"
+
+    def __init__(self, frames):
+        self.frames = frames
+        self.created: list[dict] = []
+        self.tts: _FakeTTS | None = None
+        self._voices = {
+            "brooke": _FakeVoice("v-brooke", "Brooke"),
+            "katie": _FakeVoice("v-katie", "Katie"),
+        }
+
+    def voice_for_id(self, voice_id):
+        return next((v for v in self._voices.values() if v.id == voice_id), None)
+
+    def voice_for_name(self, name):
+        return self._voices.get((name or "").lower())
+
+    def default_announcer_voice(self):
+        return self._voices["katie"]
+
+    def create_livekit_tts(self, *, voice_id, **kwargs):
+        self.created.append({"voice_id": voice_id, **kwargs})
+        self.tts = _FakeTTS(self.frames)
+        return self.tts
+
+
+def _patch_product_provider(monkeypatch, provider):
+    from openbase_coder_cli import dispatcher_config, tts_providers
+
+    monkeypatch.setattr(
+        dispatcher_config, "selected_tts_provider_id", lambda *a, **k: "openbase_cloud"
+    )
+    monkeypatch.setattr(tts_providers, "get_tts_provider", lambda provider_id: provider)
+
+
+def test_product_voice_synthesizer_streams_through_cloud_cartesia(monkeypatch):
+    frames = [_FakeFrame(b"\x01\x00" * 2400), _FakeFrame(b"\x02\x00" * 2400)]
+    provider = _FakeProvider(frames)
+    _patch_product_provider(monkeypatch, provider)
+
+    from openbase_coder_cli.config import machine_token_manager
+
+    class FakeTokenManager:
+        def __init__(self, url):
+            self.url = url
+
+        def get_machine_token(self):
+            return "machine-token"
+
+    monkeypatch.setattr(machine_token_manager, "MachineTokenManager", FakeTokenManager)
+
+    synth = tm.ProductVoiceSynthesizer(voice="brooke")
+    assert synth.voice_name == "Brooke" and synth.voice_id == "v-brooke"
+    assert synth.describe() == "Openbase Cloud voice Brooke"
+    pcm = synth("Settle in.")
+    assert pcm == b"\x01\x00" * 2400 + b"\x02\x00" * 2400
+    assert provider.created[0]["voice_id"] == "v-brooke"
+    assert provider.created[0]["api_key"] == "machine-token"
+    assert provider.created[0]["base_url"].endswith("/cartesia")
+    assert provider.created[0]["model"] == "sonic-3"
+    assert provider.tts.streams[0].pushed == ["Settle in."]
+    assert provider.tts.streams[0].closed
+    # The TTS instance is reused across segments.
+    synth("Breathe.")
+    assert len(provider.created) == 1 and len(provider.tts.streams) == 2
+    synth.close()
+    assert provider.tts.closed
+    synth.close()  # idempotent
+
+
+def test_product_voice_synthesizer_falls_back_to_default_voice(monkeypatch):
+    provider = _FakeProvider([_FakeFrame(b"\x01\x00" * 2400)])
+    _patch_product_provider(monkeypatch, provider)
+    assert tm.ProductVoiceSynthesizer(voice="nobody").voice_name == "Brooke"
+    assert tm.ProductVoiceSynthesizer(voice="v-katie").voice_name == "Katie"
+    assert tm.ProductVoiceSynthesizer(voice=None).voice_name == "Brooke"
+
+
+def test_product_voice_synthesizer_rejects_empty_audio(monkeypatch):
+    provider = _FakeProvider([])
+    _patch_product_provider(monkeypatch, provider)
+    from openbase_coder_cli.config import machine_token_manager
+
+    monkeypatch.setattr(
+        machine_token_manager,
+        "MachineTokenManager",
+        lambda url: type("T", (), {"get_machine_token": lambda self: "t"})(),
+    )
+    synth = tm.ProductVoiceSynthesizer(voice="brooke")
+    with pytest.raises(RuntimeError, match="no audio"):
+        synth("Hello")
+    synth.close()
+
+
+def test_frames_to_pcm_passes_matching_frames_through_and_downmixes():
+    frames = [_FakeFrame(b"\x01\x00" * 10), _FakeFrame(b"\x02\x00" * 10)]
+    assert (
+        tm._frames_to_pcm(frames, sample_rate=24000)
+        == b"\x01\x00" * 10 + b"\x02\x00" * 10
+    )
+    assert tm._downmix(b"\x02\x00\x04\x00" * 3, 2) == b"\x03\x00" * 3
+
+
+def test_build_synthesizer_honours_engine_setting(monkeypatch):
+    provider = _FakeProvider([_FakeFrame(b"\x01\x00" * 2400)])
+    _patch_product_provider(monkeypatch, provider)
+    product = tm.build_synthesizer(tm.TaskMeditationSettings(voice="katie"))
+    assert (
+        isinstance(product, tm.ProductVoiceSynthesizer)
+        and product.voice_name == "Katie"
+    )
+    eleven = tm.build_synthesizer(
+        tm.TaskMeditationSettings(
+            tts_engine="elevenlabs", elevenlabs_api_key="k", elevenlabs_voice_id="v"
+        )
+    )
+    assert (
+        isinstance(eleven, tm.ElevenLabsSynthesizer)
+        and eleven.describe() == "ElevenLabs voice v"
+    )
+    assert (
+        tm.build_synthesizer(tm.TaskMeditationSettings(tts_engine="elevenlabs")) is None
+    )
+    tm.close_synthesizer(product)
+    tm.close_synthesizer(None)
+
+
+def test_settings_read_engine_and_voice(tmp_path):
+    settings = tm.load_task_meditation_settings(
+        env={}, config_path=tmp_path / "missing.json"
+    )
+    assert settings.tts_engine == "product" and settings.voice == "Brooke"
+    settings = tm.load_task_meditation_settings(
+        env={tm.TTS_ENGINE_ENV: "ElevenLabs", tm.VOICE_ENV: "Katie"},
+        config_path=tmp_path / "missing.json",
+    )
+    assert settings.tts_engine == "elevenlabs" and settings.voice == "Katie"
+    settings = tm.load_task_meditation_settings(
+        env={tm.TTS_ENGINE_ENV: "robot"}, config_path=tmp_path / "missing.json"
+    )
+    assert settings.tts_engine == "product"
+
+
+def test_run_records_the_voice_used(tmp_path):
+    completer = FakeCompleter("unused", "Breathe.<pause 2 seconds>Release.")
+
+    class Synth:
+        def __call__(self, text):
+            return b"\x01\x00" * tm.SAMPLE_RATE
+
+        def describe(self):
+            return "Openbase Cloud voice Brooke"
+
+    outcome, _, _ = _run(
+        _settings(tmp_path), completer, synthesize=Synth(), force=True, play=False
+    )
+    assert (
+        outcome.status == "rendered" and outcome.voice == "Openbase Cloud voice Brooke"
+    )
