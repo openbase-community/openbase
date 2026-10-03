@@ -182,6 +182,10 @@ def test_settings_defaults(tmp_path):
     assert settings.threshold_seconds == 90.0
     assert settings.estimator_model == "gpt-5.5"
     assert settings.estimator_reasoning_effort == "low"
+    assert settings.jev_api_key is None
+    assert settings.jev_model == "jev-latest"
+    assert settings.decision_probability == 0.5
+    assert settings.payload()["jev_api_key"] == "missing"
     assert settings.meditation_model == "gpt-6-sol"
     assert settings.meditation_reasoning_effort == "medium"
     assert settings.elevenlabs_api_key is None
@@ -372,6 +376,7 @@ def _run(
     settings,
     completer,
     *,
+    estimate=None,
     synthesize="default",
     publish=None,
     force=False,
@@ -398,6 +403,7 @@ def _run(
             agent_name="Dottie",
             settings=settings,
             complete=completer,
+            estimate=estimate,
             synthesize=fake_synthesize if synthesize == "default" else synthesize,
             publish=publish or fake_publish,
             read_conversation=read_conversation,
@@ -414,6 +420,7 @@ def test_run_skips_short_tasks_without_writing_a_script(tmp_path):
     assert outcome.status == "skipped"
     assert outcome.reason == "under threshold"
     assert outcome.estimate_seconds == 30.0
+    assert outcome.estimate_source == "codex"
     assert len(completer.calls) == 1
     assert completer.calls[0]["model"] == "gpt-5.5"
     assert completer.calls[0]["reasoning_effort"] == "low"
@@ -531,6 +538,7 @@ def test_run_survives_conversation_reader_failure(tmp_path):
             agent_name=None,
             settings=_settings(tmp_path),
             complete=completer,
+            estimate=None,
             synthesize=None,
             publish=None,
             read_conversation=broken_reader,
@@ -801,3 +809,218 @@ def test_codex_one_shot_completer_raises_on_failed_turn(monkeypatch):
                 "p", model="sol", reasoning_effort="low", developer_instructions="d"
             )
         )
+
+
+# --- Jev estimate ------------------------------------------------------------
+
+JEV_RESPONSE = {
+    "model": "jev-1.13.0",
+    "answers": {
+        "duration": {
+            "type": "score",
+            "score": 5.4,
+            "confidence": 0.65,
+            "legend": {str(i): d for i, (_s, d) in enumerate(tm.DURATION_LEVELS)},
+            "probabilities": {
+                "0": 0.0,
+                "1": 0.0,
+                "2": 0.0,
+                "3": 0.0,
+                "4": 0.12,
+                "5": 0.33,
+                "6": 0.55,
+            },
+        },
+        "over_threshold": {"type": "noul", "noul": 0.91},
+    },
+    "usage": {"input_tokens": 537, "output_tokens": 34},
+}
+
+
+def test_build_jev_estimate_request_shape():
+    request = tm.build_jev_estimate_request(
+        task="Fix login",
+        agent_name="Dottie",
+        conversation="<voice>User: fix login</voice>",
+        threshold_seconds=90,
+        model="jev-latest",
+    )
+    assert request["model"] == "jev-latest"
+    assert request["state"] == {
+        "task": "Fix login",
+        "agent": "Dottie, an autonomous coding agent working in the repository",
+        "recent_conversation": "User: fix login",
+    }
+    duration = request["questions"]["duration"]
+    assert duration["type"] == "score"
+    assert duration["criteria"] == [d for _s, d in tm.DURATION_LEVELS]
+    assert 2 <= len(duration["criteria"]) <= 10
+    over = request["questions"]["over_threshold"]
+    assert over["type"] == "noul"
+    assert "a minute and a half" in over["instructions"]
+    assert (
+        "recent_conversation"
+        not in tm.build_jev_estimate_request(
+            task="t", agent_name=None, conversation="", threshold_seconds=300
+        )["state"]
+    )
+    assert (
+        "5 minutes"
+        in tm.build_jev_estimate_request(
+            task="t", agent_name=None, conversation="", threshold_seconds=300
+        )["questions"]["over_threshold"]["instructions"]
+    )
+
+
+def test_parse_jev_estimate_uses_probability_weighted_seconds_and_noul():
+    estimate = tm.parse_jev_estimate(JEV_RESPONSE)
+    expected = 0.12 * 630 + 0.33 * 1800 + 0.55 * 3600
+    assert estimate.seconds == round(expected, 1)
+    assert estimate.over_threshold_probability == 0.91
+    assert estimate.confidence == 0.65
+    assert estimate.model == "jev-1.13.0"
+    assert estimate.source == "jev"
+
+
+def test_parse_jev_estimate_falls_back_to_score_interpolation():
+    payload = {"answers": {"duration": {"type": "score", "score": 1.5}}}
+    estimate = tm.parse_jev_estimate(payload)
+    assert estimate.seconds == round((60 + 135) / 2, 1)
+    assert estimate.over_threshold_probability is None
+    assert tm.parse_jev_estimate({}).seconds is None
+    assert (
+        tm.parse_jev_estimate(
+            {"answers": {"over_threshold": {"noul": 1.7}}}
+        ).over_threshold_probability
+        is None
+    )
+
+
+def test_estimate_says_long_prefers_noul_then_seconds():
+    long_by_noul = tm.TaskEstimate(seconds=30, over_threshold_probability=0.8)
+    short_by_noul = tm.TaskEstimate(seconds=900, over_threshold_probability=0.2)
+    assert tm.estimate_says_long(
+        long_by_noul, threshold_seconds=90, decision_probability=0.5
+    )
+    assert not tm.estimate_says_long(
+        short_by_noul, threshold_seconds=90, decision_probability=0.5
+    )
+    assert tm.estimate_says_long(
+        tm.TaskEstimate(seconds=100), threshold_seconds=90, decision_probability=0.5
+    )
+    assert not tm.estimate_says_long(
+        tm.TaskEstimate(seconds=None), threshold_seconds=90, decision_probability=0.5
+    )
+
+
+def test_jev_estimator_posts_request_and_parses(monkeypatch):
+    import httpx
+
+    captured = {}
+
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured["kwargs"] = kwargs
+        return httpx.Response(200, json=JEV_RESPONSE)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    estimator = tm.JevEstimator(api_key="k", model="jev-latest", threshold_seconds=90)
+    estimate = estimator(
+        task="Migrate billing", agent_name="Dottie", conversation="User: go"
+    )
+    assert captured["url"] == tm.JEV_SYSTEM_ONE_URL
+    assert captured["kwargs"]["headers"]["Authorization"] == "Bearer k"
+    assert captured["kwargs"]["json"]["state"]["task"] == "Migrate billing"
+    assert estimate.over_threshold_probability == 0.91
+
+    monkeypatch.setattr(
+        httpx, "post", lambda url, **kwargs: httpx.Response(401, text="bad key")
+    )
+    with pytest.raises(RuntimeError, match="HTTP 401"):
+        estimator(task="t", agent_name=None, conversation="")
+    monkeypatch.setattr(
+        httpx, "post", lambda url, **kwargs: httpx.Response(200, json={"answers": {}})
+    )
+    with pytest.raises(RuntimeError, match="neither"):
+        estimator(task="t", agent_name=None, conversation="")
+
+
+def test_run_uses_jev_estimate_and_skips_codex_estimator(tmp_path):
+    calls = []
+
+    def jev(*, task, agent_name, conversation):
+        calls.append((task, agent_name, conversation))
+        return tm.TaskEstimate(
+            seconds=1500,
+            over_threshold_probability=0.91,
+            confidence=0.65,
+            model="jev-1.13.0",
+        )
+
+    completer = FakeCompleter("unused", "Breathe.<pause 2 seconds>Release.")
+    outcome, synthesized, published = _run(_settings(tmp_path), completer, estimate=jev)
+    assert outcome.status == "played"
+    assert outcome.estimate_source == "jev"
+    assert outcome.estimate_seconds == 1500
+    assert outcome.over_threshold_probability == 0.91
+    assert calls == [("Fix the login bug", "Dottie", "User: hi")]
+    # Only the meditation itself went to Codex.
+    assert [call["developer_instructions"] for call in completer.calls] == [
+        tm.MEDITATION_INSTRUCTIONS
+    ]
+    assert "about 25 minutes" in completer.calls[0]["prompt"]
+
+
+def test_run_jev_noul_decides_even_when_seconds_are_short(tmp_path):
+    completer = FakeCompleter("unused", "Breathe.")
+    outcome, _, _ = _run(
+        _settings(tmp_path),
+        completer,
+        estimate=lambda **kwargs: tm.TaskEstimate(
+            seconds=600, over_threshold_probability=0.1
+        ),
+    )
+    assert outcome.status == "skipped" and outcome.reason == "under threshold"
+    assert completer.calls == []
+
+
+def test_run_jev_decision_probability_is_configurable(tmp_path):
+    completer = FakeCompleter("unused", "Breathe.")
+    outcome, _, _ = _run(
+        _settings(tmp_path, decision_probability=0.9),
+        completer,
+        estimate=lambda **kwargs: tm.TaskEstimate(
+            seconds=600, over_threshold_probability=0.8
+        ),
+    )
+    assert outcome.status == "skipped" and outcome.reason == "under threshold"
+
+
+def test_run_jev_failure_is_reported(tmp_path):
+    def broken(**kwargs):
+        raise RuntimeError("Jev request failed with HTTP 529")
+
+    completer = FakeCompleter("unused", "Breathe.")
+    outcome, _, _ = _run(_settings(tmp_path), completer, estimate=broken)
+    assert outcome.status == "failed" and "529" in outcome.reason
+
+
+def test_settings_read_jev_keys(tmp_path):
+    settings = tm.load_task_meditation_settings(
+        env={
+            tm.JEV_API_KEY_ENV: "jk",
+            tm.JEV_MODEL_ENV: "jev-preview",
+            tm.DECISION_PROBABILITY_ENV: "0.7",
+        },
+        config_path=tmp_path / "missing.json",
+    )
+    assert settings.jev_api_key == "jk"
+    assert settings.jev_model == "jev-preview"
+    assert settings.decision_probability == 0.7
+    assert settings.payload()["jev_api_key"] == "set"
+    settings = tm.load_task_meditation_settings(
+        env={tm.TYPESAFE_API_KEY_ENV: "tk", tm.DECISION_PROBABILITY_ENV: "7"},
+        config_path=tmp_path / "missing.json",
+    )
+    assert settings.jev_api_key == "tk"
+    assert settings.decision_probability == 0.5

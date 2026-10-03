@@ -87,6 +87,16 @@ def run(
         else None
     )
 
+    estimate = (
+        task_meditation.JevEstimator(
+            api_key=settings.jev_api_key,
+            model=settings.jev_model,
+            threshold_seconds=settings.threshold_seconds,
+        )
+        if settings.jev_api_key
+        else None
+    )
+
     def publish(path: Path) -> None:
         task_meditation.publish_meditation_audio(
             path, room_name=room_name.strip() or None
@@ -105,6 +115,7 @@ def run(
                 agent_name=agent_name.strip() or None,
                 settings=settings,
                 complete=task_meditation.CodexOneShotCompleter(),
+                estimate=estimate,
                 synthesize=synthesize,
                 publish=publish,
                 read_conversation=read_conversation,

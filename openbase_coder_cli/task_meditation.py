@@ -5,8 +5,11 @@ Flow (see :func:`run_task_meditation`):
 1. A named Super Agent thread's first turn fires the Super Agents thread intro
    hook, which runs ``openbase-coder user intro``. That command greets the
    user and detaches ``openbase-coder meditation run`` for the new thread.
-2. The estimator model (fast, low effort) guesses how long the task will take
-   from the task name and the recent voice conversation.
+2. Jev (TypeSafe AI's System One decision model) estimates how long the task
+   will take from the task name and the recent voice conversation: a score
+   question over duration buckets plus a yes/no ("noul") question for "longer
+   than the threshold". Without a Jev key, a fast Codex model estimates
+   instead.
 3. Past the threshold (90 seconds by default) the meditation model (Sol at
    medium reasoning by default) writes a short guided meditation grounded in
    that conversation, with ``<pause N seconds>`` markers between phrases.
@@ -41,6 +44,10 @@ logger = logging.getLogger(__name__)
 TASK_MEDITATION_CONFIG_KEY = "task_meditation"
 ENABLED_ENV = "OPENBASE_TASK_MEDITATION_ENABLED"
 THRESHOLD_ENV = "OPENBASE_TASK_MEDITATION_THRESHOLD_SECONDS"
+JEV_API_KEY_ENV = "JEV_API_KEY"
+TYPESAFE_API_KEY_ENV = "TYPESAFE_API_KEY"
+JEV_MODEL_ENV = "OPENBASE_TASK_ESTIMATE_JEV_MODEL"
+DECISION_PROBABILITY_ENV = "OPENBASE_TASK_MEDITATION_DECISION_PROBABILITY"
 ESTIMATOR_MODEL_ENV = "OPENBASE_TASK_ESTIMATE_MODEL"
 ESTIMATOR_REASONING_EFFORT_ENV = "OPENBASE_TASK_ESTIMATE_REASONING_EFFORT"
 MEDITATION_MODEL_ENV = "OPENBASE_TASK_MEDITATION_MODEL"
@@ -50,6 +57,23 @@ ELEVENLABS_VOICE_ID_ENV = "ELEVENLABS_MEDITATION_VOICE_ID"
 ELEVENLABS_MODEL_ID_ENV = "ELEVENLABS_MEDITATION_MODEL_ID"
 
 DEFAULT_THRESHOLD_SECONDS = 90.0
+DEFAULT_JEV_MODEL = "jev-latest"
+# Jev's noul answer is a calibrated probability that the task runs past the
+# threshold; at or above this the meditation plays.
+DEFAULT_DECISION_PROBABILITY = 0.5
+JEV_SYSTEM_ONE_URL = "https://api.typesafe.ai/v1/systemone"
+# Ordered duration buckets for the Jev score question: representative seconds
+# plus the level description Jev sees. Expected seconds is the
+# probability-weighted mean of the representative values.
+DURATION_LEVELS: tuple[tuple[float, str], ...] = (
+    (15.0, "Under 30 seconds: a quick answer or lookup"),
+    (60.0, "30 to 90 seconds: a one-line fix or a small check"),
+    (135.0, "90 seconds to 3 minutes: a one-file change"),
+    (270.0, "3 to 6 minutes: a small change with tests"),
+    (630.0, "6 to 15 minutes: a multi-file change with tests"),
+    (1800.0, "15 to 45 minutes: a feature across several files"),
+    (3600.0, "Over 45 minutes: a large migration or refactor"),
+)
 DEFAULT_ESTIMATOR_MODEL = "gpt-5.5"
 DEFAULT_ESTIMATOR_REASONING_EFFORT = "low"
 # The app-server wants the provider slug here, not the Openbase "sol" alias:
@@ -104,6 +128,9 @@ _ESTIMATE_BARE_PATTERN = re.compile(r"\d+(?:\.\d+)?")
 class TaskMeditationSettings:
     enabled: bool = True
     threshold_seconds: float = DEFAULT_THRESHOLD_SECONDS
+    decision_probability: float = DEFAULT_DECISION_PROBABILITY
+    jev_api_key: str | None = None
+    jev_model: str = DEFAULT_JEV_MODEL
     estimator_model: str = DEFAULT_ESTIMATOR_MODEL
     estimator_reasoning_effort: str = DEFAULT_ESTIMATOR_REASONING_EFFORT
     meditation_model: str = DEFAULT_MEDITATION_MODEL
@@ -118,6 +145,7 @@ class TaskMeditationSettings:
         data = asdict(self)
         data["output_dir"] = str(self.output_dir)
         data["elevenlabs_api_key"] = "set" if self.elevenlabs_api_key else "missing"
+        data["jev_api_key"] = "set" if self.jev_api_key else "missing"
         return data
 
 
@@ -145,6 +173,14 @@ def _parse_positive_float(value: object, default: float) -> float:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
+
+
+def _parse_probability(value: object, default: float) -> float:
+    try:
+        parsed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return parsed if 0.0 <= parsed <= 1.0 else default
 
 
 def _parse_str(value: object, default: str) -> str:
@@ -180,6 +216,16 @@ def load_task_meditation_settings(
         threshold_seconds=_parse_positive_float(
             pick(THRESHOLD_ENV, "threshold_seconds"), defaults.threshold_seconds
         ),
+        decision_probability=_parse_probability(
+            pick(DECISION_PROBABILITY_ENV, "decision_probability"),
+            defaults.decision_probability,
+        ),
+        jev_api_key=(
+            _parse_str(source.get(JEV_API_KEY_ENV), "")
+            or _parse_str(source.get(TYPESAFE_API_KEY_ENV), "")
+            or None
+        ),
+        jev_model=_parse_str(pick(JEV_MODEL_ENV, "jev_model"), defaults.jev_model),
         estimator_model=_parse_str(
             pick(ESTIMATOR_MODEL_ENV, "estimator_model"), defaults.estimator_model
         ),
@@ -641,10 +687,221 @@ async def _close_quietly(client: Any) -> None:
 
 
 # --------------------------------------------------------------------------
+# Jev task-length estimate
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TaskEstimate:
+    """How long the task should take, and how sure we are it is a long one."""
+
+    seconds: float | None
+    over_threshold_probability: float | None = None
+    confidence: float | None = None
+    source: str = "jev"
+    model: str | None = None
+
+    def payload(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+DURATION_QUESTION_KEY = "duration"
+OVER_THRESHOLD_QUESTION_KEY = "over_threshold"
+
+
+def build_jev_estimate_request(
+    *,
+    task: str,
+    agent_name: str | None,
+    conversation: str,
+    threshold_seconds: float,
+    model: str = DEFAULT_JEV_MODEL,
+) -> dict[str, Any]:
+    """The System One request: one score question over duration buckets and one
+    noul question for "longer than the threshold"."""
+    state: dict[str, Any] = {
+        "task": task.strip() or "unknown",
+        "agent": (
+            f"{agent_name}, an autonomous coding agent working in the repository"
+            if agent_name
+            else "an autonomous coding agent working in the repository"
+        ),
+    }
+    cleaned = _clean_conversation(conversation)
+    if cleaned:
+        state["recent_conversation"] = cleaned
+    threshold_label = _seconds_label(threshold_seconds)
+    return {
+        "model": model,
+        "state": state,
+        "questions": {
+            DURATION_QUESTION_KEY: {
+                "type": "score",
+                "instructions": (
+                    "How long will the coding agent take, wall-clock, from now "
+                    "until it reports the task finished, counting investigation, "
+                    "edits, running tests, and verification?"
+                ),
+                "criteria": [description for _seconds, description in DURATION_LEVELS],
+            },
+            OVER_THRESHOLD_QUESTION_KEY: {
+                "type": "noul",
+                "instructions": (
+                    "Finishing this task will take the coding agent more than "
+                    f"{threshold_label} of wall-clock time."
+                ),
+            },
+        },
+    }
+
+
+def _seconds_label(seconds: float) -> str:
+    if seconds >= 120 and seconds % 60 == 0:
+        return f"{int(seconds // 60)} minutes"
+    if seconds == 90:
+        return "a minute and a half"
+    return f"{int(seconds)} seconds"
+
+
+def parse_jev_estimate(payload: Mapping[str, Any]) -> TaskEstimate:
+    """Turn a System One response into a :class:`TaskEstimate`.
+
+    Expected seconds is the probability-weighted mean of the duration levels;
+    when per-level probabilities are missing, the (fractional) score is
+    interpolated between neighbouring levels instead.
+    """
+    answers = payload.get("answers")
+    answers = answers if isinstance(answers, Mapping) else {}
+    duration = answers.get(DURATION_QUESTION_KEY)
+    duration = duration if isinstance(duration, Mapping) else {}
+    seconds: float | None = None
+    probabilities = duration.get("probabilities")
+    if isinstance(probabilities, Mapping):
+        weighted = 0.0
+        total = 0.0
+        for key, value in probabilities.items():
+            try:
+                index = int(str(key))
+                probability = float(value)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= index < len(DURATION_LEVELS) and probability > 0:
+                weighted += probability * DURATION_LEVELS[index][0]
+                total += probability
+        if total > 0:
+            seconds = weighted / total
+    if seconds is None:
+        try:
+            score = float(duration.get("score"))
+        except (TypeError, ValueError):
+            score = None
+        if score is not None:
+            seconds = _interpolate_level_seconds(score)
+    confidence = duration.get("confidence")
+    over = answers.get(OVER_THRESHOLD_QUESTION_KEY)
+    over_probability: float | None = None
+    if isinstance(over, Mapping):
+        try:
+            over_probability = float(over.get("noul"))
+        except (TypeError, ValueError):
+            over_probability = None
+    if over_probability is not None and not 0.0 <= over_probability <= 1.0:
+        over_probability = None
+    return TaskEstimate(
+        seconds=round(seconds, 1) if seconds is not None else None,
+        over_threshold_probability=over_probability,
+        confidence=float(confidence) if isinstance(confidence, (int, float)) else None,
+        source="jev",
+        model=str(payload.get("model") or "") or None,
+    )
+
+
+def _interpolate_level_seconds(score: float) -> float:
+    clamped = max(0.0, min(float(len(DURATION_LEVELS) - 1), score))
+    lower = int(clamped)
+    upper = min(lower + 1, len(DURATION_LEVELS) - 1)
+    fraction = clamped - lower
+    return DURATION_LEVELS[lower][0] + fraction * (
+        DURATION_LEVELS[upper][0] - DURATION_LEVELS[lower][0]
+    )
+
+
+def estimate_says_long(
+    estimate: TaskEstimate,
+    *,
+    threshold_seconds: float,
+    decision_probability: float,
+) -> bool:
+    """Jev's calibrated yes/no answer decides; the expected duration is the
+    fallback when that answer is missing."""
+    if estimate.over_threshold_probability is not None:
+        return estimate.over_threshold_probability >= decision_probability
+    return should_meditate(estimate.seconds, threshold_seconds)
+
+
+class JevEstimator:
+    """Ask Jev (TypeSafe System One) how long the task will take."""
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str = DEFAULT_JEV_MODEL,
+        threshold_seconds: float = DEFAULT_THRESHOLD_SECONDS,
+        timeout_seconds: float = 30.0,
+        url: str = JEV_SYSTEM_ONE_URL,
+    ) -> None:
+        self._api_key = api_key
+        self._model = model
+        self._threshold_seconds = threshold_seconds
+        self._timeout_seconds = timeout_seconds
+        self._url = url
+
+    def __call__(
+        self, *, task: str, agent_name: str | None, conversation: str
+    ) -> TaskEstimate:
+        import httpx
+
+        request = build_jev_estimate_request(
+            task=task,
+            agent_name=agent_name,
+            conversation=conversation,
+            threshold_seconds=self._threshold_seconds,
+            model=self._model,
+        )
+        response = httpx.post(
+            self._url,
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+            json=request,
+            timeout=self._timeout_seconds,
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Jev request failed with HTTP {response.status_code}: {response.text[:300]}"
+            )
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise RuntimeError("Jev returned a non-JSON response.") from exc
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("Jev returned an unexpected response shape.")
+        estimate = parse_jev_estimate(payload)
+        if estimate.seconds is None and estimate.over_threshold_probability is None:
+            raise RuntimeError(
+                "Jev answered neither the duration nor the threshold question."
+            )
+        return estimate
+
+
+# --------------------------------------------------------------------------
 # Model and speech providers
 # --------------------------------------------------------------------------
 
 Completer = Callable[..., Awaitable[str]]
+Estimator = Callable[..., TaskEstimate]
 Synthesizer = Callable[[str], bytes]
 Publisher = Callable[[Path], None]
 ConversationReader = Callable[[], Awaitable[str]]
@@ -808,6 +1065,8 @@ class MeditationOutcome:
     thread_id: str = ""
     task: str = ""
     estimate_seconds: float | None = None
+    estimate_source: str | None = None
+    over_threshold_probability: float | None = None
     threshold_seconds: float | None = None
     script_path: str | None = None
     audio_path: str | None = None
@@ -884,6 +1143,7 @@ async def run_task_meditation(
     agent_name: str | None,
     settings: TaskMeditationSettings,
     complete: Completer,
+    estimate: Estimator | None,
     synthesize: Synthesizer | None,
     publish: Publisher | None,
     read_conversation: ConversationReader,
@@ -891,7 +1151,11 @@ async def run_task_meditation(
     force: bool = False,
     play: bool = True,
 ) -> MeditationOutcome:
-    """Estimate the task, and when it is long enough write, render, and play a meditation."""
+    """Estimate the task, and when it is long enough write, render, and play a meditation.
+
+    ``estimate`` is the Jev estimator (sync, run on a thread); ``None`` falls
+    back to asking the Codex estimator model for a JSON estimate.
+    """
     task = " ".join((task_text or thread_name or "").split())
     outcome = MeditationOutcome(
         status=STATUS_SKIPPED,
@@ -910,20 +1174,20 @@ async def run_task_meditation(
         logger.info("task_meditation stage=conversation_unavailable", exc_info=True)
 
     if force:
-        estimate: float | None = None
+        estimate_seconds: float | None = None
         logger.info(
             "task_meditation stage=estimate_skipped reason=force thread_id=%s",
             thread_id,
         )
     else:
         try:
-            reply = await complete(
-                build_estimate_prompt(
-                    task=task, agent_name=agent_name, conversation=conversation
-                ),
-                model=settings.estimator_model,
-                reasoning_effort=settings.estimator_reasoning_effort,
-                developer_instructions=ESTIMATOR_INSTRUCTIONS,
+            task_estimate = await _estimate_task(
+                estimate=estimate,
+                complete=complete,
+                settings=settings,
+                task=task,
+                agent_name=agent_name,
+                conversation=conversation,
             )
         except Exception as exc:
             logger.warning(
@@ -934,19 +1198,32 @@ async def run_task_meditation(
             outcome.status = STATUS_FAILED
             outcome.reason = f"estimate failed: {exc}"
             return outcome
-        estimate = parse_estimate_seconds(reply)
-        outcome.estimate_seconds = estimate
+        estimate_seconds = task_estimate.seconds
+        outcome.estimate_seconds = estimate_seconds
+        outcome.estimate_source = task_estimate.source
+        outcome.over_threshold_probability = task_estimate.over_threshold_probability
         logger.info(
-            "task_meditation stage=estimated thread_id=%s estimate_seconds=%s threshold=%s reply=%r",
+            "task_meditation stage=estimated thread_id=%s source=%s model=%s "
+            "estimate_seconds=%s over_threshold_probability=%s confidence=%s threshold=%s",
             thread_id,
-            estimate,
+            task_estimate.source,
+            task_estimate.model or "",
+            estimate_seconds,
+            task_estimate.over_threshold_probability,
+            task_estimate.confidence,
             settings.threshold_seconds,
-            reply[:200],
         )
-        if estimate is None:
+        if (
+            estimate_seconds is None
+            and task_estimate.over_threshold_probability is None
+        ):
             outcome.reason = "estimate unparsable"
             return outcome
-        if not should_meditate(estimate, settings.threshold_seconds):
+        if not estimate_says_long(
+            task_estimate,
+            threshold_seconds=settings.threshold_seconds,
+            decision_probability=settings.decision_probability,
+        ):
             outcome.reason = "under threshold"
             return outcome
 
@@ -956,7 +1233,7 @@ async def run_task_meditation(
                 task=task,
                 agent_name=agent_name,
                 conversation=conversation,
-                estimate_seconds=estimate,
+                estimate_seconds=estimate_seconds,
             ),
             model=settings.meditation_model,
             reasoning_effort=settings.meditation_reasoning_effort,
@@ -1045,6 +1322,35 @@ async def run_task_meditation(
         outcome.reason = "playback disabled"
     _write_record(base, outcome)
     return outcome
+
+
+async def _estimate_task(
+    *,
+    estimate: Estimator | None,
+    complete: Completer,
+    settings: TaskMeditationSettings,
+    task: str,
+    agent_name: str | None,
+    conversation: str,
+) -> TaskEstimate:
+    if estimate is not None:
+        return await asyncio.to_thread(
+            estimate, task=task, agent_name=agent_name, conversation=conversation
+        )
+    logger.info("task_meditation stage=estimate_fallback reason=no_jev_key")
+    reply = await complete(
+        build_estimate_prompt(
+            task=task, agent_name=agent_name, conversation=conversation
+        ),
+        model=settings.estimator_model,
+        reasoning_effort=settings.estimator_reasoning_effort,
+        developer_instructions=ESTIMATOR_INSTRUCTIONS,
+    )
+    return TaskEstimate(
+        seconds=parse_estimate_seconds(reply),
+        source="codex",
+        model=settings.estimator_model,
+    )
 
 
 def _write_record(base: Path, outcome: MeditationOutcome) -> None:
