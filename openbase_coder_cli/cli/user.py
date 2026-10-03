@@ -24,7 +24,6 @@ from openbase_coder_cli.skill_approvals import (
     wait_for_approval_via_server,
 )
 
-
 DEFAULT_INTRO_GREETING = "Hey there, I'm {agent_name}."
 
 
