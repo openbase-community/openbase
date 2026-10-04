@@ -64,7 +64,9 @@ Setup is only interactive when run with no flags at all on a terminal, or
 when `--interactive` is passed explicitly. Passing **any** other flag implies
 `--non-interactive`, so scripted and AI-agent invocations never block on a
 prompt: fresh non-interactive installs require `--backend` (setup errors
-otherwise) and default the audio provider to `openbase-cloud`.
+otherwise), default the audio provider to `openbase-cloud`, and auto-select
+the tailnet provider (`netmesh`, or `tailscale` when the official Tailscale
+CLI/app is already installed).
 `./scripts/setup` passes `--interactive` for you when you give it no flags on
 a terminal, since it always injects `--workspace-dir` itself.
 
@@ -143,6 +145,7 @@ to keep local audio available.
 | `--fast-mode/--no-fast-mode` | `true` | Use the fast service tier for the voice dispatcher. Super Agents stay on the standard tier; both are adjustable in console settings (Codex backend only — Claude Code turns always run at the standard tier) |
 | `--backend NAME` | prompted for new env files | Default coding backend: `codex`, `claude-code`, or `openbase-cloud`. Existing env files are only changed when provided |
 | `--audio-provider NAME` | picker on fresh interactive installs, else `openbase-cloud` for new dispatcher configs | Voice audio provider. Existing configs are only changed when provided |
+| `--tailnet-provider NAME` | picker on fresh interactive installs, else auto-selected for new env files | Tailnet transport: `tailscale`, `netmesh`, or `netmesh-tsnet`. New non-interactive installs use `netmesh`, or `tailscale` when the official Tailscale CLI/app is already installed; existing env files are only changed when provided |
 | `--interactive/--non-interactive` | interactive only for flagless terminal runs | Force or forbid the first-run pickers. Passing any other flag implies `--non-interactive` |
 | `--json-progress` | `false` | Emit NDJSON step events on stdout for UI-driven setup; human-readable output moves to stderr |
 | `--shared-super-agents-mcp/--no-shared-super-agents-mcp` | `true` | Also register the Super Agents MCP in your default Codex and Claude Code configurations so plain terminal sessions can dispatch Super Agents. An existing entry of your own is never replaced |
