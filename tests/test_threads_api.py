@@ -513,10 +513,13 @@ def test_thread_tags_endpoint_rejects_non_list(monkeypatch, tmp_path):
     assert response.data["error"] == "tags must be a list"
 
 
-def _activity_response(monkeypatch, threads: list[ThreadInfo]):
+def _activity_response(
+    monkeypatch, threads: list[ThreadInfo], *, active_calls: int = 0
+):
     thread_cache.clear_thread_cache()
     manager = FakeThreadManager(threads)
     monkeypatch.setattr(thread_views, "get_session_manager", lambda: manager)
+    monkeypatch.setattr(thread_views, "count_active_voice_calls", lambda: active_calls)
 
     factory = APIRequestFactory()
     request = factory.get("/api/threads/activity/")
@@ -541,6 +544,15 @@ def test_thread_activity_counts_only_recently_progressing_runs(monkeypatch) -> N
     assert response.status_code == 200
     assert response.data["active_run_count"] == 1
     assert response.data["thread_count"] == 4
+
+
+def test_thread_activity_counts_a_live_voice_call_as_activity(monkeypatch) -> None:
+    response = _activity_response(monkeypatch, [_thread(0)], active_calls=1)
+
+    assert response.status_code == 200
+    assert response.data["active_run_count"] == 0
+    assert response.data["active_call_count"] == 1
+    assert response.data["active"] is True
 
 
 def test_thread_activity_reports_zero_when_no_runs_active(monkeypatch) -> None:

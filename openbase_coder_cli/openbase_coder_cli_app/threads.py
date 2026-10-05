@@ -21,6 +21,9 @@ from openbase_coder_cli.openbase_coder_cli_app.item_tags import (
     set_thread_tags,
     thread_tags_payload,
 )
+from openbase_coder_cli.openbase_coder_cli_app.livekit_activity import (
+    count_active_voice_calls,
+)
 from openbase_coder_cli.openbase_coder_cli_app.thread_cache import (
     get_cached_thread_list,
     get_cached_thread_page,
@@ -293,9 +296,13 @@ def thread_activity(request):
         if thread.status == ThreadStatus.running
         and _aware_datetime(thread.updated_at) >= activity_cutoff
     )
+    # A live voice call keeps a workspace busy even with no coding run.
+    active_call_count = count_active_voice_calls()
     return Response(
         {
             "active_run_count": active_run_count,
+            "active_call_count": active_call_count,
+            "active": active_run_count > 0 or active_call_count > 0,
             "thread_count": len(threads),
         }
     )

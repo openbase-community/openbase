@@ -354,6 +354,11 @@ default_services="livekit-server livekit-agent django-cli sync-workers openbase-
 if [ "$NETWORK_MODE" = "netmesh-tsnet" ]; then
     default_services="openbase-tunneld $default_services"
 fi
+# Cloud workspaces report activity so Cloud (and, for Maritime, the provider)
+# can tell a busy workspace from an idle one; provision installs the wrapper.
+if [ "${MARITIME_MODE:-0}" = "1" ] && [ -f "$WRAPPER_DIR/openbase-cloud-heartbeat.sh" ]; then
+    default_services="$default_services openbase-cloud-heartbeat"
+fi
 if [ -f "$WRAPPER_DIR/codex-app-server.sh" ]; then
     default_services="$default_services codex-app-server"
 fi
