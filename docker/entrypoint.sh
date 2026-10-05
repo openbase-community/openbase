@@ -37,6 +37,18 @@ if [ "${OPENBASE_CODER_RUNTIME:-}" = "maritime" ] && [ "$(/usr/bin/id -u)" = "0"
         exit 1
     fi
     /bin/mkdir -p /data
+    # Maritime's VM init boots with an empty /etc/hosts and no hostname, so
+    # "localhost" does not resolve and the LiveKit worker can never reach its
+    # server. Repair both here, the only point where we still hold root.
+    if ! /usr/bin/getent hosts localhost >/dev/null 2>&1; then
+        /usr/bin/printf '127.0.0.1\tlocalhost\n::1\tlocalhost\n' >>/etc/hosts 2>/dev/null \
+            || echo "[entrypoint] Could not add localhost to /etc/hosts." >&2
+    fi
+    case "$(/bin/hostname 2>/dev/null)" in
+        ""|"(none)"|localhost)
+            /bin/hostname "${OPENBASE_TSNET_HOSTNAME:-openbase-workspace}" 2>/dev/null || true
+            ;;
+    esac
     # Reparent only root-owned entries (the platform-created mount and
     # first-boot directories); never rewrite a user's existing files, and
     # never follow links (-h) so nothing under /data can redirect the chown.

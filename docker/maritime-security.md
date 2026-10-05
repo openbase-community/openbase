@@ -91,7 +91,10 @@ or non-container grant receives the same generic rejection.
 1. Maritime starts the digest-pinned Openbase image (passed as `imageName` on
    agent creation, so no second deploy call is needed) with its durable disk
    mounted at `/data`; the entrypoint drops from root to the image's
-   unprivileged user before anything else runs.
+   unprivileged user before anything else runs. The only work done as root
+   first: reparent root-owned `/data` entries, and repair the VM's name
+   resolution (Maritime's init boots with an empty `/etc/hosts` and no
+   hostname, so `localhost` would not resolve for the LiveKit worker).
 2. `openbase-coder provision --kind container` exchanges the one-time grant.
 3. The CLI atomically persists the machine token and owner pin under `/data`
    with mode `0600`. It stages the one-time Netmesh key there for the supervisor.
