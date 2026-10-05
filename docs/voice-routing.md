@@ -126,59 +126,6 @@ openbase-coder user play success
 openbase-coder user play /path/to/sound.wav
 ```
 
-## A Guided Meditation While A Long Task Runs
-
-When the dispatcher hands a task to a new Super Agent, the agent's first
-turn greets you ("Hey there, I'm Dottie.") and Openbase Coder quietly asks
-[Jev](https://docs.typesafe.ai/), TypeSafe AI's System One decision model,
-how long the task will take: a score over duration buckets plus a calibrated
-yes/no answer to "longer than a minute and a half". When Jev says the task
-is a long one, Openbase Coder writes a short guided meditation from the
-recent conversation and plays it over the same call while the agent works. The
-meditation moves through three themes: letting go of attachment to the work,
-gratitude that the work is being done, and the people you will connect with
-and influence by doing it. It ends with a gentle return, ready for the agent
-to report back.
-
-The meditation is written by GPT-6 Sol at medium reasoning effort and
-spoken by the same voice engine the call uses (Cartesia through Openbase
-Cloud, a direct Cartesia key, or local Kokoro), in the catalog voice
-"Brooke" by default, with the pauses in the script rendered as real
-silence. Set `JEV_API_KEY` (or `TYPESAFE_API_KEY`) in the Openbase `.env`
-file; without it a fast Codex model estimates instead. ElevenLabs is an
-alternative engine (`OPENBASE_TASK_MEDITATION_TTS=elevenlabs` plus
-`ELEVENLABS_API_KEY`). Scripts, audio, and a
-JSON record of each run land in `~/.openbase/meditations/`.
-
-Tuning, in `~/.openbase/.env` or under `"task_meditation"` in
-`~/.openbase/dispatcher-config.json`:
-
-| Setting | Default | Purpose |
-| ------- | ------- | ------- |
-| `OPENBASE_TASK_MEDITATION_ENABLED` / `enabled` | `true` | Turn the feature off entirely |
-| `OPENBASE_TASK_MEDITATION_THRESHOLD_SECONDS` / `threshold_seconds` | `90` | Minimum estimated task length that earns a meditation |
-| `OPENBASE_TASK_ESTIMATE_JEV_MODEL` / `jev_model` | `jev-latest` | Jev model that estimates the task length |
-| `OPENBASE_TASK_MEDITATION_DECISION_PROBABILITY` / `decision_probability` | `0.5` | Jev's probability that the task runs past the threshold at which the meditation plays |
-| `OPENBASE_TASK_ESTIMATE_MODEL` / `estimator_model` | `gpt-5.5` | Codex model used for the estimate when no Jev key is set |
-| `OPENBASE_TASK_ESTIMATE_REASONING_EFFORT` / `estimator_reasoning_effort` | `low` | Reasoning effort for that fallback estimate |
-| `OPENBASE_TASK_MEDITATION_MODEL` / `meditation_model` | `gpt-6-sol` | Codex model that writes the meditation |
-| `OPENBASE_TASK_MEDITATION_REASONING_EFFORT` / `meditation_reasoning_effort` | `medium` | Reasoning effort for the meditation |
-| `OPENBASE_TASK_MEDITATION_TTS` / `tts_engine` | `product` | `product` (the call's voice engine) or `elevenlabs` |
-| `OPENBASE_TASK_MEDITATION_VOICE` / `voice` | `Brooke` | Catalog voice name or id for the product engine |
-| `ELEVENLABS_MEDITATION_VOICE_ID` / `voice_id` | Sarah | ElevenLabs voice when that engine is selected |
-
-To hear one on demand, or to check a voice without waiting for a long task:
-
-```bash
-openbase-coder meditation run --thread-name "Refactor the billing module" --agent-name Dottie --force
-openbase-coder meditation render ~/.openbase/meditations/<script>.txt --play
-```
-
-`meditation run --force` skips the estimate and always produces one;
-`--no-play` renders the WAV without playing it. `meditation render` turns a
-saved script (with `<pause N seconds>` markers) back into audio without any
-model call. The worker's log is `~/.openbase/logs/task-meditation.log`.
-
 ## Ring The User For An Urgent Voice Handoff
 
 Use an inbound call only when the user explicitly asked to be called or the

@@ -4,18 +4,14 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections import deque
 from collections.abc import AsyncIterator
+from collections import deque
 from pathlib import Path
 
 import av
 from livekit import rtc
 from livekit.agents import AgentSession
 
-from openbase_coder_cli.livekit_agent.announcement_audio import (
-    AnnouncementSynthesisOutcome,
-    announcement_audio,
-)
 from openbase_coder_cli.livekit_agent.config import (
     ANNOUNCER_MAX_QUEUE_SIZE,
     ANNOUNCER_SILENCE_GRACE_SECONDS,
@@ -30,6 +26,9 @@ from openbase_coder_cli.livekit_agent.packets import (
 )
 from openbase_coder_cli.livekit_agent.speech_formatter import format_for_speech
 from openbase_coder_cli.livekit_agent.tts_selection import VoiceSelectingTTS
+from openbase_coder_cli.livekit_agent.announcement_audio import (
+    AnnouncementSynthesisOutcome, announcement_audio,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +77,8 @@ class AnnouncerSpeechQueue:
 
     def enqueue(self, message: AnnouncerQueueItem) -> bool:
         if message.message_id and message.message_id in self._recent_message_id_set:
-            logger.info(
-                "dispatch_timing stage=announcer_duplicate_ignored message_id=%s",
-                message.message_id,
-            )
+            logger.info("dispatch_timing stage=announcer_duplicate_ignored message_id=%s",
+                message.message_id)
             return True
         try:
             self._queue.put_nowait(
@@ -202,12 +199,8 @@ class AnnouncerSpeechQueue:
         outcome = AnnouncementSynthesisOutcome()
         handle = self._session.say(
             spoken_text,
-            audio=announcement_audio(
-                self._announcer_tts,
-                spoken_text,
-                voice_id=message.voice_id,
-                outcome=outcome,
-            ),
+            audio=announcement_audio(self._announcer_tts, spoken_text,
+                voice_id=message.voice_id, outcome=outcome),
             allow_interruptions=False,
             add_to_chat_ctx=False,
         )
@@ -223,8 +216,7 @@ class AnnouncerSpeechQueue:
             "synthesis_completed=%s audio_events=%d",
             message.message_id,
             int((time.monotonic() - started) * 1000),
-            outcome.completed,
-            outcome.audio_events,
+            outcome.completed, outcome.audio_events,
         )
 
     async def _bracketed_playout(
@@ -264,38 +256,25 @@ class AnnouncerSpeechQueue:
         # does not hold its own release.
         self._speaking = False
         if getattr(handle, "interrupted", False):
-            logger.warning(
-                "dispatch_timing stage=announcer_playout_interrupted "
-                "delivery_id=%s synthesis_completed=%s",
-                record.delivery_id,
-                synthesis_outcome.completed if synthesis_outcome is not None else None,
-            )
+            logger.warning("dispatch_timing stage=announcer_playout_interrupted "
+                "delivery_id=%s synthesis_completed=%s", record.delivery_id,
+                synthesis_outcome.completed if synthesis_outcome is not None else None)
             ledger.mark_cancelled(record, reason="announcer_playout_interrupted")
             return
         if synthesis_outcome is not None and (
             not synthesis_outcome.completed or not synthesis_outcome.audio_events
         ):
-            logger.warning(
-                "dispatch_timing stage=announcer_synthesis_incomplete "
-                "delivery_id=%s audio_events=%d audio_seconds=%.2f",
-                record.delivery_id,
-                synthesis_outcome.audio_events,
-                synthesis_outcome.audio_seconds,
-            )
-            ledger.mark_tts_failed(
-                record,
-                audio_events=synthesis_outcome.audio_events,
-                audio_seconds=synthesis_outcome.audio_seconds,
-            )
+            logger.warning("dispatch_timing stage=announcer_synthesis_incomplete "
+                "delivery_id=%s audio_events=%d audio_seconds=%.2f", record.delivery_id,
+                synthesis_outcome.audio_events, synthesis_outcome.audio_seconds)
+            ledger.mark_tts_failed(record, audio_events=synthesis_outcome.audio_events,
+                audio_seconds=synthesis_outcome.audio_seconds)
             return
         ledger.mark_tts_completed(
             record,
-            audio_events=synthesis_outcome.audio_events
-            if synthesis_outcome is not None
-            else 1,
-            audio_seconds=synthesis_outcome.audio_seconds
-            if synthesis_outcome is not None
-            else time.monotonic() - playout_started,
+            audio_events=synthesis_outcome.audio_events if synthesis_outcome is not None else 1,
+            audio_seconds=synthesis_outcome.audio_seconds if synthesis_outcome is not None
+                else time.monotonic() - playout_started,
             role="announcer",
             voice_id=voice_id,
             voice_name=voice_name,
@@ -364,10 +343,8 @@ class AnnouncerSpeechQueue:
         )
 
     def _user_quiet_pending(self) -> bool:
-        return (
-            self._delivery_ledger is not None
-            and self._delivery_ledger.user_quiet_verification_pending()
-        )
+        return (self._delivery_ledger is not None
+                and self._delivery_ledger.user_quiet_verification_pending())
 
     @staticmethod
     def _speech_active(speech_handle) -> bool:
@@ -453,92 +430,31 @@ class AnnouncerSpeechQueue:
         )
 
     async def _audio_file_frames(self, path: Path) -> AsyncIterator[rtc.AudioFrame]:
-        # Decode off the event loop (a multi-minute file is tens of MB of
-        # PCM) and hand the room output frames at its own sample rate in the
-        # same 20 ms shape the TTS plugins produce, so nothing downstream has
-        # to resample or re-chunk a long playout.
-        frames = await asyncio.to_thread(
-            _decode_audio_file, path, sample_rate=self._output_sample_rate()
-        )
-        for frame in frames:
+        for frame in _decode_audio_file(path):
             yield frame
 
-    def _output_sample_rate(self) -> int:
-        output = getattr(getattr(self._session, "output", None), "audio", None)
-        rate = getattr(output, "sample_rate", None)
-        if isinstance(rate, int) and rate > 0:
-            return rate
-        return DEFAULT_FILE_PLAYBACK_SAMPLE_RATE
 
-
-DEFAULT_FILE_PLAYBACK_SAMPLE_RATE = 24000
-FILE_PLAYBACK_FRAME_MS = 20
-_SAMPLE_WIDTH_BYTES = 2
-
-
-def _decode_audio_file(
-    path: Path,
-    *,
-    sample_rate: int = DEFAULT_FILE_PLAYBACK_SAMPLE_RATE,
-    frame_ms: int = FILE_PLAYBACK_FRAME_MS,
-) -> list[rtc.AudioFrame]:
-    """Decode any supported audio file into mono 16-bit frames of ``frame_ms``."""
-    chunks: list[bytes] = []
+def _decode_audio_file(path: Path) -> list[rtc.AudioFrame]:
+    frames: list[rtc.AudioFrame] = []
     with av.open(str(path)) as container:
         stream = next((candidate for candidate in container.streams.audio), None)
         if stream is None:
             raise ValueError(f"No audio stream found in {path.name}.")
-        resampler = av.AudioResampler(format="s16", layout="mono", rate=sample_rate)
+        resampler = av.AudioResampler(format="s16", layout="mono", rate=48000)
         for packet in container.demux(stream):
             for decoded in packet.decode():
                 for resampled in resampler.resample(decoded):
-                    chunks.append(_plane_pcm(resampled))
+                    frames.append(_av_frame_to_livekit_frame(resampled))
         for resampled in resampler.resample(None):
-            chunks.append(_plane_pcm(resampled))
-    return _pcm_to_frames(b"".join(chunks), sample_rate=sample_rate, frame_ms=frame_ms)
-
-
-def _plane_pcm(frame) -> bytes:
-    """The real samples of a packed PyAV frame.
-
-    PyAV plane buffers are padded past ``frame.samples`` (128 bytes per frame
-    in practice). Pushing the whole buffer as audio inserted a sliver of junk
-    at every frame boundary, which played as a periodic click over long files.
-    """
-    channels = len(frame.layout.channels)
-    return bytes(frame.planes[0])[: frame.samples * channels * _SAMPLE_WIDTH_BYTES]
+            frames.append(_av_frame_to_livekit_frame(resampled))
+    return frames
 
 
 def _av_frame_to_livekit_frame(frame) -> rtc.AudioFrame:
-    """One decoded PyAV frame as a LiveKit frame (kept for callers that chunk themselves)."""
-    data = _plane_pcm(frame)
+    data = bytes(frame.planes[0])
     return rtc.AudioFrame(
         data=data,
         sample_rate=frame.sample_rate,
         num_channels=len(frame.layout.channels),
         samples_per_channel=frame.samples,
     )
-
-
-def _pcm_to_frames(
-    pcm: bytes, *, sample_rate: int, frame_ms: int = FILE_PLAYBACK_FRAME_MS
-) -> list[rtc.AudioFrame]:
-    samples_per_frame = max(1, sample_rate * frame_ms // 1000)
-    frame_bytes = samples_per_frame * _SAMPLE_WIDTH_BYTES
-    usable = len(pcm) - (len(pcm) % _SAMPLE_WIDTH_BYTES)
-    frames: list[rtc.AudioFrame] = []
-    for start in range(0, usable, frame_bytes):
-        chunk = pcm[start : start + frame_bytes]
-        if len(chunk) < frame_bytes:
-            # Pad the tail so every frame has the same duration; a few
-            # milliseconds of trailing silence beats a short odd frame.
-            chunk = chunk + b"\x00" * (frame_bytes - len(chunk))
-        frames.append(
-            rtc.AudioFrame(
-                data=chunk,
-                sample_rate=sample_rate,
-                num_channels=1,
-                samples_per_channel=samples_per_frame,
-            )
-        )
-    return frames

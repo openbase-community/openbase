@@ -143,14 +143,6 @@ def configured_execution_backends(
 # depends on the model obeying an instruction. Placeholders are substituted
 # per argument after shell-style splitting (see super_agents.thread_intro).
 SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV = "SUPER_AGENTS_THREAD_INTRO_COMMAND"
-# ``user intro`` speaks the greeting and then starts the task meditation
-# worker (openbase_coder_cli.task_meditation) for threads that look long.
 OPENBASE_THREAD_INTRO_COMMAND = (
-    "openbase-coder user intro {agent_name} "
-    "--thread-id {thread_id} --thread-name {thread_name}"
-)
-# Earlier templates written by setup; ``setup env`` upgrades these in place so
-# existing installs pick up new intro behavior without a manual edit.
-LEGACY_THREAD_INTRO_COMMANDS = (
-    'openbase-coder user say {agent_name} "Hey there, I\'m {agent_name}."',
+    'openbase-coder user say {agent_name} "Hey there, I\'m {agent_name}."'
 )

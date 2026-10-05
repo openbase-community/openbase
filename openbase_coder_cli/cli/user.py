@@ -24,8 +24,6 @@ from openbase_coder_cli.skill_approvals import (
     wait_for_approval_via_server,
 )
 
-DEFAULT_INTRO_GREETING = "Hey there, I'm {agent_name}."
-
 
 @click.group()
 def user() -> None:
@@ -87,76 +85,6 @@ def say(
             f"Message text must be {MAX_ANNOUNCER_TEXT_LENGTH} characters or fewer."
         )
 
-    _announce_as_agent(normalized_agent_name, text, room_name)
-
-
-@user.command()
-@click.argument("agent_name")
-@click.option("--thread-id", default="", help="Super Agent thread that just started.")
-@click.option(
-    "--thread-name", default="", help="Thread name; doubles as the task summary."
-)
-@click.option(
-    "--greeting",
-    default=DEFAULT_INTRO_GREETING,
-    show_default=True,
-    help="Greeting to speak; {agent_name} is substituted.",
-)
-@click.option(
-    "--room",
-    "room_name",
-    default="",
-    help="Explicit LiveKit room name. Defaults to the latest active voice room.",
-)
-def intro(
-    agent_name: str,
-    thread_id: str,
-    thread_name: str,
-    greeting: str,
-    room_name: str,
-) -> None:
-    """Greet the user as a newly started Super Agent, then start a meditation
-    in the background when the task looks long enough to warrant one."""
-    normalized_agent_name = " ".join(agent_name.split())
-    if not normalized_agent_name:
-        raise click.ClickException("Agent name is required and cannot be blank.")
-    text = greeting.replace("{agent_name}", normalized_agent_name).strip()
-    if not text:
-        raise click.ClickException("Greeting text is required.")
-    _announce_as_agent(normalized_agent_name, text, room_name)
-    _start_task_meditation(
-        thread_id=thread_id.strip(),
-        thread_name=thread_name.strip(),
-        agent_name=normalized_agent_name,
-    )
-
-
-def _start_task_meditation(
-    *, thread_id: str, thread_name: str, agent_name: str
-) -> None:
-    from openbase_coder_cli import task_meditation
-
-    try:
-        settings = task_meditation.load_task_meditation_settings()
-    except Exception as exc:
-        click.echo(f"Task meditation settings unavailable: {exc}", err=True)
-        return
-    if not settings.enabled:
-        return
-    argv = task_meditation.meditation_worker_argv(
-        thread_id=thread_id,
-        thread_name=thread_name,
-        agent_name=agent_name,
-    )
-    try:
-        pid = task_meditation.spawn_meditation_worker(argv)
-    except OSError as exc:
-        click.echo(f"Unable to start the task meditation worker: {exc}", err=True)
-        return
-    click.echo(f"Task meditation worker started (pid {pid}).")
-
-
-def _announce_as_agent(normalized_agent_name: str, text: str, room_name: str) -> None:
     payload: dict[str, str] = {"agent_name": normalized_agent_name, "text": text}
     if room_name.strip():
         payload["room_name"] = room_name.strip()

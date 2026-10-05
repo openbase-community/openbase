@@ -12,7 +12,6 @@ from openbase_coder_cli.agent_profiles import profile_environment
 from openbase_coder_cli.backend_config import (
     CODING_BACKEND_ENV_KEY,
     DEFAULT_CODING_BACKEND,
-    LEGACY_THREAD_INTRO_COMMANDS,
     OPENBASE_THREAD_INTRO_COMMAND,
     SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV,
     normalize_backend,
@@ -323,8 +322,7 @@ def _missing_livekit_client_credential_values(path: Path) -> dict[str, str]:
         updates["SUPER_AGENTS_CODEX_SANDBOX_POLICY"] = "danger-full-access"
     if not existing.get("SUPER_AGENTS_BASE_INSTRUCTIONS_PATH"):
         updates["SUPER_AGENTS_BASE_INSTRUCTIONS_PATH"] = str(OPENBASE_AGENTS_MD_PATH)
-    intro_command = existing.get(SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV)
-    if not intro_command or intro_command in LEGACY_THREAD_INTRO_COMMANDS:
+    if not existing.get(SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV):
         updates[SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV] = OPENBASE_THREAD_INTRO_COMMAND
     if not existing.get("SUPER_AGENTS_DEFAULT_CONFIG_PATH"):
         updates["SUPER_AGENTS_DEFAULT_CONFIG_PATH"] = str(CODEX_DISPATCHER_CONFIG_PATH)
