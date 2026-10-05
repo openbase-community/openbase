@@ -124,6 +124,18 @@ SERVICES: list[ServiceDefinition] = [
         cleanup_command_substrings=("syncthing",),
     ),
     ServiceDefinition(
+        name="sync-daemon",
+        freshness_kind="binary",
+        freshness_packages=(),
+        description="Openbase Sync daemon (hub/edge mirror)",
+        command_template="sync-daemon",
+        workdir_template="{data_dir}",
+        # Installed only after ``openbase-coder sync-daemon configure``; it
+        # replaces the Syncthing-based code-sync service.
+        install_by_default=False,
+        cleanup_command_substrings=("openbase-syncd",),
+    ),
+    ServiceDefinition(
         name="openbase-cloud-auth-rehydrate",
         description="Openbase Cloud workspace auth rehydrate",
         command_template="openbase-cloud-auth-rehydrate",

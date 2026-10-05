@@ -50,6 +50,55 @@ def _code_sync_expected() -> bool:
 
 
 _CONDITIONAL_SERVICES["code-sync"] = _code_sync_expected
+
+
+def _sync_daemon_expected() -> bool:
+    from openbase_coder_cli.sync_daemon import is_configured
+
+    try:
+        return is_configured()
+    except OSError:
+        return False
+
+
+_CONDITIONAL_SERVICES["sync-daemon"] = _sync_daemon_expected
+
+
+def _sync_daemon_warnings() -> list[dict[str, str]]:
+    from openbase_coder_cli.sync_daemon import SyncDaemonClient, SyncDaemonError
+
+    try:
+        status_payload = SyncDaemonClient(timeout=0.5).status()
+    except SyncDaemonError:
+        return [
+            _warning(
+                "sync-daemon-unreachable",
+                "warning",
+                "Openbase Sync is configured but its daemon is not answering.",
+                "Run `openbase-coder services start sync-daemon`.",
+            )
+        ]
+    warnings: list[dict[str, str]] = []
+    if not status_payload.get("peers"):
+        warnings.append(
+            _warning(
+                "sync-daemon-no-peer",
+                "warning",
+                "Openbase Sync is running but not connected to the other computer.",
+                "Check that the hub is on and reachable over Openbase VPN.",
+            )
+        )
+    open_conflicts = int(status_payload.get("open_conflicts") or 0)
+    if open_conflicts:
+        warnings.append(
+            _warning(
+                "sync-daemon-conflicts",
+                "warning",
+                f"Openbase Sync has {open_conflicts} unresolved conflict(s).",
+                "Resolve them on the Sync page.",
+            )
+        )
+    return warnings
 # Cross-device thread sync rides the code-sync transport; when devices are
 # mirrored, both backends' device-sync services are expected too.
 _CONDITIONAL_SERVICES["codex-thread-device-sync"] = _code_sync_expected
@@ -508,6 +557,8 @@ def collect_warnings() -> list[dict[str, str]]:
     if _code_sync_expected():
         warnings.extend(_sync_warnings())
         warnings.extend(_thread_exchange_warnings())
+    if _sync_daemon_expected():
+        warnings.extend(_sync_daemon_warnings())
     return warnings
 
 

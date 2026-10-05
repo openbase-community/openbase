@@ -148,6 +148,18 @@ def _binary_resolvers(config: InstallationConfig) -> dict[str, Callable[[], str]
                 *_workspace_binary_candidates(config, "openbase-coder"),
             ],
         ),
+        "openbase_syncd": lambda: _resolve_binary_with_preferred_paths(
+            "openbase-syncd",
+            [
+                *(
+                    [Path(os.environ["OPENBASE_SYNCD_BIN"])]
+                    if os.environ.get("OPENBASE_SYNCD_BIN")
+                    else []
+                ),
+                OPENBASE_BIN_DIR / "openbase-syncd",
+                *_workspace_binary_candidates(config, "openbase-syncd"),
+            ],
+        ),
         "tunneld": lambda: _resolve_binary_with_preferred_paths(
             "openbase-tunneld",
             [
