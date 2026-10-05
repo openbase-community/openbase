@@ -51,7 +51,7 @@ def _web_backend_url() -> str:
     return DEFAULT_WEB_BACKEND_URL
 
 
-def _cloud_bearer_token(manager: TokenManager) -> str:
+def _cloud_bearer_token(manager: TokenManager, web_backend_url: str) -> str:
     """Cloud credential for this installation: the owner's login on a desktop
     or EC2 workspace; the cached scoped machine token on a container
     workspace, which never holds a login."""
@@ -60,7 +60,7 @@ def _cloud_bearer_token(manager: TokenManager) -> str:
     except AuthLoginRequiredError:
         from openbase_coder_cli.config.machine_token_manager import MachineTokenManager
 
-        machine_tokens = MachineTokenManager(manager.web_backend_url)
+        machine_tokens = MachineTokenManager(web_backend_url)
         if not machine_tokens.has_cached_token():
             raise
         return machine_tokens.get_machine_token()
@@ -142,7 +142,7 @@ def heartbeat(interval: int) -> None:
         # A long-running service must survive network blips and token-refresh
         # hiccups: skipping one beat and retrying next interval is the fallback.
         try:
-            token = _cloud_bearer_token(manager)
+            token = _cloud_bearer_token(manager, url)
             httpx.post(
                 f"{url}{HEARTBEAT_PATH}",
                 json={"active": active},

@@ -229,5 +229,22 @@ def test_cloud_bearer_token_falls_back_to_machine_token(monkeypatch):
         "openbase_coder_cli.config.machine_token_manager.MachineTokenManager",
         FakeMachineTokens,
     )
-    manager = LoginRequiredTokenManager("https://cloud.example")
-    assert cloud_cli._cloud_bearer_token(manager) == "machine.token"
+    seen = {}
+
+    class RecordingMachineTokens(FakeMachineTokens):
+        def __init__(self, url):
+            seen["url"] = url
+
+    monkeypatch.setattr(
+        "openbase_coder_cli.config.machine_token_manager.MachineTokenManager",
+        RecordingMachineTokens,
+    )
+    # The real TokenManager keeps its URL private; the caller supplies it.
+    from openbase_coder_cli.config.token_manager import TokenManager
+
+    manager = TokenManager(web_backend_url="https://cloud.example")
+    assert (
+        cloud_cli._cloud_bearer_token(manager, "https://cloud.example")
+        == "machine.token"
+    )
+    assert seen["url"] == "https://cloud.example"
