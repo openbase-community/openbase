@@ -397,11 +397,23 @@ done
 if [ "$netmesh_key_staged" = "1" ]; then
     (
         while :; do
+            # The daemon tries TS_AUTHKEY once at start. On Maritime, egress
+            # can still be down at that moment, and a failed first login
+            # parks the node in NeedsLogin for good — so while the staged key
+            # is still here, resubmit it through the daemon's local login
+            # API until the node reports enrolled and forwarding.
             if python -c "
 import sys
-from openbase_coder_cli.services.tunneld import tunneld_health
+from pathlib import Path
+from openbase_coder_cli.services.tunneld import tunneld_health, tunneld_login
 h = tunneld_health()
-sys.exit(0 if h.get('backend_state') == 'Running' and h.get('forwards_up') else 1)
+if h.get('backend_state') == 'Running' and h.get('forwards_up'):
+    sys.exit(0)
+if h.get('backend_state') == 'NeedsLogin':
+    key = Path('$NETMESH_AUTHKEY_FILE').read_text().strip()
+    if key and tunneld_login(key):
+        print('resubmitted the staged enrollment key')
+sys.exit(1)
 " 2>/dev/null; then
                 rm -f "$NETMESH_AUTHKEY_FILE"
                 echo "enrollment confirmed; staged auth key removed"
