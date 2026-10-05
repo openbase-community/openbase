@@ -455,7 +455,11 @@ def service_status(request):
             "optional": False,
         },
         "livekit_server": {"name": "LiveKit Server", "port": 7880, "optional": False},
-        "livekit_agent": {"name": "LiveKit Agent", "port": 8081, "optional": False},
+        "livekit_agent": {
+            "name": "LiveKit Agent",
+            "port": int(os.environ.get("LIVEKIT_AGENT_PORT", "8081")),
+            "optional": False,
+        },
         "web_backend": {
             "name": "Web Backend",
             "url": f"{getattr(settings, 'WEB_BACKEND_URL', '').rstrip('/')}/_allauth/app/v1/config",
