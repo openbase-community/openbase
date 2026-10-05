@@ -39,6 +39,8 @@ CODE_SYNC_TICK_SECONDS = 60.0
 CLOUD_REGISTER_INTERVAL_SECONDS = 3600.0
 CLOUD_WEBHOOK_POLL_INTERVAL_SECONDS = 30.0
 LIVEKIT_POOL_WATCHDOG_TICK_SECONDS = 30.0
+SUPER_AGENTS_STATE_PRUNE_INTERVAL_SECONDS = 21600.0
+CODEX_VERSION_SKEW_TICK_SECONDS = 300.0
 
 
 def _env_float(name: str, default: float) -> float:
@@ -321,6 +323,47 @@ def _cloud_webhook_events_tick() -> None:
     )
 
 
+def _super_agents_state_prune_tick() -> None:
+    """Keep the Super Agents state file small.
+
+    The file is fully rewritten on every session merge, so unbounded
+    session/turn accumulation makes every merge slower (2026-09-18: a 1.7MB
+    file with 431 sessions was rewritten ~30x/sec during a churning turn).
+    """
+    from super_agents.app_server_client import DEFAULT_STATE_FILE
+    from super_agents.state import prune_state_file_sessions
+
+    state_file = _env_path("SUPER_AGENTS_STATE_FILE", DEFAULT_STATE_FILE)
+    if not state_file.exists():
+        return
+    summary = prune_state_file_sessions(state_file)
+    if summary["removedSessions"] or summary["removedTurns"]:
+        logger.info(
+            "super_agents_state_prune removed_sessions=%s removed_turns=%s remaining_sessions=%s",
+            summary["removedSessions"],
+            summary["removedTurns"],
+            summary["remainingSessions"],
+        )
+
+
+def _codex_version_skew_tick() -> None:
+    # A codex-app-server that predates the installed Codex makes every new
+    # Codex CLI launch warn about the stale background service. Restart it
+    # once no agent turn or voice call is in flight; otherwise the console
+    # banner keeps offering a manual restart.
+    from openbase_coder_cli.services.codex_version_skew import (
+        run_auto_restart_tick,
+    )
+
+    summary = run_auto_restart_tick()
+    if summary["skews"] and not summary["restarted"]:
+        logger.info(
+            "codex_version_skew waiting services=%s blockers=%s",
+            summary["skews"],
+            summary["blockers"],
+        )
+
+
 def build_jobs() -> list[SyncJob]:
     """The full job set; gating happens inside each tick, not here."""
     return [
@@ -372,6 +415,21 @@ def build_jobs() -> list[SyncJob]:
                 LIVEKIT_POOL_WATCHDOG_TICK_SECONDS,
             ),
             tick=_livekit_pool_watchdog_tick,
+        ),
+        SyncJob(
+            name="super_agents_state_prune",
+            interval=_env_float(
+                "SUPER_AGENTS_STATE_PRUNE_INTERVAL",
+                SUPER_AGENTS_STATE_PRUNE_INTERVAL_SECONDS,
+            ),
+            tick=_super_agents_state_prune_tick,
+        ),
+        SyncJob(
+            name="codex_version_skew",
+            interval=_env_float(
+                "CODEX_VERSION_SKEW_TICK_SECONDS", CODEX_VERSION_SKEW_TICK_SECONDS
+            ),
+            tick=_codex_version_skew_tick,
         ),
     ]
 

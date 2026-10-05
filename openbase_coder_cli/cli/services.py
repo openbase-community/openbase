@@ -6,6 +6,10 @@ import click
 
 from openbase_coder_cli.codex_control_plane import codex_app_server_ready
 from openbase_coder_cli.paths import DEFAULT_LOG_DIR
+from openbase_coder_cli.services.codex_version_skew import (
+    CODEX_APP_SERVER_SERVICE_NAMES,
+    service_version_skew,
+)
 from openbase_coder_cli.services.definitions import SERVICES, ServiceDefinition
 from openbase_coder_cli.services.launchd import (
     install_all_services,
@@ -154,6 +158,12 @@ def status() -> None:
             supports(backend) for backend in coding_backends
         )
         required = getattr(svc, "install_by_default", True) and backend_supported
+        if svc.name == "codex-app-server" and not info.get("pid"):
+            from openbase_coder_cli.codex_control_plane import shared_codex_daemon_ready
+
+            if shared_codex_daemon_ready():
+                click.echo(f"{name_col} available through the shared Codex daemon")
+                continue
         if not info["installed"]:
             if required:
                 click.echo(f"{name_col} not installed")
@@ -163,11 +173,29 @@ def status() -> None:
             else:
                 click.echo(f"{name_col} optional (not installed)")
         elif info["pid"]:
-            if svc.name == "codex-app-server" and not codex_app_server_ready():
+            app_server_endpoint = None
+            if svc.name == "codex-app-server-dispatcher":
+                from openbase_coder_cli.codex_control_plane import (
+                    dispatcher_codex_app_server_endpoint,
+                )
+
+                app_server_endpoint = dispatcher_codex_app_server_endpoint()
+            if svc.name in (
+                "codex-app-server",
+                "codex-app-server-dispatcher",
+            ) and not codex_app_server_ready(app_server_endpoint):
                 click.echo(
                     f"{name_col} running (pid {info['pid']}), but initialize readiness failed"
                 )
                 has_failure = True
+            elif svc.name in CODEX_APP_SERVER_SERVICE_NAMES and (
+                skew := service_version_skew(svc.name)
+            ):
+                click.echo(
+                    f"{name_col} running (pid {info['pid']}), Codex "
+                    f"{skew.running_version} but {skew.installed_version} is "
+                    "installed — restart to update"
+                )
             else:
                 click.echo(f"{name_col} running (pid {info['pid']})")
         else:

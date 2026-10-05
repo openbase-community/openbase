@@ -157,6 +157,36 @@ OPENBASE_AUTH_DIAGNOSTICS=1
 
 Upload payloads redact secret-like values and email addresses before they are written to the local runtime log directory. Do not leave verbose console diagnostics enabled for routine development sessions unless you need the extra local output.
 
+## Codex CLI Warns About an Older Background Service
+
+Symptom: launching `codex` prints "A background Codex service is running
+vX, older than your Codex CLI vY".
+
+Openbase runs Codex as long-lived `codex-app-server` services. After Codex is
+upgraded (for example with `npm install -g @openai/codex`, or when a new Node
+version gets its own global install), those services keep the old binary in
+memory until they restart.
+
+Openbase handles this itself:
+
+- The console health banner shows "Service 'codex-app-server' is running
+  Codex X, but Codex Y is installed" with a **Restart** button.
+- `openbase-coder services status` prints the same mismatch next to the
+  service.
+- The `sync-workers` service restarts the affected services automatically
+  once nothing is in flight: no Super Agents turn, no voice call, and no
+  conversation attached to the app-server (an interactive `codex` chat)
+  that is mid-turn, waiting on an approval, or was active in the last ten
+  minutes. An open `codex` tab that has been idle longer than that does not
+  hold the restart back; it loses its connection and `codex resume` brings
+  the conversation back. Set `OPENBASE_CODEX_AUTO_RESTART=0` in
+  `~/.openbase/.env` to keep the warning but never restart automatically;
+  `OPENBASE_CODEX_RECENT_THREAD_SECONDS` changes the ten-minute window.
+
+To restart by hand: `openbase-coder restart --service codex-app-server`
+(and `--service codex-app-server-dispatcher`). This briefly interrupts
+running Codex threads and any voice call.
+
 ## Codex Resume Fails Against the Shared App-Server
 
 Three distinct failures can block `codex --remote unix:// resume <name>`

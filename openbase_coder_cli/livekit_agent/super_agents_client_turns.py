@@ -415,6 +415,47 @@ class SuperAgentsClientTurnsMixin:
                 prompt,
                 turn_input,
             )
+        except TimeoutError:
+            # The app-server is too busy to accept the steer right now
+            # (2026-09-18: turn/steer timed out for every mid-churn utterance
+            # and the transcripts were silently dropped). Capture the input
+            # in the local follow-up queue instead of losing it; the queue
+            # drains as soon as the active turn finishes.
+            active_turn_id = self._active_turn_id
+            try:
+                queued = await self._backend_client.queue_turn_by_label(
+                    self._query(thread_id=thread_id),
+                    self._turn_input(
+                        prompt,
+                        developer_instructions=None,
+                        dispatch_id=f"voice-{uuid.uuid4().hex[:12]}",
+                    ),
+                )
+            except Exception:
+                logger.error(
+                    "%s stage=steer_timeout_input_lost thread_id=%s turn_id=%s "
+                    "prompt_hash=%s",
+                    DISPATCH_TIMING_LOG,
+                    thread_id,
+                    active_turn_id,
+                    prompt_debug["hash"],
+                    exc_info=True,
+                )
+                raise
+            logger.warning(
+                "%s stage=steer_timeout_queued_follow_up thread_id=%s turn_id=%s "
+                "queued_id=%s prompt_hash=%s",
+                DISPATCH_TIMING_LOG,
+                thread_id,
+                active_turn_id,
+                _extract_queued_id(queued)
+                if _response_is_queued(queued)
+                else _extract_turn_id(queued),
+                prompt_debug["hash"],
+            )
+            if active_turn_id:
+                self._record_turn_prompt(active_turn_id, prompt_debug["hash"], prompt)
+            return active_turn_id
         except RuntimeError as exc:
             actual_turn_id = _active_turn_id_mismatch(exc)
             if actual_turn_id:

@@ -20,6 +20,64 @@
 set -euo pipefail
 umask 077
 
+# --- Privilege drop (Maritime) ----------------------------------------------
+# Maritime's VM init launches the image entrypoint as root regardless of the
+# Dockerfile USER and without the image ENV (observed 2026-09-28; without
+# this the root guard below exited PID 1 and the VM kernel-panicked). The
+# image's own bin directories (~/.openbase/bin, the cli venv) are owned by
+# the unprivileged user, so they must never be searched while we are root: a
+# binary planted there would run as root at the next boot. Keep a fixed
+# system PATH and absolute paths until the drop is done, then re-exec this
+# script as the image user with no inheritable capabilities, an empty
+# bounding set and no_new_privs, environment otherwise intact.
+if [ "${OPENBASE_CODER_RUNTIME:-}" = "maritime" ] && [ "$(/usr/bin/id -u)" = "0" ]; then
+    export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    if ! /usr/bin/id openbase >/dev/null 2>&1; then
+        echo "[entrypoint] Refusing to run the Maritime workspace as root (no 'openbase' user)." >&2
+        exit 1
+    fi
+    /bin/mkdir -p /data
+    # Maritime's VM init boots with an empty /etc/hosts and no hostname, so
+    # "localhost" does not resolve and the LiveKit worker can never reach its
+    # server. Repair both here, the only point where we still hold root.
+    if ! /usr/bin/getent hosts localhost >/dev/null 2>&1; then
+        /usr/bin/printf '127.0.0.1\tlocalhost\n::1\tlocalhost\n' >>/etc/hosts 2>/dev/null \
+            || echo "[entrypoint] Could not add localhost to /etc/hosts." >&2
+    fi
+    case "$(/bin/hostname 2>/dev/null)" in
+        ""|"(none)"|localhost)
+            /bin/hostname "${OPENBASE_TSNET_HOSTNAME:-openbase-workspace}" 2>/dev/null || true
+            ;;
+    esac
+    # Reparent only root-owned entries (the platform-created mount and
+    # first-boot directories); never rewrite a user's existing files, and
+    # never follow links (-h) so nothing under /data can redirect the chown.
+    /usr/bin/find /data -maxdepth 2 -user root \
+        -exec /bin/chown -h openbase:openbase {} + 2>/dev/null || true
+    echo "[entrypoint] Started as root; re-executing as 'openbase'." >&2
+    exec /usr/bin/setpriv --reuid=openbase --regid=openbase --init-groups \
+        --inh-caps=-all --bounding-set=-all --no-new-privs \
+        /usr/bin/env HOME=/home/openbase USER=openbase LOGNAME=openbase \
+        "$0" "$@"
+fi
+
+# The Dockerfile ENV is not guaranteed to reach us: Maritime's VM init rebuilds
+# the environment from its own store and drops the image's ENV, so the cli
+# venv fell off PATH ("openbase-coder: command not found", 2026-09-28).
+# Re-assert the image defaults here (mirrors the Dockerfile ENV block; keep
+# the two in sync); explicit platform values still win. This runs only after
+# the privilege drop above, so the user-owned directories it puts on PATH are
+# never searched by root.
+case ":${PATH:-}:" in
+    *":/opt/openbase-coder/workspace/cli/.venv/bin:"*) ;;
+    *)
+        export PATH="/home/openbase/.openbase/bin:/opt/openbase-coder/workspace/cli/.venv/bin:${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
+        ;;
+esac
+export OPENBASE_CODER_WORKSPACE_DIR="${OPENBASE_CODER_WORKSPACE_DIR:-/opt/openbase-coder/workspace}"
+export OPENBASE_CODER_CLI_CONSOLE_BUILD_DIR="${OPENBASE_CODER_CLI_CONSOLE_BUILD_DIR:-/opt/openbase-coder/console-dist}"
+export UV_PYTHON_DOWNLOADS="${UV_PYTHON_DOWNLOADS:-never}"
+
 if [ "$#" -gt 0 ]; then
     exec "$@"
 fi
@@ -36,6 +94,12 @@ if [ "${OPENBASE_CODER_RUNTIME:-}" = "maritime" ]; then
     # tunneld) is the only mode that works there. Default to it so a missing
     # env value can never silently boot the tailscale path.
     NETWORK_MODE="${OPENBASE_CODER_NETWORK_MODE:-netmesh}"
+    # Maritime's VM init keeps its exec/command servers on 8081/8082, the
+    # LiveKit worker's default health port; Cloud passes the port explicitly,
+    # and this default covers a hand-launched workspace.
+    export LIVEKIT_AGENT_PORT="${LIVEKIT_AGENT_PORT:-18081}"
+    # The privilege drop at the top of this script already re-executed us as
+    # the image user; nothing past this point may run as root.
     if [ "$(id -u)" = "0" ]; then
         echo "[entrypoint] Refusing to run the Maritime workspace as root." >&2
         exit 1
@@ -333,11 +397,23 @@ done
 if [ "$netmesh_key_staged" = "1" ]; then
     (
         while :; do
+            # The daemon tries TS_AUTHKEY once at start. On Maritime, egress
+            # can still be down at that moment, and a failed first login
+            # parks the node in NeedsLogin for good — so while the staged key
+            # is still here, resubmit it through the daemon's local login
+            # API until the node reports enrolled and forwarding.
             if python -c "
 import sys
-from openbase_coder_cli.services.tunneld import tunneld_health
+from pathlib import Path
+from openbase_coder_cli.services.tunneld import tunneld_health, tunneld_login
 h = tunneld_health()
-sys.exit(0 if h.get('backend_state') == 'Running' and h.get('forwards_up') else 1)
+if h.get('backend_state') == 'Running' and h.get('forwards_up'):
+    sys.exit(0)
+if h.get('backend_state') == 'NeedsLogin':
+    key = Path('$NETMESH_AUTHKEY_FILE').read_text().strip()
+    if key and tunneld_login(key):
+        print('resubmitted the staged enrollment key')
+sys.exit(1)
 " 2>/dev/null; then
                 rm -f "$NETMESH_AUTHKEY_FILE"
                 echo "enrollment confirmed; staged auth key removed"

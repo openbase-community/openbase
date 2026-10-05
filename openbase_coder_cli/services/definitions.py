@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from openbase_coder_cli.backend_config import (
@@ -63,6 +64,19 @@ SERVICES: list[ServiceDefinition] = [
         restart_dependents=("openbase-routines", "livekit-agent", "django-cli"),
     ),
     ServiceDefinition(
+        name="codex-app-server-dispatcher",
+        freshness_kind="binary",
+        freshness_packages=(),
+        # Dedicated instance for the voice dispatcher's own thread: a
+        # churning worker turn on the shared instance must never starve the
+        # dispatcher's RPCs (2026-09-18 voice-call failure).
+        description="Codex App Server (dispatcher)",
+        command_template="codex-app-server-dispatcher",
+        workdir_template="{workspace}",
+        backends=(CODEX_BACKEND, OPENBASE_CLOUD_CODEX_BACKEND),
+        restart_dependents=("livekit-agent",),
+    ),
+    ServiceDefinition(
         name="sync-workers",
         description="Sync Workers (thread, device, and code-sync reconcile)",
         # One process runs every periodic sync job on its own thread — the
@@ -85,7 +99,9 @@ SERVICES: list[ServiceDefinition] = [
         description="LiveKit Agent Worker",
         command_template="livekit-agent",
         workdir_template="{runtime_workdir}",
-        cleanup_ports=(8081,),
+        # The worker's health server port follows LIVEKIT_AGENT_PORT (container
+        # runtimes move it off 8081, which Maritime's own VM services hold).
+        cleanup_ports=(int(os.environ.get("LIVEKIT_AGENT_PORT", "8081")),),
         cleanup_command_substrings=("openbase_coder_cli.livekit_agent.livekit",),
     ),
     ServiceDefinition(

@@ -169,6 +169,8 @@ COPY --from=console-build --chown=openbase:openbase \
 WORKDIR /home/openbase
 # ~/.openbase/bin leads so the entrypoint's tailscale CLI shim (which targets
 # the in-container tailscaled socket) also wins in `docker exec` shells.
+# Maritime's VM init drops this ENV, so docker/entrypoint.sh re-asserts the
+# same defaults at runtime — change both together.
 ENV PATH="/home/openbase/.openbase/bin:/opt/openbase-coder/workspace/cli/.venv/bin:${PATH}" \
     OPENBASE_CODER_WORKSPACE_DIR=/opt/openbase-coder/workspace \
     OPENBASE_CODER_CLI_CONSOLE_BUILD_DIR=/opt/openbase-coder/console-dist \

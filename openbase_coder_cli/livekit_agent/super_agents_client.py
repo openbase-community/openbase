@@ -471,9 +471,7 @@ class SuperAgentsLiveKitClient(
                         self._active_turn_started_at = time.monotonic()
                         self._active_turn_dispatch_id = dispatch_id
                         self._active_turn_prompt_hash = prompt_debug["hash"]
-                        self._record_turn_prompt(
-                            turn_id, prompt_debug["hash"], prompt
-                        )
+                        self._record_turn_prompt(turn_id, prompt_debug["hash"], prompt)
                         preserve_active_turn = True
                         logger.info(
                             "%s stage=turn_start_cancelled_after_backend_start "
@@ -690,6 +688,39 @@ class SuperAgentsLiveKitClient(
         )
         handler(self, turn_id, spoken_text)
 
+    def backend_appears_busy(self) -> bool:
+        """True when the active turn streamed a backend event recently.
+
+        Distinguishes "the backend is churning and can't answer RPCs" from
+        "the backend is down" so failure UX can say busy instead of broken."""
+        from super_agents.app_time import age_ms, turn_key
+
+        thread_id = self._thread_id
+        turn_id = self._active_turn_id
+        if not thread_id or not turn_id:
+            return False
+        turns = getattr(self._backend_client, "_turns", None)
+        if not isinstance(turns, dict):
+            return False
+        events = getattr(turns.get(turn_key(thread_id, turn_id)), "events", None)
+        if not events:
+            return False
+        age = age_ms(events[-1].get("receivedAt"))
+        return age is not None and age < 30_000
+
+    def _turn_notification_count(self, thread_id: str, turn_id: str) -> int:
+        """Monotonic count of pushed backend notifications for this turn.
+
+        Used as a liveness signal: if this is still advancing while poll RPCs
+        time out, the backend is busy streaming — not down."""
+        from super_agents.app_time import turn_key
+
+        turns = getattr(self._backend_client, "_turns", None)
+        if not isinstance(turns, dict):
+            return 0
+        turn = turns.get(turn_key(thread_id, turn_id))
+        return int(getattr(turn, "notification_count", 0) or 0)
+
     async def _poll_turn_until_ready(
         self,
         thread_id: str,
@@ -697,6 +728,7 @@ class SuperAgentsLiveKitClient(
     ) -> dict[str, Any]:
         consecutive_failures = 0
         empty_answer_started_at: float | None = None
+        last_notification_count = self._turn_notification_count(thread_id, turn_id)
         while True:
             try:
                 progress = await self._backend_client.progress_by_label(
@@ -714,6 +746,26 @@ class SuperAgentsLiveKitClient(
                 raise
             except Exception as exc:
                 consecutive_failures += 1
+                notification_count = self._turn_notification_count(thread_id, turn_id)
+                if notification_count > last_notification_count:
+                    # The backend is still streaming events for this turn
+                    # while failing to answer poll RPCs: it is busy, not
+                    # down (2026-09-18: thread/read timed out 10x in a row
+                    # while ~30 notifications/sec arrived, and the dispatcher
+                    # wrongly declared the backend unresponsive). Keep
+                    # waiting instead of counting toward give-up.
+                    last_notification_count = notification_count
+                    consecutive_failures = 0
+                    logger.warning(
+                        "%s stage=turn_wait_poll_busy_backend turn_id=%s "
+                        "notification_count=%d error=%s",
+                        DISPATCH_TIMING_LOG,
+                        turn_id,
+                        notification_count,
+                        exc,
+                    )
+                    await asyncio.sleep(TURN_POLL_FAILURE_BACKOFF_MAX_SECONDS)
+                    continue
                 if consecutive_failures >= TURN_POLL_MAX_CONSECUTIVE_FAILURES:
                     logger.error(
                         "%s stage=turn_wait_poll_gave_up turn_id=%s "

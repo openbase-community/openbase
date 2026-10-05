@@ -68,11 +68,13 @@ def test_thread_sync_services_are_retired():
 
 def test_sync_workers_jobs_cover_device_sync_and_reconcile():
     # The home<->home thread sync engine is gone (shared agent homes); the
-    # workers only run device sync, reconcile, registration, and watchdog jobs.
+    # workers only run device sync, reconcile, registration, watchdog, and
+    # codex version-skew self-heal jobs.
     from openbase_coder_cli.cli.sync_workers import build_jobs
 
     names = {job.name for job in build_jobs()}
     assert names == {
+        "codex_version_skew",
         "codex_thread_device_sync",
         "claude_thread_device_sync",
         "claude_app_index",
@@ -80,6 +82,7 @@ def test_sync_workers_jobs_cover_device_sync_and_reconcile():
         "cloud_registration",
         "cloud_webhook_events",
         "livekit_pool_watchdog",
+        "super_agents_state_prune",
     }
 
 

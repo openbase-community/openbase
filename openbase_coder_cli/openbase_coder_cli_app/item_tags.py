@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from openbase_coder_cli.cli.utils import get_data_dir
+from openbase_coder_cli.json_snapshot import JsonFileSnapshot
 
 TAGS_FILE = "item-tags.json"
 ItemKind = Literal["thread", "report"]
@@ -73,11 +74,46 @@ def set_report_tags(
 
 
 def report_tags(project_path: str | None, relative_path: str | None) -> list[str]:
-    return report_tags_payload(project_path, relative_path)["tags"]
+    return item_tag_labels(
+        _read_tags(), "report", report_item_id(project_path, relative_path)
+    )
 
 
 def thread_tags(thread_id: str | None) -> list[str]:
-    return thread_tags_payload(thread_id)["tags"]
+    return item_tag_labels(_read_tags(), "thread", _normalize_item_id(thread_id))
+
+
+def tags_snapshot() -> dict[str, Any]:
+    """The current tags payload, for callers resolving many items at once.
+
+    Read-only: pass it to ``item_tag_labels`` instead of calling
+    ``report_tags``/``thread_tags`` per item.
+    """
+    return _read_tags()
+
+
+def item_tag_labels(payload: dict[str, Any], kind: ItemKind, item_id: str) -> list[str]:
+    """Just the labels — no tag-option catalog or usage counts.
+
+    Report sweeps and thread-list annotation resolve tags once per item, so
+    this must not pay the catalog-wide usage count the API payload carries.
+    """
+    if not item_id:
+        return []
+    entry = payload[f"{kind}s"].get(item_id)
+    slugs = entry.get("tags") if isinstance(entry, dict) else []
+    options = payload["options"]
+    return [
+        options[slug]["label"]
+        for slug in slugs
+        if isinstance(slug, str) and slug in options
+    ]
+
+
+def report_item_id(project_path: str | None, relative_path: str | None) -> str:
+    return _report_item_id(
+        _normalize_item_id(project_path), _normalize_report_path(relative_path)
+    )
 
 
 def _item_tags_payload(kind: ItemKind, item_id: str) -> dict[str, Any]:
@@ -152,16 +188,16 @@ def _normalize_tag_inputs(
 
 
 def _read_tags() -> dict[str, Any]:
-    with _lock:
-        return _read_tags_unlocked()
+    """Read-only snapshot shared across callers; never mutate the result."""
+    return _tags_snapshot.get(_tags_path())
 
 
 def _read_tags_unlocked() -> dict[str, Any]:
-    path = _tags_path()
-    try:
-        raw_payload = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
-        raw_payload = {}
+    """Private, freshly parsed copy for write paths (caller holds ``_lock``)."""
+    return _tags_snapshot.read_fresh(_tags_path())
+
+
+def _parse_tags_payload(raw_payload: Any) -> dict[str, Any]:
     if not isinstance(raw_payload, dict):
         raw_payload = {}
     return {
@@ -229,6 +265,10 @@ def _write_tags_unlocked(payload: dict[str, Any]) -> None:
         tmp.write("\n")
         tmp_path = Path(tmp.name)
     os.replace(tmp_path, path)
+    _tags_snapshot.invalidate(path)
+
+
+_tags_snapshot: JsonFileSnapshot[dict[str, Any]] = JsonFileSnapshot(_parse_tags_payload)
 
 
 def _tag_usage_counts(payload: dict[str, Any]) -> dict[str, int]:

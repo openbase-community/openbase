@@ -22,6 +22,7 @@ from openbase_coder_cli.openbase_coder_cli_app.item_tags import (
     thread_tags_payload,
 )
 from openbase_coder_cli.openbase_coder_cli_app.thread_cache import (
+    get_cached_thread_history_page,
     get_cached_thread_list,
     get_cached_thread_page,
     get_cached_thread_state,
@@ -41,6 +42,9 @@ from openbase_coder_cli.openbase_coder_cli_app.thread_metadata import (
     annotate_thread_payload,
     get_livekit_shared_thread_id,
 )
+from openbase_coder_cli.openbase_coder_cli_app.thread_models import (
+    validate_model_for_thread,
+)
 from openbase_coder_cli.openbase_coder_cli_app.thread_origins import (
     MANUAL_ORIGIN,
     set_thread_origin,
@@ -54,6 +58,7 @@ from openbase_coder_cli.services.fleet_aggregation import (
     fleet_thread_page,
     thread_payload_sort_key,
 )
+from openbase_coder_cli.thread_model_overrides import set_thread_model_override
 from openbase_coder_cli.thread_sync.models import ThreadStatus
 from openbase_coder_cli.thread_sync.projects import (
     refresh_projects_from_thread_directories as _refresh_projects_from_threads,
@@ -67,6 +72,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_THREAD_PAGE_SIZE = 25
 MAX_THREAD_PAGE_SIZE = 100
+MAX_THREAD_NAME_LENGTH = 200
 RUN_ACTIVITY_FRESHNESS = timedelta(minutes=5)
 DISPATCHER_THREAD_WARM_TIMEOUT_SECONDS = 20.0
 
@@ -586,9 +592,13 @@ def thread_detail(request, thread_id):
         # keeps live-streamed turns that post-date the snapshot.
         history_cursor = request.query_params.get("history_cursor")
         if history_cursor:
-            thread = async_to_sync(manager.get_thread_state)(
+            # Older pages cache too: a not-loaded thread's page read can force
+            # a full rollout-file parse, so re-reading a scrolled-back page
+            # must not repeat that work within the TTL.
+            thread = get_cached_thread_history_page(
+                manager,
                 thread_id,
-                history_cursor=history_cursor,
+                history_cursor,
             )
         else:
             thread = get_cached_thread_state(manager, thread_id)
@@ -640,6 +650,41 @@ def thread_favorite(request, thread_id):
     return Response(payload)
 
 
+@api_view(["PATCH"])
+def thread_name(request, thread_id):
+    """Rename a thread on its coding backend."""
+    name = request.data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return Response(
+            {"error": "name must be a non-empty string"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if len(name) > MAX_THREAD_NAME_LENGTH:
+        return Response(
+            {"error": f"name must be at most {MAX_THREAD_NAME_LENGTH} characters"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    manager = get_session_manager()
+    try:
+        thread = async_to_sync(manager.rename_thread)(thread_id, name)
+    except ValueError as exc:
+        return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    except RuntimeError as exc:
+        return Response(
+            {"error": thread_error_message(exc)},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+    invalidate_thread_list_cache()
+    if thread is None:
+        return Response(
+            {"error": f"Thread {thread_id} not found"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    return Response(
+        annotate_thread_payload(thread.model_dump(mode="json"), thread_id=thread_id)
+    )
+
+
 @api_view(["GET", "PATCH"])
 def thread_tags(request, thread_id):
     """Read or update a thread's local tag metadata."""
@@ -678,6 +723,27 @@ def thread_interrupt(request, thread_id):
     return Response({"success": True})
 
 
+def _requested_turn_model(request, manager, thread_id) -> str | None:
+    """Validate and persist an optional per-turn model switch.
+
+    A `model` in a turn payload is the composer's model dropdown: it must stay
+    on the thread's own backend, and it sticks — later turns without a model
+    keep using it (stored as the thread's model override).
+
+    Raises ValueError with a user-facing message on unknown or cross-backend
+    models.
+    """
+    model = request.data.get("model")
+    if not model or not isinstance(model, str):
+        return None
+    thread = async_to_sync(manager.get_thread_state)(thread_id)
+    if thread is None:
+        raise ValueError(f"Thread {thread_id} not found")
+    model = validate_model_for_thread(thread.backend, model)
+    set_thread_model_override(thread_id, model)
+    return model
+
+
 @api_view(["POST"])
 def thread_start_turn(request, thread_id):
     """Start a new turn on a thread (non-blocking).
@@ -693,7 +759,8 @@ def thread_start_turn(request, thread_id):
             status=status.HTTP_400_BAD_REQUEST,
         )
     try:
-        turn_id = async_to_sync(manager.start_turn)(thread_id, prompt)
+        model = _requested_turn_model(request, manager, thread_id)
+        turn_id = async_to_sync(manager.start_turn)(thread_id, prompt, model=model)
     except (ValueError, RuntimeError) as e:
         # Surface the app-server's human-readable message (e.g. "thread not
         # loaded: <id>") rather than its raw JSON-RPC error envelope.
@@ -717,7 +784,8 @@ def thread_queue_turn(request, thread_id):
             status=status.HTTP_400_BAD_REQUEST,
         )
     try:
-        result = async_to_sync(manager.queue_turn)(thread_id, prompt)
+        model = _requested_turn_model(request, manager, thread_id)
+        result = async_to_sync(manager.queue_turn)(thread_id, prompt, model=model)
     except (ValueError, RuntimeError) as e:
         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
     invalidate_thread_list_cache()

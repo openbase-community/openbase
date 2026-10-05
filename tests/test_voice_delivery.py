@@ -645,15 +645,25 @@ def test_stale_route_suppresses_tts_text_push():
     assert events == ["utterance_accepted"]
 
 
-def test_tts_stream_records_long_audio_delivery_gaps_without_dropping_frames(monkeypatch, caplog):
+def test_tts_stream_records_long_audio_delivery_gaps_without_dropping_frames(
+    monkeypatch, caplog
+):
     from types import SimpleNamespace
+
     from openbase_coder_cli.livekit_agent import tts_selection
+
     ticks = iter([100.0, 112.5])
-    monkeypatch.setattr(tts_selection, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    monkeypatch.setattr(
+        tts_selection, "time", SimpleNamespace(monotonic=lambda: next(ticks))
+    )
     events = [_FakeAudioEvent(), _FakeAudioEvent()]
-    stream = SpeechFormattingSynthesizeStream(_FakeTTSStream(events=events), role="direct")
+    stream = SpeechFormattingSynthesizeStream(
+        _FakeTTSStream(events=events), role="direct"
+    )
+
     async def drain():
         return [event async for event in stream]
+
     with caplog.at_level("INFO"):
         assert asyncio.run(drain()) == events
     assert stream._max_audio_event_gap_ms == 12500
@@ -1272,6 +1282,34 @@ def test_steer_receipt_closure_emits_mute_once():
     assert events.count("safe_to_mute_user") == 1
 
 
+def test_steer_receipt_retires_provisional_mute_recovery():
+    """A proactive steer means the transcript WAS captured and used, so an
+    outstanding VAD-only provisional mute must retire exactly as
+    ``accept_utterance`` retires it — otherwise its recovery timer later fires
+    the spoken "speech recognition is having trouble" notice for speech that
+    was in fact received."""
+
+    async def run() -> list:
+        notices: list = []
+        ledger = VoiceDeliveryLedger(
+            route_snapshot=_snapshot,
+            user_speaking_poll_seconds=0.005,
+            vad_min_speech_seconds=0,
+            vad_quiet_grace_seconds=0.01,
+            vad_transcript_timeout_seconds=0.015,
+        )
+        ledger.set_lifecycle_sink(lambda _event, _record, _reason: None)
+        ledger.set_user_speaking_provider(lambda: False)
+        ledger.set_transcript_timeout_sink(notices.append)
+
+        ledger._emit_vad_quiet_mute()
+        ledger.schedule_steer_receipt_closure()
+        await asyncio.sleep(0.05)
+        return notices
+
+    assert asyncio.run(run()) == []
+
+
 def test_mute_keepalive_holds_client_watchdog_during_long_turn(monkeypatch):
     """A sustained mute emits a distinct mute_keepalive event so the iOS
     stuck-muted watchdog does not reopen the mic mid-turn, stops as soon as
@@ -1313,7 +1351,9 @@ def test_failed_synthesis_releases_hold_and_preserves_partial_failure():
     ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
     ledger.set_lifecycle_sink(lambda event, record, reason: events.append(event))
     record = ledger.track_announcement(text="A long answer")
-    ledger.mark_audio_started(record, latency_ms=1, role="direct", voice_id="voice-1", voice_name="Test")
+    ledger.mark_audio_started(
+        record, latency_ms=1, role="direct", voice_id="voice-1", voice_name="Test"
+    )
     ledger.mark_tts_failed(record, audio_events=1, audio_seconds=0.05)
     assert record.status == "failed"
     assert record.terminal_reason == "tts_provider_failed_after_partial_audio"
@@ -1321,8 +1361,10 @@ def test_failed_synthesis_releases_hold_and_preserves_partial_failure():
 
 
 def test_tts_default_timeout_tolerates_congestion_and_explicit_options_survive():
-    from livekit.agents.types import APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
+    from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
+
     from openbase_coder_cli.livekit_agent.tts_selection import tts_connect_options
+
     assert tts_connect_options(DEFAULT_API_CONNECT_OPTIONS).timeout == 60
     explicit = APIConnectOptions(timeout=2)
     assert tts_connect_options(explicit) is explicit
@@ -1330,14 +1372,18 @@ def test_tts_default_timeout_tolerates_congestion_and_explicit_options_survive()
 
 def test_synthesis_error_cleans_up_delivery_instead_of_leaving_mic_hold():
     from livekit.agents import APITimeoutError
+
     class FailingStream(_FakeTTSStream):
         async def __anext__(self):
             raise APITimeoutError()
+
     async def run():
         events = []
         ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
         ledger.set_lifecycle_sink(lambda event, record, reason: events.append(event))
-        wrapped = SpeechFormattingSynthesizeStream(FailingStream(), role="direct", delivery_ledger=ledger)
+        wrapped = SpeechFormattingSynthesizeStream(
+            FailingStream(), role="direct", delivery_ledger=ledger
+        )
         wrapped.push_text("A complete answer")
         wrapped.flush()
         try:
@@ -1348,12 +1394,17 @@ def test_synthesis_error_cleans_up_delivery_instead_of_leaving_mic_hold():
             raise AssertionError("Provider failure must propagate")
         assert events[-2:] == ["agent_audio_finished", "safe_to_unmute"]
         assert not ledger.has_pending_delivery_for_current_route()
+
     asyncio.run(run())
 
 
 def test_silent_stream_failure_waits_for_partial_playout_and_never_replays():
     from types import SimpleNamespace
-    from openbase_coder_cli.livekit_agent.tts_progress import TTSProgressGuard, TTSStreamStalled
+
+    from openbase_coder_cli.livekit_agent.tts_progress import (
+        TTSProgressGuard,
+        TTSStreamStalled,
+    )
 
     class HangingStream(_FakeTTSStream):
         async def __anext__(self):
@@ -1368,8 +1419,12 @@ def test_silent_stream_failure_waits_for_partial_playout_and_never_replays():
         record = ledger.track_announcement(text="Partial answer")
         frame = SimpleNamespace(sample_rate=24000, samples_per_channel=6000)
         underlying = HangingStream(events=[SimpleNamespace(frame=frame)])
-        wrapped = SpeechFormattingSynthesizeStream(underlying, role="direct", delivery_ledger=ledger)
-        wrapped._progress = TTSProgressGuard(first_audio_seconds=.1, audio_gap_seconds=.02)
+        wrapped = SpeechFormattingSynthesizeStream(
+            underlying, role="direct", delivery_ledger=ledger
+        )
+        wrapped._progress = TTSProgressGuard(
+            first_audio_seconds=0.1, audio_gap_seconds=0.02
+        )
         wrapped.push_text("Partial answer")
         wrapped.flush()
         await wrapped.__anext__()
@@ -1382,10 +1437,11 @@ def test_silent_stream_failure_waits_for_partial_playout_and_never_replays():
         assert record.status == "failed"
         assert record.terminal_reason == "tts_stream_stalled"
         assert "safe_to_unmute" not in events
-        await asyncio.sleep(.3)
+        await asyncio.sleep(0.3)
         assert events[-2:] == ["agent_audio_finished", "safe_to_unmute"]
         assert underlying.pushed_text == [text_for_tts("Partial answer")]
         assert events.count("safe_to_unmute") == 1
+
     asyncio.run(run())
 
 
@@ -1395,34 +1451,47 @@ def test_partial_failure_does_not_release_before_estimated_playout_tail():
         ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
         ledger.set_lifecycle_sink(lambda event, record, reason: events.append(event))
         record = ledger.track_announcement(text="Partial answer")
-        ledger.mark_audio_started(record, latency_ms=1, role="direct", voice_id="v", voice_name="Test")
-        ledger.mark_tts_failed(record, audio_events=2, audio_seconds=.08)
+        ledger.mark_audio_started(
+            record, latency_ms=1, role="direct", voice_id="v", voice_name="Test"
+        )
+        ledger.mark_tts_failed(record, audio_events=2, audio_seconds=0.08)
         assert "safe_to_unmute" not in events
-        await asyncio.sleep(.12)
+        await asyncio.sleep(0.12)
         assert events[-2:] == ["agent_audio_finished", "safe_to_unmute"]
         assert record.status == "failed"
+
     asyncio.run(run())
 
 
 def test_stream_underflow_does_not_count_the_gap_as_played_audio():
     import time
+
     async def run():
         events = []
         ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
         ledger.set_lifecycle_sink(lambda event, record, reason: events.append(event))
         record = ledger.track_announcement(text="Gapped answer")
-        ledger.mark_audio_started(record, latency_ms=1, role="direct", voice_id="v", voice_name="Test")
+        ledger.mark_audio_started(
+            record, latency_ms=1, role="direct", voice_id="v", voice_name="Test"
+        )
         now = time.monotonic()
         record.audio_started_at = now - 5
-        ledger.mark_audio_frame_queued(record, audio_seconds=.03, queued_at=now-5)
-        ledger.mark_audio_frame_queued(record, audio_seconds=.08, queued_at=now)
-        ledger.mark_tts_completed(record, audio_events=2, audio_seconds=.11,
-            role="direct", voice_id="v", voice_name="Test")
+        ledger.mark_audio_frame_queued(record, audio_seconds=0.03, queued_at=now - 5)
+        ledger.mark_audio_frame_queued(record, audio_seconds=0.08, queued_at=now)
+        ledger.mark_tts_completed(
+            record,
+            audio_events=2,
+            audio_seconds=0.11,
+            role="direct",
+            voice_id="v",
+            voice_name="Test",
+        )
         assert "safe_to_unmute" not in events
-        await asyncio.sleep(.03)
+        await asyncio.sleep(0.03)
         assert "safe_to_unmute" not in events
-        await asyncio.sleep(.09)
+        await asyncio.sleep(0.09)
         assert events[-2:] == ["agent_audio_finished", "safe_to_unmute"]
+
     asyncio.run(run())
 
 
@@ -1431,67 +1500,99 @@ def test_partial_failure_preserves_other_pending_answer_mute():
     ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
     ledger.set_lifecycle_sink(lambda event, record, reason: events.append(event))
     record = ledger.track_announcement(text="Partial answer")
-    ledger.mark_audio_started(record, latency_ms=1, role="direct", voice_id="v", voice_name="Test")
+    ledger.mark_audio_started(
+        record, latency_ms=1, role="direct", voice_id="v", voice_name="Test"
+    )
     ledger.accept_utterance(message_id="another", prompt="Another pending answer")
-    ledger.mark_tts_failed(record, audio_events=1, audio_seconds=.01)
+    ledger.mark_tts_failed(record, audio_events=1, audio_seconds=0.01)
     assert events[-1] == "agent_audio_finished"
     assert "safe_to_unmute" not in events
 
 
 def test_cancelled_other_work_cannot_release_a_delivered_audio_queue():
     import time
+
     async def run():
         events = []
         ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
         ledger.set_lifecycle_sink(lambda event, record, reason: events.append(event))
         record = ledger.track_announcement(text="Still queued")
-        ledger.mark_audio_started(record, latency_ms=1, role="direct", voice_id="v", voice_name="Test")
-        ledger.mark_audio_frame_queued(record, audio_seconds=.12, queued_at=time.monotonic())
-        ledger.mark_tts_completed(record, audio_events=1, audio_seconds=.12,
-            role="direct", voice_id="v", voice_name="Test")
-        other = ledger.accept_utterance(message_id="other", prompt="Cancelled unrelated work")
+        ledger.mark_audio_started(
+            record, latency_ms=1, role="direct", voice_id="v", voice_name="Test"
+        )
+        ledger.mark_audio_frame_queued(
+            record, audio_seconds=0.12, queued_at=time.monotonic()
+        )
+        ledger.mark_tts_completed(
+            record,
+            audio_events=1,
+            audio_seconds=0.12,
+            role="direct",
+            voice_id="v",
+            voice_name="Test",
+        )
+        other = ledger.accept_utterance(
+            message_id="other", prompt="Cancelled unrelated work"
+        )
         ledger.mark_cancelled(other, reason="test_cancel")
         assert "safe_to_unmute" not in events
-        await asyncio.sleep(.16)
+        await asyncio.sleep(0.16)
         assert events[-1] == "safe_to_unmute"
+
     asyncio.run(run())
 
 
 def test_brief_vad_noise_does_not_mute_but_recognized_short_request_does():
     async def run():
         events = []
-        ledger = VoiceDeliveryLedger(route_snapshot=_snapshot, vad_quiet_grace_seconds=.01, user_speaking_poll_seconds=.005)
+        ledger = VoiceDeliveryLedger(
+            route_snapshot=_snapshot,
+            vad_quiet_grace_seconds=0.01,
+            user_speaking_poll_seconds=0.005,
+        )
         ledger.set_lifecycle_sink(lambda event, record, reason: events.append(event))
         ledger.set_user_speaking_provider(lambda: False)
         # Repeated room clicks must not accumulate into a speech turn.
         for _ in range(5):
             ledger.notify_user_state(new_state="speaking")
-            ledger._vad_speech_started_at -= .2
+            ledger._vad_speech_started_at -= 0.2
             ledger.notify_user_state(new_state="listening", old_state="speaking")
             assert ledger.user_quiet_verification_pending()
-            await asyncio.sleep(.02)
+            await asyncio.sleep(0.02)
         assert events == []
         record = ledger.accept_utterance(message_id="short", prompt="Yes")
-        ledger.schedule_user_turn_closure(record, UserTurnClosureDecision(
-            confidence=.9, source="turn_detector", quiet_grace_seconds=.01,
-            completion_reason="quiet_floor"))
-        await asyncio.sleep(.04)
+        ledger.schedule_user_turn_closure(
+            record,
+            UserTurnClosureDecision(
+                confidence=0.9,
+                source="turn_detector",
+                quiet_grace_seconds=0.01,
+                completion_reason="quiet_floor",
+            ),
+        )
+        await asyncio.sleep(0.04)
         assert events == ["utterance_accepted", "safe_to_mute_user"]
+
     asyncio.run(run())
 
 
 def test_sustained_vad_speech_keeps_provisional_mute_and_duration():
     async def run():
         records = []
-        ledger = VoiceDeliveryLedger(route_snapshot=_snapshot, vad_quiet_grace_seconds=.01, user_speaking_poll_seconds=.005)
+        ledger = VoiceDeliveryLedger(
+            route_snapshot=_snapshot,
+            vad_quiet_grace_seconds=0.01,
+            user_speaking_poll_seconds=0.005,
+        )
         ledger.set_lifecycle_sink(lambda event, record, reason: records.append(record))
         ledger.set_user_speaking_provider(lambda: False)
         ledger.notify_user_state(new_state="speaking")
-        ledger._vad_speech_started_at -= .8
+        ledger._vad_speech_started_at -= 0.8
         ledger.notify_user_state(new_state="listening", old_state="speaking")
-        await asyncio.sleep(.04)
+        await asyncio.sleep(0.04)
         assert len(records) == 1
-        assert records[0].user_speech_seconds >= .8
+        assert records[0].user_speech_seconds >= 0.8
         ledger.mark_cancelled(records[0], reason="test_finished")
         ledger._provisional_mute_recovery.cancel()
+
     asyncio.run(run())

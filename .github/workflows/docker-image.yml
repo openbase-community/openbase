@@ -21,6 +21,14 @@ on:
       - "uv.lock"
       - ".github/workflows/docker-image.yml"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: >-
+          Publish ONLY this image tag (for example maritime-<sha>) instead of
+          latest + version. Use it to ship a test image from a non-main ref
+          without moving latest.
+        required: false
+        default: ""
 
 env:
   IMAGE: openbaseai/openbase
@@ -118,13 +126,21 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Create multi-arch manifest
         working-directory: /tmp/digests
+        env:
+          CUSTOM_TAG: ${{ inputs.tag }}
         run: |
-          docker buildx imagetools create \
-            -t "$IMAGE:latest" \
-            -t "$IMAGE:${{ needs.preflight.outputs.version }}" \
-            $(printf "$IMAGE@sha256:%s " *)
+          if [ -n "$CUSTOM_TAG" ]; then
+            # A dispatch with a tag publishes that tag only; latest and the
+            # version tag keep pointing at the last main build.
+            tags="-t $IMAGE:$CUSTOM_TAG"
+          else
+            tags="-t $IMAGE:latest -t $IMAGE:${{ needs.preflight.outputs.version }}"
+          fi
+          docker buildx imagetools create $tags $(printf "$IMAGE@sha256:%s " *)
       - name: Inspect
-        run: docker buildx imagetools inspect "$IMAGE:latest"
+        env:
+          CUSTOM_TAG: ${{ inputs.tag }}
+        run: docker buildx imagetools inspect "$IMAGE:${CUSTOM_TAG:-latest}"
 
   # Report-only vulnerability scan of the image that was just published, so
   # base-image and OS-package CVEs surface in the Security tab instead of
@@ -138,7 +154,8 @@ jobs:
       - name: Run Trivy on published image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: openbaseai/openbase:${{ needs.preflight.outputs.version }}
+          # A dispatch with a custom tag publishes only that tag.
+          image-ref: openbaseai/openbase:${{ inputs.tag || needs.preflight.outputs.version }}
           format: sarif
           output: trivy-results.sarif
           severity: CRITICAL,HIGH

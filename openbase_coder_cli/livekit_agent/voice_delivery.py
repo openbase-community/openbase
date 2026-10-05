@@ -19,7 +19,6 @@ on their own.
 from __future__ import annotations
 
 import asyncio
-from .provisional_mute_recovery import ProvisionalMuteRecovery
 import difflib
 import hashlib
 import logging
@@ -33,11 +32,13 @@ from typing import Any
 
 from openbase_coder_cli.livekit_agent.turn_detection import (
     MAX_PRE_ACCEPT_QUIET_CREDIT_SECONDS,
-    VAD_ONLY_USER_TURN_QUIET_GRACE_SECONDS,
     VAD_ONLY_MIN_SPEECH_SECONDS,
+    VAD_ONLY_USER_TURN_QUIET_GRACE_SECONDS,
     UserTurnClosureDecision,
     UserTurnClosureSignals,
 )
+
+from .provisional_mute_recovery import ProvisionalMuteRecovery
 
 logger = logging.getLogger(__name__)
 
@@ -144,9 +145,13 @@ class VoiceDeliveryLedger:
         self._vad_speech_started_at: float | None = None
         self._vad_last_speech_seconds = 0.0
         self._vad_quiet_task: asyncio.Task[None] | None = None
-        self._provisional_mute_recovery = ProvisionalMuteRecovery(vad_transcript_timeout_seconds)
+        self._provisional_mute_recovery = ProvisionalMuteRecovery(
+            vad_transcript_timeout_seconds
+        )
         self._provisional_record: VoiceDeliveryRecord | None = None
-        self._transcript_timeout_sink: Callable[[VoiceDeliveryRecord], None] | None = None
+        self._transcript_timeout_sink: Callable[[VoiceDeliveryRecord], None] | None = (
+            None
+        )
         # True while a safe_to_mute_user has been emitted and neither renewed
         # user speech nor a safe_to_unmute has reopened the mic since.
         self._mute_covers_current_quiet = False
@@ -225,7 +230,8 @@ class VoiceDeliveryLedger:
         if old_state == "speaking":
             self._vad_last_speech_seconds = (
                 max(0.0, time.monotonic() - self._vad_speech_started_at)
-                if self._vad_speech_started_at is not None else 0.0
+                if self._vad_speech_started_at is not None
+                else 0.0
             )
             self._vad_speech_started_at = None
             self._start_vad_quiet_closure_task()
@@ -272,9 +278,12 @@ class VoiceDeliveryLedger:
                 break
             await asyncio.sleep(self._user_speaking_poll_seconds)
         if self._vad_last_speech_seconds < self._vad_min_speech_seconds:
-            logger.info("dispatch_timing stage=vad_brief_trigger_no_provisional_mute "
-                        "speech_ms=%d room=%s", int(self._vad_last_speech_seconds * 1000),
-                        self._room_name)
+            logger.info(
+                "dispatch_timing stage=vad_brief_trigger_no_provisional_mute "
+                "speech_ms=%d room=%s",
+                int(self._vad_last_speech_seconds * 1000),
+                self._room_name,
+            )
             return
         self._emit_vad_quiet_mute()
 
@@ -300,26 +309,43 @@ class VoiceDeliveryLedger:
         self._log_user_turn_closure(record, "safe_to_mute_user")
         self._emit_lifecycle("safe_to_mute_user", record, reason="vad_quiet_floor")
         self._provisional_record = record
-        self._provisional_mute_recovery.start(lambda: self._recover_provisional_mute(record))
+        self._provisional_mute_recovery.start(
+            lambda: self._recover_provisional_mute(record)
+        )
 
     def notify_final_transcript(self) -> None:
         """Bound the STT-to-LLM handoff without reopening the mic mid-adoption."""
         record = self._provisional_record
-        if record is None or record.status != "vad_quiet_closure" or not self._lifecycle_mute_outstanding:
+        if (
+            record is None
+            or record.status != "vad_quiet_closure"
+            or not self._lifecycle_mute_outstanding
+        ):
             return
-        logger.info("dispatch_timing stage=vad_transcript_handoff_extended delivery_id=%s room=%s",
-            record.delivery_id, self._room_name)
-        self._provisional_mute_recovery.start(lambda: self._recover_provisional_mute(
-            record, reason="vad_transcript_handoff_timeout"))
+        logger.info(
+            "dispatch_timing stage=vad_transcript_handoff_extended delivery_id=%s room=%s",
+            record.delivery_id,
+            self._room_name,
+        )
+        self._provisional_mute_recovery.start(
+            lambda: self._recover_provisional_mute(
+                record, reason="vad_transcript_handoff_timeout"
+            )
+        )
 
-    def _recover_provisional_mute(self, record: VoiceDeliveryRecord, *, reason: str = "vad_transcript_timeout") -> bool:
+    def _recover_provisional_mute(
+        self, record: VoiceDeliveryRecord, *, reason: str = "vad_transcript_timeout"
+    ) -> bool:
         if record.status != "vad_quiet_closure" or not self._lifecycle_mute_outstanding:
             return True
         if not self._may_release_unmute():
             return False
         self._provisional_record = None
         self.mark_cancelled(record, reason=reason)
-        if reason == "vad_transcript_timeout" and self._transcript_timeout_sink is not None:
+        if (
+            reason == "vad_transcript_timeout"
+            and self._transcript_timeout_sink is not None
+        ):
             self._transcript_timeout_sink(record)
         return True
 
@@ -485,7 +511,9 @@ class VoiceDeliveryLedger:
             )
         return True
 
-    async def wait_for_user_turn_closed_before_tts(self, record: VoiceDeliveryRecord) -> bool:
+    async def wait_for_user_turn_closed_before_tts(
+        self, record: VoiceDeliveryRecord
+    ) -> bool:
         return await self.wait_for_user_turn_closed(record)
 
     def mark_user_turn_closed(
@@ -766,6 +794,13 @@ class VoiceDeliveryLedger:
         only mutes right before the eventual TTS. The user reads the mute
         transition as "message received"; give steers the same receipt.
         """
+        # A steer means a final transcript WAS captured and used, so any
+        # outstanding VAD-only provisional mute is no longer waiting on a lost
+        # transcript. Retire it exactly as ``accept_utterance`` does, or its
+        # recovery timer later fires "speech recognition is having trouble" for
+        # speech that was in fact received.
+        self._provisional_mute_recovery.cancel()
+        self._provisional_record = None
         if self._mute_covers_current_quiet and not self._user_is_speaking():
             return
         record = VoiceDeliveryRecord(
@@ -878,14 +913,17 @@ class VoiceDeliveryLedger:
         )
         self._emit_lifecycle("agent_audio_started", record)
 
-    def mark_audio_frame_queued(self, record: VoiceDeliveryRecord, *, audio_seconds: float, queued_at: float) -> None:
+    def mark_audio_frame_queued(
+        self, record: VoiceDeliveryRecord, *, audio_seconds: float, queued_at: float
+    ) -> None:
         """Track the local playout queue without counting stream stalls as speech."""
         if audio_seconds <= 0:
             return
         previous_end = record.queued_audio_playout_end_at
-        record.queued_audio_playout_end_at = max(
-            queued_at, previous_end if previous_end is not None else queued_at
-        ) + audio_seconds
+        record.queued_audio_playout_end_at = (
+            max(queued_at, previous_end if previous_end is not None else queued_at)
+            + audio_seconds
+        )
 
     def mark_tts_completed(
         self,
@@ -936,7 +974,14 @@ class VoiceDeliveryLedger:
                 "safe_to_unmute", record, reason=record.terminal_reason
             )
 
-    def mark_tts_failed(self, record: VoiceDeliveryRecord, *, audio_events: int, audio_seconds: float, reason: str | None = None) -> None:
+    def mark_tts_failed(
+        self,
+        record: VoiceDeliveryRecord,
+        *,
+        audio_events: int,
+        audio_seconds: float,
+        reason: str | None = None,
+    ) -> None:
         """Release a failed synthesis hold after any partial audio has played."""
         if record.status in _TERMINAL_STATUSES:
             return
@@ -944,7 +989,11 @@ class VoiceDeliveryLedger:
         record.audio_events = audio_events
         record.audio_seconds = audio_seconds
         record.status = "failed"
-        record.terminal_reason = reason or ("tts_provider_failed_after_partial_audio" if audio_events else "tts_provider_failed_without_audio")
+        record.terminal_reason = reason or (
+            "tts_provider_failed_after_partial_audio"
+            if audio_events
+            else "tts_provider_failed_without_audio"
+        )
         record.reserved_for_tts = False
         self._log(record, "tts_failed", reason=record.terminal_reason)
         # Preserve failure instead of recording a successful, full delivery.
@@ -960,7 +1009,9 @@ class VoiceDeliveryLedger:
             task.cancel()
         self._cancel_user_turn_closure_task(record.delivery_id)
         now = time.monotonic()
-        record.audio_seconds = min(record.audio_seconds, max(0, now - (record.audio_started_at or now)))
+        record.audio_seconds = min(
+            record.audio_seconds, max(0, now - (record.audio_started_at or now))
+        )
         record.queued_audio_playout_end_at = now
         record.status = "cancelled"
         record.terminal_reason = "sdk_playout_interrupted"
@@ -979,9 +1030,7 @@ class VoiceDeliveryLedger:
             return 0.0
         if record.queued_audio_playout_end_at is not None:
             return record.queued_audio_playout_end_at - time.monotonic()
-        return (
-            record.audio_started_at + record.audio_seconds - time.monotonic()
-        )
+        return record.audio_started_at + record.audio_seconds - time.monotonic()
 
     def _schedule_playout_release(self, record: VoiceDeliveryRecord) -> None:
         """Emit ``agent_audio_finished``/``safe_to_unmute`` at playout end."""
@@ -1078,7 +1127,10 @@ class VoiceDeliveryLedger:
                 "delivery_id=%s room=%s scheduling_delay_ms=%.1f",
                 record.delivery_id,
                 self._room_name,
-                max(0, time.monotonic() - scheduled_at - MUTE_KEEPALIVE_INTERVAL_SECONDS) * 1000,
+                max(
+                    0, time.monotonic() - scheduled_at - MUTE_KEEPALIVE_INTERVAL_SECONDS
+                )
+                * 1000,
             )
             # A distinct event name, NOT a repeated safe_to_mute_user: clients
             # refresh their stuck-muted staleness clock on any lifecycle

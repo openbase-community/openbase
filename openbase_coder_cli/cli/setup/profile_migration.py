@@ -56,13 +56,13 @@ def is_openbase_mcp(entry: object) -> bool:
     )
 
 
-def migrate_codex_user_config(path: Path) -> None:
+def migrate_codex_user_config(path: Path, *, strip_super_agents: bool = True) -> None:
     if not path.is_file():
         return
     existing = path.read_text(encoding="utf-8")
     document = tomlkit.parse(existing)
     servers = document.get("mcp_servers", {})
-    if is_openbase_mcp(servers.get("super-agents")):
+    if strip_super_agents and is_openbase_mcp(servers.get("super-agents")):
         del servers["super-agents"]
     # Removing a hook group shifts subsequent positional trust identities.
     # TOML permits hook tables interleaved with unrelated sections. Rebuild
@@ -99,7 +99,9 @@ def migrate_codex_user_config(path: Path) -> None:
     write_if_changed(path, tomlkit.dumps(document), backup=True)
 
 
-def migrate_claude_user_config(state_path: Path, settings_path: Path) -> None:
+def migrate_claude_user_config(
+    state_path: Path, settings_path: Path, *, strip_super_agents: bool = True
+) -> None:
     for path in (state_path, settings_path):
         if not path.is_file():
             continue
@@ -108,7 +110,7 @@ def migrate_claude_user_config(state_path: Path, settings_path: Path) -> None:
             raise ValueError(f"Expected JSON object in {path}")
         before = json.dumps(document, sort_keys=True)
         servers = document.get("mcpServers", {})
-        if is_openbase_mcp(servers.get("super-agents")):
+        if strip_super_agents and is_openbase_mcp(servers.get("super-agents")):
             del servers["super-agents"]
         hooks = document.get("hooks", {})
         groups = hooks.get("SessionStart", [])

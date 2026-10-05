@@ -12,6 +12,8 @@ from openbase_coder_cli.agent_profiles import profile_environment
 from openbase_coder_cli.backend_config import (
     CODING_BACKEND_ENV_KEY,
     DEFAULT_CODING_BACKEND,
+    OPENBASE_THREAD_INTRO_COMMAND,
+    SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV,
     normalize_backend,
 )
 from openbase_coder_cli.cloud_environment import (
@@ -37,6 +39,7 @@ from openbase_coder_cli.env_file import (
     env_file_values as _env_file_values,
 )
 from openbase_coder_cli.env_file import (
+    format_env_value,
     selected_backend_from_env_file,
 )
 from openbase_coder_cli.env_file import (
@@ -168,6 +171,8 @@ def _ensure_env_file(
         "SUPER_AGENTS_CODEX_APPROVAL_POLICY=never",
         "SUPER_AGENTS_CODEX_SANDBOX_POLICY=danger-full-access",
         f"SUPER_AGENTS_BASE_INSTRUCTIONS_PATH={OPENBASE_AGENTS_MD_PATH}",
+        "# Named Super Agent threads greet the user on their first turn via this command.",
+        f"{SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV}={format_env_value(OPENBASE_THREAD_INTRO_COMMAND)}",
         "CLAUDE_CODE_ENABLE_TELEMETRY=0",
         "# Profiles apply only to Openbase conversations, never to the shared daemon.",
         *(f"{key}={value}" for key, value in profile_environment().items()),
@@ -317,6 +322,8 @@ def _missing_livekit_client_credential_values(path: Path) -> dict[str, str]:
         updates["SUPER_AGENTS_CODEX_SANDBOX_POLICY"] = "danger-full-access"
     if not existing.get("SUPER_AGENTS_BASE_INSTRUCTIONS_PATH"):
         updates["SUPER_AGENTS_BASE_INSTRUCTIONS_PATH"] = str(OPENBASE_AGENTS_MD_PATH)
+    if not existing.get(SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV):
+        updates[SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV] = OPENBASE_THREAD_INTRO_COMMAND
     if not existing.get("SUPER_AGENTS_DEFAULT_CONFIG_PATH"):
         updates["SUPER_AGENTS_DEFAULT_CONFIG_PATH"] = str(CODEX_DISPATCHER_CONFIG_PATH)
     if not existing.get("LIVEKIT_CLIENT_API_KEY") or existing.get(

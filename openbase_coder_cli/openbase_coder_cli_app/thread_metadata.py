@@ -4,9 +4,10 @@ import os
 from pathlib import Path
 from typing import Any, Literal
 
-from super_agents.state import read_state_file_locked
+from super_agents.state import as_session_record_map
 
 from openbase_coder_cli.dispatcher_config import selected_tts_provider_id
+from openbase_coder_cli.json_snapshot import JsonFileSnapshot
 from openbase_coder_cli.livekit_voice_history import (
     VoiceHistoryEntry,
     get_voice_history_entry,
@@ -17,6 +18,7 @@ from openbase_coder_cli.livekit_voice_route import (
 )
 from openbase_coder_cli.openbase_coder_cli_app.item_tags import thread_tags
 from openbase_coder_cli.openbase_coder_cli_app.thread_favorites import favorite_payload
+from openbase_coder_cli.thread_model_overrides import get_thread_model_override
 from openbase_coder_cli.tts_providers import voice_name_for_id
 
 VoiceRouteRole = Literal["none", "dispatcher", "active_target"]
@@ -118,6 +120,7 @@ def annotate_thread_payload(
         "display_name": display_name,
         "is_favorite": favorite["is_favorite"],
         "favorited_at": favorite["favorited_at"],
+        "model_override": get_thread_model_override(resolved_thread_id),
         "tags": thread_tags(resolved_thread_id),
         "voice_route": {
             "role": role,
@@ -150,11 +153,29 @@ def _thread_agent_name(payload: dict[str, Any]) -> str | None:
 def _super_agents_agent_name(thread_id: str | None) -> str | None:
     if not thread_id:
         return None
-    state_path = _super_agents_state_path()
-    if not state_path.is_file():
-        return None
-    session = read_state_file_locked(state_path).sessions.get(thread_id)
-    return session.agent_name if session else None
+    return _state_agent_names.get(_super_agents_state_path()).get(thread_id)
+
+
+def _parse_state_agent_names(raw: Any) -> dict[str, str]:
+    """thread id -> agent name, from one version of the Super Agents state file.
+
+    The state file is a few hundred KB and is written atomically, so parsing
+    it once per on-disk version (instead of under its file lock for every
+    thread annotated) keeps thread-list annotation off the parse cost.
+    """
+    sessions = as_session_record_map(
+        raw.get("sessions") if isinstance(raw, dict) else None
+    )
+    return {
+        thread_id: session.agent_name
+        for thread_id, session in sessions.items()
+        if session.agent_name
+    }
+
+
+_state_agent_names: JsonFileSnapshot[dict[str, str]] = JsonFileSnapshot(
+    _parse_state_agent_names
+)
 
 
 def _super_agents_state_path() -> Path:

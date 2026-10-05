@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import click
@@ -18,7 +19,10 @@ from openbase_coder_cli.livekit_announcer import (
     SUPPORTED_AUDIO_EXTENSIONS,
 )
 from openbase_coder_cli.paths import OPENBASE_SOUNDS_DIR
-from openbase_coder_cli.skill_approvals import request_approval
+from openbase_coder_cli.skill_approvals import (
+    create_approval_request_via_server,
+    wait_for_approval_via_server,
+)
 
 
 @click.group()
@@ -86,7 +90,11 @@ def say(
         payload["room_name"] = room_name.strip()
 
     response = local_server_request(
-        "POST", "/api/user/say/", json=payload, ok_statuses=(502,), timeout=60,
+        "POST",
+        "/api/user/say/",
+        json=payload,
+        ok_statuses=(502,),
+        timeout=60,
     )
 
     try:
@@ -191,15 +199,53 @@ def approval_request(
 ) -> None:
     """Ask the user to approve a skill action and wait for the answer."""
     details = _parse_approval_details(detail_items)
-    decision = request_approval(
+    request_id = create_approval_request_via_server(
         skill=skill,
         action=action,
         description=description,
         details=details,
         command=command_text.strip() or None,
         timeout_seconds=timeout_seconds,
+    )
+    # Flush before blocking: if this process is killed while waiting (tool
+    # timeouts routinely do that), the caller still learns how to re-attach.
+    click.echo(f"Approval request {request_id} is pending in the approvals dashboard.")
+    click.echo(
+        "If this command exits before the user answers, run "
+        f"`openbase-coder user approval wait {request_id}` to keep waiting "
+        "and pick up the decision."
+    )
+    sys.stdout.flush()
+    decision = wait_for_approval_via_server(
+        request_id,
+        timeout_seconds=timeout_seconds,
         poll_interval_seconds=poll_interval,
     )
+    _report_approval_decision(decision)
+
+
+@approval.command("wait")
+@click.argument("request_id")
+@click.option("--timeout", "timeout_seconds", default=300.0, show_default=True)
+@click.option("--poll-interval", default=1.0, show_default=True)
+def approval_wait(
+    request_id: str, timeout_seconds: float, poll_interval: float
+) -> None:
+    """Resume waiting on an approval request created earlier.
+
+    Picks up a decision the user recorded while no process was waiting (for
+    example after the original `approval request` call was killed by a tool
+    timeout).
+    """
+    decision = wait_for_approval_via_server(
+        request_id,
+        timeout_seconds=timeout_seconds,
+        poll_interval_seconds=poll_interval,
+    )
+    _report_approval_decision(decision)
+
+
+def _report_approval_decision(decision: dict) -> None:
     decision_value = decision.get("decision")
     if decision.get("accepted"):
         click.echo("Approval accepted.")

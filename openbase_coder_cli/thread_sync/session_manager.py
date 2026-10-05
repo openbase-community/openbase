@@ -216,7 +216,9 @@ class CodexAppServerSessionManager(
             execution_backend=execution_backend,
         )
 
-    async def send_message(self, session_id: str, message: str) -> str:
+    async def send_message(
+        self, session_id: str, message: str, model: str | None = None
+    ) -> str:
         """Start a turn on a Codex app-server thread."""
         thread = await self.get_session_state(session_id)
         if thread is None:
@@ -233,7 +235,7 @@ class CodexAppServerSessionManager(
 
         message = _with_dispatcher_onboarding_reminder(session_id, message)
 
-        model = self._model_for_thread(thread)
+        model = self._resolve_turn_model(thread, model)
         role_turn_input = {
             "prompt": message,
             "cwd": thread.directory,
@@ -384,7 +386,7 @@ class CodexAppServerSessionManager(
 
         if method in {"turn/completed", "turn/failed"}:
             from openbase_coder_cli.openbase_coder_cli_app.notification_runtime import (
-                run_notification_sweep,
+                request_notification_sweep,
             )
 
             if turn_id:
@@ -392,7 +394,7 @@ class CodexAppServerSessionManager(
                     self._forget_turn_locked(turn_id)
             # Agent turns can write reports too, even when another turn is queued
             # or the completed thread is no longer available to read.
-            await run_notification_sweep(force=True)
+            request_notification_sweep()
             if method == "turn/failed":
                 failure_message = _turn_failure_message(params)
                 logger.error(

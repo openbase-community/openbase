@@ -44,6 +44,24 @@ def test_expected_service_not_running_warns(monkeypatch) -> None:
     assert warnings[0]["severity"] == "critical"
 
 
+def test_shared_codex_daemon_satisfies_stopped_openbase_service(monkeypatch) -> None:
+    from openbase_coder_cli import codex_control_plane
+
+    services = [FakeService("codex-app-server", backends=("codex",))]
+    monkeypatch.setattr("openbase_coder_cli.services.definitions.SERVICES", services)
+    monkeypatch.setattr(
+        "openbase_coder_cli.services.launchd.launchctl_status",
+        lambda _service: {"installed": True, "pid": None, "last_exit_code": 1},
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.services.selection.configured_coding_backend",
+        lambda: "codex",
+    )
+    monkeypatch.setattr(codex_control_plane, "shared_codex_daemon_ready", lambda: True)
+
+    assert hw._service_warnings() == []
+
+
 def test_conditional_service_expected_only_when_enabled(monkeypatch) -> None:
     services = [FakeService("code-sync", install_by_default=False)]
     monkeypatch.setattr("openbase_coder_cli.services.definitions.SERVICES", services)
@@ -72,6 +90,9 @@ def test_conditional_service_expected_only_when_enabled(monkeypatch) -> None:
 
 
 def test_backend_scoped_service_not_expected_on_other_backend(monkeypatch) -> None:
+    from openbase_coder_cli import codex_control_plane
+
+    monkeypatch.setattr(codex_control_plane, "shared_codex_daemon_ready", lambda: False)
     services = [
         FakeService("django-cli"),
         FakeService("codex-app-server", backends=("codex", "openbase_cloud_codex")),
@@ -267,3 +288,34 @@ def test_freshness_handshake_is_opt_in_and_passes_loaded_stamp(monkeypatch):
     assert response.status_code == 200
     assert response.data["freshness"]["enabled"] is True
     assert calls == [body]
+
+
+def test_codex_version_skew_warning_offers_restart(monkeypatch) -> None:
+    from openbase_coder_cli.services import codex_version_skew as skew_module
+
+    monkeypatch.setattr(
+        skew_module,
+        "collect_codex_version_skews",
+        lambda: [
+            skew_module.CodexVersionSkew(
+                service="codex-app-server",
+                running_version="0.155.0",
+                installed_version="0.156.1",
+                installed_path="/opt/codex",
+            )
+        ],
+    )
+    warnings = hw._codex_version_skew_warnings()
+    assert [w["id"] for w in warnings] == ["service-restart-needed:codex-app-server"]
+    assert warnings[0]["severity"] == "warning"
+    assert "0.155.0" in warnings[0]["message"]
+    assert "0.156.1" in warnings[0]["message"]
+
+    monkeypatch.setattr(skew_module, "collect_codex_version_skews", lambda: [])
+    assert hw._codex_version_skew_warnings() == []
+
+    def boom():
+        raise RuntimeError("probe exploded")
+
+    monkeypatch.setattr(skew_module, "collect_codex_version_skews", boom)
+    assert hw._codex_version_skew_warnings() == []

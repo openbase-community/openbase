@@ -130,8 +130,15 @@ def _exchange_bootstrap(bootstrap_token: str, web_backend_url: str) -> dict:
             f"Workspace bootstrap request failed: {exc}"
         ) from exc
     if response.status_code >= 400:
+        # Say who answered: a 403 from Cloud is a JSON "detail", while an
+        # upstream proxy or WAF answers with HTML/text. Never echo secrets
+        # (the request carried the grant; the response never does).
+        body = " ".join(response.text.split())[:200]
+        server = response.headers.get("server", "")
         raise click.ClickException(
-            f"Workspace bootstrap was rejected with HTTP {response.status_code}."
+            f"Workspace bootstrap was rejected with HTTP {response.status_code} "
+            f"from {urlsplit(web_backend_url).hostname}"
+            f"{f' (server: {server})' if server else ''}: {body or '<empty body>'}"
         )
     try:
         payload = response.json()
@@ -315,6 +322,10 @@ def provision(
         tailnet_provider="netmesh-tsnet" if kind == "container" else None,
         skip_services=kind == "container",
         json_progress=False,
+        # ctx.invoke passes no command-line flags, so setup's interactivity
+        # check falls through to isatty(); on Maritime the VM console is a tty
+        # and the "Log in to Openbase Cloud now?" prompt blocked boot forever.
+        interactive_mode=False,
     )
     if post_setup_env:
         # Setup must create the complete env file on a new volume before we

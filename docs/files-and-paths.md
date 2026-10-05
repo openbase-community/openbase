@@ -58,6 +58,7 @@ resets onboarding. Remove both when fully uninstalling (see
 | `~/.openbase/claude-app-index-ledger.json` | `sync-workers` (Claude app index sync, macOS) | Ledger of Openbase Claude sessions injected into the Claude desktop app's private session index so they appear in the app (best-effort) |
 | `<workspace>/cli/.venv/` | `openbase-coder setup` (development mode) | CLI and bundled LiveKit worker environment |
 | `~/.openbase/bin/codex` | `openbase-coder setup` | Codex CLI installed on demand from GitHub release binaries |
+| Global Git ignore (`core.excludesFile`, or `~/.config/git/ignore`) | `openbase-coder setup` | Setup appends `.signals/` if missing so agent-to-agent signal messages are never committed; a read-only file only produces a warning |
 | `~/.local/bin/openbase-coder` | `openbase-coder setup` | User CLI shim; points at the standalone package launcher or the workspace CLI venv (never overwrites a `uv tool install`-managed script) |
 
 Generated instruction files are rendered from the workspace or bundled
@@ -83,6 +84,15 @@ current machine. Openbase's permission posture is not written into
 `~/.codex/config.toml` or `~/.claude/settings.json`; super-agents passes it
 per session via profiles and role overrides. The shared Codex app-server has no Openbase model or provider launch overrides.
 
+## Project Artifact Directories
+
+Agents create these inside a project, workspace, or worktree root. Neither is product state; they are conventions the CLI, console, and loops understand.
+
+| Path | Purpose |
+|---|---|
+| `<project>/.reports/` | Markdown (or image/PDF) reports written for people; discovered by `openbase-coder reports` and the console Reports page |
+| `<project>/.signals/` | Messages written for other agents and loops (requests and responses, questions); watched by loop file triggers, never committed (see [loops](commands/loops.md#the-signals-convention)) |
+
 ## Service Artifacts
 
 | Path Pattern | Created By | Purpose |
@@ -102,6 +112,7 @@ Managed services:
 
 - `livekit-server`
 - `codex-app-server`
+- `codex-app-server-dispatcher`
 - `livekit-agent`
 - `django-cli`
 
@@ -110,6 +121,15 @@ On macOS and Linux, `codex-app-server` listens at
 managed server and clients to the shared `~/.codex` home; the socket is runtime
 state and is never committed. A stale socket is removed only after it is
 confirmed not to have a live owner.
+
+`codex-app-server-dispatcher` is a second instance of the same server,
+listening at `$CODEX_HOME/app-server-control-dispatcher/app-server-control.sock`
+(override with `OPENBASE_DISPATCHER_APP_SERVER_URL`). Only the voice
+dispatcher's own conversational thread runs there, so a long-running coding
+turn on the shared instance can never make the dispatcher unresponsive.
+Super Agent threads stay on the shared instance. If the dispatcher instance
+is not running, the dispatcher falls back to the shared socket; setting
+`OPENBASE_DISPATCHER_DEDICATED_APP_SERVER=0` forces that fallback.
 
 ## Runtime Data
 

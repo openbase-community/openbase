@@ -1,0 +1,394 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from openbase_coder_cli.services import codex_version_skew as skew_module
+from openbase_coder_cli.services.codex_version_skew import (
+    CodexVersionSkew,
+    attached_sessions_in_use,
+    parse_codex_version,
+    parse_user_agent_version,
+    restart_blockers,
+    run_auto_restart_tick,
+    super_agents_active_turn_count,
+    thread_in_use,
+)
+
+
+def test_parse_codex_version_reads_cli_output() -> None:
+    assert parse_codex_version("codex-cli 0.156.1\n") == "0.156.1"
+    assert parse_codex_version("") is None
+
+
+def test_parse_user_agent_version_reads_initialize_handshake() -> None:
+    assert (
+        parse_user_agent_version("codex-tui/0.155.0 (Mac OS 26.6.2; arm64) unknown")
+        == "0.155.0"
+    )
+    assert parse_user_agent_version("codex-app-server/1.2.3 (x)") == "1.2.3"
+    # The originator is whichever client initialized the server first.
+    assert parse_user_agent_version("openbase-coder-version-probe/1.2.3 (x)") == "1.2.3"
+    assert parse_user_agent_version("no version here") is None
+    assert parse_user_agent_version(None) is None
+
+
+def test_installed_version_caches_per_binary_stat(monkeypatch, tmp_path) -> None:
+    binary = tmp_path / "codex"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    calls: list[list[str]] = []
+
+    class FakeResult:
+        stdout = "codex-cli 0.156.1\n"
+        stderr = ""
+
+    def fake_run(argv, **_kwargs):
+        calls.append(argv)
+        return FakeResult()
+
+    monkeypatch.setattr(skew_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(skew_module, "_installed_cache", None)
+
+    assert skew_module.installed_codex_version(binary) == (str(binary), "0.156.1")
+    assert skew_module.installed_codex_version(binary) == (str(binary), "0.156.1")
+    assert len(calls) == 1  # unchanged file: no second --version
+
+    binary.write_text("#!/bin/sh\n# changed\n")
+    FakeResult.stdout = "codex-cli 0.157.0\n"
+    assert skew_module.installed_codex_version(binary) == (str(binary), "0.157.0")
+    assert len(calls) == 2
+
+
+def test_service_version_skew_only_when_versions_differ(monkeypatch) -> None:
+    monkeypatch.setattr(skew_module, "service_endpoint", lambda name: f"ep:{name}")
+    monkeypatch.setattr(
+        skew_module, "running_codex_app_server_version", lambda endpoint: "0.155.0"
+    )
+    installed = ("/opt/codex", "0.156.1")
+
+    skew = skew_module.service_version_skew("codex-app-server", installed)
+    assert skew == CodexVersionSkew(
+        service="codex-app-server",
+        running_version="0.155.0",
+        installed_version="0.156.1",
+        installed_path="/opt/codex",
+    )
+    assert "0.155.0" in skew.message and "0.156.1" in skew.message
+
+    assert (
+        skew_module.service_version_skew("codex-app-server", ("/x", "0.155.0")) is None
+    )
+
+    # Unreachable server: reported by service status checks, not as skew.
+    monkeypatch.setattr(
+        skew_module, "running_codex_app_server_version", lambda endpoint: None
+    )
+    assert skew_module.service_version_skew("codex-app-server", installed) is None
+
+
+def test_active_turn_count_reads_state_file(tmp_path: Path) -> None:
+    state = tmp_path / "state.json"
+    assert super_agents_active_turn_count(state) == 0  # no file yet
+
+    now = 1_800_000_000.0
+    fresh = "2027-01-15T08:00:00+00:00"  # == now
+    stale = "2027-01-10T08:00:00+00:00"  # five days earlier
+
+    def session(**fields: object) -> dict[str, object]:
+        # Sessions are keyed by threadId; the outer key is only a fallback.
+        return {"updatedAt": fresh, **fields}
+
+    def turn(status: str) -> dict[str, str]:
+        return {"turnId": "x", "status": status, "startedAt": "x", "updatedAt": "x"}
+
+    state.write_text(
+        json.dumps(
+            {
+                "sessions": {
+                    "idle": session(turns={"a": turn("completed")}),
+                    "busy": session(activeTurnId="b"),
+                    "waiting": session(turns={"c": turn("waiting")}),
+                    # Died without a terminal event: still "running" days later.
+                    "stale": session(updatedAt=stale, activeTurnId="d"),
+                    # Session finished but a turn record never closed.
+                    "finished": session(
+                        lastStatus="completed", turns={"e": turn("running")}
+                    ),
+                },
+                "routines": {},
+            }
+        )
+    )
+    assert super_agents_active_turn_count(state, now=now) == 2
+
+    state.write_text("{not json")
+    assert super_agents_active_turn_count(state, now=now) is None
+
+
+def test_restart_blockers_treat_unknown_as_busy() -> None:
+    assert restart_blockers(active_turns=0, voice_active=False) == []
+    assert restart_blockers(active_turns=2, voice_active=False) == [
+        "2 active agent turn(s)"
+    ]
+    assert restart_blockers(active_turns=0, voice_active=True) == [
+        "voice session in progress"
+    ]
+    assert restart_blockers(active_turns=None, voice_active=None) == [
+        "agent activity unknown",
+        "voice session state unknown",
+    ]
+    assert restart_blockers(active_turns=0, voice_active=False, sessions_in_use=3) == [
+        "3 Codex session(s) in use"
+    ]
+    assert restart_blockers(
+        active_turns=0, voice_active=False, sessions_in_use=None
+    ) == ["Codex session state unknown"]
+
+
+def test_thread_in_use_distinguishes_mid_run_from_idle_tabs() -> None:
+    now = 1_800_000_000.0
+    window = 600.0
+
+    def thread(status: object, updated_at: object) -> dict[str, object]:
+        return {"id": "t", "status": status, "updatedAt": updated_at}
+
+    # A running turn (or one waiting on approval) is in use regardless of age.
+    active = {"type": "active", "activeFlags": ["waitingOnApproval"]}
+    assert thread_in_use(thread(active, now - 3600), now=now, recent_seconds=window)
+    # Idle but touched moments ago: the user is reading or typing.
+    assert thread_in_use(
+        thread({"type": "idle"}, now - 30), now=now, recent_seconds=window
+    )
+    # Millisecond timestamps are normalised.
+    assert thread_in_use(
+        thread({"type": "idle"}, (now - 30) * 1000), now=now, recent_seconds=window
+    )
+    # A tab left open for an hour is not in use.
+    assert not thread_in_use(
+        thread({"type": "idle"}, now - 3600), now=now, recent_seconds=window
+    )
+    # Threads the server is not actually running never block.
+    assert not thread_in_use(
+        thread({"type": "notLoaded"}, now), now=now, recent_seconds=window
+    )
+    assert not thread_in_use(
+        thread({"type": "systemError"}, now), now=now, recent_seconds=window
+    )
+    # Unknown status or an unreadable thread: treat as busy.
+    assert thread_in_use(
+        thread({"type": "future"}, now - 3600), now=now, recent_seconds=window
+    )
+    assert thread_in_use(thread(None, now - 3600), now=now, recent_seconds=window)
+    assert thread_in_use(None, now=now, recent_seconds=window)
+
+
+class _FakeAppServer:
+    """Answers initialize, thread/loaded/list and thread/read like the app-server."""
+
+    def __init__(
+        self, loaded: list[str], threads: dict[str, dict], *, page_size: int = 2
+    ):
+        self.loaded = loaded
+        self.threads = threads
+        self.page_size = page_size
+        self.methods: list[str] = []
+        self._outbox: list[dict] = []
+        self.closed = False
+
+    async def send(self, raw: str) -> None:
+        request = json.loads(raw)
+        method, params, rid = request["method"], request["params"], request["id"]
+        self.methods.append(method)
+        # Interleave a notification to prove unrelated messages are skipped.
+        self._outbox.append({"method": "thread/status/changed", "params": {}})
+        if method == "initialize":
+            self._outbox.append(
+                {"id": rid, "result": {"userAgent": "codex-app-server/0.158.0 (x)"}}
+            )
+        elif method == "thread/loaded/list":
+            start = int(params.get("cursor") or 0)
+            end = start + self.page_size
+            page = self.loaded[start:end]
+            self._outbox.append(
+                {
+                    "id": rid,
+                    "result": {
+                        "data": page,
+                        "nextCursor": str(end) if end < len(self.loaded) else None,
+                    },
+                }
+            )
+        elif method == "thread/read":
+            thread = self.threads.get(params["threadId"])
+            if thread is None:
+                self._outbox.append(
+                    {
+                        "id": rid,
+                        "error": {"code": -32600, "message": "thread not loaded"},
+                    }
+                )
+            else:
+                self._outbox.append({"id": rid, "result": {"thread": thread}})
+        else:
+            raise AssertionError(f"unexpected method {method}")
+
+    async def recv(self) -> str:
+        return json.dumps(self._outbox.pop(0))
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def test_attached_sessions_in_use_counts_loaded_threads_via_app_server(
+    monkeypatch,
+) -> None:
+    now = 1_800_000_000.0
+    servers: dict[str, _FakeAppServer] = {
+        "ep:codex-app-server": _FakeAppServer(
+            loaded=["mid-run", "typing", "stale-tab", "vanished"],
+            threads={
+                "mid-run": {"status": {"type": "active"}, "updatedAt": now - 5},
+                "typing": {"status": {"type": "idle"}, "updatedAt": now - 20},
+                "stale-tab": {"status": {"type": "idle"}, "updatedAt": now - 7200},
+                # "vanished" unloads between the list and the read: unknown -> busy.
+            },
+        ),
+        "ep:codex-app-server-dispatcher": _FakeAppServer(loaded=[], threads={}),
+    }
+    monkeypatch.setattr(skew_module, "service_endpoint", lambda name: f"ep:{name}")
+
+    async def open_connection(endpoint):
+        return servers[endpoint]
+
+    monkeypatch.setattr(skew_module, "_open_connection", open_connection)
+
+    count = attached_sessions_in_use(
+        ("codex-app-server", "codex-app-server-dispatcher"),
+        now=now,
+        recent_seconds=600.0,
+    )
+    assert count == 3  # mid-run + typing + vanished; the stale tab may be dropped
+    main = servers["ep:codex-app-server"]
+    assert main.methods.count("thread/loaded/list") == 2  # paginated
+    assert main.methods.count("thread/read") == 4
+    assert all(server.closed for server in servers.values())
+
+    # A dispatcher with nothing loaded probes cheaply: no reads at all.
+    assert servers["ep:codex-app-server-dispatcher"].methods == [
+        "initialize",
+        "thread/loaded/list",
+    ]
+
+
+def test_attached_sessions_in_use_is_unknown_when_a_probe_fails(monkeypatch) -> None:
+    monkeypatch.setattr(skew_module, "service_endpoint", lambda name: f"ep:{name}")
+
+    async def refuse(endpoint):
+        raise ConnectionRefusedError(endpoint)
+
+    monkeypatch.setattr(skew_module, "_open_connection", refuse)
+    assert (
+        attached_sessions_in_use(("codex-app-server",), now=0.0, recent_seconds=1.0)
+        is None
+    )
+
+
+def test_recent_thread_activity_window_env_override(monkeypatch) -> None:
+    monkeypatch.delenv(skew_module.RECENT_THREAD_ACTIVITY_ENV, raising=False)
+    assert skew_module.recent_thread_activity_seconds() == 600.0
+    monkeypatch.setenv(skew_module.RECENT_THREAD_ACTIVITY_ENV, "90")
+    assert skew_module.recent_thread_activity_seconds() == 90.0
+    monkeypatch.setenv(skew_module.RECENT_THREAD_ACTIVITY_ENV, "soon")
+    assert skew_module.recent_thread_activity_seconds() == 600.0
+
+
+def _skew(service: str = "codex-app-server") -> CodexVersionSkew:
+    return CodexVersionSkew(
+        service=service,
+        running_version="0.155.0",
+        installed_version="0.156.1",
+        installed_path="/opt/codex",
+    )
+
+
+def test_auto_restart_tick_restarts_when_idle_once_per_pair(monkeypatch) -> None:
+    scheduled: list[tuple[str, ...]] = []
+    monkeypatch.setattr(skew_module, "_last_scheduled", {})
+    monkeypatch.setattr(skew_module, "collect_codex_version_skews", lambda: [_skew()])
+    monkeypatch.setattr(skew_module, "super_agents_active_turn_count", lambda: 0)
+    monkeypatch.setattr(skew_module, "voice_session_active", lambda: False)
+    probed: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        skew_module,
+        "attached_sessions_in_use",
+        lambda names, **_kwargs: probed.append(names) or 0,
+    )
+
+    from openbase_coder_cli.services import restart as restart_module
+
+    monkeypatch.setattr(
+        restart_module,
+        "schedule_restart",
+        lambda request, **_kwargs: scheduled.append(request.services),
+    )
+
+    first = run_auto_restart_tick()
+    assert first["restarted"] == ["codex-app-server"]
+    assert scheduled == [("codex-app-server",)]
+    assert probed == [("codex-app-server",)]  # only the services being restarted
+
+    # Same pair still skewed after the restart: never loop on it.
+    second = run_auto_restart_tick()
+    assert second["restarted"] == []
+    assert second["blockers"] == ["already restarted for this version pair"]
+    assert scheduled == [("codex-app-server",)]
+
+    # Skew resolved: the memory clears so a future upgrade restarts again.
+    monkeypatch.setattr(skew_module, "collect_codex_version_skews", lambda: [])
+    assert run_auto_restart_tick()["skews"] == []
+    monkeypatch.setattr(skew_module, "collect_codex_version_skews", lambda: [_skew()])
+    assert run_auto_restart_tick()["restarted"] == ["codex-app-server"]
+
+
+def test_auto_restart_tick_waits_while_busy(monkeypatch) -> None:
+    monkeypatch.setattr(skew_module, "_last_scheduled", {})
+    monkeypatch.setattr(skew_module, "collect_codex_version_skews", lambda: [_skew()])
+    monkeypatch.setattr(skew_module, "super_agents_active_turn_count", lambda: 1)
+    monkeypatch.setattr(skew_module, "voice_session_active", lambda: None)
+    monkeypatch.setattr(
+        skew_module, "attached_sessions_in_use", lambda names, **_kwargs: 2
+    )
+
+    from openbase_coder_cli.services import restart as restart_module
+
+    def fail(*_args, **_kwargs):
+        raise AssertionError("must not restart while busy")
+
+    monkeypatch.setattr(restart_module, "schedule_restart", fail)
+
+    summary = run_auto_restart_tick()
+    assert summary["restarted"] == []
+    assert summary["blockers"] == [
+        "1 active agent turn(s)",
+        "voice session state unknown",
+        "2 Codex session(s) in use",
+    ]
+
+    # Nothing else busy, but an interactive codex chat is mid-run.
+    monkeypatch.setattr(skew_module, "super_agents_active_turn_count", lambda: 0)
+    monkeypatch.setattr(skew_module, "voice_session_active", lambda: False)
+    monkeypatch.setattr(
+        skew_module, "attached_sessions_in_use", lambda names, **_kwargs: 1
+    )
+    assert run_auto_restart_tick()["blockers"] == ["1 Codex session(s) in use"]
+
+
+def test_auto_restart_tick_respects_opt_out(monkeypatch) -> None:
+    monkeypatch.setenv(skew_module.AUTO_RESTART_ENV, "0")
+    monkeypatch.setattr(
+        skew_module,
+        "collect_codex_version_skews",
+        lambda: (_ for _ in ()).throw(AssertionError("must not probe when disabled")),
+    )
+    assert run_auto_restart_tick() == {"skews": [], "blockers": [], "restarted": []}

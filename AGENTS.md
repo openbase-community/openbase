@@ -25,3 +25,17 @@ signature and bounces `livekit-agent` (escalating to `livekit-server` +
 never goes stale — all with an active-call guard and rate limit. Don't
 re-add manual-restart-only advice for the "waiting for agent" WebRTC-timeout
 failure; extend that watchdog instead.
+
+Codex version-skew self-healing lives in
+`openbase_coder_cli/services/codex_version_skew.py`, also on the
+`sync-workers` tick: a `codex-app-server` (or the dispatcher instance) that
+reports an older version over its `initialize` handshake than the codex
+binary the service resolver would exec today is restarted once nothing is
+in flight: no recent Super Agents turn, no voice call, and no thread loaded
+in that app-server (interactive `codex` TUIs attach to it) that is active or
+was updated within `OPENBASE_CODEX_RECENT_THREAD_SECONDS` (default 600) —
+probed via `thread/loaded/list` + `thread/read` (once per version pair,
+never in a loop). The same skew feeds the console health banner as
+`service-restart-needed:<service>` with a one-click restart, and
+`services status` prints it. Set `OPENBASE_CODEX_AUTO_RESTART=0` in
+`~/.openbase/.env` to keep the banner but disable the automatic restart.

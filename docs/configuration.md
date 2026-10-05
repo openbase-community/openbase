@@ -36,7 +36,7 @@ such as backend host and call audio. This page is the underlying reference.
 
 ## Conversation Profiles
 
-Setup installs Openbase profiles for both Codex and Claude Code. Normal terminal sessions retain their own model, reasoning, permissions, hooks, and MCP settings. Openbase may add shared skills, but setup does not create or replace the user's `AGENTS.md` or `CLAUDE.md` instructions.
+Setup installs Openbase profiles for both Codex and Claude Code. Normal terminal sessions retain their own model, reasoning, permissions, hooks, and MCP settings. Openbase may add shared skills and, by default, registers the Super Agents MCP server in the default Codex and Claude Code configurations so plain terminal sessions can dispatch Super Agents (pass `--no-shared-super-agents-mcp` to `setup` or `profiles install` to opt out; an existing entry of your own is never replaced). Setup does not create or replace the user's `AGENTS.md` or `CLAUDE.md` instructions.
 
 Codex's `openbase.config.toml` is also usable with `codex -p openbase`. Codex does not accept `--profile` on `app-server`, so Openbase loads the same TOML file through `thread/start` and `thread/resume` configuration overrides. The shared daemon receives no global model, provider, reasoning, or service-tier overrides, including for the internal Cloud Codex backend. Role-specific model and reasoning choices are applied to the relevant conversation.
 
@@ -57,7 +57,7 @@ Useful keys:
 | --- | --- |
 | `dispatcher_reasoning_effort` | Default dispatcher reasoning effort |
 | `super_agents_reasoning_effort` | Default Super Agents reasoning effort |
-| `backend_models` | Backend-specific default dispatcher and default Super Agents models for `codex`, `openbase_cloud`, and `claude_code` |
+| `backend_models` | Backend-specific default dispatcher and default Super Agents models for `codex`, `openbase_cloud`, and `claude_code`. Codex accepts `gpt-5.5` (default), `gpt-5`, `sol`, and `astra` |
 
 Fresh Openbase Cloud installs write `haiku` for both roles, so the stored configuration, Settings UI, and model actually requested by the runtime agree. The Cloud proxy continues to route older trial configurations that explicitly contain `sonnet` to Haiku for compatibility.
 

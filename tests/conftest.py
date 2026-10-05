@@ -7,17 +7,24 @@ and native clients still require explicit mocks; this is not an OS sandbox.
 """
 
 import ipaddress
-import os
 import socket
 import tempfile
+from pathlib import Path
 
 import pytest
 
 # Set this before collecting test modules: many runtime paths are computed at
 # import time, and a per-test fixture is too late to protect those imports.
 _test_data_dir = tempfile.TemporaryDirectory(prefix="openbase-unit-tests-")
-_original_data_dir = os.environ.get("OPENBASE_CODER_CLI_DATA_DIR")
-os.environ["OPENBASE_CODER_CLI_DATA_DIR"] = _test_data_dir.name
+_test_environment = pytest.MonkeyPatch()
+_test_environment.setenv("OPENBASE_CODER_CLI_DATA_DIR", _test_data_dir.name)
+# Setup also writes to the shared agent homes, outside Openbase's data dir.
+# Override inherited homes before imports cache paths; deleting the temporary
+# hook script alone would leave broken hook registrations in the user's config.
+for variable, directory in (("CODEX_HOME", ".codex"), ("CLAUDE_CONFIG_DIR", ".claude")):
+    home = Path(_test_data_dir.name) / directory
+    home.mkdir()
+    _test_environment.setenv(variable, str(home))
 _network_guard = pytest.MonkeyPatch()
 
 
@@ -71,10 +78,7 @@ def pytest_configure(config):
 
 def pytest_unconfigure(config):
     _network_guard.undo()
-    if _original_data_dir is None:
-        os.environ.pop("OPENBASE_CODER_CLI_DATA_DIR", None)
-    else:
-        os.environ["OPENBASE_CODER_CLI_DATA_DIR"] = _original_data_dir
+    _test_environment.undo()
     _test_data_dir.cleanup()
 
 

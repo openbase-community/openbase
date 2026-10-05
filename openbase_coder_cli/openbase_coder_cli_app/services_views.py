@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import socket
 import threading
 import time
@@ -439,7 +440,14 @@ def service_status(request):
 
     _tailnet_label = tailnet_provider_name()
     services = {
-        "django": {"name": "Django (Coder CLI)", "port": 7999, "optional": False},
+        # The API port is 7999 on desktops; container workspaces bind the
+        # port their runtime hands them (OPENBASE_CODER_CLI_PORT), and probing
+        # 7999 there reported this very server as stopped.
+        "django": {
+            "name": "Django (Coder CLI)",
+            "port": int(os.environ.get("OPENBASE_CODER_CLI_PORT", "7999")),
+            "optional": False,
+        },
         "codex_app_server": {
             "name": "Codex App Server",
             "port": None,
@@ -447,7 +455,11 @@ def service_status(request):
             "optional": False,
         },
         "livekit_server": {"name": "LiveKit Server", "port": 7880, "optional": False},
-        "livekit_agent": {"name": "LiveKit Agent", "port": 8081, "optional": False},
+        "livekit_agent": {
+            "name": "LiveKit Agent",
+            "port": int(os.environ.get("LIVEKIT_AGENT_PORT", "8081")),
+            "optional": False,
+        },
         "web_backend": {
             "name": "Web Backend",
             "url": f"{getattr(settings, 'WEB_BACKEND_URL', '').rstrip('/')}/_allauth/app/v1/config",
@@ -467,6 +479,34 @@ def service_status(request):
         codex_app_server
     ):
         del services["codex_app_server"]
+    elif codex_app_server is not None:
+        from openbase_coder_cli.codex_control_plane import shared_codex_daemon_ready
+
+        status_payload = launchctl_status(codex_app_server)
+        services["codex_app_server"]["running"] = (
+            shared_codex_daemon_ready()
+            or bool(status_payload.get("pid")) and _check_codex_app_server()
+        )
+    dispatcher = next(
+        (svc for svc in SERVICES if svc.name == "codex-app-server-dispatcher"), None
+    )
+    if dispatcher is not None and service_supports_configured_backends(dispatcher):
+        from openbase_coder_cli.codex_control_plane import (
+            codex_app_server_ready,
+            dispatcher_codex_app_server_endpoint,
+        )
+
+        status_payload = launchctl_status(dispatcher)
+        services["codex_app_server_dispatcher"] = {
+            "name": dispatcher.description,
+            "port": dispatcher.port,
+            "running": bool(status_payload.get("pid")) and codex_app_server_ready(
+                dispatcher_codex_app_server_endpoint()
+            ),
+            "installed": bool(status_payload.get("installed")),
+            "last_exit_code": status_payload.get("last_exit_code"),
+            "optional": not dispatcher.install_by_default,
+        }
     for service_name in (
         "sync-workers",
         "openbase-routines",

@@ -13,6 +13,10 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from openbase_coder_cli.openbase_coder_cli_app.common import _clean_serializer_data
+from openbase_coder_cli.routine_projects import (
+    annotate_routines_payload,
+    filter_routines_by_project,
+)
 from openbase_coder_cli.services.fleet_aggregation import (
     FLEET_SCOPE_PARAM,
     FLEET_SCOPE_VALUE,
@@ -191,6 +195,14 @@ class TriggerFilterSerializer(serializers.Serializer):
 
 
 class TriggerCreateSerializer(serializers.Serializer):
+    type = serializers.ChoiceField(choices=["webhook", "file"], required=False)
+    watchPath = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        trim_whitespace=True,
+        max_length=1024,
+    )
+    fireExisting = serializers.BooleanField(required=False)
     description = serializers.CharField(
         required=False,
         allow_blank=True,
@@ -263,11 +275,17 @@ def routines_list(request):
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(result, status=status.HTTP_201_CREATED)
 
-    routines = async_to_sync(manager.list_routines)()
+    # Local loops are attributed to a tracked project from their cwd before
+    # the fleet merge, so peers stamp their own loops against their own
+    # project registries.
+    routines = annotate_routines_payload(async_to_sync(manager.list_routines)())
     if request.query_params.get(FLEET_SCOPE_PARAM) == FLEET_SCOPE_VALUE:
         # Loops are device-local; peer items carry origin_host and clients
         # edit/delete/run them directly on the owning device.
         routines = fleet_routines(routines)
+    project_path = request.query_params.get("project")
+    if project_path:
+        routines = filter_routines_by_project(routines, project_path)
     return Response(routines, status=status.HTTP_200_OK)
 
 
@@ -280,7 +298,7 @@ def routine_detail(request, name):
             result = async_to_sync(manager.read_routine)(name)
         except ValueError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_404_NOT_FOUND)
-        return Response(result, status=status.HTTP_200_OK)
+        return Response(annotate_routines_payload(result), status=status.HTTP_200_OK)
 
     if request.method == "DELETE":
         try:
@@ -317,7 +335,7 @@ def routines_run_due(request):
 
 @api_view(["POST"])
 def routine_triggers(request, name):
-    """Add a webhook trigger to a persisted routine (loop)."""
+    """Add a webhook or file trigger to a persisted routine (loop)."""
     serializer = TriggerCreateSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     payload = _clean_serializer_data(dict(serializer.validated_data))

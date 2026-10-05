@@ -276,17 +276,23 @@ def _cleanup_lingering_processes(svc: ServiceDefinition) -> None:
 
 
 def _cleanup_service_endpoint(svc: ServiceDefinition) -> None:
-    if svc.name != "codex-app-server" or _is_windows():
+    if (
+        svc.name not in ("codex-app-server", "codex-app-server-dispatcher")
+        or _is_windows()
+    ):
         return
     from openbase_coder_cli.codex_control_plane import (
         cleanup_stale_codex_app_server_socket,
+        dispatcher_codex_app_server_endpoint,
         managed_codex_app_server_endpoint,
     )
     from openbase_coder_cli.paths import CODEX_HOME_DIR
 
-    endpoint = managed_codex_app_server_endpoint(
-        {"CODEX_HOME": str(CODEX_HOME_DIR)},
-        platform=sys.platform,
+    endpoint_env = {"CODEX_HOME": str(CODEX_HOME_DIR)}
+    endpoint = (
+        managed_codex_app_server_endpoint(endpoint_env, platform=sys.platform)
+        if svc.name == "codex-app-server"
+        else dispatcher_codex_app_server_endpoint(endpoint_env, platform=sys.platform)
     )
     cleanup_stale_codex_app_server_socket(endpoint)
 

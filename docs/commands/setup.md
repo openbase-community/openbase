@@ -54,6 +54,10 @@ The workspace script is for a clean source-workspace install. If it finds an
 existing standalone install or a different development workspace install, it
 stops and directs you to [Uninstall](../uninstall.md) before making changes.
 
+## Session Identity Hooks
+
+Setup installs session identity hooks for both Codex and Claude Code, including their default configurations. The `--include-default-hooks` option defaults on; pass `--no-include-default-hooks` to keep the hook in Openbase's own profiles only. The developer `./scripts/setup` script accepts the same options. Existing installations can restore the hooks with `openbase-coder profiles install`, which uses the same default. Start or resume a new agent process to receive the session ID and `Agent-Thread-Id` commit instructions. Interactive developer setup ends with an ℹ️ paragraph summarizing the Codex and Claude Code configuration, including the selected hook and MCP options. Another ℹ️ paragraph lists observed system changes, including background services, local configuration and command launchers, installed binaries, and added or removed global Git and shared Syncthing ignore entries. It also reports private-network health. Repeated setup runs distinguish new changes from existing configuration, and summaries omit environment values and credentials.
+
 ## Interactive Mode
 
 Setup is only interactive when run with no flags at all on a terminal, or
@@ -82,7 +86,7 @@ openbase-coder setup --backend claude-code
 openbase-coder setup --backend openbase-cloud
 ```
 
-- `codex`: native Codex app-server with OpenAI models.
+- `codex`: native Codex app-server with OpenAI models (`gpt-5.5` by default; `gpt-5`, `sol`, and `astra` are selectable in Settings or with `openbase-coder defaults`).
 - `claude-code`: Claude Code backend using local Claude auth/billing for Super
   Agents UI-driver sessions.
 - `openbase-cloud`: Cloud-proxied Claude Code through Openbase Cloud with
@@ -141,6 +145,7 @@ to keep local audio available.
 | `--audio-provider NAME` | picker on fresh interactive installs, else `openbase-cloud` for new dispatcher configs | Voice audio provider. Existing configs are only changed when provided |
 | `--interactive/--non-interactive` | interactive only for flagless terminal runs | Force or forbid the first-run pickers. Passing any other flag implies `--non-interactive` |
 | `--json-progress` | `false` | Emit NDJSON step events on stdout for UI-driven setup; human-readable output moves to stderr |
+| `--shared-super-agents-mcp/--no-shared-super-agents-mcp` | `true` | Also register the Super Agents MCP in your default Codex and Claude Code configurations so plain terminal sessions can dispatch Super Agents. An existing entry of your own is never replaced |
 
 ## Behavior Details
 
@@ -154,7 +159,7 @@ to keep local audio available.
 6. Preserves the user's existing `~/.claude/CLAUDE.md` and `~/.codex/AGENTS.md` files and symlinks.
 7. Renders default instruction files from the bundled package or workspace `instructions/` into `~/.openbase/instructions/`, including the Openbase base instructions at `~/.openbase/instructions/AGENTS.md`. These are delivered to each Openbase session by super-agents (as Codex developer instructions or the Claude system prompt) — never written into the shared agent homes.
 8. Creates missing `~/.openbase/dispatcher-config.json` with default dispatcher reasoning effort `low`, default Super Agents reasoning effort `high`, and backend-specific default model settings. Fresh Openbase Cloud installs visibly select Claude Haiku for both dispatcher and Super Agents; existing Sonnet selections remain supported, with trial accounts transparently served Haiku.
-9. Symlinks bundled or workspace skills into `~/.codex/skills` and `~/.claude/skills`.
+9. Symlinks bundled or workspace skills into `~/.codex/skills` and `~/.claude/skills`. Also appends `.signals/` (agent-to-agent signal messages, see [loops](loops.md#the-signals-convention)) to the global Git ignore file (`core.excludesFile`, or Git's default `~/.config/git/ignore`) when it is missing; a read-only ignore file only produces a warning, and the end-of-setup system-changes summary lists the added entry.
 10. Initializes runtime assets: in development mode runs `uv sync` in `cli`; in **both** modes downloads the LiveKit agent model files (VAD, turn detector) so the first voice session does not stall on downloads.
 11. Installs the bundled `inject-session-id.sh` SessionStart hook into `~/.openbase/hooks/` and registers it in Openbase's Codex and Claude profiles for session attribution.
 12. Registers the Super Agents MCP server in `~/.codex/openbase.config.toml`, `~/.codex/openbase-cloud.config.toml`, and `~/.openbase/profiles/claude/mcp.json`. Each entry carries the profile selection and child-backend defaults. Identifiable legacy Openbase entries are migrated out of user configuration with backups; unrelated settings remain intact. The MCP command prefers the selected workspace's venv executable and falls back to the resolved local `uv` path.
@@ -213,6 +218,7 @@ openbase-coder setup \
 - If `dispatcher-config.json` already exists, setup preserves it.
 - Existing skill symlinks in `~/.codex/skills` and `~/.claude/skills` are updated to the bundled or workspace source. Real skill directories or files are left unchanged.
 - Setup installs session profiles for both backends and preserves your normal terminal defaults. See [Conversation profiles](../configuration.md#conversation-profiles) for profile selection, migration, and the `openbase-coder profiles install` repair command. Pass `--include-default-hooks` to that repair command when ordinary Codex and Claude Code terminal sessions should also run Openbase's session-ID hook.
+- Setup registers the Super Agents MCP server in your default Codex and Claude Code configurations so ordinary terminal sessions can use it. Pass `--no-shared-super-agents-mcp` to keep it only in the Openbase profiles.
 - If `npm` or `uv` are missing in development mode, related steps are skipped with messages.
 - With the expert `tailscale` provider, setup fails with install/connect
   guidance when it cannot configure Serve. With Openbase VPN or Openbase

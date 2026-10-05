@@ -4,14 +4,18 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import AsyncIterator
 from collections import deque
+from collections.abc import AsyncIterator
 from pathlib import Path
 
 import av
 from livekit import rtc
 from livekit.agents import AgentSession
 
+from openbase_coder_cli.livekit_agent.announcement_audio import (
+    AnnouncementSynthesisOutcome,
+    announcement_audio,
+)
 from openbase_coder_cli.livekit_agent.config import (
     ANNOUNCER_MAX_QUEUE_SIZE,
     ANNOUNCER_SILENCE_GRACE_SECONDS,
@@ -26,9 +30,6 @@ from openbase_coder_cli.livekit_agent.packets import (
 )
 from openbase_coder_cli.livekit_agent.speech_formatter import format_for_speech
 from openbase_coder_cli.livekit_agent.tts_selection import VoiceSelectingTTS
-from openbase_coder_cli.livekit_agent.announcement_audio import (
-    AnnouncementSynthesisOutcome, announcement_audio,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -430,31 +431,92 @@ class AnnouncerSpeechQueue:
         )
 
     async def _audio_file_frames(self, path: Path) -> AsyncIterator[rtc.AudioFrame]:
-        for frame in _decode_audio_file(path):
+        # Decode off the event loop (a multi-minute file is tens of MB of
+        # PCM) and hand the room output frames at its own sample rate in the
+        # same 20 ms shape the TTS plugins produce, so nothing downstream has
+        # to resample or re-chunk a long playout.
+        frames = await asyncio.to_thread(
+            _decode_audio_file, path, sample_rate=self._output_sample_rate()
+        )
+        for frame in frames:
             yield frame
 
+    def _output_sample_rate(self) -> int:
+        output = getattr(getattr(self._session, "output", None), "audio", None)
+        rate = getattr(output, "sample_rate", None)
+        if isinstance(rate, int) and rate > 0:
+            return rate
+        return DEFAULT_FILE_PLAYBACK_SAMPLE_RATE
 
-def _decode_audio_file(path: Path) -> list[rtc.AudioFrame]:
-    frames: list[rtc.AudioFrame] = []
+
+DEFAULT_FILE_PLAYBACK_SAMPLE_RATE = 24000
+FILE_PLAYBACK_FRAME_MS = 20
+_SAMPLE_WIDTH_BYTES = 2
+
+
+def _decode_audio_file(
+    path: Path,
+    *,
+    sample_rate: int = DEFAULT_FILE_PLAYBACK_SAMPLE_RATE,
+    frame_ms: int = FILE_PLAYBACK_FRAME_MS,
+) -> list[rtc.AudioFrame]:
+    """Decode any supported audio file into mono 16-bit frames of ``frame_ms``."""
+    chunks: list[bytes] = []
     with av.open(str(path)) as container:
         stream = next((candidate for candidate in container.streams.audio), None)
         if stream is None:
             raise ValueError(f"No audio stream found in {path.name}.")
-        resampler = av.AudioResampler(format="s16", layout="mono", rate=48000)
+        resampler = av.AudioResampler(format="s16", layout="mono", rate=sample_rate)
         for packet in container.demux(stream):
             for decoded in packet.decode():
                 for resampled in resampler.resample(decoded):
-                    frames.append(_av_frame_to_livekit_frame(resampled))
+                    chunks.append(_plane_pcm(resampled))
         for resampled in resampler.resample(None):
-            frames.append(_av_frame_to_livekit_frame(resampled))
-    return frames
+            chunks.append(_plane_pcm(resampled))
+    return _pcm_to_frames(b"".join(chunks), sample_rate=sample_rate, frame_ms=frame_ms)
+
+
+def _plane_pcm(frame) -> bytes:
+    """The real samples of a packed PyAV frame.
+
+    PyAV plane buffers are padded past ``frame.samples`` (128 bytes per frame
+    in practice). Pushing the whole buffer as audio inserted a sliver of junk
+    at every frame boundary, which played as a periodic click over long files.
+    """
+    channels = len(frame.layout.channels)
+    return bytes(frame.planes[0])[: frame.samples * channels * _SAMPLE_WIDTH_BYTES]
 
 
 def _av_frame_to_livekit_frame(frame) -> rtc.AudioFrame:
-    data = bytes(frame.planes[0])
+    """One decoded PyAV frame as a LiveKit frame (kept for callers that chunk themselves)."""
+    data = _plane_pcm(frame)
     return rtc.AudioFrame(
         data=data,
         sample_rate=frame.sample_rate,
         num_channels=len(frame.layout.channels),
         samples_per_channel=frame.samples,
     )
+
+
+def _pcm_to_frames(
+    pcm: bytes, *, sample_rate: int, frame_ms: int = FILE_PLAYBACK_FRAME_MS
+) -> list[rtc.AudioFrame]:
+    samples_per_frame = max(1, sample_rate * frame_ms // 1000)
+    frame_bytes = samples_per_frame * _SAMPLE_WIDTH_BYTES
+    usable = len(pcm) - (len(pcm) % _SAMPLE_WIDTH_BYTES)
+    frames: list[rtc.AudioFrame] = []
+    for start in range(0, usable, frame_bytes):
+        chunk = pcm[start : start + frame_bytes]
+        if len(chunk) < frame_bytes:
+            # Pad the tail so every frame has the same duration; a few
+            # milliseconds of trailing silence beats a short odd frame.
+            chunk = chunk + b"\x00" * (frame_bytes - len(chunk))
+        frames.append(
+            rtc.AudioFrame(
+                data=chunk,
+                sample_rate=sample_rate,
+                num_channels=1,
+                samples_per_channel=samples_per_frame,
+            )
+        )
+    return frames

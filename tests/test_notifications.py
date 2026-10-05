@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 from types import SimpleNamespace
@@ -193,6 +194,7 @@ async def test_agent_turn_sweeps_reports_without_a_feed_client(
     monkeypatch, _no_cloud_push, method, has_state
 ):
     from openbase_coder_cli.openbase_coder_cli_app.notification_runtime import (
+        request_notification_sweep,
         run_notification_sweep,
     )
     from openbase_coder_cli.thread_sync import session_manager
@@ -215,12 +217,14 @@ async def test_agent_turn_sweeps_reports_without_a_feed_client(
     await manager._handle_client_event(
         method, {"threadId": "agent-1", "turnId": "turn-1"}
     )
+    await request_notification_sweep()
 
     assert [entry["id"] for entry in _no_cloud_push] == ["report:/proj:first.md"]
     notification_store.mark_all_read()
     await manager._handle_client_event(
         method, {"threadId": "agent-1", "turnId": "turn-1"}
     )
+    await request_notification_sweep()
     assert len(_no_cloud_push) == 1
     assert notification_store.list_notifications()["unread_count"] == 0
 
@@ -254,7 +258,9 @@ async def test_server_lifespan_produces_reports_without_clients(
     await communicator.send_input({"type": "lifespan.startup"})
     assert await communicator.receive_output() == {"type": "lifespan.startup.complete"}
     try:
-        await wait_until(lambda: notification_store.get_report_watermark()[1])
+        await wait_until(
+            lambda: notification_store.get_report_observations()[0] is not None
+        )
         items.append(_report_item("/proj:background.md", time.time()))
         await wait_until(lambda: len(_no_cloud_push) == 1)
         assert _no_cloud_push[0]["id"] == "report:/proj:background.md"
@@ -266,7 +272,8 @@ async def test_server_lifespan_produces_reports_without_clients(
         }
         await communicator.wait()
     assert not any(
-        task.get_name() == "notification-producers" and not task.done()
+        task.get_name() in {"notification-producers", "notification-sweep"}
+        and not task.done()
         for task in asyncio.all_tasks()
     )
 
@@ -296,6 +303,91 @@ async def test_periodic_sweep_retries_after_failure(monkeypatch):
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+
+
+@pytest.mark.parametrize("mtime", [50, 100, 1_000_000])
+def test_new_reports_do_not_depend_on_global_mtime(monkeypatch, _no_cloud_push, mtime):
+    items = [_report_item("/proj:future.md", 1_000_000)]
+    monkeypatch.setattr(
+        "openbase_coder_cli.reports_service.list_report_items", lambda: items
+    )
+    notification_producers.sync_notification_producers(force=True)
+    items.append(_report_item("/proj:arrived.md", mtime))
+    notification_producers.sync_notification_producers(force=True)
+    assert [entry["id"] for entry in _no_cloud_push] == ["report:/proj:arrived.md"]
+    notification_store.mark_all_read()
+    # A project disappearing and returning must not reopen unchanged reports.
+    saved = list(items)
+    items.clear()
+    notification_producers.sync_notification_producers(force=True)
+    items.extend(saved)
+    notification_producers.sync_notification_producers(force=True)
+    assert len(_no_cloud_push) == 1
+
+
+def test_reports_beyond_200_are_discovered(tmp_path, monkeypatch, _no_cloud_push):
+    from openbase_coder_cli import reports_service
+
+    directory = tmp_path / "project" / ".reports"
+    directory.mkdir(parents=True)
+    for index in range(201):
+        (directory / f"a-{index:03}.md").write_text("# Existing report\n")
+    monkeypatch.setattr(reports_service, "_global_reports_projects", lambda: [])
+    monkeypatch.setattr(
+        reports_service,
+        "_get_recent_projects",
+        lambda: [{"path": str(directory.parent)}],
+    )
+    monkeypatch.setattr(
+        reports_service, "list_report_items", reports_service._all_reports_items
+    )
+    notification_producers.sync_notification_producers(force=True)
+    latest = directory / "z-new.md"
+    latest.write_text("# New report\n")
+    os.utime(latest, (1, 1))  # Synced files can arrive with old timestamps.
+    notification_producers.sync_notification_producers(force=True)
+    assert len(reports_service.list_report_items()) == 202
+    assert [entry["title"] for entry in _no_cloud_push] == ["New report"]
+
+
+def test_report_observations_migrate_once_without_replaying_baseline(
+    monkeypatch, _no_cloud_push
+):
+    path = notification_store.notifications_store_path()
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "notifications": {},
+                "watermarks": {
+                    "reports_last_seen_mtime": 100,
+                    "reports_baselined_at": "baseline",
+                },
+            }
+        )
+    )
+    items = [_report_item("/proj:old.md", 50), _report_item("/proj:new.md", 200)]
+    monkeypatch.setattr(
+        "openbase_coder_cli.reports_service.list_report_items", lambda: items
+    )
+    notification_producers.sync_notification_producers(force=True)
+    migrated = json.loads(path.read_text())
+    assert migrated["version"] == 2
+    assert "watermarks" not in migrated
+    assert "initial_cutoff" not in migrated["report_discovery"]
+    assert [entry["id"] for entry in _no_cloud_push] == ["report:/proj:new.md"]
+    notification_store.mark_all_read()
+    notification_producers.sync_notification_producers(force=True)
+    assert len(_no_cloud_push) == 1
+
+
+def test_future_notification_store_is_not_overwritten():
+    path = notification_store.notifications_store_path()
+    original = json.dumps({"version": 99, "notifications": {}})
+    path.write_text(original)
+    with pytest.raises(ValueError, match="update the CLI"):
+        notification_store.mark_all_read()
+    assert path.read_text() == original
 
 
 # --- approval sweep ---

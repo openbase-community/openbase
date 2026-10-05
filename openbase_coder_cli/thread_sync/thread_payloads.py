@@ -325,9 +325,39 @@ def _run_from_turn(
             "reasoningEffort",
             "reasoning_effort",
         ),
-        steers=[SteerInfo(text=text) for text in user_texts[1:]],
+        steers=(
+            [SteerInfo(text=text) for text in user_texts[1:]]
+            or _recorded_turn_steers(turn)
+        ),
         file_edits=_file_edit_paths(turn),
     )
+
+
+def _recorded_turn_steers(turn: dict[str, Any]) -> list[SteerInfo]:
+    """Steers recorded on the backend turn row (Claude Code turns).
+
+    Codex turns carry steering input as extra userMessage items instead; the
+    Claude store cannot, so its thread reads list the delivered steering
+    texts alongside the prompt.
+    """
+    raw = turn.get("steers")
+    if not isinstance(raw, list):
+        return []
+    steers: list[SteerInfo] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        created_at = item.get("createdAt")
+        steers.append(
+            SteerInfo(
+                text=text,
+                created_at=_timestamp_to_datetime(created_at) if created_at else None,
+            )
+        )
+    return steers
 
 
 def _session_sort_key(session: SessionInfo) -> datetime:

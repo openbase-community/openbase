@@ -10,6 +10,11 @@ from typing import Any
 import click
 from super_agents.app_server_client import CodexAppServerClient
 
+from openbase_coder_cli.routine_projects import (
+    annotate_routines_payload,
+    filter_routines_by_project,
+)
+
 REASONING_EFFORTS = ("low", "medium", "high", "xhigh")
 SANDBOX_TYPES = ("readOnly", "workspaceWrite", "dangerFullAccess")
 MODES = ("default", "plan")
@@ -149,16 +154,30 @@ def routines() -> None:
 
 
 @routines.command("list")
-def list_routines() -> None:
-    """List persisted routines."""
-    _json_echo(_run_client(lambda client: client.list_routines()))
+@click.option(
+    "--project",
+    "project_path",
+    type=click.Path(file_okay=False),
+    default=None,
+    help="Only routines whose cwd falls inside this tracked project.",
+)
+def list_routines(project_path: str | None) -> None:
+    """List persisted routines (each stamped with its tracked projectPath)."""
+    payload = annotate_routines_payload(
+        _run_client(lambda client: client.list_routines())
+    )
+    if project_path:
+        payload = filter_routines_by_project(payload, project_path)
+    _json_echo(payload)
 
 
 @routines.command("show")
 @click.argument("name")
 def show_routine(name: str) -> None:
     """Show one persisted routine."""
-    _json_echo(_run_client(lambda client: client.read_routine(name)))
+    _json_echo(
+        annotate_routines_payload(_run_client(lambda client: client.read_routine(name)))
+    )
 
 
 @routines.command("create")
@@ -458,6 +477,62 @@ def add_webhook_trigger(
     if relay_url:
         result["providerUrl"] = relay_url
     _json_echo(result)
+
+
+@routines.command("add-file-trigger")
+@click.argument("name")
+@click.option(
+    "--path",
+    "watch_path",
+    required=True,
+    help=(
+        "Absolute glob (a leading ~ is expanded) of files to watch, e.g. "
+        "'/path/to/checkouts/*/.signals/ready-for-review.md'. The loop runs once per "
+        "created or modified file; touching a file runs it again."
+    ),
+)
+@click.option("--description", help="What this trigger listens for.")
+@click.option(
+    "--filter",
+    "filters",
+    nargs=3,
+    multiple=True,
+    metavar="PATH OP VALUE",
+    help=(
+        "Event payload filter over path, name, dir, mtime, change, contents, "
+        "e.g. --filter name startsWith ready-for-. Ops: equals, notEquals, "
+        "contains, startsWith, endsWith, exists, regex."
+    ),
+)
+@click.option(
+    "--fire-existing",
+    is_flag=True,
+    help=(
+        "Also run for files that already match when the trigger is added. "
+        "By default existing files are recorded silently and only later "
+        "changes fire."
+    ),
+)
+def add_file_trigger(
+    name: str,
+    watch_path: str,
+    description: str | None,
+    filters: tuple[tuple[str, str, str], ...],
+    fire_existing: bool,
+) -> None:
+    """Add a file (flag) trigger: run the loop when a matching file appears or changes."""
+    trigger_input: dict[str, Any] = {"type": "file", "watchPath": watch_path}
+    if description:
+        trigger_input["description"] = description
+    if filters:
+        trigger_input["filters"] = [
+            {"path": path, "op": op, "value": value} for path, op, value in filters
+        ]
+    if fire_existing:
+        trigger_input["fireExisting"] = True
+    _json_echo(
+        _run_client(lambda client: client.add_routine_trigger(name, trigger_input))
+    )
 
 
 @routines.command("remove-trigger")

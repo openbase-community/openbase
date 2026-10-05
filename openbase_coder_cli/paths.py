@@ -109,3 +109,9 @@ PLUGIN_SKILLS_OWNERSHIP_PATH = PLUGIN_BASE_DIR / "skills_ownership.json"
 # User-published, tailnet-only development services. The registry contains
 # names and local ports, never credentials.
 PUBLISHED_SERVICES_PATH = OPENBASE_BASE_DIR / "published-services.json"
+
+# Diagnostics "problems" datastore. `openbase-coder report issue` captures the
+# most recent user interaction of a thread here so problematic interactions can
+# be reviewed later. One JSON file per recorded problem — the directory listing
+# is the source of truth, so there is no separate index to keep in sync.
+PROBLEMS_DIR = OPENBASE_BASE_DIR / "problems"

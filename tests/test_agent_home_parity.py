@@ -101,6 +101,9 @@ def test_ensure_claude_mcp_adds_entry_and_preserves_state(
     assert entry["command"] == str(command)
     assert entry["env"]["SUPER_AGENTS_DEFAULT_BACKEND"] == "claude_code"
     assert "SUPER_AGENTS_BASE_INSTRUCTIONS_PATH" in entry["env"]
+    assert entry["env"]["SUPER_AGENTS_THREAD_INTRO_COMMAND"].startswith(
+        "openbase-coder user say {agent_name} "
+    )
     # Sessions run against the shared ~/.claude; never redirect the config dir.
     assert "CLAUDE_CONFIG_DIR" not in entry["env"]
 

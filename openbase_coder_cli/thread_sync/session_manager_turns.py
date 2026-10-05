@@ -56,11 +56,15 @@ def _has_live_inbox(backend_session_id: str | None) -> bool:
 class SessionManagerTurnsMixin:
     """Turn dispatch, steering, interrupt and local-turn-state bookkeeping."""
 
-    async def start_turn(self, thread_id: str, prompt: str) -> str:
+    async def start_turn(
+        self, thread_id: str, prompt: str, model: str | None = None
+    ) -> str:
         """Start a new Codex turn on an existing thread."""
-        return await self.send_message(thread_id, prompt)
+        return await self.send_message(thread_id, prompt, model=model)
 
-    async def queue_turn(self, thread_id: str, prompt: str) -> dict[str, Any]:
+    async def queue_turn(
+        self, thread_id: str, prompt: str, model: str | None = None
+    ) -> dict[str, Any]:
         """Queue a follow-up turn after the active turn, or start immediately if idle."""
         thread = await self.get_session_state(thread_id)
         if thread is None:
@@ -75,7 +79,7 @@ class SessionManagerTurnsMixin:
             "cwd": thread.directory,
             **self._codex_permission_defaults(),
         }
-        if model := self._model_for_thread(thread):
+        if model := self._resolve_turn_model(thread, model):
             turn_input["model"] = model
 
         result = await self._client.queue_turn_by_label(

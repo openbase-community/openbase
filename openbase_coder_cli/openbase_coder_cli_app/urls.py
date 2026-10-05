@@ -15,7 +15,9 @@ from openbase_coder_cli.openbase_coder_cli_app.notifications import (
     notification_mark_all_read,
     notification_mark_read,
 )
-from openbase_coder_cli.openbase_coder_cli_app.skill_settings import skill_sharing_settings
+from openbase_coder_cli.openbase_coder_cli_app.skill_settings import (
+    skill_sharing_settings,
+)
 from openbase_coder_cli.openbase_coder_cli_app.sync_settings import (
     sync_conflicts,
     sync_conflicts_ignore_containing_folder,
@@ -124,6 +126,8 @@ from openbase_coder_cli.openbase_coder_cli_app.views import (
     thread_favorite,
     thread_interrupt,
     thread_list,
+    thread_model_settings,
+    thread_name,
     thread_queue_turn,
     thread_start_turn,
     thread_steer_turn,
@@ -173,7 +177,7 @@ urlpatterns = [
     path("update/status/", update_status, name="update-status"),
     path("update/apply/", update_apply, name="update-apply"),
     path("threads/", offloaded_view(thread_list), name="thread-list"),
-    path("threads/activity/", thread_activity, name="thread-activity"),
+    path("threads/activity/", offloaded_view(thread_activity), name="thread-activity"),
     path(
         "threads/active-voice/",
         offloaded_view(thread_active_voice),
@@ -189,18 +193,28 @@ urlpatterns = [
     ),
     path(
         "threads/<str:thread_id>/tags/",
-        thread_tags,
+        offloaded_view(thread_tags),
         name="thread-tags",
     ),
     path(
         "threads/<str:thread_id>/favorite/",
-        thread_favorite,
+        offloaded_view(thread_favorite),
         name="thread-favorite",
+    ),
+    path(
+        "threads/<str:thread_id>/name/",
+        thread_name,
+        name="thread-name",
     ),
     path(
         "threads/<str:thread_id>/interrupt/",
         thread_interrupt,
         name="thread-interrupt",
+    ),
+    path(
+        "threads/<str:thread_id>/models/",
+        thread_model_settings,
+        name="thread-model-settings",
     ),
     path("threads/<str:thread_id>/turns/", thread_start_turn, name="thread-start-turn"),
     path(
@@ -213,7 +227,10 @@ urlpatterns = [
         thread_steer_turn,
         name="thread-steer-turn",
     ),
-    path("notifications/", notification_list, name="notifications"),
+    # The console fires these alongside every thread open. They ran on
+    # Django's single thread-sensitive executor, queued behind git-sync and
+    # service-status probes; offloading lets them run concurrently.
+    path("notifications/", offloaded_view(notification_list), name="notifications"),
     path(
         "notifications/mark-read/",
         notification_mark_read,
@@ -224,7 +241,7 @@ urlpatterns = [
         notification_mark_all_read,
         name="notifications-mark-all-read",
     ),
-    path("approval-requests/", approval_requests, name="approval-requests"),
+    path("approval-requests/", offloaded_view(approval_requests), name="approval-requests"),
     path(
         "approval-requests/<str:request_id>/",
         approval_request_detail,
@@ -271,7 +288,7 @@ urlpatterns = [
     ),
     path("projects/recent/", offloaded_view(recent_projects), name="recent-projects"),
     path("projects/status/", offloaded_view(project_status), name="project-status"),
-    path("tags/", tag_options, name="tag-options"),
+    path("tags/", offloaded_view(tag_options), name="tag-options"),
     path("projects/reports/", offloaded_view(project_reports), name="project-reports"),
     path(
         "projects/reports/all/",
@@ -526,7 +543,10 @@ urlpatterns = [
     ),
     path(
         "sync/git/<str:folder_id>/<path:subpath>",
-        git_http_backend,
+        # Peers fetch dozens of repos a minute; each request runs a git
+        # subprocess, which must not serialize every other sync view behind
+        # it on Django's single thread-sensitive executor.
+        offloaded_view(git_http_backend),
         name="sync-git-http",
     ),
     path("status/", offloaded_view(service_status), name="service-status"),

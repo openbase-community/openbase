@@ -148,6 +148,27 @@ def get_cached_thread_state(manager: Any, thread_id: str) -> ThreadInfo | None:
     )
 
 
+def get_cached_thread_history_page(
+    manager: Any,
+    thread_id: str,
+    history_cursor: str,
+) -> ThreadInfo | None:
+    """Return one cached older-history page and coalesce concurrent refreshes.
+
+    Older pages are effectively immutable (turns append at the head), but they
+    are the most expensive reads — a not-loaded thread's page can force a full
+    rollout-file parse — so re-opening a scrolled-back thread should not repeat
+    that work within the TTL.
+    """
+    return _thread_cache.get(
+        ("state", thread_id, history_cursor),
+        lambda: async_to_sync(manager.get_thread_state)(
+            thread_id,
+            history_cursor=history_cursor,
+        ),
+    )
+
+
 def invalidate_thread_list_cache() -> None:
     """Mark cached thread reads stale after thread mutations.
 

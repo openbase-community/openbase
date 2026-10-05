@@ -760,6 +760,12 @@ def doctor() -> None:
             continue
         info = launchctl_status(svc)
         required = getattr(svc, "install_by_default", True)
+        if svc.name == "codex-app-server" and not info["pid"]:
+            from openbase_coder_cli.codex_control_plane import shared_codex_daemon_ready
+
+            if shared_codex_daemon_ready():
+                ok(f"{svc.name}: available through the shared Codex daemon")
+                continue
         if not info["installed"]:
             if required:
                 fail(f"{svc.name}: not installed")

@@ -95,7 +95,9 @@ class CodexLLMStream(llm.LLMStream):
         if _is_exit_to_dispatch_command(prompt):
             self._voice_router.input_buffer.clear()
         if delivery_ledger is not None and not _is_exit_to_dispatch_command(prompt):
-            self._buffered_input = self._voice_router.input_buffer.add(prompt, self._voice_router.route_snapshot())
+            self._buffered_input = self._voice_router.input_buffer.add(
+                prompt, self._voice_router.route_snapshot()
+            )
             prompt = self._buffered_input.prompt
         if delivery_ledger is not None:
             delivery_record = delivery_ledger.accept_utterance(
@@ -112,8 +114,13 @@ class CodexLLMStream(llm.LLMStream):
             await self._run_accepted_prompt(prompt, delivery_record, delivery_ledger)
         except asyncio.CancelledError:
             if delivery_record is not None:
-                from openbase_coder_cli.livekit_agent.backend_answer_ownership import preserve_backend_answer_on_cancel
-                if not preserve_backend_answer_on_cancel(self, delivery_record, delivery_ledger):
+                from openbase_coder_cli.livekit_agent.backend_answer_ownership import (
+                    preserve_backend_answer_on_cancel,
+                )
+
+                if not preserve_backend_answer_on_cancel(
+                    self, delivery_record, delivery_ledger
+                ):
                     delivery_ledger.mark_cancelled(
                         delivery_record,
                         reason="livekit_llm_stream_cancelled",
@@ -125,17 +132,37 @@ class CodexLLMStream(llm.LLMStream):
                     delivery_record,
                     reason="livekit_llm_stream_failed",
                 )
+            backend_busy = False
+            appears_busy = getattr(
+                self._voice_router.active_client, "backend_appears_busy", None
+            )
+            if callable(appears_busy):
+                try:
+                    backend_busy = bool(appears_busy())
+                except Exception:
+                    backend_busy = False
             logger.exception(
-                "dispatch_timing stage=livekit_llm_backend_failed message_id=%s",
+                "dispatch_timing stage=livekit_llm_backend_failed message_id=%s "
+                "backend_busy=%s",
                 self._message_id,
+                backend_busy,
             )
             # Speak the failure instead of leaving the room silent: emit a
-            # short fallback so TTS tells the user the backend is down.
+            # short fallback so TTS tells the user the backend is down —
+            # or merely busy, when its event stream shows it is still alive
+            # (2026-09-18: a churning backend was announced as unresponsive).
             if not self._event_ch.closed:
-                self._emit_delta(
-                    "Sorry, my coding backend isn't responding right now, so I "
-                    "couldn't handle that. Give it a moment and ask me again."
-                )
+                if backend_busy:
+                    self._emit_delta(
+                        "The coding agent is deep in a long task right now, so "
+                        "I couldn't get a word in. Give it a moment — I'll "
+                        "catch up as soon as it frees up."
+                    )
+                else:
+                    self._emit_delta(
+                        "Sorry, my coding backend isn't responding right now, so I "
+                        "couldn't handle that. Give it a moment and ask me again."
+                    )
                 return
             raise
 
@@ -168,13 +195,22 @@ class CodexLLMStream(llm.LLMStream):
         if delivery_record is not None:
             # Do not execute a partial request while the user is still finishing it.
             # Framework cancellation leaves unsubmitted fragments in the buffer.
-            if not await delivery_ledger.wait_for_user_turn_closed(delivery_record, purpose="backend"):
-                return
-            if self._buffered_input is not None and not self._voice_router.input_buffer.consume(
-                self._buffered_input, self._voice_router.route_snapshot()
+            if not await delivery_ledger.wait_for_user_turn_closed(
+                delivery_record, purpose="backend"
             ):
                 return
-            logger.info("dispatch_timing stage=livekit_llm_input_committed message_id=%s prompt_len=%d", self._message_id, delivery_record.prompt_len)
+            if (
+                self._buffered_input is not None
+                and not self._voice_router.input_buffer.consume(
+                    self._buffered_input, self._voice_router.route_snapshot()
+                )
+            ):
+                return
+            logger.info(
+                "dispatch_timing stage=livekit_llm_input_committed message_id=%s prompt_len=%d",
+                self._message_id,
+                delivery_record.prompt_len,
+            )
         self._backend_voice_client = voice_client
         self._backend_committed = True
         result = await voice_client.run_turn(

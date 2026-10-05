@@ -66,6 +66,31 @@ def test_stale_socket_is_recovered_without_removing_live_owner(tmp_path: Path) -
         live_path.unlink(missing_ok=True)
 
 
+def test_stale_codex_daemon_link_is_removed_without_disturbing_live_owner(
+    tmp_path: Path,
+) -> None:
+    stale_link = tmp_path / "stale.sock"
+    stale_link.symlink_to(tmp_path / "missing.sock")
+    assert codex_control_plane.recover_stale_codex_control_socket(stale_link) is True
+    assert not stale_link.is_symlink()
+
+    live_target = _short_socket_path("daemon")
+    live = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    live.bind(str(live_target))
+    live.listen()
+    live_link = _short_socket_path("live-link")
+    live_link.symlink_to(live_target)
+    try:
+        with pytest.raises(RuntimeError, match="live owner"):
+            codex_control_plane.recover_stale_codex_control_socket(live_link)
+        assert live_link.is_symlink()
+        assert live_target.exists()
+    finally:
+        live.close()
+        live_link.unlink(missing_ok=True)
+        live_target.unlink(missing_ok=True)
+
+
 def test_non_socket_control_path_is_never_replaced(tmp_path: Path) -> None:
     path = tmp_path / "control.sock"
     path.write_text("keep", encoding="utf-8")

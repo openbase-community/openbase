@@ -133,6 +133,9 @@ from openbase_coder_cli.openbase_coder_cli_app.sharing import (
 )
 from openbase_coder_cli.openbase_coder_cli_app.skills import _home_skills_dir
 from openbase_coder_cli.openbase_coder_cli_app.tags import tag_options
+from openbase_coder_cli.openbase_coder_cli_app.thread_models import (
+    thread_model_settings,  # noqa: F401
+)
 from openbase_coder_cli.openbase_coder_cli_app.threads import (
     thread_active_voice,  # noqa: F401
     thread_activity,  # noqa: F401
@@ -141,6 +144,7 @@ from openbase_coder_cli.openbase_coder_cli_app.threads import (
     thread_favorite,
     thread_interrupt,
     thread_list,
+    thread_name,
     thread_queue_turn,
     thread_start_turn,
     thread_steer_turn,
@@ -386,6 +390,8 @@ __all__ = [
     "thread_favorite",
     "thread_interrupt",
     "thread_list",
+    "thread_model_settings",
+    "thread_name",
     "thread_queue_turn",
     "thread_start_turn",
     "thread_steer_turn",

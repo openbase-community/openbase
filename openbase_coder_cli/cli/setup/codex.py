@@ -15,8 +15,11 @@ from openbase_coder_cli.agent_profiles import profile_environment
 from openbase_coder_cli.backend_config import (
     CODEX_BACKEND,
     DEFAULT_CODING_BACKEND,
+    OPENBASE_CLOUD_BACKEND,
     OPENBASE_CLOUD_CODEX_BACKEND,
+    OPENBASE_THREAD_INTRO_COMMAND,
     SUPER_AGENTS_DEFAULT_BACKEND_ENV_KEY,
+    SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV,
 )
 from openbase_coder_cli.cli.setup.hooks import ensure_codex_session_id_hook
 from openbase_coder_cli.cli.setup.profile_migration import (
@@ -170,12 +173,29 @@ def _symlink_skills_to_root(
         report(f"Linked {label} skill {target_path} -> {source_path}")
 
 
+def _codex_super_agents_entry(command_path: Path, args: list[str], backend: str):
+    """Build the `mcp_servers.super-agents` TOML entry for a Codex config."""
+    return tomlkit.parse(
+        f"[{SUPER_AGENTS_MCP_TABLE}]\n"
+        f"command = {json.dumps(str(command_path))}\n"
+        f"{_toml_args_line(args)}"
+        f"{_toml_env_line(backend)}"
+    )["mcp_servers"]["super-agents"]
+
+
 def _ensure_codex_config(
     workspace_dir: str,
     *,
     coding_backend: str = DEFAULT_CODING_BACKEND,
+    register_shared_super_agents: bool = True,
 ) -> None:
-    """Install session profiles, then retire our legacy shared-home entries."""
+    """Install session profiles, then retire our legacy shared-home entries.
+
+    By default the super-agents MCP is also registered in the default
+    (non-Openbase) Codex home so plain ``codex`` sessions can use it, and the
+    shared-home migration keeps that entry. With ``register_shared_super_agents``
+    off the entry is stripped instead.
+    """
     command_path, args = _super_agents_mcp_command(Path(workspace_dir))
 
     if not command_path.is_file():
@@ -200,16 +220,51 @@ def _ensure_codex_config(
             "sandbox_mode": "danger-full-access",
         }.items():
             document.setdefault(key, value)
-        entry = tomlkit.parse(
-            f"[{SUPER_AGENTS_MCP_TABLE}]\n"
-            f"command = {json.dumps(str(command_path))}\n"
-            f"{_toml_args_line(args)}"
-            f"{_toml_env_line(backend)}"
-        )["mcp_servers"]["super-agents"]
-        document.setdefault("mcp_servers", {})["super-agents"] = entry
+        document.setdefault("mcp_servers", {})["super-agents"] = (
+            _codex_super_agents_entry(command_path, args, backend)
+        )
         write_if_changed(config_path, tomlkit.dumps(document))
         ensure_codex_session_id_hook(config_path)
-    migrate_codex_user_config(CODEX_CONFIG_PATH)
+    migrate_codex_user_config(
+        CODEX_CONFIG_PATH, strip_super_agents=not register_shared_super_agents
+    )
+    if register_shared_super_agents:
+        _register_shared_codex_super_agents(
+            workspace_dir, coding_backend=coding_backend
+        )
+
+
+def _register_shared_codex_super_agents(
+    workspace_dir: str, *, coding_backend: str
+) -> None:
+    """Add super-agents to the default (non-Openbase) Codex home if absent.
+
+    Leaves any pre-existing ``super-agents`` entry untouched so a user's own
+    registration is never clobbered.
+    """
+    command_path, args = _super_agents_mcp_command(Path(workspace_dir))
+    backend = (
+        OPENBASE_CLOUD_CODEX_BACKEND
+        if coding_backend == OPENBASE_CLOUD_BACKEND
+        else CODEX_BACKEND
+    )
+    existing = (
+        CODEX_CONFIG_PATH.read_text(encoding="utf-8")
+        if CODEX_CONFIG_PATH.is_file()
+        else ""
+    )
+    document = tomlkit.parse(existing)
+    servers = document.get("mcp_servers")
+    if isinstance(servers, dict) and "super-agents" in servers:
+        click.echo(
+            f"Default Codex home already has super-agents at {CODEX_CONFIG_PATH}"
+        )
+        return
+    document.setdefault("mcp_servers", {})["super-agents"] = _codex_super_agents_entry(
+        command_path, args, backend
+    )
+    write_if_changed(CODEX_CONFIG_PATH, tomlkit.dumps(document))
+    click.echo(f"Registered super-agents MCP in default Codex home {CODEX_CONFIG_PATH}")
 
 
 def _super_agents_mcp_command(workspace_dir: Path) -> tuple[Path, list[str]]:
@@ -292,6 +347,7 @@ def _toml_env_line(backend: str) -> str:
             "CODEX_SUPER_AGENT_INSTRUCTIONS_PATH",
             str(CODEX_SUPER_AGENT_INSTRUCTIONS_PATH),
         ),
+        (SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV, OPENBASE_THREAD_INTRO_COMMAND),
         *profile_environment().items(),
     )
     body = ", ".join(f"{key} = {json.dumps(value)}" for key, value in env_pairs)

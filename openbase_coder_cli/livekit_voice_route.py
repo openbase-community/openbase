@@ -141,10 +141,21 @@ SUPER_AGENT_VOICE_IDS = tuple(
 SUPER_AGENT_VOICES = _voices_from_ids(SUPER_AGENT_VOICE_IDS)
 
 
+_super_agent_voices_by_provider: dict[str, tuple[CartesiaVoice, ...]] = {}
+
+
 def _current_super_agent_voices() -> tuple[CartesiaVoice, ...]:
     provider = get_tts_provider(selected_tts_provider_id())
-    if provider.provider_id != CARTESIA_PROVIDER_ID:
-        return tuple(
+    if provider.provider_id == CARTESIA_PROVIDER_ID:
+        voice_ids = tuple(voice.voice_id for voice in SUPER_AGENT_VOICES)
+        if voice_ids == tuple(SUPER_AGENT_VOICE_IDS):
+            return SUPER_AGENT_VOICES
+    # Provider catalogs are static, so the derived tuple is built once per
+    # provider: thread-list annotation derives a voice for every listed
+    # thread and must not rebuild the catalog each time.
+    cached = _super_agent_voices_by_provider.get(provider.provider_id)
+    if cached is None:
+        cached = tuple(
             CartesiaVoice(
                 voice_id=voice.id,
                 name=voice.name,
@@ -152,17 +163,8 @@ def _current_super_agent_voices() -> tuple[CartesiaVoice, ...]:
             )
             for voice in provider.super_agent_voices()
         )
-    voice_ids = tuple(voice.voice_id for voice in SUPER_AGENT_VOICES)
-    if voice_ids == tuple(SUPER_AGENT_VOICE_IDS):
-        return SUPER_AGENT_VOICES
-    return tuple(
-        CartesiaVoice(
-            voice_id=voice.id,
-            name=voice.name,
-            provider=provider.provider_id,
-        )
-        for voice in provider.super_agent_voices()
-    )
+        _super_agent_voices_by_provider[provider.provider_id] = cached
+    return cached
 
 
 def stable_super_agent_voice(

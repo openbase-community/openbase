@@ -120,6 +120,10 @@ def archive_stale(days: float, sources: tuple[str, ...], dry_run: bool) -> None:
             "remaining": remaining,
             "resumeByNameUsable": remaining <= RESUME_LOOKUP_PAGE_SIZE,
         }
+        if not dry_run:
+            from super_agents.state import prune_state_file_sessions
+
+            result["statePrune"] = prune_state_file_sessions(client.state_file)
         if errors:
             result["errors"] = errors
         if remaining > RESUME_LOOKUP_PAGE_SIZE:

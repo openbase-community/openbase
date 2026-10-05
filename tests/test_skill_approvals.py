@@ -69,3 +69,62 @@ def test_skill_approval_timeout_removes_pending_request(tmp_path: Path) -> None:
     assert decision["decision"] == "timeout"
     assert list_skill_approval_requests(path) == []
     assert request["id"] not in read_permission_store(path)["requests"]
+
+
+def test_answered_decision_survives_waiter_death_and_is_consumable(tmp_path: Path) -> None:
+    """A decision recorded while nobody waits (the waiter was killed by a
+    tool timeout) must still be there for a re-attached wait to consume."""
+    path = tmp_path / "skill-approvals.json"
+    request = create_skill_approval_request(
+        skill="approval-spike",
+        action="strand",
+        description="Waiter killed before answer",
+        path=path,
+    )
+
+    answer_skill_approval_request(request["id"], "accept", path)
+
+    decision = wait_for_skill_approval(
+        request["id"],
+        timeout_seconds=5,
+        poll_interval_seconds=0.1,
+        path=path,
+    )
+    assert decision["accepted"] is True
+    assert request["id"] not in read_permission_store(path)["requests"]
+
+
+def test_create_sweeps_stale_skill_residue(tmp_path: Path) -> None:
+    import json
+
+    path = tmp_path / "skill-approvals.json"
+    stale_answered = create_skill_approval_request(
+        skill="old-skill",
+        action="answered-long-ago",
+        description="Stale answered residue",
+        path=path,
+    )
+    answer_skill_approval_request(stale_answered["id"], "accept", path)
+    stale_unanswered = create_skill_approval_request(
+        skill="old-skill",
+        action="never-answered",
+        description="Stale unanswered residue",
+        path=path,
+    )
+    store = json.loads(path.read_text(encoding="utf-8"))
+    store["decisions"][stale_answered["id"]]["decidedAt"] = "2020-01-01T00:00:00.000Z"
+    store["requests"][stale_unanswered["id"]]["receivedAt"] = "2020-01-01T00:00:00.000Z"
+    path.write_text(json.dumps(store), encoding="utf-8")
+
+    fresh = create_skill_approval_request(
+        skill="new-skill",
+        action="fresh",
+        description="Fresh request triggers the sweep",
+        path=path,
+    )
+
+    store = read_permission_store(path)
+    assert stale_answered["id"] not in store["requests"]
+    assert stale_answered["id"] not in store["decisions"]
+    assert stale_unanswered["id"] not in store["requests"]
+    assert fresh["id"] in store["requests"]

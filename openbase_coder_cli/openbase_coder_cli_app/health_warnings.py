@@ -5,7 +5,8 @@ configuration *expects* is not actually healthy. Expectations follow
 configuration, not a fixed list: services installed by default are always
 expected; conditional services (code-sync) are expected exactly when their
 feature is enabled — and conversely are flagged when running without their
-feature enabled.
+feature enabled. The shared Codex service may instead be provided by Codex's
+own responsive managed daemon.
 """
 
 from __future__ import annotations
@@ -107,7 +108,13 @@ def _service_warnings() -> list[dict[str, str]]:
             continue
         installed = bool(info.get("installed"))
         running = bool(info.get("pid"))
-        if expected and not installed:
+        shared_daemon = False
+        if service.name == "codex-app-server" and not running:
+            from openbase_coder_cli.codex_control_plane import shared_codex_daemon_ready
+
+            shared_daemon = shared_codex_daemon_ready()
+            running = shared_daemon
+        if expected and not installed and not shared_daemon:
             warnings.append(
                 _warning(
                     f"service-missing:{service.name}",
@@ -378,6 +385,34 @@ def _livekit_skew_warnings() -> list[dict[str, str]]:
     ]
 
 
+def _codex_version_skew_warnings() -> list[dict[str, str]]:
+    """Warn when a running codex-app-server predates the installed Codex.
+
+    Long-lived services keep the old binary in memory after an upgrade, and
+    every new Codex CLI launch then warns about the stale background
+    service. The banner offers a one-click restart for these ids; the
+    sync-workers tick also restarts them itself once nothing is in flight.
+    """
+    from openbase_coder_cli.services.codex_version_skew import (
+        collect_codex_version_skews,
+    )
+
+    try:
+        skews = collect_codex_version_skews()
+    except Exception:  # noqa: BLE001 - version probe must never break health
+        return []
+    return [
+        _warning(
+            f"service-restart-needed:{skew.service}",
+            "warning",
+            skew.message,
+            "Restart the service to pick up the installed version; it "
+            "restarts automatically once no agent turn or voice call is active.",
+        )
+        for skew in skews
+    ]
+
+
 def _resolve_livekit_binary() -> str | None:
     import os
     import shutil
@@ -469,6 +504,7 @@ def collect_warnings() -> list[dict[str, str]]:
     warnings = _service_warnings()
     warnings.extend(_installation_warnings())
     warnings.extend(_livekit_skew_warnings())
+    warnings.extend(_codex_version_skew_warnings())
     if _code_sync_expected():
         warnings.extend(_sync_warnings())
         warnings.extend(_thread_exchange_warnings())
