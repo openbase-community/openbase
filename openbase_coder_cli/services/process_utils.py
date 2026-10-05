@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 import signal
 import sys
+import time
+from collections.abc import Callable
 
 import psutil
 
@@ -85,3 +87,35 @@ def terminate(pid: int, *, force: bool = False) -> None:
         os.kill(pid, _SIGKILL if force else _SIGTERM)
     except ProcessLookupError:
         return
+
+
+def process_tree_pids(pid: int) -> set[int]:
+    """``pid`` plus every live descendant; empty when ``pid`` is gone."""
+    try:
+        proc = psutil.Process(pid)
+        return {pid, *(child.pid for child in proc.children(recursive=True))}
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return set()
+
+
+def wait_for_pid_change(
+    read_pid: Callable[[], int | None],
+    old_pid: int | None,
+    *,
+    timeout: float,
+    interval: float = 0.25,
+) -> int | None:
+    """Poll ``read_pid`` until it differs from ``old_pid`` or ``timeout`` passes.
+
+    Returns the last pid observed (``old_pid`` itself when nothing changed in
+    time). Used to wait for a supervised process to exit, and to be
+    respawned, without racing its supervisor.
+    """
+    deadline = time.monotonic() + timeout
+    pid = old_pid
+    while time.monotonic() < deadline:
+        pid = read_pid()
+        if pid != old_pid:
+            return pid
+        time.sleep(interval)
+    return pid

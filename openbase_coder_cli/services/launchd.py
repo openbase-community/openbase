@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import platform
+import plistlib
 import shlex
 import shutil
 import subprocess
@@ -270,8 +271,11 @@ def _cleanup_candidate_pids(svc: ServiceDefinition) -> set[int]:
     return candidates
 
 
-def _cleanup_lingering_processes(svc: ServiceDefinition) -> None:
-    lingering_pids = _cleanup_candidate_pids(svc)
+def _cleanup_lingering_processes(
+    svc: ServiceDefinition, keep: frozenset[int] = frozenset()
+) -> None:
+    """Kill leftover listeners on the service's ports, sparing ``keep`` pids."""
+    lingering_pids = _cleanup_candidate_pids(svc) - keep
 
     if not lingering_pids:
         return
@@ -281,7 +285,7 @@ def _cleanup_lingering_processes(svc: ServiceDefinition) -> None:
 
     time.sleep(1)
 
-    stubborn_pids = _cleanup_candidate_pids(svc)
+    stubborn_pids = _cleanup_candidate_pids(svc) - keep
 
     for pid in stubborn_pids:
         process_utils.terminate(pid, force=True)
@@ -326,22 +330,32 @@ def _write_service_files(
     svc: ServiceDefinition,
     config: InstallationConfig,
     binaries: dict[str, str],
-) -> None:
+) -> bool:
+    """Generate the service's wrapper and unit files.
+
+    Returns True when the job must be re-registered for the change to take
+    effect: on macOS only a changed plist (launchd execs the wrapper fresh on
+    every start, so wrapper edits are picked up by an in-place restart); always
+    on Windows/Linux, where re-registration is harmless.
+    """
     if not _is_macos() and _is_windows():
         # Windows has no shell, so it skips the bash wrapper entirely —
         # Task Scheduler execs python -m ...runners directly.
         from openbase_coder_cli.services.windows import generate_task_xml
 
         generate_task_xml(svc, config, binaries["python"])
-        return
+        return True
 
-    generate_wrapper(svc, config, binaries)
+    _write_if_changed(
+        _wrapper_path(svc), render_wrapper(svc, config, binaries), mode=0o755
+    )
     if _is_macos():
-        generate_plist(svc, config)
-    else:
-        from openbase_coder_cli.services.systemd import generate_unit
+        return _write_if_changed(_plist_path(svc), render_plist(svc, config))
 
-        generate_unit(svc, config)
+    from openbase_coder_cli.services.systemd import generate_unit
+
+    generate_unit(svc, config)
+    return True
 
 
 def _prepare_service_start(svc: ServiceDefinition) -> None:
@@ -349,11 +363,11 @@ def _prepare_service_start(svc: ServiceDefinition) -> None:
     _cleanup_lingering_processes(svc)
 
 
-def generate_wrapper(
+def render_wrapper(
     svc: ServiceDefinition,
     config: InstallationConfig,
     binaries: dict[str, str],
-) -> Path:
+) -> str:
     # In standalone mode there is no workspace checkout; fall back so
     # workdirs never render as an empty string.
     workspace = config.workspace_path or _runtime_workdir(config)
@@ -371,10 +385,7 @@ def generate_wrapper(
         workspace=workspace, data_dir=data_dir, **binaries
     )
 
-    wrapper = _wrapper_path(svc)
-    wrapper.parent.mkdir(parents=True, exist_ok=True)
-    wrapper.write_text(
-        textwrap.dedent(f"""\
+    return textwrap.dedent(f"""\
         #!/bin/bash
         # Auto-generated wrapper for {svc.name}
 
@@ -390,12 +401,54 @@ def generate_wrapper(
 
         {cmd}
     """)
-    )
-    wrapper.chmod(0o755)
+
+
+def generate_wrapper(
+    svc: ServiceDefinition,
+    config: InstallationConfig,
+    binaries: dict[str, str],
+) -> Path:
+    wrapper = _wrapper_path(svc)
+    _write_if_changed(wrapper, render_wrapper(svc, config, binaries), mode=0o755)
     return wrapper
 
 
-def generate_plist(svc: ServiceDefinition, config: InstallationConfig) -> Path:
+DESKTOP_APP_BUNDLE_ID = "tech.openbase.coder.desktop"
+_DESKTOP_APP_NAMES = ("Openbase.app", "Openbase Coder.app")
+_SYSTEM_APPLICATIONS_DIR = Path("/Applications")
+
+
+def _installed_desktop_bundle_id() -> str | None:
+    """Bundle id of an installed Openbase desktop app, or None when absent.
+
+    Dev builds carry their own bundle id, so read it from the bundle rather
+    than assuming the release id.
+    """
+    roots = (_SYSTEM_APPLICATIONS_DIR, Path.home() / "Applications")
+    for root in roots:
+        for name in _DESKTOP_APP_NAMES:
+            info = root / name / "Contents" / "Info.plist"
+            if not info.is_file():
+                continue
+            try:
+                bundle_id = plistlib.loads(info.read_bytes()).get("CFBundleIdentifier")
+            except (OSError, plistlib.InvalidFileException, ValueError):
+                continue
+            if isinstance(bundle_id, str) and bundle_id:
+                return bundle_id
+    return None
+
+
+def _associated_bundle_id(config: InstallationConfig) -> str | None:
+    installed = _installed_desktop_bundle_id()
+    if installed:
+        return installed
+    if config.standalone:
+        return DESKTOP_APP_BUNDLE_ID
+    return None
+
+
+def render_plist(svc: ServiceDefinition, config: InstallationConfig) -> str:
     label = _service_label(svc)
     wrapper = _wrapper_path(svc)
     workdir = svc.workdir_template.format(
@@ -405,22 +458,20 @@ def generate_plist(svc: ServiceDefinition, config: InstallationConfig) -> Path:
     )
     log_dir = DEFAULT_LOG_DIR
     associated_bundle = ""
-    if config.standalone:
-        # Legacy LaunchAgents installed by the signed desktop app otherwise
-        # appear as generic `bash` background items in notifications and
-        # System Settings. Associate them with the owning app so macOS can
-        # present a trustworthy Openbase identity.
-        associated_bundle = textwrap.dedent("""\
+    bundle_id = _associated_bundle_id(config)
+    if bundle_id:
+        # Legacy LaunchAgents otherwise appear as anonymous `<name>.sh` items
+        # from an unknown developer in macOS background-item notifications and
+        # System Settings. Associate them with the installed desktop app so
+        # macOS presents them under the Openbase identity and groups them.
+        associated_bundle = textwrap.dedent(f"""\
             <key>AssociatedBundleIdentifiers</key>
             <array>
-                <string>tech.openbase.coder.desktop</string>
+                <string>{bundle_id}</string>
             </array>
         """)
 
-    plist = _plist_path(svc)
-    plist.parent.mkdir(parents=True, exist_ok=True)
-    plist.write_text(
-        textwrap.dedent(f"""\
+    return textwrap.dedent(f"""\
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         <plist version="1.0">
@@ -447,8 +498,34 @@ def generate_plist(svc: ServiceDefinition, config: InstallationConfig) -> Path:
         </dict>
         </plist>
     """)
-    )
+
+
+def generate_plist(svc: ServiceDefinition, config: InstallationConfig) -> Path:
+    plist = _plist_path(svc)
+    _write_if_changed(plist, render_plist(svc, config))
     return plist
+
+
+def _write_if_changed(path: Path, text: str, mode: int | None = None) -> bool:
+    """Write ``text`` to ``path`` only when its content differs.
+
+    Returns True when the file was created or rewritten. Leaving an unchanged
+    file untouched matters on macOS: Background Task Management treats a
+    modified LaunchAgent plist as a new background item and notifies the
+    user ("Background Items Added") every time.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        changed = path.read_text() != text
+    except (OSError, UnicodeDecodeError):
+        changed = True
+    if changed:
+        path.write_text(text)
+    if mode is not None and (
+        not path.exists() or (path.stat().st_mode & 0o777) != mode
+    ):
+        path.chmod(mode)
+    return changed
 
 
 def _launchctl(*args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -524,6 +601,61 @@ def launchctl_kickstart(svc: ServiceDefinition) -> bool:
     _prepare_service_start(svc)
     result = _launchctl("kickstart", "-k", f"gui/{_uid()}/{label}", check=False)
     return result.returncode == 0
+
+
+# How long an in-place restart waits for the old process to exit on SIGTERM
+# before falling back to launchd's forced kickstart.
+RESTART_EXIT_TIMEOUT_SECONDS = 15.0
+
+
+def _job_pid(svc: ServiceDefinition) -> int | None:
+    pid = launchctl_status(svc).get("pid")
+    try:
+        return int(pid) if pid else None
+    except (TypeError, ValueError):
+        return None
+
+
+def launchctl_restart(svc: ServiceDefinition) -> bool:
+    """Restart an already-loaded launchd job without unloading it.
+
+    Bootout + bootstrap re-registers the job with Background Task Management,
+    which makes macOS post a "Background Items Added" notification on every
+    restart. Keeping the job loaded and only replacing its process avoids
+    that: SIGTERM the running instance (launchd's KeepAlive respawns it), wait
+    for the old pid to go away, and kickstart in case the job is a one-shot
+    or still throttled.
+
+    Returns False when the job is not loaded (the caller must bootstrap) or
+    on a non-macOS platform (where re-registration is harmless).
+    """
+    if not _is_macos():
+        return False
+
+    status = launchctl_status(svc)
+    if not status.get("installed"):
+        return False
+
+    label = _service_label(svc)
+    target = f"gui/{_uid()}/{label}"
+    _truncate_existing_logs(svc)
+
+    old_pid = _job_pid(svc)
+    if old_pid is not None:
+        _launchctl("kill", "SIGTERM", target, check=False)
+        pid = process_utils.wait_for_pid_change(
+            lambda: _job_pid(svc), old_pid, timeout=RESTART_EXIT_TIMEOUT_SECONDS
+        )
+        if pid == old_pid:
+            # The process ignored SIGTERM; let launchd kill and relaunch it.
+            _launchctl("kickstart", "-k", target, check=False)
+
+    new_pid = _job_pid(svc)
+    keep = process_utils.process_tree_pids(new_pid) if new_pid else set()
+    _cleanup_lingering_processes(svc, keep=frozenset(keep))
+    # No-op when launchd already respawned the job; starts it otherwise.
+    _launchctl("kickstart", target, check=False)
+    return True
 
 
 def launchctl_kill(svc: ServiceDefinition) -> bool:
@@ -630,9 +762,9 @@ def install_all_services(config: InstallationConfig) -> None:
 
     for svc in services:
         click.echo(f"  Installing {svc.name}...")
-        _write_service_files(svc, config, binaries)
-        launchctl_bootstrap(svc)
-        click.echo(f"    Loaded {_service_label(svc)}")
+        reload_required = _write_service_files(svc, config, binaries)
+        verb = _activate_service(svc, reload_required)
+        click.echo(f"    {verb} {_service_label(svc)}")
 
     click.echo()
     click.echo("All services installed and started.")
@@ -655,11 +787,26 @@ def remove_service(svc: ServiceDefinition) -> bool:
     return existed
 
 
+def _activate_service(svc: ServiceDefinition, reload_required: bool) -> str:
+    """Start or restart ``svc`` after its files were (re)generated.
+
+    A loaded job whose plist did not change is restarted in place, so routine
+    restarts never re-register the background item with macOS. Only a changed
+    plist (or an unloaded job) goes through bootout + bootstrap, since that is
+    the only way launchd re-reads the plist. Returns the verb for user output.
+    """
+    if not reload_required and launchctl_restart(svc):
+        return "Restarted"
+    launchctl_bootstrap(svc)
+    return "Loaded"
+
+
 def install_service(config: InstallationConfig, svc: ServiceDefinition) -> None:
+    """Install ``svc`` if needed and (re)start it."""
     _ensure_launchd_paths()
     binaries = _resolve_binaries(config, [svc])
-    _write_service_files(svc, config, binaries)
-    launchctl_bootstrap(svc)
+    reload_required = _write_service_files(svc, config, binaries)
+    _activate_service(svc, reload_required)
 
 
 def regenerate_service(config: InstallationConfig, svc: ServiceDefinition) -> None:
