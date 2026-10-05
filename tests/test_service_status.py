@@ -36,7 +36,9 @@ def _mock_codex_daemon_probes(monkeypatch):
     from openbase_coder_cli import codex_control_plane
 
     monkeypatch.setattr(codex_control_plane, "shared_codex_daemon_ready", lambda: False)
-    monkeypatch.setattr(codex_control_plane, "codex_app_server_ready", lambda _endpoint: True)
+    monkeypatch.setattr(
+        codex_control_plane, "codex_app_server_ready", lambda _endpoint: True
+    )
 
 
 def test_service_status_caches_tailnet_probe_across_polls(monkeypatch) -> None:
@@ -527,3 +529,53 @@ def test_thread_device_sync_conflict_resolve_reports_claude_errors(
 
     assert response.status_code == 400
     assert response.data["error"] == "conflict_not_found"
+
+
+def test_service_status_probes_the_configured_api_port(monkeypatch) -> None:
+    """A container workspace serves on OPENBASE_CODER_CLI_PORT, not 7999."""
+    monkeypatch.setenv("OPENBASE_CODER_CLI_PORT", "18789")
+    monkeypatch.delenv("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", raising=False)
+    monkeypatch.setattr(
+        services_views, "service_supports_configured_backends", lambda service: False
+    )
+    probed: list[int] = []
+
+    def fake_check_port(port: int) -> bool:
+        probed.append(port)
+        return port == 18789
+
+    monkeypatch.setattr(services_views, "_check_port", fake_check_port)
+    monkeypatch.setattr(services_views, "_check_web_backend", lambda: True)
+    monkeypatch.setattr(services_views, "_check_codex_app_server", lambda: True)
+    monkeypatch.setattr(
+        services_views,
+        "keep_awake_status_payload",
+        lambda: {"name": "Keep Awake", "port": None, "running": True, "optional": True},
+    )
+    monkeypatch.setattr(
+        services_views,
+        "tailscale_serve_status",
+        lambda: SimpleNamespace(
+            tailscale_running=True,
+            host="devspace.net.example",
+            openbase_url="http://devspace.net.example:18080",
+            openbase_configured=True,
+            livekit_configured=True,
+        ),
+    )
+    monkeypatch.setattr(
+        services_views,
+        "launchctl_status",
+        lambda service: {"installed": True, "pid": "1", "last_exit_code": None},
+    )
+
+    request = APIRequestFactory().get("/api/status/")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+
+    response = views.service_status(request)
+
+    assert response.status_code == 200
+    django = response.data["services"]["django"]
+    assert django["port"] == 18789
+    assert django["running"] is True
+    assert 7999 not in probed
