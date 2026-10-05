@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import socket
 import threading
 import time
@@ -439,7 +440,14 @@ def service_status(request):
 
     _tailnet_label = tailnet_provider_name()
     services = {
-        "django": {"name": "Django (Coder CLI)", "port": 7999, "optional": False},
+        # The API port is 7999 on desktops; container workspaces bind the
+        # port their runtime hands them (OPENBASE_CODER_CLI_PORT), and probing
+        # 7999 there reported this very server as stopped.
+        "django": {
+            "name": "Django (Coder CLI)",
+            "port": int(os.environ.get("OPENBASE_CODER_CLI_PORT", "7999")),
+            "optional": False,
+        },
         "codex_app_server": {
             "name": "Codex App Server",
             "port": None,
