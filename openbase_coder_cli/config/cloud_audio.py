@@ -6,6 +6,7 @@ from collections.abc import Iterable
 
 import httpx
 
+from openbase_coder_cli.config.machine_token_manager import MachineTokenManager
 from openbase_coder_cli.config.token_manager import (
     DEFAULT_WEB_BACKEND_URL,
     AuthLoginRequiredError,
@@ -100,6 +101,23 @@ def _audio_usage_summary(
     )
 
 
+def _workspace_cloud_token(web_backend_url: str) -> str:
+    """Bearer token this installation uses for Cloud account checks.
+
+    Desktop installs hold a user login. Container workspaces (Maritime) never
+    do: bootstrap leaves them only the scoped machine token, which Cloud
+    accepts for the audio usage check. Fall back to that cached token rather
+    than reporting "login required" for a workspace that cannot log in.
+    """
+    try:
+        return get_token_manager(web_backend_url).get_access_token()
+    except AuthLoginRequiredError:
+        machine_tokens = MachineTokenManager(web_backend_url)
+        if not machine_tokens.has_cached_token():
+            raise
+        return machine_tokens.get_machine_token()
+
+
 def _cloud_user_profile(web_backend_url: str, *, access_token: str | None) -> dict:
     return _cloud_json_get(web_backend_url, "/api/users/me/", access_token=access_token)
 
@@ -111,13 +129,7 @@ def _cloud_json_get(
     access_token: str | None = None,
 ) -> dict:
     if access_token is None:
-        token_manager = get_token_manager(web_backend_url)
-        try:
-            access_token = token_manager.get_access_token()
-        except AuthLoginRequiredError:
-            raise
-        except AuthTransientError:
-            raise
+        access_token = _workspace_cloud_token(web_backend_url)
 
     try:
         response = httpx.get(
