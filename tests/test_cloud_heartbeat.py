@@ -180,3 +180,54 @@ def test_rehydrate_auth_stores_tokens_and_registers(monkeypatch, tmp_path):
         )
     ]
     assert "Cloud auth rehydrated." in result.output
+
+
+def test_agent_runs_active_honours_combined_active_flag(monkeypatch):
+    _patch_activity_response(
+        monkeypatch,
+        lambda url, **kwargs: httpx.Response(
+            200,
+            json={"active_run_count": 0, "active_call_count": 1, "active": True},
+        ),
+    )
+    assert cloud_cli._agent_runs_active("http://127.0.0.1:7999", FakeTokenManager())
+
+
+def test_agent_runs_active_uses_local_api_token_without_login(monkeypatch):
+    seen = {}
+
+    def fake_get(url, **kwargs):
+        request = httpx.Request("GET", url)
+        flow = kwargs["auth"].auth_flow(request)
+        request = next(flow)
+        seen["authorization"] = request.headers.get("Authorization")
+        return httpx.Response(200, json={"active": True})
+
+    monkeypatch.setattr(cloud_cli.httpx, "get", fake_get)
+    monkeypatch.setattr(
+        "openbase_coder_cli.config.local_api_token.get_local_api_token",
+        lambda: "local-capability-token",
+    )
+    assert cloud_cli._agent_runs_active(
+        "http://127.0.0.1:7999", LoginRequiredTokenManager()
+    )
+    assert seen["authorization"] == "Bearer local-capability-token"
+
+
+def test_cloud_bearer_token_falls_back_to_machine_token(monkeypatch):
+    class FakeMachineTokens:
+        def __init__(self, url):
+            self.url = url
+
+        def has_cached_token(self):
+            return True
+
+        def get_machine_token(self):
+            return "machine.token"
+
+    monkeypatch.setattr(
+        "openbase_coder_cli.config.machine_token_manager.MachineTokenManager",
+        FakeMachineTokens,
+    )
+    manager = LoginRequiredTokenManager("https://cloud.example")
+    assert cloud_cli._cloud_bearer_token(manager) == "machine.token"
