@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from openbase_coder_cli.backend_config import (
@@ -85,7 +86,9 @@ SERVICES: list[ServiceDefinition] = [
         description="LiveKit Agent Worker",
         command_template="livekit-agent",
         workdir_template="{runtime_workdir}",
-        cleanup_ports=(8081,),
+        # The worker's health server port follows LIVEKIT_AGENT_PORT (container
+        # runtimes move it off 8081, which Maritime's own VM services hold).
+        cleanup_ports=(int(os.environ.get("LIVEKIT_AGENT_PORT", "8081")),),
         cleanup_command_substrings=("openbase_coder_cli.livekit_agent.livekit",),
     ),
     ServiceDefinition(

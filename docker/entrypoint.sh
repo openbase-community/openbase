@@ -82,6 +82,10 @@ if [ "${OPENBASE_CODER_RUNTIME:-}" = "maritime" ]; then
     # tunneld) is the only mode that works there. Default to it so a missing
     # env value can never silently boot the tailscale path.
     NETWORK_MODE="${OPENBASE_CODER_NETWORK_MODE:-netmesh}"
+    # Maritime's VM init keeps its exec/command servers on 8081/8082, the
+    # LiveKit worker's default health port; Cloud passes the port explicitly,
+    # and this default covers a hand-launched workspace.
+    export LIVEKIT_AGENT_PORT="${LIVEKIT_AGENT_PORT:-18081}"
     # The privilege drop at the top of this script already re-executed us as
     # the image user; nothing past this point may run as root.
     if [ "$(id -u)" = "0" ]; then
