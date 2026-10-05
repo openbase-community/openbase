@@ -1736,3 +1736,36 @@ async def test_dropped_utterance_not_recovered_when_framework_kept_it(monkeypatc
     )
     await asyncio.sleep(0.3)
     assert session.generated == []
+
+
+def test_decode_audio_file_yields_uniform_frames_at_requested_rate(tmp_path):
+    import wave
+
+    from openbase_coder_cli.livekit_agent import speech_queue
+
+    path = tmp_path / "tone.wav"
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(48000)
+        handle.writeframes(b"\x01\x00" * 48000)  # one second at 48 kHz
+
+    frames = speech_queue._decode_audio_file(path, sample_rate=24000)
+    assert frames, "expected decoded frames"
+    assert {frame.sample_rate for frame in frames} == {24000}
+    assert {frame.num_channels for frame in frames} == {1}
+    assert {frame.samples_per_channel for frame in frames} == {480}  # 20 ms
+    total = sum(frame.samples_per_channel for frame in frames) / 24000
+    # Without the plane trim this came out around 1.24 s: PyAV pads every
+    # plane past frame.samples, and the padding used to be played as audio.
+    assert 0.99 <= total <= 1.03
+
+
+def test_pcm_to_frames_pads_the_tail():
+    from openbase_coder_cli.livekit_agent import speech_queue
+
+    frames = speech_queue._pcm_to_frames(
+        b"\x01\x00" * 700, sample_rate=24000, frame_ms=20
+    )
+    assert [frame.samples_per_channel for frame in frames] == [480, 480]
+    assert bytes(frames[1].data)[-4:] == b"\x00\x00\x00\x00"
