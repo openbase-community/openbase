@@ -156,6 +156,21 @@ def ctl_binary_candidates() -> list[Path]:
     return [OPENBASE_BIN_DIR / SYNC_CTL_BINARY_NAME]
 
 
+def resolve_socket_path(configured: Path) -> Path:
+    """The socket to dial for a configured path.
+
+    macOS limits AF_UNIX paths to 104 bytes, so when the configured path is too
+    long the daemon binds a short ``/tmp`` socket and writes its location into
+    ``<configured>.path``; clients follow that pointer when present.
+    """
+    pointer = configured.with_name(configured.name + ".path")
+    try:
+        actual = pointer.read_text(encoding="utf-8").strip()
+    except OSError:
+        return configured
+    return Path(actual) if actual else configured
+
+
 class SyncDaemonClient:
     """JSON-lines client for the daemon's unix control socket."""
 
@@ -170,7 +185,7 @@ class SyncDaemonClient:
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
                 conn.settimeout(self.timeout)
-                conn.connect(str(self.socket_path))
+                conn.connect(str(resolve_socket_path(self.socket_path)))
                 conn.sendall((json.dumps(request) + "\n").encode("utf-8"))
                 buf = b""
                 while not buf.endswith(b"\n"):

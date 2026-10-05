@@ -205,6 +205,13 @@ def test_api_proxies(fake_daemon):
     assert resp.data == {"requested": 1}
 
 
+def test_client_follows_socket_pointer(fake_daemon, tmp_path):
+    configured = tmp_path / "deep" / "syncd.sock"
+    configured.parent.mkdir()
+    (tmp_path / "deep" / "syncd.sock.path").write_text(str(fake_daemon.path) + "\n")
+    assert sync_daemon.SyncDaemonClient(configured).status()["device"] == "laptop"
+
+
 def test_api_unavailable_when_daemon_down(monkeypatch):
     monkeypatch.setattr(
         sync_daemon, "SYNC_DAEMON_SOCKET_PATH", Path("/tmp/obs-missing.sock")
