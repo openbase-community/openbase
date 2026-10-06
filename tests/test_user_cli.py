@@ -979,34 +979,3 @@ def test_default_voice_model_rejects_unknown_model(monkeypatch, tmp_path):
     assert "Voice model must be one of: gpt-live-1, pipeline." in result.output
     assert not config_path.exists()
 
-
-def test_default_live_voice_provider_shows_and_sets(monkeypatch, tmp_path):
-    config_path = tmp_path / "dispatcher-config.json"
-    monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
-    monkeypatch.delenv("LIVEKIT_LIVE_VOICE_PROVIDER", raising=False)
-
-    result = CliRunner().invoke(defaults_cli.defaults, ["live-voice-provider"])
-    assert result.exit_code == 0, result.output
-    assert "GPT-Live provider: openbase_cloud" in result.output
-    assert "* openbase_cloud" in result.output
-    assert "Openbase Cloud (default)" in result.output
-
-    result = CliRunner().invoke(defaults_cli.defaults, ["live-voice-provider", "openai"])
-    assert result.exit_code == 0, result.output
-    assert "GPT-Live provider set to openai." in result.output
-    assert "OPENAI_API_KEY" in result.output
-    assert (
-        json.loads(config_path.read_text(encoding="utf-8"))["live_voice_provider"]
-        == "openai"
-    )
-
-
-def test_default_live_voice_provider_rejects_unknown(monkeypatch, tmp_path):
-    config_path = tmp_path / "dispatcher-config.json"
-    monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
-
-    result = CliRunner().invoke(defaults_cli.defaults, ["live-voice-provider", "gemini"])
-
-    assert result.exit_code != 0
-    assert "Live voice provider must be one of: openbase_cloud, openai." in result.output
-    assert not config_path.exists()

@@ -6,15 +6,12 @@ import pytest
 
 from openbase_coder_cli import dispatcher_config
 from openbase_coder_cli.voice_models import (
-    DEFAULT_LIVE_VOICE_PROVIDER_ID,
     DEFAULT_VOICE_MODEL_ID,
     GPT_LIVE_VOICE_MODEL_ID,
-    LIVE_VOICE_PROVIDER_ENV_KEY,
     PIPELINE_VOICE_MODEL_ID,
     VOICE_ENGINE_LIVE,
     VOICE_ENGINE_PIPELINE,
     VOICE_MODEL_ENV_KEY,
-    normalize_live_voice_provider_id,
     normalize_voice_model_id,
     voice_engine_for_model,
     voice_model_options_payload,
@@ -51,14 +48,6 @@ def test_pipeline_model_maps_to_pipeline_engine():
     assert voice_engine_for_model(PIPELINE_VOICE_MODEL_ID) == VOICE_ENGINE_PIPELINE
 
 
-def test_live_voice_provider_normalization():
-    assert normalize_live_voice_provider_id(None) == DEFAULT_LIVE_VOICE_PROVIDER_ID
-    assert normalize_live_voice_provider_id("cloud") == "openbase_cloud"
-    assert normalize_live_voice_provider_id("openai") == "openai"
-    with pytest.raises(ValueError):
-        normalize_live_voice_provider_id("gemini")
-
-
 def test_dispatcher_config_voice_model_round_trip(tmp_path, monkeypatch):
     monkeypatch.delenv(VOICE_MODEL_ENV_KEY, raising=False)
     config_path = tmp_path / "dispatcher-config.json"
@@ -85,14 +74,3 @@ def test_dispatcher_config_voice_model_env_override_and_bad_value(tmp_path, monk
     config_path.write_text(json.dumps({dispatcher_config.VOICE_MODEL_KEY: "bogus"}))
     assert dispatcher_config.selected_voice_model_id(config_path) == DEFAULT_VOICE_MODEL_ID
 
-
-def test_dispatcher_config_live_voice_provider_round_trip(tmp_path, monkeypatch):
-    monkeypatch.delenv(LIVE_VOICE_PROVIDER_ENV_KEY, raising=False)
-    config_path = tmp_path / "dispatcher-config.json"
-    assert dispatcher_config.selected_live_voice_provider_id(config_path) == "openbase_cloud"
-    assert dispatcher_config.set_live_voice_provider("openai", config_path) == {
-        "provider": "openai"
-    }
-    assert dispatcher_config.selected_live_voice_provider_id(config_path) == "openai"
-    monkeypatch.setenv(LIVE_VOICE_PROVIDER_ENV_KEY, "openai")
-    assert dispatcher_config.selected_live_voice_provider_id(tmp_path / "none.json") == "openai"

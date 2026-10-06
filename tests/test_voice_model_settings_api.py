@@ -19,7 +19,6 @@ from openbase_coder_cli import dispatcher_config  # noqa: E402
 from openbase_coder_cli.openbase_coder_cli_app import voice_model_settings  # noqa: E402
 from openbase_coder_cli.voice_models import (  # noqa: E402
     GPT_LIVE_VOICE_MODEL_ID,
-    LIVE_VOICE_PROVIDER_ENV_KEY,
     PIPELINE_VOICE_MODEL_ID,
     VOICE_MODEL_ENV_KEY,
 )
@@ -30,7 +29,6 @@ def _isolated_voice_config(monkeypatch, tmp_path: Path) -> Path:
     config_path = tmp_path / "dispatcher-config.json"
     monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
     monkeypatch.delenv(VOICE_MODEL_ENV_KEY, raising=False)
-    monkeypatch.delenv(LIVE_VOICE_PROVIDER_ENV_KEY, raising=False)
     return config_path
 
 
@@ -67,13 +65,15 @@ def test_voice_model_settings_defaults_to_gpt_live(
     assert response.data["engine"] == "live"
     assert response.data["default"] == GPT_LIVE_VOICE_MODEL_ID
     assert response.data["pipeline_settings_relevant"] is False
-    assert response.data["live_voice_provider"] == "openbase_cloud"
     assert response.data["changed"] is False
     assert response.data["restart_required"] is False
     assert response.data["applies_hint"] == (
         "The new voice model applies to the next voice call."
     )
     assert response.data["config_path"] == str(_isolated_voice_config)
+    # GPT-Live always runs through Openbase Cloud: there is no provider choice.
+    assert "live_voice_provider" not in response.data
+    assert "live_voice_provider_options" not in response.data
 
     options = response.data["options"]
     assert [option["id"] for option in options] == [
@@ -83,16 +83,13 @@ def test_voice_model_settings_defaults_to_gpt_live(
     assert [option["is_default"] for option in options] == [True, False]
     assert {option["engine"] for option in options} == {"live", "pipeline"}
     assert all({"id", "label", "description"} <= option.keys() for option in options)
-
-    provider_options = response.data["live_voice_provider_options"]
-    assert [option["id"] for option in provider_options] == ["openbase_cloud", "openai"]
-    assert provider_options[0]["is_default"] is True
+    assert "Openbase Cloud" in options[0]["description"]
+    assert "key" not in options[0]["description"].lower()
 
 
 def test_voice_model_settings_reads_config(_isolated_voice_config: Path) -> None:
     _isolated_voice_config.write_text(
-        json.dumps({"voice_model": "pipeline", "live_voice_provider": "openai"}),
-        encoding="utf-8",
+        json.dumps({"voice_model": "pipeline"}), encoding="utf-8"
     )
 
     response = _get()
@@ -101,7 +98,6 @@ def test_voice_model_settings_reads_config(_isolated_voice_config: Path) -> None
     assert response.data["model"] == PIPELINE_VOICE_MODEL_ID
     assert response.data["engine"] == "pipeline"
     assert response.data["pipeline_settings_relevant"] is True
-    assert response.data["live_voice_provider"] == "openai"
 
 
 def test_voice_model_settings_persists_model(_isolated_voice_config: Path) -> None:
@@ -115,37 +111,18 @@ def test_voice_model_settings_persists_model(_isolated_voice_config: Path) -> No
     assert response.data["restart_required"] is False
     payload = json.loads(_isolated_voice_config.read_text(encoding="utf-8"))
     assert payload["voice_model"] == PIPELINE_VOICE_MODEL_ID
-    # The GPT-Live provider is untouched by a model-only update.
-    assert "live_voice_provider" not in payload
 
 
-def test_voice_model_settings_persists_live_voice_provider(
+def test_voice_model_settings_reports_unchanged_for_same_model(
     _isolated_voice_config: Path,
 ) -> None:
-    response = _put({"live_voice_provider": "openai"})
-
-    assert response.status_code == 200
-    assert response.data["live_voice_provider"] == "openai"
-    assert response.data["model"] == GPT_LIVE_VOICE_MODEL_ID
-    assert response.data["changed"] is True
-    payload = json.loads(_isolated_voice_config.read_text(encoding="utf-8"))
-    assert payload["live_voice_provider"] == "openai"
-    assert "voice_model" not in payload
-
-
-def test_voice_model_settings_persists_both_and_reports_unchanged(
-    _isolated_voice_config: Path,
-) -> None:
-    response = _put({"model": "gpt-live-1", "live_voice_provider": "cloud"})
+    response = _put({"model": "gpt-live-1"})
 
     assert response.status_code == 200
     assert response.data["model"] == GPT_LIVE_VOICE_MODEL_ID
-    assert response.data["live_voice_provider"] == "openbase_cloud"
-    # Same effective values as the defaults: nothing changed for the caller.
     assert response.data["changed"] is False
     payload = json.loads(_isolated_voice_config.read_text(encoding="utf-8"))
     assert payload["voice_model"] == GPT_LIVE_VOICE_MODEL_ID
-    assert payload["live_voice_provider"] == "openbase_cloud"
 
 
 def test_voice_model_settings_rejects_unknown_model(
@@ -154,24 +131,15 @@ def test_voice_model_settings_rejects_unknown_model(
     response = _put({"model": "gemini-3.8-live"})
 
     assert response.status_code == 400
-    assert "Voice model must be one of: gpt-live-1, pipeline." == response.data["error"]
+    assert response.data["error"] == "Voice model must be one of: gpt-live-1, pipeline."
     assert not _isolated_voice_config.exists()
 
 
-def test_voice_model_settings_rejects_unknown_provider_without_writing_model(
-    _isolated_voice_config: Path,
-) -> None:
-    response = _put({"model": "pipeline", "live_voice_provider": "gemini"})
-
-    assert response.status_code == 400
-    assert "Live voice provider must be one of" in response.data["error"]
-    assert not _isolated_voice_config.exists()
-
-
-def test_voice_model_settings_rejects_empty_update(
+def test_voice_model_settings_rejects_missing_model(
     _isolated_voice_config: Path,
 ) -> None:
     response = _put({})
 
     assert response.status_code == 400
+    assert "model" in response.data
     assert not _isolated_voice_config.exists()

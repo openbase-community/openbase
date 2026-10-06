@@ -121,31 +121,6 @@ def voice_model(model: str | None) -> None:
     click.echo("The new voice model applies to the next voice call.")
 
 
-@defaults.command("live-voice-provider")
-@click.argument("provider", required=False)
-def live_voice_provider(provider: str | None) -> None:
-    """Show or set where GPT-Live comes from (Openbase Cloud or your OpenAI key)."""
-    if provider is None:
-        current = dispatcher_config.selected_live_voice_provider_id()
-        click.echo(f"GPT-Live provider: {current}")
-        click.echo("Options:")
-        for option in voice_models.LIVE_VOICE_PROVIDER_OPTIONS:
-            marker = "*" if option.id == current else " "
-            suffix = " (default)" if option.is_default else ""
-            click.echo(f"  {marker} {option.id:<15} {option.label}{suffix}")
-            click.echo(f"      {option.description}")
-        return
-
-    try:
-        result = dispatcher_config.set_live_voice_provider(provider)
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
-    click.echo(f"GPT-Live provider set to {result['provider']}.")
-    if result["provider"] == voice_models.OPENAI_LIVE_VOICE_PROVIDER_ID:
-        click.echo("Set OPENAI_API_KEY in ~/.openbase/.env for calls to connect.")
-    click.echo("The change applies to the next voice call.")
-
-
 def _normalize_reasoning_effort(level: str) -> str:
     normalized = level.strip().lower()
     if normalized not in dispatcher_config.REASONING_EFFORTS:
