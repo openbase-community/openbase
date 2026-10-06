@@ -150,6 +150,9 @@ from openbase_coder_cli.openbase_coder_cli_app.views import (
     uv_tool_executable_help,
     uv_tools_list,
 )
+from openbase_coder_cli.openbase_coder_cli_app.voice_model_settings import (
+    voice_model_settings,
+)
 
 router = DefaultRouter()
 
@@ -474,6 +477,11 @@ urlpatterns = [
         "settings/backend-model/",
         backend_model_settings,
         name="backend-model-settings",
+    ),
+    path(
+        "settings/voice-model/",
+        voice_model_settings,
+        name="voice-model-settings",
     ),
     path(
         "settings/reasoning/",
