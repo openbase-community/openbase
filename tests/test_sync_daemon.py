@@ -332,3 +332,27 @@ def test_cli_install_binary_installs_all_three(monkeypatch, tmp_path):
         sync_daemon.SYNC_EDGE_BINARY_NAME,
     ):
         assert (bin_dir / name).exists() and (bin_dir / name).stat().st_mode & 0o111
+
+
+def test_root_id_is_path_derived(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    (tmp_path / "Projects" / "friendforce" / "data").mkdir(parents=True)
+    (tmp_path / "Projects" / "simula" / "data").mkdir(parents=True)
+    a = sync_daemon.root_id_for_path(tmp_path / "Projects" / "friendforce" / "data")
+    b = sync_daemon.root_id_for_path(tmp_path / "Projects" / "simula" / "data")
+    assert a == "projects-friendforce-data" and b == "projects-simula-data"
+    assert sync_daemon.root_id_for_path(tmp_path) == "home"
+
+
+def test_install_executable_replaces_via_new_inode(tmp_path):
+    src = tmp_path / "src"
+    src.write_bytes(b"#!/bin/sh\necho v2\n")
+    dest = tmp_path / "bin" / "tool"
+    dest.parent.mkdir()
+    dest.write_bytes(b"#!/bin/sh\necho v1\n")
+    before = dest.stat().st_ino
+    out = sync_daemon.install_executable(src, dest)
+    assert out == dest and dest.read_bytes().endswith(b"v2\n")
+    assert dest.stat().st_ino != before, "destination must be a new inode, not an in-place overwrite"
+    assert dest.stat().st_mode & 0o111
+    assert not (tmp_path / "bin" / "tool.new").exists()
