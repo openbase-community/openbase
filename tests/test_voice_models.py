@@ -73,4 +73,3 @@ def test_dispatcher_config_voice_model_env_override_and_bad_value(tmp_path, monk
     assert dispatcher_config.selected_voice_model_id(config_path) == PIPELINE_VOICE_MODEL_ID
     config_path.write_text(json.dumps({dispatcher_config.VOICE_MODEL_KEY: "bogus"}))
     assert dispatcher_config.selected_voice_model_id(config_path) == DEFAULT_VOICE_MODEL_ID
-

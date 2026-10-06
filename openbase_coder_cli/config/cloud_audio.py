@@ -202,13 +202,13 @@ def _required_cloud_audio_providers(
     stt_provider_id: str,
     live_voice: bool = False,
 ) -> set[str]:
+    if live_voice:
+        return {LIVE_VOICE_CLOUD_PROVIDER}
     providers: set[str] = set()
     if tts_provider_id == OPENBASE_CLOUD_TTS_PROVIDER_ID:
         providers.add("cartesia")
     if stt_provider_id == OPENBASE_CLOUD_STT_PROVIDER_ID:
         providers.add("assemblyai")
-    if live_voice:
-        providers.add(LIVE_VOICE_CLOUD_PROVIDER)
     return providers
 
 

@@ -261,6 +261,34 @@ def test_entitlement_passes_with_live_voice_credits(monkeypatch):
         )
 
 
+def test_live_voice_entitlement_ignores_pipeline_provider_balances(monkeypatch):
+    monkeypatch.setattr(
+        cloud_audio, "get_token_manager", lambda url: FakeTokenManager()
+    )
+    assert cloud_audio._required_cloud_audio_providers(
+        tts_provider_id="openbase_cloud",
+        stt_provider_id="openbase_cloud",
+        live_voice=True,
+    ) == {"live_voice"}
+    with mock.patch.object(
+        httpx,
+        "get",
+        return_value=_usage(
+            monthly_limit_cents=500,
+            cartesia_remaining_cents=0,
+            assemblyai_remaining_cents=0,
+            live_voice_limit_cents=200,
+            live_voice_remaining_cents=120,
+        ),
+    ):
+        cloud_audio.ensure_openbase_cloud_audio_subscription(
+            tts_provider_id="openbase_cloud",
+            stt_provider_id="openbase_cloud",
+            web_backend_url="https://backend.example",
+            live_voice=True,
+        )
+
+
 def test_entitlement_rejects_exhausted_live_voice_credits(monkeypatch):
     monkeypatch.setattr(
         cloud_audio, "get_token_manager", lambda url: FakeTokenManager()
