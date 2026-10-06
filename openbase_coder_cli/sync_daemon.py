@@ -44,6 +44,7 @@ class SyncDaemonConfig:
     debounce_ms: int = 15
     log_level: str = "info"
     low_water_mb: int = 10240
+    anchor: str = "hub"  # hub | edge: the side that holds every file in full
 
     def to_toml(self) -> str:
         def q(value: str) -> str:
@@ -65,7 +66,12 @@ class SyncDaemonConfig:
         else:
             lines.append(f"peer_hot = {q(self.peer_hot)}")
             lines.append(f"peer_bulk = {q(self.peer_bulk)}")
-        lines += ["", "[placement]", f"low_water_mb = {int(self.low_water_mb)}"]
+        lines += [
+            "",
+            "[placement]",
+            f"low_water_mb = {int(self.low_water_mb)}",
+            f"anchor = {q(self.anchor)}",
+        ]
         for root in self.roots:
             lines += [
                 "",

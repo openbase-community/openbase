@@ -41,6 +41,16 @@ def sync_daemon_cli() -> None:
     help="Never write below this much free disk (MB).",
 )
 @click.option(
+    "--anchor",
+    type=click.Choice(["hub", "edge"]),
+    default="hub",
+    show_default=True,
+    help=(
+        "Which side keeps every file in full. The other side keeps stubs for "
+        "large files until they are used. Choose edge when the hub has less disk."
+    ),
+)
+@click.option(
     "--start/--no-start",
     default=True,
     help="Install and start the service after writing config.",
@@ -53,6 +63,7 @@ def configure(
     pair_secret: str,
     group: str,
     low_water_mb: int,
+    anchor: str,
     start: bool,
 ) -> None:
     """Write the daemon config and (by default) install and start the service."""
@@ -83,16 +94,21 @@ def configure(
         peer_hot=f"{peer}:{sync_daemon.DEFAULT_HOT_PORT}",
         peer_bulk=f"{peer}:{sync_daemon.DEFAULT_BULK_PORT}",
         low_water_mb=low_water_mb,
+        anchor=anchor,
     )
     path = sync_daemon.write_config(config)
     click.echo(f"Wrote {path}")
     if role == "hub":
         click.echo(f"Pair secret (use on the edge): {secret}")
     if start:
+        from openbase_coder_cli.services.installation import InstallationConfig
         from openbase_coder_cli.services.launchd import install_service
         from openbase_coder_cli.services.registry import find_service
 
-        install_service(find_service(sync_daemon.SYNC_DAEMON_SERVICE_NAME))
+        install_service(
+            InstallationConfig.load(),
+            find_service(sync_daemon.SYNC_DAEMON_SERVICE_NAME),
+        )
         click.echo("Service sync-daemon installed and started.")
 
 

@@ -671,3 +671,25 @@ def test_auth_header_is_resolved_per_repo(tmp_path: Path, monkeypatch) -> None:
     assert summary["errors"] == []
     # One initial probe plus at least one resolution per repo.
     assert token_calls["count"] >= 3
+
+
+def test_discover_skips_directories_ignored_from_file_sync(tmp_path: Path) -> None:
+    """A subfolder handed to another sync mechanism via an anchored ignore is
+    left alone by the git reconciler too."""
+    from openbase_coder_cli.code_sync.repositories import anchored_ignore_relpaths
+
+    root = tmp_path / "folder"
+    _init_repo(root / "keep")
+    _init_repo(root / "pilot" / "repo")
+    _init_repo(root / "pilot-other")
+
+    assert anchored_ignore_relpaths(["/pilot", "(?d)/trash/x/", "*.log", "!/keep"]) == {
+        "pilot",
+        "trash/x",
+    }
+    repos, _, _ = reconciler.discover_repos_and_candidates(
+        root, extra_ignores=("/pilot",)
+    )
+    assert root / "keep" in repos
+    assert root / "pilot-other" in repos
+    assert all("pilot/repo" not in repo.as_posix() for repo in repos)

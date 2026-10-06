@@ -264,3 +264,48 @@ def test_cli_configure_writes_config_without_starting(monkeypatch, tmp_path):
         ["configure", "--role", "edge", "--root", str(tmp_path), "--no-start"],
     )
     assert result.exit_code != 0 and "--peer" in result.output
+
+
+def test_config_toml_includes_anchor():
+    cfg = sync_daemon.SyncDaemonConfig(
+        device_id="d", sync_group="g", role="hub", pair_secret="s", anchor="edge"
+    )
+    text = cfg.to_toml()
+    assert "[placement]" in text and 'anchor = "edge"' in text
+    assert 'anchor = "hub"' in sync_daemon.SyncDaemonConfig(
+        device_id="d", sync_group="g", role="hub", pair_secret="s"
+    ).to_toml()
+
+
+def test_cli_configure_start_installs_service_with_installation_config(
+    monkeypatch, tmp_path
+):
+    cfg = tmp_path / "config.toml"
+    monkeypatch.setattr(sync_daemon, "SYNC_DAEMON_CONFIG_PATH", cfg)
+    monkeypatch.setattr(sync_daemon, "default_device_id", lambda: "desktop-test")
+    calls: list[tuple] = []
+    from openbase_coder_cli.services import installation as config_mod
+    from openbase_coder_cli.services import launchd
+
+    monkeypatch.setattr(
+        config_mod.InstallationConfig, "load", classmethod(lambda cls: "CONFIG")
+    )
+    monkeypatch.setattr(launchd, "install_service", lambda c, svc: calls.append((c, svc.name)))
+    runner = CliRunner()
+    result = runner.invoke(
+        sync_daemon_cli,
+        [
+            "configure",
+            "--role",
+            "hub",
+            "--listen",
+            "100.64.0.15",
+            "--root",
+            str(tmp_path),
+            "--anchor",
+            "edge",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert calls == [("CONFIG", sync_daemon.SYNC_DAEMON_SERVICE_NAME)]
+    assert 'anchor = "edge"' in cfg.read_text()

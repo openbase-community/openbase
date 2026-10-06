@@ -116,13 +116,25 @@ def discover_repos_and_worktree_candidates(
 
 
 def discover_repos_and_candidates(
-    folder_root: Path, max_depth: int = MAX_REPO_DEPTH
+    folder_root: Path,
+    max_depth: int = MAX_REPO_DEPTH,
+    extra_ignores: tuple[str, ...] = (),
 ) -> tuple[list[Path], list[Path], list[Path]]:
-    """One walk yielding repos plus unattached worktree/repo directories."""
-    from openbase_coder_cli.code_sync.repositories import discover_sync_checkouts
+    """One walk yielding repos plus unattached worktree/repo directories.
+
+    Directories excluded from file sync by anchored ignore patterns are
+    excluded from git reconciliation as well.
+    """
+    from openbase_coder_cli.code_sync.repositories import (
+        anchored_ignore_relpaths,
+        discover_sync_checkouts,
+    )
 
     return discover_sync_checkouts(
-        folder_root, max_depth=max_depth, skip_dir_names=SKIP_DIR_NAMES
+        folder_root,
+        max_depth=max_depth,
+        skip_dir_names=SKIP_DIR_NAMES,
+        skip_relpaths=anchored_ignore_relpaths(extra_ignores),
     )
 
 
@@ -527,7 +539,7 @@ def run_reconcile_once(
                 f"{folder.folder_id}: file-conflict scan: {type(exc).__name__}: {exc}"
             )
         repos, worktree_candidates, repo_candidates = discover_repos_and_candidates(
-            folder_root
+            folder_root, extra_ignores=folder.extra_ignores
         )
         for candidate in worktree_candidates:
             rel = str(candidate.relative_to(folder_root))
