@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import subprocess
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -356,3 +357,44 @@ def test_install_executable_replaces_via_new_inode(tmp_path):
     assert dest.stat().st_ino != before, "destination must be a new inode, not an in-place overwrite"
     assert dest.stat().st_mode & 0o111
     assert not (tmp_path / "bin" / "tool.new").exists()
+
+
+def test_install_executable_codesigns_macho_on_darwin(monkeypatch, tmp_path):
+    calls = []
+    src = tmp_path / "src"
+    src.write_bytes(b"\xcf\xfa\xed\xfeopenbase-syncd")
+    dest = tmp_path / "bin" / "tool"
+    monkeypatch.setattr(sync_daemon.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        sync_daemon.subprocess,
+        "run",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    sync_daemon.install_executable(src, dest)
+
+    assert calls
+    args, kwargs = calls[0]
+    assert args[0][:4] == ["codesign", "-s", "-", "-f"]
+    assert kwargs["check"] is True
+
+
+def test_install_executable_keeps_existing_binary_when_codesign_fails(
+    monkeypatch, tmp_path
+):
+    src = tmp_path / "src"
+    src.write_bytes(b"\xcf\xfa\xed\xfeopenbase-syncd")
+    dest = tmp_path / "bin" / "tool"
+    dest.parent.mkdir()
+    dest.write_bytes(b"old")
+    monkeypatch.setattr(sync_daemon.sys, "platform", "darwin")
+
+    def fail_codesign(*_args, **_kwargs):
+        raise subprocess.CalledProcessError(1, "codesign")
+
+    monkeypatch.setattr(sync_daemon.subprocess, "run", fail_codesign)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        sync_daemon.install_executable(src, dest)
+
+    assert dest.read_bytes() == b"old"

@@ -120,15 +120,26 @@ def install_executable(src: Path, dest: Path) -> Path:
     tmp = dest.with_name(dest.name + ".new")
     shutil.copy2(src, tmp)
     tmp.chmod(0o755)
-    if sys.platform == "darwin":
+    if sys.platform == "darwin" and _is_macho(tmp):
         subprocess.run(
             ["codesign", "-s", "-", "-f", str(tmp)],
-            check=False,
+            check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
     os.replace(tmp, dest)
     return dest
+
+
+def _is_macho(path: Path) -> bool:
+    return path.read_bytes()[:4] in {
+        b"\xca\xfe\xba\xbe",
+        b"\xbe\xba\xfe\xca",
+        b"\xfe\xed\xfa\xce",
+        b"\xce\xfa\xed\xfe",
+        b"\xfe\xed\xfa\xcf",
+        b"\xcf\xfa\xed\xfe",
+    }
 
 
 def _config_path(config_path: Path | None) -> Path:
