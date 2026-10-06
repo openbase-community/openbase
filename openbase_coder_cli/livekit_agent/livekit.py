@@ -829,9 +829,10 @@ async def _start_voice_session(
                 turn_signal_tracker=turn_signal_tracker,
             ),
             "interruption": {"mode": "vad"},
+            # livekit-agents 1.8 deprecated the top-level kwarg; same semantics.
+            "preemptive_generation": {"enabled": False},
         },
         vad=session_vad,
-        preemptive_generation=False,
     )
     session_diagnostic_handlers = _register_session_diagnostics(
         session,
