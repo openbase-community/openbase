@@ -13,6 +13,7 @@ from openbase_coder_cli.livekit_agent.config import (
     AGENT_STATUS_TOPIC,
     ANNOUNCER_AUDIO_KIND,
     ANNOUNCER_TOPIC,
+    VOICE_ENGINE_ATTRIBUTE,
     VOICE_LIFECYCLE_ATTRIBUTE,
     VOICE_LIFECYCLE_TOPIC,
     VOICE_ROUTE_TOPIC,
@@ -29,6 +30,7 @@ async def publish_agent_error_packet(
     *,
     code: str,
     detail: str,
+    severity: str = "error",
 ) -> str:
     """Publish an agent error status packet so room participants can show it.
 
@@ -36,6 +38,9 @@ async def publish_agent_error_packet(
     data packet on topic ``openbase.agent.status`` whose payload is JSON:
     ``{"type": "agent_error", "code": <machine-readable code>,
     "detail": <human-readable message>, "message_id": <unique id>}``.
+    ``severity`` is additive too: ``"warning"`` marks a non-fatal notice (the
+    call continues, e.g. ``live_voice_unavailable``); the default ``"error"``
+    is today's payload shape, byte-for-byte.
     """
     message_id = f"agent-status-{uuid.uuid4().hex}"
     payload = {
@@ -44,19 +49,36 @@ async def publish_agent_error_packet(
         "detail": detail,
         "message_id": message_id,
     }
+    if severity != "error":
+        payload["severity"] = severity
     await room.local_participant.publish_data(
         json.dumps(payload).encode("utf-8"),
         reliable=True,
         topic=AGENT_STATUS_TOPIC,
     )
-    logger.error(
+    log = logger.error if severity == "error" else logger.warning
+    log(
         "dispatch_timing stage=agent_error_packet_published message_id=%s "
-        "code=%s detail=%r",
+        "code=%s severity=%s detail=%r",
         message_id,
         code,
+        severity,
         detail,
     )
     return message_id
+
+
+async def publish_voice_engine_attribute(room: rtc.Room, engine: str) -> None:
+    """Tell clients which voice engine serves this call (``live`` | ``pipeline``).
+
+    Clients that see ``live`` disable the lifecycle auto-mute and keep the
+    microphone open for full duplex; the attribute is state-synced, so late
+    joiners converge on it too.
+    """
+    await room.local_participant.set_attributes({VOICE_ENGINE_ATTRIBUTE: engine})
+    logger.info(
+        "dispatch_timing stage=voice_engine_attribute_published engine=%s", engine
+    )
 
 
 async def publish_voice_lifecycle_packet(
@@ -174,6 +196,10 @@ class AnnouncerMessage:
     message_id: str
     text: str
     voice_id: str | None = None
+    # Speaking agent name (``user say AGENT MESSAGE``). The pipeline picks a
+    # voice from ``voice_id``; the live engine has one voice per call and
+    # names the agent in the commentary instead.
+    agent_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -265,6 +291,7 @@ def parse_announcer_packet(data_packet: rtc.DataPacket) -> AnnouncerMessage | No
         message_id=message_id,
         text=text,
         voice_id=_optional_packet_str(payload.get("voice_id")),
+        agent_name=_optional_packet_str(payload.get("agent_name")),
     )
 
 

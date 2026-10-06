@@ -16,6 +16,11 @@ from openbase_coder_cli.config.token_manager import (
 from openbase_coder_cli.stt_providers import OPENBASE_CLOUD_STT_PROVIDER_ID
 from openbase_coder_cli.tts_providers import OPENBASE_CLOUD_TTS_PROVIDER_ID
 
+# The GPT-Live relay (dev-docs/live-voice.md) is metered as its own Cloud
+# audio provider next to Cartesia and AssemblyAI. The live engine always runs
+# through Openbase Cloud: an OpenAI key never lives on a user's device.
+LIVE_VOICE_CLOUD_PROVIDER = "live_voice"
+
 OPENBASE_CLOUD_AUDIO_SUBSCRIBE_DETAIL = (
     "Openbase Cloud audio requires an active Openbase subscription with "
     "available audio credits. Subscribe at app.openbase.cloud, or switch "
@@ -30,20 +35,37 @@ class OpenbaseCloudAudioSubscriptionError(RuntimeError):
     """Openbase Cloud audio is selected, but the account cannot use it."""
 
 
+class OpenbaseCloudLiveVoiceUnavailableError(RuntimeError):
+    """The Cloud account check does not know the live voice provider yet.
+
+    The usage summary carries no ``live_voice_*`` fields when the live voice
+    gateway is not deployed on the backend this install talks to. That is a
+    rollout gap, not a subscription problem: the caller falls back to the
+    pipeline engine instead of telling the user to subscribe.
+    """
+
+
 def ensure_openbase_cloud_audio_subscription(
     *,
     tts_provider_id: str,
     stt_provider_id: str,
     web_backend_url: str = DEFAULT_WEB_BACKEND_URL,
+    live_voice: bool = False,
 ) -> None:
     providers = _required_cloud_audio_providers(
         tts_provider_id=tts_provider_id,
         stt_provider_id=stt_provider_id,
+        live_voice=live_voice,
     )
     if not providers:
         return
 
     usage = _audio_usage_summary(web_backend_url.rstrip("/"))
+    if LIVE_VOICE_CLOUD_PROVIDER in providers and not _usage_knows_live_voice(usage):
+        raise OpenbaseCloudLiveVoiceUnavailableError(
+            "Openbase Cloud does not offer live voice on this backend yet "
+            "(the audio usage summary has no live_voice fields)."
+        )
     monthly_limit_cents = _numeric_usage_value(usage, "monthly_limit_cents")
     if monthly_limit_cents <= 0:
         raise OpenbaseCloudAudioSubscriptionError(OPENBASE_CLOUD_AUDIO_SUBSCRIBE_DETAIL)
@@ -178,13 +200,22 @@ def _required_cloud_audio_providers(
     *,
     tts_provider_id: str,
     stt_provider_id: str,
+    live_voice: bool = False,
 ) -> set[str]:
     providers: set[str] = set()
     if tts_provider_id == OPENBASE_CLOUD_TTS_PROVIDER_ID:
         providers.add("cartesia")
     if stt_provider_id == OPENBASE_CLOUD_STT_PROVIDER_ID:
         providers.add("assemblyai")
+    if live_voice:
+        providers.add(LIVE_VOICE_CLOUD_PROVIDER)
     return providers
+
+
+def _usage_knows_live_voice(usage: dict) -> bool:
+    return f"{LIVE_VOICE_CLOUD_PROVIDER}_limit_cents" in usage or (
+        f"{LIVE_VOICE_CLOUD_PROVIDER}_remaining_cents" in usage
+    )
 
 
 def _numeric_usage_value(payload: dict, key: str) -> float:
@@ -208,10 +239,16 @@ def _has_active_subscription_value(value: object) -> bool:
     return value is not None
 
 
+_PROVIDER_DISPLAY_NAMES = {
+    "assemblyai": "AssemblyAI",
+    "cartesia": "Cartesia",
+    LIVE_VOICE_CLOUD_PROVIDER: "live voice",
+}
+
+
 def _provider_names(providers: Iterable[str]) -> str:
     names = [
-        "AssemblyAI" if provider == "assemblyai" else "Cartesia"
-        for provider in providers
+        _PROVIDER_DISPLAY_NAMES.get(provider, "Cartesia") for provider in providers
     ]
     return " and ".join(sorted(names))
 

@@ -41,7 +41,7 @@ class AnnouncerSpeechQueue:
         self,
         *,
         session: AgentSession,
-        announcer_tts: VoiceSelectingTTS,
+        announcer_tts: VoiceSelectingTTS | None,
         max_queue_size: int = ANNOUNCER_MAX_QUEUE_SIZE,
         silence_grace_seconds: float = ANNOUNCER_SILENCE_GRACE_SECONDS,
         delivery_ledger=None,
@@ -124,7 +124,8 @@ class AnnouncerSpeechQueue:
         if self._worker_task is not None:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._worker_task
-        await self._announcer_tts.aclose()
+        if self._announcer_tts is not None:
+            await self._announcer_tts.aclose()
 
     async def _run(self) -> None:
         while True:
