@@ -372,7 +372,7 @@ def test_user_say_api_returns_accepted(monkeypatch, tmp_path):
         source="test",
     )
 
-    async def fake_publish(text, *, room_name=None, voice_id=None):
+    async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name is None
         assert voice_id == "voice-dottie"
@@ -412,7 +412,7 @@ def test_user_say_api_allows_authenticated_local_post_without_csrf_token(monkeyp
         source="test",
     )
 
-    async def fake_publish(text, *, room_name=None, voice_id=None):
+    async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name is None
         assert voice_id == "voice-dottie"
@@ -459,7 +459,7 @@ def test_user_say_api_resolves_agent_voice(monkeypatch, tmp_path):
         source="test",
     )
 
-    async def fake_publish(text, *, room_name=None, voice_id=None):
+    async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name == "room-1"
         assert voice_id == "super-agent-voice"
@@ -507,7 +507,7 @@ def test_user_say_api_backfills_agent_voice_from_super_agents_state(
     )
     caplog.set_level(logging.INFO)
 
-    async def fake_publish(text, *, room_name=None, voice_id=None):
+    async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name is None
         assert voice_id
@@ -572,7 +572,7 @@ def test_user_say_api_backfills_agent_voice_from_claude_code_state(
         )
     caplog.set_level(logging.INFO)
 
-    async def fake_publish(text, *, room_name=None, voice_id=None):
+    async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name is None
         assert voice_id
@@ -652,7 +652,7 @@ def test_user_say_api_selects_latest_matching_agent(tmp_path, monkeypatch):
             seen_at=seen_at,
         )
 
-    async def fake_publish(text, *, room_name=None, voice_id=None):
+    async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name is None
         assert voice_id == "voice-2"

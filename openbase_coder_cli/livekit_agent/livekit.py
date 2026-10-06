@@ -53,6 +53,7 @@ from openbase_coder_cli.dispatcher_config import (
     dispatcher_service_tier,
     selected_stt_provider_id,
     selected_tts_provider_id,
+    selected_voice_engine,
 )
 from openbase_coder_cli.livekit_agent.audio_diagnostics import (  # noqa: F401
     LoggingRecognizeStream,
@@ -100,6 +101,9 @@ from openbase_coder_cli.livekit_agent.config import (  # noqa: F401
     DIRECT_LIVEKIT_INSTRUCTIONS_PATH_ENV,
     DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV,
     DISPATCHER_BUILTIN_DEVELOPER_INSTRUCTIONS,
+    LIVE_VOICE_DEFAULT_VOICE,
+    LIVE_VOICE_MODEL,
+    LIVE_VOICE_STARTUP_INSTRUCTIONS,
     LIVEKIT_AGENT_HOST,
     LIVEKIT_AGENT_LOAD_THRESHOLD_ENV,
     LIVEKIT_AGENT_NUM_IDLE_PROCESSES_ENV,
@@ -119,6 +123,7 @@ from openbase_coder_cli.livekit_agent.config import (  # noqa: F401
     OPENBASE_CLOUD_AUDIO_CARTESIA_VERSION,
     PROACTIVE_STEER_PROMPT_CACHE_SECONDS,
     SUPPORTED_AUDIO_EXTENSIONS,
+    VOICE_ENGINE_ATTRIBUTE,
     VOICE_ROUTE_TOPIC,
     WEB_BACKEND_URL,
     _canonical_env_path,
@@ -128,6 +133,16 @@ from openbase_coder_cli.livekit_agent.config import (  # noqa: F401
     _optional_int_env,
     _read_instruction_file,
     load_direct_livekit_developer_instructions,
+)
+from openbase_coder_cli.livekit_agent.live_delegation import LiveDelegationBridge
+from openbase_coder_cli.livekit_agent.live_voice import (
+    LIVE_VOICE_PROVIDER_FAILED_CODE,
+    LIVE_VOICE_UNAVAILABLE_CODE,
+    LiveVoiceSessionError,
+    VoiceEngineDecision,
+    decide_voice_engine,
+    import_live_model,
+    live_voice_unavailable_detail,
 )
 from openbase_coder_cli.livekit_agent.logging_utils import (  # noqa: F401
     _event_text_hash,
@@ -150,6 +165,7 @@ from openbase_coder_cli.livekit_agent.packets import (  # noqa: F401
     parse_announcer_packet,
     parse_voice_route_packet,
     publish_agent_error_packet,
+    publish_voice_engine_attribute,
     publish_voice_lifecycle_packet,
 )
 from openbase_coder_cli.livekit_agent.proc_pool_patch import (
@@ -233,6 +249,10 @@ from openbase_coder_cli.tts_providers import (  # noqa: F401
     KOKORO_PROVIDER_ID,
     OPENBASE_CLOUD_TTS_PROVIDER_ID,
     get_tts_provider,
+)
+from openbase_coder_cli.voice_models import (
+    VOICE_ENGINE_LIVE,
+    VOICE_ENGINE_PIPELINE,
 )
 
 logger = logging.getLogger(__name__)
@@ -408,6 +428,8 @@ def _diagnostic_vad(vad_model):
 
 
 def _agent_error_code(exc: Exception) -> str:
+    if isinstance(exc, LiveVoiceSessionError):
+        return LIVE_VOICE_PROVIDER_FAILED_CODE
     if isinstance(exc, OpenbaseCloudAudioSubscriptionError):
         return "subscription_required"
     if isinstance(exc, OpenbaseCloudAudioAuthenticationError | AuthLoginRequiredError):
@@ -422,6 +444,14 @@ def _agent_error_code(exc: Exception) -> str:
 
 
 def _agent_error_detail(exc: Exception) -> str:
+    if isinstance(exc, LiveVoiceSessionError):
+        return (
+            "The call ended because the live voice connection was lost: "
+            f"{redact_exception_text(exc)}. This is usually a brief service "
+            "update, a dropped network, or the live voice login/subscription "
+            "being rejected. Call again in a minute; if it keeps happening, "
+            "switch the voice model to the classic pipeline in voice settings."
+        )
     if isinstance(
         exc,
         OpenbaseCloudAudioSubscriptionError
@@ -855,6 +885,295 @@ async def _start_voice_session(
     return session, announcer_tts, session_diagnostic_handlers
 
 
+class LiveVoiceAssistant(Agent):
+    """The LiveKit agent for the live engine: GPT-Live persona plus the bridge.
+
+    The persona is fixed at ``session.start``; everything that changes during
+    the call (route, agent names, results) reaches the model through the
+    delegation bridge's appends. ``on_enter`` runs once the duplex session
+    exists, which is the earliest point the bridge can subscribe to
+    ``delegation_created``.
+    """
+
+    def __init__(self, bridge: LiveDelegationBridge) -> None:
+        super().__init__(instructions=LIVE_VOICE_STARTUP_INSTRUCTIONS)
+        self._bridge = bridge
+
+    async def on_enter(self) -> None:
+        self._bridge.attach(self.duplex_session)
+
+
+async def _decide_voice_engine_for_call() -> VoiceEngineDecision:
+    """Read the voice model per call and check the live engine can start."""
+    return await decide_voice_engine(
+        selected_engine=selected_voice_engine(),
+        tts_provider_id=selected_tts_provider_id(),
+        stt_provider_id=selected_stt_provider_id(),
+        cloud_token_provider=_openbase_cloud_audio_token,
+    )
+
+
+def _build_live_voice_model(decision: VoiceEngineDecision):
+    gpt_live_model = import_live_model()
+    credentials = decision.credentials
+    assert credentials is not None
+    return gpt_live_model(
+        model=LIVE_VOICE_MODEL,
+        voice=LIVE_VOICE_DEFAULT_VOICE,
+        delegation="client",
+        api_key=credentials.api_key,
+        base_url=credentials.base_url,
+    )
+
+
+async def _start_live_voice_session(
+    ctx: JobContext,
+    voice_router: LiveKitVoiceRouter,
+    delivery_ledger: VoiceDeliveryLedger,
+    decision: VoiceEngineDecision,
+) -> tuple[AgentSession, LiveDelegationBridge, tuple]:
+    """Start the GPT-Live full-duplex session with the delegation bridge."""
+    live_model = _build_live_voice_model(decision)
+    session_vad = _diagnostic_vad(ctx.proc.userdata["vad"])
+    # No STT, TTS or turn detector: the voice model listens, speaks and owns
+    # turn-taking. The explicit VAD lets the session cut playout on barge-in
+    # (the plugin drops the default VAD for duplex models).
+    session = AgentSession(
+        conn_options=voice_connect_options(),
+        llm=live_model,
+        vad=session_vad,
+        turn_handling={"interruption": {"mode": "vad"}},
+    )
+    bridge = LiveDelegationBridge(
+        voice_router=voice_router,
+        delivery_ledger=delivery_ledger,
+    )
+    session_diagnostic_handlers = _register_session_diagnostics(
+        session,
+        voice_router,
+        enable_logging=LIVEKIT_VERBOSE_LOGGING,
+        on_unrecoverable_error=lambda exc: _end_call_after_agent_error(
+            ctx, LiveVoiceSessionError(exc)
+        ),
+        proactive_steering=False,
+    )
+    try:
+        await session.start(agent=LiveVoiceAssistant(bridge), room=ctx.room)
+    except BaseException:
+        for event_name, handler in session_diagnostic_handlers:
+            session.off(event_name, handler)
+        try:
+            await session.aclose()
+        except Exception:
+            logger.debug("live AgentSession close after failed start", exc_info=True)
+        raise
+    logger.info(
+        "dispatch_timing stage=agent_session_start_complete room_name=%s "
+        "voice_engine=live live_base_url=%s",
+        ctx.room.name,
+        decision.credentials.base_url if decision.credentials else "",
+    )
+    return session, bridge, session_diagnostic_handlers
+
+
+def _build_delivery_ledger(
+    ctx: JobContext,
+    voice_router: LiveKitVoiceRouter,
+    *,
+    room_id: str,
+    live_mode: bool,
+) -> VoiceDeliveryLedger:
+    delivery_ledger = VoiceDeliveryLedger(
+        route_snapshot=voice_router.route_snapshot,
+        room_name=ctx.room.name,
+        room_id=room_id,
+        live_mode=live_mode,
+    )
+    delivery_ledger.set_lifecycle_sink(
+        lambda event, record, reason: _schedule_voice_lifecycle_packet(
+            ctx.room,
+            event,
+            record,
+            reason,
+        )
+    )
+    voice_router.delivery_ledger = delivery_ledger
+    return delivery_ledger
+
+
+async def _report_live_voice_fallback(
+    room: rtc.Room, decision: VoiceEngineDecision
+) -> None:
+    """Non-fatal notice: the call continues on the pipeline engine."""
+    try:
+        await publish_agent_error_packet(
+            room,
+            code=LIVE_VOICE_UNAVAILABLE_CODE,
+            detail=live_voice_unavailable_detail(decision),
+            severity="warning",
+        )
+    except Exception:
+        logger.exception("Unable to publish the live voice fallback packet")
+
+
+async def _publish_voice_engine(room: rtc.Room, engine: str) -> None:
+    try:
+        await publish_voice_engine_attribute(room, engine)
+    except Exception:
+        logger.warning(
+            "Unable to publish the %s participant attribute",
+            VOICE_ENGINE_ATTRIBUTE,
+            exc_info=True,
+        )
+
+
+async def _transfer_live_voice_route(
+    voice_router: LiveKitVoiceRouter,
+    route_command: VoiceRouteCommand,
+    bridge: LiveDelegationBridge,
+) -> None:
+    assert route_command.thread_id is not None
+    assert route_command.cwd is not None
+    try:
+        await voice_router.transfer_to_thread(
+            thread_id=route_command.thread_id,
+            cwd=route_command.cwd,
+            label=route_command.label,
+            voice_id=route_command.active_target_voice_id,
+            voice_name=route_command.active_target_voice_name,
+        )
+    except Exception:
+        logger.warning("Unable to transfer LiveKit voice route", exc_info=True)
+        voice_router.exit_to_dispatch()
+        bridge.announce("Unable to transfer voice route.")
+        return
+    bridge.notify_route_changed(
+        action="transfer_to_thread",
+        agent_label=route_command.active_target_voice_name or route_command.label,
+    )
+
+
+def _wire_live_voice_call(
+    ctx: JobContext,
+    session: AgentSession,
+    bridge: LiveDelegationBridge,
+    voice_router: LiveKitVoiceRouter,
+    delivery_ledger: VoiceDeliveryLedger,
+    session_diagnostic_handlers: tuple,
+    room_diagnostic_handlers: tuple,
+) -> None:
+    """Room and session plumbing for the live engine.
+
+    No mic lifecycle (the mic stays open), no TTS announcer: ``user say``
+    becomes commentary the voice model weaves in, audio-file announcements
+    still play through the session, spoken commands come off the input
+    transcript, and route changes are narrated by the one voice on the call.
+    """
+
+    def on_user_input_transcribed(event) -> None:
+        bridge.on_user_transcript(
+            str(getattr(event, "transcript", "") or ""),
+            is_final=bool(getattr(event, "is_final", False)),
+        )
+
+    def on_agent_state_changed(event) -> None:
+        bridge.on_agent_state_changed(
+            str(getattr(event, "old_state", "") or ""),
+            str(getattr(event, "new_state", "") or ""),
+        )
+
+    session.on("user_input_transcribed", on_user_input_transcribed)
+    session.on("agent_state_changed", on_agent_state_changed)
+
+    audio_queue = AnnouncerSpeechQueue(
+        session=session,
+        announcer_tts=None,
+        delivery_ledger=delivery_ledger,
+    )
+    audio_queue_session_handlers = (
+        ("user_state_changed", audio_queue.notify_state_changed),
+        ("agent_state_changed", audio_queue.notify_state_changed),
+        ("speech_created", audio_queue.notify_state_changed),
+    )
+    for event_name, handler in audio_queue_session_handlers:
+        session.on(event_name, handler)
+    audio_queue.start()
+    voice_router.set_orphaned_result_handler(bridge.deliver_orphaned_result)
+
+    def on_data_received(data_packet: rtc.DataPacket) -> None:
+        logger.info(
+            "dispatch_timing stage=livekit_data_received topic=%s kind=%s "
+            "payload_bytes=%d payload_hash=%s participant_identity=%s engine=live",
+            data_packet.topic,
+            data_packet.kind,
+            len(data_packet.data),
+            _packet_hash(data_packet),
+            _packet_participant_identity(data_packet),
+        )
+        message = parse_announcer_packet(data_packet)
+        if message is not None:
+            logger.info(
+                "dispatch_timing stage=announcer_packet_received message_id=%s "
+                "agent_name=%s text_len=%d payload_hash=%s engine=live",
+                message.message_id,
+                message.agent_name or "",
+                len(message.text),
+                _packet_hash(data_packet),
+            )
+            bridge.announce(message.text, agent_name=message.agent_name)
+            return
+        audio_message = parse_announcer_audio_packet(data_packet)
+        if audio_message is not None:
+            audio_queue.enqueue(audio_message)
+            return
+        route_command = parse_voice_route_packet(data_packet)
+        if route_command is None:
+            return
+        logger.info(
+            "dispatch_timing stage=voice_route_packet_received action=%s "
+            "thread_id=%s label=%s engine=live payload_hash=%s",
+            route_command.action,
+            route_command.thread_id or "",
+            route_command.label or "",
+            _packet_hash(data_packet),
+        )
+        if route_command.action == "exit_to_dispatch":
+            if voice_router.exit_to_dispatch():
+                bridge.notify_route_changed(action="exit_to_dispatch", agent_label=None)
+        elif route_command.action == "transfer_to_thread":
+            if not route_command.thread_id or not route_command.cwd:
+                logger.warning(
+                    "Ignoring incomplete LiveKit voice route transfer command"
+                )
+                return
+            asyncio.create_task(
+                _transfer_live_voice_route(voice_router, route_command, bridge)
+            )
+        else:
+            logger.warning(
+                "Ignoring unsupported LiveKit voice route action %s",
+                route_command.action,
+            )
+
+    ctx.room.on("data_received", on_data_received)
+
+    async def close_live_call(*_args) -> None:
+        ctx.room.off("data_received", on_data_received)
+        for event_name, handler in room_diagnostic_handlers:
+            ctx.room.off(event_name, handler)
+        for event_name, handler in session_diagnostic_handlers:
+            session.off(event_name, handler)
+        for event_name, handler in audio_queue_session_handlers:
+            session.off(event_name, handler)
+        session.off("user_input_transcribed", on_user_input_transcribed)
+        session.off("agent_state_changed", on_agent_state_changed)
+        await bridge.aclose()
+        await audio_queue.close()
+        await voice_router.close()
+
+    ctx.add_shutdown_callback(close_live_call)
+
+
 @server.rtc_session(agent_name=LIVEKIT_DISPATCH_AGENT_NAME)
 async def livekit_agent(ctx: JobContext):
     _refresh_audio_credentials()
@@ -873,11 +1192,16 @@ async def livekit_agent(ctx: JobContext):
     prepare_task = asyncio.create_task(voice_backend_client.prepare())
     prepare_task.add_done_callback(_log_prepare_result)
     voice_router = LiveKitVoiceRouter(voice_backend_client)
+    # Read the voice model per call (no restart needed) and check the live
+    # engine's prerequisites while the room connects; a live engine that
+    # cannot start falls back to the pipeline for this call.
+    decision_task = asyncio.create_task(_decide_voice_engine_for_call())
 
     logger.info("Connecting to LiveKit room")
     try:
         await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     except Exception:
+        decision_task.cancel()
         logger.error(
             "LiveKit agent failed to connect to room %s; participants will "
             "stay at 'waiting for agent'",
@@ -889,35 +1213,111 @@ async def livekit_agent(ctx: JobContext):
     room_diagnostic_handlers = (
         _register_room_diagnostics(ctx.room) if LIVEKIT_VERBOSE_LOGGING else ()
     )
-    delivery_ledger = VoiceDeliveryLedger(
-        route_snapshot=voice_router.route_snapshot,
-        room_name=ctx.room.name,
-        room_id=await _room_sid(ctx.room),
+    decision = await decision_task
+    room_id = await _room_sid(ctx.room)
+    delivery_ledger = _build_delivery_ledger(
+        ctx, voice_router, room_id=room_id, live_mode=decision.is_live
     )
-    delivery_ledger.set_lifecycle_sink(
-        lambda event, record, reason: _schedule_voice_lifecycle_packet(
-            ctx.room,
-            event,
-            record,
-            reason,
-        )
-    )
-    voice_router.delivery_ledger = delivery_ledger
 
-    try:
-        (
+    live_bridge: LiveDelegationBridge | None = None
+    if decision.is_live:
+        try:
+            (
+                session,
+                live_bridge,
+                session_diagnostic_handlers,
+            ) = await _start_live_voice_session(
+                ctx, voice_router, delivery_ledger, decision
+            )
+        except Exception as exc:
+            summary = exception_chain_summary(exc)
+            logger.warning(
+                "Live voice session failed to start in room %s (%s); falling back "
+                "to the pipeline voice engine for this call",
+                ctx.room.name,
+                summary,
+            )
+            decision = VoiceEngineDecision(
+                engine=VOICE_ENGINE_PIPELINE,
+                fallback_reason="live_session_start_failed",
+                fallback_detail=f"The live voice session could not start: {summary}.",
+            )
+            delivery_ledger = _build_delivery_ledger(
+                ctx, voice_router, room_id=room_id, live_mode=False
+            )
+    if live_bridge is not None:
+        await _publish_voice_engine(ctx.room, VOICE_ENGINE_LIVE)
+        _wire_live_voice_call(
+            ctx,
+            session,
+            live_bridge,
+            voice_router,
+            delivery_ledger,
+            session_diagnostic_handlers,
+            room_diagnostic_handlers,
+        )
+    else:
+        try:
+            (
+                session,
+                announcer_tts,
+                session_diagnostic_handlers,
+            ) = await _start_voice_session(ctx, voice_router, delivery_ledger)
+        except Exception as exc:
+            logger.error(
+                "LiveKit agent joined room %s but could not start its voice session: %s",
+                ctx.room.name,
+                exception_chain_summary(exc),
+            )
+            await _end_call_after_agent_error(ctx, exc)
+            raise
+        if decision.fell_back:
+            await _report_live_voice_fallback(ctx.room, decision)
+        await _publish_voice_engine(ctx.room, VOICE_ENGINE_PIPELINE)
+        _wire_pipeline_voice_call(
+            ctx,
             session,
             announcer_tts,
+            voice_router,
+            delivery_ledger,
             session_diagnostic_handlers,
-        ) = await _start_voice_session(ctx, voice_router, delivery_ledger)
-    except Exception as exc:
-        logger.error(
-            "LiveKit agent joined room %s but could not start its voice session: %s",
-            ctx.room.name,
-            exception_chain_summary(exc),
+            room_diagnostic_handlers,
         )
-        await _end_call_after_agent_error(ctx, exc)
-        raise
+
+    # Surface stalled agent turns during the call — e.g. a spawned sub-agent
+    # blocked on a macOS permission dialog on the user's computer (field-test
+    # finding FT-9, 2026-09-12). Runs session-wide so it covers the dispatcher
+    # and any fire-and-forgotten sub-agent alike.
+    from . import stall_diagnostics
+
+    stall_task = asyncio.create_task(
+        stall_diagnostics.stall_watch_loop(
+            is_call_active=lambda: ctx.room.connection_state
+            == rtc.ConnectionState.CONN_CONNECTED,
+            prepare_announcement=lambda: stall_diagnostics.interrupt_nonplaying_reply(
+                session
+            ),
+        ),
+        name="openbase-stall-watch-loop",
+    )
+
+    async def _cancel_stall_watch():
+        stall_task.cancel()
+
+    ctx.add_shutdown_callback(_cancel_stall_watch)
+    logger.info("LiveKit AgentSession started (voice_engine=%s)", decision.engine)
+
+
+def _wire_pipeline_voice_call(
+    ctx: JobContext,
+    session: AgentSession,
+    announcer_tts: "VoiceSelectingTTS",
+    voice_router: LiveKitVoiceRouter,
+    delivery_ledger: VoiceDeliveryLedger,
+    session_diagnostic_handlers: tuple,
+    room_diagnostic_handlers: tuple,
+) -> None:
+    """Room and session plumbing for the pipeline engine (unchanged behaviour)."""
     delivery_ledger.set_user_speaking_provider(
         lambda: str(getattr(session, "user_state", "") or "") == "speaking"
     )
@@ -1072,29 +1472,6 @@ async def livekit_agent(ctx: JobContext):
         await voice_router.close()
 
     ctx.add_shutdown_callback(close_announcer_queue)
-
-    # Surface stalled agent turns during the call — e.g. a spawned sub-agent
-    # blocked on a macOS permission dialog on the user's computer (field-test
-    # finding FT-9, 2026-09-12). Runs session-wide so it covers the dispatcher
-    # and any fire-and-forgotten sub-agent alike.
-    from . import stall_diagnostics
-
-    stall_task = asyncio.create_task(
-        stall_diagnostics.stall_watch_loop(
-            is_call_active=lambda: ctx.room.connection_state
-            == rtc.ConnectionState.CONN_CONNECTED,
-            prepare_announcement=lambda: stall_diagnostics.interrupt_nonplaying_reply(
-                session
-            ),
-        ),
-        name="openbase-stall-watch-loop",
-    )
-
-    async def _cancel_stall_watch():
-        stall_task.cancel()
-
-    ctx.add_shutdown_callback(_cancel_stall_watch)
-    logger.info("LiveKit AgentSession started")
 
 
 def main():

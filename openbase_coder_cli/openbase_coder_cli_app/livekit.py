@@ -276,6 +276,7 @@ def user_say(request):
             input_serializer.validated_data["text"],
             room_name=room_name,
             voice_id=voice_entry.voice_id,
+            agent_name=agent_name,
         )
     except UnknownAgentVoiceError as exc:
         catalog_voice = get_tts_provider(selected_tts_provider_id()).voice_for_name(
