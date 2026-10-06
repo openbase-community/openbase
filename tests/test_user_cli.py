@@ -978,4 +978,3 @@ def test_default_voice_model_rejects_unknown_model(monkeypatch, tmp_path):
     assert result.exit_code != 0
     assert "Voice model must be one of: gpt-live-1, pipeline." in result.output
     assert not config_path.exists()
-
