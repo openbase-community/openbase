@@ -43,6 +43,7 @@ def _make_pool() -> ProcPool:
         initialize_process_fnc=lambda proc: None,
         job_entrypoint_fnc=_entrypoint,
         session_end_fnc=None,
+        simulation_end_fnc=None,
         num_idle_processes=0,
         initialize_timeout=1.0,
         close_timeout=1.0,
