@@ -336,6 +336,9 @@ class SuperAgentsLiveKitClient(
             Callable[[SuperAgentsLiveKitClient, str, str], None] | None
         ) = None
         self._claimed_speech_turns: set[str] = set()
+        self._turn_progress_listeners: list[
+            Callable[[SuperAgentsLiveKitClient, str, dict[str, Any]], None]
+        ] = []
         self._turn_prompt_hashes: dict[str, set[str]] = {}
         self._turn_submitted_transcripts: dict[str, list[str]] = {}
         self._turn_spoken_at: dict[str, float] = {}
@@ -792,6 +795,8 @@ class SuperAgentsLiveKitClient(
                 await asyncio.sleep(backoff)
                 continue
             consecutive_failures = 0
+            if self._turn_progress_listeners:
+                self._notify_turn_progress(turn_id, progress)
             status = str(
                 progress.get("status")
                 or progress.get("summary", {}).get("status")
