@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 
 import click
@@ -113,8 +112,7 @@ def configure(
 
 
 def _root_id(path: str) -> str:
-    name = Path(path).expanduser().name or "root"
-    return "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in name).lower()
+    return sync_daemon.root_id_for_path(path)
 
 
 @sync_daemon_cli.command("install-binary")
@@ -134,20 +132,14 @@ def _root_id(path: str) -> str:
 def install_binary(source: str, ctl: str | None, edge: str | None) -> None:
     """Copy a built openbase-syncd (and optionally openbase-sync, edge) into ~/.openbase/bin."""
     OPENBASE_BIN_DIR.mkdir(parents=True, exist_ok=True)
-    dest = OPENBASE_BIN_DIR / sync_daemon.SYNC_DAEMON_BINARY_NAME
-    shutil.copy2(source, dest)
-    dest.chmod(0o755)
-    click.echo(f"Installed {dest}")
+    pairs = [(source, sync_daemon.SYNC_DAEMON_BINARY_NAME)]
     if ctl:
-        cdest = OPENBASE_BIN_DIR / sync_daemon.SYNC_CTL_BINARY_NAME
-        shutil.copy2(ctl, cdest)
-        cdest.chmod(0o755)
-        click.echo(f"Installed {cdest}")
+        pairs.append((ctl, sync_daemon.SYNC_CTL_BINARY_NAME))
     if edge:
-        edest = OPENBASE_BIN_DIR / sync_daemon.SYNC_EDGE_BINARY_NAME
-        shutil.copy2(edge, edest)
-        edest.chmod(0o755)
-        click.echo(f"Installed {edest}")
+        pairs.append((edge, sync_daemon.SYNC_EDGE_BINARY_NAME))
+    for src, name in pairs:
+        dest = sync_daemon.install_executable(Path(src), OPENBASE_BIN_DIR / name)
+        click.echo(f"Installed {dest}")
 
 
 @sync_daemon_cli.command("status")

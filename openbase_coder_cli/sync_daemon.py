@@ -9,8 +9,12 @@ CLI, the API views and health checks use; it never implements sync logic.
 from __future__ import annotations
 
 import json
+import os
 import secrets
+import shutil
 import socket
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -81,6 +85,50 @@ class SyncDaemonConfig:
                 f"path = {q(root['path'])}",
             ]
         return "\n".join(lines) + "\n"
+
+
+def root_id_for_path(path: str | Path) -> str:
+    """A stable root id derived from the path relative to the home directory.
+
+    ``~/Projects/friendforce/data`` becomes ``projects-friendforce-data``, so
+    two roots whose last component is ``data`` do not collide. Paths outside
+    the home directory use their full path. The id must match on both sides,
+    which it does when the layout is identical (the daemon requires that).
+    """
+    resolved = Path(path).expanduser().resolve()
+    home = Path.home().resolve()
+    try:
+        rel = resolved.relative_to(home)
+        parts = rel.parts
+    except ValueError:
+        parts = resolved.parts[1:]
+    if not parts:
+        parts = ("home",)
+    raw = "-".join(parts)
+    cleaned = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in raw).lower()
+    return cleaned.strip("-") or "root"
+
+
+def install_executable(src: Path, dest: Path) -> Path:
+    """Install an executable atomically: write beside the destination, then rename.
+
+    Overwriting a Mach-O binary in place while a process runs from it makes
+    the next launch die with SIGKILL on macOS (the kernel's signature cache
+    sees a modified file). A new inode plus an ad-hoc signature avoids that.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".new")
+    shutil.copy2(src, tmp)
+    tmp.chmod(0o755)
+    if sys.platform == "darwin":
+        subprocess.run(
+            ["codesign", "-s", "-", "-f", str(tmp)],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    os.replace(tmp, dest)
+    return dest
 
 
 def _config_path(config_path: Path | None) -> Path:
