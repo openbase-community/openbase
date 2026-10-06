@@ -125,8 +125,14 @@ def _root_id(path: str) -> str:
     default=None,
     help="Also install the openbase-sync control binary.",
 )
-def install_binary(source: str, ctl: str | None) -> None:
-    """Copy a built openbase-syncd (and optionally openbase-sync) into ~/.openbase/bin."""
+@click.option(
+    "--edge",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Also install the edge relay binary (runs display-bound commands on the laptop).",
+)
+def install_binary(source: str, ctl: str | None, edge: str | None) -> None:
+    """Copy a built openbase-syncd (and optionally openbase-sync, edge) into ~/.openbase/bin."""
     OPENBASE_BIN_DIR.mkdir(parents=True, exist_ok=True)
     dest = OPENBASE_BIN_DIR / sync_daemon.SYNC_DAEMON_BINARY_NAME
     shutil.copy2(source, dest)
@@ -137,6 +143,11 @@ def install_binary(source: str, ctl: str | None) -> None:
         shutil.copy2(ctl, cdest)
         cdest.chmod(0o755)
         click.echo(f"Installed {cdest}")
+    if edge:
+        edest = OPENBASE_BIN_DIR / sync_daemon.SYNC_EDGE_BINARY_NAME
+        shutil.copy2(edge, edest)
+        edest.chmod(0o755)
+        click.echo(f"Installed {edest}")
 
 
 @sync_daemon_cli.command("status")

@@ -309,3 +309,26 @@ def test_cli_configure_start_installs_service_with_installation_config(
     assert result.exit_code == 0, result.output
     assert calls == [("CONFIG", sync_daemon.SYNC_DAEMON_SERVICE_NAME)]
     assert 'anchor = "edge"' in cfg.read_text()
+
+
+def test_cli_install_binary_installs_all_three(monkeypatch, tmp_path):
+    from openbase_coder_cli.cli import sync_daemon as cli_mod
+
+    bin_dir = tmp_path / "bin"
+    monkeypatch.setattr(cli_mod, "OPENBASE_BIN_DIR", bin_dir)
+    srcs = {}
+    for name in ("syncd", "ctl", "edge"):
+        p = tmp_path / name
+        p.write_bytes(b"#!/bin/sh\n")
+        srcs[name] = p
+    result = CliRunner().invoke(
+        sync_daemon_cli,
+        ["install-binary", str(srcs["syncd"]), "--ctl", str(srcs["ctl"]), "--edge", str(srcs["edge"])],
+    )
+    assert result.exit_code == 0, result.output
+    for name in (
+        sync_daemon.SYNC_DAEMON_BINARY_NAME,
+        sync_daemon.SYNC_CTL_BINARY_NAME,
+        sync_daemon.SYNC_EDGE_BINARY_NAME,
+    ):
+        assert (bin_dir / name).exists() and (bin_dir / name).stat().st_mode & 0o111

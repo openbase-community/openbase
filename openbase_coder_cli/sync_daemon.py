@@ -22,6 +22,7 @@ SYNC_DAEMON_SOCKET_PATH = SYNC_DAEMON_DIR / "syncd.sock"
 SYNC_DAEMON_SERVICE_NAME = "sync-daemon"
 SYNC_DAEMON_BINARY_NAME = "openbase-syncd"
 SYNC_CTL_BINARY_NAME = "openbase-sync"
+SYNC_EDGE_BINARY_NAME = "edge"  # hub-side relay for display-bound commands
 DEFAULT_HOT_PORT = 22100
 DEFAULT_BULK_PORT = 22101
 
