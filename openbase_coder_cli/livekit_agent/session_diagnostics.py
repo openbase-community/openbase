@@ -42,7 +42,17 @@ def _register_session_diagnostics(
     *,
     enable_logging: bool,
     on_unrecoverable_error: Callable[[Exception], Awaitable[None]] | None = None,
+    proactive_steering: bool = True,
 ):
+    """Register the session handlers.
+
+    ``proactive_steering`` is the pipeline behaviour: final transcripts steer
+    the active thread turn and dropped utterances are recovered with
+    ``generate_reply``. The live engine passes ``False`` because the GPT-Live
+    delegation bridge owns every thread submission there (steering the same
+    transcript twice would make the thread answer twice, and ``generate_reply``
+    on a duplex model makes it speak).
+    """
     proactive_steer_tasks: set[asyncio.Task[None]] = set()
     recovery_tasks: set[asyncio.Task[None]] = set()
     # normalized final transcript -> raw transcript, pending until steered,
@@ -185,7 +195,7 @@ def _register_session_diagnostics(
                 _event_text_hash(transcript),
                 transcript[:160],
             )
-        if is_final and transcript.strip():
+        if proactive_steering and is_final and transcript.strip():
             stripped = transcript.strip()
             if not _is_exit_to_dispatch_command(stripped):
                 _watch_for_dropped_utterance(stripped)

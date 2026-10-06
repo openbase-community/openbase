@@ -547,6 +547,38 @@ class SuperAgentsClientTurnsMixin:
     ) -> None:
         self._on_orphaned_result = handler
 
+    def add_turn_progress_listener(
+        self,
+        listener: Callable[["SuperAgentsLiveKitClient", str, dict[str, Any]], None],
+    ) -> None:
+        """Observe every progress snapshot the turn wait loop fetches.
+
+        Called as ``listener(client, turn_id, progress)`` from the poll loop
+        while a turn is being waited on, before the snapshot is judged final.
+        Listeners must not block; exceptions are logged and swallowed so an
+        observer can never break the wait. The live voice bridge uses this to
+        stream speakable text as commentary while the thread is still working.
+        """
+        self._turn_progress_listeners.append(listener)
+
+    def remove_turn_progress_listener(self, listener) -> None:
+        try:
+            self._turn_progress_listeners.remove(listener)
+        except ValueError:
+            pass
+
+    def _notify_turn_progress(self, turn_id: str, progress: dict[str, Any]) -> None:
+        for listener in tuple(self._turn_progress_listeners):
+            try:
+                listener(self, turn_id, progress)
+            except Exception:
+                logger.warning(
+                    "%s stage=turn_progress_listener_failed turn_id=%s",
+                    DISPATCH_TIMING_LOG,
+                    turn_id,
+                    exc_info=True,
+                )
+
     @property
     def orphaned_result_handler(
         self,
