@@ -692,3 +692,22 @@ def test_cli_pair_candidates_lists_roles(env, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "mini" in result.output and "hub" in result.output
     assert "phone" not in result.output
+
+
+@pytest.mark.parametrize("path", ["~", "/", "~/.openbase", "STATE", "STATE/x"])
+def test_roots_that_must_never_sync_are_refused(env, path):
+    _write("hub", [PROJECTS])
+    path = path.replace("STATE", str(sync_daemon.SYNC_DAEMON_CONFIG_PATH.parent))
+
+    with pytest.raises(sync_pairing.PairingError) as excinfo:
+        sync_pairing.add_root(path, local_only=True)
+
+    assert excinfo.value.code == "root_not_allowed"
+    assert sync_daemon.configured_roots() == [PROJECTS]
+
+
+def test_hub_refuses_a_root_that_must_never_sync(env):
+    with pytest.raises(sync_pairing.PairingError) as excinfo:
+        sync_pairing.become_hub(["~"])
+    assert excinfo.value.code == "root_not_allowed"
+    assert not sync_daemon.is_configured()

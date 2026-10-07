@@ -155,6 +155,31 @@ def default_roots() -> list[str]:
     return roots
 
 
+def check_root_allowed(path: str) -> None:
+    """Refuse folders that must never be mirrored.
+
+    The whole home folder (or anything above it) would carry credentials and
+    every app's state; the sync daemon's own state directory must never sync
+    itself. Product folders inside ``~/.openbase`` (thread sync) stay allowed.
+    """
+    target = sync_daemon.expand_root_path(path)
+    home = Path.home().resolve()
+    if target == home or target in home.parents:
+        raise PairingError(
+            "root_not_allowed",
+            f"{path} is too broad. Choose a folder inside your home folder.",
+            400,
+        )
+    base = sync_daemon.expand_root_path(sync_daemon.OPENBASE_BASE_DIR)
+    state = sync_daemon.expand_root_path(sync_daemon.SYNC_DAEMON_CONFIG_PATH.parent)
+    if target == base or target == state or state in target.parents:
+        raise PairingError(
+            "root_not_allowed",
+            f"{path} holds Openbase's own settings and cannot be synced.",
+            400,
+        )
+
+
 def _ensure_root_dirs(roots: list[dict[str, Any]]) -> None:
     for root in roots:
         sync_daemon.expand_root_path(root["path"]).mkdir(parents=True, exist_ok=True)
@@ -372,6 +397,8 @@ def become_hub(roots: list[str] | None = None, group: str = "default") -> dict:
                 "and try again.",
                 409,
             )
+        for root in roots or []:
+            check_root_allowed(root)
         entries, change = sync_daemon.plan_root_additions([], roots or default_roots())
         if not entries:
             raise PairingError("no_roots", "Choose at least one folder to sync.", 400)
@@ -565,6 +592,8 @@ def join_hub(hub: str, roots: list[str] | None = None) -> dict[str, Any]:
                 "hub_error", f"{peer.name} does not sync any folders yet.", 409
             )
         selected = _select_roots(hub_roots, roots, peer.name)
+        for root in selected:
+            check_root_allowed(root["path"])
         _ensure_root_dirs(selected)
         anchor = payload.get("anchor")
         config = sync_daemon.SyncDaemonConfig(
@@ -743,6 +772,7 @@ def add_root(path: str, *, local_only: bool = False) -> dict[str, Any]:
     """
     if not path or not str(path).strip():
         raise PairingError("path_required", "Choose a folder.", 400)
+    check_root_allowed(path)
     with _lock:
         role = _require_configured_role()
         target = sync_daemon.expand_root_path(path)
