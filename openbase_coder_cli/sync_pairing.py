@@ -191,11 +191,29 @@ def _service():
     return find_service(sync_daemon.SYNC_DAEMON_SERVICE_NAME)
 
 
-def _start_service() -> None:
+def _externally_supervised() -> bool:
+    """Whether something other than launchd/systemd runs the services.
+
+    The Docker image supervises services itself and only starts the sync
+    daemon at container start, so changes there take effect on a restart.
+    """
+    from openbase_coder_cli.services.launchd import _external_supervisor
+
+    return _external_supervisor()
+
+
+def _start_service() -> bool:
+    """Install and start the service; True when a restart is still needed."""
     from openbase_coder_cli.services.installation import InstallationConfig
-    from openbase_coder_cli.services.launchd import install_service
+    from openbase_coder_cli.services.launchd import (
+        install_service,
+        regenerate_service,
+    )
 
     try:
+        if _externally_supervised():
+            regenerate_service(InstallationConfig.load(), _service())
+            return True
         install_service(InstallationConfig.load(), _service())
     except Exception as exc:  # noqa: BLE001 - surfaced as a clear message
         raise PairingError(
@@ -204,12 +222,17 @@ def _start_service() -> None:
             "Start it with 'openbase-coder services start sync-daemon'.",
             500,
         ) from exc
+    return False
 
 
-def _stop_service() -> None:
-    from openbase_coder_cli.services.launchd import remove_service
+def _stop_service() -> bool:
+    """Stop and remove the service; True when a restart is still needed."""
+    from openbase_coder_cli.services.launchd import _wrapper_path, remove_service
 
     try:
+        if _externally_supervised():
+            _wrapper_path(_service()).unlink(missing_ok=True)
+            return True
         remove_service(_service())
     except Exception as exc:  # noqa: BLE001 - surfaced as a clear message
         raise PairingError(
@@ -217,6 +240,14 @@ def _stop_service() -> None:
             f"Could not stop the sync service ({exc}). Nothing was changed.",
             500,
         ) from exc
+    return False
+
+
+def _restart_service() -> tuple[bool, bool]:
+    """Restart after a root change: (restarted, restart_required)."""
+    if _externally_supervised():
+        return False, True
+    return sync_daemon.restart_service_if_installed(), False
 
 
 def refresh_cloud_registration(*, background: bool = True) -> None:
@@ -415,11 +446,12 @@ def become_hub(roots: list[str] | None = None, group: str = "default") -> dict:
             anchor=DEFAULT_ANCHOR,
         )
         sync_daemon.write_config(config)
-        _start_service()
+        restart_required = _start_service()
     return {
         "role": "hub",
         "roots": entries,
         "skipped": [{"path": p, "reason": r} for p, r in change.skipped],
+        "restart_required": restart_required,
     }
 
 
@@ -608,12 +640,13 @@ def join_hub(hub: str, roots: list[str] | None = None) -> dict[str, Any]:
             anchor=anchor if anchor in {"hub", "edge"} else DEFAULT_ANCHOR,
         )
         sync_daemon.write_config(config)
-        _start_service()
+        restart_required = _start_service()
     return {
         "role": "edge",
         "hub_name": peer.name,
         "hub_host": peer.key,
         "roots": selected,
+        "restart_required": restart_required,
     }
 
 
@@ -629,8 +662,8 @@ def leave() -> dict[str, Any]:
     with _lock:
         config_path = sync_daemon.SYNC_DAEMON_CONFIG_PATH
         if not config_path.is_file():
-            return {"left": False, "config_moved_to": None}
-        _stop_service()
+            return {"left": False, "config_moved_to": None, "restart_required": False}
+        restart_required = _stop_service()
         trash = trash_dir()
         trash.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -640,7 +673,11 @@ def leave() -> dict[str, Any]:
             destination = trash / f"sync-config-{stamp}-{counter}.toml"
             counter += 1
         shutil.move(str(config_path), str(destination))
-    return {"left": True, "config_moved_to": str(destination)}
+    return {
+        "left": True,
+        "config_moved_to": str(destination),
+        "restart_required": restart_required,
+    }
 
 
 # --- roots -----------------------------------------------------------------
@@ -801,10 +838,16 @@ def add_root(path: str, *, local_only: bool = False) -> dict[str, Any]:
         if not local_only and role == "edge":
             peers = _propagate("add", role, entry["path"])
         sync_daemon.set_roots(roots)
-        restarted = sync_daemon.restart_service_if_installed()
+        restarted, restart_required = _restart_service()
         if not local_only and role == "hub":
             peers = _propagate("add", role, entry["path"])
-    return {"root": entry, "roots": roots, "restarted": restarted, "peers": peers}
+    return {
+        "root": entry,
+        "roots": roots,
+        "restarted": restarted,
+        "restart_required": restart_required,
+        "peers": peers,
+    }
 
 
 def remove_root(path: str, *, local_only: bool = False) -> dict[str, Any]:
@@ -841,12 +884,13 @@ def remove_root(path: str, *, local_only: bool = False) -> dict[str, Any]:
         if not local_only and role == "edge":
             peers = _propagate("remove", role, home_relative)
         removed = sync_daemon.remove_roots([path])
-        restarted = sync_daemon.restart_service_if_installed()
+        restarted, restart_required = _restart_service()
         if not local_only and role == "hub":
             peers = _propagate("remove", role, home_relative)
     return {
         "removed": removed,
         "roots": sync_daemon.configured_roots(),
         "restarted": restarted,
+        "restart_required": restart_required,
         "peers": peers,
     }

@@ -32,6 +32,8 @@ from openbase_coder_cli.services import fleet_aggregation as fleet
 from openbase_coder_cli.services import network
 
 SECRET = "0123456789abcdef0123456789abcdef"
+REAL_START_SERVICE = sync_pairing._start_service
+REAL_STOP_SERVICE = sync_pairing._stop_service
 MINI = fleet.FleetPeer(
     key="mini.net.example",
     name="mini",
@@ -84,9 +86,11 @@ def env(home, monkeypatch):
 
     def start():
         state.started += 1
+        return False
 
     def stop():
         state.stopped += 1
+        return False
 
     def restart():
         state.restarted += 1
@@ -349,6 +353,7 @@ def test_join_writes_edge_config_from_the_hubs_offer(env, home, monkeypatch):
         "hub_name": "mini",
         "hub_host": "mini.net.example",
         "roots": [PROJECTS, THREADS],
+        "restart_required": False,
     }
 
 
@@ -512,7 +517,11 @@ def test_leave_stops_service_and_moves_config_to_trash(env, home):
 
 
 def test_leave_when_not_syncing_is_a_no_op(env):
-    assert sync_pairing.leave() == {"left": False, "config_moved_to": None}
+    assert sync_pairing.leave() == {
+        "left": False,
+        "config_moved_to": None,
+        "restart_required": False,
+    }
     assert env.stopped == 0
 
 
@@ -720,3 +729,37 @@ def test_hub_refuses_a_root_that_must_never_sync(env):
         sync_pairing.become_hub(["~"])
     assert excinfo.value.code == "root_not_allowed"
     assert not sync_daemon.is_configured()
+
+
+def test_external_supervisor_writes_the_wrapper_and_asks_for_a_restart(
+    env, home, monkeypatch
+):
+    """The Docker image starts the sync daemon only at container start."""
+    from openbase_coder_cli.services import installation, launchd
+
+    monkeypatch.setattr(
+        installation.InstallationConfig, "load", classmethod(lambda cls: object())
+    )
+    monkeypatch.setattr(sync_pairing, "_start_service", REAL_START_SERVICE)
+    monkeypatch.setattr(sync_pairing, "_stop_service", REAL_STOP_SERVICE)
+    monkeypatch.setattr(sync_pairing, "_externally_supervised", lambda: True)
+    regenerated = []
+    monkeypatch.setattr(
+        launchd, "regenerate_service", lambda config, svc: regenerated.append(svc)
+    )
+    monkeypatch.setattr(
+        launchd,
+        "install_service",
+        lambda *a: pytest.fail("no launchd/systemd under an external supervisor"),
+    )
+    wrapper = home / "sync-daemon.sh"
+    wrapper.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(launchd, "_wrapper_path", lambda svc: wrapper)
+
+    hub = sync_pairing.become_hub(["~/Projects"])
+    left = sync_pairing.leave()
+
+    assert hub["restart_required"] is True
+    assert [svc.name for svc in regenerated] == ["sync-daemon"]
+    assert left["restart_required"] is True
+    assert not wrapper.exists()
