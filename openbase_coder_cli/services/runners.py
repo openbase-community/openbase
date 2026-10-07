@@ -11,6 +11,7 @@ actually exec'ing anything; ``run()``/``main()`` do the real process exec.
 from __future__ import annotations
 
 import ipaddress
+import logging
 import os
 import platform
 import subprocess
@@ -22,6 +23,7 @@ from openbase_coder_cli.services import network
 from openbase_coder_cli.services.installation import InstallationConfig
 
 RunnerArgvEnv = tuple[list[str], dict[str, str]]
+logger = logging.getLogger(__name__)
 
 
 def _is_ip_version(value: str, version: int) -> bool:
@@ -355,7 +357,7 @@ def build_sync_daemon(env: dict[str, str], binaries: dict[str, str]) -> RunnerAr
     try:
         link_cli_tools()
     except OSError:
-        pass
+        logger.warning("sync_daemon_cli_tools_link_failed", exc_info=True)
     argv = [binaries["openbase_syncd"], "--config", str(SYNC_DAEMON_CONFIG_PATH)]
     return argv, env
 
