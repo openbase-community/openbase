@@ -71,6 +71,8 @@ class FleetPeer(NamedTuple):
     key: str
     name: str
     base_url: str
+    ip: str | None = None
+    os: str | None = None
 
 
 class SourcePage(NamedTuple):
@@ -96,12 +98,13 @@ _peer_cache: dict[str, Any] = {"expires": 0.0, "peers": []}
 _peer_failures: dict[str, float] = {}
 
 
-def fleet_peers() -> list[FleetPeer]:
+def fleet_peers(*, include_failed: bool = False) -> list[FleetPeer]:
     """Online tailnet peers, addressed at the Openbase tailnet port.
 
     Cached briefly so list polling doesn't shell out to ``tailscale status``
     on every page. Peers recently seen unreachable are excluded until their
-    failure entry expires.
+    failure entry expires, unless ``include_failed`` is set (callers acting on
+    an explicit user choice, such as sync pairing, want every online peer).
     """
     now = time.monotonic()
     if now < _peer_cache["expires"]:
@@ -118,10 +121,18 @@ def fleet_peers() -> list[FleetPeer]:
                     f":{OPENBASE_CODER_TAILNET_PORT}"
                 )
                 peers.append(
-                    FleetPeer(key=device.host, name=device.name, base_url=base)
+                    FleetPeer(
+                        key=device.host,
+                        name=device.name,
+                        base_url=base,
+                        ip=device.ip,
+                        os=device.os,
+                    )
                 )
         _peer_cache["peers"] = peers
         _peer_cache["expires"] = now + PEER_LIST_CACHE_SECONDS
+    if include_failed:
+        return list(peers)
     return [peer for peer in peers if _peer_failures.get(peer.key, 0.0) <= now]
 
 
