@@ -311,9 +311,9 @@ class GatewayBridge:
         if self._stdout_task is not None:
             await asyncio.wait({self._stdout_task})
 
-    def _signal(self, sig: int) -> None:
+    def _signal(self, sig: int, *, include_exited_root: bool = False) -> None:
         proc = self.proc
-        if proc is None or proc.returncode is not None:
+        if proc is None or (proc.returncode is not None and not include_exited_root):
             return
         try:
             if os.name == "posix":
@@ -339,9 +339,12 @@ class GatewayBridge:
                     self._signal(sig)
             else:
                 await proc.wait()
-        elif proc is not None and os.name == "posix":
-            # The server itself exited; end anything it left in its group.
-            self._signal(getattr(signal, "SIGKILL", signal.SIGTERM))
+        if proc is not None and os.name == "posix":
+            # The server itself may have exited while leaving children behind.
+            self._signal(
+                getattr(signal, "SIGKILL", signal.SIGTERM),
+                include_exited_root=True,
+            )
         for task in (self._stdout_task, self._stderr_task):
             if task is not None and not task.done():
                 task.cancel()
