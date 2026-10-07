@@ -17,8 +17,8 @@ openbase-coder services start
 # Start only Django API
 openbase-coder services start django-cli
 
-# Start the code-sync engine explicitly (normally `openbase-coder sync enable`)
-openbase-coder services start code-sync
+# Start Openbase Sync explicitly (normally `openbase-coder sync-daemon configure`)
+openbase-coder services start sync-daemon
 ```
 
 Starting the default service set also configures the Tailscale Serve routes used

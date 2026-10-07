@@ -31,12 +31,13 @@ openbase-coder services COMMAND [ARGS]
 - `codex-app-server` (standard Unix control socket on macOS/Linux; legacy port
   `4500` only for explicit compatibility deployments)
 - `sync-workers` (cross-device thread snapshot sync, Claude desktop app
-  index sync, code-sync reconcile, and other periodic jobs in one process;
+  index sync, and other periodic jobs in one process;
   state-dependent jobs no-op until their feature is enabled)
 - `openbase-routines`
 - `livekit-agent`
 - `django-cli` (port `7999`)
-- `code-sync` (optional; installed when code sync is enabled)
+- `sync-daemon` (optional; installed by `openbase-coder sync-daemon configure`,
+  see [Sync Between Your Computers](../code-sync.md))
 
 ## Examples
 
