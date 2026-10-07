@@ -597,3 +597,41 @@ def reachable(socket_path: Path | None = None) -> bool:
         return True
     except SyncDaemonError:
         return False
+
+
+USER_BIN_DIR = Path.home() / ".local" / "bin"
+CLI_TOOLS = ("edge", "openbase-sync")
+
+
+def link_cli_tools(
+    user_bin: Path | None = None,
+    package_bin: Path | None = None,
+    manual_bin: Path | None = None,
+) -> list[Path]:
+    """Put `edge` and `openbase-sync` on PATH next to `openbase-coder`.
+
+    Links point at the packaged binaries when present (so self-update moves
+    them), else at a manual `install-binary` copy. Existing files that are not
+    our symlinks are left alone.
+    """
+    from openbase_coder_cli.paths import STANDALONE_CURRENT_DIR
+
+    user_bin = user_bin or USER_BIN_DIR
+    package_bin = package_bin or (STANDALONE_CURRENT_DIR / "bin")
+    manual_bin = manual_bin or OPENBASE_BIN_DIR
+    linked: list[Path] = []
+    for name in CLI_TOOLS:
+        target = package_bin / name if (package_bin / name).exists() else manual_bin / name
+        if not target.exists():
+            continue
+        link = user_bin / name
+        if link.exists() or link.is_symlink():
+            if not link.is_symlink():
+                continue  # a file of the user's: never replace it
+            if Path(os.readlink(link)) == target:
+                continue
+            link.unlink()
+        user_bin.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(target)
+        linked.append(link)
+    return linked

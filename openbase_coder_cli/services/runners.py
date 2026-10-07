@@ -348,8 +348,14 @@ def build_django_cli(env: dict[str, str], binaries: dict[str, str]) -> RunnerArg
 
 
 def build_sync_daemon(env: dict[str, str], binaries: dict[str, str]) -> RunnerArgvEnv:
-    from openbase_coder_cli.sync_daemon import SYNC_DAEMON_CONFIG_PATH
+    from openbase_coder_cli.sync_daemon import SYNC_DAEMON_CONFIG_PATH, link_cli_tools
 
+    # Installing (or reinstalling after self-update) the service also keeps
+    # the agent-facing tools on PATH, pointing at the current engine.
+    try:
+        link_cli_tools()
+    except OSError:
+        pass
     argv = [binaries["openbase_syncd"], "--config", str(SYNC_DAEMON_CONFIG_PATH)]
     return argv, env
 

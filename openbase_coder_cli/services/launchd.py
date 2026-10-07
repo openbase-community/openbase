@@ -25,6 +25,7 @@ from openbase_coder_cli.paths import (
     OPENBASE_BASE_DIR,
     OPENBASE_BIN_DIR,
     PLIST_DIR,
+    STANDALONE_CURRENT_DIR,
     TASK_SCHEDULER_DIR,
 )
 from openbase_coder_cli.runtime import stable_runtime_package
@@ -171,6 +172,10 @@ def _binary_resolvers(config: InstallationConfig) -> dict[str, Callable[[], str]
                     if os.environ.get("OPENBASE_SYNCD_BIN")
                     else []
                 ),
+                # The packaged engine follows self-update; a manual
+                # `sync-daemon install-binary` copy is the fallback for
+                # development installs, which carry no package.
+                STANDALONE_CURRENT_DIR / "bin" / "openbase-syncd",
                 OPENBASE_BIN_DIR / "openbase-syncd",
                 *_workspace_binary_candidates(config, "openbase-syncd"),
             ],
