@@ -209,7 +209,10 @@ def test_self_update_flips_current_and_keeps_previous(monkeypatch, tmp_path) -> 
     assert cache["update_available"] is False
 
 
-def test_self_update_rolls_back_on_failed_health_gate(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("activation_timeout", [False, True])
+def test_self_update_rolls_back_on_failed_health_gate(
+    monkeypatch, tmp_path, activation_timeout
+) -> None:
     layout = _patch_standalone_layout(monkeypatch, tmp_path)
     old_root = layout["releases"] / "1.0.0-aarch64-apple-darwin"
     _make_fake_package(old_root, version="1.0.0")
@@ -237,11 +240,14 @@ def test_self_update_rolls_back_on_failed_health_gate(monkeypatch, tmp_path) -> 
     )
     monkeypatch.setattr(self_update, "_voice_session_active", lambda: False)
     # New launcher fails post-flip; old launcher succeeds during rollback.
-    monkeypatch.setattr(
-        self_update,
-        "_post_flip",
-        lambda _launcher, old_root, new_root, report: False,
-    )
+    def failed_activation(_launcher, *, old_root, new_root, report):
+        if activation_timeout:
+            import subprocess
+
+            raise subprocess.TimeoutExpired("services-install", 600)
+        return False
+
+    monkeypatch.setattr(self_update, "_post_flip", failed_activation)
     rollback_calls: list[list[str]] = []
     monkeypatch.setattr(
         self_update,
@@ -614,3 +620,50 @@ def test_staging_channel_skips_drafts_and_manifestless_releases(monkeypatch) -> 
     manifest_url, _ = self_update._prerelease_manifest_urls("staging")
 
     assert manifest_url == "https://example.test/v0.3.0.dev20260811120000/manifest"
+
+
+@pytest.mark.parametrize("failure", ["plugins", "services", "timeout", None])
+def test_python_minor_upgrade_preserves_plugins_on_activation_failure(
+    tmp_path, monkeypatch, failure
+):
+    import subprocess
+
+    old = _make_fake_package(tmp_path / "old", version="1.0", python_version="3.12.8")
+    new = _make_fake_package(tmp_path / "new", version="2.0", python_version="3.13.1")
+    site = tmp_path / "plugins" / "site"
+    site.mkdir(parents=True)
+    (site / "native.so").write_bytes(b"old-python-plugin")
+    monkeypatch.setattr(self_update, "PLUGIN_SITE_DIR", site)
+    calls = []
+
+    def run(launcher, args, *, report):
+        calls.append(args[0])
+        if args[0] == "plugins":
+            (site / "native.so").write_bytes(b"new-python-plugin")
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired("plugin-rebuild", 600)
+        return args[0] != failure
+
+    monkeypatch.setattr(self_update, "_run_launcher", run)
+    if failure == "timeout":
+        with pytest.raises(subprocess.TimeoutExpired):
+            self_update._post_flip(
+                new / "bin/openbase-coder",
+                old_root=old,
+                new_root=new,
+                report=lambda _s: None,
+            )
+    else:
+        assert self_update._post_flip(
+            new / "bin/openbase-coder",
+            old_root=old,
+            new_root=new,
+            report=lambda _s: None,
+        ) is (failure is None)
+    assert (site / "native.so").read_bytes() == (
+        b"new-python-plugin" if failure is None else b"old-python-plugin"
+    )
+    assert calls == (
+        ["plugins"] if failure in ("plugins", "timeout") else ["plugins", "services"]
+    )
+    assert sorted(p.name for p in site.parent.iterdir()) == ["site"]

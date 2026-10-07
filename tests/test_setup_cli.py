@@ -1945,6 +1945,40 @@ def test_relink_workspace_skills_noop_without_installation(monkeypatch) -> None:
     assert codex_setup.relink_workspace_skills_from_installation() is False
 
 
+def test_standalone_startup_links_skills_added_by_package_update(tmp_path, monkeypatch):
+    from openbase_coder_cli import runtime
+    from openbase_coder_cli.cli.setup import codex as codex_setup
+    from openbase_coder_cli.services.installation import InstallationConfig
+
+    old = tmp_path / "releases" / "old"
+    new = tmp_path / "releases" / "new"
+    for root, names in ((old, ("existing",)), (new, ("existing", "added"))):
+        for name in names:
+            skill = root / "skills" / name
+            skill.mkdir(parents=True)
+            (skill / "SKILL.md").write_text(root.name)
+    current = tmp_path / "current"
+    current.symlink_to(old)
+    monkeypatch.setattr(runtime, "STANDALONE_CURRENT_DIR", current)
+    homes = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(codex_setup, "packaged_skills_dir", lambda: current / "skills")
+    monkeypatch.setattr(InstallationConfig, "exists", classmethod(lambda cls: True))
+    monkeypatch.setattr(
+        InstallationConfig,
+        "load",
+        classmethod(lambda cls: InstallationConfig(standalone=True, workspace_path="")),
+    )
+    assert codex_setup.relink_workspace_skills_from_installation()
+    current.unlink()
+    current.symlink_to(new)
+    assert codex_setup.relink_workspace_skills_from_installation()
+    for home in homes:
+        for name in ("existing", "added"):
+            target = home / "skills" / name
+            assert target.readlink() == current / "skills" / name
+            assert (target / "SKILL.md").read_text() == "new"
+
+
 def _fake_tty_stdin(monkeypatch, text: str) -> None:
     import io
     import sys

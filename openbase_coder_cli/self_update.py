@@ -30,6 +30,7 @@ from openbase_coder_cli.file_lock import LOCK_EX, LOCK_NB, LOCK_UN, flock
 from openbase_coder_cli.paths import (
     DEFAULT_LOG_DIR,
     OPENBASE_BASE_DIR,
+    PLUGIN_SITE_DIR,
     STANDALONE_CURRENT_DIR,
     STANDALONE_PACKAGES_DIR,
     STANDALONE_RELEASES_DIR,
@@ -314,7 +315,14 @@ def _run_self_update_locked(
     _point_symlink(STANDALONE_CURRENT_DIR, release_dir)
 
     new_launcher = STANDALONE_CURRENT_DIR / "bin" / "openbase-coder"
-    if _post_flip(new_launcher, old_root=old_root, new_root=release_dir, report=report):
+    try:
+        activated = _post_flip(
+            new_launcher, old_root=old_root, new_root=release_dir, report=report
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        report(f"Post-update activation failed: {exc}")
+        activated = False
+    if activated:
         _refresh_backend_binaries(report)
         _prune_releases()
         _write_update_check_cache(
@@ -520,12 +528,14 @@ def _point_symlink(link: Path, destination: Path) -> None:
 
 
 def _post_flip(new_launcher: Path, *, old_root: Path, new_root: Path, report) -> bool:
-    if not _run_launcher(new_launcher, ["services", "install"], report=report):
-        return False
     if _bundled_python_changed(old_root, new_root):
+        from openbase_coder_cli.self_update_plugins import migrate_plugin_site
+
         report("Bundled Python changed; rebuilding the plugin site...")
-        _run_launcher(new_launcher, ["plugins", "rebuild-site"], report=report)
-    return True
+        return migrate_plugin_site(
+            PLUGIN_SITE_DIR, new_launcher, run_launcher=_run_launcher, report=report
+        )
+    return _run_launcher(new_launcher, ["services", "install"], report=report)
 
 
 def _run_launcher(launcher: Path, args: list[str], *, report) -> bool:

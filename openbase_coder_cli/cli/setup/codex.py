@@ -119,7 +119,7 @@ def relink_workspace_skills_from_installation(
     *,
     report: Callable[[str], None] | None = None,
 ) -> bool:
-    """Re-point bundled workspace skill links at this machine's checkout.
+    """Re-point bundled skill links at this machine's current installation.
 
     Skill links in the agent homes are machine-local symlinks, but the
     directories that hold them can be replicated between machines by file
@@ -135,7 +135,7 @@ def relink_workspace_skills_from_installation(
         if not InstallationConfig.exists():
             return False
         config = InstallationConfig.load()
-        if not config.workspace_path:
+        if not config.workspace_path and not config.standalone:
             return False
         _symlink_codex_home_skills(config.workspace_path, report=emit)
         return True
