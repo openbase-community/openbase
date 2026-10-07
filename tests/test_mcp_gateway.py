@@ -50,6 +50,18 @@ FAKE_SERVER = textwrap.dedent(
             f.write(str(os.getpid()))
     if mode == "exit":
         sys.exit(0)
+    if mode == "spawn-child-exit":
+        import subprocess
+        child = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if pid_file:
+            with open(pid_file, "w") as f:
+                f.write(f"{os.getpid()} {child.pid}")
+        sys.exit(0)
     if mode == "stubborn":
         import signal
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -201,6 +213,34 @@ async def test_bridge_stop_kills_process_that_ignores_eof_and_sigterm(
     await bridge.stop()
     assert time.monotonic() - started < 5
     assert await _wait_dead(pid)
+
+
+async def test_bridge_stop_kills_process_group_after_server_exits(
+    fake_server: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pid_file = tmp_path / "pid"
+    monkeypatch.setenv("FAKE_MCP_PID_FILE", str(pid_file))
+    server = gw.ServedServer(
+        "fake", [sys.executable, str(fake_server), "spawn-child-exit"]
+    )
+    bridge = gw.GatewayBridge(server, lambda text: asyncio.sleep(0))
+    child_pid = None
+    await bridge.start()
+    try:
+        await _wait_for(lambda: pid_file.exists())
+        assert bridge.proc is not None
+        await asyncio.wait_for(bridge.proc.wait(), 5)
+        _, child_pid_text = pid_file.read_text().split()
+        child_pid = int(child_pid_text)
+        assert _pid_alive(child_pid)
+        await bridge.stop()
+        assert await _wait_dead(child_pid)
+    finally:
+        if child_pid is not None and _pid_alive(child_pid):
+            try:
+                os.kill(child_pid, 9)
+            except ProcessLookupError:
+                pass
 
 
 async def test_bridge_start_failure_raises_oserror(tmp_path: Path) -> None:
