@@ -189,14 +189,14 @@ def _apply_provider(name: str, *, push_cloud: bool) -> None:
 def _teardown_transport(previous: str) -> None:
     """Best-effort teardown of the transport we're leaving."""
     from openbase_coder_cli.services.definitions import TUNNELD_SERVICE
-    from openbase_coder_cli.services.launchd import launchctl_bootout
+    from openbase_coder_cli.services.launchd import remove_service
 
     if previous == tp.PROVIDER_NETMESH_TSNET:
         try:
-            launchctl_bootout(TUNNELD_SERVICE)
-            click.echo("Stopped openbase-tunneld.")
+            remove_service(TUNNELD_SERVICE)
+            click.echo("Removed openbase-tunneld.")
         except Exception as exc:  # noqa: BLE001 - best-effort teardown
-            click.echo(f"Note: could not stop openbase-tunneld: {exc}")
+            click.echo(f"Note: could not remove openbase-tunneld: {exc}")
     elif previous == tp.PROVIDER_TAILSCALE:
         tailscale_bin = tp.tailscale_bin()
         if tailscale_bin:
