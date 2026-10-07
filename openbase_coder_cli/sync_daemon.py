@@ -30,6 +30,11 @@ SYNC_DAEMON_SERVICE_NAME = "sync-daemon"
 SYNC_DAEMON_BINARY_NAME = "openbase-syncd"
 SYNC_CTL_BINARY_NAME = "openbase-sync"
 SYNC_EDGE_BINARY_NAME = "edge"  # hub-side relay for display-bound commands
+SYNC_ENGINE_BINARY_NAMES = (
+    SYNC_DAEMON_BINARY_NAME,
+    SYNC_CTL_BINARY_NAME,
+    SYNC_EDGE_BINARY_NAME,
+)
 DEFAULT_HOT_PORT = 22100
 DEFAULT_BULK_PORT = 22101
 
@@ -600,7 +605,7 @@ def reachable(socket_path: Path | None = None) -> bool:
 
 
 USER_BIN_DIR = Path.home() / ".local" / "bin"
-CLI_TOOLS = ("edge", "openbase-sync")
+CLI_TOOLS = (SYNC_EDGE_BINARY_NAME, SYNC_CTL_BINARY_NAME)
 
 
 def link_cli_tools(
@@ -621,7 +626,9 @@ def link_cli_tools(
     manual_bin = manual_bin or OPENBASE_BIN_DIR
     linked: list[Path] = []
     for name in CLI_TOOLS:
-        target = package_bin / name if (package_bin / name).exists() else manual_bin / name
+        target = (
+            package_bin / name if (package_bin / name).exists() else manual_bin / name
+        )
         if not target.exists():
             continue
         link = user_bin / name

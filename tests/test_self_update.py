@@ -15,6 +15,7 @@ from click.testing import CliRunner
 from openbase_coder_cli import self_update
 from openbase_coder_cli.runtime import RuntimePackage
 from openbase_coder_cli.services.installation import InstallationConfig
+from openbase_coder_cli.sync_daemon import SYNC_ENGINE_BINARY_NAMES
 
 
 def _make_fake_package(
@@ -30,6 +31,10 @@ def _make_fake_package(
     tunneld = root / "bin" / "openbase-tunneld"
     tunneld.write_text("#!/bin/sh\n", encoding="utf-8")
     tunneld.chmod(0o755)
+    for name in SYNC_ENGINE_BINARY_NAMES:
+        binary = root / "bin" / name
+        binary.write_text("#!/bin/sh\n", encoding="utf-8")
+        binary.chmod(0o755)
     (root / "openbase-coder-package.json").write_text(
         json.dumps(
             {
@@ -263,6 +268,14 @@ def test_download_rejects_checksum_mismatch(monkeypatch, tmp_path) -> None:
             target="aarch64-apple-darwin",
             report=lambda _msg: None,
         )
+
+
+def test_validate_release_dir_requires_sync_engine(tmp_path: Path) -> None:
+    release = _make_fake_package(tmp_path / "release", version="2.0.0")
+    (release / "bin" / "openbase-sync").unlink()
+
+    with pytest.raises(self_update.SelfUpdateError, match="openbase-sync"):
+        self_update._validate_release_dir(release)
 
 
 def test_installation_config_refuses_newer_schema(tmp_path, monkeypatch) -> None:

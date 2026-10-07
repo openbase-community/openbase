@@ -279,6 +279,8 @@ jobs:
           codesign --verify --deep --strict "$PACKAGE_DIR/bin/livekit-server"
           codesign --verify --deep --strict "$PACKAGE_DIR/bin/openbase-tunneld"
           codesign --verify --deep --strict "$PACKAGE_DIR/bin/openbase-syncd"
+          codesign --verify --deep --strict "$PACKAGE_DIR/bin/openbase-sync"
+          codesign --verify --deep --strict "$PACKAGE_DIR/bin/edge"
           codesign --verify --deep --strict "$PACKAGE_DIR/python/bin/python$pyver"
 
       - name: Archive release assets

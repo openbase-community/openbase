@@ -21,6 +21,7 @@ INSTRUCTIONS_ROOT = REPO_ROOT / "instructions"
 SKILLS_ROOT = REPO_ROOT / "skills"
 SUPER_AGENTS_ROOT = REPO_ROOT / "super-agents"
 METADATA_FILENAME = "openbase-coder-package.json"
+SYNC_ENGINE_BINARIES = ("openbase-syncd", "openbase-sync", "edge")
 
 
 def parse_args() -> argparse.Namespace:
@@ -88,7 +89,11 @@ def main() -> int:
     )
     prune_rebuildable_bytecode(python_dir)
     ad_hoc_sign_macos_package(package_dir)
-    validate_package(package_dir, args.version)
+    validate_package(
+        package_dir,
+        args.version,
+        require_sync_engine=args.sync_engine_dir is not None,
+    )
 
     if args.archive_output:
         write_archive(package_dir, args.archive_output.resolve(), force=args.force)
@@ -218,8 +223,7 @@ def _verify_source_super_agents(python_dir: Path) -> None:
     # server. Exercise that construction in the exact bundled interpreter so
     # an incompatible resolver result fails the release instead of onboarding.
     compatibility_check = (
-        "from super_agents.mcp_server import create_server; "
-        "create_server(object())"
+        "from super_agents.mcp_server import create_server; create_server(object())"
     )
     result = subprocess.run(
         [str(runtime_python(python_dir)), "-c", compatibility_check],
@@ -378,7 +382,7 @@ def stage_bin(
     shutil.copy2(tunneld_bin, bin_dir / "openbase-tunneld")
     (bin_dir / "openbase-tunneld").chmod(0o755)
     if sync_engine_dir is not None:
-        for name in ("openbase-syncd", "openbase-sync", "edge"):
+        for name in SYNC_ENGINE_BINARIES:
             src = sync_engine_dir / name
             if not src.is_file():
                 raise RuntimeError(f"sync engine binary not found: {src}")
@@ -454,7 +458,9 @@ def write_metadata(
     )
 
 
-def validate_package(package_dir: Path, version: str) -> None:
+def validate_package(
+    package_dir: Path, version: str, *, require_sync_engine: bool = False
+) -> None:
     required = [
         package_dir / METADATA_FILENAME,
         package_dir / "bin" / "openbase-coder",
@@ -463,6 +469,8 @@ def validate_package(package_dir: Path, version: str) -> None:
         package_dir / "python" / "bin" / "python",
         package_dir / "console" / "index.html",
     ]
+    if require_sync_engine:
+        required.extend(package_dir / "bin" / name for name in SYNC_ENGINE_BINARIES)
     for path in required:
         if not path.exists():
             raise RuntimeError(f"Package validation failed; missing {path}")
