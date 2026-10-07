@@ -97,6 +97,20 @@ def _voice_session_active() -> bool:
         return True
 
 
+def _agent_started_ts() -> float | None:
+    """Start time of the running livekit-agent process, or None if unknown."""
+    import psutil
+
+    from openbase_coder_cli.services.launchd import launchctl_status
+    from openbase_coder_cli.services.registry import find_service
+
+    try:
+        pid = int(launchctl_status(find_service(_AGENT_SERVICE_NAME)).get("pid") or 0)
+        return psutil.Process(pid).create_time() if pid else None
+    except Exception:  # noqa: BLE001 - an unknown start time just disables the reset
+        return None
+
+
 def _agent_service_running() -> bool:
     """True only when the livekit-agent service is installed and has a pid."""
     from openbase_coder_cli.services.launchd import launchctl_status
@@ -270,8 +284,8 @@ def _bounce_failure(state: dict, now: float) -> bool:
         reason = "stale_pool_signature"
 
     logger.info("livekit_pool_watchdog bounce reason=%s services=%s", reason, services)
-    _execute_bounce(services)
     state["last_failure_bounce_ts"] = now
+    _execute_bounce(services)
     return True
 
 
@@ -286,7 +300,12 @@ def _bounce_idle(state: dict, now: float) -> bool:
     baseline = state.get("baseline_ts") or 0.0
     last_failure = state.get("last_failure_bounce_ts") or 0.0
     last_idle = state.get("last_idle_recycle_ts") or 0.0
-    last_activity = max(baseline, last_failure, last_idle)
+    # The agent's own start counts as activity: a process younger than the
+    # idle window was already recycled (boot, a manual restart, or a
+    # container restored after sleeping for hours, where the wall clock jumps
+    # far past a baseline recorded before the sleep).
+    started = _agent_started_ts() or 0.0
+    last_activity = max(baseline, last_failure, last_idle, started)
     if (now - last_activity) < idle_seconds:
         return False
 
@@ -308,11 +327,12 @@ def _bounce_idle(state: dict, now: float) -> bool:
         "livekit_pool_watchdog bounce reason=idle_recycle services=('%s',)",
         _AGENT_SERVICE_NAME,
     )
-    _execute_bounce((_AGENT_SERVICE_NAME,))
     # Idle recycles reset the idle timer but do NOT count toward the failure
     # escalation ladder (only last_idle_recycle_ts advances, not the failure
-    # bounce timestamp).
+    # bounce timestamp). Advance it before bouncing: a bounce that raises
+    # halfway (the process already killed) must not fire again next tick.
     state["last_idle_recycle_ts"] = now
+    _execute_bounce((_AGENT_SERVICE_NAME,))
     return True
 
 
@@ -335,15 +355,19 @@ def run_tick() -> None:
     new_content = _read_new_log_content(state)
     signature_detected = new_content.count(STALE_POOL_SIGNATURE) > 0
 
-    bounced = False
-    if signature_detected or _pending_active(state, now):
-        bounced = _bounce_failure(state, now)
-    else:
-        # A stale/expired pending flag is cleared so it cannot linger.
-        if state.get("pending") is not None:
-            state["pending"] = None
+    # Persist whatever was decided even when the bounce itself raises, so a
+    # failed restart is rate-limited like any other instead of repeating
+    # every tick.
+    try:
+        bounced = False
+        if signature_detected or _pending_active(state, now):
+            bounced = _bounce_failure(state, now)
+        else:
+            # A stale/expired pending flag is cleared so it cannot linger.
+            if state.get("pending") is not None:
+                state["pending"] = None
 
-    if not bounced:
-        _bounce_idle(state, now)
-
-    _write_state(state)
+        if not bounced:
+            _bounce_idle(state, now)
+    finally:
+        _write_state(state)
