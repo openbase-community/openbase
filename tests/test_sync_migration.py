@@ -228,6 +228,25 @@ def test_remove_markers_moves_them_into_the_trash(home, fake_launchd):
     assert (home / "Projects" / "README.md").read_text() == "mine"
 
 
+def test_remove_markers_after_state_was_already_migrated(home, fake_launchd):
+    _legacy_install(home, fake_launchd)
+    _configure_daemon(["~/Projects"])
+    first = CliRunner().invoke(sync, ["migrate-from-syncthing", "--apply"])
+    assert first.exit_code == 0, first.output
+    (trash,) = (home / ".openbase" / "trash").iterdir()
+    assert (home / "Projects" / ".stignore").is_file()
+
+    second = CliRunner().invoke(
+        sync, ["migrate-from-syncthing", "--apply", "--remove-markers"]
+    )
+
+    assert second.exit_code == 0, second.output
+    assert not (home / "Projects" / ".stignore").exists()
+    assert not (home / "Projects" / ".stfolder").exists()
+    assert (trash / "Projects" / ".stignore").read_text() == "(?d).git\n"
+    assert list((home / ".openbase" / "trash").iterdir()) == [trash]
+
+
 def test_nested_existing_roots_are_kept_unless_replace_nested(home, fake_launchd):
     _legacy_install(home, fake_launchd)
     _configure_daemon(["~/Projects/app/data"])

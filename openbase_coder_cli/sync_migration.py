@@ -58,6 +58,18 @@ def trash_dir() -> Path:
     return OPENBASE_BASE_DIR / "trash"
 
 
+def _latest_migration_trash_folder() -> Path | None:
+    try:
+        folders = [
+            path
+            for path in trash_dir().iterdir()
+            if path.is_dir() and path.name.startswith(TRASH_PREFIX)
+        ]
+    except OSError:
+        return None
+    return max(folders, key=lambda path: path.name, default=None)
+
+
 @dataclass(frozen=True)
 class LegacyFolder:
     relpath: str
@@ -98,6 +110,13 @@ def read_legacy_config(path: Path | None = None) -> LegacyConfig:
         )
         folders.append(LegacyFolder(relpath=relpath, extra_ignores=ignores))
     return LegacyConfig(enabled=payload.get("enabled") is True, folders=tuple(folders))
+
+
+def _read_latest_trashed_legacy_config() -> LegacyConfig:
+    folder = _latest_migration_trash_folder()
+    if folder is None:
+        return LegacyConfig()
+    return read_legacy_config(folder / ".openbase" / "sync-config.json")
 
 
 def roots_for_legacy_config(config: LegacyConfig) -> list[str]:
@@ -186,6 +205,15 @@ def plan_migration(
 ) -> MigrationPlan:
     """What a migration would do on this computer. Changes nothing."""
     config = read_legacy_config()
+    if (
+        include_markers
+        and not config.folders
+        and not legacy_config_path().exists()
+        and not config.error
+    ):
+        # A normal migration moves sync-config.json into trash first. A later
+        # marker-cleanup pass still needs that folder list to find .stignore.
+        config = _read_latest_trashed_legacy_config()
     trash_paths = [
         path
         for path in (legacy_engine_dir(), legacy_versions_dir(), legacy_config_path())
@@ -251,7 +279,11 @@ def apply_migration(
 
     to_move = [*plan.trash_paths, *plan.markers]
     if to_move:
-        folder = _unique_trash_folder(now or datetime.now())
+        folder = (
+            _latest_migration_trash_folder()
+            if plan.markers and not plan.trash_paths
+            else None
+        ) or _unique_trash_folder(now or datetime.now())
         for path in to_move:
             if not (path.exists() or path.is_symlink()):
                 continue
