@@ -32,6 +32,7 @@ These docs cover the whole product, not just the CLI:
 - What can I do on my phone? → [iOS App](ios-tabs.md) or the [Android app](downloads.md) (same features on both)
 - What is app.openbase.cloud for? → [Web Console & Cloud](console.md)
 - Talking to agents by voice, transferring calls → [Voice Routing](voice-routing.md)
+- Letting agents on another machine use your laptop's screen or browser → [Laptop Tools](laptop-tools.md)
 - Something is broken → [Troubleshooting](troubleshooting.md)
 - CLI flags and behavior → [Commands](commands/index.md)
 
@@ -65,6 +66,7 @@ Using the apps:
 - [Android app](downloads.md)
 - [Web Console & Openbase Cloud](console.md)
 - [Voice Routing](voice-routing.md)
+- [Laptop Tools for Remote Agents](laptop-tools.md)
 
 Setup and operations:
 

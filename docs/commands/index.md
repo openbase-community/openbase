@@ -32,6 +32,8 @@ openbase-coder [OPTIONS] COMMAND [ARGS]
 | [`server`](server.md) | Run local Django/ASGI server |
 | [`service`](service.md) | Publish a local HTTP service privately over the Openbase VPN |
 | [`restart`](restart.md) | Restart Openbase-managed services |
+| [`sync`](sync.md) | Inspect Openbase Sync, resolve conflicts, and migrate from the previous sync |
+| [`sync-daemon`](sync-daemon.md) | Configure and manage Openbase Sync between two of your computers |
 | [`self-update`](self-update.md) | Update a standalone install to the latest release |
 | [`version`](self-update.md) | Print CLI and package versions plus update availability |
 | [`services`](services.md) | Manage launchd services |
@@ -39,6 +41,7 @@ openbase-coder [OPTIONS] COMMAND [ARGS]
 | [`onboarding`](onboarding.md) | Inspect onboarding state and report it to Openbase cloud |
 | [`login`](login.md) | Email-code login to Openbase cloud |
 | [`loops`](loops.md) | Manage loops: scheduled or event-triggered agent prompts and commands (alias: `routines`) |
+| [`mcp-gateway`](../laptop-tools.md#commands) | Make MCP servers bound to one machine (such as your laptop's screen) available to agents on another |
 | [`logout`](logout.md) | Remove saved auth tokens |
 | [`plugins`](plugins.md) | Install and manage Openbase plugins |
 | [`profiles`](profiles.md) | Install or repair Openbase conversation profiles and session-ID hooks |

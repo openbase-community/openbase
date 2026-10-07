@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from django.urls import re_path
 
+from openbase_coder_cli.mcp_gateway import NAME_PATTERN
+
 from . import consumers
 
 websocket_urlpatterns = [
@@ -16,4 +18,8 @@ websocket_urlpatterns = [
     re_path(r"ws/approval-requests/$", consumers.ApprovalRequestsConsumer.as_asgi()),
     re_path(r"ws/notifications/$", consumers.NotificationsConsumer.as_asgi()),
     re_path(r"ws/ios-app-control/$", consumers.IOSAppControlConsumer.as_asgi()),
+    re_path(
+        rf"ws/mcp-gateway/(?P<name>{NAME_PATTERN})/$",
+        consumers.McpGatewayConsumer.as_asgi(),
+    ),
 ]

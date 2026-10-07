@@ -26,6 +26,7 @@ from .computer_use import computer_use
 from .defaults import defaults
 from .desktop import desktop
 from .doctor import doctor
+from .mcp_gateway import mcp_gateway
 from .onboarding import onboarding
 from .plugins import plugins
 from .profiles import profiles
@@ -134,6 +135,7 @@ main.add_command(claude_sync)
 main.add_command(claude)
 main.add_command(claude_chrome)
 main.add_command(computer_use)
+main.add_command(mcp_gateway)
 main.add_command(routines)
 main.add_command(routines, name="loops")
 main.add_command(super_agent_name)

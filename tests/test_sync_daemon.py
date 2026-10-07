@@ -273,9 +273,12 @@ def test_config_toml_includes_anchor():
     )
     text = cfg.to_toml()
     assert "[placement]" in text and 'anchor = "edge"' in text
-    assert 'anchor = "hub"' in sync_daemon.SyncDaemonConfig(
-        device_id="d", sync_group="g", role="hub", pair_secret="s"
-    ).to_toml()
+    assert (
+        'anchor = "hub"'
+        in sync_daemon.SyncDaemonConfig(
+            device_id="d", sync_group="g", role="hub", pair_secret="s"
+        ).to_toml()
+    )
 
 
 def test_cli_configure_start_installs_service_with_installation_config(
@@ -291,7 +294,9 @@ def test_cli_configure_start_installs_service_with_installation_config(
     monkeypatch.setattr(
         config_mod.InstallationConfig, "load", classmethod(lambda cls: "CONFIG")
     )
-    monkeypatch.setattr(launchd, "install_service", lambda c, svc: calls.append((c, svc.name)))
+    monkeypatch.setattr(
+        launchd, "install_service", lambda c, svc: calls.append((c, svc.name))
+    )
     runner = CliRunner()
     result = runner.invoke(
         sync_daemon_cli,
@@ -324,7 +329,14 @@ def test_cli_install_binary_installs_all_three(monkeypatch, tmp_path):
         srcs[name] = p
     result = CliRunner().invoke(
         sync_daemon_cli,
-        ["install-binary", str(srcs["syncd"]), "--ctl", str(srcs["ctl"]), "--edge", str(srcs["edge"])],
+        [
+            "install-binary",
+            str(srcs["syncd"]),
+            "--ctl",
+            str(srcs["ctl"]),
+            "--edge",
+            str(srcs["edge"]),
+        ],
     )
     assert result.exit_code == 0, result.output
     for name in (
@@ -354,7 +366,9 @@ def test_install_executable_replaces_via_new_inode(tmp_path):
     before = dest.stat().st_ino
     out = sync_daemon.install_executable(src, dest)
     assert out == dest and dest.read_bytes().endswith(b"v2\n")
-    assert dest.stat().st_ino != before, "destination must be a new inode, not an in-place overwrite"
+    assert dest.stat().st_ino != before, (
+        "destination must be a new inode, not an in-place overwrite"
+    )
     assert dest.stat().st_mode & 0o111
     assert not (tmp_path / "bin" / "tool.new").exists()
 
@@ -398,3 +412,90 @@ def test_install_executable_keeps_existing_binary_when_codesign_fails(
         sync_daemon.install_executable(src, dest)
 
     assert dest.read_bytes() == b"old"
+
+
+def test_link_cli_tools_prefers_package_and_never_replaces_user_files(tmp_path):
+    user_bin, pkg, manual = tmp_path / "ub", tmp_path / "pkg", tmp_path / "man"
+    for d in (pkg, manual):
+        d.mkdir()
+    (pkg / "edge").write_text("#!/bin/sh\n")
+    (manual / "edge").write_text("#!/bin/sh\n")
+    (manual / "openbase-sync").write_text("#!/bin/sh\n")
+    user_bin.mkdir()
+    linked = sync_daemon.link_cli_tools(
+        user_bin=user_bin, package_bin=pkg, manual_bin=manual
+    )
+    assert sorted(p.name for p in linked) == ["edge", "openbase-sync"]
+    import os as _os
+
+    assert _os.readlink(user_bin / "edge") == str(pkg / "edge")
+    assert _os.readlink(user_bin / "openbase-sync") == str(manual / "openbase-sync")
+    # idempotent
+    assert (
+        sync_daemon.link_cli_tools(
+            user_bin=user_bin, package_bin=pkg, manual_bin=manual
+        )
+        == []
+    )
+    # a real file of the user's is never replaced
+    (user_bin / "edge").unlink()
+    (user_bin / "edge").write_text("mine")
+    sync_daemon.link_cli_tools(user_bin=user_bin, package_bin=pkg, manual_bin=manual)
+    assert (user_bin / "edge").read_text() == "mine"
+
+
+def test_fetch_sync_engine_verifies_checksum(tmp_path, monkeypatch):
+    import hashlib
+    import importlib.util
+    import io
+    import json as _json
+    import tarfile
+
+    spec = importlib.util.spec_from_file_location(
+        "fetch_sync_engine",
+        Path(__file__).resolve().parents[1] / "scripts" / "fetch_sync_engine.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name in mod.BINARIES:
+            data = b"#!/bin/sh\necho " + name.encode() + b"\n"
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    blob = buf.getvalue()
+    pin = tmp_path / "pin.json"
+    pin.write_text(
+        _json.dumps(
+            {
+                "version": "9.9.9",
+                "base_url": "https://example.invalid/e",
+                "sha256": {"linux-arm64": hashlib.sha256(blob).hexdigest()},
+            }
+        )
+    )
+
+    class Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(
+        mod.urllib.request, "urlopen", lambda url, timeout=0: Resp(blob)
+    )
+    out = mod.fetch("aarch64-unknown-linux-gnu", tmp_path / "out", pin_path=pin)
+    assert sorted(p.name for p in out) == sorted(mod.BINARIES)
+    pin.write_text(
+        _json.dumps(
+            {
+                "version": "9.9.9",
+                "base_url": "https://example.invalid/e",
+                "sha256": {"linux-arm64": "0" * 64},
+            }
+        )
+    )
+    with pytest.raises(SystemExit):
+        mod.fetch("linux-arm64", tmp_path / "out2", pin_path=pin)

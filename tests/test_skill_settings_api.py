@@ -61,10 +61,10 @@ def test_disabling_device_sync_does_not_change_backend_linking(monkeypatch):
 
 
 def test_device_sync_failure_returns_actionable_error(monkeypatch):
-    from openbase_coder_cli.code_sync import CodeSyncError
+    from openbase_coder_cli.sync_daemon import SyncDaemonError
 
     def fail(value):
-        raise CodeSyncError("Add a second machine to enable sync.")
+        raise SyncDaemonError("Add a second machine to enable sync.")
 
     monkeypatch.setattr(skill_settings.skills_sync, "set_enabled", fail)
     response = skill_settings.skill_sharing_settings(

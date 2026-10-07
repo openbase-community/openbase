@@ -36,7 +36,7 @@ openbase-coder doctor
 - Skill symlinks in `~/.codex/skills` and `~/.claude/skills`
 - Local audio model readiness when Kokoro or local MLX Whisper is selected
 
-Optional services such as `code-sync` are allowed to be stopped or absent
+Optional services such as `sync-daemon` are allowed to be stopped or absent
 without causing a doctor failure.
 
 ## Required Environment Keys

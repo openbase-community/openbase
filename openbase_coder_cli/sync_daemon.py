@@ -1,9 +1,10 @@
 """Openbase Sync daemon integration (``openbase-syncd``).
 
-The daemon is the hub/edge mirror that replaces the Syncthing-based code sync.
-It owns its own config and state under ``~/.openbase/sync`` and exposes a
-JSON-lines control API on a unix socket. This module is the thin client the
-CLI, the API views and health checks use; it never implements sync logic.
+The daemon is the hub/edge mirror that keeps a user's computers in sync. It
+owns its state under ``~/.openbase/sync`` and exposes a JSON-lines control API
+on a unix socket. This module is the thin client the CLI, the API views and
+health checks use, plus the helpers that edit the ``[[roots]]`` of its config
+file; it never implements sync logic.
 """
 
 from __future__ import annotations
@@ -15,8 +16,10 @@ import shutil
 import socket
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Iterable
 
 from openbase_coder_cli.paths import OPENBASE_BASE_DIR, OPENBASE_BIN_DIR
 
@@ -27,8 +30,20 @@ SYNC_DAEMON_SERVICE_NAME = "sync-daemon"
 SYNC_DAEMON_BINARY_NAME = "openbase-syncd"
 SYNC_CTL_BINARY_NAME = "openbase-sync"
 SYNC_EDGE_BINARY_NAME = "edge"  # hub-side relay for display-bound commands
+SYNC_ENGINE_BINARY_NAMES = (
+    SYNC_DAEMON_BINARY_NAME,
+    SYNC_CTL_BINARY_NAME,
+    SYNC_EDGE_BINARY_NAME,
+)
 DEFAULT_HOT_PORT = 22100
 DEFAULT_BULK_PORT = 22101
+
+# Product folders: state other Openbase features exchange between computers
+# by having it mirrored. Thread device sync writes snapshots into the thread
+# exchange; skills sync shares the personal skills directory (plus the
+# folders its skills link to, see ``skills_sync``). Written home-relative so
+# the same config works on computers whose home directories differ.
+PERSONAL_SKILLS_ROOT = "~/.agents/skills"
 
 
 class SyncDaemonError(RuntimeError):
@@ -77,14 +92,30 @@ class SyncDaemonConfig:
             f"low_water_mb = {int(self.low_water_mb)}",
             f"anchor = {q(self.anchor)}",
         ]
-        for root in self.roots:
-            lines += [
-                "",
-                "[[roots]]",
-                f"id = {q(root['id'])}",
-                f"path = {q(root['path'])}",
-            ]
+        lines += render_roots_toml(self.roots)
         return "\n".join(lines) + "\n"
+
+
+def _toml_string(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def render_roots_toml(roots: Iterable[dict[str, Any]]) -> list[str]:
+    """``[[roots]]`` blocks (id, path, optional pins) as TOML lines."""
+    lines: list[str] = []
+    for root in roots:
+        lines += [
+            "",
+            "[[roots]]",
+            f"id = {_toml_string(str(root['id']))}",
+            f"path = {_toml_string(str(root['path']))}",
+        ]
+        pins = [str(pin) for pin in root.get("pins") or [] if str(pin).strip()]
+        if pins:
+            lines.append(
+                "pins = [" + ", ".join(_toml_string(pin) for pin in pins) + "]"
+            )
+    return lines
 
 
 def root_id_for_path(path: str | Path) -> str:
@@ -150,51 +181,301 @@ def is_configured(config_path: Path | None = None) -> bool:
     return _config_path(config_path).is_file()
 
 
+_SUMMARY_KEYS = (
+    "device_id",
+    "sync_group",
+    "role",
+    "listen_hot",
+    "peer_hot",
+    "log_level",
+)
+
+
+def _load_config(config_path: Path) -> dict[str, Any]:
+    with config_path.open("rb") as handle:
+        return tomllib.load(handle)
+
+
 def read_config_summary(config_path: Path | None = None) -> dict:
-    """A small, dependency-free TOML reader for the fields the UI shows."""
+    """The fields the UI shows; never raises for a missing or broken file."""
     config_path = _config_path(config_path)
     summary: dict = {"configured": False, "roots": []}
     if not config_path.is_file():
         return summary
     summary["configured"] = True
-    current_root: dict | None = None
-    for raw in config_path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line == "[[roots]]":
-            current_root = {}
-            summary["roots"].append(current_root)
-            continue
-        if line.startswith("["):
-            current_root = None
-            continue
-        if "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key, value = key.strip(), value.strip().strip('"')
-        if current_root is not None:
-            current_root[key] = value
-        elif key in {
-            "device_id",
-            "sync_group",
-            "role",
-            "listen_hot",
-            "peer_hot",
-            "log_level",
-        }:
-            summary[key] = value
+    try:
+        data = _load_config(config_path)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        summary["error"] = f"unreadable config: {exc}"
+        return summary
+    for key in _SUMMARY_KEYS:
+        if isinstance(data.get(key), str):
+            summary[key] = data[key]
+    summary["roots"] = _roots_from_config(data)
     return summary
+
+
+def _roots_from_config(data: dict[str, Any]) -> list[dict[str, Any]]:
+    roots: list[dict[str, Any]] = []
+    for raw in data.get("roots") or []:
+        if not isinstance(raw, dict):
+            continue
+        root: dict[str, Any] = {
+            "id": str(raw.get("id") or ""),
+            "path": str(raw.get("path") or ""),
+        }
+        pins = raw.get("pins")
+        if isinstance(pins, list) and pins:
+            root["pins"] = [str(pin) for pin in pins]
+        roots.append(root)
+    return roots
+
+
+def configured_roots(config_path: Path | None = None) -> list[dict[str, Any]]:
+    """The ``[[roots]]`` of the config (empty when unconfigured or unreadable)."""
+    config_path = _config_path(config_path)
+    if not config_path.is_file():
+        return []
+    try:
+        return _roots_from_config(_load_config(config_path))
+    except (OSError, tomllib.TOMLDecodeError):
+        return []
 
 
 def write_config(config: SyncDaemonConfig, config_path: Path | None = None) -> Path:
     config_path = _config_path(config_path)
+    _write_config_text(config.to_toml(), config_path)
+    return config_path
+
+
+def _write_config_text(text: str, config_path: Path) -> None:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = config_path.with_suffix(".toml.tmp")
-    tmp.write_text(config.to_toml(), encoding="utf-8")
+    tmp.write_text(text, encoding="utf-8")
     tmp.chmod(0o600)
     tmp.replace(config_path)
+
+
+# --- roots -----------------------------------------------------------------
+
+
+def expand_root_path(path: str | Path) -> Path:
+    """The absolute directory a root path names (``~/`` is the home dir)."""
+    return Path(path).expanduser().resolve()
+
+
+def home_relative_root_path(path: str | Path) -> str:
+    """``~/...`` for a directory under the home dir, else its absolute path.
+
+    The daemon matches roots by home-relative path, so writing them this way
+    keeps one config valid on computers whose home directories differ.
+    """
+    resolved = expand_root_path(path)
+    home = Path.home().resolve()
+    try:
+        rel = resolved.relative_to(home)
+    except ValueError:
+        return str(resolved)
+    return "~" if not rel.parts else "~/" + rel.as_posix()
+
+
+def root_entry(path: str | Path, pins: Iterable[str] = ()) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "id": root_id_for_path(path),
+        "path": home_relative_root_path(path),
+    }
+    pins = [pin for pin in pins if pin]
+    if pins:
+        entry["pins"] = pins
+    return entry
+
+
+def roots_overlap(a: str | Path, b: str | Path) -> bool:
+    """True when one root contains the other (or they are the same folder)."""
+    path_a, path_b = expand_root_path(a), expand_root_path(b)
+    return path_a == path_b or path_a in path_b.parents or path_b in path_a.parents
+
+
+def path_is_synced(path: str | Path, config_path: Path | None = None) -> bool:
+    """Whether ``path`` lies inside a configured root (unconfigured: False)."""
+    target = expand_root_path(path)
+    for root in configured_roots(config_path):
+        if not root.get("path"):
+            continue
+        base = expand_root_path(root["path"])
+        if target == base or base in target.parents:
+            return True
+    return False
+
+
+def set_roots(roots: Iterable[dict[str, Any]], config_path: Path | None = None) -> Path:
+    """Replace every ``[[roots]]`` block, keeping the rest of the file as is.
+
+    The config may carry keys this CLI does not manage (placement tuning,
+    command relay allowlists), so only the root blocks are rewritten.
+    """
+    config_path = _config_path(config_path)
+    if not config_path.is_file():
+        raise SyncDaemonError(
+            f"{config_path} does not exist; run `openbase-coder sync-daemon "
+            "configure` first"
+        )
+    kept: list[str] = []
+    in_root = False
+    for line in config_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped == "[[roots]]":
+            in_root = True
+            continue
+        if in_root and stripped.startswith("["):
+            in_root = False
+        if not in_root:
+            kept.append(line)
+    while kept and not kept[-1].strip():
+        kept.pop()
+    text = "\n".join(kept + render_roots_toml(roots)) + "\n"
+    tomllib.loads(text)  # never write a file the daemon cannot parse
+    _write_config_text(text, config_path)
     return config_path
+
+
+@dataclass
+class RootChange:
+    added: list[dict[str, Any]] = field(default_factory=list)
+    replaced: list[dict[str, Any]] = field(default_factory=list)
+    skipped: list[tuple[str, str]] = field(default_factory=list)  # (path, reason)
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.added or self.replaced)
+
+
+def plan_root_additions(
+    existing: list[dict[str, Any]],
+    paths: Iterable[str | Path],
+    *,
+    replace_nested: bool = False,
+) -> tuple[list[dict[str, Any]], RootChange]:
+    """The root list after adding ``paths``, and what changed.
+
+    Roots must not nest: the daemon watches each root on its own, so a root
+    inside another would mirror the same files twice. A path already covered
+    by an existing root is skipped. A path that would contain existing roots
+    is skipped too, unless ``replace_nested`` is set, in which case the inner
+    roots are dropped in favour of the outer one.
+    """
+    roots = [dict(root) for root in existing]
+    change = RootChange()
+    for raw in paths:
+        entry = root_entry(raw)
+        target = expand_root_path(entry["path"])
+        covering = [
+            root
+            for root in roots
+            if root.get("path")
+            and (
+                expand_root_path(root["path"]) == target
+                or expand_root_path(root["path"]) in target.parents
+            )
+        ]
+        if covering:
+            change.skipped.append(
+                (entry["path"], f"already inside root {covering[0]['path']}")
+            )
+            continue
+        nested = [
+            root
+            for root in roots
+            if root.get("path") and target in expand_root_path(root["path"]).parents
+        ]
+        if nested and not replace_nested:
+            inner = ", ".join(root["path"] for root in nested)
+            change.skipped.append(
+                (
+                    entry["path"],
+                    f"would contain existing root(s) {inner}; pass "
+                    "--replace-nested to replace them",
+                )
+            )
+            continue
+        for root in nested:
+            roots.remove(root)
+            change.replaced.append(root)
+        roots.append(entry)
+        change.added.append(entry)
+    return roots, change
+
+
+def add_roots(
+    paths: Iterable[str | Path],
+    *,
+    replace_nested: bool = False,
+    config_path: Path | None = None,
+) -> RootChange:
+    """Add roots to the config file (see ``plan_root_additions``)."""
+    roots, change = plan_root_additions(
+        configured_roots(config_path), paths, replace_nested=replace_nested
+    )
+    if change.changed:
+        set_roots(roots, config_path)
+    return change
+
+
+def remove_roots(
+    paths: Iterable[str | Path], config_path: Path | None = None
+) -> list[dict[str, Any]]:
+    """Remove the roots naming exactly ``paths``; returns the removed roots."""
+    targets = {expand_root_path(path) for path in paths}
+    roots = configured_roots(config_path)
+    removed = [
+        root
+        for root in roots
+        if root.get("path") and expand_root_path(root["path"]) in targets
+    ]
+    if removed:
+        set_roots([root for root in roots if root not in removed], config_path)
+    return removed
+
+
+def thread_sync_root() -> str:
+    """The thread exchange folder as a root path (``~/.openbase/thread-sync``)."""
+    return home_relative_root_path(OPENBASE_BASE_DIR / "thread-sync")
+
+
+def product_folder_roots() -> list[str]:
+    """Thread exchange, personal skills and the folders skills link to."""
+    from openbase_coder_cli import skills_sync
+
+    roots = [thread_sync_root(), PERSONAL_SKILLS_ROOT]
+    for source in skills_sync.linked_source_paths():
+        candidate = home_relative_root_path(source)
+        if candidate not in roots:
+            roots.append(candidate)
+    return roots
+
+
+def service_installed() -> bool:
+    from openbase_coder_cli.services.launchd import launchctl_status
+    from openbase_coder_cli.services.registry import find_service
+
+    try:
+        return bool(
+            launchctl_status(find_service(SYNC_DAEMON_SERVICE_NAME)).get("installed")
+        )
+    except Exception:  # noqa: BLE001 - a status probe must never break callers
+        return False
+
+
+def restart_service_if_installed() -> bool:
+    """Restart the daemon so it re-reads its roots; False when not installed."""
+    if not service_installed():
+        return False
+    from openbase_coder_cli.services.installation import InstallationConfig
+    from openbase_coder_cli.services.launchd import install_service
+    from openbase_coder_cli.services.registry import find_service
+
+    install_service(InstallationConfig.load(), find_service(SYNC_DAEMON_SERVICE_NAME))
+    return True
 
 
 def new_pair_secret() -> str:
@@ -321,3 +602,43 @@ def reachable(socket_path: Path | None = None) -> bool:
         return True
     except SyncDaemonError:
         return False
+
+
+USER_BIN_DIR = Path.home() / ".local" / "bin"
+CLI_TOOLS = (SYNC_EDGE_BINARY_NAME, SYNC_CTL_BINARY_NAME)
+
+
+def link_cli_tools(
+    user_bin: Path | None = None,
+    package_bin: Path | None = None,
+    manual_bin: Path | None = None,
+) -> list[Path]:
+    """Put `edge` and `openbase-sync` on PATH next to `openbase-coder`.
+
+    Links point at the packaged binaries when present (so self-update moves
+    them), else at a manual `install-binary` copy. Existing files that are not
+    our symlinks are left alone.
+    """
+    from openbase_coder_cli.paths import STANDALONE_CURRENT_DIR
+
+    user_bin = user_bin or USER_BIN_DIR
+    package_bin = package_bin or (STANDALONE_CURRENT_DIR / "bin")
+    manual_bin = manual_bin or OPENBASE_BIN_DIR
+    linked: list[Path] = []
+    for name in CLI_TOOLS:
+        target = (
+            package_bin / name if (package_bin / name).exists() else manual_bin / name
+        )
+        if not target.exists():
+            continue
+        link = user_bin / name
+        if link.exists() or link.is_symlink():
+            if not link.is_symlink():
+                continue  # a file of the user's: never replace it
+            if Path(os.readlink(link)) == target:
+                continue
+            link.unlink()
+        user_bin.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(target)
+        linked.append(link)
+    return linked

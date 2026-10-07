@@ -567,7 +567,7 @@ def prune_exchange_snapshots(
     """Delete exchange snapshots that no device will import again.
 
     Exports never clean up after themselves, so every fingerprint of every
-    thread accumulates in the (Syncthing-shared) exchange forever. Remove a
+    thread accumulates in the (mirrored) exchange forever. Remove a
     snapshot once it is older than the export window — the exporter already
     skips such threads as ``skipped_old`` — or once ``keep_latest`` newer
     fingerprints of the same entity supersede it. The newest fingerprints are

@@ -25,7 +25,19 @@ def sync_daemon_cli() -> None:
     "--listen", "listen", default="", help="Hub bind address (tailnet IP) for a hub."
 )
 @click.option(
-    "--root", "roots", multiple=True, help="Absolute directory to mirror (repeatable)."
+    "--root",
+    "roots",
+    multiple=True,
+    help="Directory to mirror, absolute or ~/... (repeatable).",
+)
+@click.option(
+    "--with-product-folders",
+    is_flag=True,
+    help=(
+        "Also mirror the Openbase folders other features exchange through "
+        "sync: the thread exchange (~/.openbase/thread-sync), personal skills "
+        "(~/.agents/skills) and the folders those skills link to."
+    ),
 )
 @click.option(
     "--pair-secret",
@@ -59,6 +71,7 @@ def configure(
     peer: str,
     listen: str,
     roots: tuple[str, ...],
+    with_product_folders: bool,
     pair_secret: str,
     group: str,
     low_water_mb: int,
@@ -76,18 +89,23 @@ def configure(
         raise click.UsageError(
             "--listen is required for a hub (its Openbase VPN address)"
         )
-    if not roots:
-        raise click.UsageError("at least one --root is required")
+    root_paths = list(roots)
+    if with_product_folders:
+        root_paths += sync_daemon.product_folder_roots()
+    if not root_paths:
+        raise click.UsageError(
+            "at least one --root (or --with-product-folders) is required"
+        )
+    root_entries, change = sync_daemon.plan_root_additions([], root_paths)
+    for path, reason in change.skipped:
+        click.echo(f"Skipping root {path}: {reason}")
     secret = pair_secret or sync_daemon.new_pair_secret()
     config = sync_daemon.SyncDaemonConfig(
         device_id=sync_daemon.default_device_id(),
         sync_group=group,
         role=role,
         pair_secret=secret,
-        roots=[
-            {"id": _root_id(r), "path": str(Path(r).expanduser().resolve())}
-            for r in roots
-        ],
+        roots=root_entries,
         listen_hot=f"{listen}:{sync_daemon.DEFAULT_HOT_PORT}",
         listen_bulk=f"{listen}:{sync_daemon.DEFAULT_BULK_PORT}",
         peer_hot=f"{peer}:{sync_daemon.DEFAULT_HOT_PORT}",
@@ -109,10 +127,6 @@ def configure(
             find_service(sync_daemon.SYNC_DAEMON_SERVICE_NAME),
         )
         click.echo("Service sync-daemon installed and started.")
-
-
-def _root_id(path: str) -> str:
-    return sync_daemon.root_id_for_path(path)
 
 
 @sync_daemon_cli.command("install-binary")

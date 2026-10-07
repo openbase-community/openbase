@@ -289,21 +289,6 @@ def test_django_cli_lan_mode_uses_default_lan_ip(monkeypatch):
     assert out_env["LIVEKIT_URL"] == "ws://192.168.1.20:7880"
 
 
-def test_code_sync_argv(tmp_path, monkeypatch):
-    monkeypatch.setattr(runners, "OPENBASE_BASE_DIR", tmp_path)
-    argv, _ = runners.build_code_sync({}, {"syncthing": "/bin/syncthing"})
-
-    assert argv == [
-        "/bin/syncthing",
-        "serve",
-        "--home",
-        str(tmp_path / "code-sync"),
-        "--no-browser",
-        "--no-restart",
-        "--no-upgrade",
-    ]
-
-
 def test_openbase_cloud_auth_rehydrate_argv():
     argv, _ = runners.build_openbase_cloud_auth_rehydrate(
         {}, {"openbase_coder": "/bin/openbase-coder"}

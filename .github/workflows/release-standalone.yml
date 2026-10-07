@@ -227,6 +227,11 @@ jobs:
           file "$tunneld_bin"
           echo "OPENBASE_TUNNELD_BIN=${tunneld_bin}" >> "$GITHUB_ENV"
 
+      - name: Fetch the sync engine
+        run: |
+          python3 cli/scripts/fetch_sync_engine.py --target "${{ steps.release.outputs.target }}" --out "$RUNNER_TEMP/sync-engine"
+          "$RUNNER_TEMP/sync-engine/openbase-syncd" --version
+
       - name: Build package directory
         env:
           # hatch-vcs only honors the unsuffixed form; the _FOR_<dist> variant
@@ -243,6 +248,7 @@ jobs:
             --python "$python_bin" \
             --livekit-server-bin "$LIVEKIT_SERVER_BIN" \
             --tunneld-bin "$OPENBASE_TUNNELD_BIN" \
+            --sync-engine-dir "$RUNNER_TEMP/sync-engine" \
             --package-dir "$package_dir" \
             --force
           echo "PACKAGE_DIR=${package_dir}" >> "$GITHUB_ENV"
@@ -272,6 +278,9 @@ jobs:
             --identity "$identity"
           codesign --verify --deep --strict "$PACKAGE_DIR/bin/livekit-server"
           codesign --verify --deep --strict "$PACKAGE_DIR/bin/openbase-tunneld"
+          codesign --verify --deep --strict "$PACKAGE_DIR/bin/openbase-syncd"
+          codesign --verify --deep --strict "$PACKAGE_DIR/bin/openbase-sync"
+          codesign --verify --deep --strict "$PACKAGE_DIR/bin/edge"
           codesign --verify --deep --strict "$PACKAGE_DIR/python/bin/python$pyver"
 
       - name: Archive release assets

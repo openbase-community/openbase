@@ -12,7 +12,8 @@ nav = [
     { "iOS App" = "ios-tabs.md" },
     { "Web Console & Cloud" = "console.md" },
     { "Voice Routing" = "voice-routing.md" },
-    { "Sync Between Your Computers" = "code-sync.md" }
+    { "Sync Between Your Computers" = "code-sync.md" },
+    { "Laptop Tools for Remote Agents" = "laptop-tools.md" }
   ]},
   { "Getting Started" = [
     "getting-started/index.md",
@@ -50,7 +51,8 @@ nav = [
     { "services logs" = "commands/services-logs.md" },
     { "services regenerate" = "commands/services-regenerate.md" },
     { "setup" = "commands/setup.md" },
-    { "sync" = "commands/sync.md" }
+    { "sync" = "commands/sync.md" },
+    { "sync-daemon" = "commands/sync-daemon.md" }
   ]},
   { "Plugins" = [
     "plugins/index.md",

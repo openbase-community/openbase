@@ -25,6 +25,7 @@ from openbase_coder_cli.paths import (
     OPENBASE_BASE_DIR,
     OPENBASE_BIN_DIR,
     PLIST_DIR,
+    STANDALONE_CURRENT_DIR,
     TASK_SCHEDULER_DIR,
 )
 from openbase_coder_cli.runtime import stable_runtime_package
@@ -37,6 +38,7 @@ from openbase_coder_cli.services.definitions import (
     retired_service_stub,
 )
 from openbase_coder_cli.services.installation import InstallationConfig
+from openbase_coder_cli.services.selection import include_installed_optional_services
 
 
 def _is_macos() -> bool:
@@ -93,12 +95,6 @@ def _resolve_binary_with_preferred_paths(
         if path.is_file() and (sys.platform == "win32" or os.access(path, os.X_OK)):
             return str(path)
     return _resolve_binary(name, homebrew_fallback)
-
-
-def _resolve_syncthing() -> str:
-    from openbase_coder_cli.code_sync.syncthing import resolve_syncthing_binary
-
-    return resolve_syncthing_binary()
 
 
 def _resolve_livekit_server(package) -> str:
@@ -162,7 +158,6 @@ def _binary_resolvers(config: InstallationConfig) -> dict[str, Callable[[], str]
         ),
         "livekit": lambda: _resolve_livekit_server(package),
         "python": lambda: _resolve_service_python(package),
-        "syncthing": _resolve_syncthing,
         "openbase_coder": lambda: _resolve_binary_with_preferred_paths(
             "openbase-coder",
             [
@@ -178,6 +173,10 @@ def _binary_resolvers(config: InstallationConfig) -> dict[str, Callable[[], str]
                     if os.environ.get("OPENBASE_SYNCD_BIN")
                     else []
                 ),
+                # The packaged engine follows self-update; a manual
+                # `sync-daemon install-binary` copy is the fallback for
+                # development installs, which carry no package.
+                STANDALONE_CURRENT_DIR / "bin" / "openbase-syncd",
                 OPENBASE_BIN_DIR / "openbase-syncd",
                 *_workspace_binary_candidates(config, "openbase-syncd"),
             ],
@@ -190,6 +189,7 @@ def _binary_resolvers(config: InstallationConfig) -> dict[str, Callable[[], str]
                     if os.environ.get("OPENBASE_TUNNELD_BIN")
                     else []
                 ),
+                *([package.root / "bin" / "openbase-tunneld"] if package else []),
                 OPENBASE_BIN_DIR / "openbase-tunneld",
                 *_workspace_binary_candidates(config, "openbase-tunneld"),
             ],
@@ -720,7 +720,7 @@ def _external_supervisor_status(svc: ServiceDefinition) -> dict:
         except OSError:
             pid = None
     if not svc.install_by_default and pid is None:
-        # Wrapper regeneration writes files for optional services (code-sync,
+        # Wrapper regeneration writes files for optional services (sync-daemon,
         # cloud heartbeat) regardless of whether their feature is on; under
         # an external supervisor "installed" means actually supervised, so a
         # disabled feature doesn't warn as an unexpectedly installed service.
@@ -765,7 +765,9 @@ def launchctl_status(svc: ServiceDefinition) -> dict:
 def install_all_services(config: InstallationConfig) -> None:
     _ensure_launchd_paths()
     coding_backend = _selected_backend(config)
-    services = default_services(coding_backend)
+    services = include_installed_optional_services(
+        default_services(coding_backend), launchctl_status
+    )
     binaries = _resolve_binaries(config, services)
 
     for svc in default_services():

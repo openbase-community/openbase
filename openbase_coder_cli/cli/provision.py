@@ -337,9 +337,13 @@ def provision(
     if kind != "container":
         _install_cloud_workspace_services()
 
-    # 6. Optional code sync (bundles may omit the field entirely).
+    # 6. Code sync needs a hub/edge pairing the bundle cannot carry; point at
+    # the setup command instead of arming anything (bundles may omit it).
     if bundle.get("code_sync") is True:
-        _enable_code_sync()
+        click.echo(
+            "Code sync requested: pair this workspace with Openbase Sync via "
+            "'openbase-coder sync-daemon configure'."
+        )
 
     click.echo(f"Provisioned {kind} workspace against {web_backend_url}.")
 
@@ -351,85 +355,3 @@ def _install_cloud_workspace_services() -> None:
     config = require_installation()
     install_service(config, find_service("openbase-cloud-auth-rehydrate"))
     install_service(config, find_service("openbase-cloud-heartbeat"))
-
-
-SYNCTHING_RELEASES_API = (
-    "https://api.github.com/repos/syncthing/syncthing/releases/latest"
-)
-_SYNCTHING_ARCHES = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64"}
-
-
-def _ensure_syncthing_linux() -> None:
-    """Install syncthing on a Linux workspace via the managed installer."""
-    from openbase_coder_cli.code_sync.install import ensure_syncthing_installed
-
-    ensure_syncthing_installed()
-
-
-def _download_syncthing_release() -> None:
-    """Download the latest static syncthing binary into ~/.openbase/bin."""
-    import tarfile
-    import tempfile
-
-    import httpx
-
-    from openbase_coder_cli.paths import OPENBASE_BIN_DIR
-
-    machine = platform.machine().lower()
-    arch = _SYNCTHING_ARCHES.get(machine)
-    if arch is None:
-        raise click.ClickException(f"Unsupported syncthing architecture: {machine}")
-
-    release = httpx.get(SYNCTHING_RELEASES_API, timeout=30).json()
-    version = str(release.get("tag_name", "")).strip()
-    if not version:
-        raise click.ClickException("Could not determine the latest syncthing release.")
-    archive_name = f"syncthing-linux-{arch}-{version}.tar.gz"
-    url = (
-        "https://github.com/syncthing/syncthing/releases/download/"
-        f"{version}/{archive_name}"
-    )
-
-    OPENBASE_BIN_DIR.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        archive_path = Path(tmp_dir) / archive_name
-        with httpx.stream("GET", url, timeout=120, follow_redirects=True) as response:
-            response.raise_for_status()
-            with archive_path.open("wb") as handle:
-                for chunk in response.iter_bytes():
-                    handle.write(chunk)
-        with tarfile.open(archive_path) as archive:
-            member = next(
-                (
-                    item
-                    for item in archive.getmembers()
-                    if item.isfile() and Path(item.name).name == "syncthing"
-                ),
-                None,
-            )
-            if member is None:
-                raise click.ClickException(
-                    f"No syncthing binary found in {archive_name}."
-                )
-            member.name = "syncthing"
-            archive.extract(member, OPENBASE_BIN_DIR)
-    (OPENBASE_BIN_DIR / "syncthing").chmod(0o755)
-
-
-def _enable_code_sync() -> None:
-    """Best-effort code-sync arming for provisioned workspaces.
-
-    Forced because the user's other devices may register their sync
-    capabilities after this workspace boots; the rendered config is refreshed
-    on every settings change and reconcile tick.
-    """
-    from openbase_coder_cli.code_sync import CodeSyncError
-    from openbase_coder_cli.code_sync.manager import enable_code_sync
-
-    try:
-        _ensure_syncthing_linux()
-        enable_code_sync(force=True)
-    except (click.ClickException, CodeSyncError) as exc:
-        click.echo(click.style(f"  WARN  code sync not enabled: {exc}", fg="yellow"))
-    else:
-        click.echo("Enabled code sync.")

@@ -39,6 +39,7 @@ from openbase_coder_cli.runtime import (
     RuntimePackage,
     current_runtime_package,
 )
+from openbase_coder_cli.sync_daemon import SYNC_ENGINE_BINARY_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -488,6 +489,7 @@ def _validate_release_dir(release_dir: Path) -> None:
         launcher,
         release_dir / "bin" / "livekit-server",
         release_dir / "bin" / "openbase-tunneld",
+        *(release_dir / "bin" / name for name in SYNC_ENGINE_BINARY_NAMES),
     )
     for path in required:
         if not path.is_file():

@@ -1,8 +1,8 @@
 # sync
 
-Keep code in sync between your computers with a managed Syncthing instance.
-See [Sync Between Your Computers](../code-sync.md) for what syncs, what never
-syncs, and how git state is reconciled.
+Inspect Openbase Sync, resolve its conflicts, and migrate from the previous
+sync. See [Sync Between Your Computers](../code-sync.md) for how Openbase Sync
+works, and [`sync-daemon`](sync-daemon.md) for configuring it.
 
 ## Usage
 
@@ -14,48 +14,78 @@ openbase-coder sync COMMAND [ARGS]
 
 | Subcommand | Description |
 |---|---|
-| `install-engine` | Pre-fetch the pinned Syncthing engine without enabling sync |
-| `enable` | Create the sync identity, render config/ignores, install and start the `code-sync` service, and advertise sync capabilities to Openbase Cloud |
-| `disable` | Stop and remove the `code-sync` service (local data and version history are kept) |
-| `status` | Show enablement, eligibility, folders, peers, and conflict counts |
-| `add PATH` | Add a directory under `$HOME` to sync (stored as a home-relative path) |
-| `remove PATH` | Stop syncing a directory (files stay on disk) |
-| `ignores list [--folder RELPATH]` | Show custom Syncthing ignore rules for a synced folder |
-| `ignores add PATTERN [--folder RELPATH]` | Add a custom Syncthing ignore pattern to a synced folder |
-| `ignores remove PATTERN [--folder RELPATH]` | Remove a custom Syncthing ignore pattern from a synced folder |
-| `conflicts` | List unresolved repo and file conflicts |
-| `resolve ID --keep-local\|--use-remote` | Resolve one conflict (`--use-remote` safety-stashes the working tree first) |
-| `heal-echoes` | Fast-forward repos whose dirty files exactly match already-pushed peer commits |
-| `reconcile [--loop]` | Run one git-state reconcile tick, or loop forever |
+| `status [--json]` | Show the Openbase Sync role, roots, connected peer and open conflict count |
+| `conflicts [--json]` | List open conflicts (id, root, path, kind) |
+| `resolve ID --keep-local\|--use-remote` | Resolve one conflict by keeping this computer's version or taking the other computer's |
+| `migrate-from-syncthing [--apply] [--remove-markers]` | Move this machine from the previous Syncthing-based sync to Openbase Sync |
 
-## Options
+`status`, `conflicts` and `resolve` talk to the local `sync-daemon` service
+and fail with an explanation when Openbase Sync is not configured or not
+running.
 
-| Option | Command | Description |
-|---|---|---|
-| `--force` | `enable` | Enable before the cloud registry shows a second device (used by DevSpace provisioning) |
-| `--check` | `heal-echoes` | Report sync-echo state without fast-forwarding |
-| `--no-fetch` | `heal-echoes` | Evaluate against cached origin refs instead of fetching |
-| `--interval SECONDS` | `reconcile --loop` | Loop interval (default 60) |
+## migrate-from-syncthing
+
+A dry run by default: it prints what it would do and changes nothing.
+
+| Option | Description |
+|---|---|
+| `--apply` | Perform the migration |
+| `--remove-markers` | With `--apply`: also move the old sync's `.stfolder`, `.stignore` and `.stglobalignore` files out of the previously synced folders. Use it only after the old sync service is stopped on **every** computer |
+| `--replace-nested` | When a migrated root contains roots that are already configured (for example `~/Projects` over `~/Projects/app`), drop the inner roots in favour of the outer one. Without it, overlapping roots are skipped and reported |
+| `--no-restart` | Do not restart the `sync-daemon` service after adding roots |
+
+With `--apply` it:
+
+1. stops and uninstalls the old `code-sync` service if it is installed;
+2. moves `~/.openbase/code-sync`, `~/.openbase/sync-versions` and
+   `~/.openbase/sync-config.json` into
+   `~/.openbase/trash/syncthing-migration-<timestamp>/` (nothing is deleted;
+   with `sync-config.json` gone, a second run has nothing left to do);
+3. maps the previously synced folders (for example `~/Projects`) plus the
+   product folders (`~/.openbase/thread-sync`, `~/.agents/skills` and
+   linked skill-source folders) to Openbase Sync roots. Custom ignore rules
+   from the previous sync are not carried over (Openbase Sync recognizes
+   dependency and build folders itself); they stay in the trashed
+   `sync-config.json` and the command prints how many were left behind;
+4. if Openbase Sync is configured, adds the missing roots to
+   `~/.openbase/sync/config.toml` and restarts the `sync-daemon` service when
+   it is installed; otherwise prints the `openbase-coder sync-daemon
+   configure ...` command to run.
+
+With `--apply --remove-markers` it additionally moves the old `.stfolder`,
+`.stignore` and `.stglobalignore` files out of the previously synced folders
+into the trash folder. Do this only once the old sync is stopped on every
+computer: while another computer still runs it, Openbase Sync would carry
+the deletion of an ignore file over, and the old sync there would start
+copying `.git` directories.
+
+Recommended order: run `--apply` on each computer, then, once all of them are
+done, `--apply --remove-markers`.
+
+The command is idempotent and safe on a machine that never used the previous
+sync.
 
 ## Examples
 
 ```bash
-# Turn on sync and pick what to share
-openbase-coder sync enable
-openbase-coder sync add ~/Projects/myapp
 openbase-coder sync status
-
-# Inspect and resolve a divergence after committing on both machines
 openbase-coder sync conflicts
-openbase-coder sync resolve 3f2a... --use-remote
+openbase-coder sync resolve 42 --use-remote
+
+# Preview, then perform, the migration from the previous sync (each computer)
+openbase-coder sync migrate-from-syncthing
+openbase-coder sync migrate-from-syncthing --apply
+
+# After every computer is migrated: remove the old markers
+openbase-coder sync migrate-from-syncthing --apply --remove-markers
 ```
 
 ## Notes
 
-- Eligibility requires two or more non-phone devices with Tailscale
-  identities in your Openbase Cloud device registry.
-- The reconcile tick also runs automatically every minute inside the
-  `openbase-routines` service whenever sync is enabled; the `reconcile`
-  command exists for one-off runs and debugging.
-- Settings are also exposed at `GET/PUT /api/sync/settings/` for the console
-  Sync page.
+- Earlier `sync enable`, `disable`, `add`, `remove`, `ignores`,
+  `heal-echoes`, `reconcile` and `install-engine` subcommands were removed
+  with the previous sync. Choose what to sync with
+  `openbase-coder sync-daemon configure --root ...`.
+- The phone apps read the same state through `/api/sync/status/`,
+  `/api/sync/conflicts/` and `/api/sync/conflicts/resolve/`; the console uses
+  `/api/sync/daemon/...`.

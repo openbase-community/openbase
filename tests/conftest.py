@@ -115,9 +115,14 @@ def _isolated_host_state(monkeypatch, tmp_path):
     env_path = tmp_path / "openbase-test.env"
     env_path.write_text("")
     monkeypatch.setattr("openbase_coder_cli.paths.DEFAULT_ENV_FILE_PATH", env_path)
+    # Never read or dial this machine's real Openbase Sync daemon.
     monkeypatch.setattr(
-        "openbase_coder_cli.code_sync.conflicts.CODE_SYNC_CONFLICTS_PATH",
-        tmp_path / "code-sync-conflicts.json",
+        "openbase_coder_cli.sync_daemon.SYNC_DAEMON_CONFIG_PATH",
+        tmp_path / "openbase-sync" / "config.toml",
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.sync_daemon.SYNC_DAEMON_SOCKET_PATH",
+        tmp_path / "openbase-sync" / "syncd.sock",
     )
     # Discard inherited backend settings and changes made by other tests.
     # Tests must see only what they set themselves.

@@ -15,7 +15,7 @@ openbase-coder restart [OPTIONS]
 openbase-coder self-restart [OPTIONS]
 ```
 
-With no options, this schedules a detached restart of the default services plus optional daemons already enabled on this installation, including code sync, the Cloud heartbeat, and Openbase Direct. It does not enable unused optional features or rerun completed one-shot authentication/provisioning jobs. The Openbase Coder API/MCP host restarts through `django-cli`.
+With no options, this schedules a detached restart of the default services plus optional daemons already enabled on this installation, including Openbase Sync (`sync-daemon`), the Cloud heartbeat, and Openbase Direct. It does not enable unused optional features or rerun completed one-shot authentication/provisioning jobs. The Openbase Coder API/MCP host restarts through `django-cli`.
 
 In a developer install, a restart that includes `openbase-tunneld` rebuilds and installs Openbase Direct from the configured checkout before scheduling the restart. A failed build leaves the running services alone. The new binary receives a build stamp so runtime freshness can verify it after startup.
 

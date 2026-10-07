@@ -18,7 +18,8 @@ openbase-coder claude-sync devices run
 
 `devices` exports and imports Claude Code session snapshots through
 `~/.openbase/thread-sync` by default (an exchange directory shared
-between machines, for example via [code sync](../code-sync.md)). Conflicts
+between machines, for example via [Openbase Sync](../code-sync.md), which must include
+`~/.openbase/thread-sync` as a root). Conflicts
 are not merged; they are recorded in
 `~/.openbase/claude-thread-device-sync-ledger.json` and shown by
 `openbase-coder claude-sync devices status`.

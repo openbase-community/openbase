@@ -1,19 +1,18 @@
 `openbase` is the main Openbase Coder runtime repository.
 
-## Code sync (two layers — don't conflate)
+## Code sync (Openbase Sync)
 
-Code sync lives in `openbase_coder_cli/code_sync/`. It is **two independent
-layers**: **layer 1** is a managed Syncthing file sync of working trees that
-categorically excludes `.git`/`.jj`/`.hg` (`code_sync/ignores.py`); **layer 2**
-is the reconciler (`code_sync/reconciler.py`, run on the `sync-workers` tick)
-that moves git commits and branch pointers between machines over git's own
-transport — each machine serves a read-only `git-upload-pack` endpoint at
-`/api/sync/git/...` (`openbase_coder_cli_app/git_http.py`), and the reconciler
-fetches + fast-forwards when safe. So git state *does* cross machines even
-though `.git` never file-syncs. It also creates `refs/heads/synced/<branch>`
-mirrors and `refs/openbase-code-sync/backups/*` recovery refs. Canonical
+File and git sync between a user's computers is done by the closed-source
+Openbase Sync daemon (`openbase-syncd`, the `sync-daemon` service). This repo
+only talks to it over its unix control socket: the client is
+`openbase_coder_cli/sync_daemon.py`, the commands are `openbase-coder
+sync-daemon ...` and `openbase-coder sync status|conflicts|resolve|
+migrate-from-syncthing`, and the API routes are thin proxies
+(`openbase_coder_cli_app/sync_daemon_api.py`). Never implement sync logic or
+add daemon source here. The previous Syncthing-based `code_sync` package was
+removed; `sync migrate-from-syncthing` moves old machines over. Canonical
 behavior doc: `docs/code-sync.md`; engineer glossary: workspace
-`dev-docs/GLOSSARY.md` ("Code sync", "Repo reconciler").
+`dev-docs/GLOSSARY.md` ("Code sync").
 
 ## Service self-healing
 

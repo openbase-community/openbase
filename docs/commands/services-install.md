@@ -25,10 +25,13 @@ For workspace-managed services, generated wrappers prefer binaries from
 before falling back to `PATH`.
 `livekit-server` is still resolved from `PATH` or `/opt/homebrew/bin/livekit-server`.
 
-Optional services, such as the `code-sync` engine, are not installed by
-default; they are installed by the feature that needs them (for example
-`openbase-coder sync enable`) or can be started explicitly:
+Optional services, such as the `sync-daemon` (Openbase Sync), are not
+installed by default; they are installed by the feature that needs them (for
+example `openbase-coder sync-daemon configure`) or can be started explicitly:
 
 ```bash
-openbase-coder services start code-sync
+openbase-coder services start sync-daemon
 ```
+
+Installing services also removes leftover services that no longer exist,
+including the retired `code-sync` service of the previous sync.

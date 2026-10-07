@@ -11,6 +11,7 @@ actually exec'ing anything; ``run()``/``main()`` do the real process exec.
 from __future__ import annotations
 
 import ipaddress
+import logging
 import os
 import platform
 import subprocess
@@ -18,11 +19,11 @@ import sys
 from pathlib import Path
 
 from openbase_coder_cli.env_file import env_file_values
-from openbase_coder_cli.paths import OPENBASE_BASE_DIR
 from openbase_coder_cli.services import network
 from openbase_coder_cli.services.installation import InstallationConfig
 
 RunnerArgvEnv = tuple[list[str], dict[str, str]]
+logger = logging.getLogger(__name__)
 
 
 def _is_ip_version(value: str, version: int) -> bool:
@@ -348,23 +349,15 @@ def build_django_cli(env: dict[str, str], binaries: dict[str, str]) -> RunnerArg
     return argv, env
 
 
-def build_code_sync(env: dict[str, str], binaries: dict[str, str]) -> RunnerArgvEnv:
-    home = str(OPENBASE_BASE_DIR / "code-sync")
-    argv = [
-        binaries["syncthing"],
-        "serve",
-        "--home",
-        home,
-        "--no-browser",
-        "--no-restart",
-        "--no-upgrade",
-    ]
-    return argv, env
-
-
 def build_sync_daemon(env: dict[str, str], binaries: dict[str, str]) -> RunnerArgvEnv:
-    from openbase_coder_cli.sync_daemon import SYNC_DAEMON_CONFIG_PATH
+    from openbase_coder_cli.sync_daemon import SYNC_DAEMON_CONFIG_PATH, link_cli_tools
 
+    # Installing (or reinstalling after self-update) the service also keeps
+    # the agent-facing tools on PATH, pointing at the current engine.
+    try:
+        link_cli_tools()
+    except OSError:
+        logger.warning("sync_daemon_cli_tools_link_failed", exc_info=True)
     argv = [binaries["openbase_syncd"], "--config", str(SYNC_DAEMON_CONFIG_PATH)]
     return argv, env
 
@@ -416,7 +409,6 @@ RUNNERS: dict[str, tuple[callable, tuple[str, ...]]] = {
     "openbase-routines": (build_openbase_routines, ("openbase_coder",)),
     "livekit-agent": (build_livekit_agent, ("python",)),
     "django-cli": (build_django_cli, ("openbase_coder",)),
-    "code-sync": (build_code_sync, ("syncthing",)),
     "sync-daemon": (build_sync_daemon, ("openbase_syncd",)),
     "openbase-tunneld": (build_openbase_tunneld, ("tunneld",)),
     "openbase-cloud-auth-rehydrate": (
