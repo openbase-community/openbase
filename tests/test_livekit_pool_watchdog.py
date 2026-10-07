@@ -19,13 +19,14 @@ SIGNATURE_LINE = (
 
 
 class _Env:
-    def __init__(self, log_path, state_path, bounces, clock, session, running):
+    def __init__(self, log_path, state_path, bounces, clock, session, running, started):
         self.log_path = log_path
         self.state_path = state_path
         self.bounces = bounces
         self.clock = clock
         self.session = session
         self.running = running
+        self.started = started
 
     def append_log(self, text: str) -> None:
         with self.log_path.open("a", encoding="utf-8") as handle:
@@ -49,6 +50,7 @@ def env(monkeypatch, tmp_path):
     clock = {"now": 1000.0}
     session = {"active": False}
     running = {"ok": True}
+    started = {"ts": None}
 
     monkeypatch.setattr(wd, "_LOG_PATH", log_path)
     monkeypatch.setattr(wd, "_STATE_PATH", state_path)
@@ -57,9 +59,10 @@ def env(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(wd, "_voice_session_active", lambda: session["active"])
     monkeypatch.setattr(wd, "_agent_service_running", lambda: running["ok"])
+    monkeypatch.setattr(wd, "_agent_started_ts", lambda: started["ts"])
     monkeypatch.setattr(wd.time, "time", lambda: clock["now"])
 
-    return _Env(log_path, state_path, bounces, clock, session, running)
+    return _Env(log_path, state_path, bounces, clock, session, running, started)
 
 
 def test_first_run_seeks_to_eof_and_ignores_historical_signature(env):
@@ -199,6 +202,39 @@ def test_idle_recycle_disabled_when_env_non_positive(env, monkeypatch):
     env.advance(wd.IDLE_RECYCLE_SECONDS * 10)
     wd.run_tick()
     assert env.bounces == []
+
+
+def test_idle_recycle_counts_the_agent_start_as_activity(env):
+    """A container restored after sleeping for hours boots a fresh agent while
+    the wall clock is far past the recorded baseline (2026-10-07: every tick
+    after a Maritime wake recycled the agent)."""
+    wd.run_tick()  # baseline at t=1000
+
+    env.advance(10 * 3600)
+    env.started["ts"] = env.clock["now"] - 60  # the agent itself is a minute old
+    wd.run_tick()
+    assert env.bounces == []
+
+    env.advance(wd.IDLE_RECYCLE_SECONDS + 1)
+    wd.run_tick()
+    assert env.bounces == [("livekit-agent",)]
+
+
+def test_failed_idle_bounce_persists_state_and_does_not_refire(env, monkeypatch):
+    def explode(services):
+        env.bounces.append(services)
+        raise RuntimeError("systemctl not found")
+
+    monkeypatch.setattr(wd, "_execute_bounce", explode)
+    wd.run_tick()
+    env.advance(wd.IDLE_RECYCLE_SECONDS + 1)
+    with pytest.raises(RuntimeError):
+        wd.run_tick()
+    assert env.state()["last_idle_recycle_ts"] == env.clock["now"]
+
+    env.advance(wd.WATCHDOG_TICK_SECONDS)
+    wd.run_tick()
+    assert env.bounces == [("livekit-agent",)]  # not a second time
 
 
 def test_idle_recycle_skipped_during_active_call(env):

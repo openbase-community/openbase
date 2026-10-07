@@ -341,8 +341,8 @@ async def _resolve_target_room(
         reverse=True,
     )
     for room in rooms:
-        if int(getattr(room, "num_participants", 0) or 0) <= 0:
-            continue
+        # Room summary counts lag newly connected participants. Query the
+        # current membership even when the summary still says zero.
         participant_response = await client.room.list_participants(
             livekit_api.ListParticipantsRequest(room=room.name)
         )

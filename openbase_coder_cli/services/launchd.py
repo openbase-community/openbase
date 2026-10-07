@@ -561,6 +561,11 @@ def _launchctl(*args: str, check: bool = True) -> subprocess.CompletedProcess:
 
 
 def launchctl_bootstrap(svc: ServiceDefinition) -> None:
+    if _external_supervisor():
+        # Nothing to register: the supervisor already runs the wrapper in a
+        # restart loop, so (re)loading a service means restarting it.
+        _external_supervisor_restart(svc)
+        return
     if not _is_macos():
         if _is_windows():
             from openbase_coder_cli.services.windows import windows_bootstrap
@@ -594,6 +599,9 @@ def launchctl_bootstrap(svc: ServiceDefinition) -> None:
 
 
 def launchctl_bootout(svc: ServiceDefinition) -> bool:
+    if _external_supervisor():
+        # The supervisor relaunches the wrapper; a stop is only ever a bounce.
+        return _external_supervisor_restart(svc)
     if not _is_macos():
         if _is_windows():
             from openbase_coder_cli.services.windows import windows_bootout
@@ -652,6 +660,8 @@ def launchctl_restart(svc: ServiceDefinition) -> bool:
     Returns False when the job is not loaded (the caller must bootstrap) or
     on a non-macOS platform (where re-registration is harmless).
     """
+    if _external_supervisor():
+        return _external_supervisor_restart(svc)
     if not _is_macos():
         return False
 
@@ -682,6 +692,8 @@ def launchctl_restart(svc: ServiceDefinition) -> bool:
 
 
 def launchctl_kill(svc: ServiceDefinition) -> bool:
+    if _external_supervisor():
+        return _external_supervisor_restart(svc)
     if not _is_macos():
         if _is_windows():
             from openbase_coder_cli.services.windows import windows_kill
@@ -728,6 +740,41 @@ def _external_supervisor_status(svc: ServiceDefinition) -> dict:
         # disabled feature doesn't warn as an unexpectedly installed service.
         return {"installed": False}
     return {"installed": True, "pid": str(pid) if pid else None}
+
+
+def _external_supervisor_pid(svc: ServiceDefinition) -> int | None:
+    pid = _external_supervisor_status(svc).get("pid")
+    try:
+        return int(pid) if pid else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _external_supervisor_restart(svc: ServiceDefinition) -> bool:
+    """Restart ``svc`` under an external supervisor (the container entrypoint).
+
+    There is no launchd or systemd job to kick: the only primitive is making
+    the current process exit, after which the supervisor relaunches the
+    wrapper a few seconds later. Terminate the pidfile's process, wait for the
+    supervisor to drop the pidfile, then clear any orphans still holding the
+    service's ports so the relaunch can bind them (2026-10-07: a Maritime
+    workspace fell through to ``systemctl`` here, which does not exist in the
+    container, so every watchdog bounce killed the agent and then raised).
+    """
+    old_pid = _external_supervisor_pid(svc)
+    if old_pid is not None:
+        process_utils.terminate(old_pid)
+        pid = process_utils.wait_for_pid_change(
+            lambda: _external_supervisor_pid(svc),
+            old_pid,
+            timeout=RESTART_EXIT_TIMEOUT_SECONDS,
+        )
+        if pid == old_pid:
+            process_utils.terminate(old_pid, force=True)
+    new_pid = _external_supervisor_pid(svc)
+    keep = process_utils.process_tree_pids(new_pid) if new_pid else set()
+    _cleanup_lingering_processes(svc, keep=frozenset(keep))
+    return True
 
 
 def launchctl_status(svc: ServiceDefinition) -> dict:

@@ -114,6 +114,7 @@ def _participant(identity: str, *, kind, state=livekit_api.ParticipantInfo.State
 def test_watchdog_preserves_speaking_agent_while_phone_reconnects(monkeypatch):
     from openbase_coder_cli import livekit_announcer
     from openbase_coder_cli.services import livekit_pool_watchdog as watchdog
+    monkeypatch.setattr(watchdog, '_agent_started_ts', lambda: None)
     client = FakeLiveKitClient([_room('retained', 100, participants=1)], {'retained': [
         _participant('agent-speaking', kind=livekit_api.ParticipantInfo.Kind.AGENT)]})
     monkeypatch.setattr(livekit_announcer, '_build_livekit_client', lambda: client)
@@ -129,6 +130,7 @@ def test_watchdog_preserves_speaking_agent_while_phone_reconnects(monkeypatch):
 def test_watchdog_can_recycle_room_without_a_connected_agent(monkeypatch):
     from openbase_coder_cli import livekit_announcer
     from openbase_coder_cli.services import livekit_pool_watchdog as watchdog
+    monkeypatch.setattr(watchdog, '_agent_started_ts', lambda: None)
     client = FakeLiveKitClient([_room('retained', 100, participants=1)], {'retained': [
         _participant('agent-gone', kind=livekit_api.ParticipantInfo.Kind.AGENT,
             state=livekit_api.ParticipantInfo.State.DISCONNECTED)]})
@@ -142,6 +144,7 @@ def test_watchdog_can_recycle_room_without_a_connected_agent(monkeypatch):
 def test_watchdog_room_query_failure_cannot_authorize_worker_restart(monkeypatch):
     from openbase_coder_cli import livekit_announcer
     from openbase_coder_cli.services import livekit_pool_watchdog as watchdog
+    monkeypatch.setattr(watchdog, '_agent_started_ts', lambda: None)
     async def unavailable(**kwargs):
         raise ConnectionError('Local room query unavailable')
     monkeypatch.setattr(livekit_announcer, 'active_voice_room_exists', unavailable)
