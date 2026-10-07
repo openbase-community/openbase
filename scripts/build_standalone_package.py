@@ -45,6 +45,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--archive-output", type=Path)
     parser.add_argument("--livekit-server-bin", type=Path, required=True)
     parser.add_argument("--tunneld-bin", type=Path, required=True)
+    parser.add_argument(
+        "--sync-engine-dir",
+        type=Path,
+        help="Directory with the prebuilt sync engine binaries (openbase-syncd, openbase-sync, edge) to bundle.",
+    )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--skip-console-build", action="store_true")
     return parser.parse_args()
@@ -69,6 +74,7 @@ def main() -> int:
         python_dir,
         args.livekit_server_bin.resolve(),
         args.tunneld_bin.resolve(),
+        args.sync_engine_dir.resolve() if args.sync_engine_dir else None,
     )
     stage_console(package_dir, skip_build=args.skip_console_build)
     stage_optional_tree(INSTRUCTIONS_ROOT, package_dir / "instructions")
@@ -350,6 +356,7 @@ def stage_bin(
     python_dir: Path,
     livekit_server_bin: Path,
     tunneld_bin: Path,
+    sync_engine_dir: Path | None = None,
 ) -> None:
     if not livekit_server_bin.is_file():
         raise RuntimeError(f"LiveKit binary not found: {livekit_server_bin}")
@@ -370,6 +377,13 @@ def stage_bin(
     (bin_dir / "livekit-server").chmod(0o755)
     shutil.copy2(tunneld_bin, bin_dir / "openbase-tunneld")
     (bin_dir / "openbase-tunneld").chmod(0o755)
+    if sync_engine_dir is not None:
+        for name in ("openbase-syncd", "openbase-sync", "edge"):
+            src = sync_engine_dir / name
+            if not src.is_file():
+                raise RuntimeError(f"sync engine binary not found: {src}")
+            shutil.copy2(src, bin_dir / name)
+            (bin_dir / name).chmod(0o755)
 
 
 def stage_console(package_dir: Path, *, skip_build: bool) -> None:

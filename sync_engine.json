@@ -1,0 +1,11 @@
+{
+  "_comment": "Pinned Openbase Sync engine (closed-source binaries). Bump with the version and per-target sha256 from the engine release's SHA256SUMS.",
+  "version": "0.1.0",
+  "base_url": "https://openbase-coder-desktop-releases-632795836081-us-east-1.s3.amazonaws.com/sync-engine",
+  "sha256": {
+    "darwin-amd64": "78a5aa32e8b042716b172f0a968f4d289165b019717861802f5db2fc927eab4a",
+    "darwin-arm64": "4cc8af3bbf185fa70d2db728503fc53ff41b93fead43af55a97338e948be3630",
+    "linux-amd64": "0627f5952a9746bd1435c01246ed225d1694098cd42679311e7bbcecac221761",
+    "linux-arm64": "5afec5d3713521dbe3d69b69021dd543bef8e3051c114d1de7e011b735b49ea9"
+  }
+}
