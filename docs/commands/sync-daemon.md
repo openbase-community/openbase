@@ -14,6 +14,7 @@ openbase-coder sync-daemon COMMAND [ARGS]
 
 | Subcommand | Description |
 |---|---|
+| `pair hub\|join HUB\|leave\|candidates` | Pair this computer with your other computers, the same as the console Sync page (see below) |
 | `configure` | Write `~/.openbase/sync/config.toml` and (by default) install and start the `sync-daemon` service |
 | `install-binary SOURCE [--ctl PATH] [--edge PATH]` | Install the Openbase-provided `openbase-syncd` binary (and optionally the `openbase-sync` control binary and the `edge` companion) into `~/.openbase/bin` |
 | `status` | Print the daemon status as JSON (peers, roots, open conflicts) |
@@ -22,6 +23,23 @@ openbase-coder sync-daemon COMMAND [ARGS]
 | `install-hooks` | Install the Openbase Sync agent hooks and shell snippet |
 | `judgment enable\|disable\|status` | Turn AI conflict labels from Openbase Cloud on or off for this computer, or show the setting (see below) |
 | `disable` | Stop and remove the `sync-daemon` service; configuration and files are kept |
+
+## pair
+
+Pair computers without copying addresses or secrets. Both computers must be
+signed in to the same Openbase account and connected to Openbase VPN; the
+console **Sync** page runs the same steps.
+
+| Command | Description |
+|---|---|
+| `pair candidates [--json]` | List your other computers on Openbase VPN with their sync role (always-on hub, edge, not syncing, offline) |
+| `pair hub [--root PATH]...` | Make this computer the hub: listen on its Openbase VPN address, sync `~/Projects` plus the product folders (or the `--root` folders), generate the pair secret, install and start the service |
+| `pair join HUB [--root PATH]...` | Make this computer an edge of `HUB` (its name or Openbase VPN address). The hub hands over its pair secret, ports and folders; `--root` keeps only some of the hub's folders |
+| `pair leave [--yes]` | Stop syncing on this computer: remove the service and move `config.toml` to `~/.openbase/trash/`. Files are not touched |
+
+`join` reports a clear error when the hub is offline, signed in to another
+account, not set up as a hub yet, or runs an older Openbase. Every command
+reports when the sync daemon is missing: update Openbase.
 
 ## configure options
 
@@ -71,6 +89,10 @@ Restart the service after editing the file:
 ## Examples
 
 ```bash
+# Pair from the command line (same as the Sync page)
+openbase-coder sync-daemon pair hub              # on the always-on computer
+openbase-coder sync-daemon pair join mini        # on the laptop
+
 # On the hub (always-on Mac mini)
 openbase-coder sync-daemon configure --role hub --listen 100.64.0.2 \
   --root ~/Projects --with-product-folders

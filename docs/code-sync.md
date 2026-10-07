@@ -53,7 +53,8 @@ Two Openbase features ride Openbase Sync through **product-folder roots**:
 - **Skills sync**: `~/.agents/skills` plus any linked skill-source folders
   inside your home folder carry your personal skills (see below).
 
-Add them with `openbase-coder sync-daemon configure ... --with-product-folders`.
+Pairing from the Sync page or with `sync-daemon pair hub` includes them;
+with `configure`, add `--with-product-folders`.
 
 ## Git: history travels as git
 
@@ -154,31 +155,56 @@ on 9222) to the hub.
 
 ## Set up
 
-1. Install the sync binaries provided by Openbase on both computers:
+Both computers must be signed in to the same Openbase account and
+connected to Openbase VPN.
 
-    ```bash
-    openbase-coder sync-daemon install-binary /path/to/openbase-syncd \
-      --ctl /path/to/openbase-sync --edge /path/to/edge
-    ```
+1. On the always-on computer (for example a Mac mini), open the console
+   **Sync** page and choose **Make this my always-on computer**. It becomes
+   the hub and starts syncing `~/Projects` plus the product folders.
+2. On each other computer, open **Sync**. Under **Sync with…**, your other
+   computers are listed with their role; choose **Sync with this** next to
+   the always-on computer. This computer becomes an edge with the hub's
+   folders: the hub hands over its pair secret and folder list over Openbase
+   VPN, so there is nothing to copy by hand.
+3. Check it on the Sync page (the peer shows as connected), or with
+   `openbase-coder sync status`.
 
-2. Configure the **hub** with its Openbase VPN address and the roots to
-   sync. It prints the pair secret:
+Once syncing, the Sync page shows which computer is the hub, lets you add
+or remove a folder (the change is made on both computers), and has **Stop
+syncing on this computer**. Stopping removes the `sync-daemon` service and
+moves `~/.openbase/sync/config.toml` to `~/.openbase/trash/`; your files
+stay where they are. A computer that is not paired runs no sync service.
 
-    ```bash
-    openbase-coder sync-daemon configure --role hub --listen <hub-vpn-ip> \
-      --root ~/Projects --with-product-folders
-    ```
+The sync daemon is provided with Openbase. If pairing reports that it is
+missing, update Openbase.
 
-3. Configure the **edge** with the hub's address and the pair secret, using
-   the same roots:
+### From the command line
 
-    ```bash
-    openbase-coder sync-daemon configure --role edge --peer <hub-vpn-ip> \
-      --pair-secret <secret> --root ~/Projects --with-product-folders
-    ```
+The same steps without the console:
 
-4. Check it: `openbase-coder sync status`, or open the console **Sync**
-   page.
+```bash
+# On the always-on computer
+openbase-coder sync-daemon pair hub
+
+# On each other computer
+openbase-coder sync-daemon pair candidates      # your computers and their role
+openbase-coder sync-daemon pair join <hub-name>
+
+# Stop syncing on a computer
+openbase-coder sync-daemon pair leave
+```
+
+`openbase-coder sync-daemon configure` remains for manual setups (custom
+addresses, a pair secret you manage yourself, or `--anchor hub`). Configure
+the hub with its Openbase VPN address and roots, then each edge with the
+hub's address and the pair secret the hub printed, using the same roots:
+
+```bash
+openbase-coder sync-daemon configure --role hub --listen <hub-vpn-ip> \
+  --root ~/Projects --with-product-folders
+openbase-coder sync-daemon configure --role edge --peer <hub-vpn-ip> \
+  --pair-secret <secret> --root ~/Projects --with-product-folders
+```
 
 `configure` installs and starts the `sync-daemon` service unless you pass
 `--no-start`. Stop it with `openbase-coder sync-daemon disable` (your
