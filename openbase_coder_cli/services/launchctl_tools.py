@@ -11,11 +11,13 @@ from pathlib import Path
 import click
 
 from openbase_coder_cli.paths import LAUNCHD_DOMAIN
+from openbase_coder_cli.services import process_utils
 from openbase_coder_cli.services.console_settings import get_ignored_launchctl_labels
 from openbase_coder_cli.services.voice_warning import warn_before_voice_interruption
 
 LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
 OPENBASE_LAUNCHCTL_PREFIX = "com.openbase.coder."
+RESTART_EXIT_TIMEOUT_SECONDS = 15.0
 VOICE_INTERRUPTING_LAUNCHCTL_LABELS = {
     f"{LAUNCHD_DOMAIN}.livekit-agent",
     f"{LAUNCHD_DOMAIN}.livekit-server",
@@ -137,13 +139,32 @@ def run_launchctl_service_action(label: str, action: str) -> None:
         _raise_for_launchctl_failure(result, f"Unable to start {label}")
         return
 
-    if is_loaded:
-        bootout_result = _run_launchctl("bootout", f"{domain}/{label}", check=False)
-        if bootout_result.returncode != 0:
-            detail = _launchctl_error_detail(bootout_result)
-            raise click.ClickException(f"Unable to restart {label}: {detail}")
+    if not is_loaded:
+        result = _run_launchctl("bootstrap", domain, service.plist_path, check=False)
+        _raise_for_launchctl_failure(result, f"Unable to restart {label}")
+        return
 
-    result = _run_launchctl("bootstrap", domain, service.plist_path, check=False)
+    # Restart in place rather than bootout + bootstrap: re-registering the
+    # job makes macOS post a "Background Items Added" notification each time.
+    target = f"{domain}/{label}"
+    old_pid = runtime_job.pid
+    if old_pid is not None:
+        _run_launchctl("kill", "SIGTERM", target, check=False)
+        pid = process_utils.wait_for_pid_change(
+            lambda: (
+                _list_runtime_jobs()[0]
+                .get(label, LaunchctlRuntimeJob(label, None, None))
+                .pid
+            ),
+            old_pid,
+            timeout=RESTART_EXIT_TIMEOUT_SECONDS,
+        )
+        if pid == old_pid:
+            result = _run_launchctl("kickstart", "-k", target, check=False)
+            _raise_for_launchctl_failure(result, f"Unable to restart {label}")
+            return
+    # No-op if KeepAlive already respawned the job; starts it otherwise.
+    result = _run_launchctl("kickstart", target, check=False)
     _raise_for_launchctl_failure(result, f"Unable to restart {label}")
 
 

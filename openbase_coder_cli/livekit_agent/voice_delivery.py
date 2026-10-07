@@ -135,8 +135,13 @@ class VoiceDeliveryLedger:
         vad_quiet_grace_seconds: float = VAD_ONLY_USER_TURN_QUIET_GRACE_SECONDS,
         vad_transcript_timeout_seconds: float = 15,
         vad_min_speech_seconds: float = VAD_ONLY_MIN_SPEECH_SECONDS,
+        live_mode: bool = False,
     ) -> None:
         self._route_snapshot = route_snapshot
+        # Live Voice engine: the microphone stays open for full duplex, so the
+        # ledger never emits a mute or unmute release, whatever path asks for
+        # one. Everything else (utterance_accepted, agent_audio_*) still flows.
+        self._live_mode = live_mode
         self._room_name = room_name
         self._room_id = room_id
         self._user_speaking_poll_seconds = user_speaking_poll_seconds
@@ -186,6 +191,88 @@ class VoiceDeliveryLedger:
         sink: Callable[[str, VoiceDeliveryRecord, str], None] | None,
     ) -> None:
         self._lifecycle_sink = sink
+
+    @property
+    def live_mode(self) -> bool:
+        return self._live_mode
+
+    def track_live_speech(self, *, text: str = "") -> VoiceDeliveryRecord:
+        """Synthetic record for voice-model speech no delegation asked for.
+
+        Under the live engine the model may speak on its own (small talk,
+        acknowledgements, announcer commentary). Playout still has to be
+        bracketed by ``agent_audio_started`` / ``agent_audio_finished`` for
+        diagnostics and the Call tab, so give it a record of its own.
+        """
+        record = VoiceDeliveryRecord(
+            delivery_id=f"voice-live-{uuid.uuid4().hex[:12]}",
+            message_id="",
+            prompt_hash="",
+            prompt_len=0,
+            room_name=self._room_name,
+            room_id=self._room_id,
+            route_at_acceptance=self._route_snapshot(),
+            status="tts_flushed",
+        )
+        if text:
+            record.speech_hash = short_text_hash(text)
+            record.speech_len = len(text)
+        record.reserved_for_tts = True
+        self._records[record.delivery_id] = record
+        self._log(record, "live_speech_tracked")
+        return record
+
+    def mark_live_audio_started(self, record: VoiceDeliveryRecord) -> None:
+        """Model audio playout began for ``record`` (live engine)."""
+        if record.status in _TERMINAL_STATUSES:
+            return
+        self._cancel_user_turn_closure_task(record.delivery_id)
+        record.status = "audio_started"
+        record.audio_started_at = time.monotonic()
+        record.delivered = True
+        if record.turn_id and record.client is not None:
+            claim = getattr(record.client, "claim_speech", None)
+            if callable(claim):
+                claim(record.turn_id)
+        self._log(record, "audio_started", role="live")
+        self._emit_lifecycle("agent_audio_started", record)
+
+    def mark_live_audio_finished(
+        self, record: VoiceDeliveryRecord, *, interrupted: bool = False
+    ) -> None:
+        """Model audio playout ended for ``record`` (live engine).
+
+        Never emits ``safe_to_unmute``: the live engine keeps the mic open.
+        """
+        if record.status in _TERMINAL_STATUSES:
+            return
+        if record.audio_started_at is not None:
+            record.audio_seconds = max(0.0, time.monotonic() - record.audio_started_at)
+            record.audio_events = max(record.audio_events, 1)
+        record.status = "audio_delivered"
+        record.delivered = True
+        if interrupted:
+            record.terminal_reason = "live_playout_interrupted"
+        self._log(
+            record, "audio_delivered", role="live", reason=record.terminal_reason or ""
+        )
+        self._emit_lifecycle(
+            "agent_audio_finished", record, reason=record.terminal_reason or ""
+        )
+
+    def live_record_awaiting_audio(self) -> VoiceDeliveryRecord | None:
+        """The newest live delegation record whose answer has not played yet."""
+        candidates = [
+            record
+            for record in self._records.values()
+            if record.message_id.startswith("live-")
+            and record.status
+            in {"utterance_accepted", "answer_owed", "text_generated", "tts_reserved"}
+            and not record.delivered
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda record: record.accepted_at)
 
     def set_user_speaking_provider(self, provider: Callable[[], bool] | None) -> None:
         self._user_speaking_provider = provider
@@ -1374,6 +1461,9 @@ class VoiceDeliveryLedger:
         *,
         reason: str = "",
     ) -> None:
+        if self._live_mode and event in _LIVE_MODE_SUPPRESSED_EVENTS:
+            self._log(record, "lifecycle_suppressed_live_mode", reason=event)
+            return
         if event == "safe_to_mute_user":
             self._mute_covers_current_quiet = True
             self._lifecycle_mute_outstanding = True
@@ -1395,6 +1485,11 @@ class VoiceDeliveryLedger:
                 exc_info=True,
             )
 
+
+# The live engine never drives the client's microphone.
+_LIVE_MODE_SUPPRESSED_EVENTS = frozenset(
+    {"safe_to_mute_user", "safe_to_unmute", "mute_keepalive"}
+)
 
 _TERMINAL_STATUSES = {
     "audio_delivered",

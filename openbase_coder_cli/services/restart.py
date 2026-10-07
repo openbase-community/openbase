@@ -13,11 +13,7 @@ import click
 
 from openbase_coder_cli.livekit_install import ensure_pinned_livekit_server
 from openbase_coder_cli.services.definitions import SERVICES
-from openbase_coder_cli.services.launchd import (
-    install_service,
-    launchctl_bootout,
-    launchctl_status,
-)
+from openbase_coder_cli.services.launchd import install_service, launchctl_status
 from openbase_coder_cli.services.registry import find_service, require_installation
 from openbase_coder_cli.services.selection import configured_default_services
 from openbase_coder_cli.services.tunneld import install_tunneld_binary
@@ -144,15 +140,11 @@ def execute_restart_plan(plan: RestartPlan) -> None:
         prepare_livekit_dispatcher_recreation()
 
     services = [find_service(name) for name in plan.services]
-    # Stop consumers before the services they depend on, then start providers
-    # first so consumers reconnect to the new process.
-    for service in reversed(services):
-        if launchctl_status(service)["installed"]:
-            launchctl_bootout(service)
-
-    if services:
-        time.sleep(2)
-
+    # Providers first: each restart waits for the old process to exit before
+    # moving on, so a consumer is restarted only after its provider's new
+    # process exists and attaches to that one. Restarts happen in place
+    # (no bootout/bootstrap) so macOS does not re-announce the background
+    # items on every restart.
     for service in services:
         install_service(config, service)
 

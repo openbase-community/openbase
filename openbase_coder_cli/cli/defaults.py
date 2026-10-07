@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import click
 
-from openbase_coder_cli import dispatcher_config
+from openbase_coder_cli import dispatcher_config, voice_models
 
 
 @click.group("defaults")
@@ -15,7 +15,9 @@ def defaults() -> None:
 def dispatcher_reasoning(level: str | None) -> None:
     """Show or set the default dispatcher reasoning effort."""
     if level is None:
-        current = dispatcher_config.dispatcher_reasoning_effort() or "app-server default"
+        current = (
+            dispatcher_config.dispatcher_reasoning_effort() or "app-server default"
+        )
         click.echo(f"Default dispatcher reasoning effort: {current}")
         return
 
@@ -26,7 +28,11 @@ def dispatcher_reasoning(level: str | None) -> None:
 
 @defaults.command("dispatcher-model")
 @click.argument("model", required=False)
-@click.option("--backend", default=None, help="Backend to configure. Defaults to the selected coding backend.")
+@click.option(
+    "--backend",
+    default=None,
+    help="Backend to configure. Defaults to the selected coding backend.",
+)
 def dispatcher_model(model: str | None, backend: str | None) -> None:
     """Show or set the default dispatcher model."""
     if model is None:
@@ -64,7 +70,11 @@ def super_agents_reasoning(level: str | None) -> None:
 
 @defaults.command("super-agents-model")
 @click.argument("model", required=False)
-@click.option("--backend", default=None, help="Backend to configure. Defaults to the selected coding backend.")
+@click.option(
+    "--backend",
+    default=None,
+    help="Backend to configure. Defaults to the selected coding backend.",
+)
 def super_agents_model(model: str | None, backend: str | None) -> None:
     """Show or set the default Super Agents model."""
     if model is None:
@@ -84,6 +94,31 @@ def super_agents_model(model: str | None, backend: str | None) -> None:
         backend=backend,
     )
     click.echo(f"Default Super Agents model set to {normalized}.")
+
+
+@defaults.command("voice-model")
+@click.argument("model", required=False)
+def voice_model(model: str | None) -> None:
+    """Show or set the voice model used for calls (GPT-Live or the classic pipeline)."""
+    if model is None:
+        current = dispatcher_config.selected_voice_model_id()
+        click.echo(
+            f"Voice model: {current} ({dispatcher_config.selected_voice_engine()})"
+        )
+        click.echo("Options:")
+        for option in voice_models.VOICE_MODEL_OPTIONS:
+            marker = "*" if option.id == current else " "
+            suffix = " (default)" if option.is_default else ""
+            click.echo(f"  {marker} {option.id:<12} {option.label}{suffix}")
+            click.echo(f"      {option.description}")
+        return
+
+    try:
+        result = dispatcher_config.set_voice_model(model)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"Voice model set to {result['model']} ({result['engine']} engine).")
+    click.echo("The new voice model applies to the next voice call.")
 
 
 def _normalize_reasoning_effort(level: str) -> str:

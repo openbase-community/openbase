@@ -934,3 +934,47 @@ def test_user_say_publish_failure_without_thread_still_errors(monkeypatch):
 
     assert result.exit_code != 0
     assert "No agent thread was available" in result.output
+
+
+def test_default_voice_model_shows_options_with_default_marked(monkeypatch, tmp_path):
+    config_path = tmp_path / "dispatcher-config.json"
+    monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
+    monkeypatch.delenv("LIVEKIT_VOICE_MODEL", raising=False)
+
+    result = CliRunner().invoke(defaults_cli.defaults, ["voice-model"])
+
+    assert result.exit_code == 0, result.output
+    assert "Voice model: gpt-live-1 (live)" in result.output
+    assert "* gpt-live-1" in result.output
+    assert "GPT-Live 1 (default)" in result.output
+    assert "  pipeline" in result.output
+    assert "Classic pipeline" in result.output
+    assert not config_path.exists()
+
+
+def test_default_voice_model_sets_config_file(monkeypatch, tmp_path):
+    config_path = tmp_path / "dispatcher-config.json"
+    monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
+    monkeypatch.delenv("LIVEKIT_VOICE_MODEL", raising=False)
+
+    result = CliRunner().invoke(defaults_cli.defaults, ["voice-model", "classic"])
+
+    assert result.exit_code == 0, result.output
+    assert "Voice model set to pipeline (pipeline engine)." in result.output
+    assert "applies to the next voice call" in result.output
+    assert json.loads(config_path.read_text(encoding="utf-8"))["voice_model"] == "pipeline"
+
+    result = CliRunner().invoke(defaults_cli.defaults, ["voice-model"])
+    assert "Voice model: pipeline (pipeline)" in result.output
+    assert "* pipeline" in result.output
+
+
+def test_default_voice_model_rejects_unknown_model(monkeypatch, tmp_path):
+    config_path = tmp_path / "dispatcher-config.json"
+    monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
+
+    result = CliRunner().invoke(defaults_cli.defaults, ["voice-model", "gemini-live"])
+
+    assert result.exit_code != 0
+    assert "Voice model must be one of: gpt-live-1, pipeline." in result.output
+    assert not config_path.exists()

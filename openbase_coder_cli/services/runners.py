@@ -362,6 +362,13 @@ def build_code_sync(env: dict[str, str], binaries: dict[str, str]) -> RunnerArgv
     return argv, env
 
 
+def build_sync_daemon(env: dict[str, str], binaries: dict[str, str]) -> RunnerArgvEnv:
+    from openbase_coder_cli.sync_daemon import SYNC_DAEMON_CONFIG_PATH
+
+    argv = [binaries["openbase_syncd"], "--config", str(SYNC_DAEMON_CONFIG_PATH)]
+    return argv, env
+
+
 def build_openbase_tunneld(
     env: dict[str, str], binaries: dict[str, str]
 ) -> RunnerArgvEnv:
@@ -410,6 +417,7 @@ RUNNERS: dict[str, tuple[callable, tuple[str, ...]]] = {
     "livekit-agent": (build_livekit_agent, ("python",)),
     "django-cli": (build_django_cli, ("openbase_coder",)),
     "code-sync": (build_code_sync, ("syncthing",)),
+    "sync-daemon": (build_sync_daemon, ("openbase_syncd",)),
     "openbase-tunneld": (build_openbase_tunneld, ("tunneld",)),
     "openbase-cloud-auth-rehydrate": (
         build_openbase_cloud_auth_rehydrate,

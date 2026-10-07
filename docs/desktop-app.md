@@ -244,8 +244,9 @@ The Settings page groups configuration into sections:
   dispatcher automatically.
 - **Backend Model**, **Service Tier**, **Reasoning** — model and reasoning defaults for agents (same as `openbase-coder defaults ...`). Service tiers (Fast mode) apply to the Codex backend only; on Claude Code the tier cannot be set and turns always run at the standard tier. Reasoning levels apply to both backends and are the Claude speed/quality knob. Fresh Openbase Cloud installs show Claude Haiku as the default for both dispatcher and Super Agents. Existing Sonnet selections remain visible; trial accounts explain that their requests run on Haiku.
 - **LiveKit Companion Screen Sharing** (desktop app only) — see below.
+- **Voice Model** — which model listens and speaks on calls, picked like the agent model: **GPT-Live 1** (the default; a full-duplex model that listens and speaks at the same time while Super Agents do the work) or **Classic pipeline** (speech-to-text, then the agent's turn, then text-to-speech). GPT-Live runs through Openbase Cloud with your Openbase account; no API key is needed. Changes apply to the next call. Same setting as `openbase-coder defaults voice-model`.
 - **Dispatcher Voice** — TTS/STT provider and voice selection, voice API
-  keys, local model downloads, and a "Recreate LiveKit thread" action.
+  keys, local model downloads, and a "Recreate LiveKit thread" action. These providers drive the Classic pipeline only; when GPT-Live is the voice model they stay editable but are marked "Classic pipeline only".
 - **Ignored Launchctl** — services to hide from the Launchctl page.
 - **Authentication** — login status and sign out.
 - **Agent Instructions** — auto-generation options for instruction files.

@@ -89,6 +89,7 @@ async def publish_announcer_message(
     *,
     room_name: str | None = None,
     voice_id: str | None = None,
+    agent_name: str | None = None,
     livekit_client: livekit_api.LiveKitAPI | None = None,
 ) -> AnnouncerPublishResult:
     normalized_text = validate_announcer_text(text)
@@ -97,7 +98,7 @@ async def publish_announcer_message(
     async def operation(client) -> AnnouncerPublishResult:
         return await _publish_announcer_message_with(
             client, normalized_text, room_name=room_name, voice_id=voice_id,
-            message_id=message_id,
+            message_id=message_id, agent_name=agent_name,
         )
 
     return await _run_with_livekit_client(operation, livekit_client)
@@ -110,6 +111,7 @@ async def _publish_announcer_message_with(
     room_name: str | None,
     voice_id: str | None,
     message_id: str,
+    agent_name: str | None = None,
 ) -> AnnouncerPublishResult:
     import livekit.api as livekit_api
 
@@ -132,6 +134,11 @@ async def _publish_announcer_message_with(
         "message_id": message_id,
         "text": normalized_text,
     }
+    normalized_agent_name = " ".join((agent_name or "").split())
+    if normalized_agent_name:
+        # The live voice engine names the agent in speech (one voice per
+        # call); the pipeline ignores this and keeps choosing by voice_id.
+        payload["agent_name"] = normalized_agent_name
     target_voice_id = _safe_announcer_voice_id(
         (voice_id or "").strip() or _active_target_voice_id()
     )

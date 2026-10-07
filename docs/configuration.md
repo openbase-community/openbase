@@ -58,8 +58,11 @@ Useful keys:
 | `dispatcher_reasoning_effort` | Default dispatcher reasoning effort |
 | `super_agents_reasoning_effort` | Default Super Agents reasoning effort |
 | `backend_models` | Backend-specific default dispatcher and default Super Agents models for `codex`, `openbase_cloud`, and `claude_code`. Codex accepts `gpt-5.5` (default), `gpt-5`, `sol`, and `astra` |
+| `voice_model` | The model that listens and speaks on voice calls: `gpt-live-1` (default, GPT-Live full duplex through Openbase Cloud with your Openbase account) or `pipeline` (the classic speech-to-text, agent turn, text-to-speech path that uses the `stt_provider` and `tts_provider` settings) |
 
 Fresh Openbase Cloud installs write `haiku` for both roles, so the stored configuration, Settings UI, and model actually requested by the runtime agree. The Cloud proxy continues to route older trial configurations that explicitly contain `sonnet` to Haiku for compatibility.
+
+The voice model is picked like the agent model: one selectable id whose engine follows from it. `openbase-coder defaults voice-model [MODEL]` shows or sets this key (see [defaults](commands/defaults.md)), as does **Settings → Voice** in the desktop app and console. A change applies to the next voice call; no restart is needed. `LIVEKIT_VOICE_MODEL` in the environment acts as a fallback when the key is absent.
 
 ## Agent/Voice Variables
 

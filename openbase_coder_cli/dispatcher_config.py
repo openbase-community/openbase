@@ -32,6 +32,12 @@ from openbase_coder_cli.tts_providers import (
     get_tts_provider,
     normalize_tts_provider_id,
 )
+from openbase_coder_cli.voice_models import (
+    DEFAULT_VOICE_MODEL_ID,
+    VOICE_MODEL_ENV_KEY,
+    normalize_voice_model_id,
+    voice_engine_for_model,
+)
 
 # Bump alongside a forward-only migration; see the workspace AUTO_UPDATE.md.
 SCHEMA_VERSION_KEY = "schema_version"
@@ -295,6 +301,9 @@ def is_known_combined_model(model: str, location: str) -> bool:
     )
 TTS_PROVIDER_KEY = "tts_provider"
 STT_PROVIDER_KEY = "stt_provider"
+# Which model renders the voice side of a call (see voice_models.py). The
+# default is GPT-Live; "pipeline" keeps the STT/TTS provider settings in play.
+VOICE_MODEL_KEY = "voice_model"
 DISPATCHER_VOICE_ID_KEY = "dispatcher_voice_id"
 DISPATCHER_VOICE_NAME_KEY = "dispatcher_voice_name"
 DEFAULT_DISPATCHER_VOICE_ID = DEFAULT_CARTESIA_VOICE_ID
@@ -539,6 +548,44 @@ def selected_stt_provider_id(path: Path | None = None) -> str:
         except ValueError:
             return DEFAULT_STT_PROVIDER_ID
     return DEFAULT_STT_PROVIDER_ID
+
+
+def selected_voice_model_id(path: Path | None = None) -> str:
+    """The configured voice model id, falling back to the env override, then
+    the default (GPT-Live). Unknown values fall back to the default rather
+    than failing a call."""
+    payload = read_dispatcher_config(path)
+    for candidate in (
+        _optional_str(payload.get(VOICE_MODEL_KEY)),
+        _optional_str(os.getenv(VOICE_MODEL_ENV_KEY)),
+    ):
+        if candidate:
+            try:
+                return normalize_voice_model_id(candidate)
+            except ValueError:
+                return DEFAULT_VOICE_MODEL_ID
+    return DEFAULT_VOICE_MODEL_ID
+
+
+def selected_voice_engine(path: Path | None = None) -> str:
+    """``live`` or ``pipeline``, derived from the selected voice model."""
+    return voice_engine_for_model(selected_voice_model_id(path))
+
+
+def set_voice_model(model_id: str, path: Path | None = None) -> dict[str, str]:
+    normalized_model_id = normalize_voice_model_id(model_id)
+    config_path = path or CODEX_DISPATCHER_CONFIG_PATH
+    _write_dispatcher_config(
+        {
+            **read_dispatcher_config(config_path),
+            VOICE_MODEL_KEY: normalized_model_id,
+        },
+        config_path,
+    )
+    return {
+        "model": normalized_model_id,
+        "engine": voice_engine_for_model(normalized_model_id),
+    }
 
 
 def set_stt_provider(provider_id: str, path: Path | None = None) -> dict[str, str]:

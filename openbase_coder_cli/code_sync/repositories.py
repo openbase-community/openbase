@@ -33,16 +33,30 @@ def is_repository_manifest_conflict(path: Path) -> bool:
 
 
 def discover_sync_checkouts(
-    folder_root: Path, *, max_depth: int, skip_dir_names: set[str]
+    folder_root: Path,
+    *,
+    max_depth: int,
+    skip_dir_names: set[str],
+    skip_relpaths: set[str] | None = None,
 ) -> tuple[list[Path], list[Path], list[Path]]:
-    """Find attached repos plus manifest-only worktree/repo directories."""
+    """Find attached repos plus manifest-only worktree/repo directories.
+
+    ``skip_relpaths`` are folder-relative directories excluded from file sync
+    (anchored ``/path`` ignore patterns); the reconciler stays out of them too,
+    so a directory handed to another sync mechanism is left alone by both layers.
+    """
     from openbase_coder_cli.code_sync.worktrees import WORKTREE_MANIFEST_NAME
 
     repos: list[Path] = []
     worktree_candidates: list[Path] = []
     repo_candidates: list[Path] = []
+    skipped = {rel.strip("/") for rel in (skip_relpaths or set()) if rel.strip("/")}
 
     def walk(directory: Path, depth: int) -> None:
+        if skipped and directory != folder_root:
+            rel = directory.relative_to(folder_root).as_posix()
+            if rel in skipped or any(rel.startswith(s + "/") for s in skipped):
+                return
         try:
             is_repo = (directory / ".git").exists()
         except OSError:
@@ -70,6 +84,25 @@ def discover_sync_checkouts(
     if folder_root.is_dir():
         walk(folder_root, 0)
     return repos, worktree_candidates, repo_candidates
+
+
+def anchored_ignore_relpaths(extra_ignores: tuple[str, ...] | list[str]) -> set[str]:
+    """Folder-relative directories named by anchored ignore patterns.
+
+    Only plain ``/dir/sub`` patterns count (optionally ``(?d)``-prefixed);
+    globs and negations are left to Syncthing's matcher.
+    """
+    out: set[str] = set()
+    for pattern in extra_ignores:
+        p = pattern.strip()
+        if p.startswith("(?d)"):
+            p = p[4:]
+        if not p.startswith("/") or any(ch in p for ch in "*?[!"):
+            continue
+        rel = p.strip("/")
+        if rel:
+            out.add(rel)
+    return out
 
 
 def repository_state(repo: Path) -> dict[str, str] | None:

@@ -85,6 +85,27 @@ OPENBASE_CLOUD_AUDIO_CARTESIA_VERSION = os.getenv(
     "OPENBASE_CLOUD_AUDIO_CARTESIA_VERSION",
     "2026-03-01",
 )
+# Live Voice engine (GPT-Live client delegation; see dev-docs/live-voice.md).
+# The Openbase Cloud gateway relays GPT-Live under the account's token; the
+# LiveKit plugin appends ``/live/sessions`` to this base URL. Override it the
+# way OPENBASE_CLOUD_AUDIO_BASE_URL points the audio proxies at staging.
+OPENBASE_CLOUD_LIVE_BASE_URL = os.getenv(
+    "OPENBASE_CLOUD_LIVE_BASE_URL",
+    f"{WEB_BACKEND_URL}/api/openbase/live/openai/v1",
+).rstrip("/")
+LIVE_VOICE_MODEL = os.getenv("LIVEKIT_LIVE_VOICE_MODEL", "gpt-live-1")
+# One voice per call in phase 1 (the voice is fixed at session start); agents
+# are named in speech instead of getting their own voice.
+LIVE_VOICE_DEFAULT_VOICE = os.getenv("LIVEKIT_LIVE_VOICE_VOICE", "marin")
+# Pre-start websocket handshake probe of the live endpoint. A refused
+# connection, an HTTP 401/403/404 handshake, or an immediate 4401/4403 close
+# means the live engine cannot start and the call falls back to the pipeline.
+LIVE_VOICE_PREFLIGHT_TIMEOUT_SECONDS = float(
+    os.getenv("LIVEKIT_LIVE_VOICE_PREFLIGHT_TIMEOUT_SECONDS", "5") or 5
+)
+LIVE_VOICE_PREFLIGHT_CLOSE_WAIT_SECONDS = float(
+    os.getenv("LIVEKIT_LIVE_VOICE_PREFLIGHT_CLOSE_WAIT_SECONDS", "0.75") or 0.75
+)
 
 ANNOUNCER_TOPIC = "openbase.announcer.say"
 VOICE_ROUTE_TOPIC = "openbase.voice.route"
@@ -94,6 +115,11 @@ VOICE_LIFECYCLE_TOPIC = "openbase.voice.lifecycle"
 # be silently lost in transit; attributes are state-synced by LiveKit, so the
 # client always converges on the latest lifecycle state.
 VOICE_LIFECYCLE_ATTRIBUTE = "openbase.voice.lifecycle"
+# Which voice engine serves this call: ``live`` (GPT-Live full duplex; clients
+# keep the microphone open and disable lifecycle auto-mute) or ``pipeline``
+# (STT -> turn -> TTS; clients keep today's auto-mute). Published on join;
+# clients that do not understand it keep today's half-duplex behaviour.
+VOICE_ENGINE_ATTRIBUTE = "openbase.voice.engine"
 ANNOUNCER_AUDIO_KIND = "audio_file"
 SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".aac", ".ogg"}
 ANNOUNCER_MAX_QUEUE_SIZE = int(os.getenv("LIVEKIT_ANNOUNCER_MAX_QUEUE_SIZE", "20"))
@@ -130,6 +156,22 @@ openbase-coder user transfer-to-agent "<agent name>"
 When the user asks to transfer by thread id, run:
 openbase-coder user transfer-to-thread "<thread id>"
 Keep spoken confirmations concise.
+""".strip()
+# Startup persona of the GPT-Live voice model. Fixed for the whole call (the
+# plugin cannot change instructions after session.start); route changes are
+# appended as thinking/commentary by the delegation bridge instead.
+LIVE_VOICE_STARTUP_INSTRUCTIONS = """
+You are the Openbase voice relay for a private coding call. The caller talks
+to coding agents through you: the dispatcher first, or a specific agent after
+a transfer. You never do the coding work yourself and you never invent
+results. When the caller asks for anything that needs an agent (starting,
+checking, steering or transferring work, reading files, running commands),
+delegate it and acknowledge briefly in your own words while the agent works.
+Results, progress and errors reach you as commentary and thinking; relay
+commentary faithfully and concisely, mention the agent by name when a
+transfer or announcement names one, and keep small talk short. Speak
+naturally, stop when interrupted, and never read code, paths or identifiers
+character by character.
 """.strip()
 LIVEKIT_CODEX_THREAD_STATE_PATH = os.getenv("LIVEKIT_CODEX_THREAD_STATE_PATH")
 LIVEKIT_CODEX_FRESH_THREAD_PER_SESSION = os.getenv(

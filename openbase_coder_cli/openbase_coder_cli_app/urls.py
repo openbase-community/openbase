@@ -18,6 +18,15 @@ from openbase_coder_cli.openbase_coder_cli_app.notifications import (
 from openbase_coder_cli.openbase_coder_cli_app.skill_settings import (
     skill_sharing_settings,
 )
+from openbase_coder_cli.openbase_coder_cli_app.sync_daemon_api import (
+    sync_daemon_barrier,
+    sync_daemon_conflicts,
+    sync_daemon_conflicts_resolve,
+    sync_daemon_hydrate,
+    sync_daemon_settings,
+    sync_daemon_status,
+    sync_daemon_stubs,
+)
 from openbase_coder_cli.openbase_coder_cli_app.sync_settings import (
     sync_conflicts,
     sync_conflicts_ignore_containing_folder,
@@ -140,6 +149,9 @@ from openbase_coder_cli.openbase_coder_cli_app.views import (
     uv_tool_detail,
     uv_tool_executable_help,
     uv_tools_list,
+)
+from openbase_coder_cli.openbase_coder_cli_app.voice_model_settings import (
+    voice_model_settings,
 )
 
 router = DefaultRouter()
@@ -467,6 +479,11 @@ urlpatterns = [
         name="backend-model-settings",
     ),
     path(
+        "settings/voice-model/",
+        voice_model_settings,
+        name="voice-model-settings",
+    ),
+    path(
         "settings/reasoning/",
         reasoning_settings,
         name="reasoning-settings",
@@ -523,6 +540,17 @@ urlpatterns = [
     ),
     path("git/diff/", git_diff, name="git-diff"),
     path("sync/settings/", sync_settings, name="sync-settings"),
+    path("sync/daemon/settings/", sync_daemon_settings, name="sync-daemon-settings"),
+    path("sync/daemon/status/", sync_daemon_status, name="sync-daemon-status"),
+    path("sync/daemon/conflicts/", sync_daemon_conflicts, name="sync-daemon-conflicts"),
+    path(
+        "sync/daemon/conflicts/resolve/",
+        sync_daemon_conflicts_resolve,
+        name="sync-daemon-conflicts-resolve",
+    ),
+    path("sync/daemon/barrier/", sync_daemon_barrier, name="sync-daemon-barrier"),
+    path("sync/daemon/stubs/", sync_daemon_stubs, name="sync-daemon-stubs"),
+    path("sync/daemon/hydrate/", sync_daemon_hydrate, name="sync-daemon-hydrate"),
     path("sync/peers/remove/", sync_peers_remove, name="sync-peers-remove"),
     path("sync/status/", sync_status, name="sync-status"),
     path("sync/conflicts/", sync_conflicts, name="sync-conflicts"),

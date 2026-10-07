@@ -6,6 +6,11 @@ drive logs: up to 84s). The VAD stream buffers input in an unbounded channel,
 so once behind, ``session.user_state`` describes the past — which delays the
 mute lifecycle and can report "quiet" while the user is actually speaking.
 
+Re-verified against livekit-agents 1.8.4 (2026-10-06): ``VADStream.__init__``
+still creates ``self._input_ch`` as an unbounded ``aio.Chan`` and the Silero
+stream still iterates it, so the swap applies unchanged. The live voice engine
+keeps Silero VAD for barge-in playout cuts, so this bound matters there too.
+
 This patch swaps the stream's input channel for a bounded one: when buffered
 audio exceeds ``MAX_VAD_INPUT_BACKLOG_SECONDS`` the oldest frames are dropped
 (flush sentinels are preserved) so inference fast-forwards to near-now. Every

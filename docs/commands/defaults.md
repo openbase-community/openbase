@@ -1,10 +1,10 @@
 # defaults
 
-Manage default dispatcher and Super Agents model/reasoning settings.
+Manage default dispatcher and Super Agents model/reasoning settings, and the voice model used on calls.
 
-In the apps: **Settings → Backend Model / Service Tier / Reasoning** in the
-[desktop app](../desktop-app.md) and [console](../console.md) edit the same
-settings.
+In the apps: **Settings → Backend Model / Service Tier / Reasoning** and
+**Settings → Voice** in the [desktop app](../desktop-app.md) and
+[console](../console.md) edit the same settings.
 
 Service tiers (Fast mode) apply to the Codex backend only; Claude Code turns
 always run at the standard tier. Reasoning levels apply to both backends.
@@ -29,6 +29,11 @@ openbase-coder defaults COMMAND [ARGS]
 | `dispatcher-model [MODEL] [--backend BACKEND]` | Show or set the default dispatcher model |
 | `super-agents-reasoning [LEVEL]` | Show or set the default Super Agents reasoning effort |
 | `super-agents-model [MODEL] [--backend BACKEND]` | Show or set the default Super Agents model |
+| `voice-model [MODEL]` | Show or set the voice model used on calls: `gpt-live-1` (default) or `pipeline`. Without an argument it lists the options with the current one starred and the default marked |
+
+## Voice Model
+
+The voice model is picked like the agent model: one selectable id whose engine follows from it. `gpt-live-1` runs GPT-Live, a full-duplex model that listens and speaks at the same time while Super Agents do the work, always through Openbase Cloud with your Openbase account; `pipeline` keeps the classic speech-to-text, agent turn, text-to-speech path, which is the only option for local-only audio and the only one that uses the STT and TTS provider settings. Aliases such as `live`, `gpt-live`, and `classic` are accepted and normalized. Changes apply to the next voice call; no restart is needed. The same settings live under **Settings → Voice** in the desktop app and console.
 
 ## Options
 
@@ -44,4 +49,6 @@ openbase-coder defaults dispatcher-model gpt-5.5
 openbase-coder defaults super-agents-reasoning high
 openbase-coder defaults super-agents-model opus
 openbase-coder defaults super-agents-model sol
+openbase-coder defaults voice-model
+openbase-coder defaults voice-model pipeline
 ```
