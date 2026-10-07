@@ -191,7 +191,5 @@ candidate.
   (e.g. `-v ~/Projects:/home/openbase/Projects`). Node (with npm/corepack)
   and git are bundled for agent tooling; other toolchains must be installed
   into the container.
-- **Code-sync works**: syncthing is bundled (pinned to the version
-  `code_sync/install.py` would download). After enabling sync from the
-  console, restart the container so the entrypoint starts the code-sync
-  service.
+- **Openbase Sync is not bundled**: the image does not ship the sync daemon.
+  Mount the folders you want to work on instead.

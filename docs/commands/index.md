@@ -32,6 +32,8 @@ openbase-coder [OPTIONS] COMMAND [ARGS]
 | [`server`](server.md) | Run local Django/ASGI server |
 | [`service`](service.md) | Publish a local HTTP service privately over the Openbase VPN |
 | [`restart`](restart.md) | Restart Openbase-managed services |
+| [`sync`](sync.md) | Inspect Openbase Sync, resolve conflicts, and migrate from the previous sync |
+| [`sync-daemon`](sync-daemon.md) | Configure and manage Openbase Sync between two of your computers |
 | [`self-update`](self-update.md) | Update a standalone install to the latest release |
 | [`version`](self-update.md) | Print CLI and package versions plus update availability |
 | [`services`](services.md) | Manage launchd services |

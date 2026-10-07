@@ -1,243 +1,206 @@
 # Sync Between Your Computers
 
-Code sync keeps the same working directories on two or more of your machines
-(for example a MacBook and a Mac mini, or a laptop and a Cloud DevSpace) in
-near-realtime sync, so your secondary machine is always ready to take a voice
-call. Files move on save — no commits, no pushes, no manual copying.
+**Openbase Sync** mirrors the folders you choose between two of your
+computers (for example a MacBook and a Mac mini, or a laptop and a Cloud
+DevSpace) in near-realtime, so your other machine is always ready to take a
+voice call or run an agent. Files move on save — no commits, no pushes, no
+manual copying — and git history moves as git.
 
-Under the hood, Openbase Coder runs a fully managed
-[Syncthing](https://syncthing.net) instance as the `code-sync` service. You
-never configure Syncthing yourself: device pairing comes from your Openbase
-Cloud device registry, transport is pinned to your private Tailscale network,
-and global discovery, relays, and NAT traversal are all disabled. Nothing
-leaves your tailnet.
+Openbase Sync runs as the `sync-daemon` service on each computer. The
+service runs Openbase's sync daemon (`openbase-syncd`), a binary provided by
+Openbase; the CLI, console and phone apps talk to it locally and never
+implement sync themselves.
 
-## What syncs
+## Hub and edge
 
-- Every directory you add with `openbase-coder sync add` (or from the console
-  Sync settings). Folders are identified by their **home-relative path** —
-  `~/Projects/myapp` on one machine maps to `~/Projects/myapp` on the other,
-  even when the home directories differ.
-- **Secrets sync deliberately.** `.env` files, keys, and other
-  gitignored-but-needed files travel with the code. This is a core feature:
-  git transports alone can never move them, and a second machine without its
-  secrets cannot actually run your project. Only machines you own (they are
-  all inside your tailnet) ever receive them.
+Openbase Sync pairs exactly two computers:
 
-## Personal skills
+- The **hub** is the machine that is always on (typically a Mac mini or a
+  Cloud DevSpace). It listens on its Openbase VPN address.
+- The **edge** is the machine you carry (typically a laptop). It connects to
+  the hub when it can and catches up after sleep or travel.
 
-Use **Settings → Agents → Skills → Sync my skills across devices** to share your personal skills. The setting manages `~/.agents/skills` and linked skill-source directories inside your home folder, reusing any broader folders already selected for sync. It does not sync entire backend homes, credentials, or plugin caches. Linked sources outside your home folder or in machine-local Openbase state are reported as unavailable for sharing. Disabling preserves files on every device and keeps independently configured folder shares.
+Both sides share a pair secret generated when the hub is configured. Traffic
+only flows over your private Openbase VPN; nothing is relayed through a
+third party.
 
-## What never syncs
+## Roots: what syncs
 
-- **`.git` and all other VCS metadata (`.jj`, `.hg`) — categorically.** A git
-  directory is a multi-file database mutated non-atomically; syncing it
-  transfers refs from one moment and the index from another, which silently
-  corrupts checkouts (this failure mode is why code sync exists in its
-  current form). Each machine keeps its own private `.git`; branch pointers
-  are reconciled through git's own transport instead (below).
-- Dependency and build noise: `node_modules`, virtualenvs, `dist`/`build`
-  outputs, `__pycache__`, `DerivedData`, caches, `*.sqlite3`.
-- Machine-local state under `~/.openbase` (device identity, databases, logs).
+Each synced directory is a **root**. A root is mirrored as a whole,
+including:
 
-Each synced folder gets a generated `.stignore` owned by openbase-coder; add
-per-folder patterns via `extra_ignores` in the sync settings rather than
-editing it.
+- uncommitted changes and new files,
+- **secrets**: `.env` files, keys and other gitignored-but-needed files
+  travel with the code on purpose — git alone never moves them, and a second
+  machine without its secrets cannot run your project. Only your two paired
+  machines ever receive them,
+- lockfiles and local databases.
 
-## How git stays correct on both machines
+Dependency directories (such as `node_modules` and virtualenvs) are not
+transferred; each machine installs its own.
 
-Commits made on either machine propagate through a small reconciler that runs
-every minute:
+Roots are matched by their **home-relative path**: `~/Projects` on one
+machine pairs with `~/Projects` on the other, even when the home directories
+differ (a Mac and a Linux DevSpace). Keep the same layout on both machines.
 
-- Every ordinary repository publishes a small `.openbase-repo.json` manifest
-  containing its active branch and commit. The file stays out of local Git
-  status but travels through code sync. It makes the checked-out
-  branch authoritative across machines: when one machine checks out another
-  branch, peers attach `HEAD` to that branch without rewriting the working
-  files that Syncthing already delivered.
-- If a repository's files arrive on a machine that has never cloned it, the
-  manifest bootstraps a machine-local `.git`, fetches the branch history from
-  the peer, and restores a safe credential-free `origin` URL when one was
-  available. No manual first clone is required.
-- When the peer committed and Syncthing has already delivered the resulting
-  files, your local branch pointer is **fast-forwarded** to the same commit —
-  status goes clean, nothing moves twice. This only happens when it is
-  provably safe: no merge/rebase in progress, your head is an ancestor of the
-  peer's, and your working tree already matches the peer's commit exactly.
-- When the peer's manifest is **stale** — its head is an ancestor of yours —
-  your local history wins: nothing moves, this machine republishes its own
-  state, and the peer fast-forwards to you on its next pass. A branch is
-  never rewound.
-- When one machine **rewrites history** (rebase, amend), its manifest
-  advertises the replaced tips alongside the new head — intent only that
-  machine can prove, from its own reflog. A peer whose branch tip is exactly
-  that rewritten-away history follows the rewrite automatically, with
-  `--force-with-lease` semantics: only the history the rewriting machine
-  claims to have replaced is discarded, and the old tip is retained under
-  `refs/openbase-code-sync/backups/`. A peer that made its own new commits
-  on top still pauses as a conflict.
-- When branch histories **truly diverge** (both machines committed different
-  history to the same branch), sync pauses that branch instead of picking a
-  winner: the local pointer stays put, the divergence is recorded as a repo
-  sync conflict, and it surfaces in health warnings until you decide with
-  `openbase-coder sync resolve <id> --keep-local` or `--use-remote`
-  (`--use-remote` safety-stashes your working tree first). Since the files
-  themselves have already synced, a paused branch does not hold up day-to-day
-  work. Setting `OPENBASE_CODE_SYNC_AUTO_DISPLACE=1` restores the old
-  behavior of automatically converging to the manifest, with the displaced
-  commit retained under `refs/openbase-code-sync/backups/`.
-- Uncommitted work needs no reconciliation at all — it syncs as files and
-  simply shows as a dirty tree on both sides.
+### Product folders
 
-The staging area, stashes, reflog, and in-progress Git operations remain
-machine-local. The reconciler pauses instead of changing a checkout with
-staged changes or an active merge/rebase/cherry-pick.
+Two Openbase features ride Openbase Sync through **product-folder roots**:
 
-Git **worktrees** under synced folders are first-class: the worktree's
-files sync like any files, and each machine attaches its own local git
-identity automatically (a small synced manifest tells the other machine
-which repository and branch to attach). Run git commands in a worktree on
-either computer; commits reconcile back through the same branch
-fast-forward machinery as any repository.
+- **Thread sync**: `~/.openbase/thread-sync` carries Codex and Claude Code
+  thread snapshots between your machines. The thread device-sync jobs run
+  only when this folder is inside a configured root.
+- **Skills sync**: `~/.agents/skills` plus any linked skill-source folders
+  inside your home folder carry your personal skills (see below).
 
-When a synced worktree lives in a `<workspace>-worktrees/` sibling folder
-and had to be attached as a **standalone** checkout on the other machine,
-its branches would otherwise be invisible from the main
-`<workspace>/<repo>` checkout there. The reconciler closes that gap
-automatically: branches (and their commits) from the sibling checkout are
-**advertised into the trunk repo** — as a normal local branch when the
-name is free, fast-forwarded when the trunk's branch is strictly behind,
-or mirrored under the `synced/<branch>` name when the trunk's own branch
-diverges or is checked out. The trunk's checked-out branch and working
-files are never touched, and real local branches are never force-moved.
-Each import appears in the service log as a `code_sync trunk_advertise`
-line.
+Add them with `openbase-coder sync-daemon configure ... --with-product-folders`.
 
-The reconciler also heals **sync echoes**: after one machine commits and
-pushes, Syncthing delivers the changed files to the other machine before
-its git HEAD catches up, so the second machine's checkout looks dirty
-with what appears to be uncommitted work. When every dirty tracked file
-is byte-identical to the same path in `origin/<branch>` and the local
-HEAD is strictly behind it, the repo is fast-forwarded automatically and
-the dirt disappears (`code_sync echo_heal_applied` in the log). Any
-staged change, any file that differs, or any untracked file the
-fast-forward would overwrite aborts the heal for that repo — real
-in-flight work always wins. Run it on demand (or preview with `--check`)
-with:
+## Git: history travels as git
 
-```bash
-openbase-coder sync heal-echoes
+`.git` directories are **never file-synced**. A git directory is a
+multi-file database that is changed non-atomically; copying its files
+transfers refs from one moment and the index from another, which silently
+corrupts checkouts. Instead, Openbase Sync replicates git state as git:
+commits, branches, tags and worktrees made on one machine appear on the
+other through git's own object transfer, and the checked-out branch follows.
+
+- A branch or commit can appear on this machine because the other one made
+  it.
+- A branch is never silently rewound. If both machines committed different
+  history to the same branch, sync records a **branch conflict** instead of
+  picking a winner.
+- Deleting a worktree on one machine propagates to the other.
+
+## Placement: large files and disk space
+
+One side is the **anchor** and holds every file in full (the hub by
+default). The other side keeps large files as placeholders until they are
+used, and frees space when the disk runs low. Choose `--anchor edge` when the
+hub has less disk than the laptop.
+
+Advanced: a root in `~/.openbase/sync/config.toml` can list **pins** —
+root-relative paths that are held in full only on the anchor side (`"."` pins
+the whole root):
+
+```toml
+[[roots]]
+id = "projects-media"
+path = "~/Projects/media"
+pins = ["raw-footage"]
 ```
-
-Set `OPENBASE_CODE_SYNC_ECHO_HEAL=0` to keep automatic healing off; the
-reconciler then only logs that a repo's dirt is a pure echo and safe to
-fast-forward. A hydrated worktree showing only `uv.lock` /
-`pnpm-lock.yaml` as deleted is a known cosmetic sync artifact (the origin
-machine keeps those as symlinks, which do not sync); it is logged as such
-and deliberately left alone.
-
-Coding threads (Codex and Claude Code) also travel between your machines
-over the same channel: each device exports snapshots of recent threads and
-imports the other's automatically. Only threads active in the **last 15
-days** are exchanged — after a long gap between machines, older threads
-stay where they were created (they are never deleted, just not carried
-across). Working directories beneath the source device's home are translated
-to the same home-relative location on the receiving device (for example, a
-Mac home path becomes the analogous path under a Linux DevSpace home); paths
-outside a user home are preserved as recorded. A thread sync conflict is only
-raised when the two machines hold
-genuinely divergent transcripts; identical or append-only-extended copies
-sync silently, and a standing conflict clears itself once the two sides
-converge again.
-
-Machines fetch from each other directly over Tailscale (read-only git smart
-HTTP served by the local API with your own credentials); no GitHub round-trip
-is involved.
-
-## The write lease
-
-To make stale-machine echoes structurally impossible, code sync holds an
-advisory write lease: the machine with recent voice/agent activity (last 15
-minutes) keeps its folders send-receive, while an idle machine that can see
-an active peer flips its own folders receive-only. When nobody is provably
-active the lease is sticky with its last holder, so plain manual edits always
-still propagate. Set `lease_mode` to `manual` in sync settings to disable
-automatic flipping when you intentionally work on both machines at once.
-
-## Versioning: the undo net
-
-Synced work is often uncommitted, so it has no reflog. Every managed folder
-has staggered file versioning enabled: whenever an incoming sync replaces or
-deletes a file, the previous copy is kept under
-`~/.openbase/sync-versions/<folder-id>/` for 30 days. A bad deletion that
-propagates through sync is an undo, not data loss. Local edits never create
-versions, and the storage-heavy patterns are excluded from sync entirely;
-`openbase-coder doctor` warns when version history grows past 2 GiB, and the
-console offers a purge control (`POST /api/sync/versions/purge/`).
-
-## Eligibility
-
-Code sync arms only when your Openbase Cloud device registry shows **two or
-more non-phone devices with Tailscale identities**. Phones never participate
-as sync peers; they only view sync state and conflicts. With a single
-machine, the console shows an "add a second machine" nudge and
-`openbase-coder sync enable` explains what is missing.
 
 ## Conflicts
 
-Two kinds of conflicts can be surfaced:
+Openbase Sync merges what it can. When both machines changed the same thing
+in incompatible ways, it keeps both versions and records a **conflict**
+instead of overwriting either side. Kinds include both sides edited a file,
+deleted on one side and edited on the other, a file versus a directory, a
+database written on both sides, and a diverged branch.
 
-- **Repo conflicts** — a divergent branch could not yet follow its repository
-  manifest safely. These self-clear after convergence; manual *Keep Local* /
-  *Use Remote* controls remain available when intervention is needed.
-- **File conflicts** — Syncthing's last-resort `*.sync-conflict-*` copies
-  from truly simultaneous edits of one file. The reconciler finds and lists
-  them so they are cleaned up deliberately instead of discovered by grep.
+Resolve each conflict by keeping this computer's version (**keep mine**) or
+taking the other computer's (**take theirs**):
 
-List and resolve them with `openbase-coder sync conflicts` and
-`openbase-coder sync resolve`, or from the console/iOS conflict pages.
+- the console **Sync** page,
+- the iOS and Android **Computer Sync** screens,
+- the CLI: `openbase-coder sync conflicts` and
+  `openbase-coder sync resolve <id> --keep-local|--use-remote`.
 
-See the [`sync` command reference](commands/sync.md) for the full CLI.
+Open conflicts also show as a dashboard warning.
+
+## Personal skills
+
+Use **Settings → Agents → Skills → Sync my skills across devices** to share
+your personal skills. Sharing uses the `~/.agents/skills` product-folder
+root and linked skill-source directories inside your home folder. It never
+syncs entire backend homes, credentials or plugin caches; linked sources
+outside your home folder or in machine-local Openbase state are reported as
+unavailable for sharing.
+
+## Coding threads
+
+Codex and Claude Code threads travel between your machines through the
+thread-sync product folder: each device exports snapshots of recent threads
+and imports the other's automatically. Only threads active in the **last 15
+days** are exchanged. Working directories beneath the source device's home
+are translated to the same home-relative location on the receiving device. A
+thread sync conflict is raised only when the two machines hold genuinely
+divergent transcripts.
+
+## Display-bound commands
+
+Openbase also provides a small companion `edge` command for work that must
+happen on the laptop while agents run on the hub: `edge run` runs a
+display-bound command (for example opening a browser) on the laptop, and
+`edge forward` forwards a port from the laptop (for example Chrome DevTools
+on 9222) to the hub.
+
+## Set up
+
+1. Install the sync binaries provided by Openbase on both computers:
+
+    ```bash
+    openbase-coder sync-daemon install-binary /path/to/openbase-syncd \
+      --ctl /path/to/openbase-sync --edge /path/to/edge
+    ```
+
+2. Configure the **hub** with its Openbase VPN address and the roots to
+   sync. It prints the pair secret:
+
+    ```bash
+    openbase-coder sync-daemon configure --role hub --listen <hub-vpn-ip> \
+      --root ~/Projects --with-product-folders
+    ```
+
+3. Configure the **edge** with the hub's address and the pair secret, using
+   the same roots:
+
+    ```bash
+    openbase-coder sync-daemon configure --role edge --peer <hub-vpn-ip> \
+      --pair-secret <secret> --root ~/Projects --with-product-folders
+    ```
+
+4. Check it: `openbase-coder sync status`, or open the console **Sync**
+   page.
+
+`configure` installs and starts the `sync-daemon` service unless you pass
+`--no-start`. Stop it with `openbase-coder sync-daemon disable` (your
+configuration and files are kept).
+
+## Migrating from the previous sync
+
+Earlier releases synced folders with a Syncthing-based `code-sync` service.
+That service is no longer installed; setup and self-update remove a leftover
+`code-sync` service. To move an existing machine over:
+
+```bash
+openbase-coder sync migrate-from-syncthing          # dry run: shows the plan
+openbase-coder sync migrate-from-syncthing --apply  # do it
+```
+
+With `--apply`, the migration stops and removes the old service, moves its
+state (`~/.openbase/code-sync`, `~/.openbase/sync-versions`,
+`~/.openbase/sync-config.json`) and the old folder markers into
+`~/.openbase/trash/syncthing-migration-<timestamp>/` — nothing is deleted —
+and turns your previously synced folders plus the product folders into
+Openbase Sync roots. If Openbase Sync is already configured, the missing
+roots are added and the service is restarted; otherwise the migration prints
+the `sync-daemon configure` command to run. It is safe to run again, and safe
+on machines that never used the previous sync. See
+[`sync migrate-from-syncthing`](commands/sync.md#migrate-from-syncthing).
 
 ## Troubleshooting
 
-### File sync stalled (folder in error state)
+- **"Openbase Sync is configured but its daemon is not answering"** — start
+  the service: `openbase-coder services start sync-daemon`, then check
+  `openbase-coder services logs sync-daemon`.
+- **"Not connected to the other computer"** — make sure the hub is on and
+  both machines are connected to Openbase VPN. The edge reconnects
+  automatically.
+- **Unresolved conflicts** — resolve them on the Sync page or with
+  `openbase-coder sync resolve`.
+- **A commit or build fails mysteriously** — check
+  `openbase-coder sync conflicts`, and compare `HEAD` with
+  `origin/<branch>` before committing.
 
-When free disk drops below the engine's floor, Syncthing keeps running but
-its folders enter an error state (typically `insufficient space on disk for
-database`) and **nothing syncs** — the peer's working trees go stale, deleted
-files can echo back from the peer as untracked copies, and branch switches
-stop propagating (repository manifests ride the same folder).
-
-Where the stall surfaces:
-
-- a red banner on the dashboard (health warnings), plus a low-disk warning
-  before the hard floor is hit,
-- the Sync page: a "File sync is stalled" callout and a red state badge with
-  the error on each affected folder row,
-- `openbase-coder sync status`: an `ERROR:` line under the affected folder,
-- `/api/sync/status/`: `folders[].error` and `syncthing_errors`.
-
-The managed config pins an absolute floor of 2 GiB (`minDiskFree` per folder
-and `minHomeDiskFree` for the engine's database) instead of Syncthing's 1%
-default, which on large disks pauses sync with tens of GiB still free. Fix:
-free disk space, then restart Openbase services (`openbase-coder services
-stop code-sync && openbase-coder services start code-sync`); the folders
-recover on the next scan.
-
-### Reading the reconcile heartbeat
-
-Every reconcile tick logs one summary line to the sync-workers log:
-
-```
-code_sync tick_complete repos=41 up_to_date=39 fast_forwarded=1
-awaiting_files=1 remote_behind=0 diverged=0 skipped=0 fetch_failed=0
-converged=0 published=1 conflicts=0 errors=0 lease=noop
-```
-
-`awaiting_files` climbing without draining means git state is ready but file
-delivery is behind — check for a Syncthing stall. Per-repo failures are
-isolated (one broken repo cannot abort the tick) and named in a
-`code_sync tick_errors` warning line. The same counts appear in
-`openbase-coder sync status` (`Reconcile:` line) and in
-`/api/sync/status/` under `last_reconcile`.
+See the [`sync`](commands/sync.md) and [`sync-daemon`](commands/sync-daemon.md)
+command references for the full CLI.
