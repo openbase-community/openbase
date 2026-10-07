@@ -121,19 +121,18 @@ def local_device_id() -> str:
 
 
 def _code_sync_capabilities() -> dict[str, Any]:
-    """Advertised code-sync facts; never raises (registration must not fail)."""
-    from openbase_coder_cli.code_sync.syncthing import stored_device_id
-    from openbase_coder_cli.sync_config import code_sync_enabled
+    """Advertised Openbase Sync facts; never raises (registration must not fail)."""
+    from openbase_coder_cli.sync_daemon import read_config_summary
 
-    capabilities: dict[str, Any] = {}
     try:
-        capabilities["code_sync_enabled"] = code_sync_enabled()
-    except ValueError:
-        capabilities["code_sync_enabled"] = False
-    syncthing_device_id = stored_device_id()
-    if syncthing_device_id:
-        capabilities["syncthing_device_id"] = syncthing_device_id
-    return capabilities
+        summary = read_config_summary()
+    except OSError:
+        summary = {"configured": False}
+    role = summary.get("role") if summary.get("configured") else None
+    return {
+        "code_sync_enabled": bool(summary.get("configured")),
+        "sync_role": role if role in {"hub", "edge"} else "none",
+    }
 
 
 def _is_standalone_install() -> bool:

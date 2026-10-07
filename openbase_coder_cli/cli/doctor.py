@@ -617,102 +617,67 @@ def _check_audio_readiness(ok, warn) -> None:
             )
 
 
-_VERSIONS_WARN_BYTES = 2 * 1024**3  # 2 GiB
-_GIT_IGNORE_PATTERN = "(?d).git"
-
-
-def _syncthing_process_running() -> bool:
-    result = subprocess.run(
-        ["pgrep", "-f", "syncthing"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return result.returncode == 0 and bool(result.stdout.strip())
-
-
-def _stignore_content_with_includes(path: Path) -> str:
-    """A .stignore's text plus one level of ``#include`` targets.
-
-    Syncthing resolves includes relative to the .stignore's directory; the
-    VCS patterns typically live in an included .stglobalignore, so checking
-    only the top-level file false-positives on correctly configured setups.
-    """
-    try:
-        content = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
-    parts = [content]
-    for line in content.splitlines():
-        if not line.startswith("#include "):
-            continue
-        include_path = path.parent / line[len("#include ") :].strip()
-        try:
-            parts.append(include_path.read_text(encoding="utf-8", errors="replace"))
-        except OSError:
-            continue
-    return "\n".join(parts)
-
-
-def _check_code_sync(ok, warn, fail) -> None:
-    from openbase_coder_cli.code_sync.ignores import STIGNORE_FILENAME
-    from openbase_coder_cli.code_sync.manager import versions_usage_bytes
+def _check_sync_daemon(ok, warn, fail) -> None:
+    """Openbase Sync: configured -> service running -> daemon answering."""
+    from openbase_coder_cli import sync_daemon
     from openbase_coder_cli.services.registry import find_service
-    from openbase_coder_cli.sync_config import code_sync_enabled, sync_folders
 
-    # Guard against user-managed Syncthing setups that still sync `.git`
-    # (torn git state; the reason code-sync excludes VCS metadata).
-    user_stignore = Path.home() / "Projects" / ".stignore"
-    if user_stignore.is_file() and _syncthing_process_running():
-        if _GIT_IGNORE_PATTERN not in _stignore_content_with_includes(user_stignore):
-            warn(
-                f"a Syncthing instance is running and {user_stignore} does not "
-                f"ignore '{_GIT_IGNORE_PATTERN}': syncing .git corrupts repos; "
-                "add the VCS patterns or migrate to 'openbase-coder sync'"
-            )
-        else:
-            ok("user-managed Syncthing ignores .git")
-
-    try:
-        enabled = code_sync_enabled()
-    except ValueError as exc:
-        fail(f"sync-config.json unreadable: {exc}")
+    summary = sync_daemon.read_config_summary()
+    if not summary.get("configured"):
+        ok("Openbase Sync: not configured")
+        _check_leftover_code_sync(warn)
         return
-    if not enabled:
-        ok("code sync: disabled")
+    if summary.get("error"):
+        fail(f"Openbase Sync config: {summary['error']}")
         return
-
-    # The managed .stignore is only rewritten on enable/apply; if one goes
-    # missing or loses the VCS block, Syncthing quietly starts syncing .git.
-    for folder in sync_folders():
-        stignore = folder.absolute_path() / STIGNORE_FILENAME
-        if _GIT_IGNORE_PATTERN in _stignore_content_with_includes(stignore):
-            continue
-        fail(
-            f"managed sync folder '{folder.relpath}' has no .git ignore in "
-            f"{stignore}: run 'openbase-coder sync enable' to regenerate it, "
-            "or .git corruption can recur"
-        )
-
-    info = launchctl_status(find_service("code-sync"))
+    roots = summary.get("roots") or []
+    if not roots:
+        warn("Openbase Sync is configured without roots; nothing is mirrored")
+    info = launchctl_status(find_service(sync_daemon.SYNC_DAEMON_SERVICE_NAME))
     if not info.get("installed"):
-        fail("code-sync service: not installed (run 'openbase-coder sync enable')")
-    elif info.get("pid"):
-        ok(f"code-sync service: running (pid {info['pid']})")
-    else:
         fail(
-            "code-sync service: not running "
+            "sync-daemon service: not installed (run 'openbase-coder services "
+            "start sync-daemon')"
+        )
+    elif not info.get("pid"):
+        fail(
+            "sync-daemon service: not running "
             f"(last exit: {info.get('last_exit_code', 'unknown')})"
         )
-
-    usage = versions_usage_bytes()
-    if usage > _VERSIONS_WARN_BYTES:
-        warn(
-            f"sync version history uses {usage / 1024**3:.1f} GiB; purge it "
-            "with 'POST /api/sync/versions/purge/' or from the console"
-        )
     else:
-        ok(f"sync version history: {usage / 1024**2:.0f} MiB")
+        try:
+            status = sync_daemon.SyncDaemonClient(timeout=1.0).status()
+        except sync_daemon.SyncDaemonError as exc:
+            fail(f"Openbase Sync daemon not answering: {exc}")
+        else:
+            peers = status.get("peers") or []
+            ok(
+                f"Openbase Sync: {summary.get('role', '?')}, {len(roots)} root(s), "
+                f"{len(peers)} peer(s) connected"
+            )
+            if not peers:
+                warn("Openbase Sync has no connected peer")
+            open_conflicts = int(status.get("open_conflicts") or 0)
+            if open_conflicts:
+                warn(
+                    f"Openbase Sync has {open_conflicts} open conflict(s); see "
+                    "'openbase-coder sync conflicts'"
+                )
+    _check_leftover_code_sync(warn)
+
+
+def _check_leftover_code_sync(warn) -> None:
+    from openbase_coder_cli import sync_migration
+
+    try:
+        plan = sync_migration.plan_migration()
+    except Exception:  # noqa: BLE001 - doctor must never crash on old state
+        return
+    if plan.has_legacy_state:
+        warn(
+            "the previous code sync left a service or data behind; run "
+            "'openbase-coder sync migrate-from-syncthing' to see and clean it up"
+        )
 
 
 @click.command()
@@ -878,7 +843,7 @@ def doctor() -> None:
     # --- Code Sync ---
     click.echo()
     click.echo(click.style("Code Sync", bold=True))
-    _check_code_sync(ok, warn, fail)
+    _check_sync_daemon(ok, warn, fail)
 
     # --- Summary ---
     click.echo()

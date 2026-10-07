@@ -97,10 +97,7 @@ from openbase_coder_cli.cli.setup.system_summary import (
 from openbase_coder_cli.cli.setup.workspace import (
     BUNDLED_SOUND_FILES,  # noqa: F401
     BUNDLED_SOUNDS_PACKAGE,  # noqa: F401
-    DEFAULT_SYNCTHING_GLOBAL_STIGNORE_CONTENT,  # noqa: F401
     THREAD_SYNC_EXCHANGE_DIR_NAME,  # noqa: F401
-    THREAD_SYNC_MARKER_FILE_NAME,  # noqa: F401
-    THREAD_SYNC_STIGNORE_CONTENT,  # noqa: F401
     _build_console,
     _copy_bundled_sound,  # noqa: F401
     _ensure_bundled_sounds,
@@ -108,7 +105,6 @@ from openbase_coder_cli.cli.setup.workspace import (
     _init_cli_workspace,
     _init_standalone_runtime,
     _install_cli_shim,
-    _syncthing_global_ignore_path,  # noqa: F401
     resolve_dev_workspace_dir,
 )
 from openbase_coder_cli.codex_home_instructions import (

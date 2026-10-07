@@ -1276,54 +1276,18 @@ def test_ensure_env_file_updates_existing_backend_only_when_requested(tmp_path) 
     assert "OPENBASE_CODING_BACKEND=claude_code" in content
 
 
-def test_ensure_thread_sync_exchange_dir_creates_syncthing_files(
+def test_ensure_thread_sync_exchange_dir_creates_only_the_folder(
     tmp_path, monkeypatch
 ) -> None:
     openbase_dir = tmp_path / "openbase"
-    global_ignore = tmp_path / "syncthing" / "global.stignore"
     _patch_setup(monkeypatch, "OPENBASE_BASE_DIR", openbase_dir)
-    _patch_setup(
-        monkeypatch,
-        "_syncthing_global_ignore_path",
-        lambda: global_ignore,
-    )
 
     setup_cli._ensure_thread_sync_exchange_dir()
 
     exchange_dir = openbase_dir / "thread-sync"
     assert exchange_dir.is_dir()
-    assert (
-        exchange_dir / ".stfolder" / setup_cli.THREAD_SYNC_MARKER_FILE_NAME
-    ).is_file()
-    assert (exchange_dir / ".stignore").read_text(encoding="utf-8") == (
-        "#include .stglobalignore\n"
-    )
-    assert global_ignore.read_text(encoding="utf-8") == "(?d).DS_Store\n"
-    assert (exchange_dir / ".stglobalignore").is_symlink()
-    assert (exchange_dir / ".stglobalignore").resolve() == global_ignore.resolve()
-
-
-def test_ensure_thread_sync_exchange_dir_replaces_stale_global_ignore_symlink(
-    tmp_path, monkeypatch
-) -> None:
-    openbase_dir = tmp_path / "openbase"
-    exchange_dir = openbase_dir / "thread-sync"
-    stale_global_ignore = tmp_path / "stale" / "global.stignore"
-    global_ignore = tmp_path / "syncthing" / "global.stignore"
-    exchange_dir.mkdir(parents=True)
-    stale_global_ignore.parent.mkdir()
-    stale_global_ignore.write_text("stale\n", encoding="utf-8")
-    (exchange_dir / ".stglobalignore").symlink_to(stale_global_ignore)
-    _patch_setup(monkeypatch, "OPENBASE_BASE_DIR", openbase_dir)
-    _patch_setup(
-        monkeypatch,
-        "_syncthing_global_ignore_path",
-        lambda: global_ignore,
-    )
-
-    setup_cli._ensure_thread_sync_exchange_dir()
-
-    assert (exchange_dir / ".stglobalignore").resolve() == global_ignore.resolve()
+    # No markers or ignore files of the previous sync engine.
+    assert sorted(path.name for path in exchange_dir.iterdir()) == []
 
 
 def test_ensure_bundled_sounds_installs_deactivate(tmp_path, monkeypatch) -> None:

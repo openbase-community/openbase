@@ -16,7 +16,6 @@ def system_paths(monkeypatch, tmp_path):
     )
     base = tmp_path / ".openbase"
     for name, path in {
-        "OPENBASE_BASE_DIR": base,
         "OPENBASE_BIN_DIR": base / "bin",
         "INSTALLATION_JSON_PATH": base / "installation.json",
         "OPENBASE_DISPATCHER_CONFIG_PATH": base / "dispatcher-config.json",
@@ -26,16 +25,12 @@ def system_paths(monkeypatch, tmp_path):
     }.items():
         monkeypatch.setattr(summary, name, path)
     git_ignore = tmp_path / "global.gitignore"
-    syncthing_ignore = tmp_path / "global.stignore"
     monkeypatch.setattr(summary, "_git_ignore_path", lambda: git_ignore)
-    monkeypatch.setattr(
-        summary, "_syncthing_global_ignore_path", lambda: syncthing_ignore
-    )
-    return base / ".env", git_ignore, syncthing_ignore
+    return base / ".env", git_ignore
 
 
 def test_system_summary_reports_only_observed_changes(system_paths, capsys):
-    env_file, git_ignore, syncthing_ignore = system_paths
+    env_file, git_ignore = system_paths
     git_ignore.write_text("existing-pattern\nremove-me\n")
     before = summary.SystemSetupSnapshot.capture(env_file)
 
@@ -45,7 +40,6 @@ def test_system_summary_reports_only_observed_changes(system_paths, capsys):
     (summary.PLIST_DIR / "com.openbase.coder.django-cli.plist").write_text("service")
     (summary.PLIST_DIR / "org.example.unrelated.plist").write_text("unrelated")
     git_ignore.write_text("existing-pattern\nnew-pattern\n")
-    syncthing_ignore.write_text("(?d).DS_Store\n")
     after = summary.SystemSetupSnapshot.capture(env_file)
 
     summary.print_system_setup_summary(
@@ -64,8 +58,6 @@ def test_system_summary_reports_only_observed_changes(system_paths, capsys):
     assert (
         "Removed Global Git ignore entries in ~/global.gitignore: remove-me" in output
     )
-    assert "Added Shared Syncthing ignore entries" in output
-    assert "(?d).DS_Store" in output
     assert "existing-pattern" not in output
     assert "unrelated" not in output
     assert "must-never-appear-in-summary" not in output
@@ -75,7 +67,7 @@ def test_system_summary_reports_only_observed_changes(system_paths, capsys):
 def test_system_summary_rerun_does_not_claim_new_services_or_ignores(
     system_paths, capsys
 ):
-    env_file, git_ignore, _ = system_paths
+    env_file, git_ignore = system_paths
     git_ignore.write_text("already-present\n")
     snapshot = summary.SystemSetupSnapshot.capture(env_file)
     summary.print_system_setup_summary(
@@ -105,7 +97,7 @@ def test_unreadable_configuration_is_not_reported_as_removed(capsys):
 
 
 def test_snapshot_detects_config_changes_through_symlinks(system_paths, tmp_path):
-    env_file, _, _ = system_paths
+    env_file, _ = system_paths
     env_file.parent.mkdir(parents=True)
     target = tmp_path / "env-target"
     target.write_text("BEFORE=1\n")

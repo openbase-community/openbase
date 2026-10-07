@@ -3,19 +3,17 @@
 The console shows a top-of-page banner when something the current
 configuration *expects* is not actually healthy. Expectations follow
 configuration, not a fixed list: services installed by default are always
-expected; conditional services (code-sync) are expected exactly when their
-feature is enabled — and conversely are flagged when running without their
+expected; conditional services (sync-daemon) are expected exactly when their
+feature is configured — and conversely are flagged when running without their
 feature enabled. The shared Codex service may instead be provided by Codex's
 own responsive managed daemon.
 """
 
 from __future__ import annotations
 
-import calendar
-import shutil
 import threading
 import time
-from typing import Any, Callable
+from typing import Callable
 
 from rest_framework import status
 from rest_framework.decorators import api_view
@@ -30,26 +28,9 @@ HEALTH_WARNINGS_CACHE_TTL_SECONDS = 5.0
 _warnings_cache_lock = threading.Lock()
 _warnings_cache: tuple[float, list[dict[str, str]]] | None = None
 
-RECONCILE_STALE_SECONDS = 10 * 60
-# Warn while there is still room to act; the engine's hard pause floor is
-# MIN_DISK_FREE_MB (2 GiB) in the rendered Syncthing config.
-SYNC_DISK_LOW_BYTES = 5 * 1024 * 1024 * 1024
-
 # Conditional services: expected exactly when the callable returns True.
 # Services not listed here are expected iff install_by_default.
 _CONDITIONAL_SERVICES: dict[str, Callable[[], bool]] = {}
-
-
-def _code_sync_expected() -> bool:
-    from openbase_coder_cli.sync_config import code_sync_enabled
-
-    try:
-        return code_sync_enabled()
-    except ValueError:
-        return False
-
-
-_CONDITIONAL_SERVICES["code-sync"] = _code_sync_expected
 
 
 def _sync_daemon_expected() -> bool:
@@ -99,10 +80,6 @@ def _sync_daemon_warnings() -> list[dict[str, str]]:
             )
         )
     return warnings
-# Cross-device thread sync rides the code-sync transport; when devices are
-# mirrored, both backends' device-sync services are expected too.
-_CONDITIONAL_SERVICES["codex-thread-device-sync"] = _code_sync_expected
-_CONDITIONAL_SERVICES["claude-thread-device-sync"] = _code_sync_expected
 
 
 def _warning(
@@ -114,26 +91,6 @@ def _warning(
         "message": message,
         "action": action,
     }
-
-
-def _disconnected_peer_warnings(
-    connections: dict[str, Any], device_names: dict[str, str]
-) -> list[dict[str, str]]:
-    warnings: list[dict[str, str]] = []
-    for device_id, conn in connections.items():
-        if not conn.get("connected") and not conn.get("paused"):
-            peer_name = device_names.get(device_id) or f"{device_id[:7]}…"
-            warnings.append(
-                _warning(
-                    f"sync-peer-disconnected:{device_id[:7]}",
-                    "critical",
-                    f"Sync peer {peer_name} is not connected; file sync "
-                    "between your machines is stopped.",
-                    "Check the peer machine is on and on the tailnet; "
-                    "see the file-sync skill for half-open connections.",
-                )
-            )
-    return warnings
 
 
 def _service_warnings() -> list[dict[str, str]]:
@@ -191,162 +148,6 @@ def _service_warnings() -> list[dict[str, str]]:
                     "is disabled.",
                     "Disable removed the feature; uninstall the service or "
                     "re-enable the feature.",
-                )
-            )
-    return warnings
-
-
-def _sync_warnings() -> list[dict[str, str]]:
-    from openbase_coder_cli.code_sync import CodeSyncError
-    from openbase_coder_cli.code_sync import manager as sync_manager
-    from openbase_coder_cli.code_sync.ignores import STIGNORE_FILENAME
-    from openbase_coder_cli.code_sync.reconciler import read_reconcile_state
-    from openbase_coder_cli.code_sync.syncthing import (
-        SyncthingClient,
-        configured_device_names,
-    )
-    from openbase_coder_cli.paths import CODE_SYNC_DIR
-    from openbase_coder_cli.services.tailnet_devices import tailscale_self_identity
-    from openbase_coder_cli.services.tailnet_experience import tailnet_provider_name
-    from openbase_coder_cli.sync_config import sync_folders
-
-    warnings: list[dict[str, str]] = []
-
-    # Engine reachable + peers connected + folders actually syncing.
-    try:
-        client = SyncthingClient()
-        warnings.extend(
-            _disconnected_peer_warnings(client.connections(), configured_device_names())
-        )
-        # A folder in error state (e.g. "insufficient space on disk") stops
-        # syncing while the engine stays up — historically invisible. One
-        # warning per distinct error message, not per folder.
-        seen_folder_errors: dict[str, str] = {}
-        for folder in sync_folders():
-            folder_status = client.folder_status(folder.folder_id)
-            error = str(folder_status.get("error") or "")
-            if error and error not in seen_folder_errors:
-                seen_folder_errors[error] = folder.relpath
-        for error, relpath in seen_folder_errors.items():
-            warnings.append(
-                _warning(
-                    f"sync-folder-error:{relpath}",
-                    "critical",
-                    f"Sync folder '{relpath}' has stopped syncing: {error[:200]}",
-                    "Free disk space on this Mac, then restart Openbase "
-                    "services; see the code-sync docs troubleshooting.",
-                )
-            )
-    except CodeSyncError as exc:
-        warnings.append(
-            _warning(
-                "sync-engine-unreachable",
-                "critical",
-                f"Code sync is enabled but its engine is unreachable: {exc}",
-                "Run 'openbase-coder restart' or 'openbase-coder sync enable'.",
-            )
-        )
-
-    # Low disk pauses Syncthing folders (absolute floor MIN_DISK_FREE_MB in
-    # the rendered config); warn before that line is crossed.
-    try:
-        free_bytes = shutil.disk_usage(str(CODE_SYNC_DIR)).free
-    except OSError:
-        free_bytes = None
-    if free_bytes is not None and free_bytes < SYNC_DISK_LOW_BYTES:
-        warnings.append(
-            _warning(
-                "sync-disk-low",
-                "warning",
-                f"Only {free_bytes // (1024 * 1024 * 1024)} GiB of disk is "
-                "free; below 2 GiB file sync pauses entirely.",
-                "Free disk space on this Mac.",
-            )
-        )
-
-    # Paused divergent branches: automation never picks a winner between two
-    # real histories, so an unresolved branch conflict means sync is holding
-    # a repo's ref until the user decides. Loud by design (2026-08-25).
-    from openbase_coder_cli.code_sync.conflicts import unresolved_conflicts
-
-    try:
-        for conflict in unresolved_conflicts():
-            if conflict.get("kind") != "branch":
-                continue
-            repo = conflict.get("repo_relpath") or "."
-            branch = conflict.get("branch") or "?"
-            warnings.append(
-                _warning(
-                    f"sync-branch-diverged:{conflict.get('id')}",
-                    "critical",
-                    f"Sync is paused for {repo}@{branch}: this machine and a "
-                    "peer have divergent git history for the same branch.",
-                    "Pick a side with 'openbase-coder sync resolve "
-                    f"{conflict.get('id')} --keep-local' or '--use-remote'.",
-                )
-            )
-    except Exception:  # noqa: BLE001 - conflicts file may be absent/corrupt
-        logger.debug("Unable to read sync conflicts", exc_info=True)
-
-    # This device must advertise an identity on its selected private network or
-    # peers will drop it. Keep the user-facing provider name transport-aware.
-    identity = tailscale_self_identity()
-    if not identity.get("available"):
-        provider_name = tailnet_provider_name()
-        warnings.append(
-            _warning(
-                "sync-no-tailscale-identity",
-                "critical",
-                f"This device's registration has no {provider_name} identity; "
-                "peers will drop it from their sync configuration.",
-                identity.get("error") or f"Check {provider_name} is connected.",
-            )
-        )
-
-    # A second, user-managed Syncthing syncing the same folders echoes
-    # writes into conflict storms.
-    try:
-        sync_manager.ensure_no_user_managed_overlap(sync_folders())
-    except CodeSyncError as exc:
-        warnings.append(_warning("sync-user-managed-overlap", "critical", str(exc), ""))
-
-    # Reconciler heartbeat: git branch pointers stop propagating silently.
-    state = read_reconcile_state()
-    last = state.get("last_reconcile_at")
-    if last:
-        try:
-            # The timestamp is UTC; calendar.timegm avoids the DST-unaware
-            # time.timezone arithmetic that added a phantom hour.
-            last_epoch = calendar.timegm(time.strptime(last, "%Y-%m-%dT%H:%M:%SZ"))
-            stale = time.time() - last_epoch
-        except ValueError:
-            stale = None
-        if stale is not None and stale > RECONCILE_STALE_SECONDS:
-            warnings.append(
-                _warning(
-                    "sync-reconcile-stale",
-                    "warning",
-                    f"Git-state reconciliation last ran {int(stale // 60)} "
-                    "minutes ago; commits are not propagating.",
-                    "Check the sync-workers service.",
-                )
-            )
-
-    # Managed ignore integrity: losing the VCS block silently syncs .git.
-    for folder in sync_folders():
-        stignore = folder.absolute_path() / STIGNORE_FILENAME
-        try:
-            content = stignore.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            content = ""
-        if "(?d).git" not in content:
-            warnings.append(
-                _warning(
-                    f"sync-stignore-broken:{folder.folder_id}",
-                    "critical",
-                    f"Sync folder '{folder.relpath}' is missing its .git "
-                    "ignore; syncing .git corrupts repositories.",
-                    "Run 'openbase-coder sync enable' to regenerate it.",
                 )
             )
     return warnings
@@ -490,26 +291,30 @@ def _thread_exchange_warnings() -> list[dict[str, str]]:
     """Detect silently-dead cross-device thread sync.
 
     Exporters happily write snapshots nobody consumes and importers find
-    nothing without ever erroring. When a sync peer is *connected right
-    now*, the exchange folder must contain a device directory from someone
-    other than us (their exporter runs) and one of our own (ours runs).
-    Staleness alone is deliberately not a signal: an idle peer with no new
-    threads exports nothing and would false-positive.
+    nothing without ever erroring. When Openbase Sync mirrors the exchange and
+    a peer is *connected right now*, the exchange folder must contain a device
+    directory from someone other than us (their exporter runs) and one of our
+    own (ours runs). Staleness alone is deliberately not a signal: an idle
+    peer with no new threads exports nothing and would false-positive.
     """
     import json as json_module
 
-    from openbase_coder_cli.code_sync import CodeSyncError
-    from openbase_coder_cli.code_sync import syncthing as syncthing_module
+    from openbase_coder_cli.sync_daemon import (
+        SyncDaemonClient,
+        SyncDaemonError,
+        path_is_synced,
+    )
 
+    base = _thread_exchange_base()
+    if not path_is_synced(base / "thread-sync"):
+        return []
     try:
-        client = syncthing_module.SyncthingClient()
-        connected = any(conn.get("connected") for conn in client.connections().values())
-    except CodeSyncError:
-        return []  # Engine trouble already warned about elsewhere.
+        connected = bool(SyncDaemonClient(timeout=0.5).status().get("peers"))
+    except SyncDaemonError:
+        return []  # Daemon trouble already warned about elsewhere.
     if not connected:
         return []
 
-    base = _thread_exchange_base()
     exchange = base / "thread-sync" / "devices"
     own_id = ""
     try:
@@ -531,8 +336,8 @@ def _thread_exchange_warnings() -> list[dict[str, str]]:
                 "thread-sync-no-peer-snapshots",
                 "warning",
                 "A sync peer is connected but the thread exchange has no "
-                "snapshots from any other device — the peer's thread "
-                "device-sync services are probably not running.",
+                "snapshots from any other device — the peer's "
+                "sync-workers service is probably not running.",
                 "Check 'openbase-coder services status' on the peer.",
             )
         )
@@ -543,7 +348,7 @@ def _thread_exchange_warnings() -> list[dict[str, str]]:
                 "warning",
                 "A sync peer is connected but this device has never "
                 "exported a thread snapshot.",
-                "Check the codex/claude-thread-device-sync services here.",
+                "Check the sync-workers service here.",
             )
         )
     return warnings
@@ -554,11 +359,9 @@ def collect_warnings() -> list[dict[str, str]]:
     warnings.extend(_installation_warnings())
     warnings.extend(_livekit_skew_warnings())
     warnings.extend(_codex_version_skew_warnings())
-    if _code_sync_expected():
-        warnings.extend(_sync_warnings())
-        warnings.extend(_thread_exchange_warnings())
     if _sync_daemon_expected():
         warnings.extend(_sync_daemon_warnings())
+        warnings.extend(_thread_exchange_warnings())
     return warnings
 
 

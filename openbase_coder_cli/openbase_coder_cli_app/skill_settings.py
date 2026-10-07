@@ -5,7 +5,7 @@ from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.response import Response
 
 from openbase_coder_cli import dispatcher_config, skills_autolink, skills_sync
-from openbase_coder_cli.code_sync import CodeSyncError
+from openbase_coder_cli.sync_daemon import SyncDaemonError
 
 
 def _payload(link_result=None, device_result=None):
@@ -32,7 +32,7 @@ def skill_sharing_settings(request):
             device_result = skills_sync.set_enabled(
                 request.data["sync_skills_across_devices"]
             )
-        except (CodeSyncError, ValueError) as exc:
+        except (SyncDaemonError, ValueError) as exc:
             raise ValidationError(str(exc)) from exc
         except OSError as exc:
             raise APIException("Unable to save device skill sharing.") from exc
