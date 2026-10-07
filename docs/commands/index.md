@@ -39,6 +39,7 @@ openbase-coder [OPTIONS] COMMAND [ARGS]
 | [`onboarding`](onboarding.md) | Inspect onboarding state and report it to Openbase cloud |
 | [`login`](login.md) | Email-code login to Openbase cloud |
 | [`loops`](loops.md) | Manage loops: scheduled or event-triggered agent prompts and commands (alias: `routines`) |
+| [`mcp-gateway`](../laptop-tools.md#commands) | Make MCP servers bound to one machine (such as your laptop's screen) available to agents on another |
 | [`logout`](logout.md) | Remove saved auth tokens |
 | [`plugins`](plugins.md) | Install and manage Openbase plugins |
 | [`profiles`](profiles.md) | Install or repair Openbase conversation profiles and session-ID hooks |
