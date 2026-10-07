@@ -1,6 +1,6 @@
 # services
 
-Manage Openbase launchd background services.
+Manage Openbase background services.
 
 In the apps: the [desktop app](../desktop-app.md) and
 [console](../console.md) show the same services on their **Status** page and
@@ -17,19 +17,22 @@ openbase-coder services COMMAND [ARGS]
 
 | Subcommand | Description |
 |---|---|
-| [`install`](services-install.md) | Generate wrappers/plists and load default services |
+| [`install`](services-install.md) | Generate service files and load default services |
 | `up` | Alias for `install`; also configures Tailscale Serve routes |
 | [`start`](services-start.md) | Start default services or one named service |
 | [`stop`](services-stop.md) | Stop all or one service |
 | [`status`](services-status.md) | Show service state summary |
 | [`logs`](services-logs.md) | Tail one service's logs |
-| [`regenerate`](services-regenerate.md) | Rebuild wrappers/plists from `installation.json` |
+| [`regenerate`](services-regenerate.md) | Rebuild platform service files from `installation.json` |
+| `uninstall [NAME]` | Stop services and remove their platform service files |
 
 ## Managed Service Names
 
 - `livekit-server` (port `7880`)
 - `codex-app-server` (standard Unix control socket on macOS/Linux; legacy port
   `4500` only for explicit compatibility deployments)
+- `codex-app-server-dispatcher` (dedicated Codex app-server instance for the
+  voice dispatcher)
 - `sync-workers` (cross-device thread snapshot sync, Claude desktop app
   index sync, and other periodic jobs in one process;
   state-dependent jobs no-op until their feature is enabled)
@@ -38,6 +41,9 @@ openbase-coder services COMMAND [ARGS]
 - `django-cli` (port `7999`)
 - `sync-daemon` (optional; installed by `openbase-coder sync-daemon configure`,
   see [Sync Between Your Computers](../code-sync.md))
+- `openbase-cloud-auth-rehydrate` (optional one-shot service for Cloud workspaces)
+- `openbase-cloud-heartbeat` (optional service for Cloud workspaces)
+- `openbase-tunneld` (optional embedded tailnet service, port `7998`)
 
 ## Examples
 
