@@ -285,13 +285,14 @@ def _run_self_update_locked(
             to_version=str(latest),
         )
 
+    voice_deferred = SelfUpdateResult(
+        status="deferred",
+        from_version=str(current),
+        to_version=str(latest),
+        detail="A voice session is active; re-run with --force to update now.",
+    )
     if not force and _voice_session_active():
-        return SelfUpdateResult(
-            status="deferred",
-            from_version=str(current),
-            to_version=str(latest),
-            detail="A voice session is active; re-run with --force to update now.",
-        )
+        return voice_deferred
 
     target = package.target
     targets = manifest.get("targets") or {}
@@ -308,6 +309,11 @@ def _run_self_update_locked(
         report=report,
     )
     _validate_release_dir(release_dir)
+
+    # Downloads and validation can take minutes; a call may have started
+    # since the first idle check. Leave the current runtime untouched.
+    if not force and _voice_session_active():
+        return voice_deferred
 
     old_root = package.root.resolve()
     report(f"Activating {release_dir.name}...")

@@ -157,7 +157,11 @@ def test_self_update_defers_during_voice_session(monkeypatch, tmp_path) -> None:
     assert "--force" in result.detail
 
 
-def test_self_update_flips_current_and_keeps_previous(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("call_starts_during_download", [False, True])
+@pytest.mark.parametrize("force", [False, True])
+def test_self_update_flips_current_and_keeps_previous(
+    monkeypatch, tmp_path, call_starts_during_download, force
+) -> None:
     layout = _patch_standalone_layout(monkeypatch, tmp_path)
     old_root = layout["releases"] / "1.0.0-aarch64-apple-darwin"
     _make_fake_package(old_root, version="1.0.0")
@@ -186,7 +190,17 @@ def test_self_update_flips_current_and_keeps_previous(monkeypatch, tmp_path) -> 
     monkeypatch.setattr(
         self_update, "_http_get", lambda _url: json.dumps(manifest).encode("utf-8")
     )
-    monkeypatch.setattr(self_update, "_voice_session_active", lambda: False)
+    voice_active = False
+    download = self_update._download_and_extract
+
+    def download_then_start_call(**kwargs):
+        nonlocal voice_active
+        root = download(**kwargs)
+        voice_active = call_starts_during_download
+        return root
+
+    monkeypatch.setattr(self_update, "_download_and_extract", download_then_start_call)
+    monkeypatch.setattr(self_update, "_voice_session_active", lambda: voice_active)
     launcher_calls: list[list[str]] = []
     monkeypatch.setattr(
         self_update,
@@ -195,7 +209,14 @@ def test_self_update_flips_current_and_keeps_previous(monkeypatch, tmp_path) -> 
     )
     monkeypatch.setattr(self_update, "_refresh_backend_binaries", lambda report: None)
 
-    result = self_update.run_self_update(report=lambda _msg: None)
+    result = self_update.run_self_update(force=force, report=lambda _msg: None)
+
+    if call_starts_during_download and not force:
+        assert result.status == "deferred"
+        assert layout["current"].resolve() == old_root.resolve()
+        assert not layout["previous"].exists()
+        assert launcher_calls == []
+        return
 
     assert result.status == "updated"
     assert result.to_version == "2.0.0"
@@ -239,6 +260,7 @@ def test_self_update_rolls_back_on_failed_health_gate(
         self_update, "_http_get", lambda _url: json.dumps(manifest).encode("utf-8")
     )
     monkeypatch.setattr(self_update, "_voice_session_active", lambda: False)
+
     # New launcher fails post-flip; old launcher succeeds during rollback.
     def failed_activation(_launcher, *, old_root, new_root, report):
         if activation_timeout:
