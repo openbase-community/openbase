@@ -365,3 +365,21 @@ def test_provider_reads_env_file_as_single_source_of_truth(
     assert tp.provider() == "netmesh-tsnet"
     monkeypatch.delenv("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", raising=False)
     assert tp.provider() == "tailscale"
+
+
+def test_leaving_direct_removes_persistent_service(monkeypatch, capsys):
+    from openbase_coder_cli.services import launchd
+    from openbase_coder_cli.services.definitions import TUNNELD_SERVICE
+
+    removed = []
+    monkeypatch.setattr(launchd, "remove_service", lambda svc: removed.append(svc))
+    monkeypatch.setattr(
+        launchd,
+        "launchctl_bootout",
+        lambda _svc: pytest.fail("bootout alone leaves a login-time service"),
+    )
+
+    tailnet_cli._teardown_transport("netmesh-tsnet")
+
+    assert removed == [TUNNELD_SERVICE]
+    assert "Removed openbase-tunneld" in capsys.readouterr().out

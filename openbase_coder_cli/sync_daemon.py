@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -212,6 +213,10 @@ def read_config_summary(config_path: Path | None = None) -> dict:
         if isinstance(data.get(key), str):
             summary[key] = data[key]
     summary["roots"] = _roots_from_config(data)
+    judgment = _judgment_from_config(data)
+    summary["judgment_enabled"] = bool(judgment and judgment["enabled"])
+    if judgment is not None:
+        summary["judgment_device_id"] = judgment["device_id"]
     return summary
 
 
@@ -254,6 +259,127 @@ def _write_config_text(text: str, config_path: Path) -> None:
     tmp.write_text(text, encoding="utf-8")
     tmp.chmod(0o600)
     tmp.replace(config_path)
+
+
+# --- judgment (AI conflict labels) ----------------------------------------
+#
+# The daemon can ask Openbase Cloud to label text-file conflicts. It is opt-in
+# per computer through the ``[judgment]`` table:
+#
+#   [judgment]
+#   enabled = true
+#   device_id = "desktop-..."  # the cloud device id, sent as X-Openbase-Device-Id
+#
+# The table may also carry keys this CLI does not manage (``endpoint``,
+# ``token_command``); edits here only touch ``enabled`` and ``device_id``.
+
+JUDGMENT_TABLE = "judgment"
+_TABLE_HEADER_RE = re.compile(r"^\s*\[")
+_JUDGMENT_HEADER_RE = re.compile(r"^\s*\[\s*judgment\s*\]\s*(#.*)?$")
+_JUDGMENT_MANAGED_KEY_RE = re.compile(r"^\s*(enabled|device_id)\s*=")
+
+
+def _judgment_from_config(data: dict[str, Any]) -> dict[str, Any] | None:
+    """``{"enabled", "device_id"}`` from a parsed config; None without a table.
+
+    ``device_id`` is the id the daemon sends to the cloud: the table's own
+    ``device_id``, else the daemon's top-level ``device_id`` (its fallback).
+    """
+    table = data.get(JUDGMENT_TABLE)
+    if not isinstance(table, dict):
+        return None
+    device_id = table.get("device_id")
+    if not isinstance(device_id, str) or not device_id:
+        device_id = (
+            data.get("device_id") if isinstance(data.get("device_id"), str) else ""
+        )
+    return {"enabled": table.get("enabled") is True, "device_id": device_id}
+
+
+def judgment_settings(config_path: Path | None = None) -> dict[str, Any] | None:
+    """The ``[judgment]`` opt-in; None when unconfigured, unreadable or absent."""
+    config_path = _config_path(config_path)
+    if not config_path.is_file():
+        return None
+    try:
+        return _judgment_from_config(_load_config(config_path))
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+
+
+def set_judgment(
+    enabled: bool,
+    device_id: str | None = None,
+    config_path: Path | None = None,
+) -> Path:
+    """Set ``[judgment] enabled`` (and ``device_id`` when given) in place.
+
+    Every other key and table, including unmanaged ``[judgment]`` keys, is
+    kept as written. The table is appended when missing. The result is
+    re-parsed and compared with the original so a layout this line editor
+    does not understand raises instead of corrupting the file.
+    """
+    config_path = _config_path(config_path)
+    if not config_path.is_file():
+        raise SyncDaemonError(
+            f"{config_path} does not exist; run `openbase-coder sync-daemon "
+            "configure` first"
+        )
+    original_text = config_path.read_text(encoding="utf-8")
+    try:
+        before = tomllib.loads(original_text)
+    except tomllib.TOMLDecodeError as exc:
+        raise SyncDaemonError(f"{config_path} is not valid TOML: {exc}") from exc
+
+    managed = [f"enabled = {'true' if enabled else 'false'}"]
+    if device_id is not None:
+        managed.append(f"device_id = {_toml_string(device_id)}")
+
+    lines = original_text.splitlines()
+    out: list[str] = []
+    found = False
+    in_table = False
+    for line in lines:
+        if _JUDGMENT_HEADER_RE.match(line) and not found:
+            found = True
+            in_table = True
+            out.append(line)
+            out.extend(managed)
+            continue
+        if in_table and _TABLE_HEADER_RE.match(line):
+            in_table = False
+        if in_table and _JUDGMENT_MANAGED_KEY_RE.match(line):
+            if device_id is None and line.strip().startswith("device_id"):
+                out.append(line)
+            continue
+        out.append(line)
+    if not found:
+        while out and not out[-1].strip():
+            out.pop()
+        out += ["", f"[{JUDGMENT_TABLE}]", *managed]
+    text = "\n".join(out) + "\n"
+
+    expected = dict(before)
+    table = before.get(JUDGMENT_TABLE)
+    expected[JUDGMENT_TABLE] = {
+        **(table if isinstance(table, dict) else {}),
+        "enabled": enabled,
+        **({"device_id": device_id} if device_id is not None else {}),
+    }
+    try:
+        after = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise SyncDaemonError(
+            f"could not update [{JUDGMENT_TABLE}] in {config_path}: {exc}; "
+            "edit the file by hand"
+        ) from exc
+    if after != expected:
+        raise SyncDaemonError(
+            f"could not update [{JUDGMENT_TABLE}] in {config_path} without "
+            "changing other settings; edit the file by hand"
+        )
+    _write_config_text(text, config_path)
+    return config_path
 
 
 # --- roots -----------------------------------------------------------------

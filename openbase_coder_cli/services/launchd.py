@@ -30,9 +30,11 @@ from openbase_coder_cli.paths import (
 )
 from openbase_coder_cli.runtime import stable_runtime_package
 from openbase_coder_cli.services import process_utils
+from openbase_coder_cli.services import tailscale_provider as tp
 from openbase_coder_cli.services.definitions import (
     RETIRED_SERVICE_NAMES,
     SERVICES,
+    TUNNELD_SERVICE,
     ServiceDefinition,
     default_services,
     retired_service_stub,
@@ -765,6 +767,11 @@ def launchctl_status(svc: ServiceDefinition) -> dict:
 def install_all_services(config: InstallationConfig) -> None:
     _ensure_launchd_paths()
     coding_backend = _selected_backend(config)
+    # A stopped legacy Direct job can still have a login-time LaunchAgent.
+    # Remove it before selecting optional daemons so an upgrade cannot revive
+    # the outgoing transport alongside the selected VPN.
+    if tp.provider() != tp.PROVIDER_NETMESH_TSNET and remove_service(TUNNELD_SERVICE):
+        click.echo("  Removed openbase-tunneld (Openbase Direct is not selected).")
     services = include_installed_optional_services(
         default_services(coding_backend), launchctl_status
     )

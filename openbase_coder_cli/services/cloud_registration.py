@@ -102,7 +102,24 @@ def device_registration_payload() -> dict[str, Any]:
         payload["capabilities"]["tailscale_ips"] = identity["ips"]
         if identity["ips"]:
             payload["tailscale_ip"] = identity["ips"][0]
+    judgment_enabled = _judgment_enabled()
+    if judgment_enabled is not None:
+        # Top-level, not a capability: the cloud stores it on the device and
+        # gates its conflict-judgment route on it. Omitted (stored value
+        # unchanged) when this computer never opted in or out.
+        payload["judgment_enabled"] = judgment_enabled
     return payload
+
+
+def _judgment_enabled() -> bool | None:
+    """The Openbase Sync ``[judgment]`` opt-in; None without the table. Never raises."""
+    from openbase_coder_cli.sync_daemon import judgment_settings
+
+    try:
+        settings = judgment_settings()
+    except Exception:  # noqa: BLE001 - registration must not fail on sync config
+        return None
+    return None if settings is None else bool(settings["enabled"])
 
 
 def _device_id() -> str:

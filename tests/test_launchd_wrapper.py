@@ -1,6 +1,8 @@
 import plistlib
 import subprocess
 
+import pytest
+
 from openbase_coder_cli.runtime import RuntimePackage
 from openbase_coder_cli.services import launchd, process_utils
 from openbase_coder_cli.services.definitions import ServiceDefinition
@@ -404,6 +406,7 @@ def test_tunneld_tracks_current_package_despite_old_installed_copy(
 def test_install_refreshes_enabled_optional_daemons_not_disabled_or_oneshots(
     monkeypatch,
 ):
+    monkeypatch.setattr(launchd.tp, "provider", lambda: "netmesh-tsnet")
     enabled = {"openbase-tunneld", "sync-daemon", "openbase-cloud-auth-rehydrate"}
     installed = []
     monkeypatch.setattr(launchd, "_ensure_launchd_paths", lambda: None)
@@ -668,3 +671,47 @@ def test_ensure_launchd_paths_creates_systemd_dir_on_linux(tmp_path, monkeypatch
     launchd._ensure_launchd_paths()
 
     assert systemd_dir.is_dir()
+
+
+@pytest.mark.parametrize("provider", ["netmesh", "tailscale"])
+@pytest.mark.parametrize("loaded", [False, True])
+def test_install_removes_inactive_direct_even_when_unloaded(
+    tmp_path, monkeypatch, provider, loaded
+):
+    from openbase_coder_cli.services.definitions import TUNNELD_SERVICE
+
+    _patch_launchd_dirs(tmp_path, monkeypatch)
+    plist = launchd._plist_path(TUNNELD_SERVICE)
+    wrapper = launchd._wrapper_path(TUNNELD_SERVICE)
+    for path in (plist, wrapper):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("legacy Direct service")
+    removed = []
+    installed = []
+    monkeypatch.setattr(launchd.tp, "provider", lambda: provider)
+    monkeypatch.setattr(launchd, "_ensure_launchd_paths", lambda: None)
+    monkeypatch.setattr(launchd, "_selected_backend", lambda _config: "openbase-cloud")
+    monkeypatch.setattr(
+        launchd,
+        "launchctl_status",
+        lambda svc: {
+            "installed": loaded and svc == TUNNELD_SERVICE and svc not in removed
+        },
+    )
+    monkeypatch.setattr(launchd, "launchctl_bootout", lambda svc: removed.append(svc))
+    monkeypatch.setattr(launchd, "_cleanup_service_endpoint", lambda _svc: None)
+    monkeypatch.setattr(launchd, "_resolve_binaries", lambda *_args: {})
+    monkeypatch.setattr(launchd, "_write_service_files", lambda *_args: False)
+    monkeypatch.setattr(
+        launchd,
+        "_activate_service",
+        lambda svc, _reload: installed.append(svc.name) or "Restarted",
+    )
+
+    launchd.install_all_services(InstallationConfig(standalone=True))
+
+    assert not plist.exists()
+    assert not wrapper.exists()
+    assert (TUNNELD_SERVICE in removed) == loaded
+    assert "openbase-tunneld" not in installed
+    assert "django-cli" in installed
