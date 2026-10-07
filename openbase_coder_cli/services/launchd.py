@@ -101,6 +101,33 @@ def _resolve_syncthing() -> str:
     return resolve_syncthing_binary()
 
 
+def _resolve_livekit_server(package) -> str:
+    if package is not None:
+        return _resolve_binary_with_preferred_paths(
+            "livekit-server",
+            [package.livekit_server_path],
+            "/opt/homebrew/bin/livekit-server",
+        )
+
+    from openbase_coder_cli.livekit_install import (
+        fallback_livekit_server_path,
+        installed_livekit_server_path,
+        livekit_binary_matches_pin,
+    )
+
+    downloaded = installed_livekit_server_path()
+    if (
+        downloaded.is_file()
+        and os.access(downloaded, os.X_OK)
+        and livekit_binary_matches_pin(downloaded)
+    ):
+        return str(downloaded)
+    fallback = fallback_livekit_server_path()
+    if fallback is not None:
+        return str(fallback)
+    return _resolve_binary("livekit-server", "/opt/homebrew/bin/livekit-server")
+
+
 def _runtime_workdir(config: InstallationConfig) -> str:
     runtime_package = stable_runtime_package()
     if runtime_package is not None:
@@ -133,13 +160,7 @@ def _binary_resolvers(config: InstallationConfig) -> dict[str, Callable[[], str]
             "claude",
             backend_binary_candidates("claude"),
         ),
-        "livekit": lambda: _resolve_binary_with_preferred_paths(
-            "livekit-server",
-            [package.livekit_server_path]
-            if package is not None
-            else [OPENBASE_BIN_DIR / "livekit-server"],
-            "/opt/homebrew/bin/livekit-server",
-        ),
+        "livekit": lambda: _resolve_livekit_server(package),
         "python": lambda: _resolve_service_python(package),
         "syncthing": _resolve_syncthing,
         "openbase_coder": lambda: _resolve_binary_with_preferred_paths(

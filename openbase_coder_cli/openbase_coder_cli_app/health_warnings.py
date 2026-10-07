@@ -464,20 +464,20 @@ def _codex_version_skew_warnings() -> list[dict[str, str]]:
 
 def _resolve_livekit_binary() -> str | None:
     import os
-    import shutil
 
-    from openbase_coder_cli.paths import OPENBASE_BIN_DIR
+    # Mirror the service resolver's preference order: a matching pinned
+    # download in ~/.openbase/bin wins, then PATH, then Homebrew.
+    from openbase_coder_cli.livekit_install import (
+        fallback_livekit_server_path,
+        installed_livekit_server_path,
+        livekit_binary_matches_pin,
+    )
 
-    # Mirror the service resolver's preference order: the pinned download in
-    # ~/.openbase/bin wins, then PATH, then Homebrew.
-    pinned = OPENBASE_BIN_DIR / "livekit-server"
-    if os.access(pinned, os.X_OK):
+    pinned = installed_livekit_server_path()
+    if os.access(pinned, os.X_OK) and livekit_binary_matches_pin(pinned):
         return str(pinned)
-    found = shutil.which("livekit-server")
-    if found:
-        return found
-    fallback = "/opt/homebrew/bin/livekit-server"
-    return fallback if os.access(fallback, os.X_OK) else None
+    fallback = fallback_livekit_server_path()
+    return str(fallback) if fallback is not None else None
 
 
 def _thread_exchange_base():

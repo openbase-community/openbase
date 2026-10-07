@@ -49,6 +49,39 @@ def installed_livekit_server_path() -> Path:
     return OPENBASE_BIN_DIR / name
 
 
+def livekit_binary_matches_pin(
+    binary: Path, pin: str = LIVEKIT_SERVER_PINNED_VERSION
+) -> bool:
+    return _binary_version(binary) == pin
+
+
+def fallback_livekit_server_path() -> Path | None:
+    name = "livekit-server.exe" if is_windows() else "livekit-server"
+    installed = installed_livekit_server_path().resolve()
+    candidates = [
+        Path(found)
+        for found in [shutil.which(name), shutil.which("livekit-server")]
+        if found
+    ]
+    if platform.system() == "Darwin":
+        candidates.extend(
+            [
+                Path("/opt/homebrew/bin/livekit-server"),
+                Path("/usr/local/bin/livekit-server"),
+            ]
+        )
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            resolved = candidate
+        if resolved == installed:
+            continue
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
 def ensure_pinned_livekit_server() -> Path | None:
     """Install the pinned livekit-server into ~/.openbase/bin for dev.
 
@@ -77,6 +110,16 @@ def ensure_pinned_livekit_server() -> Path | None:
         subprocess.SubprocessError,
         RuntimeError,
     ) as exc:
+        fallback = fallback_livekit_server_path()
+        if fallback is not None and livekit_binary_matches_pin(fallback, pin):
+            click.echo(
+                click.style(
+                    f"  WARN  Could not install pinned livekit-server {pin}: {exc}. "
+                    f"Using {fallback} because it already matches the pin.",
+                    fg="yellow",
+                )
+            )
+            return fallback
         click.echo(
             click.style(
                 f"  WARN  Could not install pinned livekit-server {pin}: {exc}. "

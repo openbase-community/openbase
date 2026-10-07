@@ -53,6 +53,31 @@ def test_install_refuses_version_mismatch(tmp_path, monkeypatch):
     assert not (tmp_path / "bin" / "livekit-server").exists()
 
 
+def test_ensure_uses_matching_fallback_when_openbase_package_lags_pin(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(livekit_install, "OPENBASE_BIN_DIR", tmp_path / "bin")
+    monkeypatch.setattr(livekit_install.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(livekit_install.platform, "machine", lambda: "arm64")
+    staged = tmp_path / "staged-livekit-server"
+    staged.write_text("#!/bin/sh\n", encoding="utf-8")
+    fallback = tmp_path / "homebrew-livekit-server"
+    fallback.write_text("#!/bin/sh\n", encoding="utf-8")
+    fallback.chmod(0o755)
+    monkeypatch.setattr(livekit_install, "_extract_livekit_server", lambda _url: staged)
+    monkeypatch.setattr(
+        livekit_install,
+        "_binary_version",
+        lambda binary: (
+            LIVEKIT_SERVER_PINNED_VERSION if binary == fallback else "1.13.7"
+        ),
+    )
+    monkeypatch.setattr(livekit_install, "fallback_livekit_server_path", lambda: fallback)
+
+    assert livekit_install.ensure_pinned_livekit_server() == fallback
+    assert not (tmp_path / "bin" / "livekit-server").exists()
+
+
 def test_install_replaces_binary_with_fresh_inode(tmp_path, monkeypatch):
     """In-place overwrites of a running signed binary corrupt the kernel's
     cached code signature (execs then die with SIGKILL); the installer must
