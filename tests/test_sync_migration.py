@@ -183,6 +183,9 @@ def test_apply_trashes_state_adds_roots_and_is_idempotent(home, fake_launchd):
 
     assert result.exit_code == 0, result.output
     assert fake_launchd.removed == ["code-sync"]
+    assert "Will stop and uninstall the code-sync service." in result.output
+    assert "Will add root ~/Projects" in result.output
+    assert "Will restart the sync-daemon service if it is installed." in result.output
     base = home / ".openbase"
     for name in ("code-sync", "sync-versions", "sync-config.json"):
         assert not (base / name).exists()
@@ -313,6 +316,8 @@ def test_no_restart_flag(home, fake_launchd):
     assert result.exit_code == 0, result.output
     assert fake_launchd.restarts == 0
     assert "~/Projects" in _root_paths()
+    assert "Will add root ~/Projects" in result.output
+    assert "restart the sync-daemon service" not in result.output
 
 
 def test_leftover_service_files_count_as_installed(home, fake_launchd):
