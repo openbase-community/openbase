@@ -195,7 +195,7 @@ def migrate_from_syncthing(
     )
     if plan.legacy_config.error:
         click.echo(click.style(f"  WARN  {plan.legacy_config.error}", fg="yellow"))
-    _echo_plan(plan)
+    _echo_plan(plan, verb="Will" if apply_changes else "Would", restart=not no_restart)
     if plan.nothing_to_do:
         click.echo("Nothing to migrate.")
         if not plan.daemon_configured and plan.roots:
@@ -228,8 +228,7 @@ def migrate_from_syncthing(
     click.echo("Migration complete.")
 
 
-def _echo_plan(plan: sync_migration.MigrationPlan) -> None:
-    verb = "Would"
+def _echo_plan(plan: sync_migration.MigrationPlan, *, verb: str, restart: bool) -> None:
     if plan.service_installed:
         click.echo(f"{verb} stop and uninstall the code-sync service.")
     for path in [*plan.trash_paths, *plan.markers]:
@@ -254,5 +253,5 @@ def _echo_plan(plan: sync_migration.MigrationPlan) -> None:
         if reason.startswith("already inside"):
             continue
         click.echo(click.style(f"  SKIP  {path}: {reason}", fg="yellow"))
-    if plan.root_change.changed:
+    if plan.root_change.changed and restart:
         click.echo(f"{verb} restart the sync-daemon service if it is installed.")
