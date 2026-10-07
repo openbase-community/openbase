@@ -204,6 +204,8 @@ def command_env(monkeypatch, payload_env):
     calls: dict[str, list] = {"register": [], "restart": []}
 
     def fake_register_and_report(**kwargs):
+        if calls.get("register_exception"):
+            raise RuntimeError(str(calls["register_exception"]))
         calls["register"].append(cloud_registration.device_registration_payload())
         return calls.get("register_result") or CloudReportResult(
             ok=True, supported=True
@@ -249,6 +251,16 @@ def test_disable_registers_false_and_restarts(command_env):
     assert command_env["restart"] == [True, True]
 
 
+def test_disable_writes_cloud_device_id_before_prior_enable(command_env):
+    _configure()
+
+    result = CliRunner().invoke(sync_daemon_cli, ["judgment", "disable"])
+
+    assert result.exit_code == 0, result.output
+    assert _load()["judgment"] == {"enabled": False, "device_id": "desktop-1"}
+    assert [p["judgment_enabled"] for p in command_env["register"]] == [False]
+
+
 def test_enable_warns_but_succeeds_when_cloud_unreachable(command_env):
     _configure()
     command_env["register_result"] = CloudReportResult(
@@ -262,6 +274,19 @@ def test_enable_warns_but_succeeds_when_cloud_unreachable(command_env):
     assert result.exit_code == 0, result.output
     assert "Warning: could not update Openbase Cloud" in result.output
     assert "Login required" in result.output
+    assert _load()["judgment"]["enabled"] is True
+    assert command_env["restart"] == [True]
+
+
+def test_enable_warns_but_succeeds_when_registration_raises(command_env):
+    _configure()
+    command_env["register_exception"] = "registration exploded"
+
+    result = CliRunner().invoke(sync_daemon_cli, ["judgment", "enable"])
+
+    assert result.exit_code == 0, result.output
+    assert "Warning: could not update Openbase Cloud" in result.output
+    assert "registration exploded" in result.output
     assert _load()["judgment"]["enabled"] is True
     assert command_env["restart"] == [True]
 
@@ -284,6 +309,22 @@ def test_enable_no_restart(command_env):
     assert result.exit_code == 0, result.output
     assert command_env["restart"] == []
     assert len(command_env["register"]) == 1
+
+
+def test_enable_json_output(command_env):
+    _configure()
+    command_env["installed"] = False
+
+    result = CliRunner().invoke(
+        sync_daemon_cli, ["judgment", "enable", "--json", "--no-restart"]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["enabled"] is True
+    assert payload["device_id"] == "desktop-1"
+    assert payload["cloud"]["ok"] is True
+    assert payload["restart"] == {"requested": False, "restarted": None}
 
 
 def test_enable_requires_configured_sync(command_env):

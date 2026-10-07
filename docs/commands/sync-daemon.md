@@ -43,22 +43,15 @@ roots on both machines.
 
 ## judgment
 
-Opt this computer in or out of AI conflict labels: Openbase Cloud labels
-text-file conflicts to help you choose, and never resolves them for you. The
-contents of both versions of a conflicting text file are sent to Openbase
-Cloud for classification, billed against a small free monthly allowance. See
-[AI conflict labels](../code-sync.md#ai-conflict-labels-opt-in).
+Opt this computer in or out of AI conflict labels: Openbase Cloud labels text-file conflicts to help you choose, and never resolves them for you. The contents of both versions of a conflicting text file are sent to Openbase Cloud for classification, billed against a small free monthly allowance. See [AI conflict labels](../code-sync.md#ai-conflict-labels-opt-in).
 
 | Command | Description |
 |---|---|
-| `judgment enable [--no-restart]` | Set `[judgment] enabled = true` and this computer's cloud device id in `config.toml`, register the choice with Openbase Cloud, and restart the `sync-daemon` service if it is installed |
-| `judgment disable [--no-restart]` | Set `enabled = false`, register the choice with Openbase Cloud, and restart the service |
+| `judgment enable [--json] [--no-restart]` | Set `[judgment] enabled = true` and this computer's cloud device id in `config.toml`, register the choice with Openbase Cloud, and restart the `sync-daemon` service if it is installed |
+| `judgment disable [--json] [--no-restart]` | Set `enabled = false` plus this computer's cloud device id, register the choice with Openbase Cloud, and restart the service |
 | `judgment status [--json]` | Show whether labels are enabled and which device id the daemon uses |
 
-Registering with Openbase Cloud needs you to be signed in. If it fails (for
-example offline), the command still saves the setting, prints a warning, and
-the choice is sent at the computer's next periodic check-in. Other settings
-in `config.toml` are kept as they are.
+Registering with Openbase Cloud needs you to be signed in. If it fails (for example offline), the command still saves the setting, prints a warning, and the choice is sent at the computer's next periodic check-in. Other settings in `config.toml` are kept as they are.
 
 ## Advanced: pins
 

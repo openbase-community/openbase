@@ -236,8 +236,13 @@ def _require_configured() -> None:
         )
 
 
-def _apply_judgment(enabled: bool, *, restart: bool) -> None:
+def _json_option(func):
+    return click.option("--json", "as_json", is_flag=True, help="Print JSON.")(func)
+
+
+def _apply_judgment(enabled: bool, *, restart: bool, as_json: bool) -> None:
     from openbase_coder_cli.services.cloud_registration import (
+        CloudReportResult,
         local_device_id,
         register_and_report,
     )
@@ -245,21 +250,24 @@ def _apply_judgment(enabled: bool, *, restart: bool) -> None:
     _require_configured()
     # The daemon sends this id as X-Openbase-Device-Id; the cloud allows the
     # call only for a registered device of the user with the opt-in set.
-    device_id = local_device_id() if enabled else None
+    device_id = local_device_id()
     try:
         path = sync_daemon.set_judgment(enabled, device_id)
     except sync_daemon.SyncDaemonError as exc:
         raise click.ClickException(str(exc)) from exc
     state = "enabled" if enabled else "disabled"
-    click.echo(f"AI conflict labels {state} in {path}.")
-    if device_id:
+    if not as_json:
+        click.echo(f"AI conflict labels {state} in {path}.")
         click.echo(f"Cloud device id: {device_id}")
 
     # The registration payload reads the opt-in from the config just written.
-    report = register_and_report()
-    if report.ok:
+    try:
+        report = register_and_report()
+    except Exception as exc:  # noqa: BLE001 - registration is best-effort
+        report = CloudReportResult(ok=False, supported=True, error=str(exc))
+    if report.ok and not as_json:
         click.echo(f"Openbase Cloud updated (judgment_enabled={str(enabled).lower()}).")
-    else:
+    elif not report.ok and not as_json:
         click.echo(
             "Warning: could not update Openbase Cloud "
             f"({report.error or 'unknown error'}); it is retried at the next "
@@ -267,8 +275,12 @@ def _apply_judgment(enabled: bool, *, restart: bool) -> None:
             err=True,
         )
 
+    restarted: bool | None = None
     if not restart:
-        click.echo("Not restarting the sync-daemon service (--no-restart).")
+        if not as_json:
+            click.echo("Not restarting the sync-daemon service (--no-restart).")
+        else:
+            _print_judgment_result(enabled, device_id, path, report, restart, restarted)
         return
     try:
         restarted = sync_daemon.restart_service_if_installed()
@@ -278,12 +290,43 @@ def _apply_judgment(enabled: bool, *, restart: bool) -> None:
             f"{exc}. Restart it with 'openbase-coder services restart sync-daemon'."
         ) from exc
     if restarted:
-        click.echo("Restarted the sync-daemon service.")
+        if not as_json:
+            click.echo("Restarted the sync-daemon service.")
     else:
-        click.echo(
-            "The sync-daemon service is not installed; the setting applies when "
-            "it starts."
+        if not as_json:
+            click.echo(
+                "The sync-daemon service is not installed; the setting applies when "
+                "it starts."
+            )
+    if as_json:
+        _print_judgment_result(enabled, device_id, path, report, restart, restarted)
+
+
+def _print_judgment_result(
+    enabled: bool,
+    device_id: str,
+    path: Path,
+    report,
+    restart_requested: bool,
+    restarted: bool | None,
+) -> None:
+    click.echo(
+        json.dumps(
+            {
+                "configured": True,
+                "enabled": enabled,
+                "device_id": device_id,
+                "config_path": str(path),
+                "cloud": report.to_dict(),
+                "restart": {
+                    "requested": restart_requested,
+                    "restarted": restarted,
+                },
+            },
+            indent=2,
+            sort_keys=True,
         )
+    )
 
 
 _no_restart_option = click.option(
@@ -295,16 +338,18 @@ _no_restart_option = click.option(
 
 @judgment_cli.command("enable")
 @_no_restart_option
-def judgment_enable(no_restart: bool) -> None:
+@_json_option
+def judgment_enable(no_restart: bool, as_json: bool) -> None:
     """Opt this computer in: label sync conflicts with Openbase Cloud."""
-    _apply_judgment(True, restart=not no_restart)
+    _apply_judgment(True, restart=not no_restart, as_json=as_json)
 
 
 @judgment_cli.command("disable")
 @_no_restart_option
-def judgment_disable(no_restart: bool) -> None:
+@_json_option
+def judgment_disable(no_restart: bool, as_json: bool) -> None:
     """Opt this computer out of AI conflict labels."""
-    _apply_judgment(False, restart=not no_restart)
+    _apply_judgment(False, restart=not no_restart, as_json=as_json)
 
 
 @judgment_cli.command("status")
