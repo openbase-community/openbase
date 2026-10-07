@@ -374,6 +374,60 @@ def test_dev_livekit_resolver_skips_stale_download(tmp_path, monkeypatch):
     assert launchd._binary_resolvers(config)["livekit"]() == str(fallback)
 
 
+def test_tunneld_tracks_current_package_despite_old_installed_copy(
+    tmp_path, monkeypatch
+):
+    current = tmp_path / "current"
+    old = tmp_path / "old" / "bin" / "openbase-tunneld"
+    new = tmp_path / "new" / "bin" / "openbase-tunneld"
+    installed = tmp_path / "user-bin" / "openbase-tunneld"
+    for binary, content in ((old, "old"), (new, "new"), (installed, "old")):
+        binary.parent.mkdir(parents=True)
+        binary.write_text(content)
+        binary.chmod(0o755)
+    current.symlink_to(old.parent.parent)
+    monkeypatch.delenv("OPENBASE_TUNNELD_BIN", raising=False)
+    monkeypatch.setattr(launchd, "OPENBASE_BIN_DIR", installed.parent)
+    monkeypatch.setattr(
+        launchd, "stable_runtime_package", lambda: RuntimePackage(root=current)
+    )
+    config = InstallationConfig(standalone=True)
+    resolver = launchd._binary_resolvers(config)["tunneld"]
+    assert resolver() == str(current / "bin" / "openbase-tunneld")
+    current.unlink()
+    current.symlink_to(new.parent.parent)
+    assert resolver() == str(current / "bin" / "openbase-tunneld")
+    assert (current / "bin" / "openbase-tunneld").read_text() == "new"
+    assert installed.read_text() == "old"
+
+
+def test_install_refreshes_enabled_optional_daemons_not_disabled_or_oneshots(
+    monkeypatch,
+):
+    enabled = {"openbase-tunneld", "sync-daemon", "openbase-cloud-auth-rehydrate"}
+    installed = []
+    monkeypatch.setattr(launchd, "_ensure_launchd_paths", lambda: None)
+    monkeypatch.setattr(launchd, "_selected_backend", lambda _config: "openbase-cloud")
+    monkeypatch.setattr(
+        launchd, "launchctl_status", lambda svc: {"installed": svc.name in enabled}
+    )
+    monkeypatch.setattr(launchd, "_resolve_binaries", lambda _config, _services: {})
+    monkeypatch.setattr(launchd, "remove_service", lambda _svc: False)
+    monkeypatch.setattr(launchd, "_write_service_files", lambda *_args: False)
+    monkeypatch.setattr(
+        launchd,
+        "_activate_service",
+        lambda svc, _reload: installed.append(svc.name) or "Restarted",
+    )
+    launchd.install_all_services(InstallationConfig(standalone=True))
+    assert {"django-cli", "livekit-server", "openbase-tunneld", "sync-daemon"} <= set(
+        installed
+    )
+    assert "openbase-cloud-auth-rehydrate" not in installed
+    assert "openbase-cloud-heartbeat" not in installed
+    assert "codex-app-server" not in installed
+
+
 def test_launchctl_bootstrap_reenables_disabled_label(tmp_path, monkeypatch):
     service = ServiceDefinition(
         name="sample",

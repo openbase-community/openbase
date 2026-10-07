@@ -15,7 +15,10 @@ from openbase_coder_cli.livekit_install import ensure_pinned_livekit_server
 from openbase_coder_cli.services.definitions import SERVICES
 from openbase_coder_cli.services.launchd import install_service, launchctl_status
 from openbase_coder_cli.services.registry import find_service, require_installation
-from openbase_coder_cli.services.selection import configured_default_services
+from openbase_coder_cli.services.selection import (
+    configured_default_services,
+    include_installed_optional_services,
+)
 from openbase_coder_cli.services.tunneld import install_tunneld_binary
 from openbase_coder_cli.services.voice_warning import (
     any_service_action_interrupts_voice,
@@ -47,22 +50,16 @@ def restart_target_names() -> list[str]:
 
 def build_restart_plan(request: RestartRequest) -> RestartPlan:
     service_names = [service.name for service in SERVICES]
-    default_service_names = [service.name for service in configured_default_services()]
     valid_targets = set(service_names)
 
     requested_targets = list(request.services)
     if not requested_targets:
-        requested_targets = default_service_names
-        # Optional daemons can already be enabled on this installation. A full
-        # restart must refresh those too, without enabling unused features or
-        # replaying completed one-shot provisioning/auth jobs.
-        for service in SERVICES:
-            if (
-                service.name not in requested_targets
-                and service.service_type != "oneshot"
-                and launchctl_status(service).get("installed")
-            ):
-                requested_targets.append(service.name)
+        requested_targets = [
+            service.name
+            for service in include_installed_optional_services(
+                configured_default_services(), launchctl_status
+            )
+        ]
     unknown = [target for target in requested_targets if target not in valid_targets]
     if unknown:
         valid = ", ".join(restart_target_names())

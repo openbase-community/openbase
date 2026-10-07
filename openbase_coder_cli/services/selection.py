@@ -3,15 +3,34 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from openbase_coder_cli.env_file import selected_backend_from_env_file
 from openbase_coder_cli.paths import DEFAULT_ENV_FILE_PATH
 from openbase_coder_cli.services.definitions import (
+    SERVICES,
     ServiceDefinition,
     default_services,
 )
 from openbase_coder_cli.services.installation import InstallationConfig
+
+
+def include_installed_optional_services(
+    services: Iterable[ServiceDefinition],
+    status: Callable[[ServiceDefinition], dict],
+) -> list[ServiceDefinition]:
+    """Refresh enabled optional daemons without enabling or replaying features."""
+    selected = list(services)
+    for service in SERVICES:
+        if (
+            not service.install_by_default
+            and service.service_type != "oneshot"
+            and service not in selected
+            and status(service).get("installed")
+        ):
+            selected.append(service)
+    return selected
 
 
 def configured_env_file_path() -> Path:

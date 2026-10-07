@@ -38,6 +38,7 @@ from openbase_coder_cli.services.definitions import (
     retired_service_stub,
 )
 from openbase_coder_cli.services.installation import InstallationConfig
+from openbase_coder_cli.services.selection import include_installed_optional_services
 
 
 def _is_macos() -> bool:
@@ -188,6 +189,7 @@ def _binary_resolvers(config: InstallationConfig) -> dict[str, Callable[[], str]
                     if os.environ.get("OPENBASE_TUNNELD_BIN")
                     else []
                 ),
+                *([package.root / "bin" / "openbase-tunneld"] if package else []),
                 OPENBASE_BIN_DIR / "openbase-tunneld",
                 *_workspace_binary_candidates(config, "openbase-tunneld"),
             ],
@@ -763,7 +765,9 @@ def launchctl_status(svc: ServiceDefinition) -> dict:
 def install_all_services(config: InstallationConfig) -> None:
     _ensure_launchd_paths()
     coding_backend = _selected_backend(config)
-    services = default_services(coding_backend)
+    services = include_installed_optional_services(
+        default_services(coding_backend), launchctl_status
+    )
     binaries = _resolve_binaries(config, services)
 
     for svc in default_services():
