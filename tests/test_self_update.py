@@ -5,9 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import tarfile
+from importlib import import_module
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from click.testing import CliRunner
 
 from openbase_coder_cli import self_update
 from openbase_coder_cli.runtime import RuntimePackage
@@ -63,9 +66,7 @@ def _patch_standalone_layout(monkeypatch, tmp_path: Path) -> dict[str, Path]:
         "previous": tmp_path / "standalone" / "previous",
         "cache": tmp_path / "update-check.json",
     }
-    monkeypatch.setattr(
-        self_update, "STANDALONE_PACKAGES_DIR", tmp_path / "standalone"
-    )
+    monkeypatch.setattr(self_update, "STANDALONE_PACKAGES_DIR", tmp_path / "standalone")
     monkeypatch.setattr(self_update, "STANDALONE_RELEASES_DIR", layout["releases"])
     monkeypatch.setattr(self_update, "STANDALONE_CURRENT_DIR", layout["current"])
     monkeypatch.setattr(self_update, "STANDALONE_PREVIOUS_DIR", layout["previous"])
@@ -343,9 +344,9 @@ def test_manifest_signature_enforced_when_key_embedded(monkeypatch) -> None:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     private_key = Ed25519PrivateKey.generate()
-    public_b64 = base64.b64encode(
-        private_key.public_key().public_bytes_raw()
-    ).decode("ascii")
+    public_b64 = base64.b64encode(private_key.public_key().public_bytes_raw()).decode(
+        "ascii"
+    )
     monkeypatch.setattr(self_update, "UPDATE_MANIFEST_PUBLIC_KEY_B64", public_b64)
 
     manifest_bytes = json.dumps({"manifest_schema": 1, "version": "1.0.0"}).encode(
@@ -399,7 +400,11 @@ def test_spawn_detached_self_update_launches_current_launcher(
     self_update.spawn_detached_self_update()
     self_update.spawn_detached_self_update(force=True)
 
-    assert spawned[0][0] == [str(current / "bin" / "openbase-coder"), "self-update"]
+    assert spawned[0][0] == [
+        str(current / "bin" / "openbase-coder"),
+        "self-update",
+        "--automatic",
+    ]
     assert spawned[0][1]["start_new_session"] is True
     assert spawned[1][0][-1] == "--force"
 
@@ -408,6 +413,117 @@ def test_spawn_detached_self_update_requires_launcher(monkeypatch, tmp_path) -> 
     _patch_standalone_layout(monkeypatch, tmp_path)
     with pytest.raises(self_update.SelfUpdateError, match="launcher"):
         self_update.spawn_detached_self_update()
+
+
+def test_automatic_update_waits_for_call_without_fetching_feed(monkeypatch, tmp_path):
+    monkeypatch.setattr(self_update, "OPENBASE_BASE_DIR", tmp_path)
+    monkeypatch.setattr(InstallationConfig, "exists", lambda: False)
+    monkeypatch.delenv(self_update.AUTO_UPDATE_ENV_KEY, raising=False)
+    active = iter([True, True, False])
+    monkeypatch.setattr(self_update, "_voice_session_active", lambda: next(active))
+    waits = []
+    monkeypatch.setattr(self_update.time, "sleep", waits.append)
+    updated = self_update.SelfUpdateResult("updated", "1.0.0", "2.0.0")
+    applied = []
+
+    def apply(**kwargs):
+        applied.append(kwargs)
+        return updated
+
+    monkeypatch.setattr(self_update, "run_self_update", apply)
+    assert self_update.run_automatic_self_update(report=lambda _: None) == updated
+    assert waits == [60, 60]
+    assert len(applied) == 1
+    assert applied[0]["force"] is False
+
+
+def test_pending_automatic_update_observes_new_opt_out(monkeypatch, tmp_path):
+    monkeypatch.setattr(self_update, "OPENBASE_BASE_DIR", tmp_path)
+    monkeypatch.setattr(InstallationConfig, "exists", lambda: False)
+    monkeypatch.delenv(self_update.AUTO_UPDATE_ENV_KEY, raising=False)
+    package = RuntimePackage(
+        root=tmp_path, version="1.0.0", target="aarch64-apple-darwin"
+    )
+    monkeypatch.setattr(self_update, "current_runtime_package", lambda: package)
+    monkeypatch.setattr(self_update, "_voice_session_active", lambda: True)
+    monkeypatch.setattr(
+        self_update.time,
+        "sleep",
+        lambda _: (tmp_path / ".env").write_text("OPENBASE_CODER_AUTO_UPDATE=0\n"),
+    )
+    monkeypatch.setattr(
+        self_update, "run_self_update", lambda **_: pytest.fail("opted-out update ran")
+    )
+    result = self_update.run_automatic_self_update(report=lambda _: None)
+    assert result.status == "deferred"
+    assert "disabled" in result.detail
+
+
+@pytest.mark.parametrize("status", ["rolled-back", "blocked"])
+def test_automatic_update_does_not_retry_failed_release(monkeypatch, tmp_path, status):
+    monkeypatch.setattr(self_update, "OPENBASE_BASE_DIR", tmp_path)
+    monkeypatch.setattr(InstallationConfig, "exists", lambda: False)
+    monkeypatch.delenv(self_update.AUTO_UPDATE_ENV_KEY, raising=False)
+    monkeypatch.setattr(self_update, "_voice_session_active", lambda: False)
+    failed = self_update.SelfUpdateResult(status, "1.0.0", "2.0.0")
+    monkeypatch.setattr(self_update, "run_self_update", lambda **_: failed)
+    monkeypatch.setattr(
+        self_update.time, "sleep", lambda _: pytest.fail("failed release retried")
+    )
+    assert self_update.run_automatic_self_update(report=lambda _: None) == failed
+
+
+def test_automatic_update_retries_a_deferred_race(monkeypatch, tmp_path):
+    monkeypatch.setattr(self_update, "OPENBASE_BASE_DIR", tmp_path)
+    monkeypatch.setattr(InstallationConfig, "exists", lambda: False)
+    monkeypatch.delenv(self_update.AUTO_UPDATE_ENV_KEY, raising=False)
+    monkeypatch.setattr(self_update, "_voice_session_active", lambda: False)
+    updated = self_update.SelfUpdateResult("updated", "1.0.0", "2.0.0")
+    results = iter([self_update.SelfUpdateResult("deferred", "1.0.0", None), updated])
+    monkeypatch.setattr(self_update, "run_self_update", lambda **_: next(results))
+    waits = []
+    monkeypatch.setattr(self_update.time, "sleep", waits.append)
+    assert self_update.run_automatic_self_update(report=lambda _: None) == updated
+    assert waits == [60]
+
+
+def test_automatic_update_reads_configured_env_file(monkeypatch, tmp_path):
+    configured_env = tmp_path / "configured.env"
+    configured_env.write_text("OPENBASE_CODER_AUTO_UPDATE=0\n")
+    monkeypatch.setattr(InstallationConfig, "exists", lambda: True)
+    monkeypatch.setattr(
+        InstallationConfig,
+        "load",
+        lambda: SimpleNamespace(env_file=str(configured_env)),
+    )
+    monkeypatch.setattr(self_update, "current_runtime_package", lambda: None)
+    monkeypatch.setenv(self_update.AUTO_UPDATE_ENV_KEY, "1")
+    monkeypatch.setattr(
+        self_update, "_voice_session_active", lambda: pytest.fail("opt-out ignored")
+    )
+    assert self_update.run_automatic_self_update().status == "deferred"
+
+
+@pytest.mark.parametrize("automatic", [False, True])
+def test_cli_routes_automatic_attempts_without_changing_manual_updates(
+    monkeypatch, automatic
+):
+    module = import_module("openbase_coder_cli.cli.self_update")
+    calls = []
+    result = self_update.SelfUpdateResult("up-to-date", "1.0.0", "1.0.0")
+    monkeypatch.setattr(
+        module, "run_self_update", lambda **_: calls.append("manual") or result
+    )
+    monkeypatch.setattr(
+        module,
+        "run_automatic_self_update",
+        lambda **_: calls.append("automatic") or result,
+    )
+    args = ["--json"] + (["--automatic"] if automatic else [])
+    invocation = CliRunner().invoke(module.self_update, args)
+    assert invocation.exit_code == 0, invocation.output
+    assert json.loads(invocation.output)["status"] == "up-to-date"
+    assert calls == ["automatic" if automatic else "manual"]
 
 
 def _fake_releases_response(monkeypatch, releases: list[dict]) -> None:

@@ -8,6 +8,7 @@ from openbase_coder_cli.self_update import (
     SelfUpdateError,
     check_for_update,
     result_payload,
+    run_automatic_self_update,
     run_self_update,
 )
 
@@ -25,12 +26,17 @@ from openbase_coder_cli.self_update import (
     help="Update even while a voice session is active.",
 )
 @click.option(
+    "--automatic",
+    is_flag=True,
+    hidden=True,
+)
+@click.option(
     "--json",
     "as_json",
     is_flag=True,
     help="Emit the result as JSON (for UI-driven updates).",
 )
-def self_update(check_only: bool, force: bool, as_json: bool) -> None:
+def self_update(check_only: bool, force: bool, automatic: bool, as_json: bool) -> None:
     """Update a standalone install to the latest release for its channel.
 
     The update sequence, rollback behavior, and channel semantics are
@@ -53,7 +59,8 @@ def self_update(check_only: bool, force: bool, as_json: bool) -> None:
                 )
             return
 
-        result = run_self_update(force=force, report=click.echo)
+        updater = run_automatic_self_update if automatic else run_self_update
+        result = updater(force=force, report=click.echo)
     except SelfUpdateError as exc:
         raise click.ClickException(str(exc)) from exc
 
