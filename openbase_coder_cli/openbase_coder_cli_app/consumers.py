@@ -18,6 +18,7 @@ from channels.generic.websocket import (
 from super_agents.app_permissions import DEFAULT_APPROVAL_REQUESTS_FILE
 from watchfiles import awatch
 
+from openbase_coder_cli import mcp_gateway
 from openbase_coder_cli.openbase_coder_cli_app.approvals import (
     pending_approval_requests,
 )
@@ -725,3 +726,89 @@ class IOSAppControlConsumer(AsyncJsonWebsocketConsumer):
 
     async def ios_app_control(self, event):
         await self.send_json({"type": "ios_app_control", "data": event["data"]})
+
+
+class McpGatewayConsumer(AsyncWebsocketConsumer):
+    """Bridge to a stdio MCP server this machine serves (see ``mcp_gateway``).
+
+    One JSON-RPC message per text frame each way. Only servers listed in the
+    gateway config are reachable, only by the owner, and each socket gets its
+    own process, ended when the socket closes.
+    """
+
+    bridge: mcp_gateway.GatewayBridge | None = None
+    _inbox: asyncio.Queue[str | None] | None = None
+    _tasks: tuple[asyncio.Task, ...] = ()
+
+    async def connect(self):
+        if self.scope.get("user") != "authenticated":
+            await self.close(code=mcp_gateway.CLOSE_UNAUTHENTICATED)
+            return
+        name = self.scope["url_route"]["kwargs"]["name"]
+        server = mcp_gateway.served_servers().get(name)
+        await self.accept()
+        if server is None:
+            await self.close(
+                code=mcp_gateway.CLOSE_UNKNOWN_SERVER,
+                reason=f"{name} is not served on this machine",
+            )
+            return
+        bridge = mcp_gateway.GatewayBridge(server, self._send_text)
+        try:
+            await bridge.start()
+        except OSError as exc:
+            logger.warning("mcp-gateway %s failed to start: %s", name, exc)
+            await self.close(
+                code=mcp_gateway.CLOSE_START_FAILED,
+                reason=f"{name} could not be started",
+            )
+            return
+        self.bridge = bridge
+        self._inbox = asyncio.Queue()
+        self._tasks = (
+            asyncio.create_task(self._write_inbox()),
+            asyncio.create_task(self._close_when_process_exits()),
+        )
+        logger.info("mcp-gateway %s: bridge opened", name)
+
+    async def _send_text(self, text: str) -> None:
+        await self.send(text_data=text)
+
+    async def _write_inbox(self) -> None:
+        # Writes happen off the receive path so a process that stops reading
+        # stdin cannot stall this consumer's disconnect handling.
+        assert self._inbox is not None and self.bridge is not None
+        while True:
+            text = await self._inbox.get()
+            if text is None:
+                return
+            if not await self.bridge.to_process(text):
+                return
+
+    async def _close_when_process_exits(self) -> None:
+        assert self.bridge is not None
+        await self.bridge.wait_stdout_closed()
+        await self.close(
+            code=mcp_gateway.CLOSE_PROCESS_EXITED,
+            reason=f"{self.bridge.server.name} exited",
+        )
+
+    async def receive(self, text_data=None, bytes_data=None):
+        if self._inbox is None:
+            return
+        if text_data is None and bytes_data is not None:
+            text_data = bytes_data.decode("utf-8", errors="replace")
+        if text_data:
+            self._inbox.put_nowait(text_data)
+
+    async def disconnect(self, close_code):
+        current = asyncio.current_task()
+        for task in self._tasks:
+            if task is not current and not task.done():
+                task.cancel()
+        self._tasks = ()
+        self._inbox = None
+        bridge, self.bridge = self.bridge, None
+        if bridge is not None:
+            await bridge.stop()
+            logger.info("mcp-gateway %s: bridge closed", bridge.server.name)
