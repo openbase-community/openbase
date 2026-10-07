@@ -206,31 +206,17 @@ jobs:
           # setup-node's automatic packageManager cache probing.
           package-manager-cache: false
 
-      - name: Install LiveKit server
-        run: |
-          brew update
-          brew install livekit
-          livekit_server="$(command -v livekit-server)"
-          "$livekit_server" --version
-          # The repo pins the livekit-server version releases may ship
-          # (cli/openbase_coder_cli/livekit_version.py); dev installs warn when
-          # their local engine diverges from this pin, so an unnoticed brew
-          # bump here would reopen that blind spot. Bump the pin
-          # deliberately instead.
-          pinned="$(sed -n 's/^LIVEKIT_SERVER_PINNED_VERSION = \"\(.*\)\"$/\1/p' cli/openbase_coder_cli/livekit_version.py)"
-          actual="$("$livekit_server" --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
-          if [ -z "$pinned" ] || [ "$pinned" != "$actual" ]; then
-            echo "livekit-server $actual does not match the pinned $pinned" >&2
-            echo "Update cli/openbase_coder_cli/livekit_version.py in the same change that adopts the new engine." >&2
-            exit 1
-          fi
-          echo "LIVEKIT_SERVER_BIN=${livekit_server}" >> "$GITHUB_ENV"
-
-      - name: Setup Go for Openbase Direct
+      - name: Setup Go for packaged engines
         uses: actions/setup-go@v6
         with:
           go-version-file: cli/tunneld/go.mod
           cache-dependency-path: cli/tunneld/go.sum
+
+      - name: Build pinned LiveKit server
+        run: |
+          livekit_server="$RUNNER_TEMP/livekit-server"
+          bash cli/scripts/build-pinned-livekit.sh "$livekit_server"
+          echo "LIVEKIT_SERVER_BIN=${livekit_server}" >> "$GITHUB_ENV"
 
       - name: Build Openbase Direct tunnel
         working-directory: cli/tunneld
