@@ -26,14 +26,14 @@ def onboarding_cloud_state(request):
     """
     import httpx
 
-    from openbase_coder_cli.code_sync import eligibility
     from openbase_coder_cli.config.token_manager import (
         AuthLoginRequiredError,
         AuthTransientError,
     )
+    from openbase_coder_cli.services import cloud_device_registry
 
     try:
-        state = eligibility.fetch_cloud_state()
+        state = cloud_device_registry.fetch_cloud_state()
     except AuthLoginRequiredError as exc:
         return Response(
             {"error": str(exc) or "Openbase login required."},

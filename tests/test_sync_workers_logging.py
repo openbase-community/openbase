@@ -1,51 +1,83 @@
 from __future__ import annotations
 
 import importlib
-import logging
 
-from openbase_coder_cli.code_sync import reconciler
+from openbase_coder_cli import sync_daemon
+from openbase_coder_cli.thread_sync import claude_thread_sync, thread_exchange
 
 # The cli package re-exports a click group named sync_workers; import the
 # module itself to reach the tick functions.
 sync_workers = importlib.import_module("openbase_coder_cli.cli.sync_workers")
 
 
-def test_code_sync_tick_logs_full_counts(monkeypatch, caplog) -> None:
-    summary = {
-        "repos": [
-            {"action": "fast_forwarded"},
-            {"action": "up_to_date"},
-            {"action": "awaiting_files"},
-        ],
-        "repository_manifests": [{"path": "", "action": "converged"}],
-        "errors": ["cs-x/alpha: TimeoutExpired: git timed out"],
-        "conflicts_count": 2,
-        "lease": {"action": "noop"},
-    }
-    monkeypatch.setattr(reconciler, "run_tick_if_enabled", lambda: summary)
-
-    with caplog.at_level(logging.INFO):
-        sync_workers._code_sync_reconcile_tick()
-
-    messages = " | ".join(record.getMessage() for record in caplog.records)
-    assert "code_sync tick_complete" in messages
-    assert "fast_forwarded=1" in messages
-    assert "up_to_date=1" in messages
-    assert "awaiting_files=1" in messages
-    assert "converged=1" in messages
-    assert "conflicts=2" in messages
-    assert "errors=1" in messages
-    assert "lease=noop" in messages
-    assert "tick_errors" in messages
-    assert "cs-x/alpha" in messages
-
-
-def test_code_sync_tick_silent_when_disabled(monkeypatch, caplog) -> None:
-    monkeypatch.setattr(reconciler, "run_tick_if_enabled", lambda: None)
-
-    with caplog.at_level(logging.INFO):
-        sync_workers._code_sync_reconcile_tick()
-
-    assert all(
-        "tick_complete" not in record.getMessage() for record in caplog.records
+def _configure_daemon(roots: list[str]) -> None:
+    sync_daemon.write_config(
+        sync_daemon.SyncDaemonConfig(
+            device_id="laptop",
+            sync_group="default",
+            role="edge",
+            pair_secret="s",
+            roots=[{"id": sync_daemon.root_id_for_path(r), "path": r} for r in roots],
+            peer_hot="hub:22100",
+            peer_bulk="hub:22101",
+        )
     )
+
+
+def _record_calls(monkeypatch) -> list[str]:
+    calls: list[str] = []
+    empty = {"exports": [], "imports": []}
+
+    def codex(**kwargs):
+        calls.append(f"codex:{kwargs['exchange_dir']}")
+        return empty
+
+    def claude(**kwargs):
+        calls.append(f"claude:{kwargs['exchange_dir']}")
+        return empty
+
+    monkeypatch.setattr(thread_exchange, "sync_thread_snapshots_once", codex)
+    monkeypatch.setattr(
+        claude_thread_sync, "sync_claude_thread_snapshots_once", claude
+    )
+    return calls
+
+
+def test_device_ticks_skip_when_openbase_sync_is_not_configured(
+    monkeypatch, tmp_path
+) -> None:
+    calls = _record_calls(monkeypatch)
+    monkeypatch.setenv("CODEX_THREAD_DEVICE_SYNC_EXCHANGE_DIR", str(tmp_path / "x"))
+    monkeypatch.setenv("CLAUDE_THREAD_DEVICE_SYNC_EXCHANGE_DIR", str(tmp_path / "x"))
+
+    sync_workers._codex_devices_tick()
+    sync_workers._claude_devices_tick()
+
+    assert calls == []
+
+
+def test_device_ticks_skip_when_exchange_is_outside_every_root(
+    monkeypatch, tmp_path
+) -> None:
+    _configure_daemon([str(tmp_path / "Projects")])
+    calls = _record_calls(monkeypatch)
+    monkeypatch.setenv("CODEX_THREAD_DEVICE_SYNC_EXCHANGE_DIR", str(tmp_path / "x"))
+
+    sync_workers._codex_devices_tick()
+
+    assert calls == []
+
+
+def test_device_ticks_run_when_a_root_mirrors_the_exchange(
+    monkeypatch, tmp_path
+) -> None:
+    exchange = tmp_path / "state" / "thread-sync"
+    _configure_daemon([str(tmp_path / "state")])
+    calls = _record_calls(monkeypatch)
+    monkeypatch.setenv("CODEX_THREAD_DEVICE_SYNC_EXCHANGE_DIR", str(exchange))
+    monkeypatch.setenv("CLAUDE_THREAD_DEVICE_SYNC_EXCHANGE_DIR", str(exchange))
+
+    sync_workers._codex_devices_tick()
+    sync_workers._claude_devices_tick()
+
+    assert calls == [f"codex:{exchange}", f"claude:{exchange}"]

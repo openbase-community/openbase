@@ -8,7 +8,6 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from openbase_coder_cli.openbase_coder_cli_app.common import offloaded_view
-from openbase_coder_cli.openbase_coder_cli_app.git_http import git_http_backend
 from openbase_coder_cli.openbase_coder_cli_app.health_warnings import health_warnings
 from openbase_coder_cli.openbase_coder_cli_app.notifications import (
     notification_list,
@@ -19,6 +18,7 @@ from openbase_coder_cli.openbase_coder_cli_app.skill_settings import (
     skill_sharing_settings,
 )
 from openbase_coder_cli.openbase_coder_cli_app.sync_daemon_api import (
+    sync_conflicts,
     sync_daemon_barrier,
     sync_daemon_conflicts,
     sync_daemon_conflicts_resolve,
@@ -26,15 +26,7 @@ from openbase_coder_cli.openbase_coder_cli_app.sync_daemon_api import (
     sync_daemon_settings,
     sync_daemon_status,
     sync_daemon_stubs,
-)
-from openbase_coder_cli.openbase_coder_cli_app.sync_settings import (
-    sync_conflicts,
-    sync_conflicts_ignore_containing_folder,
-    sync_conflicts_resolve,
-    sync_peers_remove,
-    sync_settings,
     sync_status,
-    sync_versions_purge,
 )
 from openbase_coder_cli.openbase_coder_cli_app.update import (
     update_apply,
@@ -539,7 +531,6 @@ urlpatterns = [
         name="bootstrap-run",
     ),
     path("git/diff/", git_diff, name="git-diff"),
-    path("sync/settings/", sync_settings, name="sync-settings"),
     path("sync/daemon/settings/", sync_daemon_settings, name="sync-daemon-settings"),
     path("sync/daemon/status/", sync_daemon_status, name="sync-daemon-status"),
     path("sync/daemon/conflicts/", sync_daemon_conflicts, name="sync-daemon-conflicts"),
@@ -551,31 +542,13 @@ urlpatterns = [
     path("sync/daemon/barrier/", sync_daemon_barrier, name="sync-daemon-barrier"),
     path("sync/daemon/stubs/", sync_daemon_stubs, name="sync-daemon-stubs"),
     path("sync/daemon/hydrate/", sync_daemon_hydrate, name="sync-daemon-hydrate"),
-    path("sync/peers/remove/", sync_peers_remove, name="sync-peers-remove"),
+    # Daemon-backed routes in the shapes the phone apps decode.
     path("sync/status/", sync_status, name="sync-status"),
     path("sync/conflicts/", sync_conflicts, name="sync-conflicts"),
     path(
         "sync/conflicts/resolve/",
-        sync_conflicts_resolve,
+        sync_daemon_conflicts_resolve,
         name="sync-conflicts-resolve",
-    ),
-    path(
-        "sync/conflicts/ignore-containing-folder/",
-        sync_conflicts_ignore_containing_folder,
-        name="sync-conflicts-ignore-containing-folder",
-    ),
-    path(
-        "sync/versions/purge/",
-        sync_versions_purge,
-        name="sync-versions-purge",
-    ),
-    path(
-        "sync/git/<str:folder_id>/<path:subpath>",
-        # Peers fetch dozens of repos a minute; each request runs a git
-        # subprocess, which must not serialize every other sync view behind
-        # it on Django's single thread-sensitive executor.
-        offloaded_view(git_http_backend),
-        name="sync-git-http",
     ),
     path("status/", offloaded_view(service_status), name="service-status"),
     path(

@@ -135,7 +135,7 @@ def test_restart_default_schedules_all_openbase_services(monkeypatch):
     assert "livekit-server" in command
     assert "codex-app-server" in command
     assert "django-cli" in command
-    assert "code-sync" not in command
+    assert "sync-daemon" not in command
     assert "sync-workers" in command
     assert "super-agents-mcp" not in command
     assert warnings == [{"reason": "restart", "emit_cli_warning": True}]
@@ -201,18 +201,18 @@ def test_restart_optional_device_sync_can_be_targeted_explicitly(monkeypatch):
     monkeypatch.setattr(InstallationConfig, "exists", classmethod(lambda cls: True))
     monkeypatch.setattr(restart_module.subprocess, "Popen", FakePopen)
 
-    result = CliRunner().invoke(restart, ["--service", "code-sync"])
+    result = CliRunner().invoke(restart, ["--service", "sync-daemon"])
 
     assert result.exit_code == 0
-    assert "code-sync" in result.output
+    assert "sync-daemon" in result.output
     command = popen_calls[0][0][0][2]
-    assert "code-sync" in command
+    assert "sync-daemon" in command
     assert "sync-workers" not in command
 
 
 def test_full_restart_includes_enabled_optional_daemons_not_oneshots(monkeypatch):
     enabled = {
-        "code-sync",
+        "sync-daemon",
         "openbase-cloud-heartbeat",
         "openbase-tunneld",
         "openbase-cloud-auth-rehydrate",
@@ -223,7 +223,7 @@ def test_full_restart_includes_enabled_optional_daemons_not_oneshots(monkeypatch
         lambda svc: {"installed": svc.name in enabled, "pid": None},
     )
     plan = build_restart_plan(RestartRequest())
-    assert {"code-sync", "openbase-cloud-heartbeat", "openbase-tunneld"} <= set(
+    assert {"sync-daemon", "openbase-cloud-heartbeat", "openbase-tunneld"} <= set(
         plan.services
     )
     assert "openbase-cloud-auth-rehydrate" not in plan.services

@@ -78,13 +78,13 @@ SERVICES: list[ServiceDefinition] = [
     ),
     ServiceDefinition(
         name="sync-workers",
-        description="Sync Workers (thread, device, and code-sync reconcile)",
+        description="Sync Workers (thread and device sync, periodic jobs)",
         # One process runs every periodic sync job on its own thread — the
         # jobs read their historical interval/max-age env overrides
         # (CODEX_THREAD_SYNC_INTERVAL etc.) from the wrapper-sourced env file
-        # themselves, and state-dependent jobs (device sync, reconcile) gate
-        # at runtime on code-sync enablement instead of being installed and
-        # removed as companion services.
+        # themselves, and state-dependent jobs (device thread sync) gate at
+        # runtime on Openbase Sync mirroring the thread exchange instead of
+        # being installed and removed as companion services.
         command_template="sync-workers",
         workdir_template="{data_dir}",
     ),
@@ -112,26 +112,13 @@ SERVICES: list[ServiceDefinition] = [
         port=7999,
     ),
     ServiceDefinition(
-        name="code-sync",
-        freshness_kind="binary",
-        freshness_packages=(),
-        description="Code Sync (managed Syncthing)",
-        command_template="code-sync",
-        workdir_template="{data_dir}",
-        # Installed only when code sync is enabled (openbase-coder sync
-        # enable or the sync settings API); never on plain installs.
-        install_by_default=False,
-        cleanup_command_substrings=("syncthing",),
-    ),
-    ServiceDefinition(
         name="sync-daemon",
         freshness_kind="binary",
         freshness_packages=(),
         description="Openbase Sync daemon (hub/edge mirror)",
         command_template="sync-daemon",
         workdir_template="{data_dir}",
-        # Installed only after ``openbase-coder sync-daemon configure``; it
-        # replaces the Syncthing-based code-sync service.
+        # Installed only after ``openbase-coder sync-daemon configure``.
         install_by_default=False,
         cleanup_command_substrings=("openbase-syncd",),
     ),
@@ -182,13 +169,17 @@ def default_services(coding_backend: str | None = None) -> list[ServiceDefinitio
 
 
 # Services that no longer exist; installs remove any leftover units/plists so
-# upgrades don't strand old processes running retired commands. Their periodic
-# jobs now run inside the consolidated ``sync-workers`` service.
+# upgrades don't strand old processes running retired commands. The thread
+# sync jobs now run inside the consolidated ``sync-workers`` service;
+# ``code-sync`` was the Syncthing-based file sync that Openbase Sync
+# (``sync-daemon``) replaced — its data is archived by
+# ``openbase-coder sync migrate-from-syncthing``.
 RETIRED_SERVICE_NAMES: tuple[str, ...] = (
     "codex-thread-sync",
     "claude-thread-sync",
     "codex-thread-device-sync",
     "claude-thread-device-sync",
+    "code-sync",
 )
 
 

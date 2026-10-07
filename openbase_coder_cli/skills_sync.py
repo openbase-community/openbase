@@ -1,4 +1,10 @@
-"""Opt-in personal skill sharing through the managed file-sync engine."""
+"""Opt-in personal skill sharing through Openbase Sync.
+
+Sharing means the personal skills directory (``~/.agents/skills``) and the
+folders its skills link to are roots of the Openbase Sync daemon, so the
+daemon mirrors them to the user's other computers. The preference lives in
+``~/.openbase/skill-sync.json``; the roots live in the daemon config.
+"""
 
 from __future__ import annotations
 
@@ -7,16 +13,14 @@ import os
 import tempfile
 from pathlib import Path
 
-from openbase_coder_cli import skills_autolink, sync_config
+from openbase_coder_cli import skills_autolink, sync_daemon
 from openbase_coder_cli.file_lock import LOCK_EX, LOCK_UN, flock
 from openbase_coder_cli.paths import OPENBASE_BASE_DIR
 
 STATE_PATH = OPENBASE_BASE_DIR / "skill-sync.json"
-PERSONAL_SKILLS = ".agents/skills"
-LEGACY_SKILL_FOLDERS = {
-    ".openbase/codex_home/skills",
-    ".openbase/claude_config/skills",
-}
+PERSONAL_SKILLS = sync_daemon.PERSONAL_SKILLS_ROOT
+# Top-level home folders that hold machine-local state and never sync.
+MACHINE_LOCAL_TOP_LEVEL = {".openbase", ".ssh", ".gnupg"}
 
 
 def _read_state() -> dict:
@@ -41,116 +45,118 @@ def enabled() -> bool:
     state = _read_state()
     if state["enabled"] is not None:
         return state["enabled"]
-    # Existing manually configured skill sharing is already enabled. No
-    # preference has been chosen until the user operates the Settings toggle.
-    return any(f.relpath == PERSONAL_SKILLS for f in sync_config.sync_folders())
+    # No preference chosen yet: sharing is on exactly when the skills folder
+    # is already mirrored (for example, added by a migration).
+    return sync_daemon.path_is_synced(PERSONAL_SKILLS)
 
 
-def accepts_peer_folder(relpath: str) -> bool:
-    state = _read_state()
-    if relpath in LEGACY_SKILL_FOLDERS:
-        return False
-    if state["enabled"] is not False:
-        return True
-    return not any(
-        relpath == blocked or relpath.startswith(blocked + "/")
-        for blocked in [PERSONAL_SKILLS, *state["managed_folders"]]
-    )
-
-
-def _source_folders() -> tuple[list[str], list[str]]:
+def _linked_sources() -> tuple[list[Path], list[str]]:
     home = Path.home().resolve()
-    sources = {PERSONAL_SKILLS}
+    personal = sync_daemon.expand_root_path(PERSONAL_SKILLS)
+    sources: dict[Path, None] = {}
     warnings = []
     for skill in skills_autolink.list_skill_dirs(skills_autolink.home_skills_dir()):
         source = skill.resolve()
         if not source.is_relative_to(home):
             warnings.append(f"{skill.name}: linked source is outside your home folder.")
             continue
-        relpath = source.relative_to(home).as_posix()
-        if relpath.startswith(PERSONAL_SKILLS + "/"):
+        if source == personal or source.is_relative_to(personal):
             continue
+        relpath = source.relative_to(home).as_posix()
         if (
             relpath == "."
-            or relpath.split("/")[0] in {".openbase", ".ssh", ".gnupg"}
+            or relpath.split("/")[0] in MACHINE_LOCAL_TOP_LEVEL
             or relpath.startswith((".codex/plugins/", ".claude/plugins/"))
         ):
             warnings.append(f"{skill.name}: machine-local source cannot be synced.")
             continue
-        sources.add(sync_config.validate_relpath(relpath))
-    return sorted(sources, key=lambda p: (p.count("/"), p)), warnings
+        sources[source] = None
+    ordered = sorted(sources, key=lambda p: (len(p.parts), str(p)))
+    return ordered, warnings
 
 
-def _reconcile(state: dict) -> dict:
-    folders = list(sync_config.sync_folders())
-    existing = {f.relpath for f in folders}
-    managed = set(state["managed_folders"])
-    active = state["enabled"]
-    if active is None:
-        active = PERSONAL_SKILLS in existing
-    added: list[str] = []
-    removed: list[str] = []
-    warnings: list[str] = []
-    if active:
-        sources, warnings = _source_folders()
+def linked_source_paths() -> list[Path]:
+    """Folders outside ``~/.agents/skills`` that personal skills link to."""
+    return _linked_sources()[0]
+
+
+def _wanted_roots() -> tuple[list[str], list[str]]:
+    sources, warnings = _linked_sources()
+    roots = [PERSONAL_SKILLS]
+    for source in sources:
+        candidate = sync_daemon.home_relative_root_path(source)
+        if candidate not in roots:
+            roots.append(candidate)
+    return roots, warnings
+
+
+def _apply(state: dict) -> dict:
+    """Bring the daemon roots in line with the preference.
+
+    Only roots this module added are ever removed. Nothing changes when Openbase
+    Sync is not configured on this computer; the preference is kept and applied
+    by the next toggle (or a migration's product folders).
+    """
+    result = {"added": [], "removed": [], "warnings": [], "restarted": False}
+    if not sync_daemon.is_configured():
+        if state["enabled"]:
+            result["warnings"].append(
+                "Openbase Sync is not set up on this computer; skills will "
+                "sync once it is."
+            )
+        return result
+    managed = {_as_root_path(path) for path in state["managed_folders"]}
+    if state["enabled"]:
+        wanted, result["warnings"] = _wanted_roots()
         skills_autolink.home_skills_dir().mkdir(parents=True, exist_ok=True)
-        for relpath in sources:
-            if any(relpath == p or relpath.startswith(p + "/") for p in existing):
-                continue
-            sync_config.add_sync_folder(relpath)
-            existing.add(relpath)
-            managed.add(relpath)
-            added.append(relpath)
-        for relpath in existing & LEGACY_SKILL_FOLDERS:
-            sync_config.remove_sync_folder(relpath)
-            removed.append(relpath)
+        change = sync_daemon.add_roots(wanted)
+        result["added"] = [root["path"] for root in change.added]
+        managed.update(result["added"])
+        result["warnings"] += [
+            f"{path}: {reason}"
+            for path, reason in change.skipped
+            if not reason.startswith("already inside")
+        ]
     elif state["enabled"] is False:
-        for relpath in existing & (managed | {PERSONAL_SKILLS}):
-            sync_config.remove_sync_folder(relpath)
-            removed.append(relpath)
+        removed = sync_daemon.remove_roots(managed | {PERSONAL_SKILLS})
+        result["removed"] = [root["path"] for root in removed]
+        managed.clear()
     if sorted(managed) != state["managed_folders"]:
         state["managed_folders"] = sorted(managed)
         _write_state(state)
-    return {"added": added, "removed": removed, "warnings": warnings}
+    if result["added"] or result["removed"]:
+        result["restarted"] = sync_daemon.restart_service_if_installed()
+    return result
+
+
+def _as_root_path(path: str) -> str:
+    # Older releases recorded home-relative folder paths ("Developer/skills").
+    return path if path.startswith(("~", "/")) else "~/" + path
 
 
 def reconcile() -> dict:
-    """Discover new linked sources without changing other folder registrations."""
+    """Add roots for newly linked skill sources (when sharing is on)."""
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with STATE_PATH.with_suffix(".lock").open("a") as lock:
         flock(lock, LOCK_EX)
         try:
-            return _reconcile(_read_state())
+            return _apply(_read_state())
         finally:
             flock(lock, LOCK_UN)
 
 
 def set_enabled(value: bool) -> dict:
-    from openbase_coder_cli.code_sync import manager
-
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with STATE_PATH.with_suffix(".lock").open("a") as lock:
         flock(lock, LOCK_EX)
         previous = _read_state()
-        previous_config = sync_config.read_sync_config()
         try:
             state = {**previous, "enabled": value}
             _write_state(state)
-            result = _reconcile(state)
-            if value and not sync_config.code_sync_enabled():
-                # Arming an existing transport needs no service changes. A
-                # first-time enable uses the same eligibility checks as Sync.
-                manager.enable_code_sync()
-            elif result["added"] or result["removed"]:
-                manager.apply_settings_change()
-            return result
+            return _apply(state)
         except Exception:
-            # Restore the persisted preferences/registrations on failure so
-            # a rejected enable cannot silently arm sharing on a later tick.
+            # A failed apply must not leave the preference armed for later.
             _write_state(previous)
-            sync_config._write_sync_config(
-                previous_config, sync_config.SYNC_CONFIG_PATH
-            )
             raise
         finally:
             flock(lock, LOCK_UN)
@@ -158,9 +164,11 @@ def set_enabled(value: bool) -> dict:
 
 def settings_payload() -> dict:
     active = enabled()
-    _, warnings = _source_folders() if active else ([], [])
+    _, warnings = _wanted_roots() if active else ([], [])
     return {
         "sync_skills_across_devices": active,
-        "device_sync_enabled": sync_config.code_sync_enabled(),
+        # Whether Openbase Sync is set up here; the console explains that
+        # shared skills wait for it when this is False.
+        "device_sync_enabled": sync_daemon.is_configured(),
         "warnings": warnings,
     }

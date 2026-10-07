@@ -63,30 +63,33 @@ def test_shared_codex_daemon_satisfies_stopped_openbase_service(monkeypatch) -> 
 
 
 def test_conditional_service_expected_only_when_enabled(monkeypatch) -> None:
-    services = [FakeService("code-sync", install_by_default=False)]
+    services = [FakeService("sync-daemon", install_by_default=False)]
     monkeypatch.setattr("openbase_coder_cli.services.definitions.SERVICES", services)
     status = {"installed": False, "pid": None}
     monkeypatch.setattr(
         "openbase_coder_cli.services.launchd.launchctl_status", lambda svc: status
     )
 
-    monkeypatch.setattr(hw, "_code_sync_expected", lambda: True)
-    hw._CONDITIONAL_SERVICES["code-sync"] = lambda: True
+    hw._CONDITIONAL_SERVICES["sync-daemon"] = lambda: True
     try:
         warnings = hw._service_warnings()
-        assert [w["id"] for w in warnings] == ["service-missing:code-sync"]
+        assert [w["id"] for w in warnings] == ["service-missing:sync-daemon"]
 
         # Feature off + service installed -> unexpected-service warning.
-        hw._CONDITIONAL_SERVICES["code-sync"] = lambda: False
+        hw._CONDITIONAL_SERVICES["sync-daemon"] = lambda: False
         status.update({"installed": True, "pid": 5})
         warnings = hw._service_warnings()
-        assert [w["id"] for w in warnings] == ["service-unexpected:code-sync"]
+        assert [w["id"] for w in warnings] == ["service-unexpected:sync-daemon"]
 
         # Feature off + not installed -> silence.
         status.update({"installed": False, "pid": None})
         assert hw._service_warnings() == []
     finally:
-        hw._CONDITIONAL_SERVICES["code-sync"] = hw._code_sync_expected
+        hw._CONDITIONAL_SERVICES["sync-daemon"] = hw._sync_daemon_expected
+
+
+def test_code_sync_service_is_no_longer_expected() -> None:
+    assert "code-sync" not in hw._CONDITIONAL_SERVICES
 
 
 def test_backend_scoped_service_not_expected_on_other_backend(monkeypatch) -> None:
@@ -118,35 +121,39 @@ def test_backend_scoped_service_not_expected_on_other_backend(monkeypatch) -> No
     ]
 
 
-def test_collect_skips_sync_checks_when_disabled(monkeypatch) -> None:
+def test_collect_skips_sync_checks_when_unconfigured(monkeypatch) -> None:
     monkeypatch.setattr(hw, "_service_warnings", lambda: [])
     monkeypatch.setattr(hw, "_installation_warnings", lambda: [])
     monkeypatch.setattr(hw, "_livekit_skew_warnings", lambda: [])
-    monkeypatch.setattr(hw, "_code_sync_expected", lambda: False)
+    monkeypatch.setattr(hw, "_codex_version_skew_warnings", lambda: [])
+    monkeypatch.setattr(hw, "_sync_daemon_expected", lambda: False)
     called = []
-    monkeypatch.setattr(hw, "_sync_warnings", lambda: called.append(1) or [])
+    monkeypatch.setattr(hw, "_sync_daemon_warnings", lambda: called.append(1) or [])
+    monkeypatch.setattr(
+        hw, "_thread_exchange_warnings", lambda: called.append(2) or []
+    )
 
     assert hw.collect_warnings() == []
     assert called == []
 
 
-def test_disconnected_peer_warning_uses_configured_name() -> None:
-    warnings = hw._disconnected_peer_warnings(
-        {"PEERAAA-BBBBBBB": {"connected": False, "paused": False}},
-        {"PEERAAA-BBBBBBB": "Gabe's Mac mini"},
+def test_collect_runs_daemon_and_thread_checks_when_configured(monkeypatch) -> None:
+    monkeypatch.setattr(hw, "_service_warnings", lambda: [])
+    monkeypatch.setattr(hw, "_installation_warnings", lambda: [])
+    monkeypatch.setattr(hw, "_livekit_skew_warnings", lambda: [])
+    monkeypatch.setattr(hw, "_codex_version_skew_warnings", lambda: [])
+    monkeypatch.setattr(hw, "_sync_daemon_expected", lambda: True)
+    monkeypatch.setattr(
+        hw, "_sync_daemon_warnings", lambda: [{"id": "sync-daemon-no-peer"}]
+    )
+    monkeypatch.setattr(
+        hw, "_thread_exchange_warnings", lambda: [{"id": "thread-sync-x"}]
     )
 
-    assert len(warnings) == 1
-    assert warnings[0]["id"] == "sync-peer-disconnected:PEERAAA"
-    assert "Sync peer Gabe's Mac mini is not connected" in warnings[0]["message"]
-
-
-def test_disconnected_peer_warning_falls_back_to_short_id() -> None:
-    warnings = hw._disconnected_peer_warnings(
-        {"PEERAAA-BBBBBBB": {"connected": False, "paused": False}}, {}
-    )
-
-    assert "Sync peer PEERAAA… is not connected" in warnings[0]["message"]
+    assert [w["id"] for w in hw.collect_warnings()] == [
+        "sync-daemon-no-peer",
+        "thread-sync-x",
+    ]
 
 
 def test_installation_warning_when_workspace_tracked_on_standalone(
@@ -248,15 +255,11 @@ def test_livekit_skew_resolver_skips_stale_download(tmp_path, monkeypatch) -> No
 def test_thread_exchange_warnings(monkeypatch, tmp_path) -> None:
     import json as json_module
 
-    class ConnectedClient:
-        def connections(self):
-            return {"PEER": {"connected": True}}
+    from openbase_coder_cli import sync_daemon
 
+    peers: list[dict] = [{"device": "mini"}]
     monkeypatch.setattr(
-        "openbase_coder_cli.code_sync.syncthing.SyncthingClient", ConnectedClient
-    )
-    monkeypatch.setattr(
-        "openbase_coder_cli.paths.OPENBASE_BASE_DIR", tmp_path, raising=False
+        sync_daemon.SyncDaemonClient, "status", lambda self: {"peers": peers}
     )
     monkeypatch.setattr(hw, "_thread_exchange_base", lambda: tmp_path)
 
@@ -264,9 +267,24 @@ def test_thread_exchange_warnings(monkeypatch, tmp_path) -> None:
         json_module.dumps({"device_id": "me-uuid"})
     )
     devices = tmp_path / "thread-sync" / "devices"
+    devices.mkdir(parents=True)
+
+    # The exchange is not mirrored by Openbase Sync: nothing to check.
+    assert hw._thread_exchange_warnings() == []
+
+    sync_daemon.write_config(
+        sync_daemon.SyncDaemonConfig(
+            device_id="laptop",
+            sync_group="default",
+            role="edge",
+            pair_secret="s",
+            roots=[sync_daemon.root_entry(tmp_path / "thread-sync")],
+            peer_hot="hub:22100",
+            peer_bulk="hub:22101",
+        )
+    )
 
     # Nobody has exported anything: both warnings fire.
-    devices.mkdir(parents=True)
     ids = [w["id"] for w in hw._thread_exchange_warnings()]
     assert ids == ["thread-sync-no-peer-snapshots", "thread-sync-not-exporting"]
 
@@ -279,14 +297,8 @@ def test_thread_exchange_warnings(monkeypatch, tmp_path) -> None:
     (devices / "them-uuid").mkdir()
     assert hw._thread_exchange_warnings() == []
 
-    # Peer disconnected: never warn (idle machine off is normal).
-    class DisconnectedClient:
-        def connections(self):
-            return {"PEER": {"connected": False}}
-
-    monkeypatch.setattr(
-        "openbase_coder_cli.code_sync.syncthing.SyncthingClient", DisconnectedClient
-    )
+    # No peer connected: never warn (an idle machine being off is normal).
+    peers.clear()
     (devices / "them-uuid").rmdir()
     assert hw._thread_exchange_warnings() == []
 

@@ -132,7 +132,7 @@ def _apply_provider(name: str, *, push_cloud: bool) -> None:
                 host_list.append(suffix)
             values[ALLOWED_HOSTS_ENV_KEY] = ",".join(host_list)
         # Both netmesh transports MUST enroll under the same node name: peers
-        # store this machine's MagicDNS name (phone backend host, syncthing
+        # store this machine's MagicDNS name (phone backend host, sync peer
         # addresses), so a name that drifted across a transport switch would
         # strand them on a dead address. tunneld reads this env key; the VPN
         # companion gets the same value passed explicitly on connect.
@@ -210,7 +210,7 @@ def _teardown_transport(previous: str) -> None:
             # Disconnect the official client: both tailscaleds claim the
             # 100.100.100.100 MagicDNS resolver, and while the official one
             # holds it, netmesh names silently stop resolving system-wide
-            # (syncthing peers, git-pointer fetches, phone-facing serves).
+            # (sync peers, phone-facing serves).
             subprocess.run(  # noqa: S603 - fixed argv, best-effort
                 [tailscale_bin, "down"],
                 capture_output=True,

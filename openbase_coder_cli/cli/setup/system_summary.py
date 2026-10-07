@@ -10,11 +10,9 @@ from pathlib import Path
 
 import click
 
-from openbase_coder_cli.cli.setup.workspace import _syncthing_global_ignore_path
 from openbase_coder_cli.paths import (
     INSTALLATION_JSON_PATH,
     LAUNCHD_DOMAIN,
-    OPENBASE_BASE_DIR,
     OPENBASE_BIN_DIR,
     OPENBASE_DISPATCHER_CONFIG_PATH,
     PLIST_DIR,
@@ -72,8 +70,6 @@ class SystemSetupSnapshot:
             env_file.expanduser(),
             INSTALLATION_JSON_PATH,
             OPENBASE_DISPATCHER_CONFIG_PATH,
-            OPENBASE_BASE_DIR / "thread-sync/.stignore",
-            OPENBASE_BASE_DIR / "thread-sync/.stglobalignore",
         ):
             snapshot._capture_file(path, snapshot.files)
         # Native agent executables can be large; only inspect their metadata.
@@ -100,10 +96,7 @@ class SystemSetupSnapshot:
                     snapshot.binaries[path.name] = (stat.st_size, stat.st_mtime_ns)
             except OSError:
                 snapshot.unreadable.append(path.name)
-        for label, resolve in (
-            ("Global Git", _git_ignore_path),
-            ("Shared Syncthing", _syncthing_global_ignore_path),
-        ):
+        for label, resolve in (("Global Git", _git_ignore_path),):
             try:
                 path = resolve()
                 lines = path.read_text().splitlines() if path.is_file() else []

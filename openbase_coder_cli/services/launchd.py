@@ -95,12 +95,6 @@ def _resolve_binary_with_preferred_paths(
     return _resolve_binary(name, homebrew_fallback)
 
 
-def _resolve_syncthing() -> str:
-    from openbase_coder_cli.code_sync.syncthing import resolve_syncthing_binary
-
-    return resolve_syncthing_binary()
-
-
 def _resolve_livekit_server(package) -> str:
     if package is not None:
         return _resolve_binary_with_preferred_paths(
@@ -162,7 +156,6 @@ def _binary_resolvers(config: InstallationConfig) -> dict[str, Callable[[], str]
         ),
         "livekit": lambda: _resolve_livekit_server(package),
         "python": lambda: _resolve_service_python(package),
-        "syncthing": _resolve_syncthing,
         "openbase_coder": lambda: _resolve_binary_with_preferred_paths(
             "openbase-coder",
             [
@@ -720,7 +713,7 @@ def _external_supervisor_status(svc: ServiceDefinition) -> dict:
         except OSError:
             pid = None
     if not svc.install_by_default and pid is None:
-        # Wrapper regeneration writes files for optional services (code-sync,
+        # Wrapper regeneration writes files for optional services (sync-daemon,
         # cloud heartbeat) regardless of whether their feature is on; under
         # an external supervisor "installed" means actually supervised, so a
         # disabled feature doesn't warn as an unexpectedly installed service.

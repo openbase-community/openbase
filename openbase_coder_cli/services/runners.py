@@ -18,7 +18,6 @@ import sys
 from pathlib import Path
 
 from openbase_coder_cli.env_file import env_file_values
-from openbase_coder_cli.paths import OPENBASE_BASE_DIR
 from openbase_coder_cli.services import network
 from openbase_coder_cli.services.installation import InstallationConfig
 
@@ -348,20 +347,6 @@ def build_django_cli(env: dict[str, str], binaries: dict[str, str]) -> RunnerArg
     return argv, env
 
 
-def build_code_sync(env: dict[str, str], binaries: dict[str, str]) -> RunnerArgvEnv:
-    home = str(OPENBASE_BASE_DIR / "code-sync")
-    argv = [
-        binaries["syncthing"],
-        "serve",
-        "--home",
-        home,
-        "--no-browser",
-        "--no-restart",
-        "--no-upgrade",
-    ]
-    return argv, env
-
-
 def build_sync_daemon(env: dict[str, str], binaries: dict[str, str]) -> RunnerArgvEnv:
     from openbase_coder_cli.sync_daemon import SYNC_DAEMON_CONFIG_PATH
 
@@ -416,7 +401,6 @@ RUNNERS: dict[str, tuple[callable, tuple[str, ...]]] = {
     "openbase-routines": (build_openbase_routines, ("openbase_coder",)),
     "livekit-agent": (build_livekit_agent, ("python",)),
     "django-cli": (build_django_cli, ("openbase_coder",)),
-    "code-sync": (build_code_sync, ("syncthing",)),
     "sync-daemon": (build_sync_daemon, ("openbase_syncd",)),
     "openbase-tunneld": (build_openbase_tunneld, ("tunneld",)),
     "openbase-cloud-auth-rehydrate": (

@@ -58,6 +58,7 @@ def test_thread_sync_services_are_retired():
         "claude-thread-sync",
         "codex-thread-device-sync",
         "claude-thread-device-sync",
+        "code-sync",
     ):
         assert name in RETIRED_SERVICE_NAMES
         assert name not in defined_names
@@ -66,10 +67,10 @@ def test_thread_sync_services_are_retired():
         assert stub.install_by_default is False
 
 
-def test_sync_workers_jobs_cover_device_sync_and_reconcile():
-    # The home<->home thread sync engine is gone (shared agent homes); the
-    # workers only run device sync, reconcile, registration, watchdog, and
-    # codex version-skew self-heal jobs.
+def test_sync_workers_jobs_cover_device_sync_and_periodic_jobs():
+    # The home<->home thread sync engine is gone (shared agent homes) and so
+    # is the previous code sync's git reconcile; the workers run device sync,
+    # registration, watchdog, and codex version-skew self-heal jobs.
     from openbase_coder_cli.cli.sync_workers import build_jobs
 
     names = {job.name for job in build_jobs()}
@@ -78,7 +79,6 @@ def test_sync_workers_jobs_cover_device_sync_and_reconcile():
         "codex_thread_device_sync",
         "claude_thread_device_sync",
         "claude_app_index",
-        "code_sync_reconcile",
         "cloud_registration",
         "cloud_webhook_events",
         "livekit_pool_watchdog",
@@ -90,11 +90,9 @@ def test_sync_workers_intervals_respect_env_overrides(monkeypatch):
     from openbase_coder_cli.cli.sync_workers import build_jobs
 
     monkeypatch.setenv("CODEX_THREAD_DEVICE_SYNC_INTERVAL", "120")
-    monkeypatch.setenv("CODE_SYNC_TICK_SECONDS", "30")
     monkeypatch.setenv("CLAUDE_THREAD_DEVICE_SYNC_INTERVAL", "not-a-number")
     jobs = {job.name: job for job in build_jobs()}
     assert jobs["codex_thread_device_sync"].interval == 120.0
-    assert jobs["code_sync_reconcile"].interval == 30.0
     # Bad values fall back to the default rather than crashing the service.
     assert jobs["claude_thread_device_sync"].interval == 60.0
 

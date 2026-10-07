@@ -362,11 +362,11 @@ fi
 if [ -f "$WRAPPER_DIR/codex-app-server.sh" ]; then
     default_services="$default_services codex-app-server"
 fi
-# code-sync is conditional: supervise it only when the feature is enabled
-# (enabling it from the console requires a container restart to take effect).
-if [ -f "$WRAPPER_DIR/code-sync.sh" ] \
-    && python -c "from openbase_coder_cli.sync_config import code_sync_enabled; import sys; sys.exit(0 if code_sync_enabled() else 1)" 2>/dev/null; then
-    default_services="$default_services code-sync"
+# Openbase Sync is conditional: supervise the daemon only once it is
+# configured (configuring it requires a container restart to take effect).
+if [ -f "$WRAPPER_DIR/sync-daemon.sh" ] \
+    && python -c "from openbase_coder_cli.sync_daemon import is_configured; import sys; sys.exit(0 if is_configured() else 1)" 2>/dev/null; then
+    default_services="$default_services sync-daemon"
 fi
 services="${OPENBASE_CODER_SERVICES:-$default_services}"
 # The staged single-use netmesh key must survive failed enrollments (egress

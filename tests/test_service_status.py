@@ -145,7 +145,7 @@ def test_service_status_includes_background_openbase_services(monkeypatch) -> No
 
     assert response.status_code == 200
     assert response.data["services"]["sync_workers"] == {
-        "name": "Sync Workers (thread, device, and code-sync reconcile)",
+        "name": "Sync Workers (thread and device sync, periodic jobs)",
         "port": None,
         "running": True,
         "installed": True,

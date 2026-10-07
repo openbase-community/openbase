@@ -739,9 +739,6 @@ def run_loop(interval: float, verbose: bool) -> None:
                         summary["errors"],
                     )
 
-        # The code-sync reconcile tick moved to the consolidated sync-workers
-        # service (openbase_coder_cli.cli.sync_workers).
-
         # Periodically refresh the update-check cache (standalone installs)
         # so update_available surfaces in status APIs without manual checks,
         # and auto-apply available updates unless opted out.
