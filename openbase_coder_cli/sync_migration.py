@@ -205,6 +205,7 @@ def plan_migration(
 ) -> MigrationPlan:
     """What a migration would do on this computer. Changes nothing."""
     config = read_legacy_config()
+    from_trash = False
     if (
         include_markers
         and not config.folders
@@ -212,14 +213,16 @@ def plan_migration(
         and not config.error
     ):
         # A normal migration moves sync-config.json into trash first. A later
-        # marker-cleanup pass still needs that folder list to find .stignore.
+        # marker-cleanup pass still needs that folder list to find .stignore,
+        # but must not re-add roots the user may have removed since.
         config = _read_latest_trashed_legacy_config()
+        from_trash = True
     trash_paths = [
         path
         for path in (legacy_engine_dir(), legacy_versions_dir(), legacy_config_path())
         if path.exists() or path.is_symlink()
     ]
-    roots = roots_for_legacy_config(config)
+    roots = [] if from_trash else roots_for_legacy_config(config)
     configured = sync_daemon.is_configured()
     plan = MigrationPlan(
         service_installed=legacy_service_installed(),

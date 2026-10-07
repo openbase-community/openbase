@@ -247,6 +247,23 @@ def test_remove_markers_after_state_was_already_migrated(home, fake_launchd):
     assert list((home / ".openbase" / "trash").iterdir()) == [trash]
 
 
+def test_marker_cleanup_does_not_re_add_removed_roots(home, fake_launchd):
+    _legacy_install(home, fake_launchd)
+    _configure_daemon(["~/Notes"])
+    assert (
+        CliRunner().invoke(sync, ["migrate-from-syncthing", "--apply"]).exit_code == 0
+    )
+    sync_daemon.remove_roots(["~/.agents/skills"])
+
+    result = CliRunner().invoke(
+        sync, ["migrate-from-syncthing", "--apply", "--remove-markers"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert not (home / "Projects" / ".stignore").exists()
+    assert "~/.agents/skills" not in _root_paths()
+
+
 def test_nested_existing_roots_are_kept_unless_replace_nested(home, fake_launchd):
     _legacy_install(home, fake_launchd)
     _configure_daemon(["~/Projects/app/data"])
