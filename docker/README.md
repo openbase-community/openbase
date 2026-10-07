@@ -191,5 +191,5 @@ candidate.
   (e.g. `-v ~/Projects:/home/openbase/Projects`). Node (with npm/corepack)
   and git are bundled for agent tooling; other toolchains must be installed
   into the container.
-- **Openbase Sync is not bundled**: the image does not ship the sync daemon.
-  Mount the folders you want to work on instead.
+- **Openbase Sync**: configure it inside the container with
+  `openbase-coder sync-daemon configure` (see the sync docs).

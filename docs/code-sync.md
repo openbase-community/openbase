@@ -173,19 +173,37 @@ That service is no longer installed; setup and self-update remove a leftover
 `code-sync` service. To move an existing machine over:
 
 ```bash
-openbase-coder sync migrate-from-syncthing          # dry run: shows the plan
-openbase-coder sync migrate-from-syncthing --apply  # do it
+# 1. On each computer: preview, then migrate
+openbase-coder sync migrate-from-syncthing
+openbase-coder sync migrate-from-syncthing --apply
+
+# 2. Only after step 1 has been done on EVERY computer: remove the old markers
+openbase-coder sync migrate-from-syncthing --apply --remove-markers
 ```
 
 With `--apply`, the migration stops and removes the old service, moves its
 state (`~/.openbase/code-sync`, `~/.openbase/sync-versions`,
-`~/.openbase/sync-config.json`) and the old folder markers into
+`~/.openbase/sync-config.json`) into
 `~/.openbase/trash/syncthing-migration-<timestamp>/` — nothing is deleted —
 and turns your previously synced folders plus the product folders into
 Openbase Sync roots. If Openbase Sync is already configured, the missing
 roots are added and the service is restarted; otherwise the migration prints
-the `sync-daemon configure` command to run. It is safe to run again, and safe
-on machines that never used the previous sync. See
+the `sync-daemon configure` command to run.
+
+The old sync's marker and ignore files in your synced folders (`.stfolder`,
+`.stignore`, `.stglobalignore`) stay in place until you pass
+`--remove-markers`. Remove them only once the old sync is stopped on every
+computer: if one computer still ran it, Openbase Sync would carry the
+deletion of its ignore file over, and the old sync there would start copying
+`.git` directories. The markers are moved to the same trash folder.
+
+Custom ignore rules from the previous sync are not carried over — Openbase
+Sync recognizes dependency and build folders itself. They stay in the
+trashed `sync-config.json`, and the migration prints how many were left
+behind.
+
+The migration is safe to run again (a finished machine has nothing left to
+do), and safe on machines that never used the previous sync. See
 [`sync migrate-from-syncthing`](commands/sync.md#migrate-from-syncthing).
 
 ## Troubleshooting
