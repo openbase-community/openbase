@@ -196,7 +196,13 @@ stage="$RELEASES_DIR/.staging.$$"
 rm -rf "$stage"
 mkdir -p "$stage"
 tar -xzf "$tarball" -C "$stage"
-chmod 0755 "$stage/bin/openbase-coder" "$stage/bin/livekit-server" "$stage/bin/openbase-tunneld"
+chmod 0755 \
+  "$stage/bin/openbase-coder" \
+  "$stage/bin/livekit-server" \
+  "$stage/bin/openbase-tunneld" \
+  "$stage/bin/openbase-syncd" \
+  "$stage/bin/openbase-sync" \
+  "$stage/bin/edge"
 
 if [ -z "$version" ]; then
   version="$(package_metadata_version "$stage/openbase-coder-package.json")"

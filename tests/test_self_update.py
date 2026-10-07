@@ -12,6 +12,7 @@ import pytest
 from openbase_coder_cli import self_update
 from openbase_coder_cli.runtime import RuntimePackage
 from openbase_coder_cli.services.installation import InstallationConfig
+from openbase_coder_cli.sync_daemon import SYNC_ENGINE_BINARY_NAMES
 
 
 def _make_fake_package(
@@ -27,6 +28,10 @@ def _make_fake_package(
     tunneld = root / "bin" / "openbase-tunneld"
     tunneld.write_text("#!/bin/sh\n", encoding="utf-8")
     tunneld.chmod(0o755)
+    for name in SYNC_ENGINE_BINARY_NAMES:
+        binary = root / "bin" / name
+        binary.write_text("#!/bin/sh\n", encoding="utf-8")
+        binary.chmod(0o755)
     (root / "openbase-coder-package.json").write_text(
         json.dumps(
             {
@@ -63,9 +68,7 @@ def _patch_standalone_layout(monkeypatch, tmp_path: Path) -> dict[str, Path]:
         "previous": tmp_path / "standalone" / "previous",
         "cache": tmp_path / "update-check.json",
     }
-    monkeypatch.setattr(
-        self_update, "STANDALONE_PACKAGES_DIR", tmp_path / "standalone"
-    )
+    monkeypatch.setattr(self_update, "STANDALONE_PACKAGES_DIR", tmp_path / "standalone")
     monkeypatch.setattr(self_update, "STANDALONE_RELEASES_DIR", layout["releases"])
     monkeypatch.setattr(self_update, "STANDALONE_CURRENT_DIR", layout["current"])
     monkeypatch.setattr(self_update, "STANDALONE_PREVIOUS_DIR", layout["previous"])
@@ -264,6 +267,14 @@ def test_download_rejects_checksum_mismatch(monkeypatch, tmp_path) -> None:
         )
 
 
+def test_validate_release_dir_requires_sync_engine(tmp_path: Path) -> None:
+    release = _make_fake_package(tmp_path / "release", version="2.0.0")
+    (release / "bin" / "openbase-sync").unlink()
+
+    with pytest.raises(self_update.SelfUpdateError, match="openbase-sync"):
+        self_update._validate_release_dir(release)
+
+
 def test_installation_config_refuses_newer_schema(tmp_path, monkeypatch) -> None:
     from openbase_coder_cli.services import installation
 
@@ -343,9 +354,9 @@ def test_manifest_signature_enforced_when_key_embedded(monkeypatch) -> None:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     private_key = Ed25519PrivateKey.generate()
-    public_b64 = base64.b64encode(
-        private_key.public_key().public_bytes_raw()
-    ).decode("ascii")
+    public_b64 = base64.b64encode(private_key.public_key().public_bytes_raw()).decode(
+        "ascii"
+    )
     monkeypatch.setattr(self_update, "UPDATE_MANIFEST_PUBLIC_KEY_B64", public_b64)
 
     manifest_bytes = json.dumps({"manifest_schema": 1, "version": "1.0.0"}).encode(

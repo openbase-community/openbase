@@ -101,23 +101,53 @@ def test_verify_source_super_agents_rejects_incompatible_mcp_runtime(
     assert "create_server(object())" in commands[1][-1]
 
 
-def test_stage_bin_includes_direct_tunnel(tmp_path: Path) -> None:
+def test_stage_bin_includes_direct_tunnel_and_sync_engine(tmp_path: Path) -> None:
     package_dir = tmp_path / "package"
     package_dir.mkdir()
     python_dir = package_dir / "python"
     livekit = tmp_path / "livekit-server"
     tunneld = tmp_path / "openbase-tunneld"
+    sync_engine = tmp_path / "sync-engine"
+    sync_engine.mkdir()
     livekit.write_bytes(b"livekit")
     tunneld.write_bytes(b"tunneld")
+    for name in build_standalone_package.SYNC_ENGINE_BINARIES:
+        (sync_engine / name).write_bytes(name.encode())
 
     build_standalone_package.stage_bin(
         package_dir,
         python_dir,
         livekit,
         tunneld,
+        sync_engine,
     )
 
     assert (package_dir / "bin" / "livekit-server").read_bytes() == b"livekit"
     packaged_tunneld = package_dir / "bin" / "openbase-tunneld"
     assert packaged_tunneld.read_bytes() == b"tunneld"
     assert packaged_tunneld.stat().st_mode & 0o111
+    for name in build_standalone_package.SYNC_ENGINE_BINARIES:
+        packaged = package_dir / "bin" / name
+        assert packaged.read_bytes() == name.encode()
+        assert packaged.stat().st_mode & 0o111
+
+
+def test_validate_package_requires_sync_engine_when_requested(tmp_path: Path) -> None:
+    package_dir = tmp_path / "package"
+    for path in (
+        package_dir / build_standalone_package.METADATA_FILENAME,
+        package_dir / "bin" / "openbase-coder",
+        package_dir / "bin" / "livekit-server",
+        package_dir / "bin" / "openbase-tunneld",
+        package_dir / "python" / "bin" / "python",
+        package_dir / "console" / "index.html",
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="openbase-syncd"):
+        build_standalone_package.validate_package(
+            package_dir,
+            "1.0.0",
+            require_sync_engine=True,
+        )
