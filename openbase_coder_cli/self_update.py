@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
@@ -140,11 +141,52 @@ def check_for_update() -> UpdateCheck:
     return check
 
 
-def auto_update_enabled() -> bool:
+def auto_update_enabled(setting: str | None = None) -> bool:
     """Automatic updates apply by default on standalone installs; opt out with
     OPENBASE_CODER_AUTO_UPDATE=0 (in the environment or ~/.openbase/.env)."""
-    value = os.environ.get(AUTO_UPDATE_ENV_KEY, "").strip().lower()
+    value = (
+        (os.environ.get(AUTO_UPDATE_ENV_KEY, "") if setting is None else setting)
+        .strip()
+        .lower()
+    )
     return value not in {"0", "false", "no", "off"}
+
+
+def run_automatic_self_update(*, force: bool = False, report=print) -> SelfUpdateResult:
+    """Keep a detached automatic attempt alive until a deferred update can run.
+
+    Probe call activity locally while waiting, rather than repeatedly fetching
+    the release feed. Re-read the configured opt-out so a pending update can be
+    cancelled without restarting the routines service.
+    """
+    from dotenv import dotenv_values
+
+    from openbase_coder_cli.services.installation import InstallationConfig
+
+    env_path = OPENBASE_BASE_DIR / ".env"
+    if InstallationConfig.exists():
+        env_path = Path(InstallationConfig.load().env_file).expanduser()
+    inherited_setting = os.environ.get(AUTO_UPDATE_ENV_KEY, "")
+    while True:
+        setting = dotenv_values(env_path).get(AUTO_UPDATE_ENV_KEY, inherited_setting)
+        if not auto_update_enabled(setting):
+            package = current_runtime_package()
+            return SelfUpdateResult(
+                status="deferred",
+                from_version=(package.version or __version__)
+                if package
+                else __version__,
+                to_version=None,
+                detail="Automatic updates were disabled while waiting.",
+            )
+        if not force and _voice_session_active():
+            report("Automatic update waiting for the active voice session to end.")
+        else:
+            result = run_self_update(force=force, report=report)
+            if result.status != "deferred":
+                return result
+            report(f"Automatic update waiting: {result.detail}")
+        time.sleep(60)
 
 
 def spawn_detached_self_update(*, force: bool = False) -> None:
@@ -159,7 +201,7 @@ def spawn_detached_self_update(*, force: bool = False) -> None:
     if not launcher.is_file():
         raise SelfUpdateError(f"No standalone launcher at {launcher}.")
     SELF_UPDATE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    args = [str(launcher), "self-update"]
+    args = [str(launcher), "self-update", "--automatic"]
     if force:
         args.append("--force")
     with SELF_UPDATE_LOG_PATH.open("ab") as log_handle:
