@@ -99,6 +99,7 @@ def ensure_backend_binary(coding_backend: str) -> Path | None:
     except (
         OSError,
         subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
         urllib.error.URLError,
         tarfile.TarError,
         json.JSONDecodeError,
@@ -169,8 +170,22 @@ def _install_codex() -> Path:
         if binary is None:
             raise RuntimeError(f"No codex binary found inside {asset_name}")
         installed = OPENBASE_BIN_DIR / "codex"
-        shutil.copy2(binary, installed)
-        installed.chmod(0o755)
+        # Stage on the destination filesystem so failed copies or validation
+        # leave the working binary intact, including while it is executing.
+        with tempfile.TemporaryDirectory(
+            prefix=".codex-update-", dir=OPENBASE_BIN_DIR
+        ) as staging:
+            candidate = Path(staging) / "codex"
+            shutil.copy2(binary, candidate)
+            candidate.chmod(0o755)
+            subprocess.run(
+                [str(candidate), "--version"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            os.replace(candidate, installed)
 
     click.echo(f"Installed codex CLI at {installed}")
     return installed
