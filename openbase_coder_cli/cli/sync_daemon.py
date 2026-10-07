@@ -216,3 +216,114 @@ def disable_cmd() -> None:
 
     remove_service(find_service(sync_daemon.SYNC_DAEMON_SERVICE_NAME))
     click.echo("Service sync-daemon removed.")
+
+
+@sync_daemon_cli.group("judgment")
+def judgment_cli() -> None:
+    """AI conflict labels from Openbase Cloud (opt-in per computer).
+
+    When enabled, the daemon sends both versions of a conflicting text file
+    to Openbase Cloud, which labels the conflict. Conflicts are never
+    resolved automatically.
+    """
+
+
+def _require_configured() -> None:
+    if not sync_daemon.is_configured():
+        raise click.ClickException(
+            "Openbase Sync is not set up on this computer; run "
+            "'openbase-coder sync-daemon configure' first."
+        )
+
+
+def _apply_judgment(enabled: bool, *, restart: bool) -> None:
+    from openbase_coder_cli.services.cloud_registration import (
+        local_device_id,
+        register_and_report,
+    )
+
+    _require_configured()
+    # The daemon sends this id as X-Openbase-Device-Id; the cloud allows the
+    # call only for a registered device of the user with the opt-in set.
+    device_id = local_device_id() if enabled else None
+    try:
+        path = sync_daemon.set_judgment(enabled, device_id)
+    except sync_daemon.SyncDaemonError as exc:
+        raise click.ClickException(str(exc)) from exc
+    state = "enabled" if enabled else "disabled"
+    click.echo(f"AI conflict labels {state} in {path}.")
+    if device_id:
+        click.echo(f"Cloud device id: {device_id}")
+
+    # The registration payload reads the opt-in from the config just written.
+    report = register_and_report()
+    if report.ok:
+        click.echo(f"Openbase Cloud updated (judgment_enabled={str(enabled).lower()}).")
+    else:
+        click.echo(
+            "Warning: could not update Openbase Cloud "
+            f"({report.error or 'unknown error'}); it is retried at the next "
+            "periodic device registration.",
+            err=True,
+        )
+
+    if not restart:
+        click.echo("Not restarting the sync-daemon service (--no-restart).")
+        return
+    try:
+        restarted = sync_daemon.restart_service_if_installed()
+    except Exception as exc:  # noqa: BLE001 - the setting is saved either way
+        raise click.ClickException(
+            f"Saved the setting, but restarting the sync-daemon service failed: "
+            f"{exc}. Restart it with 'openbase-coder services restart sync-daemon'."
+        ) from exc
+    if restarted:
+        click.echo("Restarted the sync-daemon service.")
+    else:
+        click.echo(
+            "The sync-daemon service is not installed; the setting applies when "
+            "it starts."
+        )
+
+
+_no_restart_option = click.option(
+    "--no-restart",
+    is_flag=True,
+    help="Do not restart the sync-daemon service after changing the setting.",
+)
+
+
+@judgment_cli.command("enable")
+@_no_restart_option
+def judgment_enable(no_restart: bool) -> None:
+    """Opt this computer in: label sync conflicts with Openbase Cloud."""
+    _apply_judgment(True, restart=not no_restart)
+
+
+@judgment_cli.command("disable")
+@_no_restart_option
+def judgment_disable(no_restart: bool) -> None:
+    """Opt this computer out of AI conflict labels."""
+    _apply_judgment(False, restart=not no_restart)
+
+
+@judgment_cli.command("status")
+@click.option("--json", "as_json", is_flag=True, help="Print the status as JSON.")
+def judgment_status(as_json: bool) -> None:
+    """Show whether AI conflict labels are enabled and which device id is used."""
+    configured = sync_daemon.is_configured()
+    settings = sync_daemon.judgment_settings() if configured else None
+    payload = {
+        "configured": configured,
+        "enabled": bool(settings and settings["enabled"]),
+        "device_id": (settings or {}).get("device_id") or None,
+    }
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    if not configured:
+        click.echo("Openbase Sync is not set up on this computer.")
+        return
+    click.echo(f"AI conflict labels: {'enabled' if payload['enabled'] else 'disabled'}")
+    if payload["device_id"]:
+        click.echo(f"Cloud device id:    {payload['device_id']}")

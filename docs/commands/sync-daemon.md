@@ -20,6 +20,7 @@ openbase-coder sync-daemon COMMAND [ARGS]
 | `conflicts` | Print open conflicts as JSON |
 | `resolve ID keep_local\|use_remote` | Resolve one conflict |
 | `install-hooks` | Install the Openbase Sync agent hooks and shell snippet |
+| `judgment enable\|disable\|status` | Turn AI conflict labels from Openbase Cloud on or off for this computer, or show the setting (see below) |
 | `disable` | Stop and remove the `sync-daemon` service; configuration and files are kept |
 
 ## configure options
@@ -39,6 +40,25 @@ openbase-coder sync-daemon COMMAND [ARGS]
 
 At least one `--root` (or `--with-product-folders`) is required. Use the same
 roots on both machines.
+
+## judgment
+
+Opt this computer in or out of AI conflict labels: Openbase Cloud labels
+text-file conflicts to help you choose, and never resolves them for you. The
+contents of both versions of a conflicting text file are sent to Openbase
+Cloud for classification, billed against a small free monthly allowance. See
+[AI conflict labels](../code-sync.md#ai-conflict-labels-opt-in).
+
+| Command | Description |
+|---|---|
+| `judgment enable [--no-restart]` | Set `[judgment] enabled = true` and this computer's cloud device id in `config.toml`, register the choice with Openbase Cloud, and restart the `sync-daemon` service if it is installed |
+| `judgment disable [--no-restart]` | Set `enabled = false`, register the choice with Openbase Cloud, and restart the service |
+| `judgment status [--json]` | Show whether labels are enabled and which device id the daemon uses |
+
+Registering with Openbase Cloud needs you to be signed in. If it fails (for
+example offline), the command still saves the setting, prints a warning, and
+the choice is sent at the computer's next periodic check-in. Other settings
+in `config.toml` are kept as they are.
 
 ## Advanced: pins
 
@@ -67,6 +87,9 @@ openbase-coder sync-daemon configure --role edge --peer 100.64.0.2 \
   --pair-secret <secret> --root ~/Projects --with-product-folders
 
 openbase-coder sync-daemon status
+
+# Turn on AI conflict labels for this computer
+openbase-coder sync-daemon judgment enable
 ```
 
 ## Notes

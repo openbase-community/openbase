@@ -107,6 +107,36 @@ taking the other computer's (**take theirs**):
 
 Open conflicts also show as a dashboard warning.
 
+### AI conflict labels (opt-in)
+
+Openbase Sync can ask Openbase Cloud to label conflicts in text files, to
+help you decide which version to keep. It is off by default and set per
+computer:
+
+```bash
+openbase-coder sync-daemon judgment enable    # turn on for this computer
+openbase-coder sync-daemon judgment status    # show whether it is on
+openbase-coder sync-daemon judgment disable   # turn off again
+```
+
+What it does and does not do:
+
+- **Labels only.** A label is a hint attached to the conflict. Openbase Sync
+  never resolves a conflict on its own; you still choose **keep mine** or
+  **take theirs**.
+- **Your file contents leave this computer.** When a text file conflicts, the
+  contents of both versions are sent to Openbase Cloud to be classified.
+  Leave the feature off for folders whose contents must not leave your
+  computers.
+- **Billing.** Classification is billed to your Openbase Cloud account
+  against a small free monthly allowance.
+
+`enable` and `disable` update the `[judgment]` table of
+`~/.openbase/sync/config.toml`, tell Openbase Cloud about the choice for this
+computer (you must be signed in; if the computer is offline, it is retried at
+its next periodic check-in), and restart the `sync-daemon` service. Turn it
+on separately on each computer that should use it.
+
 ## Personal skills
 
 Use **Settings → Agents → Skills → Sync my skills across devices** to share
