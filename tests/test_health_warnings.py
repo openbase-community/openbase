@@ -219,6 +219,32 @@ def test_livekit_skew_warns_only_on_dev_installs(monkeypatch) -> None:
     assert hw._livekit_skew_warnings() == []
 
 
+def test_livekit_skew_resolver_skips_stale_download(tmp_path, monkeypatch) -> None:
+    stale = tmp_path / "openbase" / "bin" / "livekit-server"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("#!/bin/sh\n", encoding="utf-8")
+    stale.chmod(0o755)
+    fallback = tmp_path / "homebrew" / "livekit-server"
+    fallback.parent.mkdir()
+    fallback.write_text("#!/bin/sh\n", encoding="utf-8")
+    fallback.chmod(0o755)
+
+    monkeypatch.setattr(
+        "openbase_coder_cli.livekit_install.installed_livekit_server_path",
+        lambda: stale,
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.livekit_install.livekit_binary_matches_pin",
+        lambda _binary: False,
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.livekit_install.fallback_livekit_server_path",
+        lambda: fallback,
+    )
+
+    assert hw._resolve_livekit_binary() == str(fallback)
+
+
 def test_thread_exchange_warnings(monkeypatch, tmp_path) -> None:
     import json as json_module
 
