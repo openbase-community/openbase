@@ -247,6 +247,15 @@ def test_become_hub_needs_openbase_vpn(env, monkeypatch):
     assert not sync_daemon.is_configured()
 
 
+def test_become_hub_needs_sign_in(env):
+    env.token = None
+    with pytest.raises(sync_pairing.PairingError) as excinfo:
+        sync_pairing.become_hub()
+    assert excinfo.value.code == "not_signed_in"
+    assert not sync_daemon.is_configured()
+    assert env.started == 0
+
+
 # --- offer --------------------------------------------------------------------
 
 

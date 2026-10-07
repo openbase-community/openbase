@@ -388,6 +388,7 @@ def become_hub(roots: list[str] | None = None, group: str = "default") -> dict:
 
     with _lock:
         _require_unconfigured()
+        _require_token()
         _require_daemon_binary()
         ip = tailscale_ip("4")
         if not ip:
