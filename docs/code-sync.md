@@ -74,10 +74,12 @@ other through git's own object transfer, and the checked-out branch follows.
 
 ## Placement: large files and disk space
 
-One side is the **anchor** and holds every file in full (the hub by
-default). The other side keeps large files as placeholders until they are
-used, and frees space when the disk runs low. Choose `--anchor edge` when the
-hub has less disk than the laptop.
+One side is the **anchor** and holds every file in full. The other side
+keeps large files as placeholders until they are used, and frees space when
+the disk runs low. Pairing from the Sync page (or `sync-daemon pair`) makes
+the edge the anchor: your laptop keeps everything, and the always-on hub
+fetches a large file when it is used. With `sync-daemon configure` the hub is
+the anchor unless you pass `--anchor edge`.
 
 Advanced: a root in `~/.openbase/sync/config.toml` can list **pins** —
 root-relative paths that are held in full only on the anchor side (`"."` pins
