@@ -42,12 +42,16 @@ def fetch(target: str, out: Path, pin_path: Path = PIN) -> list[Path]:
     expected = pin["sha256"].get(target)
     if not expected:
         raise SystemExit(f"no pinned sync engine for target {target!r}")
-    url = f"{pin['base_url'].rstrip('/')}/{pin['version']}/openbase-sync-{target}.tar.gz"
+    url = (
+        f"{pin['base_url'].rstrip('/')}/{pin['version']}/openbase-sync-{target}.tar.gz"
+    )
     with urllib.request.urlopen(url, timeout=120) as resp:  # noqa: S310 - pinned https URL
         data = resp.read()
     actual = hashlib.sha256(data).hexdigest()
     if actual != expected:
-        raise SystemExit(f"sync engine checksum mismatch for {target}: {actual} != {expected}")
+        raise SystemExit(
+            f"sync engine checksum mismatch for {target}: {actual} != {expected}"
+        )
     out.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
@@ -67,7 +71,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--pin", type=Path, default=PIN, help="pin file (default: cli/sync_engine.json)")
+    parser.add_argument(
+        "--pin", type=Path, default=PIN, help="pin file (default: cli/sync_engine.json)"
+    )
     args = parser.parse_args()
     for path in fetch(args.target, args.out, pin_path=args.pin):
         print(path)
