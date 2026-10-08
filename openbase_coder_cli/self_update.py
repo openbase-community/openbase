@@ -44,6 +44,11 @@ from openbase_coder_cli.self_update_network import (
     fetch_bytes,
 )
 from openbase_coder_cli.services.installation import InstallationConfig
+from openbase_coder_cli.services.mutation_lock import (
+    ServiceMutationBusy,
+    mutation_environment,
+    service_mutation,
+)
 from openbase_coder_cli.sync_daemon import SYNC_ENGINE_BINARY_NAMES
 
 logger = logging.getLogger(__name__)
@@ -356,6 +361,30 @@ def _run_self_update_locked(
             f"Could not prepare update; current runtime unchanged: {exc}"
         ) from exc
 
+    try:
+        with service_mutation():
+            return _activate_prepared_release(
+                package,
+                release_dir,
+                current=current,
+                latest=latest,
+                channel=channel,
+                voice_deferred=voice_deferred,
+                force=force,
+                report=report,
+            )
+    except ServiceMutationBusy as exc:
+        return SelfUpdateResult(
+            status="deferred",
+            from_version=str(current),
+            to_version=str(latest),
+            detail=str(exc),
+        )
+
+
+def _activate_prepared_release(
+    package, release_dir, *, current, latest, channel, voice_deferred, force, report
+) -> SelfUpdateResult:
     # A developer setup may have replaced the active installation while the
     # detached worker downloaded. Never reactivate its old packaged runtime.
     _require_updatable_package()
@@ -615,6 +644,7 @@ def _run_launcher(launcher: Path, args: list[str], *, report) -> bool:
         capture_output=True,
         text=True,
         timeout=600,
+        env=mutation_environment(),
     )
     if completed.returncode != 0:
         report(

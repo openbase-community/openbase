@@ -39,7 +39,10 @@ from openbase_coder_cli.services.definitions import (
     default_services,
     retired_service_stub,
 )
+from openbase_coder_cli.services.dependencies import order_services
 from openbase_coder_cli.services.installation import InstallationConfig
+from openbase_coder_cli.services.mutation_lock import service_mutation
+from openbase_coder_cli.services.readiness import wait_for_provider
 from openbase_coder_cli.services.selection import include_installed_optional_services
 
 
@@ -560,6 +563,7 @@ def _launchctl(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     )
 
 
+@service_mutation()
 def launchctl_bootstrap(svc: ServiceDefinition) -> None:
     if _external_supervisor():
         # Nothing to register: the supervisor already runs the wrapper in a
@@ -598,6 +602,7 @@ def launchctl_bootstrap(svc: ServiceDefinition) -> None:
     raise click.ClickException(f"Failed to bootstrap {label}: {result.stderr.strip()}")
 
 
+@service_mutation()
 def launchctl_bootout(svc: ServiceDefinition) -> bool:
     if _external_supervisor():
         # The supervisor relaunches the wrapper; a stop is only ever a bounce.
@@ -618,6 +623,7 @@ def launchctl_bootout(svc: ServiceDefinition) -> bool:
     return result.returncode == 0
 
 
+@service_mutation()
 def launchctl_kickstart(svc: ServiceDefinition) -> bool:
     if not _is_macos():
         if _is_windows():
@@ -647,6 +653,7 @@ def _job_pid(svc: ServiceDefinition) -> int | None:
         return None
 
 
+@service_mutation()
 def launchctl_restart(svc: ServiceDefinition) -> bool:
     """Restart an already-loaded launchd job without unloading it.
 
@@ -681,7 +688,14 @@ def launchctl_restart(svc: ServiceDefinition) -> bool:
         )
         if pid == old_pid:
             # The process ignored SIGTERM; let launchd kill and relaunch it.
-            _launchctl("kickstart", "-k", target, check=False)
+            forced = _launchctl("kickstart", "-k", target, check=False)
+            pid = process_utils.wait_for_pid_change(
+                lambda: _job_pid(svc), old_pid, timeout=RESTART_EXIT_TIMEOUT_SECONDS
+            )
+            if forced.returncode != 0 or pid == old_pid:
+                raise click.ClickException(
+                    f"Failed to replace the old process for {svc.name}."
+                )
 
     new_pid = _job_pid(svc)
     keep = process_utils.process_tree_pids(new_pid) if new_pid else set()
@@ -691,6 +705,7 @@ def launchctl_restart(svc: ServiceDefinition) -> bool:
     return True
 
 
+@service_mutation()
 def launchctl_kill(svc: ServiceDefinition) -> bool:
     if _external_supervisor():
         return _external_supervisor_restart(svc)
@@ -811,6 +826,7 @@ def launchctl_status(svc: ServiceDefinition) -> dict:
     }
 
 
+@service_mutation()
 def install_all_services(config: InstallationConfig) -> None:
     _ensure_launchd_paths()
     coding_backend = _selected_backend(config)
@@ -822,6 +838,7 @@ def install_all_services(config: InstallationConfig) -> None:
     services = include_installed_optional_services(
         default_services(coding_backend), launchctl_status
     )
+    services = order_services(services)
     binaries = _resolve_binaries(config, services)
 
     for svc in default_services():
@@ -841,6 +858,7 @@ def install_all_services(config: InstallationConfig) -> None:
         click.echo(f"  Installing {svc.name}...")
         reload_required = _write_service_files(svc, config, binaries)
         verb = _activate_service(svc, reload_required)
+        wait_for_provider(svc)
         click.echo(f"    {verb} {_service_label(svc)}")
 
     click.echo()
@@ -848,6 +866,7 @@ def install_all_services(config: InstallationConfig) -> None:
     click.echo(f"Logs: {DEFAULT_LOG_DIR}/")
 
 
+@service_mutation()
 def remove_service(svc: ServiceDefinition) -> bool:
     """Unload a service and delete its generated files. True if any existed."""
     existed = False
@@ -878,20 +897,24 @@ def _activate_service(svc: ServiceDefinition, reload_required: bool) -> str:
     return "Loaded"
 
 
+@service_mutation()
 def install_service(config: InstallationConfig, svc: ServiceDefinition) -> None:
     """Install ``svc`` if needed and (re)start it."""
     _ensure_launchd_paths()
     binaries = _resolve_binaries(config, [svc])
     reload_required = _write_service_files(svc, config, binaries)
     _activate_service(svc, reload_required)
+    wait_for_provider(svc)
 
 
+@service_mutation()
 def regenerate_service(config: InstallationConfig, svc: ServiceDefinition) -> None:
     _ensure_launchd_paths()
     binaries = _resolve_binaries(config, [svc])
     _write_service_files(svc, config, binaries)
 
 
+@service_mutation()
 def regenerate_all_services(config: InstallationConfig) -> None:
     _ensure_launchd_paths()
     coding_backend = _selected_backend(config)

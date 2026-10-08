@@ -31,16 +31,14 @@ def _codex_release(monkeypatch, tmp_path: Path, contents: bytes) -> Path:
             }
         ]
     }
-    monkeypatch.setattr(
-        backend_binaries.urllib.request,
-        "urlopen",
-        lambda *a, **k: io.BytesIO(json.dumps(release).encode()),
-    )
-    monkeypatch.setattr(
-        backend_binaries.urllib.request,
-        "urlretrieve",
-        lambda _url, destination: shutil.copyfile(archive_path, destination),
-    )
+
+    def response(url, *, timeout):
+        assert timeout == 30
+        if url == backend_binaries.CODEX_LATEST_RELEASE_URL:
+            return io.BytesIO(json.dumps(release).encode())
+        return io.BytesIO(archive_path.read_bytes())
+
+    monkeypatch.setattr(backend_binaries.urllib.request, "urlopen", response)
     managed = tmp_path / "managed"
     managed.mkdir()
     monkeypatch.setattr(backend_binaries, "OPENBASE_BIN_DIR", managed)
@@ -117,3 +115,30 @@ def test_codex_failed_atomic_replace_preserves_working_binary(monkeypatch, tmp_p
         backend_binaries.refresh_openbase_bin_codex()
     assert installed.read_bytes() == before
     assert list(installed.parent.iterdir()) == [installed]
+
+
+def test_codex_transfer_timeout_preserves_binary_and_releases_activation_lock(
+    monkeypatch, tmp_path
+):
+    from openbase_coder_cli.services.mutation_lock import service_mutation
+
+    installed = _codex_release(monkeypatch, tmp_path, b"new")
+    before = installed.read_bytes()
+    urlopen = backend_binaries.urllib.request.urlopen
+
+    class StalledResponse(io.BytesIO):
+        def read(self, *_):
+            raise TimeoutError("transfer stalled")
+
+    def response(url, *, timeout):
+        if url == backend_binaries.CODEX_LATEST_RELEASE_URL:
+            return urlopen(url, timeout=timeout)
+        assert timeout == 30
+        return StalledResponse()
+
+    monkeypatch.setattr(backend_binaries.urllib.request, "urlopen", response)
+    with pytest.raises(TimeoutError, match="transfer stalled"):
+        backend_binaries.refresh_openbase_bin_codex()
+    assert installed.read_bytes() == before
+    with service_mutation(timeout=0):
+        pass

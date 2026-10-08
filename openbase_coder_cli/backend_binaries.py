@@ -30,6 +30,7 @@ from openbase_coder_cli.backend_config import (
     OPENBASE_CLOUD_CODEX_BACKEND,
 )
 from openbase_coder_cli.paths import OPENBASE_BIN_DIR
+from openbase_coder_cli.services.mutation_lock import service_mutation
 
 CODEX_LATEST_RELEASE_URL = "https://api.github.com/repos/openai/codex/releases/latest"
 CLAUDE_INSTALLER_URL = "https://claude.ai/install.sh"
@@ -144,6 +145,7 @@ def _codex_release_target() -> str:
     raise RuntimeError(f"Unsupported platform for codex install: {system}")
 
 
+@service_mutation()
 def _install_codex() -> Path:
     target = _codex_release_target()
     asset_name = f"codex-{target}.tar.gz"
@@ -166,7 +168,9 @@ def _install_codex() -> Path:
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
         archive_path = tmp_dir / asset_name
-        urllib.request.urlretrieve(asset_url, archive_path)
+        with urllib.request.urlopen(asset_url, timeout=30) as response:
+            with archive_path.open("wb") as handle:
+                shutil.copyfileobj(response, handle, length=1024 * 1024)
         with tarfile.open(archive_path, "r:gz") as archive:
             archive.extractall(tmp_dir, filter="data")
         binary = _find_extracted_binary(tmp_dir, "codex")
