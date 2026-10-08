@@ -34,7 +34,11 @@ def test_ensure_codex_config_adds_openbase_profile_without_changing_default(
     )
     command = _stub_super_agents_command(monkeypatch, codex_phase)
 
-    codex_phase._ensure_codex_config(str(tmp_path / "workspace"))
+    # Shared registration in the default home is on by default and covered in
+    # test_setup_cli; opting out must leave the default config untouched.
+    codex_phase._ensure_codex_config(
+        str(tmp_path / "workspace"), register_shared_super_agents=False
+    )
 
     content = profile_path.read_text(encoding="utf-8")
     assert "[mcp_servers.super-agents]" in content
