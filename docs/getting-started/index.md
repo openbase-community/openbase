@@ -1,5 +1,10 @@
 # Getting Started
 
+Starting from a phone with no computer set up yet? Read
+[Computer or Cloud Workspace?](computer-or-cloud-workspace.md) first: it
+explains why an always-on computer is the best first backend, what a hosted
+Cloud Workspace can and cannot do, and that the choice can be changed later.
+
 Openbase Coder runs as the `openbase-coder` CLI runtime on your own machine.
 The recommended path starts from the GitHub workspace and keeps every part of
 the install visible and editable:
