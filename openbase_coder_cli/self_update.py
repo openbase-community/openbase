@@ -297,7 +297,12 @@ def run_self_update(*, force: bool = False, report=print) -> SelfUpdateResult:
             detail="Another self-update is already running.",
         )
     try:
-        return _run_self_update_locked(package, force=force, report=report)
+        try:
+            return _run_self_update_locked(package, force=force, report=report)
+        except OSError as exc:
+            raise RetryableUpdateError(
+                f"Update storage operation failed; the next attempt will retry or recover activation: {exc}"
+            ) from exc
     finally:
         flock(lock_handle, LOCK_UN)
         lock_handle.close()

@@ -157,3 +157,19 @@ def test_unusable_interrupted_target_rolls_back_offline(interrupted, monkeypatch
     assert layout["current"].resolve() == old
     assert (site / "native.so").read_bytes() == b"old-ABI"
     assert not self_update.activation_pending()
+
+
+def test_storage_failure_keeps_pending_activation_retryable(interrupted, monkeypatch):
+    import errno
+
+    layout, old, new, site = interrupted
+    kill_during_activation(layout, old, new, site, "activating")
+
+    def no_space(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "disk full")
+
+    monkeypatch.setattr(self_update, "_finish_activation", no_space)
+    with pytest.raises(self_update.RetryableUpdateError, match="storage operation failed"):
+        self_update.run_self_update(report=lambda _: None)
+    assert self_update.activation_pending()
+    assert layout["current"].resolve() == new
