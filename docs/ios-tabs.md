@@ -26,13 +26,14 @@ Keychain.
 **On the Mac:** the desktop app's setup flow drives the other half of this
 pairing — see [Desktop App](desktop-app.md#install-and-first-run-setup).
 
-## Home and Navigation
+## Chat
 
-The app opens on an empty **new chat**, like the ChatGPT and Codex apps: the Openbase mark sits faded in the middle and a message box sits at the bottom. The Android app uses the same layout.
+The app opens on an empty **new chat**, like the ChatGPT and Codex apps: the Openbase mark sits faded in the middle and a message box sits at the bottom. Every conversation, with the Dispatcher or with a coding thread, is this same screen: your messages on the right in gray bubbles, the agent's replies on the left as plain text, with copy and share under the latest reply. A reply that is still being written streams in with a **Stop** control. The Android app uses the same layout.
 
-- Type a message and tap the arrow to send it to the **Dispatcher**, which routes the work. To start a new coding thread instead, tap **+** and pick a recent project; the app creates the thread on the computer that owns the project and opens it.
+- Type a message and tap the arrow to send it. On a new chat it goes to the **Dispatcher**, which routes the work, and the screen becomes that conversation. To start a new coding thread instead, tap **+** and pick a recent project; the app creates the thread on the computer that owns the project and the screen becomes that thread. In a conversation, sending while the agent is working steers it (hold the button to queue instead).
 - Tap the **microphone** to record a voice note. It is transcribed on the phone into the message box so you can edit it before sending; tap again to stop. Voice notes are off while a call is running.
 - With the box empty, the round **waveform** button starts a voice call.
+- The title shows the conversation name. The top-right **compose** button starts a new chat; **⋯** holds the thread actions (pin, archive, transfer the active call, refresh, details). In a conversation, **+** also chooses which computer runs the thread.
 
 Tap the round menu button at the top left (or swipe from the left edge) to open the side drawer. From the top:
 
@@ -44,16 +45,13 @@ Tap the round menu button at the top left (or swipe from the left edge) to open 
 
 ## Calls
 
-There is no separate Call page. Start a call from the waveform button in the new-chat message box, or from the waveform button in any thread's prompt bar. The call connects to the dispatcher — the routing agent that can start, resume, and hand you to Super Agents by voice.
+There is no separate Call page. Start a call from the waveform button in any chat's message box. The call connects to the dispatcher — the routing agent that can start, resume, and hand you to Super Agents by voice.
 
-While a call is running, a call strip above the new-chat message box shows who you are talking to and the call state, with mute, speaker, and end-call buttons; other screens show the same controls in the top bar. Tap the strip (or the top-bar call title) for **call details**: the device you are calling, the live agent visualizer and latest agent message, a shared screen, the auto-mute and auto-unmute switches, and **Back to Dispatch**.
+While a call is running, the chat screen becomes the voice view: the agent orb in the middle with the call state and the latest spoken reply under it, and the message box with a **mute** button and a round **✕** to end the call. You can still type to steer. **Show messages** swaps the orb for the conversation, with a small orb in the title bar. The **settings** button at the top right opens the call settings: which computer answers, speaker, auto-mute and auto-unmute, room and call state, a shared screen, and **Back to Dispatch**. Other screens show the call in their top bar; tapping it opens the same settings.
 
-While connected you can ask the dispatcher to transfer you to a Super Agent,
-or say "go back to dispatch" to return. The same routing is scriptable from
-the CLI — see [Voice Routing](voice-routing.md).
+While connected you can ask the dispatcher to transfer you to a Super Agent, or say "go back to dispatch" to return. The same routing is scriptable from the CLI — see [Voice Routing](voice-routing.md).
 
-Voice Test is a developer screen for exercising LiveKit connection
-parameters directly.
+Voice Test is a developer screen for exercising LiveKit connection parameters directly.
 
 **Action Button mute shortcut:** the app exposes an App Intent named
 `Toggle Voice Session Mute` (shortcut title `Toggle Mute`). Create an iOS
@@ -68,9 +66,7 @@ into the same call.
 
 ## Dispatch
 
-A read-and-steer view of the dispatcher's thread: its turn history, current
-turn, and reasoning, with an interrupt button. Auto-refreshes every 15
-seconds.
+The Dispatcher's conversation, opened from the drawer. It is the same chat screen as any thread, so you can read what the dispatcher did, steer it, and start a call from it.
 
 ## Threads
 
@@ -80,14 +76,9 @@ The full thread list (from the drawer's search button or **See all**), with stat
 - Swipe left to favorite (pin), swipe right to archive. Pinned threads appear under **Pinned** in the drawer.
 - Pull to refresh.
 
-Tap a thread for the detail view: connection indicator, expandable turn
-history (prompt, status, timestamps, output, stderr, Markdown rendering),
-the live current turn with real-time output over WebSocket, an interrupt
-button, and a prompt bar to send the next message.
+Tap a thread to open it as a chat. Under **⋯** → **Show details** each turn exposes its status, timestamps, return code and stderr.
 
-During an active call, thread detail shows **Transfer Active Call** to route
-the voice session to that thread, and a **Return to Dispatch** action to hand
-it back.
+During an active call, a thread's **⋯** menu offers **Transfer Active Call** to route the voice session to that thread, and the call settings offer **Back to Dispatch** to hand it back.
 
 **On the Mac:** the desktop app and console have the same thread list and
 live detail view with a full keyboard.
