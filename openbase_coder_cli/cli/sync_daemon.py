@@ -621,3 +621,92 @@ def judgment_status(as_json: bool) -> None:
     click.echo(f"AI conflict labels: {'enabled' if payload['enabled'] else 'disabled'}")
     if payload["device_id"]:
         click.echo(f"Cloud device id:    {payload['device_id']}")
+
+
+@sync_daemon_cli.group("agent-config")
+def agent_config_cli() -> None:
+    """Sync the coding agents' skills, MCP servers and sign-in (on by default).
+
+    Claude Code's and Codex's user-level MCP servers, linked skills and
+    sign-in material travel between your computers through Openbase Sync.
+    Sign-in material never appears in previous versions, conflict copies or
+    logs. Disable it on a computer that should keep its own agent setup.
+    """
+
+
+def _apply_agent_config(enabled: bool, *, restart: bool, as_json: bool) -> None:
+    _require_configured()
+    try:
+        path = sync_daemon.set_agent_config(enabled)
+    except sync_daemon.SyncDaemonError as exc:
+        raise click.ClickException(str(exc)) from exc
+    restarted: bool | None = None
+    if restart:
+        try:
+            restarted = sync_daemon.restart_service_if_installed()
+        except Exception as exc:  # noqa: BLE001 - the setting is saved either way
+            raise click.ClickException(
+                f"Saved the setting, but restarting the sync-daemon service failed: "
+                f"{exc}. Restart it with 'openbase-coder services restart sync-daemon'."
+            ) from exc
+    if as_json:
+        click.echo(
+            json.dumps(
+                {
+                    "configured": True,
+                    "enabled": enabled,
+                    "config_path": str(path),
+                    "restart": {"requested": restart, "restarted": restarted},
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
+    state = "on" if enabled else "off"
+    click.echo(f"Agent configuration sync {state} in {path}.")
+    if not restart:
+        click.echo("Not restarting the sync-daemon service (--no-restart).")
+    elif restarted:
+        click.echo("Restarted the sync-daemon service.")
+    else:
+        click.echo(
+            "The sync-daemon service is not installed; the setting applies when it starts."
+        )
+
+
+@agent_config_cli.command("enable")
+@_no_restart_option
+@_json_option
+def agent_config_enable(no_restart: bool, as_json: bool) -> None:
+    """Sync skills, MCP servers and sign-in on this computer (the default)."""
+    _apply_agent_config(True, restart=not no_restart, as_json=as_json)
+
+
+@agent_config_cli.command("disable")
+@_no_restart_option
+@_json_option
+def agent_config_disable(no_restart: bool, as_json: bool) -> None:
+    """Keep this computer's agent setup local."""
+    _apply_agent_config(False, restart=not no_restart, as_json=as_json)
+
+
+@agent_config_cli.command("status")
+@click.option("--json", "as_json", is_flag=True, help="Print the status as JSON.")
+def agent_config_status(as_json: bool) -> None:
+    """Show whether agent configuration sync is on for this computer."""
+    enabled = sync_daemon.agent_config_enabled()
+    payload = {"configured": enabled is not None, "enabled": bool(enabled)}
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    if enabled is None:
+        click.echo("Openbase Sync is not set up on this computer.")
+        return
+    click.echo(
+        "Agent configuration sync is on: skills, MCP servers and sign-in of Claude "
+        "Code and Codex follow you to your other computers."
+        if enabled
+        else "Agent configuration sync is off on this computer "
+        "(openbase-coder sync-daemon agent-config enable)."
+    )

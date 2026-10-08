@@ -252,6 +252,8 @@ def read_config_summary(config_path: Path | None = None) -> dict:
     summary["judgment_enabled"] = bool(judgment and judgment["enabled"])
     if judgment is not None:
         summary["judgment_device_id"] = judgment["device_id"]
+    agents = data.get(AGENTS_TABLE) if isinstance(data.get(AGENTS_TABLE), dict) else {}
+    summary["agent_config"] = agents.get("sync_config") is not False
     return summary
 
 
@@ -316,8 +318,6 @@ def _write_config_text(text: str, config_path: Path) -> None:
 
 JUDGMENT_TABLE = "judgment"
 _TABLE_HEADER_RE = re.compile(r"^\s*\[")
-_JUDGMENT_HEADER_RE = re.compile(r"^\s*\[\s*judgment\s*\]\s*(#.*)?$")
-_JUDGMENT_MANAGED_KEY_RE = re.compile(r"^\s*(enabled|device_id)\s*=")
 
 
 def _judgment_from_config(data: dict[str, Any]) -> dict[str, Any] | None:
@@ -356,9 +356,23 @@ def set_judgment(
     """Set ``[judgment] enabled`` (and ``device_id`` when given) in place.
 
     Every other key and table, including unmanaged ``[judgment]`` keys, is
-    kept as written. The table is appended when missing. The result is
-    re-parsed and compared with the original so a layout this line editor
-    does not understand raises instead of corrupting the file.
+    kept as written. The table is appended when missing.
+    """
+    values: dict[str, bool | str] = {"enabled": enabled}
+    if device_id is not None:
+        values["device_id"] = device_id
+    return _set_table_values(JUDGMENT_TABLE, values, config_path)
+
+
+def _set_table_values(
+    table: str, values: dict[str, bool | str], config_path: Path | None = None
+) -> Path:
+    """Set keys of one TOML table in place, by line.
+
+    Every other line is kept as written, including the table's unmanaged
+    keys; the table is appended when missing. The result is re-parsed and
+    compared with the original so a layout this line editor does not
+    understand raises instead of corrupting the file.
     """
     config_path = _config_path(config_path)
     if not config_path.is_file():
@@ -372,16 +386,17 @@ def set_judgment(
     except tomllib.TOMLDecodeError as exc:
         raise SyncDaemonError(f"{config_path} is not valid TOML: {exc}") from exc
 
-    managed = [f"enabled = {'true' if enabled else 'false'}"]
-    if device_id is not None:
-        managed.append(f"device_id = {_toml_string(device_id)}")
-
+    managed = [f"{key} = {_toml_value(value)}" for key, value in values.items()]
+    header_re = re.compile(rf"^\s*\[\s*{re.escape(table)}\s*\]\s*(#.*)?$")
+    managed_key_re = re.compile(
+        r"^\s*(" + "|".join(re.escape(key) for key in values) + r")\s*="
+    )
     lines = original_text.splitlines()
     out: list[str] = []
     found = False
     in_table = False
     for line in lines:
-        if _JUDGMENT_HEADER_RE.match(line) and not found:
+        if header_re.match(line) and not found:
             found = True
             in_table = True
             out.append(line)
@@ -389,38 +404,68 @@ def set_judgment(
             continue
         if in_table and _TABLE_HEADER_RE.match(line):
             in_table = False
-        if in_table and _JUDGMENT_MANAGED_KEY_RE.match(line):
-            if device_id is None and line.strip().startswith("device_id"):
-                out.append(line)
+        if in_table and managed_key_re.match(line):
             continue
         out.append(line)
     if not found:
         while out and not out[-1].strip():
             out.pop()
-        out += ["", f"[{JUDGMENT_TABLE}]", *managed]
+        out += ["", f"[{table}]", *managed]
     text = "\n".join(out) + "\n"
 
     expected = dict(before)
-    table = before.get(JUDGMENT_TABLE)
-    expected[JUDGMENT_TABLE] = {
-        **(table if isinstance(table, dict) else {}),
-        "enabled": enabled,
-        **({"device_id": device_id} if device_id is not None else {}),
-    }
+    existing = before.get(table)
+    expected[table] = {**(existing if isinstance(existing, dict) else {}), **values}
     try:
         after = tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
         raise SyncDaemonError(
-            f"could not update [{JUDGMENT_TABLE}] in {config_path}: {exc}; "
-            "edit the file by hand"
+            f"could not update [{table}] in {config_path}: {exc}; edit the file by hand"
         ) from exc
     if after != expected:
         raise SyncDaemonError(
-            f"could not update [{JUDGMENT_TABLE}] in {config_path} without "
+            f"could not update [{table}] in {config_path} without "
             "changing other settings; edit the file by hand"
         )
     _write_config_text(text, config_path)
     return config_path
+
+
+def _toml_value(value: bool | str) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return _toml_string(value)
+
+
+# --- agent configuration sync (skills, MCP servers, sign-in) --------------
+#
+# The daemon mirrors the coding agents' configuration between the user's
+# computers through its managed ``agent-config`` root; on by default:
+#
+#   [agents]
+#   sync_config = false   # turns it off on this computer
+
+AGENTS_TABLE = "agents"
+
+
+def agent_config_enabled(config_path: Path | None = None) -> bool | None:
+    """Whether agent configuration sync is on; None when unconfigured."""
+    config_path = _config_path(config_path)
+    if not config_path.is_file():
+        return None
+    try:
+        data = _load_config(config_path)
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    agents = data.get(AGENTS_TABLE)
+    if isinstance(agents, dict) and agents.get("sync_config") is False:
+        return False
+    return True
+
+
+def set_agent_config(enabled: bool, config_path: Path | None = None) -> Path:
+    """Set ``[agents] sync_config`` in place (see ``_set_table_values``)."""
+    return _set_table_values(AGENTS_TABLE, {"sync_config": enabled}, config_path)
 
 
 # --- roots -----------------------------------------------------------------

@@ -75,7 +75,9 @@ def client(monkeypatch):
     monkeypatch.setattr(sync_daemon, "SyncDaemonClient", FakeClient)
     monkeypatch.setattr(sync_daemon, "is_configured", lambda config_path=None: True)
     monkeypatch.setattr(
-        sync_daemon, "read_config_summary", lambda config_path=None: {"device_id": "laptop"}
+        sync_daemon,
+        "read_config_summary",
+        lambda config_path=None: {"device_id": "laptop"},
     )
     return FakeClient
 
@@ -103,7 +105,12 @@ def test_status_shows_disk_budget_and_low_disk(client, monkeypatch):
         "held_files": 3,
         "held_bytes": 90_000,
     }
-    payload["versions"] = {"usage_bytes": 1_000_000, "quota_bytes": 750_000_000, "quota_auto": True, "retention_days": 30}
+    payload["versions"] = {
+        "usage_bytes": 1_000_000,
+        "quota_bytes": 750_000_000,
+        "quota_auto": True,
+        "retention_days": 30,
+    }
     payload["placement"] = {"thin": True}
     monkeypatch.setattr(FakeClient, "status", lambda self: payload)
 
@@ -111,9 +118,17 @@ def test_status_shows_disk_budget_and_low_disk(client, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert "~/Projects  (1200 entries, 3 transferring, 40.0 MB)" in result.output
-    assert "disk: 400.0 MB free of 5.0 GB; sync keeps 500.0 MB free, from disk size" in result.output
-    assert "low disk: sync writes here are paused until space returns (3 files, 90.0 KB waiting)" in result.output
-    assert "Versions:  1.0 MB of 750.0 MB (from disk size), kept 30 days" in result.output
+    assert (
+        "disk: 400.0 MB free of 5.0 GB; sync keeps 500.0 MB free, from disk size"
+        in result.output
+    )
+    assert (
+        "low disk: sync writes here are paused until space returns (3 files, 90.0 KB waiting)"
+        in result.output
+    )
+    assert (
+        "Versions:  1.0 MB of 750.0 MB (from disk size), kept 30 days" in result.output
+    )
     assert "large files stay on the other computer until used" in result.output
 
 
@@ -182,3 +197,31 @@ def test_resolve_requires_an_action(client):
 def test_removed_syncthing_commands_are_gone():
     for name in ("enable", "disable", "add", "remove", "ignores", "reconcile"):
         assert name not in sync.commands
+
+
+def test_status_shows_agent_configuration_sync(client, monkeypatch):
+    payload = FakeClient.status(FakeClient())
+    payload["agent_config"] = {
+        "enabled": True,
+        "root": "/home/u/.openbase/agent-config",
+        "entries": 7,
+        "secrets": 2,
+        "errors": ["claude/mcp-servers/x.json: a real directory is in the way"],
+    }
+    monkeypatch.setattr(FakeClient, "status", lambda self: payload)
+
+    result = CliRunner().invoke(sync, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "Agents:    skills, MCP servers and sign-in synced (7 entries, 2 sign-ins)"
+        in result.output
+    )
+    assert "could not sync claude/mcp-servers/x.json" in result.output
+
+
+def test_status_says_when_agent_configuration_is_not_synced(client):
+    result = CliRunner().invoke(sync, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert "Agents:    configuration not synced" in result.output

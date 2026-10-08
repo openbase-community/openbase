@@ -185,14 +185,26 @@ What it does and does not do:
 
 `enable` and `disable` update the `[judgment]` table of `~/.openbase/sync/config.toml`, tell Openbase Cloud about the choice for this computer (you must be signed in; if the computer is offline, it is retried at its next periodic check-in), and restart the `sync-daemon` service. Turn it on separately on each computer that should use it.
 
-## Personal skills
+## Skills, MCP servers and sign-in
 
-Use **Settings → Agents → Skills → Sync my skills across devices** to share
-your personal skills. Sharing uses the `~/.agents/skills` product-folder
-root and linked skill-source directories inside your home folder. It never
-syncs entire backend homes, credentials or plugin caches; linked sources
-outside your home folder or in machine-local Openbase state are reported as
-unavailable for sharing.
+Your coding agents are the same agents on every computer: the skills you have linked, the MCP servers you have added and the accounts you are signed in to travel with you. This is on by default for Claude Code and Codex. What it covers:
+
+| | Claude Code | Codex |
+|---|---|---|
+| MCP servers | your user-level servers (`claude mcp add` at user scope) | the `[mcp_servers]` tables of `~/.codex/config.toml` |
+| Skills | the skills linked in `~/.claude/skills` | the skills linked in `~/.codex/skills` |
+| Sign-in | your Claude Code login and MCP OAuth tokens | `~/.codex/auth.json` and MCP OAuth tokens |
+
+Each entry syncs on its own, so adding a server on one computer adds it on the other, removing it removes it there, and two computers that define the same server differently show one conflict on the Sync page for that server only. A sign-in refreshed on one computer reaches the other within seconds; sign-in material never appears in previous versions, conflict copies, logs or the Sync page, and the fresher sign-in always wins without a conflict. Paths inside your home folder are translated, so a server that runs a tool under `~/bin` works on both computers.
+
+Not covered: project-level MCP servers (those belong to the project and sync with it), servers Openbase installs itself, your agents' sessions, histories and other settings, and skills that are real folders inside `~/.claude/skills` or `~/.codex/skills` (keep skills in `~/.agents/skills`, which syncs, and link them). To turn the feature off on a computer:
+
+```bash
+openbase-coder sync-daemon agent-config disable   # and `enable` to turn it back on
+openbase-coder sync status                        # shows what is synced and any entry it could not apply
+```
+
+Skills in `~/.agents/skills` sync as a product folder of their own (**Settings → Agents → Skills → Sync my skills across devices**); linked skill-source directories inside your home folder sync with it. Sources outside your home folder or in machine-local Openbase state are reported as unavailable for sharing.
 
 ## Coding threads
 

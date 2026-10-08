@@ -95,6 +95,7 @@ def status(as_json: bool) -> None:
         )
     if (payload.get("placement") or {}).get("thin"):
         click.echo("Placement: large files stay on the other computer until used")
+    _echo_agent_config(payload.get("agent_config"))
     open_conflicts = int(payload.get("open_conflicts") or 0)
     if open_conflicts:
         click.echo(
@@ -105,6 +106,22 @@ def status(as_json: bool) -> None:
         )
     else:
         click.echo("Conflicts: 0")
+
+
+def _echo_agent_config(agents) -> None:
+    """Skills, MCP servers and sign-in of the coding agents (docs: code-sync)."""
+    if not isinstance(agents, dict) or not agents.get("enabled"):
+        click.echo(
+            "Agents:    configuration not synced on this computer "
+            "(openbase-coder sync-daemon agent-config enable)"
+        )
+        return
+    details = f"{int(agents.get('entries') or 0)} entries"
+    if agents.get("secrets"):
+        details += f", {int(agents['secrets'])} sign-ins"
+    click.echo(f"Agents:    skills, MCP servers and sign-in synced ({details})")
+    for problem in agents.get("errors") or []:
+        click.echo(click.style(f"           could not sync {problem}", fg="yellow"))
 
 
 def _size(value) -> str:
