@@ -7,13 +7,16 @@ import click
 import httpx
 
 from openbase_coder_cli.config.local_api_token import get_local_api_token
-
 from openbase_coder_cli.config.token_manager import (
     CloudAccessTokenAuth,
     get_token_manager,
 )
 
-DEFAULT_LOCAL_SERVER_URL = "http://127.0.0.1:7999"
+DEFAULT_LOCAL_SERVER_HOST = "127.0.0.1"
+DEFAULT_LOCAL_SERVER_PORT = 7999
+DEFAULT_LOCAL_SERVER_URL = (
+    f"http://{DEFAULT_LOCAL_SERVER_HOST}:{DEFAULT_LOCAL_SERVER_PORT}"
+)
 
 
 class LocalInstallationAuth(httpx.Auth):
@@ -27,7 +30,9 @@ class LocalInstallationAuth(httpx.Auth):
 def server_auth(url: str) -> httpx.Auth:
     destination = urlparse(url)
     if destination.scheme in {"http", "https"} and destination.hostname in {
-        "127.0.0.1", "::1", "localhost",
+        "127.0.0.1",
+        "::1",
+        "localhost",
     }:
         return LocalInstallationAuth()
     # Never send this installation's capability to a configured remote server.
@@ -35,10 +40,30 @@ def server_auth(url: str) -> httpx.Auth:
 
 
 def local_server_url() -> str:
-    return os.environ.get(
-        "OPENBASE_CODER_CLI_SERVER_URL",
-        os.environ.get("OPENBASE_CODER_CLI_LOCAL_SERVER_URL", DEFAULT_LOCAL_SERVER_URL),
-    ).rstrip("/")
+    """Where this installation's own coder server listens.
+
+    An explicit URL wins; otherwise the host and port the server was started
+    with (``OPENBASE_CODER_CLI_HOST`` / ``OPENBASE_CODER_CLI_PORT``, which
+    container runtimes move off 7999 — Maritime serves on 18789). Falling
+    back to the stock port there made every local probe a connection
+    refused: the Cloud heartbeat never saw a live call, so a hosted
+    workspace was idle-slept mid-call (field test 2026-10-08).
+    """
+    explicit = os.environ.get("OPENBASE_CODER_CLI_SERVER_URL") or os.environ.get(
+        "OPENBASE_CODER_CLI_LOCAL_SERVER_URL"
+    )
+    if explicit:
+        return explicit.rstrip("/")
+    host = (
+        os.environ.get("OPENBASE_CODER_CLI_HOST", "").strip()
+        or DEFAULT_LOCAL_SERVER_HOST
+    )
+    port_raw = os.environ.get("OPENBASE_CODER_CLI_PORT", "").strip()
+    try:
+        port = int(port_raw) if port_raw else DEFAULT_LOCAL_SERVER_PORT
+    except ValueError:
+        port = DEFAULT_LOCAL_SERVER_PORT
+    return f"http://{host}:{port}"
 
 
 def local_server_request(

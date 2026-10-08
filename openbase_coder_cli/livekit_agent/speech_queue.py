@@ -78,8 +78,10 @@ class AnnouncerSpeechQueue:
 
     def enqueue(self, message: AnnouncerQueueItem) -> bool:
         if message.message_id and message.message_id in self._recent_message_id_set:
-            logger.info("dispatch_timing stage=announcer_duplicate_ignored message_id=%s",
-                message.message_id)
+            logger.info(
+                "dispatch_timing stage=announcer_duplicate_ignored message_id=%s",
+                message.message_id,
+            )
             return True
         try:
             self._queue.put_nowait(
@@ -201,8 +203,12 @@ class AnnouncerSpeechQueue:
         outcome = AnnouncementSynthesisOutcome()
         handle = self._session.say(
             spoken_text,
-            audio=announcement_audio(self._announcer_tts, spoken_text,
-                voice_id=message.voice_id, outcome=outcome),
+            audio=announcement_audio(
+                self._announcer_tts,
+                spoken_text,
+                voice_id=message.voice_id,
+                outcome=outcome,
+            ),
             allow_interruptions=False,
             add_to_chat_ctx=False,
         )
@@ -218,7 +224,8 @@ class AnnouncerSpeechQueue:
             "synthesis_completed=%s audio_events=%d",
             message.message_id,
             int((time.monotonic() - started) * 1000),
-            outcome.completed, outcome.audio_events,
+            outcome.completed,
+            outcome.audio_events,
         )
 
     async def _bracketed_playout(
@@ -258,25 +265,38 @@ class AnnouncerSpeechQueue:
         # does not hold its own release.
         self._speaking = False
         if getattr(handle, "interrupted", False):
-            logger.warning("dispatch_timing stage=announcer_playout_interrupted "
-                "delivery_id=%s synthesis_completed=%s", record.delivery_id,
-                synthesis_outcome.completed if synthesis_outcome is not None else None)
+            logger.warning(
+                "dispatch_timing stage=announcer_playout_interrupted "
+                "delivery_id=%s synthesis_completed=%s",
+                record.delivery_id,
+                synthesis_outcome.completed if synthesis_outcome is not None else None,
+            )
             ledger.mark_cancelled(record, reason="announcer_playout_interrupted")
             return
         if synthesis_outcome is not None and (
             not synthesis_outcome.completed or not synthesis_outcome.audio_events
         ):
-            logger.warning("dispatch_timing stage=announcer_synthesis_incomplete "
-                "delivery_id=%s audio_events=%d audio_seconds=%.2f", record.delivery_id,
-                synthesis_outcome.audio_events, synthesis_outcome.audio_seconds)
-            ledger.mark_tts_failed(record, audio_events=synthesis_outcome.audio_events,
-                audio_seconds=synthesis_outcome.audio_seconds)
+            logger.warning(
+                "dispatch_timing stage=announcer_synthesis_incomplete "
+                "delivery_id=%s audio_events=%d audio_seconds=%.2f",
+                record.delivery_id,
+                synthesis_outcome.audio_events,
+                synthesis_outcome.audio_seconds,
+            )
+            ledger.mark_tts_failed(
+                record,
+                audio_events=synthesis_outcome.audio_events,
+                audio_seconds=synthesis_outcome.audio_seconds,
+            )
             return
         ledger.mark_tts_completed(
             record,
-            audio_events=synthesis_outcome.audio_events if synthesis_outcome is not None else 1,
-            audio_seconds=synthesis_outcome.audio_seconds if synthesis_outcome is not None
-                else time.monotonic() - playout_started,
+            audio_events=synthesis_outcome.audio_events
+            if synthesis_outcome is not None
+            else 1,
+            audio_seconds=synthesis_outcome.audio_seconds
+            if synthesis_outcome is not None
+            else time.monotonic() - playout_started,
             role="announcer",
             voice_id=voice_id,
             voice_name=voice_name,
@@ -345,8 +365,10 @@ class AnnouncerSpeechQueue:
         )
 
     def _user_quiet_pending(self) -> bool:
-        return (self._delivery_ledger is not None
-                and self._delivery_ledger.user_quiet_verification_pending())
+        return (
+            self._delivery_ledger is not None
+            and self._delivery_ledger.user_quiet_verification_pending()
+        )
 
     @staticmethod
     def _speech_active(speech_handle) -> bool:

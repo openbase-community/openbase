@@ -95,7 +95,20 @@ def test_set_provider_back_to_tailscale_restores_livekit_mode(
     assert quiet_orchestration["teardown"][-1] == "netmesh-tsnet"
 
 
-def test_set_provider_no_cloud_skips_push(env_path, quiet_orchestration):
+def test_set_provider_no_cloud_skips_push(
+    env_path, quiet_orchestration, tmp_path, monkeypatch
+):
+    # The macOS netmesh capability check looks for an installed companion app
+    # or a dev workspace to build it from; pin both so the test passes on a
+    # clean machine as well as inside a developer workspace.
+    from openbase_coder_cli.services import netmesh_companion
+
+    monkeypatch.setattr(tailnet_cli, "_dev_workspace_dir_or_none", lambda: None)
+    monkeypatch.setattr(
+        netmesh_companion,
+        "_find_companion_app",
+        lambda _workspace: tmp_path / "Openbase VPN.app",
+    )
     result = CliRunner().invoke(
         tailnet_cli.tailnet, ["set-provider", "netmesh", "--no-cloud"]
     )

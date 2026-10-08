@@ -15,7 +15,7 @@ Dispatch**. The [desktop app](desktop-app.md) and [console](console.md) show
 the dispatcher thread as text chat on their Dispatch page. The commands below
 are how agents (and scripts) drive the same routing.
 
-Calls default to the **GPT-Live** voice model: one full-duplex model listens and speaks for the whole call while the dispatcher and Super Agents do the work behind it, so the routing below is unchanged. The classic speech-to-text, agent turn, text-to-speech pipeline remains selectable (`openbase-coder defaults voice-model pipeline`, or **Settings → Voice** in the apps) and is the only option for local-only audio; the STT and TTS provider settings apply to that pipeline only. See [defaults](commands/defaults.md) and [configuration](configuration.md#dispatcher-config).
+Calls default to the **GPT-Live** voice model: one full-duplex model listens and speaks for the whole call while the dispatcher and Super Agents do the work behind it, so the routing below is unchanged. Everything you say goes to the agent on the call, which answers with its own tools, skills and files; the voice model only speaks the agent's answers and never answers from its own knowledge. The classic speech-to-text, agent turn, text-to-speech pipeline remains selectable (`openbase-coder defaults voice-model pipeline`, or **Settings → Voice** in the apps) and is the only option for local-only audio; the STT and TTS provider settings apply to that pipeline only. See [defaults](commands/defaults.md) and [configuration](configuration.md#dispatcher-config).
 
 ## Check The Current Route
 

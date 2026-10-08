@@ -127,7 +127,7 @@ def test_openbase_cloud_audio_token_fails_closed_on_empty_token(monkeypatch):
     assert "empty Openbase machine token" in str(exc_info.value)
 
 
-def test_livekit_agent_capacity_uses_livekit_defaults_for_remote_models(monkeypatch):
+def test_livekit_agent_capacity_caps_idle_pool_for_remote_models(monkeypatch):
     monkeypatch.delenv(livekit.LIVEKIT_AGENT_LOAD_THRESHOLD_ENV, raising=False)
     monkeypatch.delenv(livekit.LIVEKIT_AGENT_NUM_IDLE_PROCESSES_ENV, raising=False)
     monkeypatch.setattr(
@@ -141,7 +141,7 @@ def test_livekit_agent_capacity_uses_livekit_defaults_for_remote_models(monkeypa
         lambda: livekit.CARTESIA_PROVIDER_ID,
     )
 
-    assert livekit._livekit_agent_server_options() == {}
+    assert livekit._livekit_agent_server_options() == {"num_idle_processes": 1}
 
 
 def test_livekit_agent_capacity_uses_local_friendly_defaults_for_local_stt(monkeypatch):
@@ -218,7 +218,7 @@ def test_livekit_agent_capacity_ignores_invalid_env_for_remote_models(monkeypatc
         lambda: livekit.CARTESIA_PROVIDER_ID,
     )
 
-    assert livekit._livekit_agent_server_options() == {}
+    assert livekit._livekit_agent_server_options() == {"num_idle_processes": 1}
 
 
 def test_parse_voice_route_packet_reads_exit_action():
@@ -697,14 +697,16 @@ class FakeSession:
 @pytest.mark.asyncio
 async def test_retried_packet_plays_only_once_after_lost_ack():
     session = FakeSession()
-    queue = AnnouncerSpeechQueue(session=session, announcer_tts=FakeTTS(),
-        silence_grace_seconds=0)
-    message = AnnouncerMessage(message_id='same-invocation', text='A controlled announcement.',
-        voice_id=None)
+    queue = AnnouncerSpeechQueue(
+        session=session, announcer_tts=FakeTTS(), silence_grace_seconds=0
+    )
+    message = AnnouncerMessage(
+        message_id="same-invocation", text="A controlled announcement.", voice_id=None
+    )
     assert queue.enqueue(message)
     assert queue.enqueue(message)
     queue.start()
-    await asyncio.sleep(.03)
+    await asyncio.sleep(0.03)
     await queue.close()
     assert len(session.say_calls) == 1
 
@@ -742,10 +744,14 @@ def test_voice_selecting_tts_delegates_stream_to_active_voice(monkeypatch):
 
 def test_explicit_announcement_voice_retains_timeout_policy(monkeypatch):
     from livekit.agents.types import APIConnectOptions
+
     RecordingCartesiaTTS.created = []
     monkeypatch.setattr(cartesia, "TTS", RecordingCartesiaTTS)
-    tts = VoiceSelectingCartesiaTTS(default_voice_id="default",
-        active_voice_id=lambda: "foreground", api_key="test-placeholder")
+    tts = VoiceSelectingCartesiaTTS(
+        default_voice_id="default",
+        active_voice_id=lambda: "foreground",
+        api_key="test-placeholder",
+    )
     tts.stream_for_voice("background")
     selected = RecordingCartesiaTTS.created[-1]
     assert selected.voice == "background"
@@ -1572,28 +1578,40 @@ async def test_announcer_playout_brackets_voice_lifecycle_events():
     )
 
     session = FakeSession()
+
     class AudioTTS(FakeTTS):
         def stream_for_voice(self, voice_id):
             class Stream(FakeTTSStream):
                 async def __anext__(self):
-                    if getattr(self, 'emitted', False):
+                    if getattr(self, "emitted", False):
                         raise StopAsyncIteration
                     self.emitted = True
-                    return SimpleNamespace(frame=rtc.AudioFrame(
-                        data=bytes(320), sample_rate=16000, num_channels=1,
-                        samples_per_channel=160))
+                    return SimpleNamespace(
+                        frame=rtc.AudioFrame(
+                            data=bytes(320),
+                            sample_rate=16000,
+                            num_channels=1,
+                            samples_per_channel=160,
+                        )
+                    )
+
             return Stream()
+
     fake_tts = AudioTTS()
     original_say = session.say
     original_wait = session.say_handle.wait_for_playout
+
     def consuming_say(text, **kwargs):
         handle = original_say(text, **kwargs)
+
         async def wait():
-            async for _ in kwargs['audio']:
+            async for _ in kwargs["audio"]:
                 pass
             await original_wait()
+
         handle.wait_for_playout = wait
         return handle
+
     session.say = consuming_say
     events: list[tuple[str, str]] = []
     ledger = VoiceDeliveryLedger(
@@ -1646,9 +1664,7 @@ async def test_dropped_utterance_recovered_after_uninterruptible_speech(monkeypa
     """
     from openbase_coder_cli.livekit_agent import session_diagnostics
 
-    monkeypatch.setattr(
-        session_diagnostics, "DROPPED_UTTERANCE_GRACE_SECONDS", 0.05
-    )
+    monkeypatch.setattr(session_diagnostics, "DROPPED_UTTERANCE_GRACE_SECONDS", 0.05)
 
     class FakeSpeech:
         allow_interruptions = False
@@ -1698,9 +1714,7 @@ async def test_dropped_utterance_recovered_after_uninterruptible_speech(monkeypa
 async def test_dropped_utterance_not_recovered_when_framework_kept_it(monkeypatch):
     from openbase_coder_cli.livekit_agent import session_diagnostics
 
-    monkeypatch.setattr(
-        session_diagnostics, "DROPPED_UTTERANCE_GRACE_SECONDS", 0.05
-    )
+    monkeypatch.setattr(session_diagnostics, "DROPPED_UTTERANCE_GRACE_SECONDS", 0.05)
 
     class FakeSession:
         def __init__(self):

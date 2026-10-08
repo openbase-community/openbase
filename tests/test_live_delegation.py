@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 from types import SimpleNamespace
 
 import pytest
@@ -17,15 +18,20 @@ from openbase_coder_cli.livekit_agent.live_delegation import (
     LIVE_EMPTY_ANSWER_COMMENTARY,
     LiveDelegationBridge,
     LiveSpeechCursor,
-    LiveTranscriptBuffer,
     chunk_commentary,
     estimate_tokens,
+    is_trivial_utterance,
+    remainder_after,
 )
 from openbase_coder_cli.livekit_agent.voice_delivery import (
     VoiceDeliveryLedger,
     VoiceRouteSnapshot,
 )
-from openbase_coder_cli.voice_tags import VOICE_TAG_CLOSE, VOICE_TAG_OPEN
+from openbase_coder_cli.voice_tags import (
+    VOICE_TAG_CLOSE,
+    VOICE_TAG_OPEN,
+    wrap_voice_prompt,
+)
 
 
 class FakeGPTLiveSession:
@@ -34,6 +40,7 @@ class FakeGPTLiveSession:
     def __init__(self) -> None:
         self.appends: list[tuple[str, str, str | None]] = []
         self._handlers: dict[str, list] = {}
+        self._speech_ids = itertools.count(1)
 
     def on(self, event, callback):
         self._handlers.setdefault(event, []).append(callback)
@@ -59,6 +66,23 @@ class FakeGPTLiveSession:
         self.emit(
             "delegation_created",
             SimpleNamespace(id=delegation_id, pending_transcript=pending_transcript),
+        )
+
+    def final(self, transcript: str, item_id: str | None = None) -> None:
+        """The plugin closed a caller utterance (``_end_speech``)."""
+        self.emit(
+            "input_audio_transcription_completed",
+            SimpleNamespace(
+                item_id=item_id or f"speech_{next(self._speech_ids)}",
+                transcript=transcript,
+                is_final=True,
+            ),
+        )
+
+    def partial(self, transcript: str, item_id: str = "speech_open") -> None:
+        self.emit(
+            "input_audio_transcription_completed",
+            SimpleNamespace(item_id=item_id, transcript=transcript, is_final=False),
         )
 
     def of(self, kind: str, delegation_id=...) -> list[str]:
@@ -152,7 +176,9 @@ class FakeVoiceRouter:
         return self.active_client is client and client.claim_speech(turn_id)
 
 
-def _make_bridge(*, ledger=True, developer_instructions="Direct route guidance."):
+def _make_bridge(
+    *, ledger=True, developer_instructions="Direct route guidance.", clock=None
+):
     dispatcher = FakeVoiceClient(thread_id="dispatcher-thread")
     router = FakeVoiceRouter(dispatcher)
     lifecycle: list[tuple[str, str]] = []
@@ -170,6 +196,7 @@ def _make_bridge(*, ledger=True, developer_instructions="Direct route guidance."
         delivery_ledger=delivery_ledger,
         developer_instructions=lambda: developer_instructions,
         progress_thinking_interval=3600,
+        **({"clock": clock} if clock is not None else {}),
     )
     bridge.attach(live)
     return bridge, live, router, dispatcher, delivery_ledger, lifecycle
@@ -223,32 +250,71 @@ def test_speech_cursor_streams_only_new_complete_sentences_then_the_rest():
     )
 
 
-# --- transcript buffer --------------------------------------------------------
+# --- utterance matching and the trivial-utterance filter ----------------------
 
 
-def test_transcript_buffer_combines_unseen_finals_with_the_pending_utterance():
-    clock = {"now": 100.0}
-    buffer = LiveTranscriptBuffer(clock=lambda: clock["now"])
-    buffer.note_final("Hey there.")
-    buffer.note_final("Can you check the build")
-    assert buffer.take_prompt("and run the tests") == (
-        "Hey there. Can you check the build and run the tests"
-    )
-    # The final for the consumed open utterance is not replayed, but an
-    # extension beyond it is.
-    buffer.note_final("and run the tests, please, twice")
-    assert buffer.take_prompt("") == "please, twice"
-    buffer.note_final("stale small talk")
-    clock["now"] += 500
-    assert buffer.take_prompt("new request") == "new request"
-
-
-def test_transcript_buffer_does_not_duplicate_a_final_that_is_a_prefix_of_pending():
-    buffer = LiveTranscriptBuffer()
-    buffer.note_final("Check the build")
+def test_remainder_after_compares_normalized_words_and_keeps_original_wording():
+    assert remainder_after("Check the build", "check the build.") == ""
     assert (
-        buffer.take_prompt("Check the build and deploy") == "Check the build and deploy"
+        remainder_after("and run the tests", "And run the tests, please, twice.")
+        == "please, twice"
     )
+    assert remainder_after("What's on my", "What's on my desktop?") == "desktop?"
+    assert remainder_after("Check the bill", "Check the build") is None
+    assert remainder_after("Check the build and deploy", "Check the build") is None
+    assert remainder_after("", "anything") == "anything"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "...",
+        "Hello.",
+        "hello?",
+        "Hey there!",
+        "Thanks.",
+        "Thank you so much.",
+        "Okay.",
+        "OK, thanks!",
+        "Mm-hmm.",
+        "Uh huh",
+        "Um...",
+        "Got it, cool.",
+        "Alright, sounds good.",
+        "Bye bye.",
+        "Hi, good morning.",
+    ],
+)
+def test_trivial_utterances_skip_the_agent(text):
+    assert is_trivial_utterance(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "What's on my desktop?",
+        "what is on my desktop",
+        "Yes.",
+        "Yeah.",
+        "No.",
+        "Sure.",
+        "Go ahead.",
+        "Do it.",
+        "Stop.",
+        "Wait.",
+        "Cancel that.",
+        "Hello, what's on my calendar?",
+        "Thanks, now run the tests.",
+        "Okay so check the build",
+        "Hey, are you there?",
+        "Can you hear me?",
+        "What time is it?",
+        "okay okay okay okay okay okay okay",
+    ],
+)
+def test_substantive_utterances_go_to_the_agent(text):
+    assert not is_trivial_utterance(text)
 
 
 # --- delegation <-> turn binding ---------------------------------------------
@@ -353,17 +419,282 @@ async def test_empty_answer_closes_the_delegation_with_a_short_commentary():
     await bridge.aclose()
 
 
-async def test_delegation_without_new_speech_is_answered_from_context_only():
+async def test_delegation_without_new_speech_never_tells_the_model_to_answer():
     bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
     live.delegate("d1", "")
     await _settle()
     assert dispatcher.prompts == []
-    assert (
-        live.of("thinking", "d1")
-        and "answer from the conversation" in (live.of("thinking", "d1")[0])
-    )
+    (thinking,) = live.of("thinking", "d1")
+    assert "Do not answer from your own knowledge" in thinking
+    assert "answer from the conversation" not in thinking
     assert lifecycle == []
     await bridge.aclose()
+
+
+# --- the agent is always the brain: every utterance reaches the thread --------
+
+
+def _answer(dispatcher, text, turn_id="turn-1"):
+    dispatcher.result = {
+        "_livekit_speech_text": text,
+        "_livekit_turn_id": turn_id,
+        "status": "completed",
+        "progress": {},
+    }
+
+
+async def test_desktop_question_reaches_the_agent_without_any_delegation():
+    """Regression: GPT-Live answered "what's on my desktop" from its own knowledge.
+
+    The model emits no ``delegation_created`` at all; the closed utterance
+    still goes to the active thread and the thread's answer is spoken.
+    """
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    _answer(dispatcher, "Your desktop has two folders and a screenshot.")
+
+    live.partial("what's on my")
+    await _settle()
+    assert dispatcher.prompts == [], "partial transcripts must not start turns"
+
+    live.final("what's on my desktop", item_id="speech_1")
+    # The same final delivered twice (same item id) is one utterance.
+    live.final("what's on my desktop", item_id="speech_1")
+    await _settle()
+
+    assert len(dispatcher.prompts) == 1
+    prompt, instructions = dispatcher.prompts[0]
+    assert prompt.endswith(wrap_voice_prompt("what's on my desktop"))
+    assert instructions == "Direct route guidance."
+    (thinking,) = live.of("thinking", None)
+    assert "what's on my desktop" in thinking
+    assert "do not answer it yourself" in thinking
+    assert live.of("commentary") == []
+    assert ("utterance_accepted", "live-utt-1") in lifecycle
+
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.of("commentary", None) == [
+        "Your desktop has two folders and a screenshot."
+    ]
+    assert dispatcher.claimed == ["turn-1"]
+    await bridge.aclose()
+
+
+async def test_delegation_after_the_final_binds_to_the_running_turn():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.final("Check whether the build passes")
+    await _settle()
+    assert len(dispatcher.prompts) == 1
+
+    # The model delegates the same, already closed utterance.
+    live.delegate("d1", "")
+    await _settle()
+    assert len(dispatcher.prompts) == 1, "exactly one agent turn"
+    (bound,) = live.of("thinking", "d1")
+    assert "Check whether the build passes" in bound
+
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    assert live.of("commentary", None) == []
+    await bridge.aclose()
+
+
+async def test_delegation_before_the_final_is_not_sent_twice():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    # The model delegates while the caller's utterance is still open...
+    live.delegate("d1", "Check whether the build passes")
+    await _settle()
+    # ... and the plugin then closes the same utterance.
+    live.final("Check whether the build passes.")
+    await _settle()
+    assert len(dispatcher.prompts) == 1, "exactly one agent turn"
+
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    assert live.of("commentary", None) == []
+    await bridge.aclose()
+
+
+async def test_words_added_after_the_delegation_steer_the_same_delegation():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.delegate("d1", "Check the build")
+    await _settle()
+    live.final("Check the build and run the linter")
+    await _settle()
+    assert len(dispatcher.prompts) == 2
+    assert dispatcher.prompts[1][0].endswith(
+        wrap_voice_prompt("Check the build and run the linter")
+    )
+
+    dispatcher.result_gate.set()
+    await _settle()
+    # The steered turn's merged answer is spoken once, still answering d1.
+    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    assert live.of("commentary", None) == []
+    await bridge.aclose()
+
+
+async def test_trailing_small_talk_after_the_delegation_is_covered():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.delegate("d1", "Check the build")
+    await _settle()
+    live.final("Check the build, okay thanks.")
+    await _settle()
+    assert len(dispatcher.prompts) == 1
+    dispatcher.result_gate.set()
+    await _settle()
+    await bridge.aclose()
+
+
+async def test_two_utterances_in_a_row_steer_and_only_the_newest_speaks():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.final("Check the build")
+    await _settle()
+    live.final("And also run the linter")
+    await _settle()
+    # Both reach the thread; run_turn steers the running turn with the second.
+    assert len(dispatcher.prompts) == 2
+    assert dispatcher.prompts[0][0].endswith(wrap_voice_prompt("Check the build"))
+    assert dispatcher.prompts[1][0].endswith(
+        wrap_voice_prompt("And also run the linter")
+    )
+    # A late delegation binds to the newest utterance.
+    live.delegate("d1", "")
+    await _settle()
+
+    dispatcher.result_gate.set()
+    await _settle()
+    # The superseded first result is dropped; the merged answer speaks once.
+    assert live.of("commentary") == ["All tests pass. The build is green."]
+    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    assert dispatcher.claimed == ["turn-1"]
+    first = next(r for r in ledger._records.values() if r.message_id == "live-utt-1")
+    assert first.status == "cancelled"
+    await bridge.aclose()
+
+
+async def test_trivial_utterances_stay_off_the_agent_unless_the_model_delegates():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.final("Thanks!")
+    live.final("Mm-hmm.")
+    await _settle()
+    assert dispatcher.prompts == []
+    assert live.appends == []
+
+    # An answer the model judged substantive ("Okay." to an agent's question)
+    # still reaches the agent when the model delegates it.
+    live.final("Okay.")
+    live.delegate("d1", "")
+    await _settle()
+    assert len(dispatcher.prompts) == 1
+    assert dispatcher.prompts[0][0].endswith(wrap_voice_prompt("Okay."))
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    await bridge.aclose()
+
+
+async def test_trivial_open_utterance_delegation_binds_to_the_running_request():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.final("Check the build")
+    await _settle()
+    live.delegate("d1", "um")
+    await _settle()
+    assert len(dispatcher.prompts) == 1
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    await bridge.aclose()
+
+
+async def test_late_delegation_for_an_answered_utterance_is_not_rerun():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.final("Check the build")
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+
+    live.delegate("d1", "")
+    await _settle()
+    assert len(dispatcher.prompts) == 1
+    (thinking,) = live.of("thinking", "d1")
+    assert "already answered" in thinking
+    assert live.of("commentary", "d1") == []
+    await bridge.aclose()
+
+
+async def test_stale_turn_is_not_bound_to_a_much_later_delegation():
+    clock = {"now": 100.0}
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        clock=lambda: clock["now"]
+    )
+    live.final("Check the build")
+    await _settle()
+    clock["now"] += live_delegation.DELEGATION_BIND_WINDOW_SECONDS + 1
+    live.delegate("d1", "")
+    await _settle()
+    assert len(dispatcher.prompts) == 1
+    assert "Do not answer from your own knowledge" in live.of("thinking", "d1")[0]
+    dispatcher.result_gate.set()
+    await _settle()
+    await bridge.aclose()
+
+
+async def test_route_change_sends_the_next_final_to_the_new_agent():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.delegate("d1", "Check the build")
+    await _settle()
+    other = FakeVoiceClient(thread_id="thread-2")
+    router.transfer(other)
+    bridge.notify_route_changed(action="transfer_to_thread", agent_label="Lucy")
+    live.final("Check the build")
+    await _settle()
+    assert len(dispatcher.prompts) == 1
+    assert len(other.prompts) == 1
+    dispatcher.result_gate.set()
+    other.result_gate.set()
+    await _settle()
+    await bridge.aclose()
+
+
+async def test_exit_command_delegated_first_is_not_sent_when_its_final_arrives():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    other = FakeVoiceClient(thread_id="thread-2")
+    router.transfer(other)
+    live.delegate("d1", "Exit to dispatch")
+    await _settle()
+    assert router.is_dispatcher_active
+    live.final("Exit to dispatch.")
+    await _settle()
+    assert dispatcher.prompts == [] and other.prompts == []
+    assert live.of("commentary", "d1") == [BACK_TO_DISPATCH_COMMENTARY]
+    await bridge.aclose()
+
+
+async def test_exit_command_marker_does_not_swallow_the_next_request():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    other = FakeVoiceClient(thread_id="thread-2")
+    router.transfer(other)
+    live.final("Exit to dispatch.")
+    live.final("What's on my desktop?")
+    live.delegate("d1", "")
+    await _settle()
+    assert len(dispatcher.prompts) == 1
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    await bridge.aclose()
+
+
+async def test_bridge_subscribes_to_closed_utterances_and_delegations():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    assert len(live._handlers["input_audio_transcription_completed"]) == 1
+    assert len(live._handlers["delegation_created"]) == 1
+    await bridge.aclose()
+    assert live._handlers["input_audio_transcription_completed"] == []
+    assert live._handlers["delegation_created"] == []
 
 
 # --- overlapping delegations / steering ----------------------------------------
