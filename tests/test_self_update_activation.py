@@ -12,6 +12,32 @@ from openbase_coder_cli.runtime import RuntimePackage
 from openbase_coder_cli.self_update_activation import Activation
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS durability primitive")
+def test_failed_full_disk_flush_does_not_authorize_activation(interrupted, monkeypatch):
+    import fcntl
+
+    layout, old, new, site = interrupted
+
+    def fail_flush(fd, operation):
+        assert operation == fcntl.F_FULLFSYNC
+        raise OSError("disk flush failed")
+
+    monkeypatch.setattr(fcntl, "fcntl", fail_flush)
+    with pytest.raises(OSError, match="disk flush failed"):
+        Activation.begin(
+            layout["current"].parent,
+            old=old,
+            new=new,
+            current="1.0",
+            latest="2.0",
+            channel="stable",
+            plugin_site=site,
+            migrate_plugins=True,
+        )
+    assert layout["current"].resolve() == old
+    assert Activation.load(layout["current"].parent) is not None
+
+
 @pytest.fixture
 def interrupted(tmp_path, monkeypatch):
     layout = _patch_standalone_layout(monkeypatch, tmp_path)
@@ -169,7 +195,9 @@ def test_storage_failure_keeps_pending_activation_retryable(interrupted, monkeyp
         raise OSError(errno.ENOSPC, "disk full")
 
     monkeypatch.setattr(self_update, "_finish_activation", no_space)
-    with pytest.raises(self_update.RetryableUpdateError, match="storage operation failed"):
+    with pytest.raises(
+        self_update.RetryableUpdateError, match="storage operation failed"
+    ):
         self_update.run_self_update(report=lambda _: None)
     assert self_update.activation_pending()
     assert layout["current"].resolve() == new

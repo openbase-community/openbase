@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 
 from openbase_coder_cli.self_update_network import SelfUpdateError
@@ -12,12 +13,18 @@ from openbase_coder_cli.self_update_network import SelfUpdateError
 JOURNAL_NAME = ".activation.json"
 
 
-def sync_directory(path: Path) -> None:
+def sync_directory(path: Path, *, full: bool = False) -> None:
     if os.name == "nt":
         return
     fd = os.open(path, os.O_RDONLY)
     try:
         os.fsync(fd)
+        if full and sys.platform == "darwin":
+            import fcntl
+
+            # fsync alone can leave the journal and rename in volatile disk
+            # caches on macOS. Flush at transaction boundaries, not per file.
+            fcntl.fcntl(fd, fcntl.F_FULLFSYNC)
     finally:
         os.close(fd)
 
@@ -139,7 +146,7 @@ class Activation:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, self.path)
-        sync_directory(self.directory)
+        sync_directory(self.directory, full=True)
 
     def rollback(self) -> None:
         self.data["phase"] = "rollback"
@@ -158,5 +165,5 @@ class Activation:
 
     def finish(self) -> None:
         self.path.unlink()
-        sync_directory(self.directory)
+        sync_directory(self.directory, full=True)
         shutil.rmtree(self.backup)

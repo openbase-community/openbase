@@ -483,7 +483,7 @@ def _finish_activation(transaction: Activation, *, report) -> SelfUpdateResult:
         return _rollback_activation(transaction, report=report)
     _point_symlink(STANDALONE_PREVIOUS_DIR, old_root)
     _point_symlink(STANDALONE_CURRENT_DIR, release_dir)
-    sync_directory(STANDALONE_PACKAGES_DIR)
+    sync_directory(STANDALONE_PACKAGES_DIR, full=True)
 
     new_launcher = STANDALONE_CURRENT_DIR / "bin" / "openbase-coder"
     try:
@@ -525,7 +525,7 @@ def _rollback_activation(transaction: Activation, *, report) -> SelfUpdateResult
     report("Update failed health checks; rolling back...")
     transaction.restore_plugins(PLUGIN_SITE_DIR)
     _point_symlink(STANDALONE_CURRENT_DIR, old_root)
-    sync_directory(STANDALONE_PACKAGES_DIR)
+    sync_directory(STANDALONE_PACKAGES_DIR, full=True)
     old_launcher = STANDALONE_CURRENT_DIR / "bin" / "openbase-coder"
     if not _run_launcher(old_launcher, ["services", "install"], report=report):
         raise SelfUpdateError(
