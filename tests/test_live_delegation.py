@@ -476,6 +476,29 @@ async def test_desktop_question_after_an_answered_question_speaks_only_the_new_a
     await bridge.aclose()
 
 
+async def test_answer_streamed_by_progress_is_not_followed_by_an_already_answered_note():
+    """Regression for the 2026-10-08 06:06Z staging call.
+
+    Progress relayed the turn's own answer as commentary; the final result
+    repeated it, and the bridge then appended the thinking note "That request
+    was already answered; nothing new to add." GPT-Live spoke that note
+    instead of the answer, three times in one call.
+    """
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    answer = "The grocery list has three items: milk, eggs, and bread."
+    _answer(dispatcher, answer)
+    live.delegate("d1", "What's in the grocery list")
+    await _settle()
+
+    dispatcher.progress("turn-1", _running_snapshot(lastUsefulMessage=answer))
+    dispatcher.result_gate.set()
+    await _settle()
+
+    assert live.of("commentary", "d1") == [answer]
+    assert not any("already answered" in note for note in live.of("thinking", "d1"))
+    await bridge.aclose()
+
+
 async def test_pending_approval_is_spoken_once_and_retained_as_instructions():
     bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
     live.delegate("d1", "Deploy it")
