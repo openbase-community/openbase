@@ -64,12 +64,12 @@ def _inherited_descriptor() -> int | None:
 def _delegated(token: str) -> bool:
     # Service daemons/grandchildren must acquire their own lease. A token
     # inherited from a finished updater must not bypass the lock either.
-    if not token.startswith(f"{os.getppid()}:") and _inherited_descriptor() is None:
-        return False
     try:
-        return LOCK_PATH.read_text() == token
+        if LOCK_PATH.read_text() != token:
+            return False
     except FileNotFoundError:
         return False
+    return token.startswith(f"{os.getppid()}:") or _inherited_descriptor() is not None
 
 
 def _require_current_runtime() -> None:
