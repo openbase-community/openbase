@@ -69,8 +69,9 @@ session **on the hub** and attaches your terminal to it, when:
 
 Synced folders have the same path on both computers, so the session opens in
 the same folder there. It keeps running on the hub if the laptop sleeps or
-the connection drops; the terminal reconnects to it automatically, and the
-session stays available in the Openbase app. Keys, including Ctrl-C, go to
+the connection drops (for up to 8 hours with no terminal attached); the
+terminal reconnects to it automatically, and the conversation stays
+available in the Openbase app. Keys, including Ctrl-C, go to
 the agent; resizing the window resizes the session.
 
 When one of those conditions is not met, the session runs on the laptop and

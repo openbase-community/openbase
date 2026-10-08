@@ -309,3 +309,12 @@ def test_thread_terminal_still_strips_inherited_session_markers(monkeypatch):
     monkeypatch.setenv("CLAUDECODE", "1")
 
     assert "CLAUDECODE" not in thread_terminal._terminal_env()
+
+
+def test_hub_sessions_outlive_a_sleeping_laptop_longer_than_thread_views():
+    agent = thread_terminal.TerminalSession("agent-1", _shell_launch("true"))
+    view = thread_terminal.TerminalSession("thread-1", _shell_launch("true"))
+
+    assert agent.idle_grace_seconds == thread_terminal.AGENT_IDLE_GRACE_SECONDS
+    assert view.idle_grace_seconds == thread_terminal.IDLE_GRACE_SECONDS
+    assert agent.idle_grace_seconds > view.idle_grace_seconds

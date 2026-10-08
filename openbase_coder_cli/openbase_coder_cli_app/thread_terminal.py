@@ -61,6 +61,12 @@ CLAUDE_TERMINAL_BACKENDS = frozenset({CLAUDE_CODE_BACKEND, OPENBASE_CLOUD_BACKEN
 # full-screen TUI's recent redraws; trimmed at line boundaries.
 REPLAY_BUFFER_BYTES = 2 * 1024 * 1024
 IDLE_GRACE_SECONDS = 15 * 60
+# A session an edge started on this hub is the user's working session, not a
+# view of a thread: it keeps running while the laptop sleeps, so its grace
+# without a viewer is much longer (Codex turns survive the TUI anyway; a
+# Claude Code session ends with its process).
+AGENT_IDLE_GRACE_SECONDS = 8 * 60 * 60
+AGENT_TERMINAL_KEY_PREFIX = "agent-"
 MAX_TERMINAL_SESSIONS = 12
 DEFAULT_COLS = 120
 DEFAULT_ROWS = 32
@@ -189,7 +195,6 @@ def resolve_terminal_launch(
     )
 
 
-AGENT_TERMINAL_KEY_PREFIX = "agent-"
 MAX_AGENT_ARGS = 256
 MAX_AGENT_ARG_CHARS = 64 * 1024
 _DISPLAY_ARG_CHARS = 120
@@ -270,6 +275,11 @@ class TerminalSession:
 
     def __init__(self, key: str, launch: TerminalLaunch) -> None:
         self.key = key
+        self.idle_grace_seconds = (
+            AGENT_IDLE_GRACE_SECONDS
+            if key.startswith(AGENT_TERMINAL_KEY_PREFIX)
+            else IDLE_GRACE_SECONDS
+        )
         self.launch = launch
         self.cols = DEFAULT_COLS
         self.rows = DEFAULT_ROWS
@@ -350,7 +360,7 @@ class TerminalSession:
         if not self.running:
             self.close()
             return
-        self._idle_handle = self._loop.call_later(IDLE_GRACE_SECONDS, self.close)
+        self._idle_handle = self._loop.call_later(self.idle_grace_seconds, self.close)
 
     def _emit(self, kind: str, payload: object) -> None:
         for listener in list(self._listeners):
