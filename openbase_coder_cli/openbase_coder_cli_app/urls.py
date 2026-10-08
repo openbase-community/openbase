@@ -46,6 +46,7 @@ from openbase_coder_cli.openbase_coder_cli_app.update import (
 from openbase_coder_cli.openbase_coder_cli_app.views import (
     agents_md,
     all_project_reports,
+    analytics_identify,
     apple_music_playback_entitlement,
     approval_request_detail,
     approval_requests,
@@ -184,6 +185,14 @@ urlpatterns = [
     path("user/ios-app-control/", ios_app_control, name="ios-app-control"),
     path("devices/", devices_list, name="devices-list"),
     path("onboarding/status/", onboarding_status, name="onboarding-status"),
+    # Desktop reaches Openbase Cloud only through this server; both slash forms
+    # are accepted because clients differ (see the cloud analytics urls).
+    path(
+        "openbase/analytics/identify",
+        analytics_identify,
+        name="analytics-identify",
+    ),
+    path("openbase/analytics/identify/", analytics_identify),
     path(
         "onboarding/cloud-state/",
         onboarding_cloud_state,
@@ -256,7 +265,11 @@ urlpatterns = [
         notification_mark_all_read,
         name="notifications-mark-all-read",
     ),
-    path("approval-requests/", offloaded_view(approval_requests), name="approval-requests"),
+    path(
+        "approval-requests/",
+        offloaded_view(approval_requests),
+        name="approval-requests",
+    ),
     path(
         "approval-requests/<str:request_id>/",
         approval_request_detail,

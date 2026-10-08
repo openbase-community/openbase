@@ -23,6 +23,9 @@ from openbase_coder_cli.openbase_coder_cli_app import diagnostics as _diagnostic
 from openbase_coder_cli.openbase_coder_cli_app import livekit as _livekit
 from openbase_coder_cli.openbase_coder_cli_app import memories as _memories
 from openbase_coder_cli.openbase_coder_cli_app import skills as _skills
+from openbase_coder_cli.openbase_coder_cli_app.analytics_identity import (
+    analytics_identify,
+)
 from openbase_coder_cli.openbase_coder_cli_app.approvals import (
     approval_request_detail,
     approval_requests,
@@ -300,6 +303,7 @@ def memory_detail(request, memory_name):
 
 
 __all__ = [
+    "analytics_identify",
     "agents_md",
     "all_project_reports",
     "approval_request_detail",
