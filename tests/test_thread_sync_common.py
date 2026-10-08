@@ -1,11 +1,16 @@
+import errno
 import json
 import os
 import time
 from pathlib import Path
 
+import pytest
+
 from openbase_coder_cli.thread_sync.thread_sync_common import (
     KEEP_LATEST_SNAPSHOTS_PER_ENTITY,
     prune_exchange_snapshots,
+    publish_staged_dir,
+    staging_dir,
     translate_home_path,
 )
 
@@ -43,6 +48,37 @@ def test_translate_home_path_preserves_paths_outside_user_home() -> None:
         )
         == "/tmp/nonexistent/project"
     )
+
+
+def test_staging_dir_resolves_symlinked_exchange_roots(tmp_path: Path) -> None:
+    real_exchange_dir = tmp_path / "volume" / "exchange"
+    real_exchange_dir.mkdir(parents=True)
+    exchange_link = tmp_path / "exchange-link"
+    exchange_link.symlink_to(real_exchange_dir, target_is_directory=True)
+
+    staged = staging_dir(exchange_link, "fingerprint")
+
+    assert staged.parent == real_exchange_dir.parent / "exchange.staging"
+    assert exchange_link not in staged.parents
+
+
+def test_publish_staged_dir_refuses_cross_device_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    staged = tmp_path / "exchange.staging" / "fingerprint"
+    target = tmp_path / "exchange" / "devices" / "device" / "snapshots" / "thread"
+    staged.mkdir(parents=True)
+
+    def raise_exdev(_src, _dst):
+        raise OSError(errno.EXDEV, "cross-device link")
+
+    monkeypatch.setattr(os, "replace", raise_exdev)
+
+    with pytest.raises(OSError, match="atomically publish"):
+        publish_staged_dir(staged, target)
+
+    assert staged.exists()
+    assert not target.exists()
 
 
 def _write_exchange_snapshot(

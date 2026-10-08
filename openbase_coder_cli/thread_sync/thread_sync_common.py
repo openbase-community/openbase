@@ -176,14 +176,16 @@ def ledger_lock(ledger_path: Path, *, timeout_seconds: float | None = None):
 def staging_dir(exchange_dir: Path, name: str) -> Path:
     """A fresh directory to assemble a snapshot in before it is published.
 
-    It lives next to the exchange root, not inside it: the exchange root is
-    mirrored to the user's other computers by Openbase Sync, and a snapshot
-    staged inside it would be journaled file by file while it is still being
-    written, then renamed away before the peer fetched it (stalled transfers,
-    phantom conflicts). The sibling is on the same volume, so publishing the
-    finished snapshot is one atomic rename into the root.
+    It lives next to the resolved exchange root, not inside it: the exchange
+    root is mirrored to the user's other computers by Openbase Sync, and a
+    snapshot staged inside it would be journaled file by file while it is still
+    being written, then renamed away before the peer fetched it (stalled
+    transfers, phantom conflicts). Resolving the root keeps symlinked exchange
+    directories on the destination volume, so publishing the finished snapshot
+    is one atomic rename into the root.
     """
-    root = exchange_dir.parent / f"{exchange_dir.name}.staging"
+    resolved_exchange_dir = exchange_dir.resolve()
+    root = resolved_exchange_dir.parent / f"{resolved_exchange_dir.name}.staging"
     root.mkdir(parents=True, exist_ok=True)
     path = root / f"{name}-{uuid.uuid4()}"
     path.mkdir(parents=False, exist_ok=False)
@@ -193,9 +195,9 @@ def staging_dir(exchange_dir: Path, name: str) -> Path:
 def publish_staged_dir(staged: Path, target: Path) -> None:
     """Move a finished staging directory to its final place in the exchange.
 
-    Atomic on the common path; falls back to a copy when the staging area
-    turns out to be on another volume (the exchange root is a mount or a
-    symlink elsewhere).
+    Atomic on the common path. There is no safe cross-device fallback because a
+    copied directory would become visible inside the synced exchange root while
+    it is still incomplete.
     """
     target.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -203,7 +205,11 @@ def publish_staged_dir(staged: Path, target: Path) -> None:
     except OSError as exc:
         if exc.errno != errno.EXDEV:
             raise
-        shutil.move(str(staged), str(target))
+        raise OSError(
+            errno.EXDEV,
+            "cannot atomically publish a thread snapshot across filesystems",
+            str(target),
+        ) from exc
 
 
 def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
