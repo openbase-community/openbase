@@ -337,7 +337,7 @@ def test_dispatcher_config_writes_schema_version(tmp_path) -> None:
     assert payload["schema_version"] == 1
 
 
-def test_version_info_reads_cache_without_network(monkeypatch, tmp_path) -> None:
+def test_version_info_ignores_packaged_cache_in_dev_mode(monkeypatch, tmp_path) -> None:
     cache_path = tmp_path / "update-check.json"
     cache_path.write_text(
         json.dumps({"update_available": True, "latest_version": "9.9.9"}),
@@ -349,8 +349,9 @@ def test_version_info_reads_cache_without_network(monkeypatch, tmp_path) -> None
     info = self_update.version_info()
 
     assert info["standalone"] is False
-    assert info["update_available"] is True
-    assert info["latest_version"] == "9.9.9"
+    assert info["update_available"] is False
+    assert info["update_required"] is False
+    assert "latest_version" not in info
 
 
 def test_concurrent_self_update_defers(monkeypatch, tmp_path) -> None:
@@ -419,8 +420,17 @@ def test_auto_update_enabled_env_opt_out(monkeypatch) -> None:
     assert self_update.auto_update_enabled() is True
 
 
+@pytest.fixture
+def standalone_updater(monkeypatch, tmp_path):
+    package = RuntimePackage(
+        root=tmp_path, version="1.0.0", target="aarch64-apple-darwin"
+    )
+    monkeypatch.setattr(self_update, "current_runtime_package", lambda: package)
+    return package
+
+
 def test_spawn_detached_self_update_launches_current_launcher(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, standalone_updater
 ) -> None:
     _patch_standalone_layout(monkeypatch, tmp_path)
     release = _make_fake_package(tmp_path / "release-old", version="1.0.0")
@@ -450,13 +460,17 @@ def test_spawn_detached_self_update_launches_current_launcher(
     assert spawned[1][0][-1] == "--force"
 
 
-def test_spawn_detached_self_update_requires_launcher(monkeypatch, tmp_path) -> None:
+def test_spawn_detached_self_update_requires_launcher(
+    monkeypatch, tmp_path, standalone_updater
+) -> None:
     _patch_standalone_layout(monkeypatch, tmp_path)
     with pytest.raises(self_update.SelfUpdateError, match="launcher"):
         self_update.spawn_detached_self_update()
 
 
-def test_automatic_update_waits_for_call_without_fetching_feed(monkeypatch, tmp_path):
+def test_automatic_update_waits_for_call_without_fetching_feed(
+    monkeypatch, tmp_path, standalone_updater
+):
     monkeypatch.setattr(self_update, "OPENBASE_BASE_DIR", tmp_path)
     monkeypatch.setattr(InstallationConfig, "exists", lambda: False)
     monkeypatch.delenv(self_update.AUTO_UPDATE_ENV_KEY, raising=False)
@@ -501,7 +515,9 @@ def test_pending_automatic_update_observes_new_opt_out(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("status", ["rolled-back", "blocked"])
-def test_automatic_update_does_not_retry_failed_release(monkeypatch, tmp_path, status):
+def test_automatic_update_does_not_retry_failed_release(
+    monkeypatch, tmp_path, status, standalone_updater
+):
     monkeypatch.setattr(self_update, "OPENBASE_BASE_DIR", tmp_path)
     monkeypatch.setattr(InstallationConfig, "exists", lambda: False)
     monkeypatch.delenv(self_update.AUTO_UPDATE_ENV_KEY, raising=False)
@@ -514,7 +530,9 @@ def test_automatic_update_does_not_retry_failed_release(monkeypatch, tmp_path, s
     assert self_update.run_automatic_self_update(report=lambda _: None) == failed
 
 
-def test_automatic_update_retries_a_deferred_race(monkeypatch, tmp_path):
+def test_automatic_update_retries_a_deferred_race(
+    monkeypatch, tmp_path, standalone_updater
+):
     monkeypatch.setattr(self_update, "OPENBASE_BASE_DIR", tmp_path)
     monkeypatch.setattr(InstallationConfig, "exists", lambda: False)
     monkeypatch.delenv(self_update.AUTO_UPDATE_ENV_KEY, raising=False)
@@ -528,16 +546,17 @@ def test_automatic_update_retries_a_deferred_race(monkeypatch, tmp_path):
     assert waits == [60]
 
 
-def test_automatic_update_reads_configured_env_file(monkeypatch, tmp_path):
+def test_automatic_update_reads_configured_env_file(
+    monkeypatch, tmp_path, standalone_updater
+):
     configured_env = tmp_path / "configured.env"
     configured_env.write_text("OPENBASE_CODER_AUTO_UPDATE=0\n")
     monkeypatch.setattr(InstallationConfig, "exists", lambda: True)
     monkeypatch.setattr(
         InstallationConfig,
         "load",
-        lambda: SimpleNamespace(env_file=str(configured_env)),
+        lambda: SimpleNamespace(env_file=str(configured_env), standalone=True),
     )
-    monkeypatch.setattr(self_update, "current_runtime_package", lambda: None)
     monkeypatch.setenv(self_update.AUTO_UPDATE_ENV_KEY, "1")
     monkeypatch.setattr(
         self_update, "_voice_session_active", lambda: pytest.fail("opt-out ignored")

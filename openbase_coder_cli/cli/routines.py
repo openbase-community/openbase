@@ -692,6 +692,7 @@ def run_loop(interval: float, verbose: bool) -> None:
     from openbase_coder_cli import skills_autolink
     from openbase_coder_cli.runtime import is_standalone_runtime
     from openbase_coder_cli.self_update import (
+        RetryableUpdateError,
         SelfUpdateError,
         auto_update_enabled,
         check_for_update,
@@ -708,6 +709,8 @@ def run_loop(interval: float, verbose: bool) -> None:
     next_skills_sync = time.monotonic()
     next_update_check = time.monotonic()
     last_auto_update_attempt: str | None = None
+    auto_update_process = None
+    update_check_retry_delay = 60
     while True:
         started = time.monotonic()
         try:
@@ -739,6 +742,16 @@ def run_loop(interval: float, verbose: bool) -> None:
                         summary["errors"],
                     )
 
+        # A signal-killed download did not produce a terminal update result.
+        # Let a new worker recover its scratch files and retry this version.
+        if auto_update_process is not None:
+            exit_code = auto_update_process.poll()
+            if exit_code is not None:
+                auto_update_process = None
+                if exit_code < 0:
+                    last_auto_update_attempt = None
+                    next_update_check = min(next_update_check, time.monotonic() + 60)
+
         # Periodically refresh the update-check cache (standalone installs)
         # so update_available surfaces in status APIs without manual checks,
         # and auto-apply available updates unless opted out.
@@ -746,9 +759,14 @@ def run_loop(interval: float, verbose: bool) -> None:
             next_update_check = time.monotonic() + UPDATE_CHECK_SECONDS
             try:
                 check = check_for_update()
+            except RetryableUpdateError as exc:
+                next_update_check = time.monotonic() + update_check_retry_delay
+                update_check_retry_delay = min(update_check_retry_delay * 2, 900)
+                logger.warning("update_check transfer failed; retrying: %s", exc)
             except SelfUpdateError as exc:
                 logger.warning("update_check failed: %s", exc)
             else:
+                update_check_retry_delay = 60
                 if check.update_available:
                     logger.info(
                         "update_check update_available current=%s latest=%s",
@@ -758,17 +776,23 @@ def run_loop(interval: float, verbose: bool) -> None:
                     # Retry a given version only for required updates so a
                     # release that health-check-rolled-back does not churn
                     # service restarts every check cycle.
-                    should_apply = auto_update_enabled() and (
-                        check.update_required
-                        or check.latest_version != last_auto_update_attempt
+                    should_apply = (
+                        auto_update_process is None
+                        and auto_update_enabled()
+                        and (
+                            check.update_required
+                            or check.latest_version != last_auto_update_attempt
+                        )
                     )
                     if should_apply:
-                        last_auto_update_attempt = check.latest_version
                         try:
-                            spawn_detached_self_update(force=check.update_required)
+                            auto_update_process = spawn_detached_self_update(
+                                force=check.update_required
+                            )
                         except SelfUpdateError as exc:
                             logger.warning("auto_update spawn failed: %s", exc)
                         else:
+                            last_auto_update_attempt = check.latest_version
                             logger.info(
                                 "auto_update spawned target=%s forced=%s",
                                 check.latest_version,

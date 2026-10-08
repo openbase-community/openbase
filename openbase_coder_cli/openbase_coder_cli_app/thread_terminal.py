@@ -14,6 +14,11 @@ The conversation is auto-loaded:
   the live thread (turns started from either side show up in both).
 - Claude Code threads run ``claude --resume <backend session id>`` in the
   thread's directory with the runtime's own Claude environment.
+
+The same registry also hosts NEW agent sessions an Openbase Sync edge starts
+on this hub (``openbase-coder codex|claude`` on a laptop): keyed
+``agent-<uuid>`` and launched with this computer's Openbase profile through
+``agent_launch``, see ``resolve_agent_terminal_launch``.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ import contextlib
 import dataclasses
 import logging
 import os
+import shlex
 import signal
 import struct
 import subprocess
@@ -30,6 +36,14 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from openbase_coder_cli.agent_launch import (
+    AGENTS,
+    CODEX,
+    INHERITED_SESSION_ENV,
+    AgentLaunchError,
+    default_launch_context,
+    plan_agent_launch,
+)
 from openbase_coder_cli.backend_binaries import find_backend_binary
 from openbase_coder_cli.backend_config import (
     CLAUDE_CODE_BACKEND,
@@ -47,6 +61,12 @@ CLAUDE_TERMINAL_BACKENDS = frozenset({CLAUDE_CODE_BACKEND, OPENBASE_CLOUD_BACKEN
 # full-screen TUI's recent redraws; trimmed at line boundaries.
 REPLAY_BUFFER_BYTES = 2 * 1024 * 1024
 IDLE_GRACE_SECONDS = 15 * 60
+# A session an edge started on this hub is the user's working session, not a
+# view of a thread: it keeps running while the laptop sleeps, so its grace
+# without a viewer is much longer (Codex turns survive the TUI anyway; a
+# Claude Code session ends with its process).
+AGENT_IDLE_GRACE_SECONDS = 8 * 60 * 60
+AGENT_TERMINAL_KEY_PREFIX = "agent-"
 MAX_TERMINAL_SESSIONS = 12
 DEFAULT_COLS = 120
 DEFAULT_ROWS = 32
@@ -73,26 +93,8 @@ def terminal_supported() -> bool:
     return sys.platform != "win32"
 
 
-# Identity markers of the agent session that launched this runtime (e.g. a
-# runtime started from a Claude Code or Codex shell). Inherited, they make the
-# TUI believe it is a nested child session: Claude Code then stops saving the
-# transcript, so turns typed in the terminal would never reach the thread.
-_INHERITED_SESSION_ENV = (
-    "CLAUDECODE",
-    "CLAUDE_CODE_CHILD_SESSION",
-    "CLAUDE_CODE_ENTRYPOINT",
-    "CLAUDE_CODE_EXECPATH",
-    "CLAUDE_CODE_MESSAGING_SOCKET",
-    "CLAUDE_CODE_MESSAGING_TOKEN",
-    "CLAUDE_CODE_SESSION_ATTENDED",
-    "CLAUDE_CODE_SESSION_ID",
-    "CLAUDE_CODE_SSE_PORT",
-    "CLAUDE_EFFORT",
-    "CLAUDE_PID",
-    "CODEX_THREAD_ID",
-    "CODEX_SANDBOX",
-    "CODEX_SANDBOX_NETWORK_DISABLED",
-)
+# Identity markers of an enclosing agent session (see agent_launch).
+_INHERITED_SESSION_ENV = INHERITED_SESSION_ENV
 
 
 def _terminal_env(extra: dict[str, str] | None = None) -> dict[str, str]:
@@ -193,6 +195,69 @@ def resolve_terminal_launch(
     )
 
 
+MAX_AGENT_ARGS = 256
+MAX_AGENT_ARG_CHARS = 64 * 1024
+_DISPLAY_ARG_CHARS = 120
+
+
+def _hub_directory(cwd: object) -> str:
+    """The local directory for an edge's home-relative (``~/...``) cwd."""
+    if not isinstance(cwd, str) or not cwd.strip():
+        raise TerminalUnavailableError("No working directory was given.")
+    text = cwd.strip()
+    if text == "~":
+        path = Path.home()
+    elif text.startswith("~/"):
+        path = Path.home() / text[2:]
+    else:
+        path = Path(text)
+    if not path.is_absolute() or not path.is_dir():
+        raise TerminalUnavailableError(f"{text} does not exist on this computer.")
+    return str(path)
+
+
+def resolve_agent_terminal_launch(
+    *,
+    agent: object,
+    cwd: object,
+    args: object,
+    plan: Callable[..., object] = plan_agent_launch,
+    context_factory: Callable[[], object] = default_launch_context,
+) -> tuple[TerminalLaunch, tuple[str, ...]]:
+    """A new Codex / Claude Code session in ``cwd`` with Openbase's profile.
+
+    Returns the PTY launch plus the planner's notices (for example that the
+    Codex session runs standalone because this computer's app-server is
+    down), which are relayed to the remote terminal.
+    """
+    if agent not in AGENTS:
+        raise TerminalUnavailableError(f"Unknown agent: {agent!r}.")
+    if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+        raise TerminalUnavailableError("Agent arguments must be a list of strings.")
+    if len(args) > MAX_AGENT_ARGS or any(len(a) > MAX_AGENT_ARG_CHARS for a in args):
+        raise TerminalUnavailableError("Agent arguments are too long.")
+    directory = _hub_directory(cwd)
+    try:
+        launch = plan(
+            agent, args, directory, context_factory(), base_env=_terminal_env()
+        )
+    except AgentLaunchError as exc:
+        raise TerminalUnavailableError(str(exc)) from exc
+    backend = CODEX_BACKEND if agent == CODEX else CLAUDE_CODE_BACKEND
+    return (
+        TerminalLaunch(backend, list(launch.argv), launch.cwd, dict(launch.env)),
+        tuple(launch.notices),
+    )
+
+
+def display_command(argv: list[str]) -> str:
+    """The launch command for display, with very long arguments elided."""
+    shown = [Path(argv[0]).name] + [
+        arg if len(arg) <= _DISPLAY_ARG_CHARS else f"{arg[:40]}…" for arg in argv[1:]
+    ]
+    return shlex.join(shown)
+
+
 def _acquire_controlling_tty() -> None:  # pragma: no cover - runs in the child
     import fcntl
     import termios
@@ -210,6 +275,11 @@ class TerminalSession:
 
     def __init__(self, key: str, launch: TerminalLaunch) -> None:
         self.key = key
+        self.idle_grace_seconds = (
+            AGENT_IDLE_GRACE_SECONDS
+            if key.startswith(AGENT_TERMINAL_KEY_PREFIX)
+            else IDLE_GRACE_SECONDS
+        )
         self.launch = launch
         self.cols = DEFAULT_COLS
         self.rows = DEFAULT_ROWS
@@ -290,7 +360,7 @@ class TerminalSession:
         if not self.running:
             self.close()
             return
-        self._idle_handle = self._loop.call_later(IDLE_GRACE_SECONDS, self.close)
+        self._idle_handle = self._loop.call_later(self.idle_grace_seconds, self.close)
 
     def _emit(self, kind: str, payload: object) -> None:
         for listener in list(self._listeners):

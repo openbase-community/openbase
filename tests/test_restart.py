@@ -392,3 +392,45 @@ def test_execute_restart_plan_restarts_providers_before_dependents(monkeypatch):
     # Each install_service restarts in place and returns once the old process
     # is gone, so the dependent attaches to the provider's new process.
     assert calls == ["start:livekit-server", "start:livekit-agent"]
+
+
+@pytest.mark.parametrize(
+    "targets",
+    [
+        ("livekit-server", "codex-app-server", "codex-app-server-dispatcher"),
+        (
+            "livekit-agent",
+            "codex-app-server-dispatcher",
+            "codex-app-server",
+            "livekit-server",
+        ),
+        ("codex-app-server", "codex-app-server-dispatcher"),
+    ],
+)
+def test_shared_consumer_waits_for_every_selected_provider(targets):
+    plan = build_restart_plan(RestartRequest(services=targets))
+    for provider in targets:
+        if provider != "livekit-agent":
+            assert plan.services.index(provider) < plan.services.index("livekit-agent")
+    assert len(plan.services) == len(set(plan.services))
+
+
+def test_dependency_diamond_and_cycles():
+    import click
+
+    from openbase_coder_cli.services.definitions import ServiceDefinition
+    from openbase_coder_cli.services.dependencies import order_services
+
+    def service(name, *dependents):
+        return ServiceDefinition(
+            name=name,
+            description=name,
+            command_template=name,
+            workdir_template="",
+            restart_dependents=dependents,
+        )
+
+    graph = [service("consumer"), service("a", "consumer"), service("b", "consumer")]
+    assert [s.name for s in order_services(graph)] == ["a", "b", "consumer"]
+    with pytest.raises(click.ClickException, match="cycle"):
+        order_services([service("a", "b"), service("b", "a")])

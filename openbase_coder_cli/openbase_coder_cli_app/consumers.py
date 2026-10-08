@@ -8,6 +8,7 @@ import logging
 import os
 import shlex
 import time
+import uuid
 from pathlib import Path
 from urllib.parse import parse_qs
 
@@ -40,11 +41,14 @@ from openbase_coder_cli.openbase_coder_cli_app.thread_models import (
     validate_model_for_thread,
 )
 from openbase_coder_cli.openbase_coder_cli_app.thread_terminal import (
+    AGENT_TERMINAL_KEY_PREFIX,
     DEFAULT_COLS,
     DEFAULT_ROWS,
     TerminalSession,
     TerminalUnavailableError,
+    display_command,
     get_terminal_registry,
+    resolve_agent_terminal_launch,
     resolve_terminal_launch,
     terminal_supported,
 )
@@ -261,13 +265,19 @@ class ThreadTerminalConsumer(AsyncWebsocketConsumer):
             await self.close(code=4001)
             return
         self.thread_id = self.scope["url_route"]["kwargs"]["thread_id"]
+        await self._accept_viewer()
+        await self._attach(restart=False)
+
+    async def _accept_viewer(self) -> None:
         params = parse_qs(self.scope.get("query_string", b"").decode("utf-8"))
         self._cols = _as_int(params.get("cols", [None])[0], DEFAULT_COLS)
         self._rows = _as_int(params.get("rows", [None])[0], DEFAULT_ROWS)
+        # A reconnecting client that still shows the screen asks for no
+        # replay (`replay=0`); the forced redraw repaints it instead.
+        self._send_replay = params.get("replay", ["1"])[0] != "0"
         self._outbox: asyncio.Queue[tuple[str, object] | None] = asyncio.Queue()
         await self.accept()
         self._sender = asyncio.create_task(self._drain_outbox())
-        await self._attach(restart=False)
 
     async def _attach(self, *, restart: bool) -> None:
         registry = get_terminal_registry()
@@ -293,23 +303,21 @@ class ThreadTerminalConsumer(AsyncWebsocketConsumer):
         assert session is not None
         self.session = session
         replay = session.attach(self._on_session_event)
-        launch = session.launch
-        await self._send_control(
-            "ready",
-            {
-                "backend": launch.backend,
-                "target": launch.target,
-                "command": shlex.join(
-                    [Path(launch.argv[0]).name, *launch.argv[1:]]
-                ),
-                "cwd": launch.cwd,
-                "reattached": reattached,
-            },
-        )
-        if replay:
+        await self._send_control("ready", self._ready_payload(session, reattached))
+        if replay and self._send_replay:
             self._outbox.put_nowait(("bytes", replay))
         # A reattached TUI repaints at this viewer's size.
         session.resize(self._cols, self._rows, force_redraw=reattached)
+
+    def _ready_payload(self, session: TerminalSession, reattached: bool) -> dict:
+        launch = session.launch
+        return {
+            "backend": launch.backend,
+            "target": launch.target,
+            "command": shlex.join([Path(launch.argv[0]).name, *launch.argv[1:]]),
+            "cwd": launch.cwd,
+            "reattached": reattached,
+        }
 
     async def _resolve_launch(self):
         if not terminal_supported():
@@ -385,6 +393,94 @@ class ThreadTerminalConsumer(AsyncWebsocketConsumer):
         self._detach()
         if hasattr(self, "_outbox"):
             self._outbox.put_nowait(None)
+
+
+class AgentTerminalConsumer(ThreadTerminalConsumer):
+    """A NEW Codex / Claude Code session in a PTY, for a remote terminal.
+
+    An Openbase Sync edge's ``openbase-coder codex|claude`` runs the session
+    on this hub: it connects to ``ws/agent-terminals/``, sends ``start``
+    (agent, home-relative cwd, args, cols, rows), and gets ``ready`` with the
+    session ``id``. The session is launched here with this computer's
+    Openbase profile (``agent_launch``), so it is as visible and steerable as
+    one started locally. The PTY outlives the socket: a dropped client
+    reattaches with ``ws/agent-terminals/<id>/``. Other frames are those of
+    ``ThreadTerminalConsumer``.
+    """
+
+    _launch = None
+    _notices: tuple[str, ...] = ()
+
+    async def connect(self):
+        if self.scope.get("user") != "authenticated":
+            await self.close(code=4001)
+            return
+        session_id = self.scope["url_route"]["kwargs"].get("session_id")
+        await self._accept_viewer()
+        if not session_id:
+            self.thread_id = None  # waits for the client's ``start``
+            return
+        self.thread_id = session_id
+        if not session_id.startswith(AGENT_TERMINAL_KEY_PREFIX):
+            await self._send_control("error", {"message": "Unknown session."})
+            return
+        existing = get_terminal_registry().get(session_id)
+        if existing is not None and existing.running:
+            self._launch = existing.launch
+        await self._attach(restart=False)
+
+    async def _resolve_launch(self):
+        if self._launch is None:
+            raise TerminalUnavailableError("This session has ended.")
+        return self._launch
+
+    async def receive(self, text_data=None, bytes_data=None):
+        if self.thread_id is None:
+            if text_data:
+                await self._start(text_data)
+            return
+        await super().receive(text_data=text_data, bytes_data=bytes_data)
+
+    async def _start(self, text_data: str) -> None:
+        try:
+            message = json.loads(text_data)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(message, dict) or message.get("type") != "start":
+            return
+        if not terminal_supported():
+            await self._send_control(
+                "error", {"message": "Remote sessions are not available on Windows."}
+            )
+            return
+        self._cols = _as_int(message.get("cols"), self._cols)
+        self._rows = _as_int(message.get("rows"), self._rows)
+        try:
+            launch, notices = await asyncio.to_thread(
+                resolve_agent_terminal_launch,
+                agent=message.get("agent"),
+                cwd=message.get("cwd"),
+                args=message.get("args", []),
+            )
+        except TerminalUnavailableError as exc:
+            await self._send_control("error", {"message": str(exc)})
+            return
+        self._launch = launch
+        self._notices = notices
+        self.thread_id = f"{AGENT_TERMINAL_KEY_PREFIX}{uuid.uuid4().hex}"
+        await self._attach(restart=True)
+
+    def _ready_payload(self, session: TerminalSession, reattached: bool) -> dict:
+        launch = session.launch
+        return {
+            "id": self.thread_id,
+            "backend": launch.backend,
+            "target": launch.target,
+            "command": display_command(launch.argv),
+            "cwd": launch.cwd,
+            "notices": list(self._notices),
+            "reattached": reattached,
+        }
 
 
 class AllThreadsConsumer(AsyncJsonWebsocketConsumer):

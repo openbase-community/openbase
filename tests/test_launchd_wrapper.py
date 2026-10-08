@@ -192,6 +192,10 @@ def test_launchctl_restart_terminates_and_kickstarts_without_reregistering(
 def test_launchctl_restart_forces_kickstart_when_sigterm_is_ignored(monkeypatch):
     monkeypatch.setattr(launchd, "RESTART_EXIT_TIMEOUT_SECONDS", 0.0)
     calls = _restart_harness(monkeypatch, [111])
+    changes = iter([111, 222])
+    monkeypatch.setattr(
+        process_utils, "wait_for_pid_change", lambda *a, **k: next(changes)
+    )
 
     assert launchd.launchctl_restart(_sample_service()) is True
 
@@ -715,3 +719,18 @@ def test_install_removes_inactive_direct_even_when_unloaded(
     assert (TUNNELD_SERVICE in removed) == loaded
     assert "openbase-tunneld" not in installed
     assert "django-cli" in installed
+
+
+@pytest.fixture(autouse=True)
+def isolate_provider_readiness(monkeypatch):
+    # Unit tests never probe the host's real LiveKit/Codex endpoints.
+    monkeypatch.setattr(launchd, "wait_for_provider", lambda _: None)
+
+
+def test_failed_forced_restart_does_not_claim_a_new_provider(monkeypatch):
+    _restart_harness(monkeypatch, [111])
+    monkeypatch.setattr(process_utils, "wait_for_pid_change", lambda *a, **k: 111)
+    import click
+
+    with pytest.raises(click.ClickException, match="Failed to replace the old process"):
+        launchd.launchctl_restart(_sample_service())

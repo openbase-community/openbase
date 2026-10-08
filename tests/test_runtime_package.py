@@ -16,6 +16,11 @@ def test_runtime_package_resolves_from_explicit_env(monkeypatch, tmp_path: Path)
     )
 
     monkeypatch.setenv("OPENBASE_CODER_PACKAGE_DIR", str(package_dir))
+    monkeypatch.setattr(
+        runtime,
+        "__file__",
+        str(package_dir / "python/lib/openbase_coder_cli/runtime.py"),
+    )
 
     package = runtime.current_runtime_package()
 

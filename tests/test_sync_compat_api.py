@@ -66,15 +66,20 @@ class FakeClient:
                 "root": "projects",
                 "path": "app/main.py",
                 "kind": "content",
-                "b_device": "mini",
+                "a_device": "mini",
+                "b_device": "laptop",
                 "created_ns": 1_760_000_000_000_000_000,
             },
             {
                 "id": 8,
                 "root": "projects",
-                "path": "app",
+                "path": "app:refs/heads/develop",
                 "kind": "git-branch",
-                "label": "develop",
+                "a_hash": "a" * 40,
+                "b_hash": "b" * 40,
+                "a_device": "mini",
+                "b_device": "laptop",
+                "label": "",
             },
         ]
 
@@ -93,14 +98,16 @@ def configured(monkeypatch):
         "configured_roots",
         lambda config_path=None: [{"id": "projects", "path": "~/Projects"}],
     )
+    monkeypatch.setattr(
+        sync_daemon, "read_config_summary", lambda config_path=None: {"device_id": "laptop"}
+    )
 
 
 def test_routes_point_at_daemon_views():
     assert resolve_url("/api/sync/status/").url_name == "sync-status"
     assert resolve_url("/api/sync/conflicts/").url_name == "sync-conflicts"
     assert (
-        resolve_url("/api/sync/conflicts/resolve/").url_name
-        == "sync-conflicts-resolve"
+        resolve_url("/api/sync/conflicts/resolve/").url_name == "sync-conflicts-resolve"
     )
 
 
@@ -168,6 +175,8 @@ def test_conflicts_use_legacy_shape_with_string_ids(configured):
     assert branch_conflict["type"] == "repo-divergence"
     assert branch_conflict["repo_relpath"] == "app"
     assert branch_conflict["branch"] == "develop"
+    assert branch_conflict["local_sha"] == "b" * 40
+    assert branch_conflict["remote_sha"] == "a" * 40
 
 
 def test_conflicts_unconfigured_is_empty(monkeypatch):
@@ -185,7 +194,7 @@ def test_resolve_accepts_string_ids_and_rejects_bad_ones(configured):
         )
     )
     assert ok.status_code == 200
-    assert FakeClient.resolved == [(7, "b")]
+    assert FakeClient.resolved == [(7, "a")]
 
     bad = sync_daemon_api.sync_daemon_conflicts_resolve(
         _request(
@@ -195,3 +204,15 @@ def test_resolve_accepts_string_ids_and_rejects_bad_ones(configured):
         )
     )
     assert bad.status_code == 400
+
+
+def test_resolve_refuses_branch_divergence(configured):
+    response = sync_daemon_api.sync_daemon_conflicts_resolve(
+        _request(
+            "POST", "/api/sync/conflicts/resolve/", {"id": "8", "action": "keep_local"}
+        )
+    )
+
+    assert response.status_code == 409
+    assert "neither" in response.data["error"]
+    assert FakeClient.resolved == []

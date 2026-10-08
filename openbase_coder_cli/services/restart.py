@@ -13,7 +13,9 @@ import click
 
 from openbase_coder_cli.livekit_install import ensure_pinned_livekit_server
 from openbase_coder_cli.services.definitions import SERVICES
+from openbase_coder_cli.services.dependencies import order_services
 from openbase_coder_cli.services.launchd import install_service, launchctl_status
+from openbase_coder_cli.services.mutation_lock import service_mutation
 from openbase_coder_cli.services.registry import find_service, require_installation
 from openbase_coder_cli.services.selection import (
     configured_default_services,
@@ -124,33 +126,33 @@ def schedule_restart(
 
 
 def execute_restart_plan(plan: RestartPlan) -> None:
-    config = require_installation()
-
     if plan.delay_seconds > 0:
         time.sleep(plan.delay_seconds)
+    with service_mutation():
+        config = require_installation()
 
-    if plan.recreate_dispatcher:
-        from openbase_coder_cli.livekit_voice_route import (
-            prepare_livekit_dispatcher_recreation,
-        )
+        if plan.recreate_dispatcher:
+            from openbase_coder_cli.livekit_voice_route import (
+                prepare_livekit_dispatcher_recreation,
+            )
 
-        prepare_livekit_dispatcher_recreation()
+            prepare_livekit_dispatcher_recreation()
 
-    services = [find_service(name) for name in plan.services]
-    # Providers first: each restart waits for the old process to exit before
-    # moving on, so a consumer is restarted only after its provider's new
-    # process exists and attaches to that one. Restarts happen in place
-    # (no bootout/bootstrap) so macOS does not re-announce the background
-    # items on every restart.
-    for service in services:
-        install_service(config, service)
+        services = order_services([find_service(name) for name in plan.services])
+        # Providers first: installation waits for the old process to exit and
+        # the provider endpoint to respond before restarting its consumers.
+        # Restarts happen in place
+        # (no bootout/bootstrap) so macOS does not re-announce the background
+        # items on every restart.
+        for service in services:
+            install_service(config, service)
 
-    if plan.recreate_dispatcher:
-        from openbase_coder_cli.livekit_voice_route import (
-            warm_livekit_dispatcher_thread,
-        )
+        if plan.recreate_dispatcher:
+            from openbase_coder_cli.livekit_voice_route import (
+                warm_livekit_dispatcher_thread,
+            )
 
-        asyncio.run(warm_livekit_dispatcher_thread(fresh=True))
+            asyncio.run(warm_livekit_dispatcher_thread(fresh=True))
 
 
 def execute_restart_payload(raw_payload: str) -> None:
@@ -215,4 +217,7 @@ def _expand_restart_targets(requested_targets: list[str]) -> list[str]:
 
     for target in requested_targets:
         visit(target)
-    return ordered
+    return [
+        service.name
+        for service in order_services([definitions[name] for name in ordered])
+    ]

@@ -36,6 +36,8 @@ layout), and whether a newer release is available.
 
 ## Behavior
 
+Developer workspace installs cannot check release feeds or apply releases, even with `--force` or an inherited package-directory setting. An older packaged updater also stops if the active installation has switched to a developer workspace, including while waiting for a call or downloading. Developer status ignores cached release-update flags from a previous packaged installation.
+
 1. Refuses in development-workspace installs (git-managed; no auto-update).
 2. Fetches `update-manifest.json` for the install's channel — `stable` from
    the latest GitHub release, `beta` from the newest non-`.dev` release with a
@@ -56,6 +58,12 @@ layout), and whether a newer release is available.
    refreshes `~/.openbase/bin/codex` when Openbase installed it.
 7. Rolls back to `previous` (and reinstalls services) if the post-update
    health gate fails; older releases are pruned, keeping two.
+
+Network timeouts, connection failures, transient HTTP errors, and incomplete downloads leave the running release intact. Automatic attempts retry after one minute, doubling the delay up to fifteen minutes; manual attempts report the error so you can retry. Downloads restart from the beginning and must pass the complete archive checksum before activation. Temporary storage failures during preparation also retry automatically. A signal-killed download is retried by the running routines service, and the next attempt removes its partial archive. Retry waits continue to honor update opt-outs and developer-install boundaries.
+
+Activation holds the same lock as service restarts and managed Codex refreshes. A busy service batch defers the update before changing `current`; the updater delegates its lease only to its synchronous activation commands, so those commands can install services without deadlocking. Services are ordered by their declared dependencies, and a provider readiness failure triggers the existing rollback path.
+
+A failed service rollback reports that recovery is incomplete instead of claiming that the old services were restored. The current runtime pointer is restored first; resolve the reported error and run `openbase-coder services install` if service restoration fails.
 
 ## Statuses
 

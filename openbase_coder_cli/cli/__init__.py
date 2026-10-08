@@ -13,6 +13,7 @@ from openbase_coder_cli.codex_home_instructions import (
     refresh_openbase_agents_md_from_installation,
 )
 
+from .agents import codex
 from .auth import auth, login, logout
 from .backend import backend
 from .boilersync import boilersync
@@ -133,6 +134,7 @@ main.add_command(cloud)
 main.add_command(codex_sync)
 main.add_command(claude_sync)
 main.add_command(claude)
+main.add_command(codex)
 main.add_command(claude_chrome)
 main.add_command(computer_use)
 main.add_command(mcp_gateway)

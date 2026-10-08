@@ -498,7 +498,11 @@ def offer() -> dict[str, Any]:
         "bulk_port": bulk_port,
         "sync_group": str(data.get("sync_group") or "default"),
         "anchor": anchor,
-        "roots": sync_daemon._roots_from_config(data),
+        # ignores keep paths local to one computer: never hand them on
+        "roots": [
+            {key: value for key, value in root.items() if key != "ignore"}
+            for root in sync_daemon._roots_from_config(data)
+        ],
     }
 
 

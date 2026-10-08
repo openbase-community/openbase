@@ -145,13 +145,20 @@ def _candidate_roots_from_executable() -> list[Path]:
 
 
 def _package_from_root(root: Path) -> RuntimePackage | None:
+    # A package hint can be inherited by a workspace Python process. Only
+    # code loaded from the package's Python tree belongs to that runtime;
+    # an editable install or PYTHONPATH override remains git-managed.
+    if not Path(__file__).resolve().is_relative_to(root.resolve() / "python"):
+        return None
     metadata_path = root / PACKAGE_METADATA_FILENAME
     if not metadata_path.is_file():
         return None
     try:
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        metadata = {}
+        return None
+    if not isinstance(metadata, dict):
+        return None
     return RuntimePackage(
         root=root,
         version=str(metadata.get("version", "")),

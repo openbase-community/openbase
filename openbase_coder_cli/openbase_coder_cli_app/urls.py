@@ -20,10 +20,13 @@ from openbase_coder_cli.openbase_coder_cli_app.skill_settings import (
 from openbase_coder_cli.openbase_coder_cli_app.sync_daemon_api import (
     sync_conflicts,
     sync_daemon_barrier,
+    sync_daemon_conflict_detail,
     sync_daemon_conflicts,
     sync_daemon_conflicts_resolve,
     sync_daemon_hydrate,
     sync_daemon_settings,
+    sync_daemon_stale_lock_trash,
+    sync_daemon_stale_locks,
     sync_daemon_status,
     sync_daemon_stubs,
     sync_status,
@@ -579,8 +582,23 @@ urlpatterns = [
     path("sync/daemon/status/", sync_daemon_status, name="sync-daemon-status"),
     path("sync/daemon/conflicts/", sync_daemon_conflicts, name="sync-daemon-conflicts"),
     path(
+        "sync/daemon/conflicts/<int:conflict_id>/",
+        offloaded_view(sync_daemon_conflict_detail),
+        name="sync-daemon-conflict-detail",
+    ),
+    path(
+        "sync/daemon/stale-locks/",
+        offloaded_view(sync_daemon_stale_locks),
+        name="sync-daemon-stale-locks",
+    ),
+    path(
+        "sync/daemon/stale-locks/trash/",
+        offloaded_view(sync_daemon_stale_lock_trash),
+        name="sync-daemon-stale-lock-trash",
+    ),
+    path(
         "sync/daemon/conflicts/resolve/",
-        sync_daemon_conflicts_resolve,
+        offloaded_view(sync_daemon_conflicts_resolve),
         name="sync-daemon-conflicts-resolve",
     ),
     path("sync/daemon/barrier/", sync_daemon_barrier, name="sync-daemon-barrier"),

@@ -173,6 +173,29 @@ def test_client_calls_and_errors(fake_daemon):
         sync_daemon.SyncDaemonClient(Path("/tmp/does-not-exist.sock")).status()
 
 
+def test_sync_daemon_resolve_uses_the_local_side(fake_daemon, monkeypatch, tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('device_id = "laptop"\n')
+    fake_daemon.responses["conflicts"] = {
+        "ok": True,
+        "data": [
+            {
+                "id": 7,
+                "path": "a.txt",
+                "kind": "content",
+                "a_device": "mini",
+                "b_device": "laptop",
+            }
+        ],
+    }
+    monkeypatch.setattr(sync_daemon, "SYNC_DAEMON_CONFIG_PATH", cfg)
+
+    result = CliRunner().invoke(sync_daemon_cli, ["resolve", "7", "keep_local"])
+
+    assert result.exit_code == 0, result.output
+    assert fake_daemon.requests[-1] == {"op": "resolve", "id": 7, "choice": "b"}
+
+
 def test_api_proxies(fake_daemon):
     resp = sync_daemon_api.sync_daemon_status(
         _request("GET", "/api/sync/daemon/status/")

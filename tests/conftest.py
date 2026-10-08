@@ -134,3 +134,16 @@ def _isolated_host_state(monkeypatch, tmp_path):
     for key in profile_environment():
         monkeypatch.delenv(key, raising=False)
     return env_path
+
+
+@pytest.fixture(autouse=True)
+def _livekit_agent_worker_ready(monkeypatch):
+    """The room-token view refuses rooms while the agent worker is down; tests
+    have no worker, so treat it as ready unless a test says otherwise."""
+    import sys
+
+    # Only patch when a test already imported the views (importing them here
+    # would pull Django settings into every unrelated test).
+    livekit_views = sys.modules.get("openbase_coder_cli.openbase_coder_cli_app.livekit")
+    if livekit_views is not None:
+        monkeypatch.setattr(livekit_views, "livekit_agent_worker_ready", lambda: True)
