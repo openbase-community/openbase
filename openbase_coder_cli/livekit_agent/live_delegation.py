@@ -953,12 +953,10 @@ class LiveDelegationBridge:
                 entry.client.claim_speech(turn_id)
             return
         if cursor.spoke_anything:
-            # Streamed progress already covered the answer, or a duplicate
-            # utterance joined an already-spoken turn: nothing new to say.
-            self._append_thinking(
-                "That request was already answered; nothing new to add.",
-                entry.delegation_id,
-            )
+            # Streamed progress already relayed this turn's answer as
+            # commentary: add nothing. A thinking note here ("already
+            # answered") arrived a moment after that commentary and GPT-Live
+            # spoke the note instead of the answer (staging, 2026-10-08).
             if ledger is not None and entry.record is not None:
                 ledger.mark_cancelled(entry.record, reason="live_answer_already_spoken")
             return
