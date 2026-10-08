@@ -15,10 +15,10 @@ from openbase_coder_cli.codex_session_defaults import (
     DEFAULT_CODEX_SANDBOX,
 )
 from openbase_coder_cli.config.token_manager import DEFAULT_WEB_BACKEND_URL
-from openbase_coder_cli.dispatcher_instructions import with_dispatcher_skill
 from openbase_coder_cli.direct_voice_instructions import (
     DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS,
 )
+from openbase_coder_cli.dispatcher_instructions import with_dispatcher_skill
 from openbase_coder_cli.paths import (
     CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH,
     CODEX_DISPATCHER_CONFIG_PATH,
