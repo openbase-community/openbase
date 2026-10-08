@@ -40,6 +40,7 @@ from openbase_coder_cli.runtime import (
     RuntimePackage,
     current_runtime_package,
 )
+from openbase_coder_cli.services.installation import InstallationConfig
 from openbase_coder_cli.sync_daemon import SYNC_ENGINE_BINARY_NAMES
 
 logger = logging.getLogger(__name__)
@@ -93,10 +94,29 @@ def installed_channel(runtime_package: RuntimePackage | None = None) -> str:
     return package.channel
 
 
+def updatable_runtime_package() -> RuntimePackage | None:
+    """A packaged process must also respect a switch to workspace installation."""
+    package = current_runtime_package()
+    if package is not None and InstallationConfig.exists():
+        if InstallationConfig.load().standalone is not True:
+            return None
+    return package
+
+
+def _require_updatable_package() -> RuntimePackage:
+    package = updatable_runtime_package()
+    if package is None:
+        raise SelfUpdateError(
+            "self-update only applies to standalone installs; this CLI or its "
+            "active installation is a development workspace (git-managed)."
+        )
+    return package
+
+
 def version_info() -> dict:
     """Static version facts plus cached update flags (never touches network)."""
-    package = current_runtime_package()
-    cache = _read_update_check_cache()
+    package = updatable_runtime_package()
+    cache = _read_update_check_cache() if package else {}
     info: dict = {
         "cli": __version__,
         "standalone": package is not None,
@@ -115,7 +135,7 @@ def version_info() -> dict:
 
 def check_for_update() -> UpdateCheck:
     """Fetch the manifest and compare versions; caches the result for status."""
-    package = current_runtime_package()
+    package = updatable_runtime_package()
     channel = installed_channel(package)
     if package is None:
         return UpdateCheck(
@@ -163,13 +183,13 @@ def run_automatic_self_update(*, force: bool = False, report=print) -> SelfUpdat
     """
     from dotenv import dotenv_values
 
-    from openbase_coder_cli.services.installation import InstallationConfig
-
+    _require_updatable_package()
     env_path = OPENBASE_BASE_DIR / ".env"
     if InstallationConfig.exists():
         env_path = Path(InstallationConfig.load().env_file).expanduser()
     inherited_setting = os.environ.get(AUTO_UPDATE_ENV_KEY, "")
     while True:
+        _require_updatable_package()
         setting = dotenv_values(env_path).get(AUTO_UPDATE_ENV_KEY, inherited_setting)
         if not auto_update_enabled(setting):
             package = current_runtime_package()
@@ -199,6 +219,7 @@ def spawn_detached_self_update(*, force: bool = False) -> None:
     update would be killed by its own service restart mid-flip. Output goes to
     the self-update log so failures stay diagnosable.
     """
+    _require_updatable_package()
     launcher = STANDALONE_CURRENT_DIR / "bin" / "openbase-coder"
     if not launcher.is_file():
         raise SelfUpdateError(f"No standalone launcher at {launcher}.")
@@ -217,12 +238,7 @@ def spawn_detached_self_update(*, force: bool = False) -> None:
 
 
 def run_self_update(*, force: bool = False, report=print) -> SelfUpdateResult:
-    package = current_runtime_package()
-    if package is None:
-        raise SelfUpdateError(
-            "self-update only applies to standalone installs; this CLI runs "
-            "from a development workspace (git-managed)."
-        )
+    package = _require_updatable_package()
 
     # Serialize concurrent invocations (desktop-triggered, manual, scripted):
     # two updaters racing the extract/flip would corrupt the release layout.
@@ -309,6 +325,10 @@ def _run_self_update_locked(
         report=report,
     )
     _validate_release_dir(release_dir)
+
+    # A developer setup may have replaced the active installation while the
+    # detached worker downloaded. Never reactivate its old packaged runtime.
+    _require_updatable_package()
 
     # Downloads and validation can take minutes; a call may have started
     # since the first idle check. Leave the current runtime untouched.

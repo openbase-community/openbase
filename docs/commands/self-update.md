@@ -36,6 +36,8 @@ layout), and whether a newer release is available.
 
 ## Behavior
 
+Developer workspace installs cannot check release feeds or apply releases, even with `--force` or an inherited package-directory setting. An older packaged updater also stops if the active installation has switched to a developer workspace, including while waiting for a call or downloading. Developer status ignores cached release-update flags from a previous packaged installation.
+
 1. Refuses in development-workspace installs (git-managed; no auto-update).
 2. Fetches `update-manifest.json` for the install's channel — `stable` from
    the latest GitHub release, `beta` from the newest non-`.dev` release with a

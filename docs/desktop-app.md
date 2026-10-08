@@ -281,6 +281,8 @@ never auto-update. The CLI runtime updates separately via
 [self-update](commands/self-update.md), and the dashboard footer shows a
 yellow dot when a CLI update is available (red when required).
 
+Locally packaged developer builds and desktops serving a developer workspace also disable manual release checks, release installation on quit, bundled CLI activation, and automatic VPN-helper replacement. A missing workspace CLI is reported instead of falling back to an older standalone installation.
+
 **On your phone:** iOS updates arrive through TestFlight/App Store; Android
 updates arrive as a new APK from [Downloads](downloads.md).
 
