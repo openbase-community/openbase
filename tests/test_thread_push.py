@@ -291,6 +291,25 @@ def test_missing_backend_on_target_is_refused(isolated, monkeypatch) -> None:
         )
 
 
+def test_openbase_cloud_thread_is_a_claude_code_thread_for_push(
+    isolated, monkeypatch
+) -> None:
+    # A thread records the identity that ran it; handoff works per execution
+    # backend, so a Claude Code thread run with Openbase Cloud credentials
+    # can be pushed, and the target only needs Claude Code.
+    monkeypatch.setattr(
+        durable_targets, "target_info", lambda t: {**INFO, "backends": ["claude_code"]}
+    )
+    thread = _thread(backend="openbase_cloud", backend_session_id="s")
+    assert (
+        thread_push._thread_backend(FakeManager({"t-1": thread}), thread)
+        == "claude_code"
+    )
+    options = asyncio.run(thread_push.push_options(FakeManager({"t-1": thread}), "t-1"))
+    assert options["blocked_reason"] is None
+    assert options["targets"][0]["reason"] is None
+
+
 def test_sync_lag_fails_safely_before_delivery(isolated, monkeypatch) -> None:
     monkeypatch.setattr(
         thread_push,

@@ -121,7 +121,17 @@ def configured_backends() -> list[str]:
 
 
 def _thread_backend(manager: Any, thread: Any) -> str | None:
-    return thread.backend or getattr(manager, "_execution_backend", None)
+    """The execution backend a thread runs on (codex or claude_code).
+
+    A thread records the identity that ran it (openbase_cloud is Claude Code
+    with Openbase Cloud credentials); handoff works per execution backend.
+    """
+    from openbase_coder_cli.backend_config import (
+        execution_backend_for_configured_backend,
+    )
+
+    backend = thread.backend or getattr(manager, "_execution_backend", None)
+    return execution_backend_for_configured_backend(backend) if backend else None
 
 
 async def busy_reason(manager: Any, thread: Any) -> str | None:
