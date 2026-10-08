@@ -64,8 +64,13 @@ class SyncDaemonConfig:
     peer_bulk: str = ""
     debounce_ms: int = 15
     log_level: str = "info"
-    low_water_mb: int = 10240
+    # None: the daemon derives the free-space floor from the disk size
+    # (min(10 GiB, 10%)), which a small cloud workspace needs
+    low_water_mb: int | None = None
     anchor: str = "hub"  # hub | edge: the side that holds every file in full
+    # True: keep large files as placeholders here whatever the anchor (a
+    # project-only computer such as a small cloud workspace)
+    thin: bool | None = None
 
     def to_toml(self) -> str:
         def q(value: str) -> str:
@@ -87,12 +92,12 @@ class SyncDaemonConfig:
         else:
             lines.append(f"peer_hot = {q(self.peer_hot)}")
             lines.append(f"peer_bulk = {q(self.peer_bulk)}")
-        lines += [
-            "",
-            "[placement]",
-            f"low_water_mb = {int(self.low_water_mb)}",
-            f"anchor = {q(self.anchor)}",
-        ]
+        lines += ["", "[placement]"]
+        if self.low_water_mb is not None:
+            lines.append(f"low_water_mb = {int(self.low_water_mb)}")
+        lines.append(f"anchor = {q(self.anchor)}")
+        if self.thin is not None:
+            lines.append(f"thin = {'true' if self.thin else 'false'}")
         lines += render_roots_toml(self.roots)
         return "\n".join(lines) + "\n"
 
@@ -102,10 +107,12 @@ def _toml_string(value: str) -> str:
 
 
 def render_roots_toml(roots: Iterable[dict[str, Any]]) -> list[str]:
-    """``[[roots]]`` blocks (id, path, optional pins and ignores) as TOML lines.
+    """``[[roots]]`` blocks (id, path, optional pins, ignores, only) as TOML lines.
 
     ``ignore`` lists paths a root keeps local to this computer; it is written
-    back as read so editing the folder list never drops it.
+    back as read so editing the folder list never drops it. ``only`` limits
+    this computer to some root-relative paths of the root (a project-only
+    computer syncing a few projects of ``~/Projects``).
     """
     lines: list[str] = []
     for root in roots:
@@ -124,6 +131,11 @@ def render_roots_toml(roots: Iterable[dict[str, Any]]) -> list[str]:
         if ignore:
             lines.append(
                 "ignore = [" + ", ".join(_toml_string(item) for item in ignore) + "]"
+            )
+        only = [str(item) for item in root.get("only") or [] if str(item).strip()]
+        if only:
+            lines.append(
+                "only = [" + ", ".join(_toml_string(item) for item in only) + "]"
             )
     return lines
 
@@ -234,6 +246,8 @@ def read_config_summary(config_path: Path | None = None) -> dict:
         if isinstance(data.get(key), str):
             summary[key] = data[key]
     summary["roots"] = _roots_from_config(data)
+    placement = data.get("placement") if isinstance(data.get("placement"), dict) else {}
+    summary["project_only"] = placement.get("thin") is True
     judgment = _judgment_from_config(data)
     summary["judgment_enabled"] = bool(judgment and judgment["enabled"])
     if judgment is not None:
@@ -256,6 +270,9 @@ def _roots_from_config(data: dict[str, Any]) -> list[dict[str, Any]]:
         ignore = raw.get("ignore")
         if isinstance(ignore, list) and ignore:
             root["ignore"] = [str(item) for item in ignore]
+        only = raw.get("only")
+        if isinstance(only, list) and only:
+            root["only"] = [str(item) for item in only]
         roots.append(root)
     return roots
 
@@ -745,6 +762,11 @@ class SyncDaemonClient:
             "barrier", kind=kind, path=path, root=root, timeout_ms=timeout_ms
         )
         return {"result": response.get("result"), "lag": response.get("lag", 0)}
+
+    def folder_sizes(self, root: str) -> list[dict]:
+        """Files and bytes under each top-level entry of a root (older daemons: error)."""
+        data = self.call("folder-sizes", root=root).get("data") or []
+        return [item for item in data if isinstance(item, dict)]
 
     def stubs(self, root: str | None = None) -> list[dict]:
         return self.call("stubs", root=root).get("data") or []

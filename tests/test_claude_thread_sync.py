@@ -7,6 +7,11 @@ from pathlib import Path
 import pytest
 
 from openbase_coder_cli.thread_sync import claude_snapshot_io
+from openbase_coder_cli.thread_sync.claude_session_db import (
+    _backfill_openbase_session_metadata,
+    _ensure_super_agents_schema,
+)
+from openbase_coder_cli.thread_sync.claude_snapshot_io import _read_session_snapshot
 from openbase_coder_cli.thread_sync.claude_thread_sync import (
     ClaudeConflictResolutionError,
     claude_thread_snapshot_status,
@@ -181,6 +186,75 @@ def test_import_claude_thread_snapshot_creates_session_and_backfills_metadata(
         "Cross device done.",
         target_cwd,
     )
+
+
+@pytest.mark.parametrize(
+    ("configured_backend", "expected_identity"),
+    [("openbase_cloud", "openbase_cloud"), ("codex", "claude_code")],
+)
+def test_import_writes_the_session_under_this_machines_claude_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    configured_backend: str,
+    expected_identity: str,
+) -> None:
+    """The running Claude client only sees rows labelled with its identity."""
+    monkeypatch.setenv("OPENBASE_CODING_BACKEND", configured_backend)
+    monkeypatch.delenv("OPENBASE_CODING_BACKENDS", raising=False)
+    source_home = tmp_path / "source"
+    target_home = tmp_path / "target"
+    exchange_dir = tmp_path / "exchange"
+    db_path = tmp_path / "target-state.sqlite3"
+    session_id = "2a16448e-c428-455b-bceb-5ac34da8ee4e"
+    cwd = "/Users/example/Projects/app"
+    _write_session(
+        source_home, cwd, session_id, user_text="Hello", assistant_text="Hi."
+    )
+    # A row an older import left under the wrong label is relabelled too.
+    with sqlite3.connect(db_path) as conn:
+        _ensure_super_agents_schema(conn)
+        conn.execute(
+            "insert into sessions (id, name, cwd, command_json, status, backend, backend_session_id,"
+            " created_at, updated_at) values (?, 'old', ?, '[]', 'completed', 'claude_code', ?, 't', 't')",
+            ("claude_" + session_id.replace("-", ""), cwd, session_id),
+        )
+    export_claude_thread_snapshots(
+        claude_home=source_home,
+        exchange_dir=exchange_dir,
+        device_identity_path=tmp_path / "source-device.json",
+        ledger_path=tmp_path / "source-ledger.json",
+        super_agents_db_path=tmp_path / "source-state.sqlite3",
+        stability_delay_seconds=0,
+        max_age_days=None,
+        source_user_home=Path("/Users/example"),
+    )
+    results = import_claude_thread_snapshots(
+        claude_home=target_home,
+        exchange_dir=exchange_dir,
+        device_identity_path=tmp_path / "target-device.json",
+        ledger_path=tmp_path / "target-ledger.json",
+        super_agents_db_path=db_path,
+        target_user_home=Path("/Users/example"),
+    )
+    assert results[0].status == "imported"
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("select backend from sessions").fetchall() == [
+            (expected_identity,)
+        ]
+
+    fresh_db = tmp_path / "fresh-state.sqlite3"
+    _backfill_openbase_session_metadata(
+        _read_session_snapshot(
+            target_home,
+            _session_path(target_home, cwd, session_id),
+            stability_delay_seconds=0,
+        ),
+        db_path=fresh_db,
+    )
+    with sqlite3.connect(fresh_db) as conn:
+        assert conn.execute("select backend from sessions").fetchall() == [
+            (expected_identity,)
+        ]
 
 
 def test_import_claude_snapshots_migrates_existing_foreign_home_cwd(
@@ -650,3 +724,51 @@ def test_meaningful_user_text_strips_harness_markup():
     )
     assert _meaningful_user_text("<system-reminder>noise</system-reminder>") is None
     assert _meaningful_user_text("plain question") == "plain question"
+
+
+def test_export_stages_snapshots_outside_the_synced_exchange(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A snapshot is assembled next to the exchange root and renamed in whole.
+
+    Staging inside the root would let Openbase Sync journal and ship half-written
+    temp files that vanish before the peer fetches them.
+    """
+    from openbase_coder_cli.thread_sync import thread_sync_common
+
+    source_home = tmp_path / "source"
+    exchange_dir = tmp_path / "exchange"
+    session_id = "3a16448e-c428-455b-bceb-5ac34da8ee4e"
+    _write_session(
+        source_home,
+        "/Users/example/Projects/app",
+        session_id,
+        user_text="Hi",
+        assistant_text="Hello.",
+    )
+    moves: list[tuple[Path, Path]] = []
+    real_replace = thread_sync_common.os.replace
+
+    def spy(src, dst):
+        moves.append((Path(src), Path(dst)))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(thread_sync_common.os, "replace", spy)
+    export_claude_thread_snapshots(
+        claude_home=source_home,
+        exchange_dir=exchange_dir,
+        device_identity_path=tmp_path / "device.json",
+        ledger_path=tmp_path / "ledger.json",
+        super_agents_db_path=tmp_path / "state.sqlite3",
+        stability_delay_seconds=0,
+        max_age_days=None,
+        source_user_home=Path("/Users/example"),
+    )
+    snapshot_moves = [(src, dst) for src, dst in moves if exchange_dir in dst.parents]
+    assert len(snapshot_moves) == 1
+    src, dst = snapshot_moves[0]
+    assert exchange_dir not in src.parents
+    assert src.parent == tmp_path / "exchange.staging"
+    assert dst.is_dir() and (dst / "metadata.json").is_file()
+    assert not list(exchange_dir.rglob(".tmp-*"))
+    assert list((tmp_path / "exchange.staging").iterdir()) == []

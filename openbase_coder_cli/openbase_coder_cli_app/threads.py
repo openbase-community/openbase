@@ -61,6 +61,7 @@ from openbase_coder_cli.services.fleet_aggregation import (
     fleet_thread_page,
     thread_payload_sort_key,
 )
+from openbase_coder_cli.services.thread_push import moved_thread_detail
 from openbase_coder_cli.thread_model_overrides import set_thread_model_override
 from openbase_coder_cli.thread_sync.models import ThreadStatus
 from openbase_coder_cli.thread_sync.projects import (
@@ -620,6 +621,16 @@ def thread_detail(request, thread_id):
             },
             status=status.HTTP_409_CONFLICT,
         )
+    if (
+        thread is not None
+        and not history_cursor
+        and request.query_params.get(FLEET_SCOPE_PARAM) == FLEET_SCOPE_VALUE
+    ):
+        # A thread pushed to another computer continues there: serve that
+        # live copy (tagged with its origin) so the client follows it.
+        moved_payload = moved_thread_detail(thread_id)
+        if moved_payload is not None:
+            return Response(moved_payload)
     if thread is None:
         # A fleet-scoped client may hold a thread that only exists on a peer
         # device (older than the sync window, or not yet exchanged) — serve

@@ -13,6 +13,25 @@ from .codex_state import _string
 from .thread_sync_common import super_agents_state_db_path, translate_home_path
 
 
+def claude_session_backend_identity() -> str:
+    """The backend identity this machine's Claude Code client runs under.
+
+    The Super Agents store is scoped to that identity (``claude_code`` or
+    ``openbase_cloud``), so a session row written under any other label is
+    invisible to the running client.
+    """
+    from super_agents.backend_config import configured_backend_from_environment
+
+    from openbase_coder_cli.backend_config import (
+        CLAUDE_CODE_BACKEND,
+        backend_identity_for_execution_backend,
+    )
+
+    return backend_identity_for_execution_backend(
+        configured_backend_from_environment(), CLAUDE_CODE_BACKEND
+    )
+
+
 def _translated_metadata_cwd(
     metadata: dict[str, Any], target_user_home: Path
 ) -> str | None:
@@ -60,6 +79,7 @@ def _backfill_openbase_session_metadata(
 ) -> None:
     resolved_db = db_path or _super_agents_db_path()
     resolved_db.parent.mkdir(parents=True, exist_ok=True)
+    backend = claude_session_backend_identity()
     with sqlite3.connect(resolved_db) as conn:
         _ensure_super_agents_schema(conn)
         existing = conn.execute(
@@ -74,10 +94,11 @@ def _backfill_openbase_session_metadata(
             conn.execute(
                 """
                 insert into sessions (
-                    id, name, cwd, command_json, status, last_observed_state,
-                    last_useful_message, backend_session_id, log_path,
-                    raw_log_path, created_at, updated_at
-                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    id, name, cwd, command_json, status, backend,
+                    last_observed_state, last_useful_message,
+                    backend_session_id, log_path, raw_log_path,
+                    created_at, updated_at
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
@@ -87,6 +108,7 @@ def _backfill_openbase_session_metadata(
                     # Idle synced sessions are "completed"; "waiting" means
                     # blocked on user input and counts as active.
                     "completed",
+                    backend,
                     _session_observed_state(snapshot),
                     snapshot.latest_assistant_message,
                     snapshot.session_id,
@@ -98,6 +120,10 @@ def _backfill_openbase_session_metadata(
             )
             return
         updates: dict[str, Any] = {}
+        if existing["backend"] != backend:
+            # Every row in this store runs on Claude Code; relabel to the
+            # identity the running client is scoped to.
+            updates["backend"] = backend
         if (
             snapshot.latest_assistant_message
             and existing["last_useful_message"] != snapshot.latest_assistant_message
@@ -182,6 +208,7 @@ def _ensure_super_agents_schema(conn: sqlite3.Connection) -> None:
         "last_observed_state": "text",
         "last_useful_message": "text",
         "backend_session_id": "text",
+        "backend": "text",
         "last_exit_code": "integer",
         "log_path": "text",
         "raw_log_path": "text",

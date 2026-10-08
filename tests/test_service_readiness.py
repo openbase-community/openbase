@@ -72,3 +72,41 @@ def test_codex_provider_requires_handshake_at_installed_version(
     monkeypatch.setattr(skew, "service_endpoint", lambda _: "fixture")
     monkeypatch.setattr(skew, "running_codex_app_server_version", lambda _: running)
     assert readiness.provider_ready(definition("codex-app-server")) is expected
+
+
+def test_codex_provider_is_ready_when_newer_than_installed_cli(monkeypatch):
+    from openbase_coder_cli.services import codex_version_skew as skew_module
+
+    monkeypatch.setattr(
+        skew_module, "installed_codex_version", lambda: ("/opt/codex", "0.160.1")
+    )
+    monkeypatch.setattr(skew_module, "service_endpoint", lambda name: f"ep:{name}")
+    versions = {"ep:codex-app-server": "0.161.0"}
+    monkeypatch.setattr(
+        skew_module, "running_codex_app_server_version", versions.get
+    )
+    assert readiness.provider_ready(definition("codex-app-server")) is True
+
+    versions["ep:codex-app-server"] = "0.160.0"  # the stale pre-restart instance
+    assert readiness.provider_ready(definition("codex-app-server")) is False
+    versions["ep:codex-app-server"] = None  # not answering yet
+    assert readiness.provider_ready(definition("codex-app-server")) is False
+
+
+def test_shared_codex_daemon_is_a_ready_provider_at_any_version(monkeypatch, tmp_path):
+    from openbase_coder_cli.services import codex_version_skew as skew_module
+
+    link = tmp_path / "app-server-control.sock"
+    link.symlink_to(tmp_path / "daemon.sock")
+    monkeypatch.setattr(
+        skew_module, "installed_codex_version", lambda: ("/opt/codex", "0.161.0")
+    )
+    monkeypatch.setattr(
+        skew_module,
+        "service_endpoint",
+        lambda name: SimpleNamespace(is_unix=True, socket_path=link),
+    )
+    monkeypatch.setattr(
+        skew_module, "running_codex_app_server_version", lambda endpoint: "0.160.1"
+    )
+    assert readiness.provider_ready(definition("codex-app-server")) is True

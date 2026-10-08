@@ -28,6 +28,7 @@ from .session_manager_base import (
     _with_dispatcher_onboarding_reminder,
     logger,
 )
+from .thread_moves import ensure_thread_writable
 from .thread_payloads import (
     _timestamp_to_datetime,
 )
@@ -66,6 +67,7 @@ class SessionManagerTurnsMixin:
         self, thread_id: str, prompt: str, model: str | None = None
     ) -> dict[str, Any]:
         """Queue a follow-up turn after the active turn, or start immediately if idle."""
+        ensure_thread_writable(thread_id)
         thread = await self.get_session_state(thread_id)
         if thread is None:
             raise ValueError(f"Thread {thread_id} not found")
@@ -82,6 +84,7 @@ class SessionManagerTurnsMixin:
         if model := self._resolve_turn_model(thread, model):
             turn_input["model"] = model
 
+        ensure_thread_writable(thread_id)
         result = await self._client.queue_turn_by_label(
             LabelQueryInput(thread_id=thread_id, cwd=thread.directory),
             turn_input,
@@ -98,6 +101,7 @@ class SessionManagerTurnsMixin:
 
     async def steer_turn(self, thread_id: str, prompt: str) -> dict[str, Any]:
         """Send steering input to the active turn on a thread."""
+        ensure_thread_writable(thread_id)
         thread = await self.get_session_state(thread_id)
         if thread is None:
             raise ValueError(f"Thread {thread_id} not found")
@@ -113,6 +117,7 @@ class SessionManagerTurnsMixin:
             # reach.
             raise ValueError(f"Thread {thread_id} has no active turn to steer")
 
+        ensure_thread_writable(thread_id)
         result = await self._client.steer_by_label(
             LabelQueryInput(
                 thread_id=thread_id,

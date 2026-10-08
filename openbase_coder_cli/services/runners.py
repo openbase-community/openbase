@@ -457,6 +457,11 @@ def _load_env(config: InstallationConfig) -> dict[str, str]:
 def run(name: str) -> None:
     if name not in RUNNERS:
         raise SystemExit(f"Unknown service runner: {name}")
+    from openbase_coder_cli.services.launchd import cap_service_log
+
+    # Every start appends to the service's log; a supervisor respawn loop
+    # (a failing bind, a missing binary) must not grow it without bound.
+    cap_service_log(name)
     config = (
         InstallationConfig.load()
         if InstallationConfig.exists()
@@ -468,16 +473,21 @@ def run(name: str) -> None:
     if name in ("codex-app-server", "codex-app-server-dispatcher"):
         from openbase_coder_cli.codex_control_plane import (
             dispatcher_codex_app_server_endpoint,
+            idle_while_shared_codex_daemon,
             managed_codex_app_server_endpoint,
             prepare_codex_app_server_start,
         )
 
-        prepare_codex_app_server_start(
-            managed_codex_app_server_endpoint(env)
-            if name == "codex-app-server"
-            else dispatcher_codex_app_server_endpoint(env),
-            binaries["codex"],
-        )
+        if name == "codex-app-server":
+            endpoint = managed_codex_app_server_endpoint(env)
+            # Codex's own managed daemon may already serve the standard
+            # socket. Binding would fail, and launchd would respawn this
+            # runner every few seconds forever (12,479 runs on 2026-10-07),
+            # so wait quietly for the daemon to leave instead.
+            idle_while_shared_codex_daemon(endpoint)
+        else:
+            endpoint = dispatcher_codex_app_server_endpoint(env)
+        prepare_codex_app_server_start(endpoint, binaries["codex"])
     from openbase_coder_cli.services.freshness.runtime import capture_service
 
     capture_service(name, config, argv)

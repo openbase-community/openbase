@@ -60,7 +60,14 @@ def status(as_json: bool) -> None:
             details.append(f"{root['pending_fetches']} transferring")
         if root.get("scanning"):
             details.append("scanning")
+        if root.get("bytes"):
+            details.append(_size(root["bytes"]))
+        if root.get("only"):
+            details.append("only " + ", ".join(root["only"]))
         click.echo(f"{line}  ({', '.join(details)})")
+        disk = root.get("disk") if isinstance(root.get("disk"), dict) else None
+        if disk:
+            _echo_disk(disk)
     peers = payload.get("peers") or []
     if peers:
         click.echo("Peers:")
@@ -76,6 +83,18 @@ def status(as_json: bool) -> None:
                 fg="yellow",
             )
         )
+    versions = (
+        payload.get("versions") if isinstance(payload.get("versions"), dict) else None
+    )
+    if versions:
+        auto = " (from disk size)" if versions.get("quota_auto") else ""
+        click.echo(
+            f"Versions:  {_size(versions.get('usage_bytes'))} of "
+            f"{_size(versions.get('quota_bytes'))}{auto}, kept "
+            f"{versions.get('retention_days') or 0:.0f} days"
+        )
+    if (payload.get("placement") or {}).get("thin"):
+        click.echo("Placement: large files stay on the other computer until used")
     open_conflicts = int(payload.get("open_conflicts") or 0)
     if open_conflicts:
         click.echo(
@@ -86,6 +105,39 @@ def status(as_json: bool) -> None:
         )
     else:
         click.echo("Conflicts: 0")
+
+
+def _size(value) -> str:
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return "?"
+    if n < 0:
+        return "?"
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1000 or unit == "TB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1000
+    return "?"
+
+
+def _echo_disk(disk: dict) -> None:
+    """Free space, the floor sync never writes below, and what waits for room."""
+    auto = ", from disk size" if disk.get("low_water_auto") else ""
+    line = (
+        f"    disk: {_size(disk.get('free_bytes'))} free of "
+        f"{_size(disk.get('total_bytes'))}; sync keeps "
+        f"{_size(disk.get('low_water_bytes'))} free{auto}"
+    )
+    held = int(disk.get("held_files") or 0)
+    if disk.get("below_low_water") or held:
+        warning = "    low disk: sync writes here are paused until space returns"
+        if held:
+            warning += f" ({held} files, {_size(disk.get('held_bytes'))} waiting)"
+        click.echo(line)
+        click.echo(click.style(warning, fg="yellow"))
+        return
+    click.echo(line)
 
 
 def _conflict_time(conflict: dict) -> str:

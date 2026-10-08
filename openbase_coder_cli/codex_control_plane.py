@@ -9,8 +9,10 @@ import socket
 import stat
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 
 from super_agents.app_endpoint import (
@@ -222,12 +224,71 @@ def codex_app_server_ready(
         return False
 
 
-def shared_codex_daemon_ready() -> bool:
-    """Recognize Codex's live managed-daemon link as a valid shared server."""
-    endpoint = managed_codex_app_server_endpoint()
+def endpoint_is_shared_codex_daemon(endpoint: AppServerEndpoint) -> bool:
+    """Whether Codex's own managed daemon owns ``endpoint``'s socket path.
+
+    Codex's managed daemon (``codex app-server --managed-daemon``) publishes
+    the standard control socket as a symlink into its private runtime
+    directory, while an Openbase-run app-server binds a plain socket. The
+    link is therefore the discriminator: a daemon behind it is not an
+    Openbase service, so Openbase must neither replace it nor restart it.
+    """
+    socket_path = getattr(endpoint, "socket_path", None)
     return bool(
-        endpoint.is_unix
-        and endpoint.socket_path
-        and endpoint.socket_path.is_symlink()
-        and codex_app_server_ready(endpoint)
+        getattr(endpoint, "is_unix", False)
+        and socket_path is not None
+        and socket_path.is_symlink()
     )
+
+
+def shared_codex_daemon_ready(endpoint: AppServerEndpoint | None = None) -> bool:
+    """Recognize Codex's live managed-daemon link as a valid shared server."""
+    resolved = endpoint or managed_codex_app_server_endpoint()
+    return endpoint_is_shared_codex_daemon(resolved) and codex_app_server_ready(
+        resolved
+    )
+
+
+# How often the idle ``codex-app-server`` runner re-checks the shared daemon,
+# and how many consecutive misses mean it is gone rather than restarting.
+# Codex's updater restarts the daemon in place on each release; a single
+# missed probe during that swap must not make Openbase grab the socket.
+SHARED_DAEMON_POLL_SECONDS = 15.0
+SHARED_DAEMON_HANDOVER_POLLS = 4
+
+
+def idle_while_shared_codex_daemon(
+    endpoint: AppServerEndpoint,
+    *,
+    ready: Callable[[AppServerEndpoint], bool] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    log: Callable[[str], None] = print,
+    poll_seconds: float = SHARED_DAEMON_POLL_SECONDS,
+    handover_polls: int = SHARED_DAEMON_HANDOVER_POLLS,
+) -> bool:
+    """Block while Codex's managed daemon serves ``endpoint``.
+
+    Returns ``False`` immediately when no shared daemon is live, so the
+    caller starts its own server. Otherwise logs one line and sleeps,
+    re-probing every ``poll_seconds``; it returns ``True`` only once the
+    daemon has been unreachable for ``handover_polls`` consecutive probes,
+    at which point the caller may take the socket over. Launchd keeps the
+    runner alive regardless of exit status, so exiting instead of idling
+    would turn into the very crash loop this exists to prevent.
+    """
+    probe = ready or shared_codex_daemon_ready
+    if not probe(endpoint):
+        return False
+    log(
+        f"codex-app-server: the shared Codex daemon owns {endpoint.socket_path}; "
+        "idling until it goes away instead of binding a second server"
+    )
+    misses = 0
+    while misses < handover_polls:
+        sleep(poll_seconds)
+        misses = 0 if probe(endpoint) else misses + 1
+    log(
+        f"codex-app-server: the shared Codex daemon left {endpoint.socket_path}; "
+        "starting the Openbase-managed app-server"
+    )
+    return True

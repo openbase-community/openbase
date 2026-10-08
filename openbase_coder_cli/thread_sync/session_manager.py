@@ -43,6 +43,7 @@ from .session_manager_base import (
 from .session_manager_routines import SessionManagerRoutinesMixin
 from .session_manager_threads import SessionManagerThreadsMixin
 from .session_manager_turns import SessionManagerTurnsMixin
+from .thread_moves import ensure_thread_writable
 from .thread_payloads import (
     _optional_turn_string,
     _timestamp_to_datetime,
@@ -220,6 +221,8 @@ class CodexAppServerSessionManager(
         self, session_id: str, message: str, model: str | None = None
     ) -> str:
         """Start a turn on a Codex app-server thread."""
+        # A thread pushed to another computer continues there only.
+        ensure_thread_writable(session_id)
         thread = await self.get_session_state(session_id)
         if thread is None:
             raise ValueError(f"Thread {session_id} not found")
@@ -244,6 +247,7 @@ class CodexAppServerSessionManager(
         if model:
             role_turn_input["model"] = model
 
+        ensure_thread_writable(session_id)
         if self._uses_backend_session_api():
             started = await self._client.start_turn_by_label(
                 LabelQueryInput(thread_id=session_id, cwd=thread.directory),
@@ -261,11 +265,13 @@ class CodexAppServerSessionManager(
             **role_turn_input,
         }
         try:
+            ensure_thread_writable(session_id)
             started = await self._client.start_turn(turn_input)
         except RuntimeError as exc:
             if not _is_thread_unavailable_error(exc):
                 raise
             await self._resume_thread(session_id, thread.directory)
+            ensure_thread_writable(session_id)
             started = await self._client.start_turn(turn_input)
         turn_id = extract_turn_id(started)
         if not turn_id:

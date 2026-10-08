@@ -365,6 +365,14 @@ def decode_fleet_cursor(cursor: str | None) -> dict[str, _SourceState] | None:
     return states
 
 
+def _moved_to_active_peer(item: dict[str, Any], peers: dict[str, FleetPeer]) -> bool:
+    moved = item.get("moved_to")
+    if not isinstance(moved, dict) or moved.get("state") != "moved":
+        return False
+    host = str(moved.get("host") or "")
+    return bool(host) and host in peers
+
+
 class FleetThreadPage(NamedTuple):
     threads: list[dict[str, Any]]
     next_cursor: str | None
@@ -486,6 +494,10 @@ def fleet_thread_page(
             item = state.window.pop(0)
             state.offset += 1
             _advance_if_consumed(state)
+            if best_key == LOCAL_SOURCE_KEY and _moved_to_active_peer(item, peers):
+                # The thread was pushed to that peer and continues there; its
+                # live copy comes from the peer, not this read-only one.
+                continue
             thread_id = str(item.get("thread_id") or "")
             if thread_id and thread_id in seen_ids:
                 continue

@@ -13,11 +13,13 @@ nav = [
     { "Web Console & Cloud" = "console.md" },
     { "Voice Routing" = "voice-routing.md" },
     { "Sync Between Your Computers" = "code-sync.md" },
+    { "Push a Thread to Your Durable Machine" = "push-to-durable.md" },
     { "Laptop Tools for Remote Agents" = "laptop-tools.md" },
     { "Codex & Claude Code from the Terminal" = "agent-launchers.md" }
   ]},
   { "Getting Started" = [
     "getting-started/index.md",
+    { "Computer or Cloud Workspace?" = "getting-started/computer-or-cloud-workspace.md" },
     { "Mac App Download" = "getting-started/mac-app.md" },
     { "Developer Setup" = "getting-started/developer-setup.md" },
     { "Windows & Docker" = "docker.md" }

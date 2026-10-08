@@ -236,12 +236,15 @@ def _livekit_skew_warnings() -> list[dict[str, str]]:
 
 
 def _codex_version_skew_warnings() -> list[dict[str, str]]:
-    """Warn when a running codex-app-server predates the installed Codex.
+    """Warn when a running codex-app-server and the installed Codex differ.
 
     Long-lived services keep the old binary in memory after an upgrade, and
     every new Codex CLI launch then warns about the stale background
     service. The banner offers a one-click restart for these ids; the
     sync-workers tick also restarts them itself once nothing is in flight.
+    When the server is newer than the CLI, or is Codex's own managed
+    daemon, the fix is a CLI upgrade and the warning says so without a
+    restart affordance.
     """
     from openbase_coder_cli.services.codex_version_skew import (
         collect_codex_version_skews,
@@ -251,16 +254,38 @@ def _codex_version_skew_warnings() -> list[dict[str, str]]:
         skews = collect_codex_version_skews()
     except Exception:  # noqa: BLE001 - version probe must never break health
         return []
-    return [
-        _warning(
-            f"service-restart-needed:{skew.service}",
-            "warning",
-            skew.message,
-            "Restart the service to pick up the installed version; it "
-            "restarts automatically once no agent turn or voice call is active.",
-        )
-        for skew in skews
-    ]
+    warnings: list[dict[str, str]] = []
+    for skew in skews:
+        if skew.restart_resolves:
+            warnings.append(
+                _warning(
+                    f"service-restart-needed:{skew.service}",
+                    "warning",
+                    skew.message,
+                    "Restart the service to pick up the installed version; it "
+                    "restarts automatically once no agent turn or voice call "
+                    "is active.",
+                )
+            )
+        else:
+            # No restart button: the Openbase service is not what is stale.
+            # Picking "Restart with these settings" in Codex's dialog would
+            # restart the shared daemon under every attached session.
+            action = (
+                f"Upgrade the Codex CLI to {skew.running_version} (for "
+                f"example `npm install -g @openai/codex@{skew.running_version}`)."
+                if skew.running_is_newer
+                else "Wait for Codex's managed daemon to update itself."
+            )
+            warnings.append(
+                _warning(
+                    f"codex-cli-outdated:{skew.service}",
+                    "warning",
+                    skew.message,
+                    f"{action} Openbase never restarts the shared Codex daemon.",
+                )
+            )
+    return warnings
 
 
 def _resolve_livekit_binary() -> str | None:

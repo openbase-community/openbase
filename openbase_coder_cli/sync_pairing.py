@@ -6,8 +6,14 @@ functions, so there is one code path:
 - ``candidates()`` lists the user's other computers on Openbase VPN with
   their sync role.
 - ``become_hub()`` makes this computer the hub (the always-on computer).
-- ``join_hub(hub)`` makes this computer an edge of that hub. The hub hands
-  over its pair secret, ports and roots through ``offer()``.
+- ``hub_folders(hub)`` previews the hub's folders before joining, with the
+  files and bytes each holds (from the hub's daemon) and this computer's
+  free disk, so the user can choose which to sync here.
+- ``join_hub(hub, roots)`` makes this computer an edge of that hub, syncing
+  all of the hub's folders or the chosen subset. The hub hands over its pair
+  secret, ports and roots through ``offer()``. A cloud workspace joins
+  project-only: no folder is preselected, and large files stay placeholders
+  there until used.
 - ``leave()`` stops syncing here; the config is moved to the trash.
 - ``add_root()`` / ``remove_root()`` change the synced folders here and on
   the paired computer(s).
@@ -41,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 SETTINGS_PATH = "/api/sync/daemon/settings/"
 OFFER_PATH = "/api/sync/daemon/pairing/offer/"
+FOLDERS_PATH = "/api/sync/daemon/pairing/folders/"
 ROOTS_PATH = "/api/sync/daemon/roots/"
 PROBE_TIMEOUT_SECONDS = 2.5
 PAIR_TIMEOUT_SECONDS = 10.0
@@ -121,6 +128,90 @@ def daemon_binary_available() -> bool:
         return False
 
 
+def is_cloud_workspace() -> bool:
+    """Whether this computer is an Openbase Cloud workspace (a DevSpace).
+
+    The provisioning markers name it, and the runtime flavor the device
+    registry records (``capabilities.runtime == "cloud"``) is the fallback.
+    """
+    from openbase_coder_cli.services.cloud_workspace import cloud_workspace_id
+
+    try:
+        if cloud_workspace_id():
+            return True
+        from openbase_coder_cli.services.cloud_registration import runtime_flavor
+
+        return runtime_flavor() == "cloud"
+    except Exception:  # noqa: BLE001 - detection only picks a default
+        return False
+
+
+def disk_usage(path: str | Path = "~") -> dict[str, int | None]:
+    """Free and total bytes of the volume holding ``path`` (None unknown)."""
+    try:
+        usage = shutil.disk_usage(sync_daemon.expand_root_path(path))
+    except OSError:
+        return {"free_bytes": None, "total_bytes": None}
+    return {"free_bytes": int(usage.free), "total_bytes": int(usage.total)}
+
+
+def this_computer() -> dict[str, Any]:
+    """What a join preview needs to know about this computer."""
+    cloud = is_cloud_workspace()
+    return {
+        "cloud_workspace": cloud,
+        # a cloud workspace has a small disk and works on a project or two
+        "project_only_default": cloud,
+        "disk": disk_usage(),
+    }
+
+
+# What the installed sync engine supports, from ``openbase-syncd --features``
+# (one name per line). Engines before project-only support reject the flag.
+PROJECT_ONLY_FEATURE = "project-only"
+
+
+def engine_features() -> set[str]:
+    """Features of the installed ``openbase-syncd`` (empty when unknown)."""
+    import subprocess
+
+    try:
+        from openbase_coder_cli.services.installation import InstallationConfig
+        from openbase_coder_cli.services.launchd import _binary_resolvers
+
+        binary = _binary_resolvers(InstallationConfig.load())["openbase_syncd"]()
+    except Exception:  # noqa: BLE001 - any failure means "unknown"
+        return set()
+    if not binary:
+        return set()
+    try:
+        result = subprocess.run(
+            [binary, "--features"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    if result.returncode != 0:
+        return set()
+    return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+
+def _require_project_only_engine() -> None:
+    """Refuse a project-only setup the installed engine would not honor: an
+    older engine ignores ``only`` and ``thin`` and keeps a fixed 10 GB free,
+    so a small cloud workspace would try to take every file of the folder."""
+    if PROJECT_ONLY_FEATURE not in engine_features():
+        raise PairingError(
+            "engine_outdated",
+            "Syncing only some projects needs a newer Openbase Sync on this "
+            "computer. Update Openbase and try again.",
+            409,
+        )
+
+
 def _require_daemon_binary() -> None:
     if not daemon_binary_available():
         raise PairingError(
@@ -182,7 +273,10 @@ def check_root_allowed(path: str) -> None:
 
 def _ensure_root_dirs(roots: list[dict[str, Any]]) -> None:
     for root in roots:
-        sync_daemon.expand_root_path(root["path"]).mkdir(parents=True, exist_ok=True)
+        base = sync_daemon.expand_root_path(root["path"])
+        base.mkdir(parents=True, exist_ok=True)
+        for rel in root.get("only") or []:
+            (base / rel).mkdir(parents=True, exist_ok=True)
 
 
 def _service():
@@ -499,11 +593,97 @@ def offer() -> dict[str, Any]:
         "sync_group": str(data.get("sync_group") or "default"),
         "anchor": anchor,
         # ignores keep paths local to one computer: never hand them on
-        "roots": [
-            {key: value for key, value in root.items() if key != "ignore"}
-            for root in sync_daemon._roots_from_config(data)
-        ],
+        "roots": _with_estimates(
+            [
+                {
+                    key: value
+                    for key, value in root.items()
+                    if key not in ("ignore", "only")
+                }
+                for root in sync_daemon._roots_from_config(data)
+            ]
+        ),
     }
+
+
+def _root_estimates() -> dict[str, dict[str, int]]:
+    """Files and bytes per root id from this computer's daemon (best effort)."""
+    try:
+        status = sync_daemon.SyncDaemonClient(timeout=2.0).status()
+    except sync_daemon.SyncDaemonError:
+        return {}
+    out: dict[str, dict[str, int]] = {}
+    for root in status.get("roots") or []:
+        if not isinstance(root, dict) or not root.get("id"):
+            continue
+        estimate = {"files": int(root.get("entries") or 0)}
+        if "bytes" in root:  # older daemons report no sizes
+            estimate["bytes"] = int(root.get("bytes") or 0)
+        out[str(root["id"])] = estimate
+    return out
+
+
+SUBFOLDER_TIMEOUT_SECONDS = 30.0
+
+
+def _subfolders(root: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """The folders directly inside a root (the projects of ~/Projects) with
+    their files and bytes, from this computer's daemon. None when the daemon
+    cannot say (not running, or too old to know ``folder-sizes``)."""
+    try:
+        sizes = sync_daemon.SyncDaemonClient(
+            timeout=SUBFOLDER_TIMEOUT_SECONDS
+        ).folder_sizes(str(root["id"]))
+    except sync_daemon.SyncDaemonError:
+        return None
+    base = str(root["path"]).rstrip("/")
+    return [
+        {
+            "name": str(item.get("name")),
+            "path": f"{base}/{item.get('name')}",
+            "files": int(item.get("files") or 0),
+            "bytes": int(item.get("bytes") or 0),
+        }
+        for item in sizes
+        if item.get("dir") and item.get("name")
+    ]
+
+
+def _with_estimates(roots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    estimates = _root_estimates()
+    out = []
+    for root in roots:
+        estimate = estimates.get(str(root.get("id") or ""), {})
+        out.append(
+            {
+                **root,
+                "files": estimate.get("files"),
+                "bytes": estimate.get("bytes"),
+            }
+        )
+    return out
+
+
+def folders() -> dict[str, Any]:
+    """This hub's folders with their size, for a join preview.
+
+    Answered by the hub only. Unlike ``offer()`` it carries no secret, so a
+    computer can show the choice before it commits to pairing.
+    """
+    path = sync_daemon.SYNC_DAEMON_CONFIG_PATH
+    summary = _summary()
+    if not path.is_file() or summary.get("role") != "hub":
+        raise PairingError(
+            "hub_not_configured", "This computer is not set up as a hub.", 409
+        )
+    roots = [
+        {key: value for key, value in root.items() if key not in ("ignore", "only")}
+        for root in summary.get("roots") or []
+    ]
+    roots = _with_estimates(roots)
+    for root in roots:
+        root["subfolders"] = _subfolders(root)
+    return {"roots": roots, "disk": disk_usage()}
 
 
 # --- edge ------------------------------------------------------------------
@@ -581,54 +761,255 @@ def _offer_roots(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return roots
 
 
+def _containing_root(
+    roots: list[dict[str, Any]], path: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    """The root that is ``path`` (rel None) or contains it (rel: root-relative)."""
+    target = sync_daemon.expand_root_path(path)
+    for root in roots:
+        if not root.get("path"):
+            continue
+        base = sync_daemon.expand_root_path(root["path"])
+        if target == base:
+            return root, None
+        if base in target.parents:
+            return root, target.relative_to(base).as_posix()
+    return None, None
+
+
 def _select_roots(
     hub_roots: list[dict[str, Any]], wanted: list[str] | None, hub_name: str
 ) -> list[dict[str, Any]]:
+    """The hub's roots this computer syncs. A wanted path is one of the
+    hub's folders (all of it) or a folder inside one (only that part: a
+    project of ~/Projects)."""
     if not wanted:
         return hub_roots
-    selected: list[dict[str, Any]] = []
+    whole: set[str] = set()
+    parts: dict[str, list[str]] = {}
     for path in wanted:
-        target = sync_daemon.expand_root_path(path)
-        match = next(
-            (
-                root
-                for root in hub_roots
-                if sync_daemon.expand_root_path(root["path"]) == target
-            ),
-            None,
-        )
-        if match is None:
+        root, rel = _containing_root(hub_roots, path)
+        if root is None:
             raise PairingError(
                 "root_not_on_hub",
                 f"{hub_name} does not sync {path}. Add it there first.",
                 400,
             )
-        if match not in selected:
-            selected.append(match)
+        if rel is None:
+            whole.add(root["id"])
+        elif rel not in parts.setdefault(root["id"], []):
+            parts[root["id"]].append(rel)
+    selected: list[dict[str, Any]] = []
+    for root in hub_roots:
+        if root["id"] in whole:
+            selected.append(root)
+        elif root["id"] in parts:
+            selected.append({**root, "only": sorted(parts[root["id"]])})
     return selected
 
 
-def join_hub(hub: str, roots: list[str] | None = None) -> dict[str, Any]:
-    """Make this computer an edge of ``hub`` (a peer id, name or host)."""
+def _find_hub(hub: str) -> fleet.FleetPeer:
+    peer = find_pairing_peer(hub)
+    if peer is None:
+        raise PairingError(
+            "hub_not_found",
+            f"{hub} is not one of your computers on Openbase VPN, or it is offline.",
+            404,
+        )
+    return peer
+
+
+def _request_folders(peer: fleet.FleetPeer, token: str) -> list[dict[str, Any]]:
+    """The hub's folders with sizes; an older hub's offer when it has no preview."""
+    try:
+        response = httpx.get(
+            f"{peer.base_url}{FOLDERS_PATH}",
+            headers=_auth_headers(token),
+            timeout=PAIR_TIMEOUT_SECONDS,
+        )
+    except httpx.HTTPError as exc:
+        raise PairingError(
+            "hub_unreachable",
+            f"Could not reach {peer.name}. Make sure it is on and connected "
+            "to Openbase VPN.",
+            502,
+        ) from exc
+    if response.status_code == 404:
+        payload = _request_offer(peer, token)
+        return [
+            {**root, "files": None, "bytes": None, "subfolders": None}
+            for root in _offer_roots(payload)
+        ]
+    if response.status_code in (401, 403):
+        raise PairingError(
+            "other_account",
+            f"{peer.name} is not signed in to your Openbase account.",
+            409,
+        )
+    if response.status_code == 409:
+        raise PairingError(
+            "hub_not_configured",
+            f"{peer.name} is not set up as the always-on computer yet.",
+            409,
+        )
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if response.status_code != 200 or not isinstance(payload, dict):
+        raise PairingError(
+            "hub_error",
+            f"{peer.name} could not list its folders (HTTP {response.status_code}).",
+            502,
+        )
+    out: list[dict[str, Any]] = []
+    for raw in payload.get("roots") or []:
+        if not isinstance(raw, dict) or not raw.get("id") or not raw.get("path"):
+            continue
+        out.append(
+            {
+                "id": str(raw["id"]),
+                "path": str(raw["path"]),
+                "files": raw.get("files")
+                if isinstance(raw.get("files"), int)
+                else None,
+                "bytes": raw.get("bytes")
+                if isinstance(raw.get("bytes"), int)
+                else None,
+                "subfolders": _parse_subfolders(raw.get("subfolders")),
+            }
+        )
+    return out
+
+
+def _parse_subfolders(raw: Any) -> list[dict[str, Any]] | None:
+    if not isinstance(raw, list):
+        return None
+    out = []
+    for sub in raw:
+        if not isinstance(sub, dict) or not sub.get("name") or not sub.get("path"):
+            continue
+        out.append(
+            {
+                "name": str(sub["name"]),
+                "path": str(sub["path"]),
+                "files": sub.get("files")
+                if isinstance(sub.get("files"), int)
+                else None,
+                "bytes": sub.get("bytes")
+                if isinstance(sub.get("bytes"), int)
+                else None,
+            }
+        )
+    return out
+
+
+def hub_folders(hub: str) -> dict[str, Any]:
+    """Preview of joining ``hub``: its folders, their sizes, this computer.
+
+    ``selected`` is the suggested choice: every folder for a laptop or
+    desktop, none for a cloud workspace (project-only: the user picks).
+    """
+    token = _require_token()
+    peer = _find_hub(hub)
+    local = this_computer()
+    project_only = local["project_only_default"]
+    roots = _request_folders(peer, token)
+    synced = {
+        sync_daemon.expand_root_path(root["path"])
+        for root in sync_daemon.configured_roots()
+        if root.get("path")
+    }
+    folders_out = []
+    for root in roots:
+        target = sync_daemon.expand_root_path(root["path"])
+        subfolders = root.get("subfolders")
+        folders_out.append(
+            {
+                **root,
+                "subfolders": (
+                    [{**sub, "selected": False} for sub in subfolders]
+                    if subfolders is not None
+                    else None
+                ),
+                "synced_here": target in synced,
+                "exists_here": target.is_dir(),
+                "selected": not project_only,
+            }
+        )
+    return {
+        "hub_name": peer.name,
+        "hub_host": peer.key,
+        "folders": folders_out,
+        "this_computer": local,
+        "project_only": project_only,
+    }
+
+
+def _disk_warning(
+    selected: list[dict[str, Any]], estimates: dict[str, Any]
+) -> str | None:
+    """A warning when the chosen folders look bigger than this disk's room."""
+    total = 0
+    for root in selected:
+        size = estimates.get(root["id"])
+        if isinstance(size, int):
+            total += size
+    free = disk_usage().get("free_bytes")
+    if not total or free is None or total < free * 0.9:
+        return None
+    return (
+        f"The chosen folders hold about {_human_bytes(total)} and this "
+        f"computer has {_human_bytes(free)} free. Large files stay on the hub "
+        "until used, but consider syncing fewer folders."
+    )
+
+
+def _human_bytes(n: int) -> str:
+    value = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1000 or unit == "TB":
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1000
+    return f"{n} B"
+
+
+def join_hub(
+    hub: str,
+    roots: list[str] | None = None,
+    *,
+    project_only: bool | None = None,
+) -> dict[str, Any]:
+    """Make this computer an edge of ``hub`` (a peer id, name or host).
+
+    ``roots`` chooses which of the hub's folders sync here (default: all).
+    ``project_only`` (default: whether this is a cloud workspace) requires an
+    explicit choice of folders and keeps large files as placeholders here.
+    """
+    if project_only is None:
+        project_only = is_cloud_workspace()
     with _lock:
         _require_unconfigured()
         _require_daemon_binary()
         token = _require_token()
-        peer = find_pairing_peer(hub)
-        if peer is None:
-            raise PairingError(
-                "hub_not_found",
-                f"{hub} is not one of your computers on Openbase VPN, or it is "
-                "offline.",
-                404,
-            )
+        peer = _find_hub(hub)
         payload = _request_offer(peer, token)
         hub_roots = _offer_roots(payload)
         if not hub_roots:
             raise PairingError(
                 "hub_error", f"{peer.name} does not sync any folders yet.", 409
             )
+        if project_only and not roots:
+            names = ", ".join(root["path"] for root in hub_roots)
+            raise PairingError(
+                "choose_folders",
+                "This computer syncs only the projects you choose. Pick one or "
+                f"more of {peer.name}'s folders: {names}.",
+                400,
+            )
         selected = _select_roots(hub_roots, roots, peer.name)
+        if project_only or any(root.get("only") for root in selected):
+            _require_project_only_engine()
         for root in selected:
             check_root_allowed(root["path"])
         _ensure_root_dirs(selected)
@@ -642,7 +1023,15 @@ def join_hub(hub: str, roots: list[str] | None = None) -> dict[str, Any]:
             peer_hot=_address(peer.key, payload["hot_port"]),
             peer_bulk=_address(peer.key, payload["bulk_port"]),
             anchor=anchor if anchor in {"hub", "edge"} else DEFAULT_ANCHOR,
+            thin=True if project_only else None,
         )
+        sizes = {
+            str(raw.get("id")): raw.get("bytes")
+            for raw in payload.get("roots") or []
+            if isinstance(raw, dict)
+        }
+        # a root synced in part: its full size overstates; leave it out
+        warning = _disk_warning([r for r in selected if not r.get("only")], sizes)
         sync_daemon.write_config(config)
         restart_required = _start_service()
     return {
@@ -650,6 +1039,8 @@ def join_hub(hub: str, roots: list[str] | None = None) -> dict[str, Any]:
         "hub_name": peer.name,
         "hub_host": peer.key,
         "roots": selected,
+        "project_only": project_only,
+        "warnings": [warning] if warning else [],
         "restart_required": restart_required,
     }
 
@@ -692,8 +1083,178 @@ def list_roots() -> dict[str, Any]:
     return {
         "configured": bool(summary.get("configured")),
         "role": _role(summary),
+        "project_only": bool(summary.get("project_only")),
         "roots": summary.get("roots") or [],
     }
+
+
+def available_roots() -> dict[str, Any]:
+    """For an edge: the hub's folders, which sync here, and their sizes.
+
+    The Sync page uses it to add one of the hub's folders to a computer that
+    syncs only some of them, or to stop syncing one here only.
+    """
+    role = _require_configured_role()
+    if role != "edge":
+        return {"role": role, "hub_name": None, "folders": [], "disk": disk_usage()}
+    token = _require_token()
+    peer = _hub_peer_from_config()
+    local = {
+        sync_daemon.expand_root_path(root["path"]): root
+        for root in sync_daemon.configured_roots()
+        if root.get("path")
+    }
+    folders_out = []
+    for root in _request_folders(peer, token):
+        mine = local.get(sync_daemon.expand_root_path(root["path"]))
+        only = list(mine.get("only") or []) if mine else []
+        whole = mine is not None and not only
+        subfolders = root.get("subfolders")
+        folders_out.append(
+            {
+                **root,
+                "synced_here": whole,
+                "partly_synced_here": bool(only),
+                "only": only,
+                "subfolders": (
+                    [
+                        {**sub, "synced_here": whole or sub["name"] in only}
+                        for sub in subfolders
+                    ]
+                    if subfolders is not None
+                    else None
+                ),
+            }
+        )
+    return {
+        "role": role,
+        "hub_name": peer.name,
+        "project_only": bool(_summary().get("project_only")),
+        "folders": folders_out,
+        "disk": disk_usage(),
+    }
+
+
+def _hub_roots_or_none() -> list[dict[str, Any]] | None:
+    try:
+        return _request_folders(_hub_peer_from_config(), _require_token())
+    except PairingError:
+        return None
+
+
+def _add_part(path: str) -> dict[str, Any] | None:
+    """On an edge: sync ``path``, a folder inside one of the hub's folders
+    (a project of ~/Projects), on this computer only. None when ``path`` is
+    not such a folder (the caller handles it as a whole folder)."""
+    entry, roots = _plan_part(path)
+    if entry is None:
+        return None
+    _require_project_only_engine()
+    sync_daemon.expand_root_path(path).mkdir(parents=True, exist_ok=True)
+    sync_daemon.set_roots(roots)
+    restarted, restart_required = _restart_service()
+    return {
+        "root": entry,
+        "roots": roots,
+        "restarted": restarted,
+        "restart_required": restart_required,
+        "peers": [],
+    }
+
+
+def _plan_part(path: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """(the root entry, the new root list) for adding ``path`` as a project
+    of a folder; (None, []) when it is not one."""
+    current = sync_daemon.configured_roots()
+    root, rel = _containing_root(current, path)
+    if root is not None:
+        if rel is None or not root.get("only"):
+            return None, []  # the folder itself, or inside a folder synced whole
+        only = list(root["only"])
+        if any(rel == item or rel.startswith(item + "/") for item in only):
+            raise PairingError(
+                "root_overlap", f"Not added: {path} already syncs here.", 409
+            )
+        only = sorted([item for item in only if not item.startswith(rel + "/")] + [rel])
+        roots = [{**r, "only": only} if r is root else r for r in current]
+        entry = {**root, "only": only}
+    else:
+        partial = bool(_summary().get("project_only")) or any(
+            r.get("only") for r in current
+        )
+        if not partial:
+            return None, []  # a full copy adds whole folders only
+        hub_roots = _hub_roots_or_none()
+        hub_root, rel = _containing_root(hub_roots or [], path)
+        if hub_root is None or rel is None:
+            return None, []
+        entry = {"id": hub_root["id"], "path": hub_root["path"], "only": [rel]}
+        overlap = [
+            r["path"]
+            for r in current
+            if r.get("path") and sync_daemon.roots_overlap(r["path"], hub_root["path"])
+        ]
+        if overlap:
+            raise PairingError(
+                "root_overlap",
+                f"Not added: {hub_root['path']} overlaps synced folder(s) "
+                f"{', '.join(overlap)}.",
+                409,
+            )
+        roots = [*current, entry]
+    return entry, roots
+
+
+def _remove_part(path: str, scope: str | None) -> dict[str, Any] | None:
+    """On an edge: stop syncing ``path`` when it is one of a folder's only
+    paths. None when it is not (the caller handles a whole folder)."""
+    current = sync_daemon.configured_roots()
+    root, rel = _containing_root(current, path)
+    if root is None or rel is None or rel not in (root.get("only") or []):
+        return None
+    if scope == "everywhere":
+        raise PairingError(
+            "part_of_folder",
+            f"{path} is part of {root['path']}, which your other computers sync "
+            "whole. It can stop syncing on this computer only.",
+            409,
+        )
+    only = [item for item in root["only"] if item != rel]
+    if only:
+        roots = [{**r, "only": only} if r is root else r for r in current]
+    elif len(current) == 1:
+        raise PairingError(
+            "last_root",
+            "Keep at least one folder. To stop syncing, use Stop syncing "
+            "on this computer.",
+            409,
+        )
+    else:
+        roots = [r for r in current if r is not root]
+    sync_daemon.set_roots(roots)
+    restarted, restart_required = _restart_service()
+    return {
+        "removed": [{"id": root["id"], "path": path}],
+        "scope": "this_computer",
+        "roots": roots,
+        "restarted": restarted,
+        "restart_required": restart_required,
+        "peers": [],
+    }
+
+
+def _hub_has_root(path: str) -> bool:
+    """Whether this edge's hub syncs ``path`` (False when it cannot be asked)."""
+    try:
+        token = _require_token()
+        peer = _hub_peer_from_config()
+        target = sync_daemon.expand_root_path(path)
+        return any(
+            sync_daemon.expand_root_path(root["path"]) == target
+            for root in _request_folders(peer, token)
+        )
+    except PairingError:
+        return False
 
 
 def _require_configured_role() -> str:
@@ -817,13 +1378,22 @@ def add_root(path: str, *, local_only: bool = False) -> dict[str, Any]:
     check_root_allowed(path)
     with _lock:
         role = _require_configured_role()
+        if role == "edge" and not local_only:
+            part = _add_part(path)
+            if part is not None:
+                return part
         target = sync_daemon.expand_root_path(path)
         if local_only:
             target.mkdir(parents=True, exist_ok=True)
         elif not target.is_dir():
-            raise PairingError(
-                "folder_missing", f"{path} is not a folder on this computer.", 400
-            )
+            # one of the hub's folders that this computer did not sync yet
+            # (a project-only computer adding a project): it fills from the hub
+            if role == "edge" and _hub_has_root(path):
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                raise PairingError(
+                    "folder_missing", f"{path} is not a folder on this computer.", 400
+                )
         roots, change = sync_daemon.plan_root_additions(
             sync_daemon.configured_roots(), [path]
         )
@@ -854,12 +1424,39 @@ def add_root(path: str, *, local_only: bool = False) -> dict[str, Any]:
     }
 
 
-def remove_root(path: str, *, local_only: bool = False) -> dict[str, Any]:
-    """Stop syncing a folder, here and on the paired computer(s). Files stay."""
+def remove_root(
+    path: str, *, local_only: bool = False, scope: str | None = None
+) -> dict[str, Any]:
+    """Stop syncing a folder, here and on the paired computer(s). Files stay.
+
+    ``scope="this_computer"`` (an edge only) stops syncing it here and leaves
+    the hub and the other computers syncing it; it is the default on a
+    project-only computer. ``scope="everywhere"`` is the default elsewhere.
+    """
     if not path or not str(path).strip():
         raise PairingError("path_required", "Choose a folder.", 400)
+    if scope not in (None, "this_computer", "everywhere"):
+        raise PairingError("bad_scope", "scope is this_computer or everywhere.", 400)
+    peer_request = local_only  # a paired computer's request: missing is fine
     with _lock:
         role = _require_configured_role()
+        requested_scope = scope
+        if scope is None:
+            project_only = bool(_summary().get("project_only"))
+            scope = "this_computer" if role == "edge" and project_only else "everywhere"
+        if role == "edge" and not peer_request:
+            part = _remove_part(path, requested_scope)
+            if part is not None:
+                return part
+        if scope == "this_computer":
+            if role != "edge":
+                raise PairingError(
+                    "hub_holds_all",
+                    "The always-on computer holds every synced folder. Stop "
+                    "syncing it everywhere, or on the other computer only.",
+                    409,
+                )
+            local_only = True
         target = sync_daemon.expand_root_path(path)
         current = sync_daemon.configured_roots()
         match = [
@@ -868,7 +1465,7 @@ def remove_root(path: str, *, local_only: bool = False) -> dict[str, Any]:
             if root.get("path") and sync_daemon.expand_root_path(root["path"]) == target
         ]
         if not match:
-            if local_only:
+            if peer_request:
                 return {
                     "removed": [],
                     "roots": current,
@@ -893,6 +1490,7 @@ def remove_root(path: str, *, local_only: bool = False) -> dict[str, Any]:
             peers = _propagate("remove", role, home_relative)
     return {
         "removed": removed,
+        "scope": "this_computer" if local_only else "everywhere",
         "roots": sync_daemon.configured_roots(),
         "restarted": restarted,
         "restart_required": restart_required,

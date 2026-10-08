@@ -201,3 +201,98 @@ def test_uninstall_sweeps_all_services_without_installation(monkeypatch):
 
     assert result.exit_code == 0
     assert set(removed) == {svc.name for svc in services_cli.SERVICES}
+
+
+def _healthy_serve():
+    return SimpleNamespace(
+        healthy=True,
+        tailscale_available=True,
+        tailscale_running=True,
+        host="mac.tailnet.ts.net",
+        openbase_url="http://mac.tailnet.ts.net:18080",
+        openbase_configured=True,
+        livekit_configured=True,
+        openbase_reachable=True,
+        error=None,
+    )
+
+
+def _skew(service, running, installed, shared_daemon=False):
+    from openbase_coder_cli.services.codex_version_skew import CodexVersionSkew
+
+    return CodexVersionSkew(
+        service=service,
+        running_version=running,
+        installed_version=installed,
+        installed_path="/opt/codex",
+        shared_daemon=shared_daemon,
+    )
+
+
+def test_services_status_reports_shared_daemon_even_with_idle_runner_pid(monkeypatch):
+    monkeypatch.setattr(services_cli, "require_installation", lambda: None)
+    monkeypatch.setattr(services_cli, "configured_coding_backends", lambda: ["codex"])
+    monkeypatch.setattr(
+        services_cli,
+        "SERVICES",
+        [SimpleNamespace(name="codex-app-server", install_by_default=True)],
+    )
+    # The Openbase runner idles behind the daemon, so launchd reports a pid.
+    monkeypatch.setattr(
+        services_cli,
+        "launchctl_status",
+        lambda _svc: {"installed": True, "pid": 4242, "last_exit_code": 0},
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.codex_control_plane.shared_codex_daemon_ready",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        services_cli,
+        "service_version_skew",
+        lambda name: _skew(name, "0.161.0", "0.160.1", shared_daemon=True),
+    )
+    monkeypatch.setattr(services_cli, "tailscale_serve_health", _healthy_serve)
+
+    result = CliRunner().invoke(services_cli.services, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert "codex-app-server     available through the shared Codex daemon (0.161.0)" in (
+        result.output
+    )
+    assert "upgrade the Codex CLI to 0.161.0" in result.output
+    assert "pid 4242" not in result.output
+
+
+def test_services_status_newer_own_server_asks_for_cli_upgrade_not_restart(monkeypatch):
+    monkeypatch.setattr(services_cli, "require_installation", lambda: None)
+    monkeypatch.setattr(services_cli, "configured_coding_backends", lambda: ["codex"])
+    monkeypatch.setattr(
+        services_cli,
+        "SERVICES",
+        [SimpleNamespace(name="codex-app-server-dispatcher", install_by_default=True)],
+    )
+    monkeypatch.setattr(
+        services_cli,
+        "launchctl_status",
+        lambda _svc: {"installed": True, "pid": 77, "last_exit_code": 0},
+    )
+    monkeypatch.setattr(services_cli, "codex_app_server_ready", lambda endpoint: True)
+    monkeypatch.setattr(
+        "openbase_coder_cli.codex_control_plane.dispatcher_codex_app_server_endpoint",
+        lambda: "dispatcher-endpoint",
+    )
+    monkeypatch.setattr(
+        services_cli,
+        "service_version_skew",
+        lambda name: _skew(name, "0.161.0", "0.160.1"),
+    )
+    monkeypatch.setattr(services_cli, "tailscale_serve_health", _healthy_serve)
+
+    result = CliRunner().invoke(services_cli.services, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert "Codex 0.161.0 but 0.160.1 is installed — upgrade the Codex CLI to 0.161.0" in (
+        result.output
+    )
+    assert "restart to update" not in result.output

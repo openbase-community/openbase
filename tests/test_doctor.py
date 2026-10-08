@@ -227,7 +227,8 @@ def test_agent_auth_requires_claude_login_for_claude_backend(monkeypatch, tmp_pa
     ) in messages
 
 
-def test_doctor_allows_optional_stopped_services(monkeypatch, tmp_path):
+def _patch_doctor_runtime(monkeypatch, tmp_path, services, launchctl_status):
+    """A healthy codex-backend install whose service list is ``services``."""
     env_file = tmp_path / ".env"
     env_file.write_text("OPENBASE_CODER_CLI_SECRET_KEY=x\n", encoding="utf-8")
     monkeypatch.setattr(doctor_cli.InstallationConfig, "exists", lambda: True)
@@ -240,22 +241,8 @@ def test_doctor_allows_optional_stopped_services(monkeypatch, tmp_path):
         ),
     )
     monkeypatch.setattr(doctor_cli, "configured_coding_backends", lambda: ["codex"])
-    monkeypatch.setattr(
-        doctor_cli,
-        "SERVICES",
-        [
-            SimpleNamespace(
-                name="codex-thread-device-sync",
-                install_by_default=False,
-                supports_backend=lambda _backend: True,
-            )
-        ],
-    )
-    monkeypatch.setattr(
-        doctor_cli,
-        "launchctl_status",
-        lambda _svc: {"installed": True, "pid": None, "last_exit_code": None},
-    )
+    monkeypatch.setattr(doctor_cli, "SERVICES", services)
+    monkeypatch.setattr(doctor_cli, "launchctl_status", launchctl_status)
     monkeypatch.setattr(
         doctor_cli,
         "_get_listening_sockets",
@@ -305,10 +292,66 @@ def test_doctor_allows_optional_stopped_services(monkeypatch, tmp_path):
     monkeypatch.setattr(doctor_cli, "CODEX_HOME_DIR", codex_home)
     _patch_agent_home_paths(monkeypatch, tmp_path)
 
+
+def test_doctor_allows_optional_stopped_services(monkeypatch, tmp_path):
+    _patch_doctor_runtime(
+        monkeypatch,
+        tmp_path,
+        [
+            SimpleNamespace(
+                name="codex-thread-device-sync",
+                install_by_default=False,
+                supports_backend=lambda _backend: True,
+            )
+        ],
+        lambda _svc: {"installed": True, "pid": None, "last_exit_code": None},
+    )
+
     result = CliRunner().invoke(doctor_cli.doctor)
 
     assert result.exit_code == 0, result.output
     assert "codex-thread-device-sync: optional (not running" in result.output
+
+
+def test_doctor_reports_shared_daemon_and_cli_upgrade_over_idle_runner(
+    monkeypatch, tmp_path
+):
+    from openbase_coder_cli.services.codex_version_skew import CodexVersionSkew
+
+    _patch_doctor_runtime(
+        monkeypatch,
+        tmp_path,
+        [
+            SimpleNamespace(
+                name="codex-app-server",
+                install_by_default=True,
+                supports_backend=lambda _backend: True,
+            )
+        ],
+        # Openbase's runner idles behind the daemon and holds a pid.
+        lambda _svc: {"installed": True, "pid": 4242, "last_exit_code": 0},
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.codex_control_plane.shared_codex_daemon_ready",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.services.codex_version_skew.service_version_skew",
+        lambda name: CodexVersionSkew(
+            service=name,
+            running_version="0.161.0",
+            installed_version="0.160.1",
+            installed_path="/opt/codex",
+            shared_daemon=True,
+        ),
+    )
+
+    result = CliRunner().invoke(doctor_cli.doctor)
+
+    assert result.exit_code == 0, result.output
+    assert "codex-app-server: available through the shared Codex daemon" in result.output
+    assert "upgrade the Codex CLI to 0.161.0" in result.output
+    assert "pid 4242" not in result.output
 
 
 def test_doctor_skips_backend_scoped_services_on_other_backends(monkeypatch, tmp_path):

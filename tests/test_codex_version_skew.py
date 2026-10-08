@@ -473,4 +473,176 @@ def test_auto_restart_tick_respects_opt_out(monkeypatch) -> None:
         "collect_codex_version_skews",
         lambda: (_ for _ in ()).throw(AssertionError("must not probe when disabled")),
     )
-    assert run_auto_restart_tick() == {"skews": [], "blockers": [], "restarted": []}
+    assert run_auto_restart_tick() == {
+        "skews": [],
+        "cli_outdated": [],
+        "blockers": [],
+        "restarted": [],
+    }
+
+
+def test_version_ordering_is_numeric() -> None:
+    assert skew_module.version_is_older("0.160.1", "0.161.0")
+    assert skew_module.version_is_older("0.9.0", "0.10.0")  # not lexical
+    assert not skew_module.version_is_older("0.161.0", "0.160.1")
+    assert not skew_module.version_is_older("0.161.0", "0.161.0")
+
+
+def test_skew_newer_server_or_shared_daemon_is_advisory_only() -> None:
+    stale = _skew()
+    assert stale.restart_resolves
+    assert not stale.running_is_newer
+    assert "restart" not in stale.message.lower()
+
+    newer = CodexVersionSkew(
+        service="codex-app-server",
+        running_version="0.161.0",
+        installed_version="0.160.1",
+        installed_path="/opt/codex",
+    )
+    assert newer.running_is_newer
+    assert not newer.restart_resolves
+    assert "upgrade the Codex CLI to 0.161.0" in newer.message
+
+    daemon_newer = CodexVersionSkew(
+        service="codex-app-server",
+        running_version="0.161.0",
+        installed_version="0.160.1",
+        installed_path="/opt/codex",
+        shared_daemon=True,
+    )
+    assert not daemon_newer.restart_resolves
+    assert "shared Codex daemon 0.161.0" in daemon_newer.message
+    assert "upgrade the Codex CLI to 0.161.0" in daemon_newer.message
+
+    # The daemon updates itself; an older daemon is still not ours to restart.
+    daemon_older = CodexVersionSkew(
+        service="codex-app-server",
+        running_version="0.160.1",
+        installed_version="0.161.0",
+        installed_path="/opt/codex",
+        shared_daemon=True,
+    )
+    assert not daemon_older.restart_resolves
+    assert "does not restart it" in daemon_older.message
+    assert daemon_older.advisory_hint == (
+        "wait for the shared Codex daemon to update itself"
+    )
+
+
+def test_service_version_skew_flags_the_shared_daemon_link(monkeypatch, tmp_path) -> None:
+    link = tmp_path / "app-server-control.sock"
+    link.symlink_to(tmp_path / "daemon.sock")
+    endpoints = {
+        "codex-app-server": SimpleNamespace(is_unix=True, socket_path=link),
+        "codex-app-server-dispatcher": SimpleNamespace(
+            is_unix=True, socket_path=tmp_path / "dispatcher.sock"
+        ),
+    }
+    monkeypatch.setattr(skew_module, "service_endpoint", endpoints.__getitem__)
+    monkeypatch.setattr(
+        skew_module, "running_codex_app_server_version", lambda endpoint: "0.161.0"
+    )
+    installed = ("/opt/codex", "0.160.1")
+
+    shared = skew_module.service_version_skew("codex-app-server", installed)
+    assert shared is not None and shared.shared_daemon
+    assert not shared.restart_resolves
+
+    own = skew_module.service_version_skew("codex-app-server-dispatcher", installed)
+    assert own is not None and not own.shared_daemon
+    assert own.running_is_newer and not own.restart_resolves
+
+
+def test_collect_probes_shared_endpoint_without_an_openbase_pid(monkeypatch) -> None:
+    from openbase_coder_cli.services import launchd, registry, selection
+
+    monkeypatch.setattr(
+        skew_module, "installed_codex_version", lambda: ("/opt/codex", "0.160.1")
+    )
+    monkeypatch.setattr(
+        registry, "find_service", lambda name: SimpleNamespace(name=name)
+    )
+    monkeypatch.setattr(
+        selection, "service_supports_configured_backends", lambda service: True
+    )
+    monkeypatch.setattr(
+        launchd, "launchctl_status", lambda service: {"installed": True, "pid": None}
+    )
+    probed: list[str] = []
+
+    def fake_skew(name, installed):
+        probed.append(name)
+        return CodexVersionSkew(
+            service=name,
+            running_version="0.161.0",
+            installed_version=installed[1],
+            installed_path=installed[0],
+            shared_daemon=True,
+        )
+
+    monkeypatch.setattr(skew_module, "service_version_skew", fake_skew)
+    skews = skew_module.collect_codex_version_skews()
+    # The shared endpoint answers with no Openbase pid; the dispatcher (an
+    # Openbase-only instance) is skipped while stopped.
+    assert probed == ["codex-app-server"]
+    assert [skew.service for skew in skews] == ["codex-app-server"]
+
+
+def test_auto_restart_tick_never_restarts_an_advisory_skew(monkeypatch, caplog) -> None:
+    import logging
+
+    monkeypatch.setattr(skew_module, "_last_scheduled", {})
+    monkeypatch.setattr(skew_module, "_last_advised", {})
+    daemon = CodexVersionSkew(
+        service="codex-app-server",
+        running_version="0.161.0",
+        installed_version="0.160.1",
+        installed_path="/opt/codex",
+        shared_daemon=True,
+    )
+    monkeypatch.setattr(skew_module, "collect_codex_version_skews", lambda: [daemon])
+    monkeypatch.setattr(
+        skew_module,
+        "super_agents_active_turn_count",
+        lambda: pytest.fail("no restart means no busy probe"),
+    )
+
+    from openbase_coder_cli.services import restart as restart_module
+
+    monkeypatch.setattr(
+        restart_module,
+        "schedule_restart",
+        lambda *_a, **_k: pytest.fail("must never restart for the shared daemon"),
+    )
+
+    with caplog.at_level(logging.WARNING, logger=skew_module.__name__):
+        first = run_auto_restart_tick()
+        second = run_auto_restart_tick()
+    assert first["skews"] == [] and first["restarted"] == [] and first["blockers"] == []
+    assert first["cli_outdated"] == ["codex-app-server"]
+    assert second["cli_outdated"] == ["codex-app-server"]
+    # Logged once per version pair, not on every tick.
+    warned = [r for r in caplog.records if "no_restart" in r.getMessage()]
+    assert len(warned) == 1
+    assert "upgrade the Codex CLI to 0.161.0" in warned[0].getMessage()
+
+    # A stale Openbase-owned dispatcher alongside it still restarts.
+    monkeypatch.setattr(
+        skew_module,
+        "collect_codex_version_skews",
+        lambda: [daemon, _skew(service="codex-app-server-dispatcher")],
+    )
+    monkeypatch.setattr(skew_module, "super_agents_active_turn_count", lambda: 0)
+    monkeypatch.setattr(skew_module, "voice_session_active", lambda: False)
+    monkeypatch.setattr(skew_module, "attached_sessions_in_use", lambda names, **_k: 0)
+    scheduled: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        restart_module,
+        "schedule_restart",
+        lambda request, **_k: scheduled.append(request.services),
+    )
+    third = run_auto_restart_tick()
+    assert third["restarted"] == ["codex-app-server-dispatcher"]
+    assert third["cli_outdated"] == ["codex-app-server"]
+    assert scheduled == [("codex-app-server-dispatcher",)]

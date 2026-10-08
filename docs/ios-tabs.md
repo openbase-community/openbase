@@ -12,14 +12,12 @@ CLI server, LiveKit server, and agent services started by
 
 ## Onboarding
 
-On first launch the app offers two paths:
+On first launch, an account with no backend yet is asked where its backend should live (see [Computer or Cloud Workspace?](getting-started/computer-or-cloud-workspace.md)):
 
-- **Link Your Computer** (default) — pair the phone with a Mac running the
-  Openbase runtime. The app directs you to `https://app.openbase.cloud` to
-  download the Mac app and sign in, then walks through installing Tailscale
-  on both devices (same tailnet), and waits for Mac setup to finish. Progress
-  is detected automatically by polling your cloud account state.
-- **Start with Cloud** — skip pairing and use Openbase Cloud from the phone.
+- **Set Up a New Computer** — pair the phone with a Mac running the Openbase runtime. The app directs you to `https://app.openbase.cloud` to download the Mac app and sign in, then walks through joining the private network on both devices, and waits for Mac setup to finish. Progress is detected automatically by polling your cloud account state.
+- **Use a Cloud Workspace** — let Openbase Cloud host a small private workspace and pair the phone with it, with no computer at all.
+
+An account that already has a computer running Openbase Coder or a Cloud Workspace skips this choice: the app reads that from your cloud account state and goes straight to pairing the phone.
 
 After onboarding, sign in with your Openbase account (email + password, with
 optional two-factor authentication). The session persists in the iOS
@@ -28,26 +26,32 @@ Keychain.
 **On the Mac:** the desktop app's setup flow drives the other half of this
 pairing — see [Desktop App](desktop-app.md#install-and-first-run-setup).
 
-## Navigation
+## Chat
 
-Swipe from the left edge or tap the menu button to open the sidebar. It has a
-**Workspace** section (Call, Voice Test, Dispatch, Threads, Sync, Approvals,
-Reports, Diff, Console, Cloud) and a **System** section (Settings).
+The app opens on an empty **new chat**, like the ChatGPT and Codex apps: the Openbase mark sits faded in the middle and a message box sits at the bottom. Every conversation, with the Dispatcher or with a coding thread, is this same screen: your messages on the right in gray bubbles, the agent's replies on the left as plain text, with copy and share under the latest reply. A reply that is still being written streams in with a **Stop** control. The Android app uses the same layout.
 
-## Call
+- Type a message and tap the arrow to send it. On a new chat it goes to the **Dispatcher**, which routes the work, and the screen becomes that conversation. To start a new coding thread instead, tap **+** and pick a recent project; the app creates the thread on the computer that owns the project and the screen becomes that thread. In a conversation, sending while the agent is working steers it (hold the button to queue instead).
+- Tap the **microphone** to record a voice note. It is transcribed on the phone into the message box so you can edit it before sending; tap again to stop. Voice notes are off while a call is running.
+- With the box empty, the round **waveform** button starts a voice call.
+- The title shows the conversation name. The top-right **compose** button starts a new chat; **⋯** holds the thread actions (pin, archive, transfer the active call, refresh, details). In a conversation, **+** also chooses which computer runs the thread.
 
-The primary voice interface. Tap to start a LiveKit call with the
-dispatcher — the routing agent that can start, resume, and hand you to Super
-Agents by voice. The top bar shows the call state (calling, connected agent
-name, or error), with mute/unmute and end-call buttons. The screen shows an
-audio visualizer, live agent activity, and the latest agent message.
+Tap the round menu button at the top left (or swipe from the left edge) to open the side drawer. From the top:
 
-While connected you can ask the dispatcher to transfer you to a Super Agent,
-or say "go back to dispatch" to return. The same routing is scriptable from
-the CLI — see [Voice Routing](voice-routing.md).
+- **Openbase** and a **search** button that opens the full thread list.
+- Dispatch, Approvals, Notifications (with an unread badge), Reports, Sync, Cloud, and the developer Voice Test screen.
+- **Pinned** — your favorite threads.
+- **Recents** — your most recently updated threads, with **See all** for the full list. A green dot marks a running thread.
+- A floating **New chat** button and a **Settings** gear at the bottom.
 
-Voice Test is a developer screen for exercising LiveKit connection
-parameters directly.
+## Calls
+
+There is no separate Call page. Start a call from the waveform button in any chat's message box. The call connects to the dispatcher — the routing agent that can start, resume, and hand you to Super Agents by voice.
+
+While a call is running, the chat screen becomes the voice view: the agent orb in the middle with the call state and the latest spoken reply under it, and the message box with a **mute** button and a round **✕** to end the call. You can still type to steer. **Show messages** swaps the orb for the conversation, with a small orb in the title bar. The **settings** button at the top right opens the call settings: which computer answers, speaker, auto-mute and auto-unmute, room and call state, a shared screen, and **Back to Dispatch**. Other screens show the call in their top bar; tapping it opens the same settings.
+
+While connected you can ask the dispatcher to transfer you to a Super Agent, or say "go back to dispatch" to return. The same routing is scriptable from the CLI — see [Voice Routing](voice-routing.md).
+
+Voice Test is a developer screen for exercising LiveKit connection parameters directly.
 
 **Action Button mute shortcut:** the app exposes an App Intent named
 `Toggle Voice Session Mute` (shortcut title `Toggle Mute`). Create an iOS
@@ -62,26 +66,19 @@ into the same call.
 
 ## Dispatch
 
-A read-and-steer view of the dispatcher's thread: its turn history, current
-turn, and reasoning, with an interrupt button. Auto-refreshes every 15
-seconds.
+The Dispatcher's conversation, opened from the drawer. It is the same chat screen as any thread, so you can read what the dispatcher did, steer it, and start a call from it.
 
 ## Threads
 
-Lists your coding threads with status badges and active/loaded counts.
+The full thread list (from the drawer's search button or **See all**), with status badges and active/loaded counts.
 
 - **New thread** creates a thread from a recent project.
-- Swipe left to favorite, swipe right to archive.
+- Swipe left to favorite (pin), swipe right to archive. Pinned threads appear under **Pinned** in the drawer.
 - Pull to refresh.
 
-Tap a thread for the detail view: connection indicator, expandable turn
-history (prompt, status, timestamps, output, stderr, Markdown rendering),
-the live current turn with real-time output over WebSocket, an interrupt
-button, and a prompt bar to send the next message.
+Tap a thread to open it as a chat. Under **⋯** → **Show details** each turn exposes its status, timestamps, return code and stderr.
 
-During an active call, thread detail shows **Transfer Active Call** to route
-the voice session to that thread, and a **Return to Dispatch** action to hand
-it back.
+During an active call, a thread's **⋯** menu offers **Transfer Active Call** to route the voice session to that thread, and the call settings offer **Back to Dispatch** to hand it back.
 
 **On the Mac:** the desktop app and console have the same thread list and
 live detail view with a full keyboard.

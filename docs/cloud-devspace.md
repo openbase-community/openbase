@@ -96,12 +96,7 @@ The first call should request a room token from the Linux instance, connect to
 LiveKit over Tailscale, and dispatch the `livekit-agent` worker running in the
 cloud desktop.
 
-After one successful connection identifies the backend as an Openbase Cloud
-Workspace, later calls automatically resume that Workspace when idle shutdown
-has stopped its EC2 instance. The Call screen shows whether it is checking,
-starting, or waiting for the Workspace, and lets you cancel the pending call.
-Cancelling the call does not stop an EC2 startup that Openbase Cloud has already
-accepted.
+After one successful connection identifies the backend as an Openbase Cloud Workspace, later calls automatically resume that Workspace when idle shutdown has stopped its EC2 instance. The phone app's voice view and call settings show whether it is checking, starting, or waiting for the Workspace, and let you cancel the pending call. Cancelling the call does not stop an EC2 startup that Openbase Cloud has already accepted.
 
 Openbase deliberately does not attempt this recovery for an unrecognized or
 ordinary Mac/Linux backend. An existing saved DevSpace that has never reported

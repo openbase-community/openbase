@@ -31,6 +31,12 @@ STATE_DB_NAME = "state_5.sqlite"
 _STATE_DB_PATTERN = re.compile(r"state_(\d+)\.sqlite")
 SESSION_INDEX_NAME = "session_index.jsonl"
 TERMINAL_EVENT_TYPES = {"task_complete", "turn_aborted"}
+# Events Codex appends to an idle thread outside any turn: resuming a thread
+# records the settings it was resumed with, and a background command started
+# by an earlier turn can report completion after that turn ended. Neither
+# means a turn is running, so they do not change whether the rollout ends on
+# a finished turn.
+TURN_NEUTRAL_EVENT_TYPES = {"thread_settings_applied", "item_completed"}
 DEFAULT_SUPER_AGENTS_STATE_PATH = Path.home() / ".super-agents" / "state.json"
 DEFAULT_SYNC_MAX_AGE_DAYS = 15
 FINGERPRINT_MATCH_KEYS = (
@@ -153,7 +159,9 @@ def _rollout_terminal_event(path: Path) -> tuple[str | None, bool]:
             event_type = _string(event.get("type"))
             payload = event.get("payload")
             if event_type == "event_msg" and isinstance(payload, dict):
-                last_event_type = _string(payload.get("type"))
+                payload_type = _string(payload.get("type"))
+                if payload_type not in TURN_NEUTRAL_EVENT_TYPES:
+                    last_event_type = payload_type
             elif event_type:
                 last_event_type = event_type
     return last_event_type, has_undecodable_lines

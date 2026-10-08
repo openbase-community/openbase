@@ -280,6 +280,31 @@ def _truncate_existing_logs(svc: ServiceDefinition) -> None:
     _truncate_log_file(_log_path(svc))
 
 
+# A service log is trimmed on every start, so it only grows unbounded when
+# the supervisor respawns a failing runner faster than anyone restarts it
+# (2026-10-07: 12,080 identical tracebacks, 14.6 MB). Each runner start
+# therefore also caps its own log once it passes this size.
+SERVICE_LOG_CAP_BYTES = 4 * 1024 * 1024
+
+
+def cap_service_log(
+    service_name: str, *, max_bytes: int = SERVICE_LOG_CAP_BYTES
+) -> bool:
+    """Trim ``<logs>/<service>.log`` to its tail once it exceeds ``max_bytes``.
+
+    Returns whether the log was trimmed. Best-effort: a missing or
+    unreadable log never blocks a service start.
+    """
+    path = DEFAULT_LOG_DIR / f"{service_name}.log"
+    try:
+        if path.stat().st_size <= max_bytes:
+            return False
+        _truncate_log_file(path)
+    except OSError:
+        return False
+    return True
+
+
 def _matches_cleanup_signature(svc: ServiceDefinition, pid: int) -> bool:
     if not svc.cleanup_command_substrings:
         return True

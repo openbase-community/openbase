@@ -291,7 +291,9 @@ def _codex_version_skew_tick() -> None:
     # A codex-app-server that predates the installed Codex makes every new
     # Codex CLI launch warn about the stale background service. Restart it
     # once no agent turn or voice call is in flight; otherwise the console
-    # banner keeps offering a manual restart.
+    # banner keeps offering a manual restart. A server newer than the CLI
+    # (the shared Codex daemon after its own update) is never restarted;
+    # the tick logs a CLI-upgrade warning once instead.
     from openbase_coder_cli.services.codex_version_skew import (
         run_auto_restart_tick,
     )
