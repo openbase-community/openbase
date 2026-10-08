@@ -36,8 +36,9 @@ openbase-coder services COMMAND [ARGS]
 - `openbase-routines`
 - `livekit-agent`
 - `django-cli` (port `7999`)
-- `sync-daemon` (optional; installed by `openbase-coder sync-daemon configure`,
-  see [Sync Between Your Computers](../code-sync.md))
+- `sync-daemon` (optional; installed when you pair the computer on the Sync
+  page or with `openbase-coder sync-daemon pair`, see
+  [Sync Between Your Computers](../code-sync.md))
 
 ## Examples
 

@@ -27,7 +27,8 @@ before falling back to `PATH`.
 
 Optional services, such as the `sync-daemon` (Openbase Sync), are not
 installed by default; they are installed by the feature that needs them (for
-example `openbase-coder sync-daemon configure`) or can be started explicitly:
+example pairing on the console Sync page or `openbase-coder sync-daemon pair`)
+or can be started explicitly:
 
 ```bash
 openbase-coder services start sync-daemon

@@ -17,7 +17,7 @@ openbase-coder services start
 # Start only Django API
 openbase-coder services start django-cli
 
-# Start Openbase Sync explicitly (normally `openbase-coder sync-daemon configure`)
+# Start Openbase Sync explicitly (normally started by `openbase-coder sync-daemon pair`)
 openbase-coder services start sync-daemon
 ```
 

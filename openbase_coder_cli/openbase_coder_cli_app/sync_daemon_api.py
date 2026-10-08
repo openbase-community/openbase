@@ -29,9 +29,15 @@ def _unavailable(exc: Exception) -> Response:
 
 @api_view(["GET"])
 def sync_daemon_settings(request):
-    """Configuration summary plus whether the daemon answers."""
+    """Configuration summary, whether the daemon answers, and the hub.
+
+    Never includes the pair secret.
+    """
+    from openbase_coder_cli import sync_pairing
+
     summary = sync_daemon.read_config_summary()
     summary["reachable"] = summary["configured"] and sync_daemon.reachable()
+    summary.update(sync_pairing.hub_display(summary))
     return Response(summary)
 
 
