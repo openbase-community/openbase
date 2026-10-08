@@ -167,7 +167,13 @@ upgraded (for example with `npm install -g @openai/codex`, or when a new Node
 version gets its own global install), those services keep the old binary in
 memory until they restart.
 
-Openbase handles this itself:
+This only applies when the background service is *older* than the CLI. The
+opposite case (a background server newer than the CLI, typically Codex's own
+self-updating daemon) is covered by [Codex Says the Background Server Has
+Incompatible Feature Settings](#codex-says-the-background-server-has-incompatible-feature-settings);
+Openbase never restarts anything for it.
+
+Openbase handles the stale-service case itself:
 
 - The console health banner shows "Service 'codex-app-server' is running
   Codex X, but Codex Y is installed" with a **Restart** button.
@@ -186,6 +192,52 @@ Openbase handles this itself:
 To restart by hand: `openbase-coder restart --service codex-app-server`
 (and `--service codex-app-server-dispatcher`). This briefly interrupts
 running Codex threads and any voice call.
+
+## Codex Says the Background Server Has Incompatible Feature Settings
+
+Symptom: every new `codex` session opens a dialog, "Background server has
+incompatible feature settings", listing a few feature flags and offering
+**1. Run without daemon this time** or **2. Restart with these settings**.
+`codex app-server daemon version` prints a `cliVersion` lower than its
+`appServerVersion` (for example `0.160.1` against `0.161.0`).
+
+Cause: Codex's managed app-server daemon updates itself hourly, while the
+Codex CLI on your `PATH` is only upgraded when you (or Openbase) reinstall
+it. When a Codex release changes a shared feature default, an older CLI
+computes different required features than the newer daemon serves and
+refuses to attach. The daemon is Codex's, not Openbase's: it owns the
+standard control socket (`~/.codex/app-server-control/app-server-control.sock`
+is a symlink into the daemon's runtime directory), so Openbase's own
+`codex-app-server` service stays idle beside it instead of starting a second
+server. `openbase-coder services status` shows this as
+`codex-app-server available through the shared Codex daemon (<version>)`
+followed by the version mismatch, and the console health banner shows
+"Codex CLI X is older than the shared Codex daemon Y; upgrade the Codex CLI
+to Y" without a restart button.
+
+Fix: upgrade the Codex CLI to the daemon's version. This swaps files on
+disk only; the daemon and every attached session keep running.
+
+```bash
+npm install -g @openai/codex@<daemon version>
+codex app-server daemon version   # cliVersion must now equal appServerVersion
+```
+
+The Openbase upgrade warning clears on the next health check. If Openbase's
+dispatcher app-server is still on the old version afterwards, the
+[stale-service handling above](#codex-cli-warns-about-an-older-background-service)
+restarts it once nothing is in flight.
+
+Until you upgrade, choose **1. Run without daemon this time**. That session
+runs on its own and cannot be steered from Openbase, but nothing else is
+affected.
+
+Never choose **2. Restart with these settings** on a shared daemon. It
+restarts the daemon with the older CLI's feature values persisted, which
+disconnects every Codex session attached to it (Openbase Super Agents, other
+`codex` terminals, and any voice call in progress) and leaves the daemon on
+non-default settings that newer clients then fight over. Openbase never
+restarts the shared daemon for the same reason.
 
 ## Codex Resume Fails Against the Shared App-Server
 

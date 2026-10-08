@@ -38,3 +38,11 @@ never in a loop). The same skew feeds the console health banner as
 `service-restart-needed:<service>` with a one-click restart, and
 `services status` prints it. Set `OPENBASE_CODEX_AUTO_RESTART=0` in
 `~/.openbase/.env` to keep the banner but disable the automatic restart.
+Only a skew a restart resolves (`CodexVersionSkew.restart_resolves`) is
+restarted: a server *newer* than the installed CLI, or one served by Codex's
+own managed daemon (the standard control socket is a symlink, see
+`codex_control_plane.endpoint_is_shared_codex_daemon`), is advisory — a
+`codex-cli-outdated:<service>` banner warning and a once-per-pair log line
+telling the user to upgrade the Codex CLI. Openbase never restarts the shared
+daemon, and the `codex-app-server` runner idles instead of binding while that
+daemon owns the socket (`codex_control_plane.idle_while_shared_codex_daemon`).

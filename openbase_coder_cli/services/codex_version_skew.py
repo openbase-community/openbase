@@ -10,6 +10,15 @@ running vX, older than your Codex CLI vY".
 Detection needs no bookkeeping at start time: the running server reports
 its version in the ``userAgent`` of the ``initialize`` handshake, and the
 installed version is whatever the service resolver would exec today.
+
+Only a service running an *older* Codex than is installed is fixed by a
+restart. Two other mismatches are reported but never restarted: the
+standard socket may be served by Codex's own self-updating managed daemon,
+which Openbase does not own (restarting the Openbase launchd job cannot
+change the daemon's version), and a server may be *newer* than the
+installed CLI, in which case the CLI is what needs upgrading (2026-10-07:
+daemon 0.161.0 against CLI 0.160.1 raised Codex's "incompatible feature
+settings" dialog on every new session).
 """
 
 from __future__ import annotations
@@ -49,15 +58,61 @@ _installed_cache_lock = threading.Lock()
 _installed_cache: tuple[tuple[str, int, int, int, int], str] | None = None
 
 
+def version_key(version: str) -> tuple[int, ...]:
+    """Sortable form of ``X.Y.Z``; unparsable parts sort lowest."""
+    parts: list[int] = []
+    for piece in version.split("."):
+        digits = re.match(r"\d+", piece)
+        parts.append(int(digits.group(0)) if digits else -1)
+    return tuple(parts)
+
+
+def version_is_older(candidate: str, reference: str) -> bool:
+    return version_key(candidate) < version_key(reference)
+
+
 @dataclass(frozen=True)
 class CodexVersionSkew:
     service: str
     running_version: str
     installed_version: str
     installed_path: str
+    # The endpoint is served by Codex's managed daemon, not an Openbase
+    # process: Openbase cannot restart it, and must not try.
+    shared_daemon: bool = False
+
+    @property
+    def running_is_newer(self) -> bool:
+        return version_is_older(self.installed_version, self.running_version)
+
+    @property
+    def restart_resolves(self) -> bool:
+        """Whether restarting the Openbase service brings the versions together."""
+        return not self.shared_daemon and not self.running_is_newer
+
+    @property
+    def upgrade_hint(self) -> str:
+        return f"upgrade the Codex CLI to {self.running_version}"
 
     @property
     def message(self) -> str:
+        if self.shared_daemon and self.running_is_newer:
+            return (
+                f"Codex CLI {self.installed_version} is older than the shared "
+                f"Codex daemon {self.running_version}; {self.upgrade_hint}."
+            )
+        if self.shared_daemon:
+            return (
+                f"The shared Codex daemon runs Codex {self.running_version}, "
+                f"but Codex {self.installed_version} is installed; the daemon "
+                "updates itself and Openbase does not restart it."
+            )
+        if self.running_is_newer:
+            return (
+                f"Service '{self.service}' is running Codex "
+                f"{self.running_version}, newer than the installed Codex "
+                f"{self.installed_version}; {self.upgrade_hint}."
+            )
         return (
             f"Service '{self.service}' is running Codex {self.running_version}, "
             f"but Codex {self.installed_version} is installed."
@@ -206,12 +261,17 @@ def service_version_skew(
     """Skew for one running codex service, or ``None`` when versions agree.
 
     Also ``None`` when either side is unknown: a service that is down or
-    unreachable is reported by the service-status checks instead.
+    unreachable is reported by the service-status checks instead. Check
+    ``restart_resolves`` before acting on a skew: the shared daemon and a
+    server newer than the CLI are advisory only.
     """
+    from openbase_coder_cli.codex_control_plane import endpoint_is_shared_codex_daemon
+
     installed = installed or installed_codex_version()
     if installed is None:
         return None
-    running = running_codex_app_server_version(service_endpoint(service_name))
+    endpoint = service_endpoint(service_name)
+    running = running_codex_app_server_version(endpoint)
     if running is None or running == installed[1]:
         return None
     return CodexVersionSkew(
@@ -219,11 +279,17 @@ def service_version_skew(
         running_version=running,
         installed_version=installed[1],
         installed_path=installed[0],
+        shared_daemon=endpoint_is_shared_codex_daemon(endpoint),
     )
 
 
 def collect_codex_version_skews() -> list[CodexVersionSkew]:
-    """Skews for every installed, running codex service on this machine."""
+    """Skews for every installed, running codex service on this machine.
+
+    ``codex-app-server`` is probed whenever its endpoint answers: the shared
+    Codex daemon serves it with no Openbase pid at all, and with Openbase's
+    idle placeholder runner holding the pid.
+    """
     from openbase_coder_cli.services.launchd import launchctl_status
     from openbase_coder_cli.services.registry import find_service
     from openbase_coder_cli.services.selection import (
@@ -242,7 +308,7 @@ def collect_codex_version_skews() -> list[CodexVersionSkew]:
             info = launchctl_status(service)
         except Exception:  # noqa: BLE001 - status probe must never break health
             continue
-        if not info.get("pid"):
+        if not info.get("pid") and name != "codex-app-server":
             continue
         skew = service_version_skew(name, installed)
         if skew is not None:
@@ -518,6 +584,25 @@ def restart_blockers(
 # only make it worse. The banner keeps showing the skew for a manual fix.
 _last_scheduled: dict[str, tuple[str, str]] = {}
 _last_scheduled_lock = threading.Lock()
+# Advisory skews (CLI behind the server, or the shared daemon) are logged as
+# a warning once per version pair, not on every tick.
+_last_advised: dict[str, tuple[str, str]] = {}
+
+
+def _advise_cli_upgrade(skews: list[CodexVersionSkew]) -> list[str]:
+    advised: list[str] = []
+    with _last_scheduled_lock:
+        for skew in skews:
+            pair = (skew.running_version, skew.installed_version)
+            if _last_advised.get(skew.service) == pair:
+                continue
+            _last_advised[skew.service] = pair
+            advised.append(skew.service)
+            logger.warning("codex_version_skew no_restart %s", skew.message)
+        for service in list(_last_advised):
+            if service not in {skew.service for skew in skews}:
+                del _last_advised[service]
+    return advised
 
 
 def run_auto_restart_tick() -> dict[str, object]:
@@ -527,14 +612,30 @@ def run_auto_restart_tick() -> dict[str, object]:
     attached to the app-server itself (interactive ``codex`` TUIs): a loaded
     thread that is mid-turn or changed within the recent-activity window.
 
-    Returns a summary for logging/tests: ``skews`` found, ``blockers`` (why
-    the restart waited), and ``restarted`` (service names scheduled).
+    Only skews a restart resolves are restarted. A server newer than the
+    installed CLI, or the shared Codex daemon, is reported under
+    ``cli_outdated`` (and logged once per version pair) so the CLI gets
+    upgraded instead; restarting there would at best downgrade a service
+    and at worst crash-loop against a socket Openbase does not own.
+
+    Returns a summary for logging/tests: ``skews`` a restart would fix,
+    ``cli_outdated`` services whose skew needs a CLI upgrade, ``blockers``
+    (why the restart waited), and ``restarted`` (service names scheduled).
     """
-    summary: dict[str, object] = {"skews": [], "blockers": [], "restarted": []}
+    summary: dict[str, object] = {
+        "skews": [],
+        "cli_outdated": [],
+        "blockers": [],
+        "restarted": [],
+    }
     if not auto_restart_enabled():
         return summary
     repair_unusable_managed_codex()
-    skews = collect_codex_version_skews()
+    found = collect_codex_version_skews()
+    advisory = [skew for skew in found if not skew.restart_resolves]
+    summary["cli_outdated"] = [skew.service for skew in advisory]
+    _advise_cli_upgrade(advisory)
+    skews = [skew for skew in found if skew.restart_resolves]
     summary["skews"] = [skew.service for skew in skews]
     if not skews:
         with _last_scheduled_lock:

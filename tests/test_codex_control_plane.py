@@ -129,3 +129,180 @@ def test_unix_start_refuses_legacy_competing_owner(
 
     with pytest.raises(RuntimeError, match="legacy Codex app-server owner"):
         codex_control_plane.prepare_codex_app_server_start(endpoint, "codex")
+
+
+def test_shared_daemon_is_recognized_by_its_control_link(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    link = tmp_path / "app-server-control.sock"
+    link.symlink_to(tmp_path / "daemon.sock")
+    plain = tmp_path / "own.sock"
+    plain.touch()
+    assert codex_control_plane.endpoint_is_shared_codex_daemon(
+        SimpleNamespace(is_unix=True, socket_path=link)
+    )
+    assert not codex_control_plane.endpoint_is_shared_codex_daemon(
+        SimpleNamespace(is_unix=True, socket_path=plain)
+    )
+    assert not codex_control_plane.endpoint_is_shared_codex_daemon(
+        SimpleNamespace(is_unix=False, socket_path=None)
+    )
+    assert not codex_control_plane.endpoint_is_shared_codex_daemon("ws://x")
+
+
+def test_idle_while_shared_daemon_returns_at_once_without_a_daemon(tmp_path) -> None:
+    from types import SimpleNamespace
+
+    endpoint = SimpleNamespace(is_unix=True, socket_path=tmp_path / "s.sock")
+    logged: list[str] = []
+    assert (
+        codex_control_plane.idle_while_shared_codex_daemon(
+            endpoint,
+            ready=lambda _e: False,
+            sleep=lambda _s: pytest.fail("must not sleep"),
+            log=logged.append,
+        )
+        is False
+    )
+    assert logged == []
+
+
+def test_idle_while_shared_daemon_logs_once_and_hands_over_after_misses(
+    tmp_path,
+) -> None:
+    from types import SimpleNamespace
+
+    endpoint = SimpleNamespace(is_unix=True, socket_path=tmp_path / "s.sock")
+    # Live, live, one transient miss during the daemon's self-update swap,
+    # live again, then gone for good.
+    probes = iter([True, True, True, False, True, False, False, False])
+    slept: list[float] = []
+    logged: list[str] = []
+    assert (
+        codex_control_plane.idle_while_shared_codex_daemon(
+            endpoint,
+            ready=lambda _e: next(probes),
+            sleep=slept.append,
+            log=logged.append,
+            poll_seconds=7.0,
+            handover_polls=3,
+        )
+        is True
+    )
+    assert slept == [7.0] * 7
+    assert len(logged) == 2
+    assert "shared Codex daemon owns" in logged[0]
+    assert "starting the Openbase-managed app-server" in logged[1]
+
+
+def _serve_fake_codex_daemon(socket_path: Path, version: str):
+    """A minimal managed-daemon stand-in: answers ``initialize`` like Codex."""
+    import asyncio
+    import json
+    import threading
+
+    import websockets
+
+    started = threading.Event()
+    stop: asyncio.Future | None = None
+    loop = asyncio.new_event_loop()
+
+    async def handler(connection):
+        async for raw in connection:
+            message = json.loads(raw)
+            if message.get("method") == "initialize":
+                await connection.send(
+                    json.dumps(
+                        {
+                            "id": message["id"],
+                            "result": {
+                                "userAgent": f"codex_cli_rs/{version} (Mac OS 15; arm64)"
+                            },
+                        }
+                    )
+                )
+
+    async def main():
+        nonlocal stop
+        stop = loop.create_future()
+        async with websockets.unix_serve(handler, str(socket_path)):
+            started.set()
+            await stop
+
+    thread = threading.Thread(target=loop.run_until_complete, args=(main(),), daemon=True)
+    thread.start()
+    assert started.wait(5)
+
+    def shutdown():
+        loop.call_soon_threadsafe(stop.set_result, None)
+        thread.join(5)
+        loop.close()
+
+    return shutdown
+
+
+def test_fake_managed_daemon_is_shared_advisory_and_idled_behind(monkeypatch) -> None:
+    """End to end over a real Unix socket: the 2026-10-07 laptop state.
+
+    Codex's daemon (0.161.0) serves the standard socket through a symlink
+    while the installed CLI is 0.160.1. Openbase must see a shared daemon,
+    classify the mismatch as a CLI upgrade (never a restart), and keep its
+    own runner idle until the daemon goes away.
+    """
+    import threading
+
+    from super_agents.app_endpoint import parse_app_server_endpoint
+
+    from openbase_coder_cli.services import codex_version_skew as skew_module
+
+    daemon_socket = _short_socket_path("fake-daemon")
+    link = _short_socket_path("control-link")
+    shutdown = _serve_fake_codex_daemon(daemon_socket, "0.161.0")
+    link.symlink_to(daemon_socket)
+    endpoint = parse_app_server_endpoint(f"unix://{link}", env={}, source="test")
+    try:
+        assert codex_control_plane.endpoint_is_shared_codex_daemon(endpoint)
+        assert codex_control_plane.shared_codex_daemon_ready(endpoint)
+        assert skew_module.running_codex_app_server_version(endpoint) == "0.161.0"
+
+        monkeypatch.setattr(skew_module, "service_endpoint", lambda name: endpoint)
+        skew = skew_module.service_version_skew(
+            "codex-app-server", ("/opt/codex", "0.160.1")
+        )
+        assert skew is not None
+        assert skew.shared_daemon and skew.running_is_newer
+        assert not skew.restart_resolves
+        assert "upgrade the Codex CLI to 0.161.0" in skew.message
+
+        # Starting our own server would have raised and crash-looped.
+        with pytest.raises(RuntimeError, match="live owner"):
+            codex_control_plane.recover_stale_codex_control_socket(link)
+
+        logged: list[str] = []
+        result: list[bool] = []
+        idle = threading.Thread(
+            target=lambda: result.append(
+                codex_control_plane.idle_while_shared_codex_daemon(
+                    endpoint, log=logged.append, poll_seconds=0.05, handover_polls=2
+                )
+            )
+        )
+        idle.start()
+        idle.join(1.0)
+        assert idle.is_alive(), "runner must stay idle while the daemon serves"
+        assert logged == [
+            f"codex-app-server: the shared Codex daemon owns {link}; "
+            "idling until it goes away instead of binding a second server"
+        ]
+    finally:
+        shutdown()
+        daemon_socket.unlink(missing_ok=True)
+    try:
+        idle.join(5.0)
+        assert not idle.is_alive()
+        assert result == [True]
+        assert len(logged) == 2 and "starting the Openbase-managed" in logged[1]
+        # The dangling link is now provably stale, so the start may replace it.
+        assert codex_control_plane.recover_stale_codex_control_socket(link) is True
+    finally:
+        link.unlink(missing_ok=True)

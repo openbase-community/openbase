@@ -357,3 +357,40 @@ def test_codex_version_skew_warning_offers_restart(monkeypatch) -> None:
 
     monkeypatch.setattr(skew_module, "collect_codex_version_skews", boom)
     assert hw._codex_version_skew_warnings() == []
+
+
+def test_codex_cli_behind_shared_daemon_warns_to_upgrade_without_restart(
+    monkeypatch,
+) -> None:
+    from openbase_coder_cli.services import codex_version_skew as skew_module
+
+    monkeypatch.setattr(
+        skew_module,
+        "collect_codex_version_skews",
+        lambda: [
+            skew_module.CodexVersionSkew(
+                service="codex-app-server",
+                running_version="0.161.0",
+                installed_version="0.160.1",
+                installed_path="/opt/codex",
+                shared_daemon=True,
+            ),
+            skew_module.CodexVersionSkew(
+                service="codex-app-server-dispatcher",
+                running_version="0.161.0",
+                installed_version="0.160.1",
+                installed_path="/opt/codex",
+            ),
+        ],
+    )
+    warnings = hw._codex_version_skew_warnings()
+    # Neither id carries the restart prefix the banner turns into a button.
+    assert [w["id"] for w in warnings] == [
+        "codex-cli-outdated:codex-app-server",
+        "codex-cli-outdated:codex-app-server-dispatcher",
+    ]
+    for warning in warnings:
+        assert warning["severity"] == "warning"
+        assert "upgrade the Codex CLI to 0.161.0" in warning["message"]
+        assert "@openai/codex@0.161.0" in warning["action"]
+        assert "restart" not in warning["message"].lower()

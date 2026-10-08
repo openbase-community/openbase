@@ -378,3 +378,77 @@ def test_livekit_server_pins_loopback_stun_in_every_mode(monkeypatch):
         argv, _ = runners.build_livekit_server(env, binaries)
         config_body = argv[argv.index("--config-body") + 1]
         assert "stun_servers:\n    - 127.0.0.1:3478\n" in config_body, mode
+
+
+def test_codex_app_server_runner_idles_behind_shared_daemon_before_binding(
+    monkeypatch, tmp_path
+):
+    """The shared Codex daemon owning the socket must never crash-loop us."""
+    from openbase_coder_cli import codex_control_plane
+    from openbase_coder_cli.services import launchd
+    from openbase_coder_cli.services.freshness import runtime as freshness_runtime
+
+    events: list[str] = []
+    monkeypatch.setattr(runners.InstallationConfig, "exists", staticmethod(lambda: False))
+    monkeypatch.setattr(
+        runners, "_resolve_binaries", lambda name, config: {"codex": "/opt/codex"}
+    )
+    monkeypatch.setattr(runners, "_load_env", lambda config: {})
+    monkeypatch.setattr(
+        runners,
+        "RUNNERS",
+        {"codex-app-server": (lambda env, binaries: (["codex"], env), ())},
+    )
+    monkeypatch.setattr(
+        launchd, "cap_service_log", lambda name: events.append(f"cap:{name}")
+    )
+    monkeypatch.setattr(
+        codex_control_plane,
+        "managed_codex_app_server_endpoint",
+        lambda env: "managed-endpoint",
+    )
+    monkeypatch.setattr(
+        codex_control_plane,
+        "idle_while_shared_codex_daemon",
+        lambda endpoint: events.append(f"idle:{endpoint}") or True,
+    )
+    monkeypatch.setattr(
+        codex_control_plane,
+        "prepare_codex_app_server_start",
+        lambda endpoint, binary: events.append(f"prepare:{endpoint}:{binary}"),
+    )
+    monkeypatch.setattr(
+        freshness_runtime, "capture_service", lambda name, config, argv: None
+    )
+    monkeypatch.setattr(
+        runners.os, "execvpe", lambda file, argv, env: events.append(f"exec:{file}")
+    )
+
+    runners.run("codex-app-server")
+
+    assert events == [
+        "cap:codex-app-server",
+        "idle:managed-endpoint",
+        "prepare:managed-endpoint:/opt/codex",
+        "exec:codex",
+    ]
+
+
+def test_service_log_cap_trims_only_oversized_logs(monkeypatch, tmp_path):
+    from openbase_coder_cli.services import launchd
+
+    monkeypatch.setattr(launchd, "DEFAULT_LOG_DIR", tmp_path)
+    assert launchd.cap_service_log("missing") is False
+
+    log = tmp_path / "codex-app-server.log"
+    log.write_text("short\n")
+    assert launchd.cap_service_log("codex-app-server", max_bytes=100) is False
+    assert log.read_text() == "short\n"
+
+    log.write_text("".join(f"traceback line {i}\n" for i in range(20)))
+    assert launchd.cap_service_log("codex-app-server", max_bytes=50) is True
+    kept = log.read_text().splitlines()
+    assert kept[-1] == "traceback line 19"
+    # Trimmed to the tail: the cap keeps the newest lines, drops nothing newer.
+    monkeypatch.setattr(launchd, "_truncate_log_file", lambda path, max_lines=5000: None)
+    assert launchd.cap_service_log("codex-app-server", max_bytes=0) is True
