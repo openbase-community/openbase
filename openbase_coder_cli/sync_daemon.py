@@ -64,8 +64,13 @@ class SyncDaemonConfig:
     peer_bulk: str = ""
     debounce_ms: int = 15
     log_level: str = "info"
-    low_water_mb: int = 10240
+    # None: the daemon derives the free-space floor from the disk size
+    # (min(10 GiB, 10%)), which a small cloud workspace needs
+    low_water_mb: int | None = None
     anchor: str = "hub"  # hub | edge: the side that holds every file in full
+    # True: keep large files as placeholders here whatever the anchor (a
+    # project-only computer such as a small cloud workspace)
+    thin: bool | None = None
 
     def to_toml(self) -> str:
         def q(value: str) -> str:
@@ -87,12 +92,12 @@ class SyncDaemonConfig:
         else:
             lines.append(f"peer_hot = {q(self.peer_hot)}")
             lines.append(f"peer_bulk = {q(self.peer_bulk)}")
-        lines += [
-            "",
-            "[placement]",
-            f"low_water_mb = {int(self.low_water_mb)}",
-            f"anchor = {q(self.anchor)}",
-        ]
+        lines += ["", "[placement]"]
+        if self.low_water_mb is not None:
+            lines.append(f"low_water_mb = {int(self.low_water_mb)}")
+        lines.append(f"anchor = {q(self.anchor)}")
+        if self.thin is not None:
+            lines.append(f"thin = {'true' if self.thin else 'false'}")
         lines += render_roots_toml(self.roots)
         return "\n".join(lines) + "\n"
 
@@ -234,6 +239,8 @@ def read_config_summary(config_path: Path | None = None) -> dict:
         if isinstance(data.get(key), str):
             summary[key] = data[key]
     summary["roots"] = _roots_from_config(data)
+    placement = data.get("placement") if isinstance(data.get("placement"), dict) else {}
+    summary["project_only"] = placement.get("thin") is True
     judgment = _judgment_from_config(data)
     summary["judgment_enabled"] = bool(judgment and judgment["enabled"])
     if judgment is not None:

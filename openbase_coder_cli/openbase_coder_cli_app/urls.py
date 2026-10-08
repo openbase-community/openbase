@@ -32,9 +32,12 @@ from openbase_coder_cli.openbase_coder_cli_app.sync_daemon_api import (
     sync_status,
 )
 from openbase_coder_cli.openbase_coder_cli_app.sync_pairing_api import (
+    sync_daemon_available_roots,
     sync_daemon_roots,
     sync_pairing_candidates,
+    sync_pairing_folders,
     sync_pairing_hub,
+    sync_pairing_hub_folders,
     sync_pairing_join,
     sync_pairing_leave,
     sync_pairing_offer,
@@ -624,6 +627,21 @@ urlpatterns = [
         "sync/daemon/pairing/offer/",
         offloaded_view(sync_pairing_offer),
         name="sync-pairing-offer",
+    ),
+    path(
+        "sync/daemon/pairing/folders/",
+        offloaded_view(sync_pairing_folders),
+        name="sync-pairing-folders",
+    ),
+    path(
+        "sync/daemon/pairing/hub-folders/",
+        offloaded_view(sync_pairing_hub_folders),
+        name="sync-pairing-hub-folders",
+    ),
+    path(
+        "sync/daemon/roots/available/",
+        offloaded_view(sync_daemon_available_roots),
+        name="sync-daemon-available-roots",
     ),
     path(
         "sync/daemon/roots/",

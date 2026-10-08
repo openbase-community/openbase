@@ -91,6 +91,32 @@ def test_status_summarizes_daemon_status(client):
     assert client.calls == [("status",)]
 
 
+def test_status_shows_disk_budget_and_low_disk(client, monkeypatch):
+    payload = FakeClient.status(FakeClient())
+    payload["roots"][0]["bytes"] = 40_000_000
+    payload["roots"][0]["disk"] = {
+        "free_bytes": 400_000_000,
+        "total_bytes": 5_000_000_000,
+        "low_water_bytes": 500_000_000,
+        "low_water_auto": True,
+        "below_low_water": True,
+        "held_files": 3,
+        "held_bytes": 90_000,
+    }
+    payload["versions"] = {"usage_bytes": 1_000_000, "quota_bytes": 750_000_000, "quota_auto": True, "retention_days": 30}
+    payload["placement"] = {"thin": True}
+    monkeypatch.setattr(FakeClient, "status", lambda self: payload)
+
+    result = CliRunner().invoke(sync, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert "~/Projects  (1200 entries, 3 transferring, 40.0 MB)" in result.output
+    assert "disk: 400.0 MB free of 5.0 GB; sync keeps 500.0 MB free, from disk size" in result.output
+    assert "low disk: sync writes here are paused until space returns (3 files, 90.0 KB waiting)" in result.output
+    assert "Versions:  1.0 MB of 750.0 MB (from disk size), kept 30 days" in result.output
+    assert "large files stay on the other computer until used" in result.output
+
+
 def test_status_json_is_the_raw_payload(client):
     result = CliRunner().invoke(sync, ["status", "--json"])
 

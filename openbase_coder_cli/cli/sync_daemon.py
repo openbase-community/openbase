@@ -47,9 +47,20 @@ def sync_daemon_cli() -> None:
 @click.option("--group", default="default", help="Sync group name.")
 @click.option(
     "--low-water-mb",
-    default=10240,
+    default=None,
     type=int,
-    help="Never write below this much free disk (MB).",
+    help=(
+        "Never write below this much free disk (MB). Default: derived from "
+        "the disk size, min(10 GiB, 10%)."
+    ),
+)
+@click.option(
+    "--project-only",
+    is_flag=True,
+    help=(
+        "Keep large files as placeholders on this computer until they are "
+        "used, whatever --anchor says (a small cloud workspace)."
+    ),
 )
 @click.option(
     "--anchor",
@@ -74,7 +85,8 @@ def configure(
     with_product_folders: bool,
     pair_secret: str,
     group: str,
-    low_water_mb: int,
+    low_water_mb: int | None,
+    project_only: bool,
     anchor: str,
     start: bool,
 ) -> None:
@@ -112,6 +124,7 @@ def configure(
         peer_bulk=f"{peer}:{sync_daemon.DEFAULT_BULK_PORT}",
         low_water_mb=low_water_mb,
         anchor=anchor,
+        thin=True if project_only else None,
     )
     path = sync_daemon.write_config(config)
     click.echo(f"Wrote {path}")
@@ -205,23 +218,124 @@ def pair_hub(roots: tuple[str, ...]) -> None:
     _echo_restart_required(result)
 
 
+def _size(value) -> str:
+    from openbase_coder_cli.cli.sync import _size as size
+
+    return size(value) if value is not None else "?"
+
+
+@pair_cli.command("folders")
+@click.argument("hub")
+@click.option("--json", "as_json", is_flag=True, help="Print JSON.")
+def pair_folders(hub: str, as_json: bool) -> None:
+    """Show HUB's folders, their size and this computer's free disk.
+
+    Use it before `pair join` to choose which folders to sync here.
+    """
+    from openbase_coder_cli import sync_pairing
+
+    preview = _pairing_call(sync_pairing.hub_folders, hub)
+    if as_json:
+        click.echo(json.dumps(preview, indent=2, sort_keys=True))
+        return
+    disk = preview["this_computer"]["disk"]
+    click.echo(
+        f"{preview['hub_name']} syncs these folders "
+        f"(this computer: {_size(disk.get('free_bytes'))} free of "
+        f"{_size(disk.get('total_bytes'))}):"
+    )
+    for folder in preview["folders"]:
+        files = folder.get("files")
+        size = (
+            f"{files} files, {_size(folder.get('bytes'))}"
+            if files is not None
+            else "size unknown"
+        )
+        click.echo(f"  {folder['path']:<40} {size}")
+    if preview["project_only"]:
+        click.echo(
+            "This is a cloud workspace: choose the projects it syncs, e.g. "
+            f"'openbase-coder sync-daemon pair join {hub} --root <folder>'."
+        )
+
+
 @pair_cli.command("join")
 @click.argument("hub")
 @click.option(
     "--root",
     "roots",
     multiple=True,
-    help="Only sync these of the hub's folders (repeatable). Default: all of them.",
+    help=(
+        "Only sync these of the hub's folders (repeatable). Default: all of "
+        "them; on a cloud workspace at least one is required."
+    ),
 )
-def pair_join(hub: str, roots: tuple[str, ...]) -> None:
+@click.option(
+    "--project-only/--full-copy",
+    "project_only",
+    default=None,
+    help=(
+        "Project-only: sync just the chosen folders and keep large files on "
+        "the hub until used. Default: on for a cloud workspace, off elsewhere."
+    ),
+)
+def pair_join(hub: str, roots: tuple[str, ...], project_only: bool | None) -> None:
     """Sync this computer with HUB (its name or Openbase VPN address)."""
     from openbase_coder_cli import sync_pairing
 
-    result = _pairing_call(sync_pairing.join_hub, hub, list(roots) or None)
+    result = _pairing_call(
+        sync_pairing.join_hub, hub, list(roots) or None, project_only=project_only
+    )
     sync_pairing.refresh_cloud_registration(background=False)
-    click.echo(f"Syncing with {result['hub_name']}. Folders:")
+    mode = " (project-only)" if result.get("project_only") else ""
+    click.echo(f"Syncing with {result['hub_name']}{mode}. Folders:")
     for root in result["roots"]:
         click.echo(f"  {root['path']}")
+    for warning in result.get("warnings") or []:
+        click.echo(click.style(warning, fg="yellow"))
+    _echo_restart_required(result)
+
+
+@pair_cli.command("add-folder")
+@click.argument("path")
+def pair_add_folder(path: str) -> None:
+    """Sync PATH too. On a computer that syncs some of the hub's folders,
+    PATH may be one of the others: it is created here and fills from the hub."""
+    from openbase_coder_cli import sync_pairing
+
+    result = _pairing_call(sync_pairing.add_root, path)
+    click.echo(f"Now syncing {result['root']['path']}.")
+    for peer in result.get("peers") or []:
+        if not peer["ok"]:
+            click.echo(click.style(f"  {peer['name']}: {peer['error']}", fg="yellow"))
+    _echo_restart_required(result)
+
+
+@pair_cli.command("remove-folder")
+@click.argument("path")
+@click.option(
+    "--this-computer",
+    "scope",
+    flag_value="this_computer",
+    default=None,
+    help="Stop syncing PATH here only; the hub and other computers keep it.",
+)
+@click.option(
+    "--everywhere",
+    "scope",
+    flag_value="everywhere",
+    help="Stop syncing PATH on every computer.",
+)
+def pair_remove_folder(path: str, scope: str | None) -> None:
+    """Stop syncing PATH. Files stay on disk.
+
+    Default: here only on a project-only computer, everywhere otherwise.
+    """
+    from openbase_coder_cli import sync_pairing
+
+    result = _pairing_call(sync_pairing.remove_root, path, scope=scope)
+    where = "on this computer" if result.get("scope") == "this_computer" else "anywhere"
+    click.echo(f"Stopped syncing {path} {where}. Files were not changed.")
     _echo_restart_required(result)
 
 

@@ -148,7 +148,12 @@ def overview(
         seq = _int(root.get("seq"))
         peer_rows = []
         for peer in peers:
-            progress = (peer.get("roots") or {}).get(root_id) or {}
+            peer_roots = peer.get("roots") or {}
+            if root_id not in peer_roots:
+                # a project-only computer that syncs only some folders: it
+                # has nothing to send or receive for this one
+                continue
+            progress = peer_roots.get(root_id) or {}
             sent = _int(progress.get("sent_seq"))
             acked = _int(progress.get("acked_seq"))
             peer_rows.append(
@@ -165,6 +170,7 @@ def overview(
         unacked = max((row["unacked"] for row in peer_rows), default=0)
         pending = _int(root.get("pending_fetches"))
         config = config_by_id.get(root_id, {})
+        disk = root.get("disk") if isinstance(root.get("disk"), dict) else None
         out_roots.append(
             {
                 "id": root_id,
@@ -178,6 +184,8 @@ def overview(
                 "unsent": unsent,
                 "unacked": unacked,
                 "peers": peer_rows,
+                "bytes": _int(root.get("bytes")),
+                "disk": _disk_summary(disk),
             }
         )
         totals["unsent"] += unsent
@@ -194,6 +202,13 @@ def overview(
     else:
         state = "in_sync"
     conflicts = _int(status.get("open_conflicts"))
+    low_disk = [
+        root["path"]
+        for root in out_roots
+        if root["disk"] and (root["disk"]["below_low_water"] or root["disk"]["held_files"])
+    ]
+    versions = status.get("versions") if isinstance(status.get("versions"), dict) else None
+    placement = status.get("placement") if isinstance(status.get("placement"), dict) else {}
     return {
         "state": state,
         "role": role,
@@ -202,11 +217,52 @@ def overview(
         "offline_peers": offline_peers or [],
         "totals": totals,
         "roots": out_roots,
+        "versions": _versions_summary(versions),
+        "thin": bool(placement.get("thin")),
         "attention": {
             "conflicts": conflicts,
             "stale_locks": stale_lock_count,
-            "needed": bool(conflicts or stale_lock_count),
+            "low_disk": low_disk,
+            "needed": bool(conflicts or stale_lock_count or low_disk),
         },
+    }
+
+
+def _disk_summary(disk: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A root's volume and limits as the daemon reports them (None: older daemon)."""
+    if disk is None:
+        return None
+    return {
+        "free_bytes": _known_bytes(disk.get("free_bytes")),
+        "total_bytes": _known_bytes(disk.get("total_bytes")),
+        "low_water_bytes": _int(disk.get("low_water_bytes")),
+        "low_water_auto": bool(disk.get("low_water_auto")),
+        "below_low_water": bool(disk.get("below_low_water")),
+        "held_files": _int(disk.get("held_files")),
+        "held_bytes": _int(disk.get("held_bytes")),
+        "refused_writes": _int(disk.get("refused_writes")),
+        "lazy_threshold_bytes": _int(disk.get("lazy_threshold_bytes")),
+        "pinned_threshold_bytes": _int(disk.get("pinned_threshold_bytes")),
+    }
+
+
+def _known_bytes(value: Any) -> int | None:
+    """A byte count, or None when the daemon could not read it (-1)."""
+    if value is None:
+        return None
+    number = _int(value)
+    return number if number >= 0 else None
+
+
+def _versions_summary(versions: dict[str, Any] | None) -> dict[str, Any] | None:
+    if versions is None:
+        return None
+    return {
+        "usage_bytes": _int(versions.get("usage_bytes")),
+        "quota_bytes": _int(versions.get("quota_bytes")),
+        "quota_auto": bool(versions.get("quota_auto")),
+        "retention_days": versions.get("retention_days"),
+        "over_quota": bool(versions.get("over_quota")),
     }
 
 

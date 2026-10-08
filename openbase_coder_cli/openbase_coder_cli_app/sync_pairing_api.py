@@ -70,8 +70,14 @@ def sync_pairing_join(request):
     roots = _roots_param(data)
     if isinstance(roots, Response):
         return roots
+    project_only = data.get("project_only")
+    if project_only is not None and not isinstance(project_only, bool):
+        return Response(
+            {"error": "project_only must be true or false", "code": "bad_project_only"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     try:
-        result = sync_pairing.join_hub(hub.strip(), roots)
+        result = sync_pairing.join_hub(hub.strip(), roots, project_only=project_only)
     except sync_pairing.PairingError as exc:
         return _error(exc)
     sync_pairing.refresh_cloud_registration()
@@ -86,6 +92,39 @@ def sync_pairing_leave(request):
         return _error(exc)
     sync_pairing.refresh_cloud_registration()
     return Response(result)
+
+
+@api_view(["GET"])
+def sync_pairing_folders(request):
+    """Answered by the hub: its folders and their sizes, no secret."""
+    try:
+        return Response(sync_pairing.folders())
+    except sync_pairing.PairingError as exc:
+        return _error(exc)
+
+
+@api_view(["GET"])
+def sync_pairing_hub_folders(request):
+    """Before joining: the chosen hub's folders, sizes and this computer's disk."""
+    hub = (request.query_params.get("hub") or "").strip()
+    if not hub:
+        return Response(
+            {"error": "Choose the computer to sync with.", "code": "hub_required"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    try:
+        return Response(sync_pairing.hub_folders(hub))
+    except sync_pairing.PairingError as exc:
+        return _error(exc)
+
+
+@api_view(["GET"])
+def sync_daemon_available_roots(request):
+    """For an edge: the hub's folders and which of them sync here."""
+    try:
+        return Response(sync_pairing.available_roots())
+    except sync_pairing.PairingError as exc:
+        return _error(exc)
 
 
 @api_view(["POST"])
@@ -104,11 +143,14 @@ def sync_daemon_roots(request):
     data = _data(request)
     path = data.get("path") or request.query_params.get("path") or ""
     local_only = data.get("local_only") is True
+    scope = data.get("scope") or request.query_params.get("scope") or None
     try:
         if request.method == "POST":
             result = sync_pairing.add_root(str(path), local_only=local_only)
         else:
-            result = sync_pairing.remove_root(str(path), local_only=local_only)
+            result = sync_pairing.remove_root(
+                str(path), local_only=local_only, scope=scope
+            )
     except sync_pairing.PairingError as exc:
         return _error(exc)
     return Response(result)

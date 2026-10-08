@@ -113,7 +113,13 @@ def test_overview_backlog_per_root_and_peer():
         "pending_fetches": 2,
         "entries": 820,
     }
-    assert result["attention"] == {"conflicts": 3, "stale_locks": 2, "needed": True}
+    assert result["attention"] == {
+        "conflicts": 3,
+        "stale_locks": 2,
+        "low_disk": [],
+        "needed": True,
+    }
+    assert projects["disk"] is None and result["versions"] is None
 
 
 def test_overview_states():
@@ -128,6 +134,7 @@ def test_overview_states():
     assert in_sync["attention"] == {
         "conflicts": 0,
         "stale_locks": None,
+        "low_disk": [],
         "needed": False,
     }
 
@@ -137,6 +144,67 @@ def test_overview_states():
 
     assert sync_state.overview(_status(peers=None))["state"] == "offline"
     assert sync_state.overview(_status(role="hub", peers=[]))["state"] == "waiting"
+
+
+def test_overview_skips_peers_that_do_not_sync_a_folder():
+    """A hub next to a project-only computer: that computer syncs one folder,
+    so the others show no backlog for it (it never receives them)."""
+    status = _status(role="hub")
+    status["peers"].append(
+        {
+            "device": "cloud",
+            "role": "edge",
+            "roots": {"skills": {"sent_seq": 30, "acked_seq": 30}},
+        }
+    )
+    status["roots"][0]["seq"] = 900
+    status["peers"][0]["roots"]["projects"]["acked_seq"] = 900
+    status["roots"][0]["pending_fetches"] = 0
+
+    result = sync_state.overview(status)
+
+    projects, skills = result["roots"]
+    assert [row["device"] for row in projects["peers"]] == ["mini"]
+    assert [row["device"] for row in skills["peers"]] == ["mini", "cloud"]
+    assert projects["unsent"] == 0 and result["state"] == "in_sync"
+
+
+def test_overview_reports_disk_and_low_disk_attention():
+    status = _status(open_conflicts=0)
+    status["roots"][0]["bytes"] = 123
+    status["roots"][0]["disk"] = {
+        "free_bytes": 400,
+        "total_bytes": 5000,
+        "low_water_bytes": 500,
+        "low_water_auto": True,
+        "below_low_water": True,
+        "held_files": 3,
+        "held_bytes": 90,
+        "refused_writes": 3,
+        "lazy_threshold_bytes": 50,
+        "pinned_threshold_bytes": 250,
+    }
+    status["roots"][1]["disk"] = {"free_bytes": -1, "total_bytes": -1}
+    status["versions"] = {
+        "usage_bytes": 10,
+        "quota_bytes": 750,
+        "quota_auto": True,
+        "retention_days": 30,
+        "over_quota": False,
+    }
+    status["placement"] = {"anchor": "edge", "thin": True}
+
+    result = sync_state.overview(status)
+
+    projects, skills = result["roots"]
+    assert projects["bytes"] == 123
+    assert projects["disk"]["below_low_water"] is True
+    assert projects["disk"]["held_files"] == 3
+    assert skills["disk"]["free_bytes"] is None
+    assert result["attention"]["low_disk"] == [projects["path"]]
+    assert result["attention"]["needed"] is True
+    assert result["versions"]["quota_bytes"] == 750
+    assert result["thin"] is True
 
 
 def test_presence_remembers_peers_that_went_away():

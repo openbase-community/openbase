@@ -34,6 +34,7 @@ from openbase_coder_cli.services import network
 SECRET = "0123456789abcdef0123456789abcdef"
 REAL_START_SERVICE = sync_pairing._start_service
 REAL_STOP_SERVICE = sync_pairing._stop_service
+REAL_ROOT_ESTIMATES = sync_pairing._root_estimates
 MINI = fleet.FleetPeer(
     key="mini.net.example",
     name="mini",
@@ -82,6 +83,9 @@ def env(home, monkeypatch):
         self_hosts={"laptop.net.example", "100.64.0.1"},
     )
     monkeypatch.setattr(sync_pairing, "daemon_binary_available", lambda: True)
+    monkeypatch.setattr(sync_pairing, "is_cloud_workspace", lambda: False)
+    # no daemon in tests: folder sizes come from a stub (``_root_estimates``)
+    monkeypatch.setattr(sync_pairing, "_root_estimates", lambda: {})
     monkeypatch.setattr(network, "tailscale_ip", lambda family="4": "100.64.0.1")
 
     def start():
@@ -133,6 +137,7 @@ def _write(role: str, roots: list[dict], **extra) -> None:
             peer_hot="mini.net.example:22100",
             peer_bulk="mini.net.example:22101",
             anchor=extra.get("anchor", "edge"),
+            thin=extra.get("thin"),
         )
     )
 
@@ -288,7 +293,10 @@ def test_offer_view_hands_over_secret_ports_and_roots(env):
         "bulk_port": 22101,
         "sync_group": "default",
         "anchor": "edge",
-        "roots": [PROJECTS, THREADS],
+        "roots": [
+            {**PROJECTS, "files": None, "bytes": None},
+            {**THREADS, "files": None, "bytes": None},
+        ],
     }
 
 
@@ -353,8 +361,13 @@ def test_join_writes_edge_config_from_the_hubs_offer(env, home, monkeypatch):
         "hub_name": "mini",
         "hub_host": "mini.net.example",
         "roots": [PROJECTS, THREADS],
+        "project_only": False,
+        "warnings": [],
         "restart_required": False,
     }
+    assert "thin" not in config["placement"]
+    # the floor is derived from the disk size by the daemon, not fixed here
+    assert "low_water_mb" not in config["placement"]
 
 
 def test_join_can_pick_a_subset_of_the_hubs_folders(env, monkeypatch):
@@ -780,3 +793,346 @@ def test_external_supervisor_writes_the_wrapper_and_asks_for_a_restart(
     assert [svc.name for svc in regenerated] == ["sync-daemon"]
     assert left["restart_required"] is True
     assert not wrapper.exists()
+
+
+# --- project-only computers (a small cloud workspace) ---------------------------
+
+
+ALPHA = {"id": "projects-alpha", "path": "~/Projects/alpha"}
+BETA = {"id": "projects-beta", "path": "~/Projects/beta"}
+
+
+def _hub_routes(env, monkeypatch, *, folders=None, offer=None):
+    """Fake hub: GET pairing/folders/ (sizes, no secret) and POST offer."""
+    folders = (
+        folders
+        if folders is not None
+        else _response(
+            200,
+            {
+                "roots": [
+                    {**ALPHA, "files": 1200, "bytes": 3_000_000_000},
+                    {**BETA, "files": 80, "bytes": 40_000_000},
+                ],
+                "disk": {"free_bytes": 1, "total_bytes": 2},
+            },
+        )
+    )
+
+    def fake_get(url, headers, timeout):
+        env.requests.append((url, headers))
+        return folders
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        _fake_post(env, offer or _response(200, _offer_payload(roots=[ALPHA, BETA]))),
+    )
+
+
+def test_cloud_workspace_join_requires_choosing_folders(env, monkeypatch):
+    monkeypatch.setattr(sync_pairing, "is_cloud_workspace", lambda: True)
+    _hub_routes(env, monkeypatch)
+
+    with pytest.raises(sync_pairing.PairingError) as excinfo:
+        sync_pairing.join_hub("mini")
+
+    assert excinfo.value.code == "choose_folders"
+    assert "~/Projects/beta" in str(excinfo.value)
+    assert not sync_daemon.is_configured()
+
+
+def test_cloud_workspace_joins_project_only_with_a_subset(env, home, monkeypatch):
+    monkeypatch.setattr(sync_pairing, "is_cloud_workspace", lambda: True)
+    _hub_routes(env, monkeypatch)
+
+    result = sync_pairing.join_hub("mini", ["~/Projects/beta"])
+
+    config = _config()
+    assert config["roots"] == [BETA]
+    assert config["placement"]["thin"] is True
+    assert "low_water_mb" not in config["placement"]
+    assert result["project_only"] is True
+    assert (home / "Projects" / "beta").is_dir()
+    assert not (home / "Projects" / "alpha").exists()
+    assert sync_daemon.read_config_summary()["project_only"] is True
+
+
+def test_a_laptop_can_opt_into_project_only(env, monkeypatch):
+    _hub_routes(env, monkeypatch)
+
+    sync_pairing.join_hub("mini", ["~/Projects/alpha"], project_only=True)
+
+    assert _config()["placement"]["thin"] is True
+
+
+def test_join_warns_when_the_chosen_folders_exceed_free_disk(env, monkeypatch):
+    sizes = [{**ALPHA, "bytes": 3_000_000_000}, {**BETA, "bytes": 40_000_000}]
+    _hub_routes(env, monkeypatch, offer=_response(200, _offer_payload(roots=sizes)))
+    monkeypatch.setattr(
+        sync_pairing,
+        "disk_usage",
+        lambda path="~": {"free_bytes": 2_000_000_000, "total_bytes": 5_000_000_000},
+    )
+
+    result = sync_pairing.join_hub("mini", ["~/Projects/alpha"])
+    small = sync_pairing.leave() and sync_pairing.join_hub("mini", ["~/Projects/beta"])
+
+    assert "3.0 GB" in result["warnings"][0] and "2.0 GB free" in result["warnings"][0]
+    assert small["warnings"] == []
+
+
+def test_hub_folders_preview_defaults_by_kind_of_computer(env, monkeypatch):
+    _hub_routes(env, monkeypatch)
+    monkeypatch.setattr(
+        sync_pairing,
+        "disk_usage",
+        lambda path="~": {"free_bytes": 4_000_000_000, "total_bytes": 5_000_000_000},
+    )
+
+    laptop = sync_pairing.hub_folders("mini")
+    monkeypatch.setattr(sync_pairing, "is_cloud_workspace", lambda: True)
+    cloud = sync_pairing.hub_folders("mini")
+
+    assert env.requests[0] == (
+        "http://mini.net.example:18080/api/sync/daemon/pairing/folders/",
+        {"Authorization": "Bearer owner-jwt"},
+    )
+    assert [f["selected"] for f in laptop["folders"]] == [True, True]
+    assert laptop["project_only"] is False
+    assert [f["selected"] for f in cloud["folders"]] == [False, False]
+    assert cloud["project_only"] is True
+    assert cloud["this_computer"]["cloud_workspace"] is True
+    assert cloud["this_computer"]["disk"]["free_bytes"] == 4_000_000_000
+    beta = cloud["folders"][1]
+    assert (beta["path"], beta["files"], beta["bytes"]) == (
+        "~/Projects/beta",
+        80,
+        40_000_000,
+    )
+    # the preview never carries the pair secret
+    assert SECRET not in repr(cloud)
+
+
+def test_hub_folders_preview_falls_back_to_an_older_hubs_offer(env, monkeypatch):
+    _hub_routes(env, monkeypatch, folders=_response(404, {}))
+
+    preview = sync_pairing.hub_folders("mini")
+
+    assert [f["path"] for f in preview["folders"]] == [
+        "~/Projects/alpha",
+        "~/Projects/beta",
+    ]
+    assert preview["folders"][0]["bytes"] is None
+    assert SECRET not in repr(preview)
+
+
+def test_hub_answers_folders_with_sizes_and_no_secret(env, monkeypatch):
+    _write("hub", [ALPHA, BETA])
+    monkeypatch.setattr(
+        sync_pairing,
+        "_root_estimates",
+        lambda: {"projects-beta": {"files": 80, "bytes": 40_000_000}},
+    )
+
+    response = sync_pairing_api.sync_pairing_folders(
+        _request("GET", "/api/sync/daemon/pairing/folders/")
+    )
+
+    assert response.status_code == 200
+    roots = response.data["roots"]
+    assert roots[0] == {**ALPHA, "files": None, "bytes": None}
+    assert roots[1] == {**BETA, "files": 80, "bytes": 40_000_000}
+    assert SECRET not in repr(response.data)
+
+
+def test_folders_view_refuses_on_a_non_hub(env):
+    _write("edge", [BETA])
+    response = sync_pairing_api.sync_pairing_folders(
+        _request("GET", "/api/sync/daemon/pairing/folders/")
+    )
+    assert response.status_code == 409
+
+
+def test_root_estimates_read_the_daemons_status(env, monkeypatch):
+    monkeypatch.setattr(
+        sync_daemon.SyncDaemonClient,
+        "status",
+        lambda self: {
+            "roots": [
+                {"id": "projects-beta", "entries": 80, "bytes": 40_000_000},
+                {"id": "old", "entries": 5},  # an older daemon reports no bytes
+            ]
+        },
+    )
+
+    assert REAL_ROOT_ESTIMATES() == {
+        "projects-beta": {"files": 80, "bytes": 40_000_000},
+        "old": {"files": 5},
+    }
+
+
+def test_project_only_edge_adds_a_hub_folder_it_did_not_have(env, home, monkeypatch):
+    _write("edge", [BETA], thin=True)
+    _hub_routes(env, monkeypatch)
+    monkeypatch.setattr(httpx, "request", _fake_request(env, _response(200, {})))
+
+    result = sync_pairing.add_root("~/Projects/alpha")
+
+    assert (home / "Projects" / "alpha").is_dir()
+    assert [r["path"] for r in sync_daemon.configured_roots()] == [
+        "~/Projects/beta",
+        "~/Projects/alpha",
+    ]
+    assert result["peers"] == [{"name": "mini", "ok": True, "error": None}]
+
+
+def test_edge_still_refuses_a_missing_folder_the_hub_does_not_sync(env, monkeypatch):
+    _write("edge", [BETA], thin=True)
+    _hub_routes(env, monkeypatch)
+
+    with pytest.raises(sync_pairing.PairingError) as excinfo:
+        sync_pairing.add_root("~/Projects/typo")
+
+    assert excinfo.value.code == "folder_missing"
+
+
+def test_project_only_edge_removes_a_folder_here_only_by_default(env, monkeypatch):
+    _write("edge", [ALPHA, BETA], thin=True)
+    monkeypatch.setattr(
+        httpx, "request", lambda *a, **k: pytest.fail("must not touch the hub")
+    )
+
+    result = sync_pairing.remove_root("~/Projects/alpha")
+
+    assert result["scope"] == "this_computer"
+    assert sync_daemon.configured_roots() == [BETA]
+
+
+def test_full_edge_removes_here_only_when_asked(env, monkeypatch):
+    _write("edge", [ALPHA, BETA])
+    monkeypatch.setattr(httpx, "request", _fake_request(env, _response(200, {})))
+
+    here = sync_pairing.remove_root("~/Projects/alpha", scope="this_computer")
+
+    assert here["scope"] == "this_computer"
+    assert env.requests == []
+    _write("edge", [ALPHA, BETA])
+    everywhere = sync_pairing.remove_root("~/Projects/alpha")
+    assert everywhere["scope"] == "everywhere"
+    assert env.requests[0][0] == "DELETE"
+
+
+def test_hub_cannot_remove_a_folder_here_only(env):
+    _write("hub", [ALPHA, BETA])
+
+    with pytest.raises(sync_pairing.PairingError) as excinfo:
+        sync_pairing.remove_root("~/Projects/alpha", scope="this_computer")
+
+    assert excinfo.value.code == "hub_holds_all"
+
+
+def test_remove_here_only_reports_an_unknown_folder(env):
+    _write("edge", [ALPHA, BETA], thin=True)
+
+    with pytest.raises(sync_pairing.PairingError) as excinfo:
+        sync_pairing.remove_root("~/Projects/gamma")
+
+    assert excinfo.value.code == "root_not_found"
+
+
+def test_available_roots_lists_the_hubs_folders_for_an_edge(env, monkeypatch):
+    _write("edge", [BETA], thin=True)
+    _hub_routes(env, monkeypatch)
+
+    payload = sync_pairing.available_roots()
+
+    assert payload["project_only"] is True
+    assert [(f["path"], f["synced_here"]) for f in payload["folders"]] == [
+        ("~/Projects/alpha", False),
+        ("~/Projects/beta", True),
+    ]
+
+
+def test_join_view_passes_project_only(env, monkeypatch):
+    _hub_routes(env, monkeypatch)
+
+    response = sync_pairing_api.sync_pairing_join(
+        _request(
+            "POST",
+            "/api/sync/daemon/pairing/join/",
+            {"hub": "mini", "roots": ["~/Projects/beta"], "project_only": True},
+        )
+    )
+    bad = sync_pairing_api.sync_pairing_join(
+        _request(
+            "POST",
+            "/api/sync/daemon/pairing/join/",
+            {"hub": "mini", "project_only": "yes"},
+        )
+    )
+
+    assert response.status_code == 200 and response.data["project_only"] is True
+    assert bad.status_code == 400
+
+
+def test_roots_view_remove_takes_a_scope(env, monkeypatch):
+    _write("edge", [ALPHA, BETA])
+    monkeypatch.setattr(httpx, "request", lambda *a, **k: pytest.fail("no hub call"))
+
+    response = sync_pairing_api.sync_daemon_roots(
+        _request(
+            "DELETE",
+            "/api/sync/daemon/roots/",
+            {"path": "~/Projects/alpha", "scope": "this_computer"},
+        )
+    )
+
+    assert response.status_code == 200 and response.data["scope"] == "this_computer"
+
+
+def test_cli_pair_join_project_only_and_folders(env, monkeypatch):
+    _hub_routes(env, monkeypatch)
+    monkeypatch.setattr(sync_pairing, "refresh_cloud_registration", lambda **k: None)
+    runner = CliRunner()
+
+    preview = runner.invoke(sync_daemon_cli, ["pair", "folders", "mini"])
+    joined = runner.invoke(
+        sync_daemon_cli,
+        ["pair", "join", "mini", "--root", "~/Projects/beta", "--project-only"],
+    )
+
+    assert preview.exit_code == 0, preview.output
+    assert (
+        "~/Projects/alpha" in preview.output and "1200 files, 3.0 GB" in preview.output
+    )
+    assert joined.exit_code == 0, joined.output
+    assert "(project-only)" in joined.output
+    assert _config()["placement"]["thin"] is True
+
+
+def test_cli_remove_folder_here_only(env, monkeypatch):
+    _write("edge", [ALPHA, BETA])
+    monkeypatch.setattr(httpx, "request", lambda *a, **k: pytest.fail("no hub call"))
+
+    result = CliRunner().invoke(
+        sync_daemon_cli,
+        ["pair", "remove-folder", "~/Projects/alpha", "--this-computer"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "on this computer" in result.output
+    assert sync_daemon.configured_roots() == [BETA]
+
+
+def test_is_cloud_workspace_uses_markers_then_runtime(monkeypatch):
+    from openbase_coder_cli.services import cloud_registration, cloud_workspace
+
+    monkeypatch.setattr(cloud_workspace, "cloud_workspace_id", lambda: "abc123")
+    assert sync_pairing.is_cloud_workspace() is True
+    monkeypatch.setattr(cloud_workspace, "cloud_workspace_id", lambda: None)
+    monkeypatch.setattr(cloud_registration, "runtime_flavor", lambda: "cloud")
+    assert sync_pairing.is_cloud_workspace() is True
+    monkeypatch.setattr(cloud_registration, "runtime_flavor", lambda: "native")
+    assert sync_pairing.is_cloud_workspace() is False
