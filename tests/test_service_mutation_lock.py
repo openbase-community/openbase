@@ -152,3 +152,78 @@ def test_real_updater_launcher_delegates_the_held_lease(tmp_path):
             launcher, ["services", "install"], report=lambda _: None
         )
         assert child(dict(os.environ)) == "busy"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX inherited flock contract")
+def test_service_child_keeps_lease_after_updater_is_killed(tmp_path):
+    import signal
+    import time
+
+    ready = tmp_path / "child-ready"
+    release = tmp_path / "release-child"
+    child_code = """
+import os, sys, time
+from pathlib import Path
+from openbase_coder_cli.services import mutation_lock as lock
+lock.LOCK_PATH = Path(sys.argv[1])
+ready = Path(sys.argv[2])
+ready.write_text(str(os.getpid()))
+while not ready.with_suffix(".enter").exists():
+    time.sleep(0.02)
+with lock.service_mutation(timeout=0.1):
+    ready.with_suffix(".entered").touch()
+    while not Path(sys.argv[3]).exists():
+        time.sleep(0.02)
+"""
+    parent_code = """
+import subprocess, sys, time
+from pathlib import Path
+from openbase_coder_cli.services import mutation_lock as lock
+lock.LOCK_PATH = Path(sys.argv[1])
+with lock.service_mutation():
+    process = subprocess.Popen([sys.executable, "-c", sys.argv[4], *sys.argv[1:4]],
+                               env=lock.mutation_environment(), pass_fds=lock.mutation_descriptors())
+    process.wait()
+"""
+    parent = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            parent_code,
+            str(lock.LOCK_PATH),
+            str(ready),
+            str(release),
+            child_code,
+        ]
+    )
+    child_pid = None
+    try:
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        child_pid = int(ready.read_text())
+        parent.kill()
+        parent.wait(timeout=5)
+        assert parent.returncode == -signal.SIGKILL
+        assert child(dict(os.environ)) == "busy"
+        ready.with_suffix(".enter").touch()
+        deadline = time.monotonic() + 5
+        while not ready.with_suffix(".entered").exists():
+            assert time.monotonic() < deadline
+            time.sleep(0.02)
+        assert child(dict(os.environ)) == "busy"
+        release.touch()
+        deadline = time.monotonic() + 5
+        while child(dict(os.environ)) != "entered":
+            assert time.monotonic() < deadline
+    finally:
+        ready.with_suffix(".enter").touch()
+        release.touch()
+        if parent.poll() is None:
+            parent.kill()
+            parent.wait()
+        if child_pid is not None:
+            try:
+                os.kill(child_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
