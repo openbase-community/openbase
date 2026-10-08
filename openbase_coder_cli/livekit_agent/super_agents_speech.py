@@ -42,9 +42,24 @@ def _without_cached_messages(value: Any) -> Any:
     return value
 
 
-def _speech_text_from_progress(progress: dict[str, Any]) -> str:
-    from super_agents.app_formatting import find_turn_useful_text, find_useful_text
+def _speech_text_from_progress(
+    progress: dict[str, Any],
+    *,
+    turn_scoped: bool = False,
+    turn_id: str | None = None,
+) -> str:
+    """Pick the speakable assistant text out of a progress snapshot.
 
+    ``turn_scoped`` restricts the search to text the streamed turn produced
+    itself, for MID-TURN commentary. While a new turn runs, the session-level
+    ``lastUsefulMessage`` and the ``turns``/``recentTurns`` lists still carry
+    EARLIER turns' answers and the running turn has none of its own yet; the
+    unscoped fallbacks picked those up and the live voice bridge relayed the
+    previous answer as commentary for a new question (2026-10-08: "what files
+    are on my desktop" was answered with "two plus two is four" first). When
+    ``turn_id`` is given, a turn or summary that names a different turn is
+    ignored as well.
+    """
     # A failed turn produced no fresh assistant output; every
     # lastUsefulMessage value in the snapshot is CACHED text from an earlier
     # successful turn (the generic extractors walk every key, so filtering
@@ -56,6 +71,16 @@ def _speech_text_from_progress(progress: dict[str, Any]) -> str:
     # message.
     if _turn_failed(progress):
         progress = _without_cached_messages(progress)
+
+    if turn_scoped:
+        candidates = _turn_scoped_speech_candidates(progress, turn_id)
+    else:
+        candidates = _speech_candidates(progress)
+    return _select_speech_candidate(candidates, progress)
+
+
+def _speech_candidates(progress: dict[str, Any]) -> list[tuple[str, Any, bool]]:
+    from super_agents.app_formatting import find_turn_useful_text
 
     summary = progress.get("summary")
     candidates: list[tuple[str, Any, bool]] = [
@@ -107,6 +132,82 @@ def _speech_text_from_progress(progress: dict[str, Any]) -> str:
                 ("summary.lastUsefulMessage", summary.get("lastUsefulMessage"), True),
             ]
         )
+    return candidates
+
+
+def _turn_scoped_speech_candidates(
+    progress: dict[str, Any], turn_id: str | None
+) -> list[tuple[str, Any, bool]]:
+    """Only sources that belong to the streamed turn itself.
+
+    Never the session-level ``lastUsefulMessage`` nor the ``turns`` /
+    ``recentTurns`` lists (they hold earlier turns' answers), and only the
+    turn's OWN ``lastUsefulMessage`` key (``_last_useful_message`` would
+    recurse into nested lists). A ``summary`` is the streamed turn's (Codex
+    builds it from the requested turn and stamps its id), so its own items and
+    preview count unless it names another turn.
+    """
+    from super_agents.app_formatting import find_turn_useful_text
+
+    candidates: list[tuple[str, Any, bool]] = []
+    summary = progress.get("summary")
+    if isinstance(summary, dict) and _belongs_to_turn(summary, turn_id):
+        candidates.extend(
+            [
+                (
+                    "summary.items.final_answers",
+                    _speech_text_from_turn_items(summary.get("items")),
+                    True,
+                ),
+                ("summary.items", find_turn_useful_text(summary.get("items")), True),
+            ]
+        )
+    turn = progress.get("turn")
+    if isinstance(turn, dict) and _belongs_to_turn(turn, turn_id):
+        candidates.extend(
+            [
+                (
+                    "progress.turn.lastUsefulMessage",
+                    _own_last_useful_message(turn),
+                    True,
+                ),
+                ("progress.turn", find_turn_useful_text(turn), True),
+            ]
+        )
+    if isinstance(summary, dict) and turn_id and _turn_identifier(summary) == turn_id:
+        # Codex's summary preview is the requested turn's own text; only
+        # trust it when the summary positively names the streamed turn.
+        candidates.append(
+            ("summary.lastUsefulMessage", summary.get("lastUsefulMessage"), True)
+        )
+    return candidates
+
+
+def _turn_identifier(value: dict[str, Any]) -> str | None:
+    for key in ("turnId", "id"):
+        identifier = value.get(key)
+        if isinstance(identifier, str) and identifier:
+            return identifier
+    return None
+
+
+def _belongs_to_turn(value: dict[str, Any], turn_id: str | None) -> bool:
+    identifier = _turn_identifier(value)
+    return not turn_id or identifier is None or identifier == turn_id
+
+
+def _own_last_useful_message(value: dict[str, Any]) -> str | None:
+    text = value.get("lastUsefulMessage")
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    return None
+
+
+def _select_speech_candidate(
+    candidates: list[tuple[str, Any, bool]], progress: dict[str, Any]
+) -> str:
+    from super_agents.app_formatting import find_useful_text
+
     for source, candidate, role_selected in candidates:
         text = (
             str(candidate).strip()

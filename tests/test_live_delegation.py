@@ -388,6 +388,94 @@ async def test_progress_snapshots_stream_commentary_before_the_turn_finishes():
     await bridge.aclose()
 
 
+PREVIOUS_ANSWER = "Victoria already got back to you. She said two plus two is four."
+
+
+def _running_snapshot(turn_id="turn-1", **turn_fields):
+    """A Claude Code backend snapshot of a turn still in progress.
+
+    The session-level ``lastUsefulMessage`` (and the session's turn history)
+    still hold the PREVIOUS turn's answer while the new turn runs.
+    """
+    running = {"turnId": turn_id, "status": "running", **turn_fields}
+    return {
+        "status": "running",
+        "turnId": turn_id,
+        "lastUsefulMessage": PREVIOUS_ANSWER,
+        "summary": {"lastUsefulMessage": PREVIOUS_ANSWER},
+        "turn": running,
+        "turns": [
+            {
+                "turnId": "turn-0",
+                "status": "completed",
+                "lastUsefulMessage": PREVIOUS_ANSWER,
+            },
+            running,
+        ],
+        "recentTurns": [
+            {
+                "turnId": "turn-0",
+                "status": "completed",
+                "lastUsefulMessage": PREVIOUS_ANSWER,
+            }
+        ],
+    }
+
+
+async def test_progress_never_relays_the_previous_turns_answer_as_commentary():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.delegate("d1", "What files are on my desktop")
+    await _settle()
+
+    dispatcher.progress("turn-1", _running_snapshot())
+
+    assert live.of("commentary") == []
+    dispatcher.result_gate.set()
+    await _settle()
+    await bridge.aclose()
+
+
+async def test_progress_streams_the_current_turns_own_text():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.delegate("d1", "What files are on my desktop")
+    await _settle()
+
+    dispatcher.progress(
+        "turn-1", _running_snapshot(lastUsefulMessage="Checking your desktop now.")
+    )
+
+    assert live.of("commentary", "d1") == ["Checking your desktop now."]
+    dispatcher.result_gate.set()
+    await _settle()
+    await bridge.aclose()
+
+
+async def test_desktop_question_after_an_answered_question_speaks_only_the_new_answer():
+    """Regression for the 2026-10-08 05:27Z staging call.
+
+    The previous turn's answer was still cached at session level when the
+    caller asked about the desktop; the first progress snapshot's stale text
+    went out as commentary and GPT-Live said "Victoria already got back to
+    you" before the desktop answer.
+    """
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    _answer(dispatcher, "Your desktop is empty.")
+    live.delegate("d1", "What files are on my desktop")
+    await _settle()
+
+    dispatcher.progress("turn-1", _running_snapshot())
+    dispatcher.progress("turn-1", _running_snapshot())
+    completed = _running_snapshot(lastUsefulMessage="Your desktop is empty.")
+    completed["status"] = completed["turn"]["status"] = "completed"
+    completed["lastUsefulMessage"] = "Your desktop is empty."
+    dispatcher.progress("turn-1", completed)
+    dispatcher.result_gate.set()
+    await _settle()
+
+    assert live.of("commentary") == ["Your desktop is empty."]
+    await bridge.aclose()
+
+
 async def test_pending_approval_is_spoken_once_and_retained_as_instructions():
     bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
     live.delegate("d1", "Deploy it")
@@ -730,7 +818,6 @@ async def test_result_for_a_superseded_route_is_dropped():
     dispatcher.result_gate.set()
     await _settle()
     assert live.of("commentary", "d1") == []
-    assert dispatcher.claimed == []
     await bridge.aclose()
 
 

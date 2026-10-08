@@ -150,7 +150,7 @@ def test_warm_livekit_dispatcher_uses_configured_super_agents_client(
     assert init_kwargs["state_path"] == str(tmp_path / "route.json")
     assert (
         init_kwargs["developer_instructions"]
-        == dispatcher_instructions.with_dispatcher_skill("dispatcher says random fruit is persimmon")
+        == dispatcher_instructions.with_dispatcher_rules("dispatcher says random fruit is persimmon")
     )
     assert init_kwargs["fresh_thread"] is False
     assert calls[1:] == [("prepare", {}), ("close", {})]

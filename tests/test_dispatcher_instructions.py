@@ -27,13 +27,38 @@ def test_missing_skill_preserves_existing_dispatcher_instructions(tmp_path, monk
 
 
 def test_voice_worker_and_warmup_receive_the_same_canonical_procedure(tmp_path, monkeypatch):
-    from openbase_coder_cli.livekit_agent import config
     from openbase_coder_cli import livekit_voice_route
+    from openbase_coder_cli.livekit_agent import config
     source = tmp_path / 'dispatcher.md'
     source.write_text('Dispatcher policy.')
     monkeypatch.setattr(instructions, 'canonical_dispatcher_skill', lambda: 'Canonical task ownership.')
     monkeypatch.setattr(config, 'CODEX_DISPATCHER_INSTRUCTIONS_PATH', source)
     monkeypatch.setattr(livekit_voice_route, 'CODEX_DISPATCHER_INSTRUCTIONS_PATH', source)
-    expected = instructions.with_dispatcher_skill('Dispatcher policy.')
+    expected = instructions.with_dispatcher_rules('Dispatcher policy.')
     assert config._load_dispatcher_developer_instructions() == expected
     assert livekit_voice_route._dispatcher_developer_instructions() == expected
+    assert instructions.CURRENT_STATE_HEADING in expected
+    assert expected.endswith('Canonical task ownership.')
+
+
+def test_dispatcher_rules_require_checking_current_state_every_time(monkeypatch):
+    # Regression (2026-10-08 staging call): the dispatcher answered "your
+    # desktop is empty" from a listing 100 minutes old and refused to open a
+    # desktop folder created since, without a tool call.
+    monkeypatch.setattr(instructions, 'canonical_dispatcher_skill', lambda: 'Canonical procedure.')
+    result = instructions.with_dispatcher_rules('Dispatcher policy.')
+    assert result.startswith('Dispatcher policy.')
+    rules = ' '.join(instructions.CURRENT_STATE_RULES.split())
+    assert 'by checking it in this turn' in rules
+    assert 'never from earlier turns of this conversation' in rules
+    assert 'Never say that a file, folder or project does not exist' in rules
+    assert 'instead of refusing based on earlier turns' in rules
+    assert result.index(instructions.CURRENT_STATE_HEADING) < result.index(instructions.PROCEDURE_HEADING)
+    assert instructions.with_dispatcher_rules(result) == result
+    assert result.count(instructions.CURRENT_STATE_HEADING) == 1
+
+
+def test_dispatcher_rules_apply_without_the_canonical_skill(tmp_path, monkeypatch):
+    monkeypatch.setattr(instructions, 'canonical_dispatcher_skill', lambda: '')
+    result = instructions.with_dispatcher_rules('Load the skill through tools.')
+    assert result == 'Load the skill through tools.\n\n' + instructions.CURRENT_STATE_RULES
