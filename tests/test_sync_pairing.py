@@ -687,6 +687,23 @@ def test_cli_pair_hub_and_leave(env, monkeypatch):
     assert not sync_daemon.is_configured()
 
 
+def test_cli_pair_reports_when_restart_is_required(env, monkeypatch):
+    monkeypatch.setattr(
+        sync_pairing, "refresh_cloud_registration", lambda **kwargs: None
+    )
+    monkeypatch.setattr(sync_pairing, "_start_service", lambda: True)
+    monkeypatch.setattr(sync_pairing, "_stop_service", lambda: True)
+    runner = CliRunner()
+
+    hub = runner.invoke(sync_daemon_cli, ["pair", "hub", "--root", "~/Projects"])
+    leave = runner.invoke(sync_daemon_cli, ["pair", "leave", "--yes"])
+
+    assert hub.exit_code == 0, hub.output
+    assert "Restart Openbase to finish." in hub.output
+    assert leave.exit_code == 0, leave.output
+    assert "Restart Openbase to finish." in leave.output
+
+
 def test_cli_pair_join_reports_errors(env, monkeypatch):
     monkeypatch.setattr(httpx, "post", _fake_post(env, _response(409, {})))
 

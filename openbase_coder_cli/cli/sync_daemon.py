@@ -149,6 +149,11 @@ def _pairing_call(func, *args, **kwargs):
         raise click.ClickException(str(exc)) from None
 
 
+def _echo_restart_required(result: dict) -> None:
+    if result.get("restart_required"):
+        click.echo("Restart Openbase to finish.")
+
+
 @pair_cli.command("candidates")
 @click.option("--json", "as_json", is_flag=True, help="Print JSON.")
 def pair_candidates(as_json: bool) -> None:
@@ -197,6 +202,7 @@ def pair_hub(roots: tuple[str, ...]) -> None:
         "On each other computer, run 'openbase-coder sync-daemon pair join "
         "<this computer>' or use its Sync page."
     )
+    _echo_restart_required(result)
 
 
 @pair_cli.command("join")
@@ -216,6 +222,7 @@ def pair_join(hub: str, roots: tuple[str, ...]) -> None:
     click.echo(f"Syncing with {result['hub_name']}. Folders:")
     for root in result["roots"]:
         click.echo(f"  {root['path']}")
+    _echo_restart_required(result)
 
 
 @pair_cli.command("leave")
@@ -234,6 +241,7 @@ def pair_leave(yes: bool) -> None:
     click.echo("Stopped syncing on this computer. Your files were not changed.")
     if result.get("config_moved_to"):
         click.echo(f"The old setup was moved to {result['config_moved_to']}.")
+    _echo_restart_required(result)
 
 
 @sync_daemon_cli.command("install-binary")
