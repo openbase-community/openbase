@@ -110,6 +110,36 @@ taking the other computer's (**take theirs**):
 
 Open conflicts also show as a dashboard warning.
 
+On the Sync page, conflicts are grouped by repository or folder, with search,
+a filter by kind, and paging for long lists. Opening a conflict shows both
+versions and, for text files, the differences between them (when this
+computer holds both versions). Select a group, or everything a filter shows,
+to resolve many conflicts the same way; the page asks you to confirm the
+count first.
+
+A **branch conflict** is different: neither computer's branch was moved, so
+there is no version to pick. Merge or rebase in git on either computer; the
+conflict closes by itself once both computers point at the same commit. The
+Sync page shows the commits only one side has and the commands to reconcile,
+and the CLI and API refuse **keep mine** or **take theirs** for it.
+
+## Is sync healthy?
+
+The top of the Sync page answers it: up to date, syncing (with the number of
+changes waiting to be sent or confirmed, the rate and a rough time left),
+checking files, the other computer not reachable (with when it was last
+connected), or the sync service not running. Each synced folder lists, per
+paired computer, how many changes are still to send and how far this
+computer has received the other's changes. On the always-on computer, the page
+lists every computer syncing with it.
+
+The page also lists **stale git locks**: lock files (such as
+`.git/index.lock`) left behind by a git process that died. Git commands in that
+repository fail, and Openbase Sync cannot replicate its commits, until the
+lock is removed. **Move lock to Openbase trash** moves one into
+`~/.openbase/trash/git-locks/` (nothing is deleted), and only when the lock is
+more than 10 minutes old and no running process holds it open.
+
 ### AI conflict labels (opt-in)
 
 Openbase Sync can ask Openbase Cloud to label conflicts in text files, to help you decide which version to keep. It is off by default and set per computer:

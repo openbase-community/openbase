@@ -8,6 +8,7 @@ The daemon owns all state; nothing here stores any.
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,11 +17,13 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from openbase_coder_cli import sync_daemon
+from openbase_coder_cli import sync_daemon, sync_state
 
 
-def _client() -> sync_daemon.SyncDaemonClient:
-    return sync_daemon.SyncDaemonClient()
+def _client(timeout: float | None = None) -> sync_daemon.SyncDaemonClient:
+    if timeout is None:
+        return sync_daemon.SyncDaemonClient()
+    return sync_daemon.SyncDaemonClient(timeout=timeout)
 
 
 def _unavailable(exc: Exception) -> Response:
@@ -41,55 +44,247 @@ def sync_daemon_settings(request):
     return Response(summary)
 
 
+def _stale_lock_count(snapshot: dict[str, Any]) -> int | None:
+    locks = snapshot.get("locks")
+    if locks is None:
+        return None
+    return sum(len(paths) for paths in locks.values())
+
+
 @api_view(["GET"])
 def sync_daemon_status(request):
+    """The daemon's status plus ``overview``: health, backlog, attention."""
     try:
         payload = _client().status()
         payload["metrics"] = _client().metrics()
     except sync_daemon.SyncDaemonError as exc:
         return _unavailable(exc)
+    peers = [peer for peer in payload.get("peers") or [] if isinstance(peer, dict)]
+    sync_state.PRESENCE.observe(peers, time.time())
+    payload["overview"] = sync_state.overview(
+        payload,
+        config_roots=sync_daemon.configured_roots(),
+        offline_peers=sync_state.PRESENCE.offline(
+            str(peer.get("device") or "") for peer in peers
+        ),
+        stale_lock_count=_stale_lock_count(sync_state.STALE_LOCKS.snapshot()),
+    )
     return Response(payload)
+
+
+def _local_device() -> str:
+    return str(sync_daemon.read_config_summary().get("device_id") or "")
 
 
 @api_view(["GET"])
 def sync_daemon_conflicts(request):
+    """Open conflicts, with the repository or folder each belongs to."""
     try:
         conflicts = _client().conflicts(request.query_params.get("root") or None)
     except sync_daemon.SyncDaemonError as exc:
         return _unavailable(exc)
-    return Response({"conflicts": conflicts, "unresolved_count": len(conflicts)})
+    enriched = sync_state.enrich_conflicts(
+        conflicts,
+        roots=sync_daemon.configured_roots(),
+        local_device=_local_device(),
+    )
+    return Response({"conflicts": enriched, "unresolved_count": len(enriched)})
+
+
+@api_view(["GET"])
+def sync_daemon_conflict_detail(request, conflict_id: int):
+    """Both sides of one conflict.
+
+    Text conflicts: each version's size and, for small UTF-8 text, its
+    content, read from the daemon's version store, plus a diff. Branch
+    conflicts: where each computer's branch points and the commits only one
+    side has.
+    """
+    try:
+        conflicts = _client().conflicts()
+    except sync_daemon.SyncDaemonError as exc:
+        return _unavailable(exc)
+    conflict = sync_state.find_conflict(conflicts, int(conflict_id))
+    if conflict is None:
+        return Response(
+            {"error": "This conflict is no longer open."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    roots = sync_daemon.configured_roots()
+    root_path = next(
+        (
+            Path(str(root["path"])).expanduser()
+            for root in roots
+            if root.get("id") == conflict.get("root") and root.get("path")
+        ),
+        None,
+    )
+    if conflict.get("kind") == "git-branch":
+        detail = sync_state.git_branch_detail(conflict, root_path=root_path)
+    else:
+        detail = sync_state.file_conflict_detail(
+            conflict,
+            store=sync_daemon.state_dir() / "versions",
+            root_path=root_path,
+        )
+    enriched = sync_state.enrich_conflicts(
+        [conflict], roots=roots, local_device=_local_device()
+    )[0]
+    return Response({"conflict": enriched, "detail": detail})
+
+
+_RESOLVE_CHOICES = {
+    "keep_local": "a",
+    "keep_mine": "a",
+    "a": "a",
+    "use_remote": "b",
+    "take_theirs": "b",
+    "b": "b",
+}
+
+MAX_BULK_RESOLVE = 500
+
+GIT_BRANCH_REFUSAL = sync_state.GIT_BRANCH_REFUSAL
+
+
+def _resolve_one(
+    client: sync_daemon.SyncDaemonClient,
+    open_by_id: dict[int, dict[str, Any]],
+    conflict_id: int,
+    choice: str,
+) -> tuple[int, str | None]:
+    """(HTTP status, error) for one resolution."""
+    conflict = open_by_id.get(conflict_id)
+    if conflict is None:
+        return status.HTTP_404_NOT_FOUND, "This conflict is no longer open."
+    if conflict.get("kind") == "git-branch":
+        return status.HTTP_409_CONFLICT, GIT_BRANCH_REFUSAL
+    try:
+        client.resolve(conflict_id, choice)
+    except sync_daemon.SyncDaemonError as exc:
+        return status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)
+    return status.HTTP_200_OK, None
 
 
 @api_view(["POST"])
 def sync_daemon_conflicts_resolve(request):
+    """Resolve one conflict (``id``) or several (``ids``) the same way.
+
+    ``action`` is ``keep_local`` (this computer's version wins) or
+    ``use_remote`` (take the other computer's). Branch conflicts are refused:
+    the daemon does not move refs, so neither action would do what it says.
+    """
     data = request.data if isinstance(request.data, dict) else {}
-    conflict_id = data.get("id")
-    action = data.get("action")
-    choice = {
-        "keep_local": "a",
-        "keep_mine": "a",
-        "a": "a",
-        "use_remote": "b",
-        "take_theirs": "b",
-        "b": "b",
-    }.get(action)
-    if conflict_id is None or choice is None:
+    choice = _RESOLVE_CHOICES.get(data.get("action"))
+    raw_ids = data.get("ids")
+    bulk = isinstance(raw_ids, list)
+    if bulk:
+        ids_in = raw_ids
+    elif data.get("id") is not None:
+        ids_in = [data.get("id")]
+    else:
+        ids_in = []
+    if not ids_in or choice is None:
         return Response(
-            {"error": "id and action (keep_local|use_remote) are required"},
+            {"error": "id (or ids) and action (keep_local|use_remote) are required"},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    try:
-        conflict_id = int(conflict_id)
-    except (TypeError, ValueError):
+    if len(ids_in) > MAX_BULK_RESOLVE:
         return Response(
-            {"error": f"Unknown conflict id {conflict_id!r}."},
+            {"error": f"Resolve at most {MAX_BULK_RESOLVE} conflicts per request."},
             status=status.HTTP_400_BAD_REQUEST,
         )
+    ids: list[int] = []
+    for raw in ids_in:
+        try:
+            ids.append(int(raw))
+        except (TypeError, ValueError):
+            return Response(
+                {"error": f"Unknown conflict id {raw!r}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+    client = _client(timeout=sync_state.RESOLVE_TIMEOUT_S)
     try:
-        _client().resolve(conflict_id, choice)
+        open_by_id = {
+            int(conflict.get("id")): conflict
+            for conflict in client.conflicts()
+            if isinstance(conflict, dict) and conflict.get("id") is not None
+        }
     except sync_daemon.SyncDaemonError as exc:
         return _unavailable(exc)
-    return Response({"resolved": True, "id": conflict_id, "choice": choice})
+    if not bulk:
+        code, error = _resolve_one(client, open_by_id, ids[0], choice)
+        if error:
+            return Response({"error": error, "id": ids[0]}, status=code)
+        return Response({"resolved": True, "id": ids[0], "choice": choice})
+    results = []
+    for conflict_id in ids:
+        code, error = _resolve_one(client, open_by_id, conflict_id, choice)
+        results.append({"id": conflict_id, "ok": error is None, "error": error})
+        if code == status.HTTP_503_SERVICE_UNAVAILABLE:
+            # the daemon stopped answering: do not hammer it with the rest
+            results += [
+                {"id": rest, "ok": False, "error": "not attempted"}
+                for rest in ids[len(results) :]
+            ]
+            break
+    resolved = sum(1 for result in results if result["ok"])
+    return Response(
+        {
+            "resolved": resolved,
+            "failed": len(results) - resolved,
+            "choice": choice,
+            "results": results,
+        }
+    )
+
+
+@api_view(["GET"])
+def sync_daemon_stale_locks(request):
+    """Git lock files left by a process that died, from the last daemon scan.
+
+    The daemon needs minutes to scan a large tree, so this answers from the
+    last scan and refreshes in the background (``?refresh=1`` forces one).
+    """
+    if not sync_daemon.is_configured():
+        return Response(
+            {
+                "locks": [],
+                "checked_at": None,
+                "refreshing": False,
+                "error": None,
+                "stale_after_s": sync_state.STALE_LOCK_AGE_S,
+            }
+        )
+    refresh = str(request.query_params.get("refresh") or "") in {"1", "true"}
+    snapshot = sync_state.STALE_LOCKS.snapshot(refresh=refresh)
+    return Response(
+        {
+            "locks": sync_state.describe_stale_locks(snapshot["locks"]),
+            "checked_at": snapshot["checked_at"],
+            "refreshing": snapshot["refreshing"],
+            "error": snapshot["error"],
+            "stale_after_s": sync_state.STALE_LOCK_AGE_S,
+        }
+    )
+
+
+@api_view(["POST"])
+def sync_daemon_stale_lock_trash(request):
+    """Move one stale git lock into ``~/.openbase/trash`` (never deletes)."""
+    data = request.data if isinstance(request.data, dict) else {}
+    path = str(data.get("path") or "")
+    try:
+        result = sync_state.move_lock_to_trash(path, known=sync_state.STALE_LOCKS.known)
+    except sync_state.LockMoveError as exc:
+        return Response({"error": str(exc)}, status=exc.status)
+    except OSError as exc:
+        return Response(
+            {"error": f"Could not move the lock: {exc}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    sync_state.STALE_LOCKS.forget(path)
+    return Response(result)
 
 
 @api_view(["POST"])
@@ -259,11 +454,14 @@ def _legacy_conflict(conflict: dict[str, Any], root_paths: dict[str, str]) -> di
         "label": str(conflict.get("label") or ""),
     }
     if kind == "git-branch":
+        repo, _, ref = path.partition(":")
         return {
             **base,
             "type": "repo-divergence",
-            "repo_relpath": path,
-            "branch": str(conflict.get("label") or ""),
+            "repo_relpath": repo or path,
+            "branch": ref.removeprefix("refs/heads/") if ref else "",
+            "local_sha": str(conflict.get("a_hash") or ""),
+            "remote_sha": str(conflict.get("b_hash") or ""),
         }
     return {**base, "type": "file-conflict", "path": path, "files": [path]}
 

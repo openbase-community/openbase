@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 import click
 
-from openbase_coder_cli import sync_daemon, sync_migration
+from openbase_coder_cli import sync_daemon, sync_migration, sync_state
 
 
 @click.group()
@@ -145,6 +145,12 @@ def resolve(conflict_id: int, action: str | None) -> None:
     if not action:
         raise click.ClickException("Pass --keep-local or --use-remote.")
     _require_configured()
+    try:
+        refusal = sync_state.branch_refusal(_client().conflicts(), conflict_id)
+    except sync_daemon.SyncDaemonError as exc:
+        raise click.ClickException(str(exc)) from None
+    if refusal:
+        raise click.ClickException(refusal)
     try:
         _client().resolve(conflict_id, "a" if action == "keep_local" else "b")
     except sync_daemon.SyncDaemonError as exc:

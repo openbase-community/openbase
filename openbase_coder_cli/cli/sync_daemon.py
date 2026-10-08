@@ -7,7 +7,7 @@ from pathlib import Path
 
 import click
 
-from openbase_coder_cli import sync_daemon
+from openbase_coder_cli import sync_daemon, sync_state
 from openbase_coder_cli.paths import OPENBASE_BIN_DIR
 
 
@@ -296,6 +296,14 @@ def conflicts_cmd() -> None:
 @click.argument("action", type=click.Choice(["keep_local", "use_remote"]))
 def resolve_cmd(conflict_id: int, action: str) -> None:
     """Resolve a conflict by keeping this computer's version or taking the other's."""
+    try:
+        refusal = sync_state.branch_refusal(
+            sync_daemon.SyncDaemonClient().conflicts(), conflict_id
+        )
+    except sync_daemon.SyncDaemonError as exc:
+        raise click.ClickException(str(exc)) from None
+    if refusal:
+        raise click.ClickException(refusal)
     try:
         sync_daemon.SyncDaemonClient().resolve(
             conflict_id, "a" if action == "keep_local" else "b"

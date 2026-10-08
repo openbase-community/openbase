@@ -51,7 +51,14 @@ class FakeClient:
                 "path": "app/main.py",
                 "kind": "content",
                 "created_ns": 1_760_000_000_000_000_000,
-            }
+            },
+            {
+                "id": 8,
+                "root": "projects",
+                "path": "app:refs/heads/main",
+                "kind": "git-branch",
+                "created_ns": 1_760_000_000_000_000_000,
+            },
         ]
 
     def resolve(self, conflict_id, choice):
@@ -122,7 +129,15 @@ def test_resolve_maps_actions_to_daemon_choices(client, flag, choice):
     result = CliRunner().invoke(sync, ["resolve", "7", flag])
 
     assert result.exit_code == 0, result.output
-    assert client.calls == [("resolve", 7, choice)]
+    assert client.calls == [("conflicts", None), ("resolve", 7, choice)]
+
+
+def test_resolve_refuses_diverged_branches(client):
+    result = CliRunner().invoke(sync, ["resolve", "8", "--keep-local"])
+
+    assert result.exit_code != 0
+    assert "neither" in result.output
+    assert ("resolve", 8, "a") not in client.calls
 
 
 def test_resolve_requires_an_action(client):

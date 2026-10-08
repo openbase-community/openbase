@@ -102,7 +102,11 @@ def _toml_string(value: str) -> str:
 
 
 def render_roots_toml(roots: Iterable[dict[str, Any]]) -> list[str]:
-    """``[[roots]]`` blocks (id, path, optional pins) as TOML lines."""
+    """``[[roots]]`` blocks (id, path, optional pins and ignores) as TOML lines.
+
+    ``ignore`` lists paths a root keeps local to this computer; it is written
+    back as read so editing the folder list never drops it.
+    """
     lines: list[str] = []
     for root in roots:
         lines += [
@@ -115,6 +119,11 @@ def render_roots_toml(roots: Iterable[dict[str, Any]]) -> list[str]:
         if pins:
             lines.append(
                 "pins = [" + ", ".join(_toml_string(pin) for pin in pins) + "]"
+            )
+        ignore = [str(item) for item in root.get("ignore") or [] if str(item).strip()]
+        if ignore:
+            lines.append(
+                "ignore = [" + ", ".join(_toml_string(item) for item in ignore) + "]"
             )
     return lines
 
@@ -197,6 +206,18 @@ def _load_config(config_path: Path) -> dict[str, Any]:
         return tomllib.load(handle)
 
 
+def state_dir(config_path: Path | None = None) -> Path:
+    """The daemon's state directory (``state_dir`` in its config)."""
+    config_path = _config_path(config_path)
+    try:
+        value = _load_config(config_path).get("state_dir")
+    except (OSError, tomllib.TOMLDecodeError):
+        value = None
+    if isinstance(value, str) and value.strip():
+        return Path(value).expanduser()
+    return config_path.parent
+
+
 def read_config_summary(config_path: Path | None = None) -> dict:
     """The fields the UI shows; never raises for a missing or broken file."""
     config_path = _config_path(config_path)
@@ -232,6 +253,9 @@ def _roots_from_config(data: dict[str, Any]) -> list[dict[str, Any]]:
         pins = raw.get("pins")
         if isinstance(pins, list) and pins:
             root["pins"] = [str(pin) for pin in pins]
+        ignore = raw.get("ignore")
+        if isinstance(ignore, list) and ignore:
+            root["ignore"] = [str(item) for item in ignore]
         roots.append(root)
     return roots
 
@@ -693,6 +717,22 @@ class SyncDaemonClient:
         if choice not in {"a", "b"}:
             raise SyncDaemonError("choice must be 'a' (keep mine) or 'b' (take theirs)")
         self.call("resolve", id=int(conflict_id), choice=choice)
+
+    def stale_locks(self) -> dict[str, list[str]]:
+        """Repositories whose git lock files were left by a process that died.
+
+        The daemon walks every replicated repository to answer, which can take
+        minutes on a large tree: callers should use a long ``timeout`` and
+        never call this on a request path (see ``sync_state.StaleLockCache``).
+        """
+        data = self.call("stale-locks").get("data") or {}
+        if not isinstance(data, dict):
+            return {}
+        return {
+            str(repo): [str(lock) for lock in locks or []]
+            for repo, locks in data.items()
+            if isinstance(locks, list)
+        }
 
     def barrier(
         self,

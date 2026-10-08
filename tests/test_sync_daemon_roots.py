@@ -58,6 +58,32 @@ def test_roots_render_and_read_pins(home):
     assert summary["role"] == "edge" and len(summary["roots"]) == 2
 
 
+def test_set_roots_keeps_each_roots_ignores(home):
+    _configure(
+        [{"id": "projects", "path": "~/Projects"}],
+        extra='ignore = ["/crm/data", "*.log"]\n',
+    )
+    assert sync_daemon.configured_roots()[0]["ignore"] == ["/crm/data", "*.log"]
+
+    sync_daemon.add_roots(["~/Notes"])
+
+    data = tomllib.loads(sync_daemon.SYNC_DAEMON_CONFIG_PATH.read_text())
+    assert data["roots"][0]["ignore"] == ["/crm/data", "*.log"]
+    assert "ignore" not in data["roots"][1]
+
+
+def test_state_dir_follows_config(home, tmp_path):
+    path = _configure([])
+    assert sync_daemon.state_dir() == path.parent
+    custom = tmp_path / "elsewhere"
+    path.write_text(
+        path.read_text().replace(
+            f'state_dir = "{path.parent}"', f'state_dir = "{custom}"'
+        )
+    )
+    assert sync_daemon.state_dir() == custom
+
+
 def test_broken_config_summary_reports_error_instead_of_raising(home):
     path = sync_daemon.SYNC_DAEMON_CONFIG_PATH
     path.parent.mkdir(parents=True)
