@@ -12,14 +12,20 @@ CLI server, LiveKit server, and agent services started by
 
 ## Onboarding
 
-On first launch the app offers two paths:
+On first launch, an account with no backend yet is asked where its backend
+should live (see [Computer or Cloud Workspace?](getting-started/computer-or-cloud-workspace.md)):
 
-- **Link Your Computer** (default) — pair the phone with a Mac running the
+- **Set Up a New Computer** — pair the phone with a Mac running the
   Openbase runtime. The app directs you to `https://app.openbase.cloud` to
-  download the Mac app and sign in, then walks through installing Tailscale
-  on both devices (same tailnet), and waits for Mac setup to finish. Progress
+  download the Mac app and sign in, then walks through joining the private
+  network on both devices, and waits for Mac setup to finish. Progress
   is detected automatically by polling your cloud account state.
-- **Start with Cloud** — skip pairing and use Openbase Cloud from the phone.
+- **Use a Cloud Workspace** — let Openbase Cloud host a small private
+  workspace and pair the phone with it, with no computer at all.
+
+An account that already has a computer running Openbase Coder or a Cloud
+Workspace skips this choice: the app reads that from your cloud account state
+and goes straight to pairing the phone.
 
 After onboarding, sign in with your Openbase account (email + password, with
 optional two-factor authentication). The session persists in the iOS
