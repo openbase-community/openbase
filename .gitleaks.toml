@@ -1,0 +1,12 @@
+# Repo-specific gitleaks allowlist, read by the workspace git hooks
+# (.githooks/ in the Openbase Coder workspace). Keep entries narrow: a path
+# plus the exact synthetic value.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic hex secret used by the sync pairing tests"
+condition = "AND"
+paths = ['''^tests/test_sync_pairing\.py$''']
+regexes = ['''^0123456789abcdef0123456789abcdef$''']
