@@ -42,9 +42,11 @@ _USER_AGENT_VERSION_RE = re.compile(r"^[\w.-]+/(\d+\.\d+\.\d+)")
 _HANDSHAKE_TIMEOUT_SECONDS = 5.0
 
 _installed_cache_lock = threading.Lock()
-# (path, inode, mtime_ns, size) -> version; the binary is hundreds of MB and
+# (path, inode, mtime_ns, ctime_ns, size) -> version; the binary is hundreds of MB and
 # ``--version`` costs ~100ms, so only re-run it when the file changes.
-_installed_cache: tuple[tuple[str, int, int, int], str] | None = None
+# Legacy in-place refreshes preserve mtime and size, but change ctime even
+# when rewriting the same version. Do not cache a now-unlaunchable binary.
+_installed_cache: tuple[tuple[str, int, int, int, int], str] | None = None
 
 
 @dataclass(frozen=True)
@@ -97,7 +99,7 @@ def installed_codex_version(binary: Path | None = None) -> tuple[str, str] | Non
         stat = resolved.stat()
     except OSError:
         return None
-    key = (str(resolved), stat.st_ino, stat.st_mtime_ns, stat.st_size)
+    key = (str(resolved), stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
     with _installed_cache_lock:
         cached = _installed_cache
         if cached is not None and cached[0] == key:
