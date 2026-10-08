@@ -177,7 +177,12 @@ class FakeVoiceRouter:
 
 
 def _make_bridge(
-    *, ledger=True, developer_instructions="Direct route guidance.", clock=None
+    *,
+    ledger=True,
+    developer_instructions="Direct route guidance.",
+    clock=None,
+    settle=0.0,
+    hold_max=3.0,
 ):
     dispatcher = FakeVoiceClient(thread_id="dispatcher-thread")
     router = FakeVoiceRouter(dispatcher)
@@ -196,6 +201,8 @@ def _make_bridge(
         delivery_ledger=delivery_ledger,
         developer_instructions=lambda: developer_instructions,
         progress_thinking_interval=3600,
+        utterance_settle_seconds=settle,
+        utterance_hold_max_seconds=hold_max,
         **({"clock": clock} if clock is not None else {}),
     )
     bridge.attach(live)
@@ -203,6 +210,10 @@ def _make_bridge(
 
 
 async def _settle():
+    # A zero-delay utterance hold flushes on a loop timer, one iteration later.
+    for _ in range(5):
+        await asyncio.sleep(0)
+    await asyncio.sleep(0.001)
     for _ in range(5):
         await asyncio.sleep(0)
 
@@ -501,6 +512,171 @@ async def test_answer_streamed_by_progress_is_not_followed_by_an_already_answere
     assert record.status == "cancelled"
     assert record.terminal_reason == "live_answer_already_spoken"
     assert not ledger.has_pending_delivery_for_current_route()
+    await bridge.aclose()
+
+
+# --- fragment settling ------------------------------------------------------
+
+
+def _voice(prompt: str) -> str:
+    return wrap_voice_prompt(prompt)
+
+
+async def test_closed_utterance_waits_the_settle_window_before_the_agent_hears_it():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=0.08)
+    live.final("What files are on my desktop")
+    await _settle()
+    assert dispatcher.prompts == []
+    await asyncio.sleep(0.15)
+    assert len(dispatcher.prompts) == 1
+    assert dispatcher.prompts[0][0].endswith(_voice("What files are on my desktop"))
+    await bridge.aclose()
+
+
+async def test_fragmented_question_reaches_the_agent_as_one_utterance():
+    """Regression for the 2026-10-08 05:59Z staging call.
+
+    The plugin closed "What files are on my" (0.8 s of audio with no new
+    transcript fragment) and "desktop" arrived as a second utterance about a
+    second later; each started its own agent turn and the dispatcher answered
+    "I didn't catch the end of that".
+    """
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=0.08)
+    live.final("What files are on my")
+    await asyncio.sleep(0.03)
+    live.final("desktop")
+    await asyncio.sleep(0.15)
+    assert len(dispatcher.prompts) == 1
+    assert dispatcher.prompts[0][0].endswith(_voice("What files are on my desktop"))
+    await bridge.aclose()
+
+
+async def test_a_fragment_opening_during_the_hold_extends_it_until_it_closes():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        settle=0.04, hold_max=0.6
+    )
+    live.final("What files are on my", item_id="speech_1")
+    live.partial("desk", item_id="speech_2")
+    await asyncio.sleep(0.1)
+    assert dispatcher.prompts == []
+    live.final("desktop", item_id="speech_2")
+    await asyncio.sleep(0.1)
+    assert len(dispatcher.prompts) == 1
+    assert dispatcher.prompts[0][0].endswith(_voice("What files are on my desktop"))
+    await bridge.aclose()
+
+
+async def test_the_hold_is_bounded_when_an_open_fragment_never_closes():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        settle=0.04, hold_max=0.12
+    )
+    live.final("What files are on my", item_id="speech_1")
+    live.partial("desk", item_id="speech_2")
+    await asyncio.sleep(0.25)
+    assert len(dispatcher.prompts) == 1
+    assert dispatcher.prompts[0][0].endswith(_voice("What files are on my"))
+    await bridge.aclose()
+
+
+async def test_a_delegation_during_the_hold_sends_the_held_words_with_its_pending_text():
+    """Regression for the 2026-10-08 06:36Z staging call.
+
+    "What's in the grocery list file on my" was closed, then the model
+    delegated with the open fragment "desktop" pending; the held words and
+    the pending fragment are one request, bound to that delegation, and the
+    fragment's own final transcript is then covered.
+    """
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=5.0)
+    live.final("What's in the grocery list file on my", item_id="speech_1")
+    live.delegate("d1", "desktop")
+    await _settle()
+    assert len(dispatcher.prompts) == 1
+    assert dispatcher.prompts[0][0].endswith(
+        _voice("What's in the grocery list file on my desktop")
+    )
+    live.final("desktop", item_id="speech_2")
+    await _settle()
+    assert len(dispatcher.prompts) == 1
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    await bridge.aclose()
+
+
+async def test_a_delegation_with_nothing_pending_during_the_hold_takes_the_held_words():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=5.0)
+    live.final("Run the tests")
+    live.delegate("d1", "")
+    await _settle()
+    assert len(dispatcher.prompts) == 1
+    assert dispatcher.prompts[0][0].endswith(_voice("Run the tests"))
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    await bridge.aclose()
+
+
+async def test_words_after_a_delegated_fragment_steer_with_the_whole_request():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=5.0)
+    live.final("What's in the grocery list file on my", item_id="speech_1")
+    live.delegate("d1", "desktop")
+    await _settle()
+    live.final("desktop, the one from yesterday", item_id="speech_2")
+    await _settle()
+    assert len(dispatcher.prompts) == 2
+    assert dispatcher.prompts[1][0].endswith(
+        _voice("What's in the grocery list file on my desktop, the one from yesterday")
+    )
+    await bridge.aclose()
+
+
+# --- reconnects ---------------------------------------------------------------
+
+
+async def test_a_reconnect_unbinds_dead_delegations_and_answers_session_wide():
+    """Regression for the 2026-10-08 04:58Z staging call.
+
+    A Cloud deploy replaced the relay task; the plugin reconnected and opened
+    a new GPT-Live session, whose history is reseeded but whose delegations
+    are new. The running turn's answer must not be bound to the dead id.
+    """
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.delegate("d1", "Run the tests")
+    await _settle()
+    assert len(dispatcher.prompts) == 1
+
+    live.emit("session_reconnected")
+    dispatcher.result_gate.set()
+    await _settle()
+
+    assert live.of("commentary", "d1") == []
+    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    (briefing,) = [t for t in live.of("thinking", None) if "re-established" in t]
+    assert "Do not greet the caller again" in briefing
+    assert "the dispatcher is still working" in briefing
+    await bridge.aclose()
+
+
+async def test_a_reconnect_with_nothing_running_briefs_without_a_pending_note():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.emit("session_reconnected")
+    await _settle()
+    (briefing,) = live.of("thinking", None)
+    assert "re-established" in briefing
+    assert "still working" not in briefing
+    assert dispatcher.prompts == []
+    await bridge.aclose()
+
+
+async def test_an_utterance_closed_by_the_reconnect_still_reaches_the_agent():
+    # The plugin closes the caller's open speech (a final transcript) right
+    # before it emits session_reconnected.
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=0.05)
+    live.final("What files are on my desktop")
+    live.emit("session_reconnected")
+    await asyncio.sleep(0.12)
+    assert len(dispatcher.prompts) == 1
+    assert dispatcher.prompts[0][0].endswith(_voice("What files are on my desktop"))
     await bridge.aclose()
 
 
