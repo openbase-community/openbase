@@ -7,6 +7,11 @@ from pathlib import Path
 import pytest
 
 from openbase_coder_cli.thread_sync import claude_snapshot_io
+from openbase_coder_cli.thread_sync.claude_session_db import (
+    _backfill_openbase_session_metadata,
+    _ensure_super_agents_schema,
+)
+from openbase_coder_cli.thread_sync.claude_snapshot_io import _read_session_snapshot
 from openbase_coder_cli.thread_sync.claude_thread_sync import (
     ClaudeConflictResolutionError,
     claude_thread_snapshot_status,
@@ -181,6 +186,75 @@ def test_import_claude_thread_snapshot_creates_session_and_backfills_metadata(
         "Cross device done.",
         target_cwd,
     )
+
+
+@pytest.mark.parametrize(
+    ("configured_backend", "expected_identity"),
+    [("openbase_cloud", "openbase_cloud"), ("codex", "claude_code")],
+)
+def test_import_writes_the_session_under_this_machines_claude_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    configured_backend: str,
+    expected_identity: str,
+) -> None:
+    """The running Claude client only sees rows labelled with its identity."""
+    monkeypatch.setenv("OPENBASE_CODING_BACKEND", configured_backend)
+    monkeypatch.delenv("OPENBASE_CODING_BACKENDS", raising=False)
+    source_home = tmp_path / "source"
+    target_home = tmp_path / "target"
+    exchange_dir = tmp_path / "exchange"
+    db_path = tmp_path / "target-state.sqlite3"
+    session_id = "2a16448e-c428-455b-bceb-5ac34da8ee4e"
+    cwd = "/Users/example/Projects/app"
+    _write_session(
+        source_home, cwd, session_id, user_text="Hello", assistant_text="Hi."
+    )
+    # A row an older import left under the wrong label is relabelled too.
+    with sqlite3.connect(db_path) as conn:
+        _ensure_super_agents_schema(conn)
+        conn.execute(
+            "insert into sessions (id, name, cwd, command_json, status, backend, backend_session_id,"
+            " created_at, updated_at) values (?, 'old', ?, '[]', 'completed', 'claude_code', ?, 't', 't')",
+            ("claude_" + session_id.replace("-", ""), cwd, session_id),
+        )
+    export_claude_thread_snapshots(
+        claude_home=source_home,
+        exchange_dir=exchange_dir,
+        device_identity_path=tmp_path / "source-device.json",
+        ledger_path=tmp_path / "source-ledger.json",
+        super_agents_db_path=tmp_path / "source-state.sqlite3",
+        stability_delay_seconds=0,
+        max_age_days=None,
+        source_user_home=Path("/Users/example"),
+    )
+    results = import_claude_thread_snapshots(
+        claude_home=target_home,
+        exchange_dir=exchange_dir,
+        device_identity_path=tmp_path / "target-device.json",
+        ledger_path=tmp_path / "target-ledger.json",
+        super_agents_db_path=db_path,
+        target_user_home=Path("/Users/example"),
+    )
+    assert results[0].status == "imported"
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("select backend from sessions").fetchall() == [
+            (expected_identity,)
+        ]
+
+    fresh_db = tmp_path / "fresh-state.sqlite3"
+    _backfill_openbase_session_metadata(
+        _read_session_snapshot(
+            target_home,
+            _session_path(target_home, cwd, session_id),
+            stability_delay_seconds=0,
+        ),
+        db_path=fresh_db,
+    )
+    with sqlite3.connect(fresh_db) as conn:
+        assert conn.execute("select backend from sessions").fetchall() == [
+            (expected_identity,)
+        ]
 
 
 def test_import_claude_snapshots_migrates_existing_foreign_home_cwd(
