@@ -35,6 +35,7 @@ SECRET = "0123456789abcdef0123456789abcdef"
 REAL_START_SERVICE = sync_pairing._start_service
 REAL_STOP_SERVICE = sync_pairing._stop_service
 REAL_ROOT_ESTIMATES = sync_pairing._root_estimates
+REAL_ENGINE_FEATURES = sync_pairing.engine_features
 MINI = fleet.FleetPeer(
     key="mini.net.example",
     name="mini",
@@ -84,6 +85,7 @@ def env(home, monkeypatch):
     )
     monkeypatch.setattr(sync_pairing, "daemon_binary_available", lambda: True)
     monkeypatch.setattr(sync_pairing, "is_cloud_workspace", lambda: False)
+    monkeypatch.setattr(sync_pairing, "engine_features", lambda: {"project-only"})
     # no daemon in tests: folder sizes come from a stub (``_root_estimates``)
     monkeypatch.setattr(sync_pairing, "_root_estimates", lambda: {})
     monkeypatch.setattr(network, "tailscale_ip", lambda family="4": "100.64.0.1")
@@ -1314,3 +1316,64 @@ def test_only_is_written_and_read_back(env):
 
     assert _config()["roots"][0]["only"] == ["app", "site"]
     assert sync_daemon.read_config_summary()["roots"][0]["only"] == ["app", "site"]
+
+
+def test_project_only_needs_an_engine_that_supports_it(env, home, monkeypatch):
+    """An older engine ignores only/thin and keeps 10 GB free: refuse rather
+    than let a small cloud workspace try to take all of ~/Projects."""
+    monkeypatch.setattr(sync_pairing, "engine_features", lambda: set())
+    monkeypatch.setattr(sync_pairing, "is_cloud_workspace", lambda: True)
+    _projects_hub(env, monkeypatch)
+
+    with pytest.raises(sync_pairing.PairingError) as join:
+        sync_pairing.join_hub("mini", ["~/Projects/app"])
+    assert join.value.code == "engine_outdated"
+    assert not sync_daemon.is_configured()
+
+    # a full copy of whole folders still works with an older engine
+    monkeypatch.setattr(sync_pairing, "is_cloud_workspace", lambda: False)
+    sync_pairing.join_hub("mini", project_only=False)
+    assert _config()["roots"] == [PROJECTS, THREADS]
+
+
+def test_adding_a_project_needs_a_project_only_engine(env, monkeypatch):
+    _write("edge", [{**PROJECTS, "only": ["app"]}], thin=True)
+    _projects_hub(env, monkeypatch)
+    monkeypatch.setattr(sync_pairing, "engine_features", lambda: set())
+
+    with pytest.raises(sync_pairing.PairingError) as excinfo:
+        sync_pairing.add_root("~/Projects/site")
+
+    assert excinfo.value.code == "engine_outdated"
+    assert sync_daemon.configured_roots() == [{**PROJECTS, "only": ["app"]}]
+
+
+def test_engine_features_runs_the_daemon_binary(monkeypatch, tmp_path):
+    from openbase_coder_cli.services import installation, launchd
+
+    binary = tmp_path / "openbase-syncd"
+    binary.write_text(
+        "#!/bin/sh\n[ \"$1\" = --features ] && printf 'disk-aware\\nproject-only\\n' && exit 0\nexit 2\n"
+    )
+    binary.chmod(0o755)
+    monkeypatch.setattr(
+        installation.InstallationConfig, "load", classmethod(lambda cls: None)
+    )
+    monkeypatch.setattr(
+        launchd,
+        "_binary_resolvers",
+        lambda config: {"openbase_syncd": lambda: str(binary)},
+    )
+    assert REAL_ENGINE_FEATURES() == {"disk-aware", "project-only"}
+
+    old = tmp_path / "old-syncd"
+    old.write_text(
+        "#!/bin/sh\necho 'flag provided but not defined: -features' >&2\nexit 2\n"
+    )
+    old.chmod(0o755)
+    monkeypatch.setattr(
+        launchd,
+        "_binary_resolvers",
+        lambda config: {"openbase_syncd": lambda: str(old)},
+    )
+    assert REAL_ENGINE_FEATURES() == set()

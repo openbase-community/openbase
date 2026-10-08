@@ -166,6 +166,52 @@ def this_computer() -> dict[str, Any]:
     }
 
 
+# What the installed sync engine supports, from ``openbase-syncd --features``
+# (one name per line). Engines before project-only support reject the flag.
+PROJECT_ONLY_FEATURE = "project-only"
+
+
+def engine_features() -> set[str]:
+    """Features of the installed ``openbase-syncd`` (empty when unknown)."""
+    import subprocess
+
+    try:
+        from openbase_coder_cli.services.installation import InstallationConfig
+        from openbase_coder_cli.services.launchd import _binary_resolvers
+
+        binary = _binary_resolvers(InstallationConfig.load())["openbase_syncd"]()
+    except Exception:  # noqa: BLE001 - any failure means "unknown"
+        return set()
+    if not binary:
+        return set()
+    try:
+        result = subprocess.run(
+            [binary, "--features"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    if result.returncode != 0:
+        return set()
+    return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+
+def _require_project_only_engine() -> None:
+    """Refuse a project-only setup the installed engine would not honor: an
+    older engine ignores ``only`` and ``thin`` and keeps a fixed 10 GB free,
+    so a small cloud workspace would try to take every file of the folder."""
+    if PROJECT_ONLY_FEATURE not in engine_features():
+        raise PairingError(
+            "engine_outdated",
+            "Syncing only some projects needs a newer Openbase Sync on this "
+            "computer. Update Openbase and try again.",
+            409,
+        )
+
+
 def _require_daemon_binary() -> None:
     if not daemon_binary_available():
         raise PairingError(
@@ -962,6 +1008,8 @@ def join_hub(
                 400,
             )
         selected = _select_roots(hub_roots, roots, peer.name)
+        if project_only or any(root.get("only") for root in selected):
+            _require_project_only_engine()
         for root in selected:
             check_root_allowed(root["path"])
         _ensure_root_dirs(selected)
@@ -1098,11 +1146,30 @@ def _add_part(path: str) -> dict[str, Any] | None:
     """On an edge: sync ``path``, a folder inside one of the hub's folders
     (a project of ~/Projects), on this computer only. None when ``path`` is
     not such a folder (the caller handles it as a whole folder)."""
+    entry, roots = _plan_part(path)
+    if entry is None:
+        return None
+    _require_project_only_engine()
+    sync_daemon.expand_root_path(path).mkdir(parents=True, exist_ok=True)
+    sync_daemon.set_roots(roots)
+    restarted, restart_required = _restart_service()
+    return {
+        "root": entry,
+        "roots": roots,
+        "restarted": restarted,
+        "restart_required": restart_required,
+        "peers": [],
+    }
+
+
+def _plan_part(path: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """(the root entry, the new root list) for adding ``path`` as a project
+    of a folder; (None, []) when it is not one."""
     current = sync_daemon.configured_roots()
     root, rel = _containing_root(current, path)
     if root is not None:
         if rel is None or not root.get("only"):
-            return None  # the folder itself, or inside a folder synced whole
+            return None, []  # the folder itself, or inside a folder synced whole
         only = list(root["only"])
         if any(rel == item or rel.startswith(item + "/") for item in only):
             raise PairingError(
@@ -1116,11 +1183,11 @@ def _add_part(path: str) -> dict[str, Any] | None:
             r.get("only") for r in current
         )
         if not partial:
-            return None  # a full copy adds whole folders only
+            return None, []  # a full copy adds whole folders only
         hub_roots = _hub_roots_or_none()
         hub_root, rel = _containing_root(hub_roots or [], path)
         if hub_root is None or rel is None:
-            return None
+            return None, []
         entry = {"id": hub_root["id"], "path": hub_root["path"], "only": [rel]}
         overlap = [
             r["path"]
@@ -1135,16 +1202,7 @@ def _add_part(path: str) -> dict[str, Any] | None:
                 409,
             )
         roots = [*current, entry]
-    sync_daemon.expand_root_path(path).mkdir(parents=True, exist_ok=True)
-    sync_daemon.set_roots(roots)
-    restarted, restart_required = _restart_service()
-    return {
-        "root": entry,
-        "roots": roots,
-        "restarted": restarted,
-        "restart_required": restart_required,
-        "peers": [],
-    }
+    return entry, roots
 
 
 def _remove_part(path: str, scope: str | None) -> dict[str, Any] | None:
