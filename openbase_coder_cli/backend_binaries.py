@@ -75,6 +75,17 @@ def find_backend_binary(name: str) -> Path | None:
     return Path(found) if found else None
 
 
+BACKEND_INSTALL_ERRORS = (
+    OSError,
+    subprocess.CalledProcessError,
+    subprocess.TimeoutExpired,
+    urllib.error.URLError,
+    tarfile.TarError,
+    json.JSONDecodeError,
+    RuntimeError,
+)
+
+
 def ensure_backend_binary(coding_backend: str) -> Path | None:
     """Find the selected backend's CLI, installing it if missing.
 
@@ -96,15 +107,7 @@ def ensure_backend_binary(coding_backend: str) -> Path | None:
         if name == "codex":
             return _install_codex()
         return _install_claude()
-    except (
-        OSError,
-        subprocess.CalledProcessError,
-        subprocess.TimeoutExpired,
-        urllib.error.URLError,
-        tarfile.TarError,
-        json.JSONDecodeError,
-        RuntimeError,
-    ) as exc:
+    except BACKEND_INSTALL_ERRORS as exc:
         click.echo(
             click.style(
                 f"  WARN  Could not install the {name} CLI automatically: {exc}",

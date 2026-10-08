@@ -24,6 +24,10 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+from openbase_coder_cli.services.managed_codex_repair import (
+    repair_unusable_managed_codex,
+)
+
 logger = logging.getLogger(__name__)
 
 CODEX_APP_SERVER_SERVICE_NAMES: tuple[str, ...] = (
@@ -38,9 +42,9 @@ _USER_AGENT_VERSION_RE = re.compile(r"^[\w.-]+/(\d+\.\d+\.\d+)")
 _HANDSHAKE_TIMEOUT_SECONDS = 5.0
 
 _installed_cache_lock = threading.Lock()
-# (path, mtime_ns, size) -> version; the binary is hundreds of MB and
+# (path, inode, mtime_ns, size) -> version; the binary is hundreds of MB and
 # ``--version`` costs ~100ms, so only re-run it when the file changes.
-_installed_cache: tuple[tuple[str, int, int], str | None] | None = None
+_installed_cache: tuple[tuple[str, int, int, int], str] | None = None
 
 
 @dataclass(frozen=True)
@@ -93,11 +97,11 @@ def installed_codex_version(binary: Path | None = None) -> tuple[str, str] | Non
         stat = resolved.stat()
     except OSError:
         return None
-    key = (str(resolved), stat.st_mtime_ns, stat.st_size)
+    key = (str(resolved), stat.st_ino, stat.st_mtime_ns, stat.st_size)
     with _installed_cache_lock:
         cached = _installed_cache
         if cached is not None and cached[0] == key:
-            return (key[0], cached[1]) if cached[1] else None
+            return key[0], cached[1]
     try:
         result = subprocess.run(
             [str(resolved), "--version"],
@@ -105,11 +109,15 @@ def installed_codex_version(binary: Path | None = None) -> tuple[str, str] | Non
             text=True,
             timeout=15,
         )
-        version = parse_codex_version(result.stdout + result.stderr)
+        version = (
+            parse_codex_version(result.stdout + result.stderr)
+            if result.returncode == 0
+            else None
+        )
     except (OSError, subprocess.TimeoutExpired):
         version = None
     with _installed_cache_lock:
-        _installed_cache = (key, version)
+        _installed_cache = (key, version) if version else None
     return (key[0], version) if version else None
 
 
@@ -523,6 +531,7 @@ def run_auto_restart_tick() -> dict[str, object]:
     summary: dict[str, object] = {"skews": [], "blockers": [], "restarted": []}
     if not auto_restart_enabled():
         return summary
+    repair_unusable_managed_codex()
     skews = collect_codex_version_skews()
     summary["skews"] = [skew.service for skew in skews]
     if not skews:

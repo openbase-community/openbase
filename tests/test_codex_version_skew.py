@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from openbase_coder_cli.services import codex_version_skew as skew_module
 from openbase_coder_cli.services.codex_version_skew import (
@@ -14,6 +18,11 @@ from openbase_coder_cli.services.codex_version_skew import (
     super_agents_active_turn_count,
     thread_in_use,
 )
+
+
+@pytest.fixture(autouse=True)
+def isolate_managed_binary_repair(monkeypatch):
+    monkeypatch.setattr(skew_module, "repair_unusable_managed_codex", lambda: False)
 
 
 def test_parse_codex_version_reads_cli_output() -> None:
@@ -40,6 +49,7 @@ def test_installed_version_caches_per_binary_stat(monkeypatch, tmp_path) -> None
     calls: list[list[str]] = []
 
     class FakeResult:
+        returncode = 0
         stdout = "codex-cli 0.156.1\n"
         stderr = ""
 
@@ -58,6 +68,59 @@ def test_installed_version_caches_per_binary_stat(monkeypatch, tmp_path) -> None
     FakeResult.stdout = "codex-cli 0.157.0\n"
     assert skew_module.installed_codex_version(binary) == (str(binary), "0.157.0")
     assert len(calls) == 2
+
+
+def test_installed_version_invalidates_atomic_replacement_with_identical_stat(
+    monkeypatch, tmp_path
+):
+    binary = tmp_path / "codex"
+    binary.write_text("first")
+    candidate = tmp_path / "candidate"
+    candidate.write_text("other")
+    stamp = binary.stat()
+    os.utime(candidate, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    results = iter(["0.160.1", "0.161.0"])
+    monkeypatch.setattr(skew_module, "_installed_cache", None)
+    monkeypatch.setattr(
+        skew_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0, stdout="codex-cli " + next(results), stderr=""
+        ),
+    )
+    assert skew_module.installed_codex_version(binary)[1] == "0.160.1"
+    candidate.replace(binary)
+    assert binary.stat().st_size == stamp.st_size
+    assert binary.stat().st_mtime_ns == stamp.st_mtime_ns
+    assert skew_module.installed_codex_version(binary)[1] == "0.161.0"
+
+
+def test_installed_version_retries_failed_probe_without_file_change(monkeypatch, tmp_path):
+    binary = tmp_path / "codex"
+    binary.touch()
+    results = iter([
+        SimpleNamespace(returncode=-9, stdout="codex-cli 0.161.0", stderr=""),
+        SimpleNamespace(returncode=0, stdout="codex-cli 0.161.0", stderr=""),
+    ])
+    monkeypatch.setattr(skew_module, "_installed_cache", None)
+    monkeypatch.setattr(skew_module.subprocess, "run", lambda *_args, **_kwargs: next(results))
+    assert skew_module.installed_codex_version(binary) is None
+    assert skew_module.installed_codex_version(binary)[1] == "0.161.0"
+
+
+def test_auto_restart_repairs_before_detecting_skew(monkeypatch):
+    events = []
+    monkeypatch.setattr(skew_module, "auto_restart_enabled", lambda: True)
+    monkeypatch.setattr(skew_module, "repair_unusable_managed_codex", lambda: events.append("repair"))
+    monkeypatch.setattr(skew_module, "collect_codex_version_skews", lambda: events.append("detect") or [])
+    assert run_auto_restart_tick()["restarted"] == []
+    assert events == ["repair", "detect"]
+
+
+def test_auto_restart_opt_out_also_disables_binary_repair(monkeypatch):
+    monkeypatch.setattr(skew_module, "auto_restart_enabled", lambda: False)
+    monkeypatch.setattr(skew_module, "repair_unusable_managed_codex", lambda: pytest.fail("repair disabled"))
+    assert run_auto_restart_tick()["restarted"] == []
 
 
 def test_service_version_skew_only_when_versions_differ(monkeypatch) -> None:
