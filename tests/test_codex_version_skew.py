@@ -525,6 +525,9 @@ def test_skew_newer_server_or_shared_daemon_is_advisory_only() -> None:
     )
     assert not daemon_older.restart_resolves
     assert "does not restart it" in daemon_older.message
+    assert daemon_older.advisory_hint == (
+        "wait for the shared Codex daemon to update itself"
+    )
 
 
 def test_service_version_skew_flags_the_shared_daemon_link(monkeypatch, tmp_path) -> None:

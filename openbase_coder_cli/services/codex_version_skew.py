@@ -95,6 +95,14 @@ class CodexVersionSkew:
         return f"upgrade the Codex CLI to {self.running_version}"
 
     @property
+    def advisory_hint(self) -> str:
+        if self.running_is_newer:
+            return self.upgrade_hint
+        if self.shared_daemon:
+            return "wait for the shared Codex daemon to update itself"
+        return self.upgrade_hint
+
+    @property
     def message(self) -> str:
         if self.shared_daemon and self.running_is_newer:
             return (

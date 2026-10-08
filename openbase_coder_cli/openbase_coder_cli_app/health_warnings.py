@@ -271,14 +271,18 @@ def _codex_version_skew_warnings() -> list[dict[str, str]]:
             # No restart button: the Openbase service is not what is stale.
             # Picking "Restart with these settings" in Codex's dialog would
             # restart the shared daemon under every attached session.
+            action = (
+                f"Upgrade the Codex CLI to {skew.running_version} (for "
+                f"example `npm install -g @openai/codex@{skew.running_version}`)."
+                if skew.running_is_newer
+                else "Wait for Codex's managed daemon to update itself."
+            )
             warnings.append(
                 _warning(
                     f"codex-cli-outdated:{skew.service}",
                     "warning",
                     skew.message,
-                    f"Upgrade the Codex CLI to {skew.running_version} (for "
-                    f"example `npm install -g @openai/codex@{skew.running_version}`). "
-                    "Openbase never restarts the shared Codex daemon.",
+                    f"{action} Openbase never restarts the shared Codex daemon.",
                 )
             )
     return warnings
