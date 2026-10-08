@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import socket
 import threading
 import time
 import uuid
@@ -180,6 +181,16 @@ def flush_to_peer(paths: list[str], target_name: str) -> None:
         try:
             result = _barrier("flush", path, FLUSH_TIMEOUT_SECONDS)
         except SyncDaemonError as exc:
+            if isinstance(exc.__cause__, (TimeoutError, socket.timeout)):
+                # The daemon is running but did not answer in time (busy
+                # catching up, e.g. a large rescan): not the same as "off".
+                raise PushError(
+                    "sync_lagging",
+                    f"Openbase Sync did not finish handing the folder to "
+                    f"{target_name} in time; it is still catching up. "
+                    "Try again in a moment.",
+                    safe_to_retry=True,
+                ) from exc
             raise PushError(
                 "sync_unavailable",
                 "Openbase Sync is not running on this computer, so the "

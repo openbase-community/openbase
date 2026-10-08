@@ -309,6 +309,29 @@ def test_sync_lag_fails_safely_before_delivery(isolated, monkeypatch) -> None:
     asyncio.run(manager.start_turn("t-1", "usable"))
 
 
+def test_daemon_timeout_is_reported_as_catching_up(isolated, monkeypatch) -> None:
+    import socket
+
+    from openbase_coder_cli.sync_daemon import SyncDaemonError
+
+    def slow(kind, path, timeout):
+        try:
+            raise socket.timeout("timed out")
+        except socket.timeout as exc:
+            raise SyncDaemonError("sync daemon unreachable: timed out") from exc
+
+    monkeypatch.setattr(thread_push, "_barrier", slow)
+    manager = FakeManager({"t-1": _thread()})
+
+    with pytest.raises(PushError) as caught:
+        _push(manager)
+
+    assert caught.value.code == "sync_lagging"
+    assert "still catching up" in str(caught.value)
+    assert "not running" not in str(caught.value)
+    assert isolated["arrivals"] == []
+
+
 def test_busy_export_is_retried_then_reported(isolated, monkeypatch) -> None:
     attempts = []
 
