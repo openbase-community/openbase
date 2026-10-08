@@ -76,6 +76,9 @@ from openbase_coder_cli.openbase_coder_cli_app.common import (
     ExactFieldsSerializer,
     _request_identity,
 )
+from openbase_coder_cli.openbase_coder_cli_app.livekit_agent_health import (
+    livekit_agent_worker_ready,
+)
 from openbase_coder_cli.services.cloud_workspace import cloud_workspace_id
 from openbase_coder_cli.stt_providers import (
     LOCAL_MLX_WHISPER_STT_PROVIDER_ID,
@@ -925,6 +928,17 @@ def livekit_room_token(request):
         livekit_dispatch_agent_name = input_serializer.validated_data[
             "livekit_dispatch_agent_name"
         ]
+
+    if not livekit_agent_worker_ready():
+        # Retryable for the apps (code agent_not_ready): the worker is
+        # starting, typically on a Cloud Workspace that just woke up.
+        return Response(
+            {
+                "detail": "The voice agent is still starting. Please try again in a moment.",
+                "code": "agent_not_ready",
+            },
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
 
     metadata = {
         "user_identity": identity,
