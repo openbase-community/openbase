@@ -17,6 +17,11 @@ No wrapper or alias is required. Codex probes the standard socket and, when
 the invocation is eligible, connects the TUI to the same app-server owner used
 by Super Agents. Openbase can then discover and steer the TUI's active turn.
 
+To start a session with Openbase's own Codex profile instead of your
+defaults, use [`openbase codex`](agent-launchers.md): it attaches explicitly
+(`codex -p openbase --remote unix:// -C "$PWD"`) and, on a paired Openbase
+Sync edge, can run the session on your hub.
+
 Implicit discovery is best-effort: if the socket is not ready or the
 invocation is ineligible, the TUI silently keeps a private embedded owner, and
 that session is invisible to the dispatcher, Super Agents, and the mobile
@@ -53,6 +58,13 @@ state cannot be replayed by the shared daemon. This includes raw `-c` overrides
 strict config, config-loader bypasses, and the hook-trust bypass. Openbase does
 not override these exclusions. Users can still opt into an explicit remote
 endpoint with Codex's own `--remote` flag when they deliberately need it.
+
+With an explicit `--remote`, a profile or `-c` override reaches the shared
+daemon only through the TUI's typed session settings (model, reasoning
+effort, permissions, working directory); free-form config such as
+`developer_instructions`, MCP servers, hooks and model-provider definitions
+comes from the daemon's own configuration. A new remote session also starts
+in the daemon's working directory unless `-C` is given.
 
 Super Agents treats `notLoaded`, `unknown`, incomplete discovery, and transient
 read failures as uncertainty—not proof that a turn is terminal. It will not

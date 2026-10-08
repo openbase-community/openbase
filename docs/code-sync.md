@@ -147,6 +147,13 @@ are translated to the same home-relative location on the receiving device. A
 thread sync conflict is raised only when the two machines hold genuinely
 divergent transcripts.
 
+## Starting agents on the hub
+
+On a paired edge, `openbase codex` and `openbase claude` started in a synced
+folder run the session on the hub and attach your terminal to it, so the
+work keeps going while the laptop sleeps. See
+[Codex and Claude Code from Your Terminal](agent-launchers.md).
+
 ## Display-bound commands
 
 Openbase also provides a small companion `edge` command for work that must

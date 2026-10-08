@@ -13,7 +13,8 @@ nav = [
     { "Web Console & Cloud" = "console.md" },
     { "Voice Routing" = "voice-routing.md" },
     { "Sync Between Your Computers" = "code-sync.md" },
-    { "Laptop Tools for Remote Agents" = "laptop-tools.md" }
+    { "Laptop Tools for Remote Agents" = "laptop-tools.md" },
+    { "Codex & Claude Code from the Terminal" = "agent-launchers.md" }
   ]},
   { "Getting Started" = [
     "getting-started/index.md",
@@ -33,6 +34,7 @@ nav = [
     { "bootstrap" = "commands/bootstrap.md" },
     { "claude" = "commands/claude.md" },
     { "claude-sync" = "commands/claude-sync.md" },
+    { "codex" = "commands/codex.md" },
     { "codex-sync" = "commands/codex-sync.md" },
     { "defaults" = "commands/defaults.md" },
     { "doctor" = "commands/doctor.md" },
