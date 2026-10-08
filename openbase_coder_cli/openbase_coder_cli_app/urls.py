@@ -28,6 +28,14 @@ from openbase_coder_cli.openbase_coder_cli_app.sync_daemon_api import (
     sync_daemon_stubs,
     sync_status,
 )
+from openbase_coder_cli.openbase_coder_cli_app.sync_pairing_api import (
+    sync_daemon_roots,
+    sync_pairing_candidates,
+    sync_pairing_hub,
+    sync_pairing_join,
+    sync_pairing_leave,
+    sync_pairing_offer,
+)
 from openbase_coder_cli.openbase_coder_cli_app.update import (
     update_apply,
     update_status,
@@ -531,7 +539,43 @@ urlpatterns = [
         name="bootstrap-run",
     ),
     path("git/diff/", git_diff, name="git-diff"),
-    path("sync/daemon/settings/", sync_daemon_settings, name="sync-daemon-settings"),
+    path(
+        "sync/daemon/settings/",
+        offloaded_view(sync_daemon_settings),
+        name="sync-daemon-settings",
+    ),
+    # Pairing and roots can wait on another computer or the service manager,
+    # so they run off the shared executor too.
+    path(
+        "sync/daemon/pairing/candidates/",
+        offloaded_view(sync_pairing_candidates),
+        name="sync-pairing-candidates",
+    ),
+    path(
+        "sync/daemon/pairing/hub/",
+        offloaded_view(sync_pairing_hub),
+        name="sync-pairing-hub",
+    ),
+    path(
+        "sync/daemon/pairing/join/",
+        offloaded_view(sync_pairing_join),
+        name="sync-pairing-join",
+    ),
+    path(
+        "sync/daemon/pairing/leave/",
+        offloaded_view(sync_pairing_leave),
+        name="sync-pairing-leave",
+    ),
+    path(
+        "sync/daemon/pairing/offer/",
+        offloaded_view(sync_pairing_offer),
+        name="sync-pairing-offer",
+    ),
+    path(
+        "sync/daemon/roots/",
+        offloaded_view(sync_daemon_roots),
+        name="sync-daemon-roots",
+    ),
     path("sync/daemon/status/", sync_daemon_status, name="sync-daemon-status"),
     path("sync/daemon/conflicts/", sync_daemon_conflicts, name="sync-daemon-conflicts"),
     path(

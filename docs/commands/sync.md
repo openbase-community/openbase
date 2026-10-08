@@ -84,8 +84,8 @@ openbase-coder sync migrate-from-syncthing --apply --remove-markers
 
 - Earlier `sync enable`, `disable`, `add`, `remove`, `ignores`,
   `heal-echoes`, `reconcile` and `install-engine` subcommands were removed
-  with the previous sync. Choose what to sync with
-  `openbase-coder sync-daemon configure --root ...`.
+  with the previous sync. Choose what to sync on the console Sync page, or
+  with `openbase-coder sync-daemon pair` / `configure --root ...`.
 - The phone apps read the same state through `/api/sync/status/`,
   `/api/sync/conflicts/` and `/api/sync/conflicts/resolve/`; the console uses
   `/api/sync/daemon/...`.

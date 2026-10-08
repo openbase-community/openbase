@@ -129,6 +129,121 @@ def configure(
         click.echo("Service sync-daemon installed and started.")
 
 
+@sync_daemon_cli.group("pair")
+def pair_cli() -> None:
+    """Pair this computer with your other computers (same as the Sync page).
+
+    Run `pair hub` on the always-on computer, then `pair join <hub>` on each
+    computer that should sync with it. The hub hands over its pair secret
+    and folders over Openbase VPN; both computers must be signed in to the
+    same Openbase account.
+    """
+
+
+def _pairing_call(func, *args, **kwargs):
+    from openbase_coder_cli import sync_pairing
+
+    try:
+        return func(*args, **kwargs)
+    except sync_pairing.PairingError as exc:
+        raise click.ClickException(str(exc)) from None
+
+
+def _echo_restart_required(result: dict) -> None:
+    if result.get("restart_required"):
+        click.echo("Restart Openbase to finish.")
+
+
+@pair_cli.command("candidates")
+@click.option("--json", "as_json", is_flag=True, help="Print JSON.")
+def pair_candidates(as_json: bool) -> None:
+    """List your other computers on Openbase VPN and their sync role."""
+    from openbase_coder_cli import sync_pairing
+
+    payload = sync_pairing.candidates()
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    if not payload["signed_in"]:
+        click.echo("Not signed in: run 'openbase-coder login' to see your computers.")
+    click.echo(f"This computer: {payload['role']}")
+    if not payload["candidates"]:
+        click.echo("No other computers found on Openbase VPN.")
+        return
+    for entry in payload["candidates"]:
+        role = entry["role"] if entry["reachable"] else "offline"
+        line = f"  {entry['name']:<28} {role:<8} {entry['host']}"
+        if entry.get("hub_host"):
+            line += f"  (hub: {entry.get('hub_name') or entry['hub_host']})"
+        if entry.get("error"):
+            line += f"  - {entry['error']}"
+        click.echo(line)
+
+
+@pair_cli.command("hub")
+@click.option(
+    "--root",
+    "roots",
+    multiple=True,
+    help="Folder to sync (repeatable). Default: ~/Projects plus the Openbase folders.",
+)
+def pair_hub(roots: tuple[str, ...]) -> None:
+    """Make this computer the hub (the always-on computer) and start syncing."""
+    from openbase_coder_cli import sync_pairing
+
+    result = _pairing_call(sync_pairing.become_hub, list(roots) or None)
+    sync_pairing.refresh_cloud_registration(background=False)
+    click.echo("This computer is now the hub. Folders:")
+    for root in result["roots"]:
+        click.echo(f"  {root['path']}")
+    for skipped in result["skipped"]:
+        click.echo(f"  skipped {skipped['path']}: {skipped['reason']}")
+    click.echo(
+        "On each other computer, run 'openbase-coder sync-daemon pair join "
+        "<this computer>' or use its Sync page."
+    )
+    _echo_restart_required(result)
+
+
+@pair_cli.command("join")
+@click.argument("hub")
+@click.option(
+    "--root",
+    "roots",
+    multiple=True,
+    help="Only sync these of the hub's folders (repeatable). Default: all of them.",
+)
+def pair_join(hub: str, roots: tuple[str, ...]) -> None:
+    """Sync this computer with HUB (its name or Openbase VPN address)."""
+    from openbase_coder_cli import sync_pairing
+
+    result = _pairing_call(sync_pairing.join_hub, hub, list(roots) or None)
+    sync_pairing.refresh_cloud_registration(background=False)
+    click.echo(f"Syncing with {result['hub_name']}. Folders:")
+    for root in result["roots"]:
+        click.echo(f"  {root['path']}")
+    _echo_restart_required(result)
+
+
+@pair_cli.command("leave")
+@click.option("--yes", is_flag=True, help="Do not ask for confirmation.")
+def pair_leave(yes: bool) -> None:
+    """Stop syncing on this computer. Your files stay where they are."""
+    from openbase_coder_cli import sync_pairing
+
+    if not sync_daemon.is_configured():
+        click.echo("Openbase Sync is not set up on this computer.")
+        return
+    if not yes:
+        click.confirm("Stop syncing on this computer?", abort=True)
+    result = _pairing_call(sync_pairing.leave)
+    sync_pairing.refresh_cloud_registration(background=False)
+    click.echo("Stopped syncing on this computer. Your files were not changed.")
+    if result.get("config_moved_to"):
+        click.echo(f"The old setup was moved to {result['config_moved_to']}.")
+    _echo_restart_required(result)
+
+
 @sync_daemon_cli.command("install-binary")
 @click.argument("source", type=click.Path(exists=True, dir_okay=False))
 @click.option(
