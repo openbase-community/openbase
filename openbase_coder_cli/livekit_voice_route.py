@@ -12,11 +12,10 @@ from pathlib import Path
 import livekit.api as livekit_api
 
 from openbase_coder_cli.cli.utils import get_data_dir
-from openbase_coder_cli.codex_session_defaults import codex_permission_defaults
 from openbase_coder_cli.codex_home_instructions import (
     refresh_openbase_instruction_files_from_installation,
 )
-from openbase_coder_cli.dispatcher_instructions import with_dispatcher_skill
+from openbase_coder_cli.codex_session_defaults import codex_permission_defaults
 from openbase_coder_cli.direct_voice_instructions import (
     DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS,
 )
@@ -24,6 +23,7 @@ from openbase_coder_cli.dispatcher_config import (
     dispatcher_voice,
     selected_tts_provider_id,
 )
+from openbase_coder_cli.dispatcher_instructions import with_dispatcher_rules
 from openbase_coder_cli.livekit_agent.codex_thread_state import thread_state_file_lock
 from openbase_coder_cli.livekit_announcer import (
     AnnouncerError,
@@ -469,9 +469,9 @@ async def warm_livekit_dispatcher_thread(
 def _dispatcher_developer_instructions() -> str | None:
     loaded = _read_instruction_file(CODEX_DISPATCHER_INSTRUCTIONS_PATH)
     if loaded:
-        return with_dispatcher_skill(loaded)
+        return with_dispatcher_rules(loaded)
 
-    return with_dispatcher_skill(DISPATCHER_BUILTIN_DEVELOPER_INSTRUCTIONS)
+    return with_dispatcher_rules(DISPATCHER_BUILTIN_DEVELOPER_INSTRUCTIONS)
 
 
 async def publish_exit_to_dispatch(
