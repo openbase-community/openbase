@@ -48,6 +48,7 @@ from .thread_sync_common import (
     device_snapshot_dirs,
     file_content_relation,
     find_snapshot_record,
+    ledger_lock,
     prune_exchange_snapshots,
     read_device_ledger,
     record_device_snapshot,
@@ -155,34 +156,49 @@ def export_thread_snapshots(
     max_age_days: int | None = DEFAULT_SYNC_MAX_AGE_DAYS,
     active_thread_ids: set[str] | None = None,
     source_user_home: Path | None = None,
+    thread_ids: set[str] | None = None,
+    include_store_active: bool = True,
+    ledger_lock_timeout: float | None = None,
 ) -> list[ThreadSnapshotResult]:
+    """Export changed thread snapshots into the exchange folder.
+
+    ``thread_ids`` limits the export to those threads (a thread push).
+    ``include_store_active=False`` skips the Super Agents store's "running"
+    rows: a caller that has already confirmed the thread is idle relies on
+    the rollout-level checks (terminal event, not open for write) instead of
+    store rows, which can lag behind or go stale.
+    """
     state_db = state_db_path(codex_home)
     if not state_db.exists():
         raise ThreadTransferError(f"Codex state database not found: {state_db}")
 
     identity = get_or_create_device_identity(device_identity_path)
-    active_ids = set(active_thread_ids or set()) | _active_super_agent_thread_ids()
-    ledger = _read_exchange_ledger(ledger_path)
-    results = run_snapshot_export(
-        candidates=_export_candidates(
-            state_db=state_db,
-            codex_home=codex_home,
-            exchange_dir=exchange_dir,
-            identity=identity,
-            active_ids=active_ids,
-            cutoff_ms=sync_cutoff_ms(max_age_days),
-            index_entries=_latest_session_index_entries(
-                codex_home / SESSION_INDEX_NAME
+    active_ids = set(active_thread_ids or set())
+    if include_store_active:
+        active_ids |= _active_super_agent_thread_ids()
+    with ledger_lock(ledger_path, timeout_seconds=ledger_lock_timeout):
+        ledger = _read_exchange_ledger(ledger_path)
+        results = run_snapshot_export(
+            candidates=_export_candidates(
+                state_db=state_db,
+                codex_home=codex_home,
+                exchange_dir=exchange_dir,
+                identity=identity,
+                active_ids=active_ids,
+                cutoff_ms=sync_cutoff_ms(max_age_days),
+                index_entries=_latest_session_index_entries(
+                    codex_home / SESSION_INDEX_NAME
+                ),
+                stability_delay_seconds=stability_delay_seconds,
+                source_user_home=source_user_home or Path.home(),
+                thread_ids=thread_ids,
             ),
-            stability_delay_seconds=stability_delay_seconds,
-            source_user_home=source_user_home or Path.home(),
-        ),
-        device_id=identity.device_id,
-        ledger=ledger,
-        scope_key="threads",
-        result_factory=ThreadSnapshotResult,
-    )
-    _write_exchange_ledger(ledger_path, ledger)
+            device_id=identity.device_id,
+            ledger=ledger,
+            scope_key="threads",
+            result_factory=ThreadSnapshotResult,
+        )
+        _write_exchange_ledger(ledger_path, ledger)
     return results
 
 
@@ -197,10 +213,13 @@ def _export_candidates(
     index_entries: dict[str, dict[str, Any]],
     stability_delay_seconds: float,
     source_user_home: Path,
+    thread_ids: set[str] | None = None,
 ) -> Iterator[SnapshotExportCandidate]:
     for row in _thread_rows(state_db):
         thread_id = _string(row.get("id"))
         if not thread_id:
+            continue
+        if thread_ids is not None and thread_id not in thread_ids:
             continue
         if cutoff_ms is not None and _row_updated_ms(row) < cutoff_ms:
             yield SnapshotExportCandidate(thread_id, skip_reason="skipped_old")
@@ -281,7 +300,10 @@ def import_thread_snapshots(
     device_identity_path: Path = DEFAULT_DEVICE_IDENTITY_PATH,
     ledger_path: Path = DEFAULT_LEDGER_PATH,
     target_user_home: Path | None = None,
+    thread_ids: set[str] | None = None,
+    ledger_lock_timeout: float | None = None,
 ) -> list[ThreadSnapshotResult]:
+    """Import other devices' snapshots (only ``thread_ids`` when given)."""
     state_db = state_db_path(codex_home)
     if not state_db.exists():
         raise ThreadTransferError(f"Codex state database not found: {state_db}")
@@ -289,19 +311,21 @@ def import_thread_snapshots(
     target_home = target_user_home or Path.home()
     _translate_existing_thread_cwds(state_db, target_home)
     identity = get_or_create_device_identity(device_identity_path)
-    ledger = _read_exchange_ledger(ledger_path)
-    results = run_snapshot_import(
-        exchange_dir=exchange_dir,
-        device_id=identity.device_id,
-        ledger=ledger,
-        source=_exchange_import_source(
-            state_db=state_db,
-            codex_home=codex_home,
-            target_user_home=target_home,
-        ),
-        result_factory=ThreadSnapshotResult,
-    )
-    _write_exchange_ledger(ledger_path, ledger)
+    with ledger_lock(ledger_path, timeout_seconds=ledger_lock_timeout):
+        ledger = _read_exchange_ledger(ledger_path)
+        results = run_snapshot_import(
+            exchange_dir=exchange_dir,
+            device_id=identity.device_id,
+            ledger=ledger,
+            source=_exchange_import_source(
+                state_db=state_db,
+                codex_home=codex_home,
+                target_user_home=target_home,
+            ),
+            result_factory=ThreadSnapshotResult,
+            entity_ids=thread_ids,
+        )
+        _write_exchange_ledger(ledger_path, ledger)
     return results
 
 

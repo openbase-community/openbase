@@ -134,6 +134,44 @@ def read_device_identity(path: Path) -> DeviceIdentity | None:
     return DeviceIdentity(device_id, device_name, float(created_at))
 
 
+LEDGER_LOCK_SUFFIX = ".lock"
+
+
+@contextlib.contextmanager
+def ledger_lock(ledger_path: Path, *, timeout_seconds: float | None = None):
+    """Serialize read-modify-write cycles of one device ledger across processes.
+
+    The periodic sweeps (``sync-workers``) and an on-demand thread push (the
+    coder server) both export/import through the same ledger file; without
+    this lock one writer can replace the other's freshly recorded snapshot
+    state with a stale copy. ``timeout_seconds=None`` waits indefinitely;
+    otherwise ``TimeoutError`` is raised when the lock stays held.
+    """
+    from openbase_coder_cli.file_lock import LOCK_EX, LOCK_NB, LOCK_UN, flock
+
+    lock_path = ledger_path.with_name(ledger_path.name + LEDGER_LOCK_SUFFIX)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as handle:
+        if timeout_seconds is None:
+            flock(handle, LOCK_EX)
+        else:
+            deadline = time.monotonic() + max(timeout_seconds, 0.0)
+            while True:
+                try:
+                    flock(handle, LOCK_EX | LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(
+                            f"thread sync ledger busy: {ledger_path}"
+                        ) from None
+                    time.sleep(0.1)
+        try:
+            yield
+        finally:
+            flock(handle, LOCK_UN)
+
+
 def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     body = json.dumps(payload, indent=2, sort_keys=True) + "\n"
@@ -486,12 +524,22 @@ def run_snapshot_import(
     ledger: dict[str, Any],
     source: SnapshotImportSource,
     result_factory: Callable[..., Any],
+    entity_ids: set[str] | None = None,
 ) -> list[Any]:
     # Oldest-first so that within one pass a stale divergent snapshot is
     # processed before the newer one that proves convergence and clears the
     # conflict, never the other way around.
+    all_snapshot_dirs = device_snapshot_dirs(exchange_dir)
+    # Snapshot directories are ``devices/<device>/snapshots/<entity>/<fp>``,
+    # so a targeted import (one thread being pushed here) filters on the
+    # parent directory name without parsing every snapshot's metadata.
     snapshot_dirs = sorted(
-        device_snapshot_dirs(exchange_dir), key=_snapshot_exported_at
+        (
+            path
+            for path in all_snapshot_dirs
+            if entity_ids is None or path.parent.name in entity_ids
+        ),
+        key=_snapshot_exported_at,
     )
     results = [
         _import_one_snapshot(
@@ -503,7 +551,7 @@ def run_snapshot_import(
         )
         for snapshot_dir in snapshot_dirs
     ]
-    _prune_invalid_snapshot_cache(ledger, snapshot_dirs)
+    _prune_invalid_snapshot_cache(ledger, all_snapshot_dirs)
     return results
 
 

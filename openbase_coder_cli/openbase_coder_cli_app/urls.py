@@ -39,6 +39,14 @@ from openbase_coder_cli.openbase_coder_cli_app.sync_pairing_api import (
     sync_pairing_leave,
     sync_pairing_offer,
 )
+from openbase_coder_cli.openbase_coder_cli_app.thread_push_api import (
+    thread_push,
+    thread_push_arrival_detail,
+    thread_push_arrivals,
+    thread_push_cancel,
+    thread_push_release,
+    thread_push_target,
+)
 from openbase_coder_cli.openbase_coder_cli_app.update import (
     update_apply,
     update_status,
@@ -213,6 +221,21 @@ urlpatterns = [
         name="thread-dispatcher",
     ),
     path(
+        "threads/push/target/",
+        offloaded_view(thread_push_target),
+        name="thread-push-target",
+    ),
+    path(
+        "threads/push/arrivals/",
+        offloaded_view(thread_push_arrivals),
+        name="thread-push-arrivals",
+    ),
+    path(
+        "threads/push/arrivals/<str:operation_id>/",
+        offloaded_view(thread_push_arrival_detail),
+        name="thread-push-arrival-detail",
+    ),
+    path(
         "threads/<str:thread_id>/", offloaded_view(thread_detail), name="thread-detail"
     ),
     path(
@@ -229,6 +252,21 @@ urlpatterns = [
         "threads/<str:thread_id>/name/",
         thread_name,
         name="thread-name",
+    ),
+    path(
+        "threads/<str:thread_id>/push/",
+        offloaded_view(thread_push),
+        name="thread-push",
+    ),
+    path(
+        "threads/<str:thread_id>/push/cancel/",
+        offloaded_view(thread_push_cancel),
+        name="thread-push-cancel",
+    ),
+    path(
+        "threads/<str:thread_id>/push/release/",
+        thread_push_release,
+        name="thread-push-release",
     ),
     path(
         "threads/<str:thread_id>/interrupt/",

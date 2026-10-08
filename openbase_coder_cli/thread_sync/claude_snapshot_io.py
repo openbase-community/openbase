@@ -31,12 +31,23 @@ def _discover_sessions(
     home: Path,
     *,
     stability_delay_seconds: float,
+    session_ids: set[str] | None = None,
 ) -> dict[str, ClaudeSessionSnapshot]:
     sessions: dict[str, ClaudeSessionSnapshot] = {}
     projects = home / "projects"
     if not projects.exists():
         return sessions
-    for root in projects.glob("*/*.jsonl"):
+    if session_ids is None:
+        roots = list(projects.glob("*/*.jsonl"))
+    else:
+        # A targeted read (one session being pushed) stats only that
+        # session's transcript instead of every session on the machine.
+        roots = [
+            root
+            for session_id in sorted(session_ids)
+            for root in projects.glob(f"*/{session_id}.jsonl")
+        ]
+    for root in roots:
         snapshot = _read_session_snapshot(
             home,
             root,

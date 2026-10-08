@@ -43,6 +43,7 @@ from .session_manager_base import (
 from .session_manager_routines import SessionManagerRoutinesMixin
 from .session_manager_threads import SessionManagerThreadsMixin
 from .session_manager_turns import SessionManagerTurnsMixin
+from .thread_moves import ensure_thread_writable
 from .thread_payloads import (
     _optional_turn_string,
     _timestamp_to_datetime,
@@ -220,6 +221,8 @@ class CodexAppServerSessionManager(
         self, session_id: str, message: str, model: str | None = None
     ) -> str:
         """Start a turn on a Codex app-server thread."""
+        # A thread pushed to another computer continues there only.
+        ensure_thread_writable(session_id)
         thread = await self.get_session_state(session_id)
         if thread is None:
             raise ValueError(f"Thread {session_id} not found")
