@@ -37,6 +37,11 @@ from openbase_coder_cli.runtime import (
     RuntimePackage,
     current_runtime_package,
 )
+from openbase_coder_cli.self_update_activation import (
+    JOURNAL_NAME,
+    Activation,
+    sync_directory,
+)
 from openbase_coder_cli.self_update_network import (
     RetryableUpdateError,
     SelfUpdateError,
@@ -46,6 +51,7 @@ from openbase_coder_cli.self_update_network import (
 from openbase_coder_cli.services.installation import InstallationConfig
 from openbase_coder_cli.services.mutation_lock import (
     ServiceMutationBusy,
+    mutation_descriptors,
     mutation_environment,
     service_mutation,
 )
@@ -130,7 +136,9 @@ def version_info() -> dict:
     if package is not None:
         info["target"] = package.target
         info["package_version"] = package.version
-    info["update_available"] = bool(cache.get("update_available"))
+    info["update_available"] = bool(cache.get("update_available")) or bool(
+        package and activation_pending()
+    )
     info["update_required"] = bool(cache.get("update_required"))
     if cache.get("latest_version"):
         info["latest_version"] = cache["latest_version"]
@@ -151,6 +159,18 @@ def check_for_update() -> UpdateCheck:
             detail="Development workspace installs are git-managed; no auto-update.",
         )
 
+    transaction = Activation.load(STANDALONE_PACKAGES_DIR)
+    if transaction is not None:
+        check = UpdateCheck(
+            current_version=package.version or __version__,
+            latest_version=transaction.data["to_version"],
+            channel=channel,
+            update_available=True,
+            update_required=False,
+            detail="An interrupted runtime activation needs to finish.",
+        )
+        _write_update_check_cache(check)
+        return check
     manifest = _fetch_manifest(channel)
     current = _parse_version(package.version or __version__)
     latest = _parse_version(str(manifest.get("version", "")))
@@ -165,6 +185,10 @@ def check_for_update() -> UpdateCheck:
     )
     _write_update_check_cache(check)
     return check
+
+
+def activation_pending() -> bool:
+    return (STANDALONE_PACKAGES_DIR / JOURNAL_NAME).is_file()
 
 
 def auto_update_enabled(setting: str | None = None) -> bool:
@@ -289,6 +313,39 @@ def _run_self_update_locked(
             to_version=None,
             detail="Another updater replaced this runtime; use the current launcher.",
         )
+    transaction = Activation.load(STANDALONE_PACKAGES_DIR)
+    if transaction is not None:
+        try:
+            with service_mutation():
+                _require_updatable_package()
+                if STANDALONE_CURRENT_DIR.resolve() not in {
+                    transaction.old,
+                    transaction.new,
+                }:
+                    raise SelfUpdateError(
+                        "Active runtime does not match the interrupted activation."
+                    )
+                if not force and _voice_session_active():
+                    return SelfUpdateResult(
+                        "deferred",
+                        package.version,
+                        transaction.data["to_version"],
+                        "A voice session is active; activation recovery is waiting.",
+                    )
+                report("Recovering interrupted runtime activation...")
+                if transaction.data["phase"] == "activating":
+                    try:
+                        _validate_release_dir(transaction.new)
+                    except (SelfUpdateError, OSError, subprocess.TimeoutExpired) as exc:
+                        report(
+                            f"Interrupted target is unusable; restoring the previous runtime: {exc}"
+                        )
+                        transaction.rollback()
+                return _finish_activation(transaction, report=report)
+        except ServiceMutationBusy as exc:
+            return SelfUpdateResult(
+                "deferred", package.version, transaction.data["to_version"], str(exc)
+            )
     # Only our locked updater owns these scratch directories. A killed
     # download cannot clean itself; reclaim its bytes on the next attempt.
     if STANDALONE_RELEASES_DIR.is_dir():
@@ -400,20 +457,44 @@ def _activate_prepared_release(
 
     old_root = package.root.resolve()
     report(f"Activating {release_dir.name}...")
+    transaction = Activation.begin(
+        STANDALONE_PACKAGES_DIR,
+        old=old_root,
+        new=release_dir,
+        current=str(current),
+        latest=str(latest),
+        channel=channel,
+        plugin_site=PLUGIN_SITE_DIR,
+        migrate_plugins=_bundled_python_changed(old_root, release_dir),
+    )
+    return _finish_activation(transaction, report=report)
+
+
+def _finish_activation(transaction: Activation, *, report) -> SelfUpdateResult:
+    old_root, release_dir = transaction.old, transaction.new
+    current, latest = transaction.data["from_version"], transaction.data["to_version"]
+    channel = transaction.data["channel"]
+    if transaction.data["phase"] == "rollback":
+        return _rollback_activation(transaction, report=report)
     _point_symlink(STANDALONE_PREVIOUS_DIR, old_root)
     _point_symlink(STANDALONE_CURRENT_DIR, release_dir)
+    sync_directory(STANDALONE_PACKAGES_DIR)
 
     new_launcher = STANDALONE_CURRENT_DIR / "bin" / "openbase-coder"
     try:
+        # Providers must launch the refreshed executable before consumers start.
+        _refresh_backend_binaries(report)
         activated = _post_flip(
-            new_launcher, old_root=old_root, new_root=release_dir, report=report
+            new_launcher,
+            old_root=old_root,
+            new_root=release_dir,
+            report=report,
+            plugin_backup=transaction.backup,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         report(f"Post-update activation failed: {exc}")
         activated = False
     if activated:
-        _refresh_backend_binaries(report)
-        _prune_releases()
         _write_update_check_cache(
             UpdateCheck(
                 current_version=str(latest),
@@ -423,18 +504,30 @@ def _activate_prepared_release(
                 update_required=False,
             )
         )
+        transaction.finish()
+        _prune_releases()
         return SelfUpdateResult(
             status="updated", from_version=str(current), to_version=str(latest)
         )
 
+    transaction.rollback()
+    return _rollback_activation(transaction, report=report)
+
+
+def _rollback_activation(transaction: Activation, *, report) -> SelfUpdateResult:
+    old_root = transaction.old
+    current, latest = transaction.data["from_version"], transaction.data["to_version"]
     report("Update failed health checks; rolling back...")
+    transaction.restore_plugins(PLUGIN_SITE_DIR)
     _point_symlink(STANDALONE_CURRENT_DIR, old_root)
+    sync_directory(STANDALONE_PACKAGES_DIR)
     old_launcher = STANDALONE_CURRENT_DIR / "bin" / "openbase-coder"
     if not _run_launcher(old_launcher, ["services", "install"], report=report):
         raise SelfUpdateError(
             f"Restored the {current} runtime pointer, but restoring its services failed. "
             "Run `openbase-coder services install` after resolving the reported error."
         )
+    transaction.finish()
     return SelfUpdateResult(
         status="rolled-back",
         from_version=str(current),
@@ -626,13 +719,19 @@ def _point_symlink(link: Path, destination: Path) -> None:
     os.replace(tmp_link, link)
 
 
-def _post_flip(new_launcher: Path, *, old_root: Path, new_root: Path, report) -> bool:
+def _post_flip(
+    new_launcher: Path, *, old_root: Path, new_root: Path, report, plugin_backup=None
+) -> bool:
     if _bundled_python_changed(old_root, new_root):
         from openbase_coder_cli.self_update_plugins import migrate_plugin_site
 
         report("Bundled Python changed; rebuilding the plugin site...")
         return migrate_plugin_site(
-            PLUGIN_SITE_DIR, new_launcher, run_launcher=_run_launcher, report=report
+            PLUGIN_SITE_DIR,
+            new_launcher,
+            run_launcher=_run_launcher,
+            report=report,
+            durable_backup=plugin_backup,
         )
     return _run_launcher(new_launcher, ["services", "install"], report=report)
 
@@ -645,6 +744,7 @@ def _run_launcher(launcher: Path, args: list[str], *, report) -> bool:
         text=True,
         timeout=600,
         env=mutation_environment(),
+        pass_fds=mutation_descriptors(),
     )
     if completed.returncode != 0:
         report(

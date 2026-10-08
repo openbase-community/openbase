@@ -694,6 +694,7 @@ def run_loop(interval: float, verbose: bool) -> None:
     from openbase_coder_cli.self_update import (
         RetryableUpdateError,
         SelfUpdateError,
+        activation_pending,
         auto_update_enabled,
         check_for_update,
         spawn_detached_self_update,
@@ -755,6 +756,8 @@ def run_loop(interval: float, verbose: bool) -> None:
         # Periodically refresh the update-check cache (standalone installs)
         # so update_available surfaces in status APIs without manual checks,
         # and auto-apply available updates unless opted out.
+        if activation_pending():
+            next_update_check = min(next_update_check, time.monotonic() + 60)
         if is_standalone_runtime() and time.monotonic() >= next_update_check:
             next_update_check = time.monotonic() + UPDATE_CHECK_SECONDS
             try:
@@ -781,6 +784,7 @@ def run_loop(interval: float, verbose: bool) -> None:
                         and auto_update_enabled()
                         and (
                             check.update_required
+                            or activation_pending()
                             or check.latest_version != last_auto_update_attempt
                         )
                     )

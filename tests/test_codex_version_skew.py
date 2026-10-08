@@ -95,6 +95,25 @@ def test_installed_version_invalidates_atomic_replacement_with_identical_stat(
     assert skew_module.installed_codex_version(binary)[1] == "0.161.0"
 
 
+def test_installed_version_reprobes_in_place_rewrite_preserving_mtime(monkeypatch, tmp_path):
+    binary = tmp_path / "codex"
+    binary.write_text("first")
+    stamp = binary.stat()
+    results = iter([
+        SimpleNamespace(returncode=0, stdout="codex-cli 0.161.0", stderr=""),
+        SimpleNamespace(returncode=-9, stdout="", stderr=""),
+    ])
+    monkeypatch.setattr(skew_module, "_installed_cache", None)
+    monkeypatch.setattr(skew_module.subprocess, "run", lambda *_args, **_kwargs: next(results))
+    assert skew_module.installed_codex_version(binary)[1] == "0.161.0"
+    binary.write_text("other")
+    os.utime(binary, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    assert binary.stat().st_ino == stamp.st_ino
+    assert binary.stat().st_size == stamp.st_size
+    assert binary.stat().st_mtime_ns == stamp.st_mtime_ns
+    assert skew_module.installed_codex_version(binary) is None
+
+
 def test_installed_version_retries_failed_probe_without_file_change(monkeypatch, tmp_path):
     binary = tmp_path / "codex"
     binary.touch()

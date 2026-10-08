@@ -262,7 +262,7 @@ def test_self_update_rolls_back_on_failed_health_gate(
     monkeypatch.setattr(self_update, "_voice_session_active", lambda: False)
 
     # New launcher fails post-flip; old launcher succeeds during rollback.
-    def failed_activation(_launcher, *, old_root, new_root, report):
+    def failed_activation(_launcher, *, old_root, new_root, report, plugin_backup=None):
         if activation_timeout:
             import subprocess
 
@@ -270,6 +270,7 @@ def test_self_update_rolls_back_on_failed_health_gate(
         return False
 
     monkeypatch.setattr(self_update, "_post_flip", failed_activation)
+    monkeypatch.setattr(self_update, "_refresh_backend_binaries", lambda _: None)
     rollback_calls: list[list[str]] = []
     monkeypatch.setattr(
         self_update,
