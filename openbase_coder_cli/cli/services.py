@@ -197,9 +197,7 @@ def status() -> None:
                 skew := service_version_skew(svc.name)
             ):
                 remedy = (
-                    "restart to update"
-                    if skew.restart_resolves
-                    else skew.advisory_hint
+                    "restart to update" if skew.restart_resolves else skew.advisory_hint
                 )
                 click.echo(
                     f"{name_col} running (pid {info['pid']}), Codex "
