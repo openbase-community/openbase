@@ -197,6 +197,7 @@ def test_overview_reports_disk_and_low_disk_attention():
     result = sync_state.overview(status)
 
     projects, skills = result["roots"]
+    assert projects["only"] == [] and skills["only"] == []
     assert projects["bytes"] == 123
     assert projects["disk"]["below_low_water"] is True
     assert projects["disk"]["held_files"] == 3

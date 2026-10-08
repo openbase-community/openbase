@@ -942,8 +942,9 @@ def test_hub_answers_folders_with_sizes_and_no_secret(env, monkeypatch):
 
     assert response.status_code == 200
     roots = response.data["roots"]
-    assert roots[0] == {**ALPHA, "files": None, "bytes": None}
-    assert roots[1] == {**BETA, "files": 80, "bytes": 40_000_000}
+    # no daemon in tests: no per-project breakdown either
+    assert roots[0] == {**ALPHA, "files": None, "bytes": None, "subfolders": None}
+    assert roots[1] == {**BETA, "files": 80, "bytes": 40_000_000, "subfolders": None}
     assert SECRET not in repr(response.data)
 
 
@@ -1136,3 +1137,180 @@ def test_is_cloud_workspace_uses_markers_then_runtime(monkeypatch):
     assert sync_pairing.is_cloud_workspace() is True
     monkeypatch.setattr(cloud_registration, "runtime_flavor", lambda: "native")
     assert sync_pairing.is_cloud_workspace() is False
+
+
+# --- project-only inside a folder the others sync whole (~/Projects) -------------
+
+
+def _projects_hub(env, monkeypatch, subfolders=None):
+    """A hub syncing ~/Projects whole, with two projects inside."""
+    subfolders = (
+        subfolders
+        if subfolders is not None
+        else [
+            {
+                "name": "app",
+                "path": "~/Projects/app",
+                "files": 300,
+                "bytes": 90_000_000,
+            },
+            {
+                "name": "site",
+                "path": "~/Projects/site",
+                "files": 40,
+                "bytes": 2_000_000,
+            },
+        ]
+    )
+    _hub_routes(
+        env,
+        monkeypatch,
+        folders=_response(
+            200,
+            {
+                "roots": [
+                    {
+                        **PROJECTS,
+                        "files": 900_000,
+                        "bytes": 80_000_000_000,
+                        "subfolders": subfolders,
+                    },
+                    {**THREADS, "files": 10, "bytes": 1000, "subfolders": []},
+                ]
+            },
+        ),
+        offer=_response(200, _offer_payload()),
+    )
+
+
+def test_cloud_workspace_joins_one_project_of_projects(env, home, monkeypatch):
+    monkeypatch.setattr(sync_pairing, "is_cloud_workspace", lambda: True)
+    _projects_hub(env, monkeypatch)
+
+    result = sync_pairing.join_hub("mini", ["~/Projects/app"])
+
+    assert _config()["roots"] == [{**PROJECTS, "only": ["app"]}]
+    assert result["roots"] == [{**PROJECTS, "only": ["app"]}]
+    assert (home / "Projects" / "app").is_dir()
+    # the 80 GB folder is synced in part: no misleading warning
+    assert result["warnings"] == []
+
+
+def test_join_merges_parts_and_a_whole_folder(env, monkeypatch):
+    _projects_hub(env, monkeypatch)
+
+    sync_pairing.join_hub(
+        "mini",
+        ["~/Projects/site", "~/Projects/app", "~/.openbase/thread-sync"],
+        project_only=True,
+    )
+
+    assert _config()["roots"] == [{**PROJECTS, "only": ["app", "site"]}, THREADS]
+
+
+def test_preview_lists_projects_inside_a_folder(env, monkeypatch):
+    monkeypatch.setattr(sync_pairing, "is_cloud_workspace", lambda: True)
+    _projects_hub(env, monkeypatch)
+
+    preview = sync_pairing.hub_folders("mini")
+
+    projects = preview["folders"][0]
+    assert [
+        (s["path"], s["files"], s["bytes"], s["selected"])
+        for s in projects["subfolders"]
+    ] == [
+        ("~/Projects/app", 300, 90_000_000, False),
+        ("~/Projects/site", 40, 2_000_000, False),
+    ]
+
+
+def test_edge_adds_and_removes_projects_inside_a_folder(env, home, monkeypatch):
+    _write("edge", [{**PROJECTS, "only": ["app"]}, THREADS], thin=True)
+    _projects_hub(env, monkeypatch)
+    monkeypatch.setattr(httpx, "request", lambda *a, **k: pytest.fail("no hub change"))
+
+    added = sync_pairing.add_root("~/Projects/site")
+    assert sync_daemon.configured_roots()[0] == {**PROJECTS, "only": ["app", "site"]}
+    assert (home / "Projects" / "site").is_dir()
+    assert added["peers"] == [] and env.restarted == 1
+
+    with pytest.raises(sync_pairing.PairingError) as again:
+        sync_pairing.add_root("~/Projects/app/sub")
+    assert again.value.code == "root_overlap"
+
+    with pytest.raises(sync_pairing.PairingError) as everywhere:
+        sync_pairing.remove_root("~/Projects/app", scope="everywhere")
+    assert everywhere.value.code == "part_of_folder"
+
+    removed = sync_pairing.remove_root("~/Projects/app")
+    assert removed["scope"] == "this_computer"
+    assert sync_daemon.configured_roots()[0] == {**PROJECTS, "only": ["site"]}
+    # the last project of a folder: the folder goes
+    sync_pairing.remove_root("~/Projects/site")
+    assert sync_daemon.configured_roots() == [THREADS]
+
+
+def test_edge_adds_a_project_of_a_folder_it_did_not_sync(env, home, monkeypatch):
+    _write("edge", [THREADS], thin=True)
+    _projects_hub(env, monkeypatch)
+
+    sync_pairing.add_root("~/Projects/app")
+
+    assert sync_daemon.configured_roots() == [THREADS, {**PROJECTS, "only": ["app"]}]
+
+
+def test_full_edge_adding_inside_a_whole_folder_is_an_overlap(env, home, monkeypatch):
+    _write("edge", [PROJECTS])
+    (home / "Projects" / "app").mkdir(parents=True)
+    _projects_hub(env, monkeypatch)
+
+    with pytest.raises(sync_pairing.PairingError) as excinfo:
+        sync_pairing.add_root("~/Projects/app")
+
+    assert excinfo.value.code == "root_overlap"
+
+
+def test_available_roots_marks_projects_synced_here(env, monkeypatch):
+    _write("edge", [{**PROJECTS, "only": ["app"]}], thin=True)
+    _projects_hub(env, monkeypatch)
+
+    payload = sync_pairing.available_roots()
+
+    projects, threads = payload["folders"]
+    assert projects["synced_here"] is False and projects["partly_synced_here"] is True
+    assert [(s["name"], s["synced_here"]) for s in projects["subfolders"]] == [
+        ("app", True),
+        ("site", False),
+    ]
+    assert threads["synced_here"] is False
+
+
+def test_subfolders_come_from_the_daemons_folder_sizes(env, monkeypatch):
+    monkeypatch.setattr(
+        sync_daemon.SyncDaemonClient,
+        "folder_sizes",
+        lambda self, root: [
+            {"name": "app", "dir": True, "files": 3, "bytes": 30},
+            {"name": "README.md", "dir": False, "files": 1, "bytes": 5},
+        ],
+    )
+
+    assert sync_pairing._subfolders(PROJECTS) == [
+        {"name": "app", "path": "~/Projects/app", "files": 3, "bytes": 30}
+    ]
+
+
+def test_cli_pair_folders_lists_projects(env, monkeypatch):
+    _projects_hub(env, monkeypatch)
+
+    result = CliRunner().invoke(sync_daemon_cli, ["pair", "folders", "mini"])
+
+    assert result.exit_code == 0, result.output
+    assert "~/Projects/app" in result.output and "300 files, 90.0 MB" in result.output
+
+
+def test_only_is_written_and_read_back(env):
+    _write("edge", [{**PROJECTS, "only": ["app", "site"]}])
+
+    assert _config()["roots"][0]["only"] == ["app", "site"]
+    assert sync_daemon.read_config_summary()["roots"][0]["only"] == ["app", "site"]

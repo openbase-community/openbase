@@ -180,6 +180,8 @@ def overview(
                 "pending_fetches": pending,
                 "scanning": bool(root.get("scanning")),
                 "pins": list(config.get("pins") or []),
+                # the paths of the root this computer syncs (empty: all of it)
+                "only": list(root.get("only") or config.get("only") or []),
                 "ignore": list(config.get("ignore") or []),
                 "unsent": unsent,
                 "unacked": unacked,

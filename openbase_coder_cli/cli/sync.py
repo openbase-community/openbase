@@ -62,6 +62,8 @@ def status(as_json: bool) -> None:
             details.append("scanning")
         if root.get("bytes"):
             details.append(_size(root["bytes"]))
+        if root.get("only"):
+            details.append("only " + ", ".join(root["only"]))
         click.echo(f"{line}  ({', '.join(details)})")
         disk = root.get("disk") if isinstance(root.get("disk"), dict) else None
         if disk:

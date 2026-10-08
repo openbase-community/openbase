@@ -13,12 +13,16 @@ implement sync themselves.
 
 ## Hub and edge
 
-Openbase Sync pairs exactly two computers:
+Openbase Sync connects your computers to one always-on computer:
 
 - The **hub** is the machine that is always on (typically a Mac mini or a
-  Cloud DevSpace). It listens on its Openbase VPN address.
-- The **edge** is the machine you carry (typically a laptop). It connects to
-  the hub when it can and catches up after sleep or travel.
+  Cloud DevSpace). It listens on its Openbase VPN address and holds every
+  synced folder.
+- An **edge** is any other computer (typically a laptop, or a cloud
+  workspace that works on a project or two). It connects to the hub when it
+  can and catches up after sleep or travel. Changes from one edge reach the
+  others through the hub. An edge can sync all of the hub's folders or only
+  some of them (see [A project-only cloud workspace](#a-project-only-cloud-workspace)).
 
 Both sides share a pair secret generated when the hub is configured. Traffic
 only flows over your private Openbase VPN; nothing is relayed through a
@@ -80,6 +84,29 @@ the disk runs low. Pairing from the Sync page (or `sync-daemon pair`) makes
 the edge the anchor: your laptop keeps everything, and the always-on hub
 fetches a large file when it is used. With `sync-daemon configure` the hub is
 the anchor unless you pass `--anchor edge`.
+
+Sync never fills a disk. It keeps a minimum of free space on each disk it
+writes to, and refuses to write below it: the file stays on the other
+computer and arrives by itself once space is freed. The Sync page and
+`openbase-coder sync status` show each folder's free space, the minimum sync
+keeps, and how many files are waiting for space. If a disk fills completely
+(something else used the space), sync stops accepting changes on that
+computer without losing any; they arrive when space returns.
+
+The limits scale with the size of the disk unless you set them in the
+`[placement]` table of `~/.openbase/sync/config.toml`:
+
+| Setting | Default | On a 5 GB disk |
+|---|---|---|
+| `low_water_mb`: free space sync never writes below | 10% of the disk, at most 10 GB | about 512 MB |
+| `version_quota_mb`: room for previous versions of files (conflict and undo copies) | 15% of the disk, at most 10 GB | about 768 MB |
+| `version_retention_days`: how long previous versions are kept | 30 | 30 |
+| `lazy_mb`: files above this stay placeholders on the non-anchor side until used | 1% of the disk, at most 100 MB | about 51 MB |
+| `pinned_mb`: files above this stay on the anchor until explicitly fetched | 5% of the disk, at most 1 GB | about 256 MB |
+
+On a disk of 100 GB or more every default is its maximum. `thin = true`
+makes a computer keep large files as placeholders whatever the anchor (set
+by project-only pairing).
 
 Advanced: a root in `~/.openbase/sync/config.toml` can list **pins** —
 root-relative paths that are held in full only on the anchor side (`"."` pins
@@ -204,14 +231,20 @@ connected to Openbase VPN.
    the hub and starts syncing `~/Projects` plus the product folders.
 2. On each other computer, open **Sync**. Under **Sync with…**, your other
    computers are listed with their role; choose **Sync with this** next to
-   the always-on computer. This computer becomes an edge with the hub's
-   folders: the hub hands over its pair secret and folder list over Openbase
-   VPN, so there is nothing to copy by hand.
+   the always-on computer, then choose which of its folders this computer
+   syncs. Each folder shows its number of files and size, next to this
+   computer's free space. On a laptop every folder is preselected; on a
+   cloud workspace none is (see below). This computer becomes an edge with
+   the chosen folders: the hub hands over its pair secret and folder list
+   over Openbase VPN, so there is nothing to copy by hand.
 3. Check it on the Sync page (the peer shows as connected), or with
    `openbase-coder sync status`.
 
-Once syncing, the Sync page shows which computer is the hub, lets you add
-or remove a folder (the change is made on both computers), and has **Stop
+Once syncing, the Sync page shows which computer is the hub and lets you
+add or remove a folder. On the hub, a change is made on every computer. On
+an edge, the hub's folders that this computer does not sync are listed with
+**Sync here**, and removing a folder asks whether to stop syncing it **on
+this computer** only or **everywhere**. The page also has **Stop
 syncing on this computer**. Stopping removes the `sync-daemon` service and
 moves `~/.openbase/sync/config.toml` to `~/.openbase/trash/`; your files
 stay where they are. A computer that is not paired runs no sync service.
@@ -229,7 +262,13 @@ openbase-coder sync-daemon pair hub
 
 # On each other computer
 openbase-coder sync-daemon pair candidates      # your computers and their role
-openbase-coder sync-daemon pair join <hub-name>
+openbase-coder sync-daemon pair folders <hub-name>   # its folders, their size, your free disk
+openbase-coder sync-daemon pair join <hub-name>                     # all of them
+openbase-coder sync-daemon pair join <hub-name> --root ~/Projects/app   # only some
+
+# Later, on an edge
+openbase-coder sync-daemon pair add-folder ~/Projects/other
+openbase-coder sync-daemon pair remove-folder ~/Projects/app --this-computer
 
 # Stop syncing on a computer
 openbase-coder sync-daemon pair leave
@@ -250,6 +289,53 @@ openbase-coder sync-daemon configure --role edge --peer <hub-vpn-ip> \
 `configure` installs and starts the `sync-daemon` service unless you pass
 `--no-start`. Stop it with `openbase-coder sync-daemon disable` (your
 configuration and files are kept).
+
+## A project-only cloud workspace
+
+A cloud workspace (an Openbase Cloud DevSpace) usually has a small disk,
+about 5 GB, and works on one or two projects. It can sync just those
+projects with your always-on computer, while the always-on computer keeps
+holding everything and your laptop keeps syncing all of it.
+
+Set it up on the cloud workspace:
+
+1. Make sure the always-on computer syncs the project as its own folder.
+   Folders are synced whole, so for one project out of `~/Projects`, the hub
+   needs `~/Projects/<project>` as a folder of its own rather than only
+   `~/Projects`. Folders cannot nest, so a hub that syncs `~/Projects` as a
+   whole offers only that one folder; split it on the hub first (stop syncing
+   `~/Projects` everywhere, then add each project folder you want to share).
+2. On the cloud workspace, open **Sync**, choose **Sync with this** next to
+   the always-on computer, tick the project folders, and confirm. Nothing is
+   preselected on a cloud workspace, and the chooser warns when the chosen
+   folders may not fit. From a terminal:
+
+   ```bash
+   openbase-coder sync-daemon pair folders <hub-name>
+   openbase-coder sync-daemon pair join <hub-name> --root ~/Projects/<project>
+   ```
+
+A cloud workspace joins **project-only**: it syncs only the chosen folders,
+and large files stay on the always-on computer as placeholders until
+something on the cloud workspace uses them (or `openbase-sync fetch
+<path>`). Its disk limits scale down with its disk (see
+[Placement](#placement-large-files-and-disk-space)). Your laptop and the hub
+are unchanged: the laptop's edits to the chosen projects reach the cloud
+workspace through the hub, and the other folders never travel to it.
+
+To work on another project later, use **Sync here** next to it on the
+cloud workspace's Sync page (or `pair add-folder`). To drop one, remove it
+**on this computer**: the hub and the laptop keep syncing it, and the files
+on the cloud workspace stay until you delete them. If you delete them and
+later sync the folder again, they come back from the hub; nothing is
+deleted elsewhere.
+
+`--project-only` makes any computer join this way, and `--full-copy` makes a
+cloud workspace keep every file in full.
+
+Large files that only your laptop holds in full (the laptop is the anchor
+and the hub kept a placeholder) reach the cloud workspace only after the hub
+has them; fetch them on the hub first if the cloud workspace needs them.
 
 ## Migrating from the previous sync
 

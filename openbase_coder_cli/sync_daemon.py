@@ -107,10 +107,12 @@ def _toml_string(value: str) -> str:
 
 
 def render_roots_toml(roots: Iterable[dict[str, Any]]) -> list[str]:
-    """``[[roots]]`` blocks (id, path, optional pins and ignores) as TOML lines.
+    """``[[roots]]`` blocks (id, path, optional pins, ignores, only) as TOML lines.
 
     ``ignore`` lists paths a root keeps local to this computer; it is written
-    back as read so editing the folder list never drops it.
+    back as read so editing the folder list never drops it. ``only`` limits
+    this computer to some root-relative paths of the root (a project-only
+    computer syncing a few projects of ``~/Projects``).
     """
     lines: list[str] = []
     for root in roots:
@@ -129,6 +131,11 @@ def render_roots_toml(roots: Iterable[dict[str, Any]]) -> list[str]:
         if ignore:
             lines.append(
                 "ignore = [" + ", ".join(_toml_string(item) for item in ignore) + "]"
+            )
+        only = [str(item) for item in root.get("only") or [] if str(item).strip()]
+        if only:
+            lines.append(
+                "only = [" + ", ".join(_toml_string(item) for item in only) + "]"
             )
     return lines
 
@@ -263,6 +270,9 @@ def _roots_from_config(data: dict[str, Any]) -> list[dict[str, Any]]:
         ignore = raw.get("ignore")
         if isinstance(ignore, list) and ignore:
             root["ignore"] = [str(item) for item in ignore]
+        only = raw.get("only")
+        if isinstance(only, list) and only:
+            root["only"] = [str(item) for item in only]
         roots.append(root)
     return roots
 
@@ -752,6 +762,11 @@ class SyncDaemonClient:
             "barrier", kind=kind, path=path, root=root, timeout_ms=timeout_ms
         )
         return {"result": response.get("result"), "lag": response.get("lag", 0)}
+
+    def folder_sizes(self, root: str) -> list[dict]:
+        """Files and bytes under each top-level entry of a root (older daemons: error)."""
+        data = self.call("folder-sizes", root=root).get("data") or []
+        return [item for item in data if isinstance(item, dict)]
 
     def stubs(self, root: str | None = None) -> list[dict]:
         return self.call("stubs", root=root).get("data") or []

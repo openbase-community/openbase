@@ -252,10 +252,18 @@ def pair_folders(hub: str, as_json: bool) -> None:
             else "size unknown"
         )
         click.echo(f"  {folder['path']:<40} {size}")
+        for sub in folder.get("subfolders") or []:
+            sub_size = (
+                f"{sub['files']} files, {_size(sub.get('bytes'))}"
+                if sub.get("files") is not None
+                else "size unknown"
+            )
+            click.echo(f"    {sub['path']:<38} {sub_size}")
     if preview["project_only"]:
         click.echo(
-            "This is a cloud workspace: choose the projects it syncs, e.g. "
-            f"'openbase-coder sync-daemon pair join {hub} --root <folder>'."
+            "This is a cloud workspace: choose the projects it syncs (a folder "
+            "above, or a project inside one), e.g. 'openbase-coder sync-daemon "
+            f"pair join {hub} --root <folder>'."
         )
 
 
@@ -266,8 +274,9 @@ def pair_folders(hub: str, as_json: bool) -> None:
     "roots",
     multiple=True,
     help=(
-        "Only sync these of the hub's folders (repeatable). Default: all of "
-        "them; on a cloud workspace at least one is required."
+        "Only sync these of the hub's folders, or projects inside one, such "
+        "as ~/Projects/app (repeatable). Default: all of them; on a cloud "
+        "workspace at least one is required."
     ),
 )
 @click.option(
