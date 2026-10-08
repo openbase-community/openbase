@@ -15,6 +15,11 @@ websocket_urlpatterns = [
         r"ws/threads/(?P<thread_id>[^/]+)/terminal/$",
         consumers.ThreadTerminalConsumer.as_asgi(),
     ),
+    re_path(r"ws/agent-terminals/$", consumers.AgentTerminalConsumer.as_asgi()),
+    re_path(
+        r"ws/agent-terminals/(?P<session_id>[^/]+)/$",
+        consumers.AgentTerminalConsumer.as_asgi(),
+    ),
     re_path(r"ws/approval-requests/$", consumers.ApprovalRequestsConsumer.as_asgi()),
     re_path(r"ws/notifications/$", consumers.NotificationsConsumer.as_asgi()),
     re_path(r"ws/ios-app-control/$", consumers.IOSAppControlConsumer.as_asgi()),

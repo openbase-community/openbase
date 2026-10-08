@@ -3,11 +3,30 @@ from __future__ import annotations
 import click
 
 from openbase_coder_cli.claude_auth import run_claude_login, verified_claude_auth_status
+from openbase_coder_cli.cli.agents import (
+    LAUNCHER_HELP,
+    AgentLauncherGroup,
+    launch_from_group,
+)
 
 
-@click.group()
-def claude() -> None:
-    """Inspect the Claude Code login used by Openbase sessions."""
+@click.group(
+    cls=AgentLauncherGroup,
+    invoke_without_command=True,
+    epilog=LAUNCHER_HELP,
+)
+@click.pass_context
+def claude(ctx: click.Context) -> None:
+    """Start Claude Code with Openbase's profile, or manage its login.
+
+    `openbase-coder claude [ARGS...]` starts Claude Code with Openbase's
+    settings and MCP layer (`~/.openbase/profiles/claude`) and Openbase's
+    instructions, so the session is visible to and steerable from Openbase.
+    ARGS go to Claude Code unchanged. Plain `claude` is left untouched.
+
+    The subcommands below inspect and repair the shared Claude Code login.
+    """
+    launch_from_group(ctx, "claude")
 
 
 @claude.command()
