@@ -227,3 +227,17 @@ with lock.service_mutation():
                 os.kill(child_pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX inherited flock contract")
+def test_stale_descriptor_does_not_acquire_a_hidden_lock(monkeypatch):
+    with lock.service_mutation():
+        environment = lock.mutation_environment()
+        descriptor = os.dup(lock.mutation_descriptors()[0])
+    try:
+        monkeypatch.setenv(lock.DESCRIPTOR_ENV, str(descriptor))
+        monkeypatch.setattr(lock.os, "getppid", lambda: -1)
+        assert not lock._delegated(environment[lock.DELEGATION_ENV])
+        assert child(dict(os.environ)) == "entered"
+    finally:
+        os.close(descriptor)
