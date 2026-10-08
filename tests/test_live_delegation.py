@@ -630,6 +630,56 @@ async def test_words_after_a_delegated_fragment_steer_with_the_whole_request():
     await bridge.aclose()
 
 
+# --- reconnects ---------------------------------------------------------------
+
+
+async def test_a_reconnect_unbinds_dead_delegations_and_answers_session_wide():
+    """Regression for the 2026-10-08 04:58Z staging call.
+
+    A Cloud deploy replaced the relay task; the plugin reconnected and opened
+    a new GPT-Live session, whose history is reseeded but whose delegations
+    are new. The running turn's answer must not be bound to the dead id.
+    """
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.delegate("d1", "Run the tests")
+    await _settle()
+    assert len(dispatcher.prompts) == 1
+
+    live.emit("session_reconnected")
+    dispatcher.result_gate.set()
+    await _settle()
+
+    assert live.of("commentary", "d1") == []
+    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    (briefing,) = [t for t in live.of("thinking", None) if "re-established" in t]
+    assert "Do not greet the caller again" in briefing
+    assert "the dispatcher is still working" in briefing
+    await bridge.aclose()
+
+
+async def test_a_reconnect_with_nothing_running_briefs_without_a_pending_note():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.emit("session_reconnected")
+    await _settle()
+    (briefing,) = live.of("thinking", None)
+    assert "re-established" in briefing
+    assert "still working" not in briefing
+    assert dispatcher.prompts == []
+    await bridge.aclose()
+
+
+async def test_an_utterance_closed_by_the_reconnect_still_reaches_the_agent():
+    # The plugin closes the caller's open speech (a final transcript) right
+    # before it emits session_reconnected.
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=0.05)
+    live.final("What files are on my desktop")
+    live.emit("session_reconnected")
+    await asyncio.sleep(0.12)
+    assert len(dispatcher.prompts) == 1
+    assert dispatcher.prompts[0][0].endswith(_voice("What files are on my desktop"))
+    await bridge.aclose()
+
+
 async def test_pending_approval_is_spoken_once_and_retained_as_instructions():
     bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
     live.delegate("d1", "Deploy it")

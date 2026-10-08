@@ -120,6 +120,20 @@ LIVE_APPROVAL_PENDING_INSTRUCTIONS = (
     "phone or desktop app; do not claim the work finished."
 )
 BACK_TO_DISPATCH_COMMENTARY = "Back to dispatch."
+# The plugin reconnects after the gateway socket drops (an Openbase Cloud
+# deploy replaces the relay task mid-call) and reseeds the new GPT-Live
+# session from its chat history; the delegations of the dropped session are
+# gone, so a result bound to one would answer nothing.
+LIVE_RECONNECTED_THINKING = (
+    "The voice connection dropped and was re-established; the conversation "
+    "so far was restored. Do not greet the caller again or start over. If "
+    "the caller was mid-sentence when it dropped, ask them to repeat only "
+    "that. {pending}"
+)
+LIVE_RECONNECTED_PENDING = (
+    "{label} is still working on the caller's last request; its answer "
+    "arrives as commentary."
+)
 
 _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+")
 
@@ -448,6 +462,7 @@ class LiveDelegationBridge:
         return (
             ("input_audio_transcription_completed", self._on_input_transcription),
             ("delegation_created", self.on_delegation_created),
+            ("session_reconnected", self.on_session_reconnected),
         )
 
     def attach(self, live_session) -> None:
@@ -767,6 +782,44 @@ class LiveDelegationBridge:
             open_utterance=open_utterance,
         )
         entry.lead_in = lead_in
+
+    def on_session_reconnected(self, *_args) -> None:
+        """The plugin opened a new GPT-Live session mid-call.
+
+        Its delegations died with the old session: turns still running
+        answer session-wide instead. A held utterance stays held (the plugin
+        closes the caller's open speech before this, and that final arrives
+        first). The model is briefed so it continues rather than greeting the
+        caller again.
+        """
+        if self._closed:
+            return
+        unbound = 0
+        running = 0
+        for entry in self._entries.values():
+            if entry.delegation_id is not None:
+                entry.delegation_id = None
+                unbound += 1
+            entry.open_utterance = ""
+            entry.lead_in = ""
+            if not entry.completed and not entry.superseded:
+                running += 1
+        self._last_exit_command_at = None
+        logger.info(
+            "%s stage=live_session_reconnected unbound=%d running=%d held=%d",
+            DISPATCH_TIMING_LOG,
+            unbound,
+            running,
+            1 if self._held is not None else 0,
+        )
+        pending = (
+            LIVE_RECONNECTED_PENDING.format(label=self._active_agent_label)
+            if running
+            else ""
+        )
+        self._append_thinking(
+            LIVE_RECONNECTED_THINKING.format(pending=pending).strip(), None
+        )
 
     def _on_delegation_after_utterance(self, delegation_id: str) -> None:
         """A delegation with no open utterance: the caller's words already closed."""
