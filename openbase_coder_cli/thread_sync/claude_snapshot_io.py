@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 import time
 import uuid
@@ -23,7 +22,9 @@ from .thread_sync_common import (
     DeviceIdentity,
     collect_snapshot_records,
     path_stable,
+    publish_staged_dir,
     remove_empty_dir,
+    staging_dir,
 )
 
 
@@ -332,9 +333,8 @@ def _write_device_snapshot(
     )
     if target_dir.exists():
         return target_dir
-    tmp_dir = target_dir.parent / f".tmp-{fingerprint_id}-{uuid.uuid4()}"
+    tmp_dir = staging_dir(exchange_dir, fingerprint_id)
     files_dir = tmp_dir / "files"
-    tmp_dir.mkdir(parents=True, exist_ok=False)
     try:
         copied_files: list[str] = []
         for source_path in _session_paths(snapshot, claude_home):
@@ -358,7 +358,7 @@ def _write_device_snapshot(
             json.dumps(metadata, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        os.replace(tmp_dir, target_dir)
+        publish_staged_dir(tmp_dir, target_dir)
     except Exception:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise

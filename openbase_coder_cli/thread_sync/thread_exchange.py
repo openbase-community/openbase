@@ -50,11 +50,13 @@ from .thread_sync_common import (
     find_snapshot_record,
     ledger_lock,
     prune_exchange_snapshots,
+    publish_staged_dir,
     read_device_ledger,
     record_device_snapshot,
     remove_empty_dir,
     run_snapshot_export,
     run_snapshot_import,
+    staging_dir,
     sync_cutoff_ms,
     translate_home_path,
     write_json_atomic,
@@ -616,8 +618,7 @@ def _write_snapshot(
     )
     if target_dir.exists():
         return target_dir
-    tmp_dir = target_dir.parent / f".tmp-{fingerprint_id}-{uuid.uuid4()}"
-    tmp_dir.mkdir(parents=True, exist_ok=False)
+    tmp_dir = staging_dir(exchange_dir, fingerprint_id)
     try:
         shutil.copy2(rollout, tmp_dir / "rollout.jsonl")
         metadata = _snapshot_metadata(
@@ -636,7 +637,7 @@ def _write_snapshot(
             json.dumps(metadata, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        os.replace(tmp_dir, target_dir)
+        publish_staged_dir(tmp_dir, target_dir)
     except Exception:
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise

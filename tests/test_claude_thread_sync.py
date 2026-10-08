@@ -724,3 +724,51 @@ def test_meaningful_user_text_strips_harness_markup():
     )
     assert _meaningful_user_text("<system-reminder>noise</system-reminder>") is None
     assert _meaningful_user_text("plain question") == "plain question"
+
+
+def test_export_stages_snapshots_outside_the_synced_exchange(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A snapshot is assembled next to the exchange root and renamed in whole.
+
+    Staging inside the root would let Openbase Sync journal and ship half-written
+    temp files that vanish before the peer fetches them.
+    """
+    from openbase_coder_cli.thread_sync import thread_sync_common
+
+    source_home = tmp_path / "source"
+    exchange_dir = tmp_path / "exchange"
+    session_id = "3a16448e-c428-455b-bceb-5ac34da8ee4e"
+    _write_session(
+        source_home,
+        "/Users/example/Projects/app",
+        session_id,
+        user_text="Hi",
+        assistant_text="Hello.",
+    )
+    moves: list[tuple[Path, Path]] = []
+    real_replace = thread_sync_common.os.replace
+
+    def spy(src, dst):
+        moves.append((Path(src), Path(dst)))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(thread_sync_common.os, "replace", spy)
+    export_claude_thread_snapshots(
+        claude_home=source_home,
+        exchange_dir=exchange_dir,
+        device_identity_path=tmp_path / "device.json",
+        ledger_path=tmp_path / "ledger.json",
+        super_agents_db_path=tmp_path / "state.sqlite3",
+        stability_delay_seconds=0,
+        max_age_days=None,
+        source_user_home=Path("/Users/example"),
+    )
+    snapshot_moves = [(src, dst) for src, dst in moves if exchange_dir in dst.parents]
+    assert len(snapshot_moves) == 1
+    src, dst = snapshot_moves[0]
+    assert exchange_dir not in src.parents
+    assert src.parent == tmp_path / "exchange.staging"
+    assert dst.is_dir() and (dst / "metadata.json").is_file()
+    assert not list(exchange_dir.rglob(".tmp-*"))
+    assert list((tmp_path / "exchange.staging").iterdir()) == []
