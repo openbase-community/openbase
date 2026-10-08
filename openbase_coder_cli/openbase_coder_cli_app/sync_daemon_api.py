@@ -119,8 +119,11 @@ def sync_daemon_conflict_detail(request, conflict_id: int):
         ),
         None,
     )
+    local_device = _local_device()
     if conflict.get("kind") == "git-branch":
-        detail = sync_state.git_branch_detail(conflict, root_path=root_path)
+        detail = sync_state.git_branch_detail(
+            conflict, root_path=root_path, local_device=local_device
+        )
     else:
         detail = sync_state.file_conflict_detail(
             conflict,
@@ -128,7 +131,7 @@ def sync_daemon_conflict_detail(request, conflict_id: int):
             root_path=root_path,
         )
     enriched = sync_state.enrich_conflicts(
-        [conflict], roots=roots, local_device=_local_device()
+        [conflict], roots=roots, local_device=local_device
     )[0]
     return Response({"conflict": enriched, "detail": detail})
 
@@ -151,7 +154,8 @@ def _resolve_one(
     client: sync_daemon.SyncDaemonClient,
     open_by_id: dict[int, dict[str, Any]],
     conflict_id: int,
-    choice: str,
+    action: str,
+    local_device: str,
 ) -> tuple[int, str | None]:
     """(HTTP status, error) for one resolution."""
     conflict = open_by_id.get(conflict_id)
@@ -159,6 +163,7 @@ def _resolve_one(
         return status.HTTP_404_NOT_FOUND, "This conflict is no longer open."
     if conflict.get("kind") == "git-branch":
         return status.HTTP_409_CONFLICT, GIT_BRANCH_REFUSAL
+    choice = sync_state.resolution_choice(conflict, action, local_device)
     try:
         client.resolve(conflict_id, choice)
     except sync_daemon.SyncDaemonError as exc:
@@ -175,7 +180,8 @@ def sync_daemon_conflicts_resolve(request):
     the daemon does not move refs, so neither action would do what it says.
     """
     data = request.data if isinstance(request.data, dict) else {}
-    choice = _RESOLVE_CHOICES.get(data.get("action"))
+    action = str(data.get("action") or "")
+    choice = _RESOLVE_CHOICES.get(action)
     raw_ids = data.get("ids")
     bulk = isinstance(raw_ids, list)
     if bulk:
@@ -212,14 +218,25 @@ def sync_daemon_conflicts_resolve(request):
         }
     except sync_daemon.SyncDaemonError as exc:
         return _unavailable(exc)
+    local_device = _local_device()
     if not bulk:
-        code, error = _resolve_one(client, open_by_id, ids[0], choice)
+        code, error = _resolve_one(client, open_by_id, ids[0], action, local_device)
         if error:
             return Response({"error": error, "id": ids[0]}, status=code)
-        return Response({"resolved": True, "id": ids[0], "choice": choice})
+        return Response(
+            {
+                "resolved": True,
+                "id": ids[0],
+                "choice": sync_state.resolution_choice(
+                    open_by_id[ids[0]], action, local_device
+                ),
+            }
+        )
     results = []
     for conflict_id in ids:
-        code, error = _resolve_one(client, open_by_id, conflict_id, choice)
+        code, error = _resolve_one(
+            client, open_by_id, conflict_id, action, local_device
+        )
         results.append({"id": conflict_id, "ok": error is None, "error": error})
         if code == status.HTTP_503_SERVICE_UNAVAILABLE:
             # the daemon stopped answering: do not hammer it with the rest
@@ -439,10 +456,16 @@ def _iso_from_ns(value: Any) -> str:
     return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _legacy_conflict(conflict: dict[str, Any], root_paths: dict[str, str]) -> dict:
+def _legacy_conflict(
+    conflict: dict[str, Any], root_paths: dict[str, str], local_device: str
+) -> dict:
     kind = str(conflict.get("kind") or "")
     path = str(conflict.get("path") or "")
     root_id = str(conflict.get("root") or "")
+    a_is_local = (
+        not local_device or str(conflict.get("a_device") or "") == local_device
+    )
+    remote_device = conflict.get("b_device" if a_is_local else "a_device")
     base = {
         "id": str(conflict.get("id")),
         "kind": kind,
@@ -450,7 +473,7 @@ def _legacy_conflict(conflict: dict[str, Any], root_paths: dict[str, str]) -> di
         "folder_relpath": _display_relpath(root_paths.get(root_id, "")),
         "detected_at": _iso_from_ns(conflict.get("created_ns")),
         "resolved": False,
-        "conflict_device_hint": str(conflict.get("b_device") or ""),
+        "conflict_device_hint": str(remote_device or ""),
         "label": str(conflict.get("label") or ""),
     }
     if kind == "git-branch":
@@ -460,8 +483,8 @@ def _legacy_conflict(conflict: dict[str, Any], root_paths: dict[str, str]) -> di
             "type": "repo-divergence",
             "repo_relpath": repo or path,
             "branch": ref.removeprefix("refs/heads/") if ref else "",
-            "local_sha": str(conflict.get("a_hash") or ""),
-            "remote_sha": str(conflict.get("b_hash") or ""),
+            "local_sha": str(conflict.get("a_hash" if a_is_local else "b_hash") or ""),
+            "remote_sha": str(conflict.get("b_hash" if a_is_local else "a_hash") or ""),
         }
     return {**base, "type": "file-conflict", "path": path, "files": [path]}
 
@@ -479,10 +502,11 @@ def sync_conflicts(request):
         root.get("id", ""): root.get("path", "")
         for root in sync_daemon.configured_roots()
     }
+    local_device = _local_device()
     return Response(
         {
             "conflicts": [
-                _legacy_conflict(conflict, root_paths)
+                _legacy_conflict(conflict, root_paths, local_device)
                 for conflict in conflicts
                 if isinstance(conflict, dict)
             ],

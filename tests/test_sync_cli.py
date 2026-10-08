@@ -50,6 +50,8 @@ class FakeClient:
                 "root": "projects",
                 "path": "app/main.py",
                 "kind": "content",
+                "a_device": "mini",
+                "b_device": "laptop",
                 "created_ns": 1_760_000_000_000_000_000,
             },
             {
@@ -72,6 +74,9 @@ def client(monkeypatch):
     FakeClient.fail = False
     monkeypatch.setattr(sync_daemon, "SyncDaemonClient", FakeClient)
     monkeypatch.setattr(sync_daemon, "is_configured", lambda config_path=None: True)
+    monkeypatch.setattr(
+        sync_daemon, "read_config_summary", lambda config_path=None: {"device_id": "laptop"}
+    )
     return FakeClient
 
 
@@ -123,7 +128,7 @@ def test_conflicts_lists_records(client):
 
 
 @pytest.mark.parametrize(
-    ("flag", "choice"), [("--keep-local", "a"), ("--use-remote", "b")]
+    ("flag", "choice"), [("--keep-local", "b"), ("--use-remote", "a")]
 )
 def test_resolve_maps_actions_to_daemon_choices(client, flag, choice):
     result = CliRunner().invoke(sync, ["resolve", "7", flag])

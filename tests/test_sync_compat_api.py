@@ -66,7 +66,8 @@ class FakeClient:
                 "root": "projects",
                 "path": "app/main.py",
                 "kind": "content",
-                "b_device": "mini",
+                "a_device": "mini",
+                "b_device": "laptop",
                 "created_ns": 1_760_000_000_000_000_000,
             },
             {
@@ -76,6 +77,8 @@ class FakeClient:
                 "kind": "git-branch",
                 "a_hash": "a" * 40,
                 "b_hash": "b" * 40,
+                "a_device": "mini",
+                "b_device": "laptop",
                 "label": "",
             },
         ]
@@ -94,6 +97,9 @@ def configured(monkeypatch):
         sync_daemon,
         "configured_roots",
         lambda config_path=None: [{"id": "projects", "path": "~/Projects"}],
+    )
+    monkeypatch.setattr(
+        sync_daemon, "read_config_summary", lambda config_path=None: {"device_id": "laptop"}
     )
 
 
@@ -169,8 +175,8 @@ def test_conflicts_use_legacy_shape_with_string_ids(configured):
     assert branch_conflict["type"] == "repo-divergence"
     assert branch_conflict["repo_relpath"] == "app"
     assert branch_conflict["branch"] == "develop"
-    assert branch_conflict["local_sha"] == "a" * 40
-    assert branch_conflict["remote_sha"] == "b" * 40
+    assert branch_conflict["local_sha"] == "b" * 40
+    assert branch_conflict["remote_sha"] == "a" * 40
 
 
 def test_conflicts_unconfigured_is_empty(monkeypatch):
@@ -188,7 +194,7 @@ def test_resolve_accepts_string_ids_and_rejects_bad_ones(configured):
         )
     )
     assert ok.status_code == 200
-    assert FakeClient.resolved == [(7, "b")]
+    assert FakeClient.resolved == [(7, "a")]
 
     bad = sync_daemon_api.sync_daemon_conflicts_resolve(
         _request(

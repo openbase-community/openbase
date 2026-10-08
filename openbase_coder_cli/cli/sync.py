@@ -146,13 +146,19 @@ def resolve(conflict_id: int, action: str | None) -> None:
         raise click.ClickException("Pass --keep-local or --use-remote.")
     _require_configured()
     try:
-        refusal = sync_state.branch_refusal(_client().conflicts(), conflict_id)
+        conflicts = _client().conflicts()
+        refusal = sync_state.branch_refusal(conflicts, conflict_id)
     except sync_daemon.SyncDaemonError as exc:
         raise click.ClickException(str(exc)) from None
     if refusal:
         raise click.ClickException(refusal)
+    conflict = sync_state.find_conflict(conflicts, conflict_id)
+    if conflict is None:
+        raise click.ClickException("This conflict is no longer open.")
+    local_device = str(sync_daemon.read_config_summary().get("device_id") or "")
+    choice = sync_state.resolution_choice(conflict, action, local_device)
     try:
-        _client().resolve(conflict_id, "a" if action == "keep_local" else "b")
+        _client().resolve(conflict_id, choice)
     except sync_daemon.SyncDaemonError as exc:
         raise click.ClickException(str(exc)) from None
     click.echo(f"Resolved conflict {conflict_id} with {action}.")

@@ -319,6 +319,22 @@ def test_git_branch_detail_reports_both_sides(tmp_path):
     assert [c["subject"] for c in detail["other_only"]] == ["theirs 2", "theirs 1"]
     assert [c["subject"] for c in detail["this_only"]] == ["mine"]
 
+    reversed_sides = sync_state.git_branch_detail(
+        {
+            "path": "app:refs/heads/main",
+            "a_hash": theirs,
+            "b_hash": mine,
+            "a_device": "mini",
+            "b_device": "laptop",
+        },
+        root_path=root,
+        local_device="laptop",
+    )
+    assert reversed_sides["this_sha"] == mine
+    assert reversed_sides["other_sha"] == theirs
+    assert reversed_sides["current_sha"] == mine
+    assert (reversed_sides["this_ahead"], reversed_sides["other_ahead"]) == (1, 2)
+
     _git(repo, "commit", "-q", "--allow-empty", "-m", "later")
     moved = sync_state.git_branch_detail(
         {"path": "app:refs/heads/main", "a_hash": mine, "b_hash": "f" * 40},
@@ -523,8 +539,8 @@ def api(monkeypatch, tmp_path):
             "a_hash": "",
             "b_hash": B_HASH,
             "ancestor": "",
-            "a_device": "laptop",
-            "b_device": "mini",
+            "a_device": "mini",
+            "b_device": "laptop",
             "created_ns": 3,
             "label": "",
         },
@@ -614,7 +630,7 @@ def test_bulk_resolve_reports_each_conflict(api):
 
     assert response.status_code == 200
     assert response.data["resolved"] == 2 and response.data["failed"] == 2
-    assert FakeClient.resolved == [(1, "a"), (3, "a")]
+    assert FakeClient.resolved == [(1, "a"), (3, "b")]
     errors = {row["id"]: row["error"] for row in response.data["results"]}
     assert "neither" in errors[2] and "no longer open" in errors[99]
 

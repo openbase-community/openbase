@@ -296,18 +296,21 @@ def conflicts_cmd() -> None:
 @click.argument("action", type=click.Choice(["keep_local", "use_remote"]))
 def resolve_cmd(conflict_id: int, action: str) -> None:
     """Resolve a conflict by keeping this computer's version or taking the other's."""
+    client = sync_daemon.SyncDaemonClient()
     try:
-        refusal = sync_state.branch_refusal(
-            sync_daemon.SyncDaemonClient().conflicts(), conflict_id
-        )
+        conflicts = client.conflicts()
+        refusal = sync_state.branch_refusal(conflicts, conflict_id)
     except sync_daemon.SyncDaemonError as exc:
         raise click.ClickException(str(exc)) from None
     if refusal:
         raise click.ClickException(refusal)
+    conflict = sync_state.find_conflict(conflicts, conflict_id)
+    if conflict is None:
+        raise click.ClickException("This conflict is no longer open.")
+    local_device = str(sync_daemon.read_config_summary().get("device_id") or "")
+    choice = sync_state.resolution_choice(conflict, action, local_device)
     try:
-        sync_daemon.SyncDaemonClient().resolve(
-            conflict_id, "a" if action == "keep_local" else "b"
-        )
+        client.resolve(conflict_id, choice)
     except sync_daemon.SyncDaemonError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo("resolved")

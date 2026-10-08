@@ -322,6 +322,18 @@ def branch_refusal(conflicts: Iterable[dict[str, Any]], conflict_id: int) -> str
     return None
 
 
+def resolution_choice(conflict: dict[str, Any], action: str, local_device: str) -> str:
+    """Daemon side (``a`` or ``b``) for a user-facing resolution action."""
+    if action in {"a", "b"}:
+        return action
+    a_is_local = (
+        not local_device or str(conflict.get("a_device") or "") == local_device
+    )
+    if action in {"keep_local", "keep_mine"}:
+        return "a" if a_is_local else "b"
+    return "b" if a_is_local else "a"
+
+
 # --- conflict detail: versions ----------------------------------------------
 
 
@@ -441,7 +453,7 @@ def _commits(repo: Path, spec: str, limit: int = 20) -> list[dict[str, str]]:
 
 
 def git_branch_detail(
-    conflict: dict[str, Any], *, root_path: Path | None
+    conflict: dict[str, Any], *, root_path: Path | None, local_device: str = ""
 ) -> dict[str, Any]:
     """Where each computer's branch points, and how the two relate.
 
@@ -451,8 +463,11 @@ def git_branch_detail(
     path = str(conflict.get("path") or "")
     repo_rel, _, ref = path.partition(":")
     repo_rel = "" if repo_rel == "." else repo_rel
-    this_sha = str(conflict.get("a_hash") or "")
-    other_sha = str(conflict.get("b_hash") or "")
+    a_is_local = (
+        not local_device or str(conflict.get("a_device") or "") == local_device
+    )
+    this_sha = str(conflict.get("a_hash" if a_is_local else "b_hash") or "")
+    other_sha = str(conflict.get("b_hash" if a_is_local else "a_hash") or "")
     detail: dict[str, Any] = {
         "kind": "git-branch",
         "repo": repo_rel,
