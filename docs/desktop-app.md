@@ -136,8 +136,9 @@ A shared chat view of the voice dispatcher thread — the routing agent that
 answers voice calls and hands them to Super Agents. Use it to read what the
 dispatcher is doing and to type to it directly.
 
-**On iPhone:** the Dispatch tab shows the same dispatcher thread, and the
-Call tab is where you actually speak to it. See
+**On iPhone:** the Dispatch screen shows the same dispatcher thread, and the
+waveform button on the new-chat screen starts the call where you actually
+speak to it. See
 [Voice Routing](voice-routing.md).
 
 ### Approvals

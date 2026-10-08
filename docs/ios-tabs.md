@@ -28,19 +28,45 @@ Keychain.
 **On the Mac:** the desktop app's setup flow drives the other half of this
 pairing — see [Desktop App](desktop-app.md#install-and-first-run-setup).
 
-## Navigation
+## Home and Navigation
 
-Swipe from the left edge or tap the menu button to open the sidebar. It has a
-**Workspace** section (Call, Voice Test, Dispatch, Threads, Sync, Approvals,
-Reports, Diff, Console, Cloud) and a **System** section (Settings).
+The app opens on an empty **new chat**, like the ChatGPT and Codex apps: the
+Openbase mark sits faded in the middle and a message box sits at the bottom.
+The Android app uses the same layout.
 
-## Call
+- Type a message and tap the arrow to send it to the **Dispatcher**, which
+  routes the work. To start a new coding thread instead, tap **+** and pick a
+  recent project; the app creates the thread on the computer that owns the
+  project and opens it.
+- Tap the **microphone** to record a voice note. It is transcribed on the
+  phone into the message box so you can edit it before sending; tap again to
+  stop. Voice notes are off while a call is running.
+- With the box empty, the round **waveform** button starts a voice call.
 
-The primary voice interface. Tap to start a LiveKit call with the
-dispatcher — the routing agent that can start, resume, and hand you to Super
-Agents by voice. The top bar shows the call state (calling, connected agent
-name, or error), with mute/unmute and end-call buttons. The screen shows an
-audio visualizer, live agent activity, and the latest agent message.
+Tap the round menu button at the top left (or swipe from the left edge) to
+open the side drawer. From the top:
+
+- **Openbase** and a **search** button that opens the full thread list.
+- Dispatch, Approvals, Notifications (with an unread badge), Reports, Sync,
+  Cloud, and the developer Voice Test screen.
+- **Pinned** — your favorite threads.
+- **Recents** — your most recently updated threads, with **See all** for the
+  full list. A green dot marks a running thread.
+- A floating **New chat** button and a **Settings** gear at the bottom.
+
+## Calls
+
+There is no separate Call page. Start a call from the waveform button in the
+new-chat message box, or from the waveform button in any thread's prompt bar.
+The call connects to the dispatcher — the routing agent that can start,
+resume, and hand you to Super Agents by voice.
+
+While a call is running, a call strip above the new-chat message box shows
+who you are talking to and the call state, with mute, speaker, and end-call
+buttons; other screens show the same controls in the top bar. Tap the strip
+(or the top-bar call title) for **call details**: the device you are calling,
+the live agent visualizer and latest agent message, a shared screen, the
+auto-mute and auto-unmute switches, and **Back to Dispatch**.
 
 While connected you can ask the dispatcher to transfer you to a Super Agent,
 or say "go back to dispatch" to return. The same routing is scriptable from
@@ -68,10 +94,12 @@ seconds.
 
 ## Threads
 
-Lists your coding threads with status badges and active/loaded counts.
+The full thread list (from the drawer's search button or **See all**), with
+status badges and active/loaded counts.
 
 - **New thread** creates a thread from a recent project.
-- Swipe left to favorite, swipe right to archive.
+- Swipe left to favorite (pin), swipe right to archive. Pinned threads appear
+  under **Pinned** in the drawer.
 - Pull to refresh.
 
 Tap a thread for the detail view: connection indicator, expandable turn

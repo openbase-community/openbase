@@ -8,8 +8,9 @@ the route back when the user is done speaking directly with that agent.
 These commands affect only the private LiveKit voice route for the active room.
 They do not publish code, send public messages, or change product behavior.
 
-In the apps: the [iOS app's](ios-tabs.md) Call tab is where you actually hold
-the voice session — you can ask the dispatcher to transfer you by voice, use
+In the apps: the [iOS app's](ios-tabs.md#calls) call, started from the
+waveform button on the new-chat screen, is where you actually hold the voice
+session — you can ask the dispatcher to transfer you by voice, use
 **Transfer Active Call** from a thread's detail view, or **Return to
 Dispatch**. The [desktop app](desktop-app.md) and [console](console.md) show
 the dispatcher thread as text chat on their Dispatch page. The commands below
