@@ -1,18 +1,31 @@
-"""GPT-Live client delegation bridge to Super Agent threads.
+"""GPT-Live voice bridge to Super Agent threads: the agent is always the brain.
 
 Under the Live Voice engine the voice model (``GPTLiveModel``,
-``delegation="client"``) is the only speaker. When it decides the caller
-asked for work it emits ``delegation_created`` (an id and the transcript it
-has seen so far, no task text). :class:`LiveDelegationBridge` owns the mapping
-from those delegations to Super Agent turns: it rebuilds the prompt from its
-own input-transcript buffer, runs the turn on the active voice route
-(dispatcher, direct thread, or a transferred thread) exactly as the pipeline
-does, and feeds the model ``append_thinking`` (silent context) and
-``append_commentary`` (spoken, paraphrased) in sentence-bounded chunks of at
-most 500 tokens while the thread works. See ``dev-docs/live-voice.md``.
+``delegation="client"``) is the only speaker but never the brain. Every
+substantive caller utterance goes to the active Super Agent thread
+(dispatcher, direct thread, or a transferred thread) exactly as every STT
+final did on the pipeline engine, so the thread's MCP servers, skills and
+filesystem answer the caller, not the voice model's general knowledge.
+
+:class:`LiveDelegationBridge` starts a thread turn (or joins the running one
+through ``run_turn``'s steering) when the plugin closes a caller utterance,
+whether or not GPT-Live also emits ``delegation_created``. The utterance
+signal is the plugin's final ``input_audio_transcription_completed`` event,
+emitted from ``GPTLiveSession._end_speech`` once 0.8 s of caller audio has
+passed with no new transcript fragment (or the next fragment starts that long
+after the previous one); it is the only per-utterance boundary the plugin
+exposes, it carries the whole utterance text and a stable item id, and it is
+exactly what ``AgentSession`` re-emits as a final ``user_input_transcribed``.
+A delegation the model does emit is bound to the turn already running for the
+same utterance instead of starting a second one, and spoken results then go
+out as ``append_commentary`` bound to that delegation; without one they go
+out with ``delegation_id=None``. Progress-only output is ``append_thinking``.
+Commentary is sentence-bounded, in chunks of at most 500 tokens. Pure small
+talk and noise (``is_trivial_utterance``) is the one thing kept off the agent.
+See ``dev-docs/live-voice.md``.
 
 The bridge also keeps the voice lifecycle contract alive without a TTS path:
-``utterance_accepted`` on delegation, ``agent_audio_started`` /
+``utterance_accepted`` when a turn is accepted, ``agent_audio_started`` /
 ``agent_audio_finished`` from the agent session's speaking state, and never
 ``safe_to_mute_user`` or ``safe_to_unmute`` (the mic stays open).
 """
@@ -58,14 +71,21 @@ DISPATCH_TIMING_LOG = "dispatch_timing"
 # here, so chunks are sized with a conservative characters-per-token estimate.
 COMMENTARY_MAX_TOKENS = 500
 CHARS_PER_TOKEN_ESTIMATE = 3.2
-# Finalized utterances the model handled itself are still context for the next
-# delegation, but only for so long: stale small talk must not be replayed.
-TRANSCRIPT_BUFFER_MAX_AGE_SECONDS = 120.0
-TRANSCRIPT_BUFFER_MAX_ITEMS = 8
 # Quiet progress for the model while a turn runs, so it can reassure the
 # caller instead of guessing.
 PROGRESS_THINKING_INTERVAL_SECONDS = 20.0
 RESTATEMENT_MAX_CHARS = 120
+# A GPT-Live delegation that arrives after the caller's utterance closed binds
+# to the turn the bridge already started for it when that turn is this recent.
+DELEGATION_BIND_WINDOW_SECONDS = 15.0
+# A trivial utterance the bridge kept off the agent is still sent when the
+# model delegates right after it: the model judged it substantive.
+SKIPPED_UTTERANCE_MAX_AGE_SECONDS = 15.0
+# A spoken command handled off the transcript answers the model's delegation
+# of the same words (and vice versa) for this long.
+COMMAND_DEDUPE_WINDOW_SECONDS = 10.0
+# Entries kept for ownership decisions; older completed ones are dropped.
+MAX_TRACKED_ENTRIES = 32
 
 DISPATCHER_AGENT_LABEL = "the dispatcher"
 LIVE_EMPTY_ANSWER_COMMENTARY = "Done, nothing else to report."
@@ -151,75 +171,139 @@ def chunk_commentary(
     return chunks
 
 
+# Utterances that never need the agent: noise and filler fragments, greetings,
+# thanks, farewells and pure acknowledgements, written in the normalized form
+# of ``_normalize_spoken_command`` (lowercase, punctuation as spaces). Answers
+# the agent may be waiting for ("yes", "no", "sure", "go ahead", "do it") and
+# commands ("stop", "wait", "cancel") are deliberately absent. A skipped
+# utterance still reaches the agent when the model delegates it.
+TRIVIAL_UTTERANCE_PHRASES = frozenset(
+    {
+        # fillers, backchannels and fragments cut off by a pause
+        "ah",
+        "and",
+        "eh",
+        "er",
+        "erm",
+        "hm",
+        "hmm",
+        "hmmm",
+        "huh",
+        "mhm",
+        "mm",
+        "mm hmm",
+        "mmhmm",
+        "mmm",
+        "oh",
+        "ooh",
+        "so",
+        "uh",
+        "uh huh",
+        "uhh",
+        "uhm",
+        "um",
+        "umm",
+        "well",
+        # greetings
+        "good afternoon",
+        "good evening",
+        "good morning",
+        "hello",
+        "hello there",
+        "hey",
+        "hey there",
+        "hi",
+        "hi there",
+        "hiya",
+        "morning",
+        "yo",
+        # thanks
+        "appreciate it",
+        "cheers",
+        "much appreciated",
+        "thank you",
+        "thank you so much",
+        "thanks",
+        "thanks a lot",
+        "thanks so much",
+        "thx",
+        # acknowledgements
+        "all right",
+        "alright",
+        "awesome",
+        "cool",
+        "got it",
+        "great",
+        "i see",
+        "k",
+        "nice",
+        "ok",
+        "okay",
+        "perfect",
+        "right",
+        "sounds good",
+        # farewells
+        "bye",
+        "bye bye",
+        "goodbye",
+        "good night",
+        "see you",
+        "see ya",
+    }
+)
+TRIVIAL_UTTERANCE_MAX_WORDS = 6
+_TRIVIAL_PHRASE_MAX_WORDS = max(len(p.split()) for p in TRIVIAL_UTTERANCE_PHRASES)
+
+
+def is_trivial_utterance(text: str) -> bool:
+    """True only for an utterance made entirely of known trivial phrases.
+
+    Conservative by construction, so it errs toward the agent: a single word
+    outside ``TRIVIAL_UTTERANCE_PHRASES``, or more than
+    ``TRIVIAL_UTTERANCE_MAX_WORDS`` words, sends the utterance to the agent.
+    Empty or punctuation-only fragments (noise) are trivial.
+    """
+    words = _normalize_spoken_command(text or "").split()
+    if not words:
+        return True
+    if len(words) > TRIVIAL_UTTERANCE_MAX_WORDS:
+        return False
+    index = 0
+    while index < len(words):
+        for size in range(min(_TRIVIAL_PHRASE_MAX_WORDS, len(words) - index), 0, -1):
+            if " ".join(words[index : index + size]) in TRIVIAL_UTTERANCE_PHRASES:
+                index += size
+                break
+        else:
+            return False
+    return True
+
+
+def remainder_after(prefix: str, text: str) -> str | None:
+    """``text`` minus a leading ``prefix``, compared as normalized words.
+
+    Returns the rest of ``text`` in its original wording ("" when nothing
+    follows), or ``None`` when ``text`` does not start with ``prefix`` (the
+    transcript was revised, or it is another utterance).
+    """
+    prefix_words = _normalize_spoken_command(prefix or "").split()
+    tokens = (text or "").split()
+    if not prefix_words:
+        return " ".join(tokens)
+    consumed: list[str] = []
+    index = 0
+    while index < len(tokens) and len(consumed) < len(prefix_words):
+        consumed.extend(_normalize_spoken_command(tokens[index]).split())
+        index += 1
+    if consumed[: len(prefix_words)] != prefix_words:
+        return None
+    return " ".join(tokens[index:]).strip(" ,.;")
+
+
 @dataclass
-class _BufferedUtterance:
+class _SkippedUtterance:
     text: str
     at: float
-
-
-class LiveTranscriptBuffer:
-    """Input transcript ring buffer: what the thread has not seen yet.
-
-    GPT-Live's ``delegation_created`` carries no task text and the plugin only
-    attaches the caller's *open* utterance. Utterances that already ended
-    (the model answered them itself, or the caller paused before the model
-    delegated) are kept here until the next delegation consumes them.
-    """
-
-    def __init__(
-        self,
-        *,
-        max_age_seconds: float = TRANSCRIPT_BUFFER_MAX_AGE_SECONDS,
-        max_items: int = TRANSCRIPT_BUFFER_MAX_ITEMS,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
-        self._max_age_seconds = max_age_seconds
-        self._items: deque[_BufferedUtterance] = deque(maxlen=max_items)
-        self._clock = clock
-        self._consumed_pending = ""
-
-    def note_final(self, transcript: str) -> None:
-        text = " ".join(transcript.split())
-        if not text:
-            return
-        consumed = self._consumed_pending
-        self._consumed_pending = ""
-        if consumed:
-            folded, consumed_folded = text.casefold(), consumed.casefold()
-            if folded == consumed_folded:
-                return
-            if folded.startswith(consumed_folded):
-                text = text[len(consumed) :].strip(" ,.;")
-                if not text:
-                    return
-        self._prune()
-        self._items.append(_BufferedUtterance(text=text, at=self._clock()))
-
-    def take_prompt(self, pending_transcript: str) -> str:
-        """The prompt for a delegation: unseen finals plus the open utterance."""
-        self._prune()
-        pending = " ".join((pending_transcript or "").split())
-        parts = [item.text for item in self._items]
-        self._items.clear()
-        if pending:
-            pending_folded = pending.casefold()
-            parts = [
-                part for part in parts if not pending_folded.startswith(part.casefold())
-            ]
-            parts.append(pending)
-            self._consumed_pending = pending
-        else:
-            self._consumed_pending = ""
-        return " ".join(parts).strip()
-
-    def clear(self) -> None:
-        self._items.clear()
-        self._consumed_pending = ""
-
-    def _prune(self) -> None:
-        cutoff = self._clock() - self._max_age_seconds
-        while self._items and self._items[0].at < cutoff:
-            self._items.popleft()
 
 
 class LiveSpeechCursor:
@@ -262,13 +346,27 @@ class LiveSpeechCursor:
 
 @dataclass
 class LiveDelegationEntry:
-    delegation_id: str
+    """One caller utterance handed to a Super Agent turn.
+
+    ``key`` names the entry: the delegation id when GPT-Live's delegation
+    started it, otherwise ``utt-<n>``. ``delegation_id`` is the GPT-Live
+    delegation its spoken results answer; ``None`` until one binds, in which
+    case commentary goes out session-wide. ``open_utterance`` is the caller's
+    still-open utterance text a delegation started the turn on, kept until
+    that utterance's final transcript arrives so the final is not sent twice.
+    """
+
+    key: str
     prompt: str
     route: Any
     client: Any
+    delegation_id: str | None = None
+    source: str = "transcript"
+    open_utterance: str = ""
     record: Any = None
     turn_id: str | None = None
     superseded: bool = False
+    completed: bool = False
     approval_notified: bool = False
     created_at: float = field(default_factory=time.monotonic)
     task: asyncio.Task[None] | None = None
@@ -276,7 +374,7 @@ class LiveDelegationEntry:
 
 
 class LiveDelegationBridge:
-    """Answer GPT-Live client delegations with Super Agent turns."""
+    """Send every caller utterance to the active Super Agent; voice its answers."""
 
     def __init__(
         self,
@@ -297,11 +395,13 @@ class LiveDelegationBridge:
         self._heartbeat_interval = progress_thinking_interval
         self._clock = clock
         self._live_session: Any = None
-        self.transcript_buffer = LiveTranscriptBuffer(clock=clock)
         self._entries: dict[str, LiveDelegationEntry] = {}
         self._cursors: dict[str, LiveSpeechCursor] = {}
         self._listening_clients: list[Any] = []
-        self._handled_command_hashes: deque[str] = deque(maxlen=8)
+        self._handled_item_ids: deque[str] = deque(maxlen=64)
+        self._last_exit_command_at: float | None = None
+        self._skipped: _SkippedUtterance | None = None
+        self._utterance_seq = 0
         self._speaking_record: Any = None
         self._active_agent_label = DISPATCHER_AGENT_LABEL
         self._closed = False
@@ -312,17 +412,25 @@ class LiveDelegationBridge:
     def active_agent_label(self) -> str:
         return self._active_agent_label
 
+    def _session_handlers(self) -> tuple[tuple[str, Callable[..., None]], ...]:
+        return (
+            ("input_audio_transcription_completed", self._on_input_transcription),
+            ("delegation_created", self.on_delegation_created),
+        )
+
     def attach(self, live_session) -> None:
-        """Subscribe to the plugin session's ``delegation_created`` events."""
+        """Subscribe to the plugin session: closed caller utterances and delegations."""
         self._live_session = live_session
-        live_session.on("delegation_created", self.on_delegation_created)
+        for event_name, handler in self._session_handlers():
+            live_session.on(event_name, handler)
 
     def detach(self) -> None:
         if self._live_session is not None:
-            try:
-                self._live_session.off("delegation_created", self.on_delegation_created)
-            except Exception:
-                logger.debug("live session off() failed", exc_info=True)
+            for event_name, handler in self._session_handlers():
+                try:
+                    self._live_session.off(event_name, handler)
+                except Exception:
+                    logger.debug("live session off() failed", exc_info=True)
         self._live_session = None
 
     async def aclose(self) -> None:
@@ -381,86 +489,296 @@ class LiveDelegationBridge:
 
     # inputs from the session
 
-    def on_user_transcript(self, transcript: str, *, is_final: bool) -> None:
-        text = (transcript or "").strip()
-        if not text or not is_final:
+    def _on_input_transcription(self, event) -> None:
+        self.on_user_transcript(
+            str(getattr(event, "transcript", "") or ""),
+            is_final=bool(getattr(event, "is_final", False)),
+            item_id=str(getattr(event, "item_id", "") or "") or None,
+        )
+
+    def on_user_transcript(
+        self, transcript: str, *, is_final: bool, item_id: str | None = None
+    ) -> None:
+        """A caller utterance closed: send it to the agent unless already sent.
+
+        Called for the plugin's final ``input_audio_transcription_completed``
+        (see the module docstring for why that is the utterance boundary).
+        Partial transcripts are ignored. The utterance is covered, and not
+        sent again, when a delegation already started a turn on its open text
+        and the caller added nothing substantive after it; otherwise the whole
+        final utterance steers that turn, so the agent reads the caller's
+        complete words rather than a dangling tail.
+        """
+        text = " ".join((transcript or "").split())
+        if self._closed or not text or not is_final:
             return
+        if item_id:
+            if item_id in self._handled_item_ids:
+                return
+            self._handled_item_ids.append(item_id)
         if _is_exit_to_dispatch_command(text):
-            command_hash = _hash(_normalize_spoken_command(text))
+            if self._take_recent_exit_command():
+                # The model delegated this command first; it is handled.
+                self._log_forced(text, decision="exit_command_already_handled")
+                return
             if not self._voice_router.is_dispatcher_active:
-                self._handled_command_hashes.append(command_hash)
+                self._last_exit_command_at = self._clock()
+                self._log_forced(text, decision="exit_to_dispatch")
                 self._exit_to_dispatch(delegation_id=None)
+                return
+            # Dispatcher already active: a normal prompt, as in the pipeline.
+        # Newer speech: a later empty delegation is about it, not the command.
+        self._last_exit_command_at = None
+        open_entry = self._open_utterance_entry()
+        if open_entry is not None:
+            remainder = remainder_after(open_entry.open_utterance, text)
+            open_entry.open_utterance = ""
+            if remainder is not None:
+                if not remainder or is_trivial_utterance(remainder):
+                    self._log_forced(
+                        text,
+                        decision="covered_by_delegation",
+                        key=open_entry.key,
+                        delegation_id=open_entry.delegation_id,
+                    )
+                    return
+            # The caller kept talking after the model delegated, or the final
+            # revised the words the turn started on: the full final steers
+            # the same turn (and inherits its delegation).
+        if is_trivial_utterance(text):
+            self._skipped = _SkippedUtterance(text=text, at=self._clock())
+            self._log_forced(text, decision="skipped_trivial")
             return
-        self.transcript_buffer.note_final(text)
+        self._skipped = None
+        self._start_turn(text, source="transcript")
 
     def on_delegation_created(self, delegation) -> None:
+        """Bind GPT-Live's delegation to the agent turn for that utterance.
+
+        The bridge already sends every closed utterance to the agent, so a
+        delegation never decides *whether* the agent hears the caller. It
+        decides which delegation the spoken answer is bound to, and it starts
+        the turn early when the model delegates while the caller's utterance
+        is still open (``pending_transcript``).
+        """
         if self._closed:
             return
         delegation_id = str(getattr(delegation, "id", "") or "")
         if not delegation_id:
             return
-        pending = str(getattr(delegation, "pending_transcript", "") or "")
-        prompt = self.transcript_buffer.take_prompt(pending)
+        pending = " ".join(
+            str(getattr(delegation, "pending_transcript", "") or "").split()
+        )
         logger.info(
             "%s stage=live_delegation_created delegation_id=%s pending_len=%d "
-            "prompt_len=%d prompt_hash=%s active_thread_id=%s",
+            "pending_hash=%s active_thread_id=%s",
             DISPATCH_TIMING_LOG,
             delegation_id,
             len(pending),
-            len(prompt),
-            _hash(prompt) if prompt else "",
+            _hash(pending) if pending else "",
             getattr(self._voice_router.active_client, "_thread_id", "") or "",
         )
-        if not prompt:
-            self._append_thinking(
-                "The caller has not said anything new since the last request; "
-                "answer from the conversation yourself.",
-                delegation_id,
-            )
+        if not pending:
+            self._on_delegation_after_utterance(delegation_id)
             return
-        if _is_exit_to_dispatch_command(prompt):
-            command_hash = _hash(_normalize_spoken_command(prompt))
-            if command_hash in self._handled_command_hashes:
+        if _is_exit_to_dispatch_command(pending):
+            if self._take_recent_exit_command():
                 self._append_commentary(BACK_TO_DISPATCH_COMMENTARY, delegation_id)
                 return
             if not self._voice_router.is_dispatcher_active:
+                self._last_exit_command_at = self._clock()
                 self._exit_to_dispatch(delegation_id=delegation_id)
                 return
             # Dispatcher already active: a normal prompt, as in the pipeline.
-        client = self._voice_router.active_client
-        route = self._voice_router.route_snapshot()
-        for other in self._entries.values():
-            if other.client is client and not other.superseded:
-                other.superseded = True
-                logger.info(
-                    "%s stage=live_delegation_superseded delegation_id=%s by=%s",
-                    DISPATCH_TIMING_LOG,
-                    other.delegation_id,
-                    delegation_id,
+        self._last_exit_command_at = None
+        open_entry = self._open_utterance_entry()
+        if open_entry is not None:
+            remainder = remainder_after(open_entry.open_utterance, pending)
+            if remainder is not None:
+                # The model delegated the same open utterance again.
+                if not remainder or is_trivial_utterance(remainder):
+                    open_entry.open_utterance = pending
+                    self._bind(open_entry, delegation_id)
+                    return
+                open_entry.open_utterance = ""
+                self._start_turn(
+                    pending,
+                    source="delegation",
+                    delegation_id=delegation_id,
+                    key=delegation_id,
+                    open_utterance=pending,
                 )
-        entry = LiveDelegationEntry(
+                return
+            open_entry.open_utterance = ""
+        if is_trivial_utterance(pending):
+            unbound = self._unbound_recent_entry()
+            if unbound is not None:
+                # Small talk opened while the last request's turn runs: the
+                # delegation is about that request.
+                self._bind(unbound, delegation_id)
+                return
+        self._start_turn(
+            pending,
+            source="delegation",
             delegation_id=delegation_id,
-            prompt=prompt,
-            route=route,
-            client=client,
-            created_at=self._clock(),
+            key=delegation_id,
+            open_utterance=pending,
         )
-        self._entries[delegation_id] = entry
-        if self._ledger is not None:
-            entry.record = self._ledger.accept_utterance(
-                message_id=f"live-{delegation_id}", prompt=prompt
+
+    def _on_delegation_after_utterance(self, delegation_id: str) -> None:
+        """A delegation with no open utterance: the caller's words already closed."""
+        if self._take_recent_exit_command():
+            self._append_commentary(BACK_TO_DISPATCH_COMMENTARY, delegation_id)
+            return
+        entry = self._unbound_recent_entry()
+        if entry is not None:
+            self._bind(entry, delegation_id)
+            return
+        skipped = self._take_skipped()
+        if skipped is not None:
+            self._start_turn(
+                skipped.text,
+                source="delegation",
+                delegation_id=delegation_id,
+                key=delegation_id,
             )
-        self._append_thinking(
-            f"Request taken by {self._active_agent_label}: "
-            f'"{_restatement(prompt)}". Acknowledge briefly in your own words '
-            "and keep the conversation going; results arrive as commentary. "
-            "Do not invent an outcome.",
+            return
+        logger.info(
+            "%s stage=live_delegation_without_new_speech delegation_id=%s",
+            DISPATCH_TIMING_LOG,
             delegation_id,
         )
+        self._append_thinking(
+            f"Nothing new from the caller has gone to {self._active_agent_label} "
+            "since its last request; its answer arrives as commentary. Do not "
+            "answer from your own knowledge. If the caller's words were unclear, "
+            "ask them to repeat.",
+            delegation_id,
+        )
+
+    def _start_turn(
+        self,
+        text: str,
+        *,
+        source: str,
+        delegation_id: str | None = None,
+        key: str | None = None,
+        open_utterance: str = "",
+    ) -> LiveDelegationEntry:
+        """Run (or steer) the active agent's turn on one caller utterance."""
+        client = self._voice_router.active_client
+        route = self._voice_router.route_snapshot()
+        inherited: LiveDelegationEntry | None = None
+        for other in self._entries.values():
+            if other.client is not client or other.superseded:
+                continue
+            other.superseded = True
+            # run_turn steers the running turn, so its merged answer also
+            # answers the delegation the superseded utterance was bound to.
+            if (
+                not other.completed
+                and other.delegation_id
+                and (inherited is None or other.created_at >= inherited.created_at)
+            ):
+                inherited = other
+            logger.info(
+                "%s stage=live_delegation_superseded key=%s delegation_id=%s",
+                DISPATCH_TIMING_LOG,
+                other.key,
+                other.delegation_id or "",
+            )
+        if key is None:
+            self._utterance_seq += 1
+            key = f"utt-{self._utterance_seq}"
+        entry = LiveDelegationEntry(
+            key=key,
+            prompt=text,
+            route=route,
+            client=client,
+            delegation_id=delegation_id
+            or (inherited.delegation_id if inherited is not None else None),
+            source=source,
+            open_utterance=open_utterance,
+            created_at=self._clock(),
+        )
+        self._entries[key] = entry
+        self._prune_entries()
+        self._log_forced(
+            text,
+            decision="started",
+            key=key,
+            delegation_id=entry.delegation_id,
+            source=source,
+        )
+        if self._ledger is not None:
+            entry.record = self._ledger.accept_utterance(
+                message_id=f"live-{key}", prompt=text
+            )
+        self._append_thinking(self._taken_thinking(entry), entry.delegation_id)
         self._ensure_progress_listener(client)
         entry.task = asyncio.create_task(
             self._run_delegation(entry),
-            name=f"openbase-live-delegation-{delegation_id}",
+            name=f"openbase-live-turn-{key}",
+        )
+        return entry
+
+    def _bind(self, entry: LiveDelegationEntry, delegation_id: str) -> None:
+        previous = entry.delegation_id
+        entry.delegation_id = delegation_id
+        logger.info(
+            "%s stage=live_delegation_bound key=%s delegation_id=%s previous=%s "
+            "completed=%s",
+            DISPATCH_TIMING_LOG,
+            entry.key,
+            delegation_id,
+            previous or "",
+            entry.completed,
+        )
+        if entry.completed:
+            self._append_thinking(
+                f"{self._active_agent_label} already answered that request and "
+                "its answer was spoken; do not repeat it or add to it.",
+                delegation_id,
+            )
+            return
+        self._append_thinking(self._taken_thinking(entry), delegation_id)
+
+    def _taken_thinking(self, entry: LiveDelegationEntry) -> str:
+        restated = _restatement(entry.prompt)
+        label = self._active_agent_label
+        if entry.delegation_id:
+            return (
+                f'Request taken by {label}: "{restated}". Acknowledge briefly in '
+                "your own words and keep the conversation going; the answer "
+                "arrives as commentary. Do not answer it yourself, guess, or "
+                "invent an outcome."
+            )
+        return (
+            f'The caller said "{restated}" and it went to {label}, which '
+            "answers; its answer arrives as commentary. Acknowledge briefly if "
+            "it fits, but do not answer it yourself, guess, or invent an outcome."
+        )
+
+    def _log_forced(
+        self,
+        text: str,
+        *,
+        decision: str,
+        key: str = "",
+        delegation_id: str | None = None,
+        source: str = "transcript",
+    ) -> None:
+        logger.info(
+            "%s stage=live_forced_delegation decision=%s key=%s source=%s "
+            "delegation_id=%s text_len=%d text_hash=%s active_thread_id=%s",
+            DISPATCH_TIMING_LOG,
+            decision,
+            key,
+            source,
+            delegation_id or "",
+            len(text),
+            _hash(text) if text else "",
+            getattr(self._voice_router.active_client, "_thread_id", "") or "",
         )
 
     def on_agent_state_changed(self, old_state: str, new_state: str) -> None:
@@ -493,7 +811,7 @@ class LiveDelegationBridge:
         if action == "exit_to_dispatch":
             label = DISPATCHER_AGENT_LABEL
         self._active_agent_label = label
-        self.transcript_buffer.clear()
+        self._reset_utterance_state()
         instructions = ""
         try:
             instructions = self._developer_instructions() or ""
@@ -501,8 +819,8 @@ class LiveDelegationBridge:
             logger.debug("live route instructions unavailable", exc_info=True)
         summary = " ".join(instructions.split())[:400]
         self._append_thinking(
-            f"The call is now routed to {label}. Everything you delegate goes "
-            f"to {label}; refer to it by that name. "
+            f"The call is now routed to {label}. Everything the caller says goes "
+            f"to {label}, which answers; refer to it by that name. "
             + (f"Guidance for that route: {summary}" if summary else ""),
             None,
         )
@@ -531,7 +849,7 @@ class LiveDelegationBridge:
             prompt = append_onboarding_reminder(prompt)
         entry.heartbeat = asyncio.create_task(
             self._progress_heartbeat(entry),
-            name=f"openbase-live-heartbeat-{entry.delegation_id}",
+            name=f"openbase-live-heartbeat-{entry.key}",
         )
         try:
             result = await entry.client.run_turn(
@@ -559,6 +877,7 @@ class LiveDelegationBridge:
             )
 
     def _on_turn_failed(self, entry: LiveDelegationEntry) -> None:
+        entry.completed = True
         busy = False
         appears_busy = getattr(entry.client, "backend_appears_busy", None)
         if callable(appears_busy):
@@ -567,9 +886,11 @@ class LiveDelegationBridge:
             except Exception:
                 busy = False
         logger.exception(
-            "%s stage=live_delegation_turn_failed delegation_id=%s backend_busy=%s",
+            "%s stage=live_delegation_turn_failed key=%s delegation_id=%s "
+            "backend_busy=%s",
             DISPATCH_TIMING_LOG,
-            entry.delegation_id,
+            entry.key,
+            entry.delegation_id or "",
             busy,
         )
         if self._ledger is not None and entry.record is not None:
@@ -584,6 +905,7 @@ class LiveDelegationBridge:
         )
 
     def _on_turn_result(self, entry: LiveDelegationEntry, result: dict) -> None:
+        entry.completed = True
         turn_id = str(result.get("_livekit_turn_id") or "")
         speech_text = str(result.get("_livekit_speech_text") or "")
         entry.turn_id = turn_id or None
@@ -592,10 +914,11 @@ class LiveDelegationBridge:
             ledger.mark_answer_owed(entry.record, turn_id=turn_id, client=entry.client)
         if entry.superseded:
             logger.info(
-                "%s stage=live_delegation_result_dropped delegation_id=%s "
+                "%s stage=live_delegation_result_dropped key=%s delegation_id=%s "
                 "turn_id=%s reason=superseded",
                 DISPATCH_TIMING_LOG,
-                entry.delegation_id,
+                entry.key,
+                entry.delegation_id or "",
                 turn_id,
             )
             if ledger is not None and entry.record is not None:
@@ -605,10 +928,11 @@ class LiveDelegationBridge:
             return
         if not self._voice_router.can_deliver_for_snapshot(entry.route):
             logger.info(
-                "%s stage=live_delegation_result_dropped delegation_id=%s "
+                "%s stage=live_delegation_result_dropped key=%s delegation_id=%s "
                 "turn_id=%s reason=route_changed",
                 DISPATCH_TIMING_LOG,
-                entry.delegation_id,
+                entry.key,
+                entry.delegation_id or "",
                 turn_id,
             )
             if ledger is not None and entry.record is not None:
@@ -616,7 +940,7 @@ class LiveDelegationBridge:
                     entry.record, reason="route_changed_before_commentary"
                 )
             return
-        cursor = self._cursor(turn_id or entry.delegation_id)
+        cursor = self._cursor(turn_id or entry.key)
         chunks = cursor.advance(speech_text, final=True) if speech_text else []
         if ledger is not None and entry.record is not None and speech_text:
             ledger.mark_text_generated(
@@ -687,7 +1011,7 @@ class LiveDelegationBridge:
             if not entry.superseded:
                 entry.superseded = True
         self._active_agent_label = DISPATCHER_AGENT_LABEL
-        self.transcript_buffer.clear()
+        self._reset_utterance_state()
         if changed or delegation_id is not None:
             self._append_commentary(BACK_TO_DISPATCH_COMMENTARY, delegation_id)
 
@@ -710,6 +1034,54 @@ class LiveDelegationBridge:
     def _newest_delegation_id_for(self, client) -> str | None:
         entry = self._newest_entry_for(client)
         return entry.delegation_id if entry is not None else None
+
+    def _open_utterance_entry(self) -> LiveDelegationEntry | None:
+        """The newest turn a delegation started on a still-open utterance."""
+        newest: LiveDelegationEntry | None = None
+        for entry in self._entries.values():
+            if entry.open_utterance and (
+                newest is None or entry.created_at >= newest.created_at
+            ):
+                newest = entry
+        return newest
+
+    def _unbound_recent_entry(self) -> LiveDelegationEntry | None:
+        """The newest live turn no delegation is bound to yet, if recent."""
+        cutoff = self._clock() - DELEGATION_BIND_WINDOW_SECONDS
+        newest: LiveDelegationEntry | None = None
+        for entry in self._entries.values():
+            if entry.superseded or entry.delegation_id or entry.created_at < cutoff:
+                continue
+            if newest is None or entry.created_at >= newest.created_at:
+                newest = entry
+        return newest
+
+    def _take_recent_exit_command(self) -> bool:
+        at, self._last_exit_command_at = self._last_exit_command_at, None
+        return at is not None and self._clock() - at <= COMMAND_DEDUPE_WINDOW_SECONDS
+
+    def _take_skipped(self) -> _SkippedUtterance | None:
+        skipped, self._skipped = self._skipped, None
+        if skipped is None:
+            return None
+        if self._clock() - skipped.at > SKIPPED_UTTERANCE_MAX_AGE_SECONDS:
+            return None
+        return skipped
+
+    def _reset_utterance_state(self) -> None:
+        """A route change: open utterances and skipped small talk start over."""
+        self._skipped = None
+        for entry in self._entries.values():
+            entry.open_utterance = ""
+
+    def _prune_entries(self) -> None:
+        if len(self._entries) <= MAX_TRACKED_ENTRIES:
+            return
+        for key in list(self._entries):
+            if len(self._entries) <= MAX_TRACKED_ENTRIES:
+                return
+            if self._entries[key].completed:
+                del self._entries[key]
 
 
 def _restatement(prompt: str) -> str:
