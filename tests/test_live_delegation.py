@@ -496,6 +496,11 @@ async def test_answer_streamed_by_progress_is_not_followed_by_an_already_answere
 
     assert live.of("commentary", "d1") == [answer]
     assert not any("already answered" in note for note in live.of("thinking", "d1"))
+    record = ledger.record_for_turn("turn-1")
+    assert record is not None
+    assert record.status == "cancelled"
+    assert record.terminal_reason == "live_answer_already_spoken"
+    assert not ledger.has_pending_delivery_for_current_route()
     await bridge.aclose()
 
 
