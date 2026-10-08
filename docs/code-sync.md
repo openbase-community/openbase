@@ -297,38 +297,39 @@ about 5 GB, and works on one or two projects. It can sync just those
 projects with your always-on computer, while the always-on computer keeps
 holding everything and your laptop keeps syncing all of it.
 
-Set it up on the cloud workspace:
+On the cloud workspace, open **Sync**, choose **Sync with this** next to the
+always-on computer, and tick what it should sync: one of the hub's folders,
+or a project inside one (the hub lists the projects in `~/Projects` with
+their number of files and size). Nothing is preselected on a cloud
+workspace, and the chooser warns when the choice may not fit. From a
+terminal:
 
-1. Make sure the always-on computer syncs the project as its own folder.
-   Folders are synced whole, so for one project out of `~/Projects`, the hub
-   needs `~/Projects/<project>` as a folder of its own rather than only
-   `~/Projects`. Folders cannot nest, so a hub that syncs `~/Projects` as a
-   whole offers only that one folder; split it on the hub first (stop syncing
-   `~/Projects` everywhere, then add each project folder you want to share).
-2. On the cloud workspace, open **Sync**, choose **Sync with this** next to
-   the always-on computer, tick the project folders, and confirm. Nothing is
-   preselected on a cloud workspace, and the chooser warns when the chosen
-   folders may not fit. From a terminal:
+```bash
+openbase-coder sync-daemon pair folders <hub-name>     # folders, projects, sizes, free disk
+openbase-coder sync-daemon pair join <hub-name> --root ~/Projects/<project>
+```
 
-   ```bash
-   openbase-coder sync-daemon pair folders <hub-name>
-   openbase-coder sync-daemon pair join <hub-name> --root ~/Projects/<project>
-   ```
+Nothing changes on the hub or the laptop: they keep syncing `~/Projects`
+whole. The cloud workspace syncs `~/Projects` with only the chosen projects
+(written as `only = ["<project>"]` in its `[[roots]]` entry); the hub sends
+it nothing else, and what it creates elsewhere in `~/Projects` stays on it.
+Moving a file into a chosen project on the laptop brings it to the cloud
+workspace; moving one out removes it there. Git history replicates for
+repositories inside a chosen project.
 
-A cloud workspace joins **project-only**: it syncs only the chosen folders,
-and large files stay on the always-on computer as placeholders until
-something on the cloud workspace uses them (or `openbase-sync fetch
-<path>`). Its disk limits scale down with its disk (see
-[Placement](#placement-large-files-and-disk-space)). Your laptop and the hub
-are unchanged: the laptop's edits to the chosen projects reach the cloud
-workspace through the hub, and the other folders never travel to it.
+A cloud workspace joins **project-only**: besides syncing only the chosen
+projects, it keeps large files on the always-on computer as placeholders
+until something on the cloud workspace uses them (or `openbase-sync fetch
+<path>`), and its disk limits scale down with its disk (see
+[Placement](#placement-large-files-and-disk-space)).
 
 To work on another project later, use **Sync here** next to it on the
-cloud workspace's Sync page (or `pair add-folder`). To drop one, remove it
-**on this computer**: the hub and the laptop keep syncing it, and the files
-on the cloud workspace stay until you delete them. If you delete them and
-later sync the folder again, they come back from the hub; nothing is
-deleted elsewhere.
+cloud workspace's Sync page (or `openbase-coder sync-daemon pair add-folder
+~/Projects/<other>`). To drop one, remove it there (or `pair remove-folder`):
+a project inside a folder stops syncing on the cloud workspace only, and
+the hub and the laptop keep it. The files on the cloud workspace stay until
+you delete them. If you delete them and later sync the project again, they
+come back from the hub; nothing is deleted elsewhere.
 
 `--project-only` makes any computer join this way, and `--full-copy` makes a
 cloud workspace keep every file in full.
