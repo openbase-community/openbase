@@ -48,7 +48,8 @@ Differences in a browser:
   appear in the sidebar when installed. See
   [plugins](commands/plugins.md).
 
-Useful shortcuts: **Cmd/Ctrl+B** toggles the sidebar; in a thread,
+Useful shortcuts: **Cmd/Ctrl+B** toggles the threads sidebar (the icon rail
+stays); in a thread,
 **Enter** sends the prompt and **Shift+Enter** inserts a newline.
 
 To rename a thread, double-click its title in the thread view, choose

@@ -49,10 +49,28 @@ flow ("Link Your Computer") that waits for your Mac to sign in and pair. See
 
 ## The Dashboard
 
-After setup the app shows a sidebar with **Workspace** and **System**
-sections. Any item except Settings can be hidden via
-**Settings → Sidebar Items**. The footer shows the CLI version and an update
-indicator; the top bar shows the connected backend host.
+After setup the app shows two columns on the left:
+
+- **The rail** — a narrow strip of icons for each destination (Dispatch,
+  Threads, Projects, Reports, Approvals, Configure, plus any plugin pages).
+  System pages (Status, Devices, Sync, Instructions, Tools, Services) sit
+  behind the **⋯ More** menu, which also shows the service-health summary;
+  **Cloud** and **Settings** are pinned at the bottom. Any item except
+  Settings can be hidden via **Settings → Sidebar Items**.
+- **The threads sidebar** — a **New thread** entry, then a collapsible
+  **Projects** section listing every project. Exactly one project is expanded
+  at a time (the active project); click a project to expand it and collapse
+  the previous one, or click it again to collapse it. Under the active project
+  are the threads you have open in the sidebar, which work like terminal tabs:
+  viewing a thread anywhere (the Threads page, a project page, a notification)
+  adds it, **New thread** starts one in that project, **Open thread…** picks a
+  recent thread of the project, and the **×** that appears on hover removes
+  the row without archiving the thread. A running thread shows a green dot.
+  Right-click a thread or project row to open it in a new tab or split pane.
+  The toggle in the top bar (or **Cmd/Ctrl+B**) hides the threads sidebar; the
+  rail stays. Which threads are open and which project is active are
+  remembered per backend on this device. The footer shows the CLI version
+  and an update indicator.
 
 ### Overview
 
