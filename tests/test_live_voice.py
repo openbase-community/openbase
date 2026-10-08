@@ -658,3 +658,96 @@ async def test_real_gpt_live_session_delegation_flows_through_the_bridge():
             await bridge.aclose()
             await live.aclose()
             await model.aclose()
+
+
+async def _close_caller_utterance(live, *, seconds: float = 1.0) -> None:
+    """Push caller audio with no new transcript until the plugin ends the turn."""
+    from livekit import rtc
+
+    for _ in range(round(seconds * 10)):
+        live.push_audio(
+            rtc.AudioFrame.create(
+                sample_rate=24000, num_channels=1, samples_per_channel=2400
+            )
+        )
+
+
+@pytest.mark.parametrize("model_delegates", [False, True])
+async def test_real_gpt_live_session_sends_every_closed_utterance_to_the_agent(
+    model_delegates,
+):
+    """Regression: "what's on my desktop" must reach the agent thread.
+
+    Through the real ``GPTLiveModel`` plugin: the caller's utterance closes
+    (0.8 s of audio with no new transcript) and the bridge runs the agent
+    turn whether or not GPT-Live delegates. When it does delegate after the
+    utterance closed, the delegation binds to the same single turn.
+    """
+    from livekit.agents.llm import ChatContext
+    from livekit.plugins.openai.realtime import GPTLiveModel
+
+    async with FakeGPTLiveServer() as server:
+        model = GPTLiveModel(
+            model="gpt-live-1",
+            voice="marin",
+            delegation="client",
+            api_key="cloud-token",
+            base_url=server.base_url,
+        )
+        live = model.session()
+        client = _FakeClient()
+        bridge = LiveDelegationBridge(
+            voice_router=_FakeRouter(client),
+            developer_instructions=lambda: "guidance",
+            progress_thinking_interval=3600,
+        )
+        bridge.attach(live)
+        try:
+            await live._update_session(
+                instructions="You are the voice relay.",
+                chat_ctx=ChatContext.empty(),
+                tools=[],
+            )
+            await asyncio.wait_for(server.started.wait(), 5)
+            await server.send(
+                {
+                    "type": "session.input_transcript.delta",
+                    "delta": "What's on my desktop?",
+                    "start_ms": 0,
+                    "end_ms": 900,
+                }
+            )
+            await asyncio.sleep(0.05)
+            assert client.prompts == [], "an open utterance must not start a turn"
+            await _close_caller_utterance(live)
+            await asyncio.wait_for(client.started.wait(), 5)
+            assert len(client.prompts) == 1
+            assert client.prompts[0].endswith("<voice>What's on my desktop?</voice>")
+
+            expected_delegation = None
+            if model_delegates:
+                await server.send(
+                    {
+                        "type": "session.delegation.created",
+                        "event_id": "evt_1",
+                        "offset_ms": 1000,
+                        "delegation": {
+                            "id": "item_1",
+                            "type": "delegation",
+                            "target": "client",
+                        },
+                    }
+                )
+                thinking = await server.wait_for_append("thinking", count=2)
+                assert thinking[1]["delegation_id"] == "item_1"
+                expected_delegation = "item_1"
+
+            client.gate.set()
+            commentary = await server.wait_for_append("commentary")
+            assert len(client.prompts) == 1, "exactly one agent turn"
+            assert commentary[0]["content"] == "The build passed."
+            assert commentary[0].get("delegation_id") == expected_delegation
+        finally:
+            await bridge.aclose()
+            await live.aclose()
+            await model.aclose()

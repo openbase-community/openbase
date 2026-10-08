@@ -891,8 +891,9 @@ class LiveVoiceAssistant(Agent):
     The persona is fixed at ``session.start``; everything that changes during
     the call (route, agent names, results) reaches the model through the
     delegation bridge's appends. ``on_enter`` runs once the duplex session
-    exists, which is the earliest point the bridge can subscribe to
-    ``delegation_created``.
+    exists, which is the earliest point the bridge can subscribe to the
+    plugin's closed caller utterances (every one goes to the active agent)
+    and ``delegation_created``.
     """
 
     def __init__(self, bridge: LiveDelegationBridge) -> None:
@@ -1066,15 +1067,11 @@ def _wire_live_voice_call(
 
     No mic lifecycle (the mic stays open), no TTS announcer: ``user say``
     becomes commentary the voice model weaves in, audio-file announcements
-    still play through the session, spoken commands come off the input
-    transcript, and route changes are narrated by the one voice on the call.
+    still play through the session, and route changes are narrated by the one
+    voice on the call. Caller utterances (prompts and spoken commands) reach
+    the bridge straight from the plugin session it attached to, not from
+    ``user_input_transcribed`` here, so each one is handled exactly once.
     """
-
-    def on_user_input_transcribed(event) -> None:
-        bridge.on_user_transcript(
-            str(getattr(event, "transcript", "") or ""),
-            is_final=bool(getattr(event, "is_final", False)),
-        )
 
     def on_agent_state_changed(event) -> None:
         bridge.on_agent_state_changed(
@@ -1082,7 +1079,6 @@ def _wire_live_voice_call(
             str(getattr(event, "new_state", "") or ""),
         )
 
-    session.on("user_input_transcribed", on_user_input_transcribed)
     session.on("agent_state_changed", on_agent_state_changed)
 
     audio_queue = AnnouncerSpeechQueue(
@@ -1165,7 +1161,6 @@ def _wire_live_voice_call(
             session.off(event_name, handler)
         for event_name, handler in audio_queue_session_handlers:
             session.off(event_name, handler)
-        session.off("user_input_transcribed", on_user_input_transcribed)
         session.off("agent_state_changed", on_agent_state_changed)
         await bridge.aclose()
         await audio_queue.close()

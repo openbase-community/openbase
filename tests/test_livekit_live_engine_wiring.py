@@ -228,14 +228,16 @@ async def test_live_engine_builds_a_duplex_session_and_publishes_the_attribute(
     agent, room = session.started_with
     assert isinstance(agent, livekit.LiveVoiceAssistant)
     assert agent.instructions == config.LIVE_VOICE_STARTUP_INSTRUCTIONS
-    # The bridge subscribed to the plugin session once the agent entered.
+    # The bridge subscribed to the plugin session once the agent entered:
+    # every closed caller utterance goes to the agent, delegations bind.
+    assert len(wiring.live.handlers["input_audio_transcription_completed"]) == 1
     assert len(wiring.live.handlers["delegation_created"]) == 1
     assert (
         ctx.room.local_participant.attributes[config.VOICE_ENGINE_ATTRIBUTE] == "live"
     )
     assert _status_packets(ctx.room) == []
-    # Live-mode session plumbing: transcripts and speaking state feed the bridge.
-    assert "user_input_transcribed" in session.handlers
+    # Live-mode session plumbing: speaking state feeds the bridge; transcripts
+    # reach it only from the plugin session, so each utterance is sent once.
     assert "agent_state_changed" in session.handlers
     assert "data_received" in ctx.room.handlers
     for callback in ctx.shutdown_callbacks:
@@ -364,4 +366,14 @@ def test_live_start_passes_proactive_steering_off(monkeypatch):
     assert captured["proactive_steering"] is False
     assert captured["enable_logging"] is config.LIVEKIT_VERBOSE_LOGGING
     assert handlers == ()
-    assert bridge.transcript_buffer is not None
+    assert len(fake_live.handlers["input_audio_transcription_completed"]) == 1
+
+
+def test_live_startup_instructions_never_let_the_voice_model_answer_itself():
+    """GPT-Live voices the agent; it must not answer from its own knowledge."""
+    text = config.LIVE_VOICE_STARTUP_INSTRUCTIONS
+    assert "Never answer a question or request yourself" in text
+    assert "no general knowledge" in text
+    assert "desktop" in text and "files" in text
+    assert "Only the agent answers." in text
+    assert "relay commentary faithfully" in text.lower()
