@@ -13,6 +13,7 @@ from openbase_coder_cli import livekit_voice_route
 from openbase_coder_cli.services import durable_targets, thread_push
 from openbase_coder_cli.services.durable_targets import DurableTarget, TargetError
 from openbase_coder_cli.services.thread_push import PushError
+from openbase_coder_cli.thread_sync.session_manager import CodexAppServerSessionManager
 from openbase_coder_cli.thread_sync import thread_handoff, thread_moves
 from openbase_coder_cli.thread_sync.models import ThreadInfo, TurnInfo
 from openbase_coder_cli.thread_sync.thread_handoff import HandoffError, HandoffSnapshot
@@ -61,6 +62,26 @@ class FakeManager:
         thread_moves.ensure_thread_writable(thread_id)
         self.turns.append((thread_id, prompt))
         return "turn-1"
+
+
+class RaceClient:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def read_thread(self, _thread_id: str) -> dict[str, Any]:
+        return {}
+
+    async def start_turn(self, _turn_input: dict[str, Any]) -> dict[str, str]:
+        self.calls.append("start")
+        return {"turnId": "turn-1"}
+
+    async def queue_turn_by_label(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        self.calls.append("queue")
+        return {"queued": True, "queueId": "queue-1"}
+
+    async def steer_by_label(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        self.calls.append("steer")
+        return {"turnId": "turn-1"}
 
 
 def _thread(thread_id: str = "t-1", **fields: Any) -> ThreadInfo:
@@ -146,6 +167,45 @@ def test_push_moves_the_thread_and_locks_the_local_copy(isolated) -> None:
     assert flushed[1].endswith("thread-sync")
     with pytest.raises(thread_moves.ThreadMovedError, match="moved to mini"):
         asyncio.run(manager.start_turn("t-1", "hello"))
+
+
+def test_turn_dispatch_rechecks_move_marker_after_loading_thread(isolated) -> None:
+    client = RaceClient()
+    manager = CodexAppServerSessionManager(
+        client=client,
+        execution_backend="codex",
+        model_for_role=lambda _role: None,
+    )
+
+    async def get_session_state(thread_id: str, **_kwargs: Any) -> ThreadInfo:
+        thread_moves.set_move(
+            thread_id,
+            state=thread_moves.STATE_PUSHING,
+            target={"name": "mini"},
+            started_at=thread_moves.now_iso(),
+        )
+        return _thread(thread_id)
+
+    manager.get_session_state = get_session_state
+
+    with pytest.raises(thread_moves.ThreadMovedError, match="being pushed to mini"):
+        asyncio.run(manager.send_message("t-1", "start"))
+    assert client.calls == []
+
+    thread_moves.clear_move("t-1")
+    with pytest.raises(thread_moves.ThreadMovedError, match="being pushed to mini"):
+        asyncio.run(manager.queue_turn("t-1", "queue"))
+    assert client.calls == []
+
+    thread_moves.clear_move("t-1")
+    manager._active_turn_id = lambda _thread_id: _async_value("turn-1")
+    with pytest.raises(thread_moves.ThreadMovedError, match="being pushed to mini"):
+        asyncio.run(manager.steer_turn("t-1", "steer"))
+    assert client.calls == []
+
+
+async def _async_value(value: Any) -> Any:
+    return value
 
 
 def test_push_is_idempotent_once_moved(isolated) -> None:

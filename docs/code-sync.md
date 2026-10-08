@@ -177,9 +177,7 @@ are translated to the same home-relative location on the receiving device. A
 thread sync conflict is raised only when the two machines hold genuinely
 divergent transcripts.
 
-To move a conversation that is already running on your laptop over to the
-hub, so it keeps going while the laptop sleeps, push it: see
-[Push a Thread to Your Durable Machine](push-to-durable.md).
+To move a conversation that is already running on your laptop over to the hub, so it keeps going while the laptop sleeps, push it: see [Push a Thread to Your Durable Machine](push-to-durable.md).
 
 ## Starting agents on the hub
 

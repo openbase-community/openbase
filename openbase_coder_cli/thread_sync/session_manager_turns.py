@@ -84,6 +84,7 @@ class SessionManagerTurnsMixin:
         if model := self._resolve_turn_model(thread, model):
             turn_input["model"] = model
 
+        ensure_thread_writable(thread_id)
         result = await self._client.queue_turn_by_label(
             LabelQueryInput(thread_id=thread_id, cwd=thread.directory),
             turn_input,
@@ -116,6 +117,7 @@ class SessionManagerTurnsMixin:
             # reach.
             raise ValueError(f"Thread {thread_id} has no active turn to steer")
 
+        ensure_thread_writable(thread_id)
         result = await self._client.steer_by_label(
             LabelQueryInput(
                 thread_id=thread_id,

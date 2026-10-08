@@ -247,6 +247,7 @@ class CodexAppServerSessionManager(
         if model:
             role_turn_input["model"] = model
 
+        ensure_thread_writable(session_id)
         if self._uses_backend_session_api():
             started = await self._client.start_turn_by_label(
                 LabelQueryInput(thread_id=session_id, cwd=thread.directory),
@@ -264,11 +265,13 @@ class CodexAppServerSessionManager(
             **role_turn_input,
         }
         try:
+            ensure_thread_writable(session_id)
             started = await self._client.start_turn(turn_input)
         except RuntimeError as exc:
             if not _is_thread_unavailable_error(exc):
                 raise
             await self._resume_thread(session_id, thread.directory)
+            ensure_thread_writable(session_id)
             started = await self._client.start_turn(turn_input)
         turn_id = extract_turn_id(started)
         if not turn_id:

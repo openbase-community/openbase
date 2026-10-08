@@ -208,6 +208,7 @@ class SuperAgentsClientTurnsMixin:
         ):
             previous_turn_id = await self._latest_real_turn_id(thread_id)
 
+        _ensure_not_moved(thread_id)
         if self._backend_is_codex() and hasattr(self._backend_client, "start_turn"):
             result = await self._backend_client.start_turn(
                 {"threadId": thread_id, **turn_input}
@@ -438,6 +439,7 @@ class SuperAgentsClientTurnsMixin:
             # drains as soon as the active turn finishes.
             active_turn_id = self._active_turn_id
             try:
+                _ensure_not_moved(thread_id)
                 queued = await self._backend_client.queue_turn_by_label(
                     self._query(thread_id=thread_id),
                     self._turn_input(
