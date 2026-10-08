@@ -127,7 +127,7 @@ def test_openbase_cloud_audio_token_fails_closed_on_empty_token(monkeypatch):
     assert "empty Openbase machine token" in str(exc_info.value)
 
 
-def test_livekit_agent_capacity_uses_livekit_defaults_for_remote_models(monkeypatch):
+def test_livekit_agent_capacity_caps_idle_pool_for_remote_models(monkeypatch):
     monkeypatch.delenv(livekit.LIVEKIT_AGENT_LOAD_THRESHOLD_ENV, raising=False)
     monkeypatch.delenv(livekit.LIVEKIT_AGENT_NUM_IDLE_PROCESSES_ENV, raising=False)
     monkeypatch.setattr(
@@ -141,7 +141,7 @@ def test_livekit_agent_capacity_uses_livekit_defaults_for_remote_models(monkeypa
         lambda: livekit.CARTESIA_PROVIDER_ID,
     )
 
-    assert livekit._livekit_agent_server_options() == {}
+    assert livekit._livekit_agent_server_options() == {"num_idle_processes": 1}
 
 
 def test_livekit_agent_capacity_uses_local_friendly_defaults_for_local_stt(monkeypatch):
@@ -218,7 +218,7 @@ def test_livekit_agent_capacity_ignores_invalid_env_for_remote_models(monkeypatc
         lambda: livekit.CARTESIA_PROVIDER_ID,
     )
 
-    assert livekit._livekit_agent_server_options() == {}
+    assert livekit._livekit_agent_server_options() == {"num_idle_processes": 1}
 
 
 def test_parse_voice_route_packet_reads_exit_action():
