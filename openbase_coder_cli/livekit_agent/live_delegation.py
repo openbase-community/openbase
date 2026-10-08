@@ -997,7 +997,10 @@ class LiveDelegationBridge:
             self._append_instructions(
                 LIVE_APPROVAL_PENDING_INSTRUCTIONS, entry.delegation_id
             )
-        text = _speech_text_from_progress(progress)
+        # Turn-scoped: a running turn's snapshot still carries the PREVIOUS
+        # answer at session level, and relaying it as commentary made GPT-Live
+        # speak the last question's answer before the new one.
+        text = _speech_text_from_progress(progress, turn_scoped=True, turn_id=turn_id)
         if not text or _looks_like_raw_backend_error(text):
             return
         for chunk in self._cursor(turn_id).advance(text, final=False):

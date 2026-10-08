@@ -174,6 +174,140 @@ def test_speech_text_from_progress_still_speaks_failed_turns_own_output() -> Non
     )
 
 
+PREVIOUS_ANSWER = "Victoria already got back to you. She said two plus two is four."
+
+
+def _claude_running_turn_snapshot() -> dict[str, Any]:
+    # The Claude Code backend's progress for a just-started turn: the
+    # session-level lastUsefulMessage is still the PREVIOUS turn's answer and
+    # the running turn has no lastUsefulMessage of its own yet.
+    running = {
+        "turnId": "turn-2",
+        "promptPreview": "<voice>What files are on my desktop</voice>",
+        "status": "running",
+    }
+    return {
+        "status": "running",
+        "turnId": "turn-2",
+        "activeTurnId": "turn-2",
+        "lastUsefulMessage": PREVIOUS_ANSWER,
+        "turn": running,
+        "turns": [running],
+    }
+
+
+def test_turn_scoped_speech_ignores_the_previous_turns_session_message() -> None:
+    progress = _claude_running_turn_snapshot()
+
+    # The unscoped (final-result) extraction falls back to the cached
+    # session-level message; that fallback is what streamed the stale answer.
+    assert _speech_text_from_progress(progress) != ""
+    assert (
+        _speech_text_from_progress(progress, turn_scoped=True, turn_id="turn-2") == ""
+    )
+    assert _speech_text_from_progress(progress, turn_scoped=True) == ""
+
+
+def test_turn_scoped_speech_ignores_earlier_turns_in_turn_lists() -> None:
+    earlier = {
+        "turnId": "turn-1",
+        "status": "completed",
+        "lastUsefulMessage": PREVIOUS_ANSWER,
+    }
+    running = {"turnId": "turn-2", "status": "running"}
+    progress = {
+        "status": "running",
+        "turns": [earlier, running],
+        "recentTurns": [running, earlier],
+        "summary": {"lastUsefulMessage": PREVIOUS_ANSWER},
+        "turn": running,
+    }
+
+    assert _speech_text_from_progress(progress) != ""
+    assert (
+        _speech_text_from_progress(progress, turn_scoped=True, turn_id="turn-2") == ""
+    )
+
+
+def test_turn_scoped_speech_uses_the_current_turns_own_text() -> None:
+    progress = _claude_running_turn_snapshot()
+    progress["turn"] = {
+        **progress["turn"],
+        "lastUsefulMessage": "Checking your desktop now.",
+    }
+
+    assert (
+        _speech_text_from_progress(progress, turn_scoped=True, turn_id="turn-2")
+        == "Checking your desktop now."
+    )
+
+
+def test_turn_scoped_speech_uses_the_current_turns_summary_items() -> None:
+    progress = {
+        "status": "running",
+        "turnId": "turn-2",
+        "summary": {
+            "id": "turn-2",
+            "items": [
+                {
+                    "type": "agentMessage",
+                    "phase": "final_answer",
+                    "text": "Your desktop has two folders.",
+                }
+            ],
+        },
+    }
+
+    assert (
+        _speech_text_from_progress(progress, turn_scoped=True, turn_id="turn-2")
+        == "Your desktop has two folders."
+    )
+
+
+def test_turn_scoped_speech_ignores_a_turn_or_summary_naming_another_turn() -> None:
+    progress = {
+        "status": "running",
+        "turn": {"turnId": "turn-1", "lastUsefulMessage": PREVIOUS_ANSWER},
+        "summary": {"id": "turn-1", "lastUsefulMessage": PREVIOUS_ANSWER},
+    }
+    assert (
+        _speech_text_from_progress(progress, turn_scoped=True, turn_id="turn-2") == ""
+    )
+
+    # A summary positively naming the streamed turn is that turn's own preview.
+    progress["summary"] = {"id": "turn-2", "lastUsefulMessage": "Still looking."}
+    assert (
+        _speech_text_from_progress(progress, turn_scoped=True, turn_id="turn-2")
+        == "Still looking."
+    )
+
+
+def test_turn_scoped_speech_keeps_failed_turn_handling() -> None:
+    progress = {
+        "status": "failed",
+        "turn": {"turnId": "turn-2", "lastUsefulMessage": "Cached stale reply."},
+        "summary": {
+            "id": "turn-2",
+            "lastUsefulMessage": "Cached stale reply.",
+            "items": [
+                {
+                    "type": "agentMessage",
+                    "phase": "final_answer",
+                    "text": "I hit an error reading that repository.",
+                }
+            ],
+        },
+    }
+    assert (
+        _speech_text_from_progress(progress, turn_scoped=True, turn_id="turn-2")
+        == "I hit an error reading that repository."
+    )
+    del progress["summary"]["items"]
+    assert (
+        _speech_text_from_progress(progress, turn_scoped=True, turn_id="turn-2") == ""
+    )
+
+
 def test_speech_text_from_progress_prefers_final_answer_over_commentary() -> None:
     progress = {
         "status": "completed",
