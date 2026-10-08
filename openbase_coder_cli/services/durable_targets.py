@@ -245,6 +245,16 @@ def send_arrival(
             retryable=True,
             reached=True,
         ) from exc
+    if response.status_code >= 500:
+        # The target failed while handling the arrival, possibly after taking
+        # the thread: only a retry with the same operation id can tell.
+        raise TargetError(
+            "target_error",
+            f"{target.name} hit an error while taking the thread. Retry the "
+            "push to finish it.",
+            retryable=True,
+            reached=True,
+        )
     if response.status_code != 200:
         raise _error_from_response(
             target, response, f"{target.name} could not take the thread."

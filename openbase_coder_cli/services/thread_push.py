@@ -822,7 +822,7 @@ async def _accept_locked(
         )
     local_id = await asyncio.to_thread(handoff.local_thread_id, snapshot)
     if local_id:
-        local = await manager.get_thread_state(local_id)
+        local = await _thread_state_or_none(manager, local_id)
         if local is not None and (reason := await busy_reason(manager, local)):
             raise PushError("target_busy", reason, safe_to_retry=True)
         if backend == handoff.CODEX:
@@ -832,7 +832,7 @@ async def _accept_locked(
     except HandoffError as exc:
         raise _from_handoff(exc) from exc
     target_id = await asyncio.to_thread(handoff.local_thread_id, snapshot)
-    thread = await manager.get_thread_state(target_id) if target_id else None
+    thread = await _thread_state_or_none(manager, target_id) if target_id else None
     if thread is None:
         raise PushError(
             "import_failed",
@@ -871,6 +871,21 @@ async def _accept_locked(
         outcome,
     )
     return _arrival_result(record)
+
+
+async def _thread_state_or_none(manager: Any, thread_id: str) -> Any | None:
+    """The thread's state, or None when this computer's agent cannot open it.
+
+    A Codex app-server answers a thread it does not hold with an error
+    ("thread not loaded"), not an empty result.
+    """
+    try:
+        return await manager.get_thread_state(thread_id)
+    except (RuntimeError, ValueError) as exc:
+        logger.info(
+            "thread_push thread_unreadable thread_id=%s error=%s", thread_id, exc
+        )
+        return None
 
 
 def _arrival_result(record: dict[str, Any]) -> dict[str, Any]:

@@ -13,11 +13,12 @@ from openbase_coder_cli import livekit_voice_route
 from openbase_coder_cli.services import durable_targets, thread_push
 from openbase_coder_cli.services.durable_targets import DurableTarget, TargetError
 from openbase_coder_cli.services.thread_push import PushError
-from openbase_coder_cli.thread_sync.session_manager import CodexAppServerSessionManager
 from openbase_coder_cli.thread_sync import thread_handoff, thread_moves
 from openbase_coder_cli.thread_sync.models import ThreadInfo, TurnInfo
+from openbase_coder_cli.thread_sync.session_manager import CodexAppServerSessionManager
 from openbase_coder_cli.thread_sync.thread_handoff import HandoffError, HandoffSnapshot
 
+REAL_SEND_ARRIVAL = durable_targets.send_arrival
 HUB = DurableTarget(
     key="mini.tail.ts.net",
     name="mini",
@@ -505,3 +506,49 @@ def test_accept_refuses_a_thread_running_here(isolated, receiving) -> None:
 
     assert caught.value.code == "target_busy"
     assert receiving["imports"] == 0
+
+
+class StrictCodexManager(FakeManager):
+    """Raises for threads it does not hold, like a Codex app-server does."""
+
+    async def get_thread_state(self, thread_id: str):
+        if thread_id not in self.threads:
+            raise RuntimeError('{"code": -32600, "message": "thread not loaded"}')
+        return self.threads[thread_id]
+
+
+def test_accept_handles_a_thread_new_to_this_computer(
+    isolated, receiving, monkeypatch
+) -> None:
+    manager = StrictCodexManager({})
+
+    def import_one(snapshot):
+        receiving["imports"] += 1
+        manager.threads["t-1"] = _thread()
+        return "snapshot_imported"
+
+    monkeypatch.setattr(thread_handoff, "import_one", import_one)
+
+    result = asyncio.run(thread_push.accept_push(manager, _arrival(message=None)))
+
+    assert result["state"] == "ready"
+    assert result["thread_id"] == "t-1"
+
+
+def test_target_server_error_leaves_the_push_uncertain(isolated, monkeypatch) -> None:
+    import httpx
+
+    monkeypatch.setenv(durable_targets.HUB_TOKEN_ENV, "token")
+    monkeypatch.setattr(durable_targets, "send_arrival", REAL_SEND_ARRIVAL)
+    monkeypatch.setattr(
+        httpx, "post", lambda *a, **k: httpx.Response(500, json={"error": "boom"})
+    )
+    manager = FakeManager({"t-1": _thread()})
+
+    with pytest.raises(PushError) as caught:
+        _push(manager)
+
+    assert caught.value.safe_to_retry
+    assert thread_moves.get_move("t-1")["state"] == thread_moves.STATE_UNCERTAIN
+    with pytest.raises(thread_moves.ThreadMovedError):
+        asyncio.run(manager.start_turn("t-1", "not here"))

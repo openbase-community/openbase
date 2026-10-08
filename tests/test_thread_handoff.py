@@ -253,3 +253,38 @@ def test_busy_ledger_lock_is_reported_as_retryable(tmp_path: Path) -> None:
 
     assert caught.value.code == "sync_busy"
     assert caught.value.retryable
+
+
+def _append_events(rollout: Path, *payload_types: str) -> None:
+    with rollout.open("a", encoding="utf-8") as handle:
+        for payload_type in payload_types:
+            handle.write(
+                json.dumps({"type": "event_msg", "payload": {"type": payload_type}})
+                + "\n"
+            )
+
+
+def test_resumed_idle_codex_thread_is_exportable(tmp_path: Path) -> None:
+    # Resuming an idle thread (opening it in Openbase) appends its settings
+    # after the last finished turn; a late background command completion
+    # can follow too. Neither means a turn is running.
+    laptop, _hub = _sides(tmp_path)
+    _codex_home(laptop.codex_home)
+    rollout = _codex_thread(laptop.codex_home, "t-1", cwd="/Users/edge/a")
+    _append_events(rollout, "thread_settings_applied", "item_completed")
+
+    snapshot = handoff.export_one(handoff.CODEX, "t-1", paths=laptop)
+
+    assert handoff.snapshot_present(snapshot, paths=laptop)
+
+
+def test_turn_started_after_settings_is_still_unfinished(tmp_path: Path) -> None:
+    laptop, _hub = _sides(tmp_path)
+    _codex_home(laptop.codex_home)
+    rollout = _codex_thread(laptop.codex_home, "t-1", cwd="/Users/edge/a")
+    _append_events(rollout, "thread_settings_applied", "task_started")
+
+    with pytest.raises(HandoffError) as caught:
+        handoff.export_one(handoff.CODEX, "t-1", paths=laptop)
+
+    assert caught.value.code == "not_exportable"
