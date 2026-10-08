@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,8 @@ TARGET_INFO_PATH = "/api/threads/push/target/"
 ARRIVALS_PATH = "/api/threads/push/arrivals/"
 PROBE_TIMEOUT_SECONDS = 3.0
 ARRIVAL_TIMEOUT_SECONDS = 180.0
+FETCH_FAILURE_BACKOFF_SECONDS = 60.0
+_fetch_failures: dict[str, float] = {}
 # Bumped when the arrival request or response changes incompatibly.
 PUSH_PROTOCOL_VERSION = 1
 
@@ -283,6 +286,10 @@ def fetch_thread(
         ORIGIN_HOST_KEY,
     )
 
+    # Thread detail is polled; an unreachable target must not add its
+    # timeout to every poll, so failures back off for a minute.
+    if _fetch_failures.get(target.base_url, 0.0) > time.monotonic():
+        return None
     try:
         response = httpx.get(
             f"{target.base_url}/api/threads/{thread_id}/",
@@ -292,6 +299,9 @@ def fetch_thread(
         )
         payload = response.json() if response.status_code == 200 else None
     except (TargetError, httpx.HTTPError, ValueError):
+        _fetch_failures[target.base_url] = (
+            time.monotonic() + FETCH_FAILURE_BACKOFF_SECONDS
+        )
         return None
     if not isinstance(payload, dict):
         return None

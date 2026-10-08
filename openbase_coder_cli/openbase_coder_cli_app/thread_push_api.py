@@ -26,7 +26,7 @@ from openbase_coder_cli.openbase_coder_cli_app.common import ExactFieldsSerializ
 from openbase_coder_cli.openbase_coder_cli_app.thread_cache import (
     invalidate_thread_list_cache,
 )
-from openbase_coder_cli.services import thread_push
+from openbase_coder_cli.services import thread_push as push_service
 from openbase_coder_cli.services.thread_push import PushError
 from openbase_coder_cli.thread_sync.session_manager import get_session_manager
 
@@ -37,7 +37,7 @@ class PushInput(ExactFieldsSerializer):
         required=False,
         allow_blank=True,
         trim_whitespace=False,
-        max_length=thread_push.MAX_MESSAGE_CHARS,
+        max_length=push_service.MAX_MESSAGE_CHARS,
     )
     request_id = serializers.UUIDField(required=False)
 
@@ -55,14 +55,16 @@ def thread_push(request, thread_id):
     manager = get_session_manager()
     if request.method == "GET":
         try:
-            return Response(async_to_sync(thread_push.push_options)(manager, thread_id))
+            return Response(
+                async_to_sync(push_service.push_options)(manager, thread_id)
+            )
         except PushError as exc:
             return _error(exc)
     data = PushInput(data=request.data if isinstance(request.data, dict) else {})
     data.is_valid(raise_exception=True)
     request_id = data.validated_data.get("request_id")
     try:
-        result = async_to_sync(thread_push.push_thread)(
+        result = async_to_sync(push_service.push_thread)(
             manager,
             thread_id,
             to=data.validated_data.get("to") or None,
@@ -81,7 +83,7 @@ def thread_push_cancel(request, thread_id):
     data = CancelInput(data=request.data if isinstance(request.data, dict) else {})
     data.is_valid(raise_exception=True)
     try:
-        result = async_to_sync(thread_push.cancel_push)(
+        result = async_to_sync(push_service.cancel_push)(
             thread_id, force=data.validated_data["force"]
         )
     except PushError as exc:
@@ -92,21 +94,21 @@ def thread_push_cancel(request, thread_id):
 
 @api_view(["POST"])
 def thread_push_release(request, thread_id):
-    result = thread_push.release_moved(thread_id)
+    result = push_service.release_moved(thread_id)
     invalidate_thread_list_cache()
     return Response(result)
 
 
 @api_view(["GET"])
 def thread_push_target(request):
-    return Response(thread_push.target_capabilities())
+    return Response(push_service.target_capabilities())
 
 
 @api_view(["POST"])
 def thread_push_arrivals(request):
     payload = request.data if isinstance(request.data, dict) else {}
     try:
-        result = async_to_sync(thread_push.accept_push)(get_session_manager(), payload)
+        result = async_to_sync(push_service.accept_push)(get_session_manager(), payload)
     except PushError as exc:
         return _error(exc)
     return Response(result)
@@ -115,7 +117,7 @@ def thread_push_arrivals(request):
 @api_view(["GET"])
 def thread_push_arrival_detail(request, operation_id):
     try:
-        result = thread_push.arrival_status(operation_id)
+        result = push_service.arrival_status(operation_id)
     except PushError as exc:
         return _error(exc)
     if result is None:

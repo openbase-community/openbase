@@ -67,6 +67,19 @@ def _wrap_transcript(transcript: str) -> str:
     return f"{VOICE_TAG_OPEN}{transcript}{VOICE_TAG_CLOSE}"
 
 
+def _ensure_not_moved(thread_id: str) -> None:
+    """Voice turns must not run on a thread pushed to another computer."""
+    from openbase_coder_cli.thread_sync.thread_moves import (
+        ThreadMovedError,
+        ensure_thread_writable,
+    )
+
+    try:
+        ensure_thread_writable(thread_id)
+    except ThreadMovedError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
 class SuperAgentsClientTurnsMixin:
     """Turn dispatch, steering, queueing and spoken-turn dedup."""
 
@@ -181,6 +194,7 @@ class SuperAgentsClientTurnsMixin:
         developer_instructions: str | None,
         dispatch_id: str,
     ) -> str:
+        _ensure_not_moved(thread_id)
         await self._ensure_claude_auth_ready()
         turn_input = self._turn_input(
             prompt,
@@ -399,6 +413,7 @@ class SuperAgentsClientTurnsMixin:
         start_when_inactive: bool = True,
     ) -> str | None:
         assert self._active_turn_id is not None
+        _ensure_not_moved(thread_id)
         await self._ensure_claude_auth_ready()
         prompt_debug = _prompt_debug_fields(prompt)
         turn_input = {
