@@ -59,6 +59,10 @@ Developer workspace installs cannot check release feeds or apply releases, even 
 7. Rolls back to `previous` (and reinstalls services) if the post-update
    health gate fails; older releases are pruned, keeping two.
 
+Network timeouts, connection failures, transient HTTP errors, and incomplete downloads leave the running release intact. Automatic attempts retry after one minute, doubling the delay up to fifteen minutes; manual attempts report the error so you can retry. Downloads restart from the beginning and must pass the complete archive checksum before activation. Temporary storage failures during preparation also retry automatically. A signal-killed download is retried by the running routines service, and the next attempt removes its partial archive. Retry waits continue to honor update opt-outs and developer-install boundaries.
+
+A failed service rollback reports that recovery is incomplete instead of claiming that the old services were restored. The current runtime pointer is restored first; resolve the reported error and run `openbase-coder services install` if service restoration fails.
+
 ## Statuses
 
 `updated`, `up-to-date`, `deferred` (voice session), `blocked` (newer package

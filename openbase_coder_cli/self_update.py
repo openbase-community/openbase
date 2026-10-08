@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import hashlib
 import json
 import logging
 import os
@@ -17,8 +16,6 @@ import subprocess
 import tarfile
 import tempfile
 import time
-import urllib.error
-import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -39,6 +36,12 @@ from openbase_coder_cli.runtime import (
     PACKAGE_METADATA_FILENAME,
     RuntimePackage,
     current_runtime_package,
+)
+from openbase_coder_cli.self_update_network import (
+    RetryableUpdateError,
+    SelfUpdateError,
+    download_file,
+    fetch_bytes,
 )
 from openbase_coder_cli.services.installation import InstallationConfig
 from openbase_coder_cli.sync_daemon import SYNC_ENGINE_BINARY_NAMES
@@ -63,10 +66,6 @@ UPDATE_CHECK_CACHE_PATH = OPENBASE_BASE_DIR / "update-check.json"
 DOWNLOAD_TIMEOUT_SECONDS = 30
 AUTO_UPDATE_ENV_KEY = "OPENBASE_CODER_AUTO_UPDATE"
 SELF_UPDATE_LOG_PATH = DEFAULT_LOG_DIR / "self-update.log"
-
-
-class SelfUpdateError(RuntimeError):
-    pass
 
 
 @dataclass(frozen=True)
@@ -188,6 +187,8 @@ def run_automatic_self_update(*, force: bool = False, report=print) -> SelfUpdat
     if InstallationConfig.exists():
         env_path = Path(InstallationConfig.load().env_file).expanduser()
     inherited_setting = os.environ.get(AUTO_UPDATE_ENV_KEY, "")
+    retry_delay = 60
+    retry_wait = 0
     while True:
         _require_updatable_package()
         setting = dotenv_values(env_path).get(AUTO_UPDATE_ENV_KEY, inherited_setting)
@@ -201,17 +202,28 @@ def run_automatic_self_update(*, force: bool = False, report=print) -> SelfUpdat
                 to_version=None,
                 detail="Automatic updates were disabled while waiting.",
             )
+        if retry_wait:
+            time.sleep(min(60, retry_wait))
+            retry_wait = max(0, retry_wait - 60)
+            continue
         if not force and _voice_session_active():
             report("Automatic update waiting for the active voice session to end.")
         else:
-            result = run_self_update(force=force, report=report)
+            try:
+                result = run_self_update(force=force, report=report)
+            except RetryableUpdateError as exc:
+                report(f"Update preparation failed; retrying in {retry_delay}s: {exc}")
+                retry_wait = retry_delay
+                retry_delay = min(retry_delay * 2, 900)
+                continue
+            retry_delay = 60
             if result.status != "deferred":
                 return result
             report(f"Automatic update waiting: {result.detail}")
         time.sleep(60)
 
 
-def spawn_detached_self_update(*, force: bool = False) -> None:
+def spawn_detached_self_update(*, force: bool = False) -> subprocess.Popen:
     """Launch `openbase-coder self-update` as a detached process.
 
     Detaching matters because applying an update reinstalls the launchd/systemd
@@ -228,7 +240,7 @@ def spawn_detached_self_update(*, force: bool = False) -> None:
     if force:
         args.append("--force")
     with SELF_UPDATE_LOG_PATH.open("ab") as log_handle:
-        subprocess.Popen(
+        return subprocess.Popen(
             args,
             stdin=subprocess.DEVNULL,
             stdout=log_handle,
@@ -265,6 +277,19 @@ def run_self_update(*, force: bool = False, report=print) -> SelfUpdateResult:
 def _run_self_update_locked(
     package: RuntimePackage, *, force: bool, report
 ) -> SelfUpdateResult:
+    if _active_runtime_changed(package):
+        return SelfUpdateResult(
+            status="blocked",
+            from_version=package.version,
+            to_version=None,
+            detail="Another updater replaced this runtime; use the current launcher.",
+        )
+    # Only our locked updater owns these scratch directories. A killed
+    # download cannot clean itself; reclaim its bytes on the next attempt.
+    if STANDALONE_RELEASES_DIR.is_dir():
+        for scratch in STANDALONE_RELEASES_DIR.glob(".download-*"):
+            if scratch.is_dir() and not scratch.is_symlink():
+                shutil.rmtree(scratch)
     channel = installed_channel(package)
     manifest = _fetch_manifest(channel)
     current = _parse_version(package.version or __version__)
@@ -317,18 +342,27 @@ def _run_self_update_locked(
         raise SelfUpdateError(f"Manifest has no artifact for target {target!r}.")
 
     report(f"Downloading {latest} for {target}...")
-    release_dir = _download_and_extract(
-        url=str(target_entry.get("url", "")),
-        sha256=str(target_entry.get("sha256", "")),
-        version=str(latest),
-        target=target,
-        report=report,
-    )
-    _validate_release_dir(release_dir)
+    try:
+        release_dir = _download_and_extract(
+            url=str(target_entry.get("url", "")),
+            sha256=str(target_entry.get("sha256", "")),
+            version=str(latest),
+            target=target,
+            report=report,
+        )
+        _validate_release_dir(release_dir)
+    except OSError as exc:
+        raise RetryableUpdateError(
+            f"Could not prepare update; current runtime unchanged: {exc}"
+        ) from exc
 
     # A developer setup may have replaced the active installation while the
     # detached worker downloaded. Never reactivate its old packaged runtime.
     _require_updatable_package()
+    if _active_runtime_changed(package):
+        raise SelfUpdateError(
+            "The active runtime changed during download; update cancelled."
+        )
 
     # Downloads and validation can take minutes; a call may have started
     # since the first idle check. Leave the current runtime untouched.
@@ -367,7 +401,11 @@ def _run_self_update_locked(
     report("Update failed health checks; rolling back...")
     _point_symlink(STANDALONE_CURRENT_DIR, old_root)
     old_launcher = STANDALONE_CURRENT_DIR / "bin" / "openbase-coder"
-    _run_launcher(old_launcher, ["services", "install"], report=report)
+    if not _run_launcher(old_launcher, ["services", "install"], report=report):
+        raise SelfUpdateError(
+            f"Restored the {current} runtime pointer, but restoring its services failed. "
+            "Run `openbase-coder services install` after resolving the reported error."
+        )
     return SelfUpdateResult(
         status="rolled-back",
         from_version=str(current),
@@ -458,11 +496,7 @@ def _verify_manifest_signature(manifest_bytes: bytes, signature_url: str) -> Non
 
 
 def _http_get(url: str) -> bytes:
-    try:
-        with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:
-            return response.read()
-    except urllib.error.URLError as exc:
-        raise SelfUpdateError(f"Could not fetch {url}: {exc}") from exc
+    return fetch_bytes(url, timeout=DOWNLOAD_TIMEOUT_SECONDS)
 
 
 # --- download / extract / validate ---------------------------------------
@@ -476,19 +510,14 @@ def _download_and_extract(
     release_dir = STANDALONE_RELEASES_DIR / f"{version}-{target}"
     STANDALONE_RELEASES_DIR.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.TemporaryDirectory(dir=STANDALONE_RELEASES_DIR) as tmp:
+    with tempfile.TemporaryDirectory(
+        prefix=".download-", dir=STANDALONE_RELEASES_DIR
+    ) as tmp:
         tmp_dir = Path(tmp)
         archive_path = tmp_dir / "package.tar.gz"
-        with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:
-            with archive_path.open("wb") as handle:
-                shutil.copyfileobj(response, handle)
-
-        digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
-        if not sha256 or digest != sha256:
-            raise SelfUpdateError(
-                f"Downloaded artifact checksum mismatch (expected {sha256}, "
-                f"got {digest})."
-            )
+        download_file(
+            url, archive_path, sha256=sha256, timeout=DOWNLOAD_TIMEOUT_SECONDS
+        )
 
         extract_dir = tmp_dir / "extract"
         extract_dir.mkdir()
@@ -500,6 +529,12 @@ def _download_and_extract(
                 f"Archive does not contain {PACKAGE_METADATA_FILENAME}."
             )
 
+        # Never replace files an active or rollback runtime may still execute.
+        for link in (STANDALONE_CURRENT_DIR, STANDALONE_PREVIOUS_DIR):
+            if link.is_symlink() and link.resolve() == release_dir.resolve():
+                raise SelfUpdateError(
+                    "Refusing to overwrite an active or rollback release."
+                )
         if release_dir.exists():
             shutil.rmtree(release_dir)
         package_root.rename(release_dir)
@@ -542,6 +577,15 @@ def _validate_release_dir(release_dir: Path) -> None:
 
 
 # --- flip / post-flip / rollback ------------------------------------------
+
+
+def _active_runtime_changed(package: RuntimePackage) -> bool:
+    if not STANDALONE_CURRENT_DIR.is_symlink():
+        return False
+    active = STANDALONE_CURRENT_DIR.resolve()
+    return active != package.root.resolve() or (
+        str(_read_package_metadata(active).get("version", "")) != package.version
+    )
 
 
 def _point_symlink(link: Path, destination: Path) -> None:
