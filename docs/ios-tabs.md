@@ -38,8 +38,8 @@ The app opens on an empty **new chat**, like the ChatGPT and Codex apps: the Ope
 
 Tap the round menu button at the top left (or swipe from the left edge) to open the side drawer; the keyboard closes when it opens. From the top:
 
-- **Openbase** and a **search** button that opens the full thread list.
-- Approvals, Notifications (with an unread badge), Reports, Sync, Cloud, and the developer Voice Test screen.
+- The Openbase mark and name (on the Openbase VPN the mark doubles as the tunnel status: solid when connected, outline when not) and a **search** button that opens the full thread list.
+- Approvals, Notifications (with an unread badge), Reports, Sync, and Cloud.
 - **Pinned** — the Dispatcher conversation first, then your favorite threads.
 - **Recents** — your most recently updated threads, with **See all** for the full list. A green dot marks a running thread.
 - A floating **New chat** button and a **Settings** gear at the bottom.
@@ -52,7 +52,7 @@ While a call is running, the chat screen becomes the voice view: the agent orb i
 
 While connected you can ask the dispatcher to transfer you to a Super Agent, or say "go back to dispatch" to return. The same routing is scriptable from the CLI — see [Voice Routing](voice-routing.md).
 
-Voice Test is a developer screen for exercising LiveKit connection parameters directly.
+Voice Test is a developer screen for exercising LiveKit connection parameters directly; it is reached only through remote app control, not the drawer.
 
 **Action Button mute shortcut:** the app exposes an App Intent named
 `Toggle Voice Session Mute` (shortcut title `Toggle Mute`). Create an iOS
