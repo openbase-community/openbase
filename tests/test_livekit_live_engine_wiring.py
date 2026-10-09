@@ -387,6 +387,7 @@ def test_live_voice_persona_names_the_host_kind_for_both_kinds():
     assert cloud.startswith(config.LIVE_VOICE_STARTUP_INSTRUCTIONS)
     assert "Openbase Cloud workspace" in cloud
     assert "never as their desktop or their Mac" in cloud
+    assert "Let the agent determine access to other devices" in cloud
     mac = config.live_voice_startup_instructions(host_kind.HOST_KIND_MAC)
     assert mac.startswith(config.LIVE_VOICE_STARTUP_INSTRUCTIONS)
     assert "runs on their own Mac" in mac

@@ -76,7 +76,9 @@ def test_dispatcher_rules_say_a_cloud_workspace_has_no_desktop(monkeypatch):
     assert host_kind.HOST_KIND_HEADING in cloud
     assert 'no screen, no Desktop folder' in cloud
     assert 'their cloud workspace' in cloud
-    assert 'suggest their own Mac' in cloud
+    assert 'check whether available laptop tools can reach' in cloud
+    assert 'If access is unavailable' in cloud
+    assert "Never infer that another device's desktop is empty" in cloud
     assert cloud.index(host_kind.HOST_KIND_HEADING) < cloud.index(instructions.CURRENT_STATE_HEADING)
     assert cloud.count(host_kind.HOST_KIND_HEADING) == 1
     assert instructions.with_dispatcher_rules(cloud, host=host_kind.HOST_KIND_CLOUD_WORKSPACE) == cloud
@@ -100,3 +102,14 @@ def test_host_kind_detects_a_cloud_workspace_before_the_platform(monkeypatch):
     assert host_kind.host_kind() == host_kind.HOST_KIND_LINUX
     monkeypatch.setattr(host_kind.sys, 'platform', 'darwin')
     assert host_kind.host_kind() == host_kind.HOST_KIND_MAC
+    monkeypatch.setattr(host_kind.sys, 'platform', 'win32')
+    assert host_kind.host_kind() == host_kind.HOST_KIND_WINDOWS
+
+
+def test_host_section_precedes_existing_current_state_rules(monkeypatch):
+    monkeypatch.setattr(instructions, 'canonical_dispatcher_skill', lambda: '')
+    existing = 'Base.\n\n' + instructions.CURRENT_STATE_RULES
+    result = instructions.with_dispatcher_rules(existing, host='cloud_workspace')
+    assert result.index(host_kind.HOST_KIND_HEADING) < result.index(instructions.CURRENT_STATE_HEADING)
+    assert result.count(instructions.CURRENT_STATE_HEADING) == 1
+    assert instructions.with_dispatcher_rules(result, host='cloud_workspace') == result

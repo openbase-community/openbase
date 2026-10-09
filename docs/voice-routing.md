@@ -12,6 +12,8 @@ In the apps: the [iOS app's](ios-tabs.md#calls) call, started from the waveform 
 
 Calls default to the **GPT-Live** voice model: one full-duplex model listens and speaks for the whole call while the dispatcher and Super Agents do the work behind it, so the routing below is unchanged. Everything you say goes to the agent on the call, which answers with its own tools, skills and files; the voice model only speaks the agent's answers and never answers from its own knowledge. The classic speech-to-text, agent turn, text-to-speech pipeline remains selectable (`openbase-coder defaults voice-model pipeline`, or **Settings → Voice** in the apps) and is the only option for local-only audio; the STT and TTS provider settings apply to that pipeline only. See [defaults](commands/defaults.md) and [configuration](configuration.md#dispatcher-config).
 
+The dispatcher, agents receiving a direct voice transfer, and the voice model receive context about the computer hosting the call. On a Cloud workspace, local file checks describe that workspace, not your personal computer's desktop or screen. The agent can use available [laptop tools](laptop-tools.md) to reach your other computer; if that access is unavailable, it explains the limitation and offers workspace files or suggests connecting to Openbase on your personal computer. The voice model still waits for the agent's answer.
+
 ## Check The Current Route
 
 ```bash
