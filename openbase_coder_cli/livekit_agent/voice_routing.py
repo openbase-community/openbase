@@ -201,6 +201,18 @@ class LiveKitVoiceRouter:
             self._proactive_steer_prompt_hashes.pop(prompt_hash, None)
 
     async def close(self) -> None:
+        # The call is over: the next one starts on its own route, so a target
+        # left in the route file (a call started from a thread, or a
+        # transfer) must not outlive the call. Otherwise the call page, the
+        # thread list badge and Back to dispatch keep naming that thread
+        # during the next dispatcher call.
+        if not self.is_dispatcher_active:
+            try:
+                self._dispatcher_client.reset_voice_route_to_dispatcher()
+            except Exception:
+                logger.warning(
+                    "Unable to reset the voice route at call end", exc_info=True
+                )
         for client in self._target_clients.values():
             await client.aclose()
         # The dispatcher client must close too: the claude_code backend keeps
