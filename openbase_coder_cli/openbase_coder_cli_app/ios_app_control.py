@@ -22,7 +22,9 @@ IOS_APP_CONTROL_ACK_TIMEOUT_SECONDS = 5.0
 # Channel-layer group names only allow [a-zA-Z0-9._-]; command ids are
 # validated against this before being embedded in an ack group name.
 COMMAND_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
-IOS_APP_CONTROL_ACTIONS = {
+IOS_CALL_CONTROL_ACTIONS = {"set_speaker", "end_call", "start_call"}
+IOS_CALL_CONTROL_ACK_TIMEOUT_SECONDS = 45.0
+IOS_APP_CONTROL_ACTIONS = IOS_CALL_CONTROL_ACTIONS | {
     "open_url",
     "set_call_muted",
     "start_developer_call",
@@ -41,6 +43,8 @@ class IOSAppControlSerializer(serializers.Serializer):
         max_length=4096,
     )
     muted = serializers.BooleanField(required=False)
+    speaker = serializers.BooleanField(required=False)
+    thread_id = serializers.CharField(required=False, max_length=256, trim_whitespace=True)
     limit = serializers.IntegerField(required=False, min_value=1, max_value=2000)
 
     def validate(self, attrs):
@@ -52,6 +56,10 @@ class IOSAppControlSerializer(serializers.Serializer):
             _validate_url(url)
         elif action == "set_call_muted" and "muted" not in attrs:
             raise serializers.ValidationError("muted is required for set_call_muted.")
+        elif action == "set_speaker" and "speaker" not in attrs:
+            raise serializers.ValidationError("speaker is required for set_speaker.")
+        elif action == "start_call" and not attrs.get("thread_id"):
+            raise serializers.ValidationError("thread_id is required for start_call (or dispatcher).")
         return attrs
 
 
@@ -74,11 +82,11 @@ def ack_group_name(command_id: str) -> str:
 
 async def _publish_and_await_ack(
     channel_layer, command: dict[str, Any], timeout: float
-) -> bool:
+) -> dict[str, Any] | None:
     """Publish a command, then wait for a device ack on a per-command group.
 
     The ack channel is joined before publishing so the ack cannot race the
-    subscription. Returns whether a connected app confirmed receipt.
+    subscription. Returns the device acknowledgement, or None on timeout.
     """
     ack_channel = await channel_layer.new_channel()
     ack_group = ack_group_name(command["command_id"])
@@ -89,10 +97,9 @@ async def _publish_and_await_ack(
             {"type": "ios_app_control", "data": command},
         )
         try:
-            await asyncio.wait_for(channel_layer.receive(ack_channel), timeout)
-            return True
+            return await asyncio.wait_for(channel_layer.receive(ack_channel), timeout)
         except asyncio.TimeoutError:
-            return False
+            return None
     finally:
         await channel_layer.group_discard(ack_group, ack_channel)
 
@@ -106,15 +113,25 @@ def publish_ios_app_control(payload: dict[str, Any]) -> dict[str, Any]:
     channel_layer = get_channel_layer()
     if channel_layer is None:
         raise RuntimeError("Channel layer is not configured.")
-    delivered = async_to_sync(_publish_and_await_ack)(
-        channel_layer, command, IOS_APP_CONTROL_ACK_TIMEOUT_SECONDS
+    is_call_control = command["action"] in IOS_CALL_CONTROL_ACTIONS
+    ack = async_to_sync(_publish_and_await_ack)(
+        channel_layer, command,
+        IOS_CALL_CONTROL_ACK_TIMEOUT_SECONDS if is_call_control else IOS_APP_CONTROL_ACK_TIMEOUT_SECONDS,
     )
+    delivered = ack is not None
+    result = {}
+    if is_call_control:
+        result = {"applied": False}
+        if ack is not None:
+            result.update({key: ack[key] for key in ("applied", "call_state", "error") if key in ack})
+            if "call_state" not in result:
+                result.update(applied=False, error="Device did not return call state; update the iOS app.")
     logger.info(
         "dispatch_timing stage=ios_control_round_trip command_id=%s "
         "server_sent_unix_ms=%.3f server_ack_unix_ms=%.3f delivered=%s",
         command["command_id"], command["created_at"] * 1000, time.time() * 1000, delivered,
     )
-    return {**command, "delivered": delivered}
+    return {**command, "delivered": delivered, **result}
 
 
 @api_view(["POST"])
@@ -133,6 +150,7 @@ def ios_app_control(request):
             "status": "delivered" if command["delivered"] else "published",
             "delivered": command["delivered"],
             "action": command["action"],
+            **{key: command[key] for key in ("applied", "call_state", "error") if key in command},
         },
         status=status.HTTP_202_ACCEPTED,
     )

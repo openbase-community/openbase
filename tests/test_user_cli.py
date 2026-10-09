@@ -978,3 +978,33 @@ def test_default_voice_model_rejects_unknown_model(monkeypatch, tmp_path):
     assert result.exit_code != 0
     assert "Voice model must be one of: gpt-live-1, pipeline." in result.output
     assert not config_path.exists()
+
+
+@pytest.mark.parametrize("args,payload", [
+    (["set-speaker", "on"], {"action": "set_speaker", "speaker": True}),
+    (["set-speaker", "off"], {"action": "set_speaker", "speaker": False}),
+    (["end-call"], {"action": "end_call"}),
+    (["start-call", "dispatcher"], {"action": "start_call", "thread_id": "dispatcher"}),
+    (["start-call", "thread-1"], {"action": "start_call", "thread_id": "thread-1"}),
+])
+def test_call_control_cli_prints_state(monkeypatch, args, payload):
+    calls = []
+    def publish(value, **kwargs):
+        calls.append((value, kwargs))
+        return {"delivered": True, "applied": True, "call_state": {
+            "connected": True, "muted": False, "speaker": True, "active": True}}
+    monkeypatch.setattr(user_cli, "_publish_ios_app_control", publish)
+    result = CliRunner().invoke(user_cli.user, ["ios", *args])
+    assert result.exit_code == 0, result.output
+    assert '"speaker": true' in result.output
+    assert calls == [(payload, {"timeout": 60})]
+
+
+@pytest.mark.parametrize("data", [
+    {"delivered": False}, {"delivered": True},
+    {"delivered": True, "applied": False, "error": "failed", "call_state": {}},
+])
+def test_call_control_cli_fails_without_applied_state(monkeypatch, data):
+    monkeypatch.setattr(user_cli, "_publish_ios_app_control", lambda *a, **k: data)
+    result = CliRunner().invoke(user_cli.user, ["ios", "end-call"])
+    assert result.exit_code != 0

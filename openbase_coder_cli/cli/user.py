@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -378,6 +379,38 @@ def ios_start_developer_call() -> None:
     _report_ios_command_result(data, "developer call")
 
 
+@ios.command("set-speaker")
+@click.argument("mode", type=click.Choice(["on", "off"]))
+def ios_set_speaker(mode: str) -> None:
+    """Set the connected iOS call's speaker route and report observed state."""
+    _run_ios_call_control({"action": "set_speaker", "speaker": mode == "on"})
+
+
+@ios.command("end-call")
+def ios_end_call() -> None:
+    """End normal/debug calls, including a pending app-control start."""
+    _run_ios_call_control({"action": "end_call"})
+
+
+@ios.command("start-call")
+@click.argument("thread_id")
+def ios_start_call(thread_id: str) -> None:
+    """Start a call on THREAD_ID, or use dispatcher for a developer call."""
+    _run_ios_call_control({"action": "start_call", "thread_id": thread_id})
+
+
+def _run_ios_call_control(payload: dict[str, object]) -> None:
+    data = _publish_ios_app_control(payload, timeout=60)
+    click.echo(json.dumps(data, sort_keys=True))
+    state = data.get("call_state")
+    if (
+        not data.get("delivered") or data.get("applied") is not True
+        or not isinstance(state, dict)
+        or not all(type(state.get(key)) is bool for key in ("connected", "muted", "speaker", "active"))
+    ):
+        raise click.ClickException(data.get("error") or "Call command unconfirmed; do not assume it was applied. Use end-call to clean up before retrying a start.")
+
+
 @ios.command("upload-logs")
 @click.option(
     "--limit",
@@ -394,8 +427,8 @@ def ios_upload_logs(limit: int | None) -> None:
     _report_ios_command_result(data, "diagnostics upload")
 
 
-def _publish_ios_app_control(payload: dict[str, object]) -> dict:
-    response = local_server_request("POST", "/api/user/ios-app-control/", json=payload)
+def _publish_ios_app_control(payload: dict[str, object], *, timeout: float = 10) -> dict:
+    response = local_server_request("POST", "/api/user/ios-app-control/", json=payload, timeout=timeout)
     return response.json()
 
 
