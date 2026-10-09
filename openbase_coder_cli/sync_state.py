@@ -188,6 +188,9 @@ def overview(
                 "peers": peer_rows,
                 "bytes": _int(root.get("bytes")),
                 "disk": _disk_summary(disk),
+                # local deletions the mass-delete guard holds back from the
+                # other computers until released or discarded
+                "held_deletes": _int(root.get("held_deletes")),
             }
         )
         totals["unsent"] += unsent
@@ -204,13 +207,23 @@ def overview(
     else:
         state = "in_sync"
     conflicts = _int(status.get("open_conflicts"))
+    held_deletes = [
+        {"id": root["id"], "path": root["path"], "count": root["held_deletes"]}
+        for root in out_roots
+        if root["held_deletes"]
+    ]
     low_disk = [
         root["path"]
         for root in out_roots
-        if root["disk"] and (root["disk"]["below_low_water"] or root["disk"]["held_files"])
+        if root["disk"]
+        and (root["disk"]["below_low_water"] or root["disk"]["held_files"])
     ]
-    versions = status.get("versions") if isinstance(status.get("versions"), dict) else None
-    placement = status.get("placement") if isinstance(status.get("placement"), dict) else {}
+    versions = (
+        status.get("versions") if isinstance(status.get("versions"), dict) else None
+    )
+    placement = (
+        status.get("placement") if isinstance(status.get("placement"), dict) else {}
+    )
     return {
         "state": state,
         "role": role,
@@ -225,7 +238,8 @@ def overview(
             "conflicts": conflicts,
             "stale_locks": stale_lock_count,
             "low_disk": low_disk,
-            "needed": bool(conflicts or stale_lock_count or low_disk),
+            "held_deletes": held_deletes,
+            "needed": bool(conflicts or stale_lock_count or low_disk or held_deletes),
         },
     }
 
@@ -384,9 +398,7 @@ def resolution_choice(conflict: dict[str, Any], action: str, local_device: str) 
     """Daemon side (``a`` or ``b``) for a user-facing resolution action."""
     if action in {"a", "b"}:
         return action
-    a_is_local = (
-        not local_device or str(conflict.get("a_device") or "") == local_device
-    )
+    a_is_local = not local_device or str(conflict.get("a_device") or "") == local_device
     if action in {"keep_local", "keep_mine"}:
         return "a" if a_is_local else "b"
     return "b" if a_is_local else "a"
@@ -521,9 +533,7 @@ def git_branch_detail(
     path = str(conflict.get("path") or "")
     repo_rel, _, ref = path.partition(":")
     repo_rel = "" if repo_rel == "." else repo_rel
-    a_is_local = (
-        not local_device or str(conflict.get("a_device") or "") == local_device
-    )
+    a_is_local = not local_device or str(conflict.get("a_device") or "") == local_device
     this_sha = str(conflict.get("a_hash" if a_is_local else "b_hash") or "")
     other_sha = str(conflict.get("b_hash" if a_is_local else "a_hash") or "")
     detail: dict[str, Any] = {
@@ -785,3 +795,31 @@ def move_lock_to_trash(
     base.mkdir(parents=True, exist_ok=True)
     shutil.move(str(path), str(destination))
     return {"moved": True, "from": str(path), "to": str(destination)}
+
+
+HELD_DELETE_SAMPLE = 20
+
+
+def held_deletes_summary(
+    client: Any, status: dict[str, Any], *, sample: int = HELD_DELETE_SAMPLE
+) -> list[dict[str, Any]]:
+    """Per root with held deletions: its count and the first few paths.
+
+    The count comes from the daemon's status (cheap); the paths are fetched
+    only for roots that hold any.
+    """
+    out: list[dict[str, Any]] = []
+    for root in status.get("roots") or []:
+        if not isinstance(root, dict) or not _int(root.get("held_deletes")):
+            continue
+        root_id = str(root.get("id") or "")
+        paths = client.held_deletes(root_id)
+        out.append(
+            {
+                "id": root_id,
+                "path": str(root.get("path") or ""),
+                "count": len(paths),
+                "sample": paths[:sample],
+            }
+        )
+    return out

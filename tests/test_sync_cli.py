@@ -14,6 +14,7 @@ from openbase_coder_cli.cli.sync import sync
 class FakeClient:
     calls: list[tuple] = []
     fail = False
+    held: list[str] = []
 
     def __init__(self, *args, **kwargs):
         pass
@@ -67,11 +68,24 @@ class FakeClient:
         self._maybe_fail()
         FakeClient.calls.append(("resolve", conflict_id, choice))
 
+    def held_deletes(self, root):
+        FakeClient.calls.append(("held_deletes", root))
+        return FakeClient.held if root == "projects" else []
+
+    def release_deletes(self, root):
+        FakeClient.calls.append(("release_deletes", root))
+        return len(FakeClient.held)
+
+    def discard_deletes(self, root):
+        FakeClient.calls.append(("discard_deletes", root))
+        return len(FakeClient.held)
+
 
 @pytest.fixture
 def client(monkeypatch):
     FakeClient.calls = []
     FakeClient.fail = False
+    FakeClient.held = []
     monkeypatch.setattr(sync_daemon, "SyncDaemonClient", FakeClient)
     monkeypatch.setattr(sync_daemon, "is_configured", lambda config_path=None: True)
     monkeypatch.setattr(
@@ -225,3 +239,36 @@ def test_status_says_when_agent_configuration_is_not_synced(client):
 
     assert result.exit_code == 0, result.output
     assert "Agents:    configuration not synced" in result.output
+
+
+def test_held_deletes_list_and_release(client, monkeypatch):
+    status = client.status
+
+    def held_status(self):
+        payload = status(self)
+        payload["roots"][0]["held_deletes"] = 2
+        return payload
+
+    monkeypatch.setattr(client, "status", held_status)
+    client.held = ["app/gone.py", "app"]
+
+    shown = CliRunner().invoke(sync, ["status"])
+    assert shown.exit_code == 0, shown.output
+    assert "2 deletions held by the mass-delete guard" in shown.output
+
+    listed = CliRunner().invoke(sync, ["held-deletes"])
+    assert listed.exit_code == 0, listed.output
+    assert "2 deletions held" in listed.output and "app/gone.py" in listed.output
+
+    released = CliRunner().invoke(sync, ["held-deletes", "--release"])
+    assert released.exit_code == 0, released.output
+    assert "Released 2 held deletions in ~/Projects." in released.output
+    assert ("release_deletes", "projects") in client.calls
+
+
+def test_held_deletes_none(client):
+    result = CliRunner().invoke(sync, ["held-deletes"])
+    assert result.exit_code == 0
+    assert "No deletions are held." in result.output
+    refused = CliRunner().invoke(sync, ["held-deletes", "--discard"])
+    assert refused.exit_code != 0 and "No deletions are held." in refused.output

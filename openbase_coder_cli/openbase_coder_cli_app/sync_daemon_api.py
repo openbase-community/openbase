@@ -304,6 +304,35 @@ def sync_daemon_stale_lock_trash(request):
     return Response(result)
 
 
+@api_view(["GET", "POST"])
+def sync_daemon_held_deletes(request):
+    """Deletions held by the mass-delete guard; POST releases or discards one folder's."""
+    if not sync_daemon.is_configured():
+        return Response({"roots": []})
+    try:
+        client = _client(timeout=30)
+        if request.method == "POST":
+            data = request.data if isinstance(request.data, dict) else {}
+            root_id = str(data.get("root") or "")
+            action = str(data.get("action") or "")
+            if not root_id or action not in {"release", "discard"}:
+                return Response(
+                    {"error": "Pass a folder id and action 'release' or 'discard'."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            done = (
+                client.release_deletes(root_id)
+                if action == "release"
+                else client.discard_deletes(root_id)
+            )
+            return Response({"root": root_id, "action": action, "count": done})
+        return Response(
+            {"roots": sync_state.held_deletes_summary(client, client.status())}
+        )
+    except sync_daemon.SyncDaemonError as exc:
+        return _unavailable(exc)
+
+
 @api_view(["POST"])
 def sync_daemon_barrier(request):
     data = request.data if isinstance(request.data, dict) else {}
@@ -462,9 +491,7 @@ def _legacy_conflict(
     kind = str(conflict.get("kind") or "")
     path = str(conflict.get("path") or "")
     root_id = str(conflict.get("root") or "")
-    a_is_local = (
-        not local_device or str(conflict.get("a_device") or "") == local_device
-    )
+    a_is_local = not local_device or str(conflict.get("a_device") or "") == local_device
     remote_device = conflict.get("b_device" if a_is_local else "a_device")
     base = {
         "id": str(conflict.get("id")),

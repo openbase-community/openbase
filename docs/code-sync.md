@@ -144,6 +144,17 @@ computer holds both versions). Select a group, or everything a filter shows,
 to resolve many conflicts the same way; the page asks you to confirm the
 count first.
 
+### Held deletions
+
+When a very large number of files disappears from a computer at once (more than 10,000 in a minute, or a fifth of a folder), Openbase Sync stops sending deletions from that folder to your other computers and waits for you. This catches accidents, such as a disk that was not mounted or the wrong folder moved away, before they empty your other computers too. Everything else keeps syncing, and the files stay on the other computers meanwhile.
+
+The Sync page and `openbase-coder sync status` show how many deletions are held in each folder. Decide with:
+
+- **Release** (`openbase-coder sync held-deletes --release`): send the deletions. Your other computers move the files to their Trash.
+- **Discard** (`openbase-coder sync held-deletes --discard`): cancel them and bring the files back here from your other computers.
+
+`openbase-coder sync held-deletes` lists the first paths of each folder. Moving a large folder you no longer need into a trash folder (such as a worktree you finished with) also counts as a mass deletion: release it when you are sure.
+
 A **branch conflict** is different: neither computer's branch was moved, so
 there is no version to pick. Merge or rebase in git on either computer; the
 conflict closes by itself once both computers point at the same commit. The
