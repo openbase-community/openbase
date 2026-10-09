@@ -8,10 +8,10 @@ unchanged and reaches sibling state through ``self``.
 from __future__ import annotations
 
 import asyncio
-import weakref
 import os
 import time
 import uuid
+import weakref
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
