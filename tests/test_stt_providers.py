@@ -7,6 +7,9 @@ import numpy as np
 from livekit import rtc
 
 from openbase_coder_cli.stt_providers import (
+    OPENBASE_CLOUD_STT_ENCODING,
+    OPENBASE_CLOUD_STT_MODEL,
+    OPENBASE_CLOUD_STT_SAMPLE_RATE,
     MLXWhisperSTT,
     _frame_to_whisper_audio,
     local_mlx_whisper_prompt,
@@ -80,3 +83,20 @@ def test_local_mlx_whisper_prompt_uses_configured_user_address(monkeypatch) -> N
 
     assert "Sam" in prompt
     assert "Gabe" not in prompt
+
+
+def test_openbase_cloud_stt_contract_matches_the_assemblyai_plugin_defaults() -> None:
+    """The phones' composer dictation mirrors these values (dev-docs/dictation.md);
+    a plugin upgrade that moves its defaults must be a deliberate contract change."""
+    import inspect
+
+    from livekit.plugins import assemblyai
+
+    defaults = {
+        name: parameter.default
+        for name, parameter in inspect.signature(assemblyai.STT.__init__).parameters.items()
+    }
+
+    assert defaults["model"] == OPENBASE_CLOUD_STT_MODEL
+    assert defaults["sample_rate"] == OPENBASE_CLOUD_STT_SAMPLE_RATE
+    assert defaults["encoding"] == OPENBASE_CLOUD_STT_ENCODING

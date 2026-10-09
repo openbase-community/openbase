@@ -239,7 +239,10 @@ from openbase_coder_cli.stt_providers import (
     ASSEMBLYAI_STT_PROVIDER_ID,
     DEEPGRAM_STT_PROVIDER_ID,
     LOCAL_MLX_WHISPER_STT_PROVIDER_ID,
+    OPENBASE_CLOUD_STT_ENCODING,
+    OPENBASE_CLOUD_STT_MODEL,
     OPENBASE_CLOUD_STT_PROVIDER_ID,
+    OPENBASE_CLOUD_STT_SAMPLE_RATE,
     MLXWhisperSTT,
 )
 from openbase_coder_cli.tts_providers import (  # noqa: F401
@@ -372,9 +375,14 @@ def _build_stt(vad_model=None):
         stt = assemblyai.STT(api_key=ASSEMBLY_AI_API_KEY, format_turns=True)
     elif stt_provider == OPENBASE_CLOUD_STT_PROVIDER_ID:
         logger.info("Using Openbase Cloud STT")
+        # Pinned explicitly: composer dictation on the phones opens the same
+        # proxy session with these values (dev-docs/dictation.md).
         stt = assemblyai.STT(
             api_key=_openbase_cloud_audio_token(),
             base_url=_openbase_cloud_audio_ws_base_url("assemblyai"),
+            model=OPENBASE_CLOUD_STT_MODEL,
+            sample_rate=OPENBASE_CLOUD_STT_SAMPLE_RATE,
+            encoding=OPENBASE_CLOUD_STT_ENCODING,
             format_turns=True,
         )
     elif stt_provider == LOCAL_MLX_WHISPER_STT_PROVIDER_ID:
