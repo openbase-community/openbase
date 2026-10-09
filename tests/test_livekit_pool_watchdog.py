@@ -8,6 +8,9 @@ rate limit, log truncation) and the proactive idle-recycle branch.
 from __future__ import annotations
 
 import json
+import os
+from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -44,6 +47,10 @@ class _Env:
 
 @pytest.fixture
 def env(monkeypatch, tmp_path):
+    monkeypatch.setattr(wd.activity, "_ACTIVITY_DIR", tmp_path / "activity")
+    monkeypatch.setenv("SUPER_AGENTS_STATE_FILE", str(tmp_path / "super-agents.json"))
+    monkeypatch.delenv("OPENBASE_CODER_SERVICE_SUPERVISOR", raising=False)
+    monkeypatch.delenv("LIVEKIT_AGENT_IDLE_RECYCLE_SECONDS", raising=False)
     log_path = tmp_path / "livekit-agent.log"
     state_path = tmp_path / "livekit-pool-watchdog.json"
     bounces: list[tuple[str, ...]] = []
@@ -270,3 +277,173 @@ def test_sync_job_is_registered_in_build_jobs():
     jobs = {job.name: job for job in build_jobs()}
     assert "livekit_pool_watchdog" in jobs
     assert jobs["livekit_pool_watchdog"].tick is not None
+
+
+def _mark_activity(env, source):
+    wd.activity.record_activity(source)
+    timestamp = env.clock["now"]
+    os.utime(wd.activity._ACTIVITY_DIR / source, (timestamp, timestamp))
+
+
+@pytest.mark.parametrize("source", ["token", "job", "dispatcher", "thread"])
+def test_real_activity_extends_idle_clock(env, source):
+    wd.run_tick()
+    env.advance(wd.IDLE_RECYCLE_SECONDS - 30)
+    if source in {"token", "job"}:
+        _mark_activity(env, source)
+    else:
+        timestamp = datetime.fromtimestamp(env.clock["now"], UTC).isoformat()
+        Path(os.environ["SUPER_AGENTS_STATE_FILE"]).write_text(
+            json.dumps(
+                {
+                    "sessions": {
+                        source: {
+                            "lastStatus": "completed",
+                            "lastEventAt": timestamp,
+                            "turns": {"turn": {"updatedAt": timestamp}},
+                        }
+                    },
+                }
+            )
+        )
+    env.advance(31)
+    wd.run_tick()
+    assert env.bounces == []
+    env.advance(wd.IDLE_RECYCLE_SECONDS)
+    wd.run_tick()
+    assert env.bounces == [("livekit-agent",)]
+
+
+def test_token_grace_is_a_floor_even_with_short_idle_interval(env, monkeypatch):
+    monkeypatch.setenv("LIVEKIT_AGENT_IDLE_RECYCLE_SECONDS", "1")
+    wd.run_tick()
+    _mark_activity(env, "token")
+    env.advance(wd.activity.CALL_JOIN_GRACE_SECONDS - 1)
+    wd.run_tick()
+    assert env.bounces == []
+    env.advance(1)
+    wd.run_tick()
+    assert env.bounces == [("livekit-agent",)]
+
+
+def test_token_grace_also_defers_failure_recovery(env):
+    wd.run_tick()
+    _mark_activity(env, "token")
+    env.append_log(SIGNATURE_LINE)
+    env.advance(30)
+    wd.run_tick()
+    assert env.bounces == []
+    assert env.state()["pending"]
+    env.advance(wd.activity.CALL_JOIN_GRACE_SECONDS)
+    wd.run_tick()
+    assert env.bounces == [("livekit-agent",)]
+
+
+def test_container_skips_idle_recycling_but_keeps_failure_recovery(env, monkeypatch):
+    monkeypatch.setenv("OPENBASE_CODER_SERVICE_SUPERVISOR", "external")
+    wd.run_tick()
+    env.advance(wd.IDLE_RECYCLE_SECONDS * 100)
+    wd.run_tick()
+    assert env.bounces == []
+    env.append_log(SIGNATURE_LINE)
+    wd.run_tick()
+    assert env.bounces == [("livekit-agent",)]
+
+
+def test_original_boot_chat_call_sequence_does_not_recycle(env):
+    wd.run_tick()
+    env.advance(120)
+    timestamp = datetime.fromtimestamp(env.clock["now"], UTC).isoformat()
+    Path(os.environ["SUPER_AGENTS_STATE_FILE"]).write_text(
+        json.dumps(
+            {
+                "sessions": {"dispatcher": {"lastFinishedAt": timestamp}},
+            }
+        )
+    )
+    env.advance(44.5 * 60 - 120)
+    _mark_activity(env, "token")
+    env.advance(30.01)
+    wd.run_tick()
+    assert env.bounces == []
+    assert env.state()["last_idle_recycle_ts"] is None
+
+
+def test_room_activity_remains_after_room_disappears(env):
+    wd.run_tick()
+    env.advance(120)
+    env.session["active"] = True
+    wd.run_tick()
+    env.session["active"] = False
+    env.advance(wd.IDLE_RECYCLE_SECONDS - 1)
+    wd.run_tick()
+    assert env.bounces == []
+    env.advance(2)
+    wd.run_tick()
+    assert env.bounces == [("livekit-agent",)]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "not json",
+        "[]",
+        '{"sessions": []}',
+        '{"sessions": {"x": {"lastEventAt": "bad"}}}',
+    ],
+)
+def test_unreadable_activity_cannot_authorize_idle_restart(env, payload):
+    wd.run_tick()
+    env.advance(wd.IDLE_RECYCLE_SECONDS + 1)
+    Path(os.environ["SUPER_AGENTS_STATE_FILE"]).write_text(payload)
+    wd.run_tick()
+    assert env.bounces == []
+
+
+def test_call_token_issued_during_room_probe_defers_recycle(env, monkeypatch):
+    wd.run_tick()
+    env.advance(wd.IDLE_RECYCLE_SECONDS + 1)
+
+    def room_probe():
+        # Another process cannot publish under the lock; simulate activity
+        # discovered by the final recheck without recursively taking it.
+        path = wd.activity._ACTIVITY_DIR / "token"
+        path.touch()
+        os.utime(path, (env.clock["now"], env.clock["now"]))
+        return False
+
+    monkeypatch.setattr(wd, "_voice_session_active", room_probe)
+    wd.run_tick()
+    assert env.bounces == []
+
+
+def test_restart_holds_the_token_publication_lock(env, monkeypatch):
+    from openbase_coder_cli.file_lock import LOCK_EX, LOCK_NB, flock
+
+    def bounce(services):
+        with (wd.activity._ACTIVITY_DIR / "call-start.lock").open("a+b") as handle:
+            with pytest.raises(OSError):
+                flock(handle, LOCK_EX | LOCK_NB)
+        env.bounces.append(services)
+
+    monkeypatch.setattr(wd, "_execute_bounce", bounce)
+    wd.run_tick()
+    env.advance(wd.IDLE_RECYCLE_SECONDS + 1)
+    wd.run_tick()
+    assert env.bounces == [("livekit-agent",)]
+    # The lock must be released once the restart completes.
+    _mark_activity(env, "token")
+    assert wd.activity.call_join_pending(env.clock["now"])
+
+
+def test_pruning_turn_history_does_not_erase_observed_activity(env):
+    wd.run_tick()
+    env.advance(120)
+    path = Path(os.environ["SUPER_AGENTS_STATE_FILE"])
+    timestamp = datetime.fromtimestamp(env.clock["now"], UTC).isoformat()
+    path.write_text(json.dumps({"sessions": {"thread": {"lastFinishedAt": timestamp}}}))
+    wd.run_tick()
+    path.write_text('{"sessions": {}}')
+    env.advance(wd.IDLE_RECYCLE_SECONDS - 1)
+    wd.run_tick()
+    assert env.bounces == []

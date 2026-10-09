@@ -420,8 +420,11 @@ def test_livekit_room_token_blocks_openbase_cloud_audio_without_subscription(
 
 
 def test_livekit_room_token_includes_proven_cloud_workspace_identity(
-    monkeypatch,
+    monkeypatch, tmp_path,
 ) -> None:
+    from openbase_coder_cli.services import livekit_pool_activity
+    monkeypatch.setattr(livekit_pool_activity, "_ACTIVITY_DIR", tmp_path / "activity")
+    assert livekit_pool_activity.activity_timestamp("token") == 0
     monkeypatch.setattr(
         views._livekit,
         "_livekit_client_token_credentials",
@@ -456,6 +459,7 @@ def test_livekit_room_token_includes_proven_cloud_workspace_identity(
 
     assert response.status_code == 200
     assert response.data["room_name"] == "room-test"
+    assert livekit_pool_activity.activity_timestamp("token") > 0
     assert response.data["workspace"] == {
         "kind": "openbase_cloud",
         "id": "abc123def456",

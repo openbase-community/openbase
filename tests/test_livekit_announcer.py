@@ -36,6 +36,9 @@ from openbase_coder_cli.tts_providers import KOKORO_PROVIDER_ID  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def isolate_voice_config(monkeypatch, tmp_path):
+    from openbase_coder_cli.services import livekit_pool_activity
+    monkeypatch.setattr(livekit_pool_activity, "_ACTIVITY_DIR", tmp_path / "activity")
+    monkeypatch.delenv("OPENBASE_CODER_SERVICE_SUPERVISOR", raising=False)
     monkeypatch.setenv(
         "SUPER_AGENTS_STATE_FILE",
         str(tmp_path / "missing-super-agents-state.json"),
@@ -76,6 +79,7 @@ class FakeLiveKitClient:
 @pytest.mark.parametrize('audio_file', [False, True])
 def test_retry_after_delivery_loses_ack_but_keeps_message_identity(monkeypatch, audio_file):
     import aiohttp
+
     from openbase_coder_cli import livekit_announcer
     participants = {'room-retry': [
         _participant('agent', kind=livekit_api.ParticipantInfo.Kind.AGENT),
@@ -986,3 +990,20 @@ def test_publish_announcer_message_retries_once_on_connection_loss(tmp_path, mon
     assert result.room_name == "room-retry"
     assert healthy.closed is True
     assert not clients
+
+
+@pytest.mark.parametrize("milliseconds", [True, False])
+def test_new_empty_room_protects_watchdog_before_agent_join(monkeypatch, milliseconds):
+    from openbase_coder_cli import livekit_announcer
+    monkeypatch.setattr(livekit_announcer.time, "time", lambda: 1000.0)
+    room = _room("joining", 999000, participants=0)
+    if not milliseconds:
+        room.creation_time_ms = 0
+    client = FakeLiveKitClient([room], {"joining": []})
+    monkeypatch.setattr(livekit_announcer, "_build_livekit_client", lambda: client)
+    assert asyncio.run(livekit_announcer.active_voice_room_exists(
+        include_agent_only_rooms=True, recent_room_seconds=300))
+    assert not asyncio.run(livekit_announcer.active_voice_room_exists())
+    monkeypatch.setattr(livekit_announcer.time, "time", lambda: 1300.0)
+    assert not asyncio.run(livekit_announcer.active_voice_room_exists(
+        include_agent_only_rooms=True, recent_room_seconds=300))

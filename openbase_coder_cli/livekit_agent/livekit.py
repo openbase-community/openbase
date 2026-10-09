@@ -1171,6 +1171,9 @@ def _wire_live_voice_call(
 
 @server.rtc_session(agent_name=LIVEKIT_DISPATCH_AGENT_NAME)
 async def livekit_agent(ctx: JobContext):
+    from openbase_coder_cli.services.livekit_pool_activity import record_activity
+
+    record_activity("job")
     _refresh_audio_credentials()
     ctx.log_context_fields = {
         "room": ctx.room.name,

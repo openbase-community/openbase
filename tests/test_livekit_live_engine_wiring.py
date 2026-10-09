@@ -206,10 +206,15 @@ async def _run_entrypoint(ctx, decision, monkeypatch):
 
 
 async def test_live_engine_builds_a_duplex_session_and_publishes_the_attribute(
-    wiring, monkeypatch
+    wiring, monkeypatch, tmp_path
 ):
+    from openbase_coder_cli.services import livekit_pool_activity
+
+    monkeypatch.setattr(livekit_pool_activity, "_ACTIVITY_DIR", tmp_path / "activity")
+    assert livekit_pool_activity.activity_timestamp("job") == 0
     ctx = _fake_ctx()
     await _run_entrypoint(ctx, _live_decision(), monkeypatch)
+    assert livekit_pool_activity.activity_timestamp("job") > 0
 
     assert wiring.pipeline_calls == []
     (model,) = _FakeGPTLiveModel.instances

@@ -979,6 +979,9 @@ def livekit_room_token(request):
         .to_jwt()
     )
 
+    from openbase_coder_cli.services.livekit_pool_activity import record_activity
+
+    record_activity("token")
     payload: dict[str, Any] = {"token": token, "room_name": room_name}
     if inbound_invitation_id:
         payload.update(
