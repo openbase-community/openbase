@@ -833,7 +833,9 @@ def held_deletes_summary(
     """
     out: list[dict[str, Any]] = []
     for root in status.get("roots") or []:
-        if not isinstance(root, dict) or not _int(root.get("held_deletes")):
+        if not isinstance(root, dict) or not (
+            _int(root.get("held_deletes")) or root.get("held_folders")
+        ):
             continue
         root_id = str(root.get("id") or "")
         count = _int(root.get("held_deletes"))

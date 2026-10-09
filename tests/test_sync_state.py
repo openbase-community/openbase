@@ -932,3 +932,25 @@ def test_held_deletes_summary_lists_holds_by_folder():
         {"folder": "a", "count": 2, "since": "", "rule": "count"}
     ]
     assert overview["roots"][1]["held_folders"] == []
+
+
+def test_held_deletes_summary_keeps_engaged_hold_without_paths():
+    class EmptyHoldClient:
+        def held_deletes(self, root, limit=None):
+            return []
+
+        def held_folders(self, root, limit=None):
+            return [{"folder": "burst", "count": 0, "rule": "count"}]
+
+    payload = {
+        "roots": [
+            {
+                "id": "projects",
+                "held_deletes": 0,
+                "held_folders": [{"folder": "burst", "count": 0}],
+            }
+        ]
+    }
+    [summary] = sync_state.held_deletes_summary(EmptyHoldClient(), payload)
+    assert summary["count"] == 0
+    assert summary["folders"][0]["folder"] == "burst"

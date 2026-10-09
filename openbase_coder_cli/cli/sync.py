@@ -295,8 +295,9 @@ def held_deletes(
         held = sync_state.held_deletes_summary(client, client.status())
     except sync_daemon.SyncDaemonError as exc:
         raise click.ClickException(str(exc)) from None
+    held = [entry for entry in held if not root_id or entry["id"] == root_id]
     if action:
-        targets = [entry for entry in held if not root_id or entry["id"] == root_id]
+        targets = held
         if not targets:
             raise click.ClickException("No deletions are held.")
         if len(targets) > 1:
@@ -317,6 +318,26 @@ def held_deletes(
         where = target["path"] + (f" under {folder}/" if folder else "")
         click.echo(f"{verb} {done} held deletion{'s' if done != 1 else ''} in {where}.")
         return
+    if folder:
+        scoped = []
+        for entry in held:
+            holds = [
+                hold
+                for hold in entry.get("folders") or []
+                if hold["folder"] == folder or hold["folder"].startswith(folder + "/")
+            ]
+            if holds:
+                scoped.append(
+                    {
+                        **entry,
+                        "folders": holds,
+                        "count": sum(hold["count"] for hold in holds),
+                        "sample": sorted(
+                            path for hold in holds for path in hold.get("sample") or []
+                        )[: sync_state.HELD_DELETE_SAMPLE],
+                    }
+                )
+        held = scoped
     if as_json:
         click.echo(json.dumps(held, indent=2, sort_keys=True))
         return

@@ -146,14 +146,14 @@ count first.
 
 ### Held deletions
 
-When a very large number of files disappears from a computer at once (more than 10,000 in a minute, or a fifth of a folder), Openbase Sync stops sending deletions from that folder to your other computers and waits for you. This catches accidents, such as a disk that was not mounted or the wrong folder moved away, before they empty your other computers too. Everything else keeps syncing, and the files stay on the other computers meanwhile.
+When deletions reach 10,000 in a minute, Openbase Sync holds further deletions under the deepest subfolder containing more than half of that burst. Deletions elsewhere keep syncing. If no subfolder contains a majority, or unheld deletions reach a fifth of a synced root with at least 50 entries, the whole root is held. Deleting an ancestor directory widens any hold beneath it so the peer keeps the held content. A missing root pauses deletions entirely. Files deleted before the guard engages may already have reached your other computers; held files stay there until you decide.
 
 The Sync page and `openbase-coder sync status` show how many deletions are held in each folder. Decide with:
 
 - **Release** (`openbase-coder sync held-deletes --release`): send the deletions. Your other computers move the files to their Trash.
 - **Discard** (`openbase-coder sync held-deletes --discard`): cancel them and bring the files back here from your other computers.
 
-`openbase-coder sync held-deletes` lists the first paths of each folder. Moving a large folder you no longer need into a trash folder (such as a worktree you finished with) also counts as a mass deletion: release it when you are sure.
+`openbase-coder sync held-deletes` lists holds by root-relative folder with sample paths. Add `--root <id>` to select a synced root and `--folder <relative-folder>` to list, release, or discard only holds at or beneath that folder. Use the folder printed for the hold or one above it; a folder inside a hold cannot be released separately. Without `--folder`, release and discard act on every hold in the selected root and reset its deletion window. Folder-specific actions require an updated daemon; an older daemon is refused instead of applying the action to the whole root. Moving a large folder you no longer need into a trash folder (such as a worktree you finished with) also counts as a mass deletion: release it when you are sure.
 
 A **branch conflict** is different: neither computer's branch was moved, so
 there is no version to pick. Merge or rebase in git on either computer; the
