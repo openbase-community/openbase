@@ -21,7 +21,7 @@ openbase-coder service expose 1455 --one-shot  # closes after the first connecti
 openbase-coder service unexpose 3000
 ```
 
-An exposed port is reachable only by the devices of your account over Openbase VPN, expires after `--ttl` seconds (one hour at most), and is plain HTTP inside the encrypted VPN. `--peer` limits it to one device and `--one-shot` closes it after its first completed connection, which is what `openbase-coder browser open` uses for CLI logins whose redirect points at `localhost`. `service list` shows exposed ports next to published services.
+An exposed port is reachable only by the devices of your account over Openbase VPN, expires after `--ttl` seconds (one hour at most), and is plain HTTP inside the encrypted VPN. `--peer` limits it to one device and `--one-shot` closes it after its first completed connection. `service list` shows exposed ports next to published services. Automatic login callback forwarding from `openbase-coder browser open` is not available yet; use the paste-back flow described in the bundled `openbase-cloud-workspace-logins` skill.
 
 ## Account namespace and private DNS
 

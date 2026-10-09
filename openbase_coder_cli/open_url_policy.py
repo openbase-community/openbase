@@ -17,7 +17,10 @@ URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*$")
 
 def open_url_error(value: str) -> str | None:
     """Return why ``value`` may not be opened on a phone, or None if it may."""
-    scheme = urlparse(value).scheme
+    try:
+        scheme = urlparse(value).scheme
+    except ValueError:
+        return "url is malformed."
     if not scheme:
         return "url must include a scheme."
     if not URL_SCHEME_RE.match(scheme):

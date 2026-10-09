@@ -137,13 +137,14 @@ def _entrypoint_env(tmp_path, extra: dict[str, str] | None = None) -> dict[str, 
 
 def test_container_routes_browser_logins_to_the_phone(tmp_path):
     dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
-    assert 'BROWSER="openbase-coder browser open"' in dockerfile
-    assert 'GH_BROWSER="openbase-coder browser open"' in dockerfile
+    assert 'BROWSER="openbase-browser"' in dockerfile
+    assert 'GH_BROWSER="openbase-browser"' in dockerfile
+    assert 'COPY --chmod=0755 docker/openbase-browser /usr/local/bin/openbase-browser' in dockerfile
 
     # Maritime's VM init drops the image ENV, so the entrypoint re-asserts it.
     env = _entrypoint_env(tmp_path)
-    assert env["BROWSER"] == "openbase-coder browser open"
-    assert env["GH_BROWSER"] == "openbase-coder browser open"
+    assert env["BROWSER"] == "openbase-browser"
+    assert env["GH_BROWSER"] == "openbase-browser"
 
     overridden = _entrypoint_env(tmp_path, {"BROWSER": "custom-browser", "GH_BROWSER": "custom-gh"})
     assert overridden["BROWSER"] == "custom-browser"

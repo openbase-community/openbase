@@ -9,12 +9,15 @@ any delivery problem degrades to printing the URL with paste-back guidance.
 
 from __future__ import annotations
 
+import threading
+
 import click
 
 from openbase_coder_cli.cli.app_control import publish_open_url
 from openbase_coder_cli.open_url_policy import open_url_error
 
-OPENED_MESSAGE = "Opened on your phone."
+OPENED_MESSAGE = "Sent to the Openbase app on your phone."
+BROWSER_DELIVERY_TIMEOUT_SECONDS = 6.0
 NOT_DELIVERED_HINT = (
     "Could not reach the Openbase app on your phone. Open this URL on any "
     "device; if the login ends on a localhost page that fails to load, paste "
@@ -57,7 +60,20 @@ def browser_open(url: str, no_forward: bool) -> None:
 
 
 def _deliver(url: str) -> bool:
-    """Whether the phone app confirmed the open; any failure means no."""
+    """Bound the delivery attempt even if authentication or the server stalls."""
+    delivered = []
+
+    def attempt() -> None:
+        delivered.append(_try_deliver(url))
+
+    worker = threading.Thread(target=attempt, daemon=True)
+    worker.start()
+    worker.join(BROWSER_DELIVERY_TIMEOUT_SECONDS)
+    return bool(delivered and delivered[0])
+
+
+def _try_deliver(url: str) -> bool:
+    """Whether the phone app acknowledged receipt; any failure means no."""
     try:
         data = publish_open_url(url)
     except (click.ClickException, OSError, ValueError):
