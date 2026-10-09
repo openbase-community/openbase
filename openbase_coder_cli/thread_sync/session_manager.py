@@ -376,12 +376,12 @@ class CodexAppServerSessionManager(
             item = params.get("item", {})
             if isinstance(item, dict) and item.get("type") == "agentMessage":
                 from openbase_coder_cli.cloud_model_errors import (
-                    normalize_model_plan_error,
+                    normalize_model_proxy_error,
                 )
 
                 text = item.get("text", "")
                 if turn_id and isinstance(text, str) and text:
-                    text = normalize_model_plan_error(text)
+                    text = normalize_model_proxy_error(text)
                     item_id = _notification_item_id(params)
                     if item_id:
                         delivered = self._delivered_item_text.get(

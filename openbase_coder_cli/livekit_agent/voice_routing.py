@@ -25,8 +25,8 @@ from openbase_coder_cli.livekit_agent.voice_delivery import (
     VoiceDeliveryLedger,
     VoiceRouteSnapshot,
 )
-from openbase_coder_cli.livekit_agent.voices import stable_super_agent_voice
 from openbase_coder_cli.livekit_agent.voice_input_buffer import VoiceInputBuffer
+from openbase_coder_cli.livekit_agent.voices import stable_super_agent_voice
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,9 @@ class LiveKitVoiceRouter:
         self._route_version = 0
         self.delivery_ledger = delivery_ledger
         self.input_buffer = VoiceInputBuffer()
+        # What the caller has open in the phone app (screen_context); set per
+        # call by the entrypoint once the room is connected.
+        self.focused_thread_tracker = None
 
     def set_orphaned_result_handler(self, handler) -> None:
         """Deliver completed turn answers that no voice dispatch consumed."""

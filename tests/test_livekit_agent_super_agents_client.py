@@ -1739,7 +1739,9 @@ def test_safe_spoken_answer_suppresses_raw_proxy_error_body(caplog) -> None:
     assert "voice_turn_backend_error" in caplog.text
 
 
-def test_safe_spoken_answer_surfaces_spend_limit_distinctly(caplog) -> None:
+def test_safe_spoken_answer_surfaces_spend_limit_distinctly(
+    caplog, monkeypatch
+) -> None:
     import logging
 
     caplog.set_level(logging.ERROR)
@@ -1752,12 +1754,17 @@ def test_safe_spoken_answer_surfaces_spend_limit_distinctly(caplog) -> None:
         "model proxy spend limit reached. Model requests are blocked until next "
         'month. Subscribe at app.openbase.cloud to raise your monthly limits."}'
     )
+    monkeypatch.setenv(
+        "OPENBASE_CODER_CLI_WEB_BACKEND_URL", "https://app-staging.openbase.cloud"
+    )
     spoken = super_agents_client_module._safe_spoken_answer(
         raw, auth_failed=True, backend="openbase_cloud", turn_id="t_spend"
     )
-    assert spoken == super_agents_client_module.BACKEND_SPEND_LIMIT_SPOKEN
+    assert "monthly Openbase model allowance is used up" in spoken
+    assert "https://app-staging.openbase.cloud" in spoken
+    assert "try again" not in spoken
     assert spoken != super_agents_client_module.BACKEND_ERROR_SPOKEN_FALLBACK
-    assert "monthly" in spoken.lower() and "subscrib" in spoken.lower()
+    assert "monthly" in spoken.lower() and "upgrade" in spoken.lower()
     assert "voice_turn_backend_spend_limit" in caplog.text
     assert raw not in spoken
 
@@ -1997,3 +2004,80 @@ async def test_run_turn_joins_active_turn_when_transcript_already_covered(
     assert backend.steered == []
     assert result["_livekit_turn_id"] == "active-turn-1"
     assert result["_livekit_speech_text"] == "The steered dispatcher answer is ready."
+
+
+_ALLOWANCE_ERROR = 'Failed to authenticate. API Error: 403 {"detail":"Monthly Openbase model proxy spend limit reached. Model requests are blocked until next month. Subscribe at app.openbase.cloud to raise your monthly limits."}'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url", ["https://app-staging.openbase.cloud", "https://app.openbase.cloud"]
+)
+async def test_failed_voice_turn_speaks_current_allowance_denial(
+    tmp_path, monkeypatch, url
+):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_WEB_BACKEND_URL", url)
+
+    class AllowanceBackend(FakeSuperAgentsBackend):
+        async def progress_by_label(self, input_data):
+            turn = {
+                "turnId": input_data.turn_id,
+                "status": "failed",
+                "lastUsefulMessage": _ALLOWANCE_ERROR,
+            }
+            return {
+                "status": "failed",
+                "turnId": input_data.turn_id,
+                "lastUsefulMessage": "Cached earlier answer.",
+                "turn": turn,
+                "turns": [turn],
+            }
+
+    client = SuperAgentsLiveKitClient(
+        cwd=str(tmp_path),
+        state_path=str(tmp_path / "voice.json"),
+        backend_client=AllowanceBackend(),
+    )
+    result = await client.run_turn("What is seven times nine?")
+    speech = result["_livekit_speech_text"]
+    assert result["status"] == "failed"
+    assert not result["_livekit_backend_auth_failure"]
+    assert "monthly Openbase model allowance is used up" in speech
+    assert f"Upgrade your plan at {url}" in speech
+    assert "try again" not in speech
+    assert "authenticate" not in speech
+    assert "Cached" not in speech
+
+
+@pytest.mark.parametrize("turn_scoped", [False, True])
+@pytest.mark.parametrize("stale_id", [None, "earlier-turn"])
+def test_failed_voice_turn_never_replays_stale_allowance_denial(turn_scoped, stale_id):
+    stale = {"turnId": stale_id, "lastUsefulMessage": _ALLOWANCE_ERROR}
+    progress = {
+        "status": "failed",
+        "turnId": "current-turn",
+        "lastUsefulMessage": _ALLOWANCE_ERROR,
+        "turn": stale,
+        "summary": stale,
+        "turns": [stale],
+    }
+    assert (
+        _speech_text_from_progress(
+            progress, turn_scoped=turn_scoped, turn_id="current-turn"
+        )
+        == ""
+    )
+
+
+def test_failed_voice_turn_speaks_allowance_from_fresh_items(monkeypatch):
+    monkeypatch.setenv(
+        "OPENBASE_CODER_CLI_WEB_BACKEND_URL", "https://app-staging.openbase.cloud"
+    )
+    progress = {
+        "status": "failed",
+        "summary": {"items": [{"type": "agentMessage", "text": _ALLOWANCE_ERROR}]},
+    }
+    speech = _speech_text_from_progress(progress)
+    assert "monthly Openbase model allowance is used up" in speech
+    assert "https://app-staging.openbase.cloud" in speech
+    assert "try again" not in speech

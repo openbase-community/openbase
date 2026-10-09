@@ -23,6 +23,7 @@ from openbase_coder_cli.livekit_agent.live_delegation import (
     is_trivial_utterance,
     remainder_after,
 )
+from openbase_coder_cli.livekit_agent.screen_context import FocusedThread
 from openbase_coder_cli.livekit_agent.voice_delivery import (
     VoiceDeliveryLedger,
     VoiceRouteSnapshot,
@@ -183,6 +184,7 @@ def _make_bridge(
     clock=None,
     settle=0.0,
     hold_max=3.0,
+    lag=0.0,
 ):
     dispatcher = FakeVoiceClient(thread_id="dispatcher-thread")
     router = FakeVoiceRouter(dispatcher)
@@ -203,6 +205,7 @@ def _make_bridge(
         progress_thinking_interval=3600,
         utterance_settle_seconds=settle,
         utterance_hold_max_seconds=hold_max,
+        utterance_transcript_lag_seconds=lag,
         **({"clock": clock} if clock is not None else {}),
     )
     bridge.attach(live)
@@ -586,10 +589,11 @@ async def test_a_delegation_during_the_hold_sends_the_held_words_with_its_pendin
     the pending fragment are one request, bound to that delegation, and the
     fragment's own final transcript is then covered.
     """
-    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=5.0)
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=0.05)
     live.final("What's in the grocery list file on my", item_id="speech_1")
     live.delegate("d1", "desktop")
     await _settle()
+    await asyncio.sleep(0.12)
     assert len(dispatcher.prompts) == 1
     assert dispatcher.prompts[0][0].endswith(
         _voice("What's in the grocery list file on my desktop")
@@ -604,10 +608,11 @@ async def test_a_delegation_during_the_hold_sends_the_held_words_with_its_pendin
 
 
 async def test_a_delegation_with_nothing_pending_during_the_hold_takes_the_held_words():
-    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=5.0)
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=0.05)
     live.final("Run the tests")
     live.delegate("d1", "")
     await _settle()
+    await asyncio.sleep(0.12)
     assert len(dispatcher.prompts) == 1
     assert dispatcher.prompts[0][0].endswith(_voice("Run the tests"))
     dispatcher.result_gate.set()
@@ -617,10 +622,11 @@ async def test_a_delegation_with_nothing_pending_during_the_hold_takes_the_held_
 
 
 async def test_words_after_a_delegated_fragment_steer_with_the_whole_request():
-    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=5.0)
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=0.05)
     live.final("What's in the grocery list file on my", item_id="speech_1")
     live.delegate("d1", "desktop")
     await _settle()
+    await asyncio.sleep(0.12)
     live.final("desktop, the one from yesterday", item_id="speech_2")
     await _settle()
     assert len(dispatcher.prompts) == 2
@@ -1193,3 +1199,200 @@ def test_pipeline_ledger_is_unchanged_by_the_live_mode_flag():
     assert ledger.live_mode is False
     assert sink == ["utterance_accepted", "safe_to_mute_user"]
     ledger._cancel_mute_keepalive_task()
+
+
+
+# --- BUG 18: screen context and fragment settling ----------------------------
+
+
+class _Focus:
+    def __init__(self, focus):
+        self.focus = focus
+
+    def current(self):
+        return self.focus
+
+
+LIGHTHOUSE = FocusedThread(
+    thread_id="s_4edd576829854b68b142367d698474f2",
+    name="lighthouse-738",
+    directory="/data/workspace/tic-tac-toe",
+)
+
+
+async def test_dispatcher_prompt_names_the_thread_open_on_the_phone():
+    """Regression for BUG 18 (2026-10-09): the caller, looking at a project
+    thread, said "this thread"; the dispatcher got no hint which one."""
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    router.focused_thread_tracker = _Focus(LIGHTHOUSE)
+    live.final("Subtract 38 from the multiplication result in this thread.")
+    await _settle()
+    (prompt, _instructions) = dispatcher.prompts[0]
+    assert prompt.startswith("[Openbase system note: the caller has the thread")
+    assert LIGHTHOUSE.thread_id in prompt
+    assert '"lighthouse-738"' in prompt
+    assert "super_agents_steer" in prompt
+    assert prompt.endswith(
+        wrap_voice_prompt("Subtract 38 from the multiplication result in this thread.")
+    )
+    await bridge.aclose()
+
+
+async def test_no_screen_note_without_an_open_project_thread():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    router.focused_thread_tracker = _Focus(None)
+    live.final("Check the build")
+    await _settle()
+    assert "screen" not in dispatcher.prompts[0][0]
+    assert "the caller has the thread" not in dispatcher.prompts[0][0]
+    await bridge.aclose()
+
+
+async def test_no_screen_note_once_the_call_is_transferred_into_a_thread():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    router.focused_thread_tracker = _Focus(LIGHTHOUSE)
+    target = FakeVoiceClient(thread_id=LIGHTHOUSE.thread_id)
+    router.transfer(target)
+    live.final("What is the result now?")
+    await _settle()
+    assert target.prompts
+    assert "the caller has the thread" not in target.prompts[0][0]
+    await bridge.aclose()
+
+
+async def test_a_sentence_still_being_transcribed_joins_the_held_one():
+    """Regression for BUG 18's split: "... in this thread" closed first and
+    ". Answer just the number" arrived later as its own final, so the
+    dispatcher got two turns. The caller's voice (session VAD) stopped after
+    both sentences; the hold waits the transcript lag past that point."""
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        settle=0.02, hold_max=2.0, lag=0.3
+    )
+    bridge.on_user_state_changed("listening", "speaking")
+    bridge.on_user_state_changed("speaking", "listening")
+    live.final("Subtract 38 from the multiplication result in this thread")
+    await asyncio.sleep(0.15)
+    assert dispatcher.prompts == []
+    live.final(". Answer just the number")
+    await asyncio.sleep(0.45)
+    assert len(dispatcher.prompts) == 1
+    assert dispatcher.prompts[0][0].endswith(
+        wrap_voice_prompt(
+            "Subtract 38 from the multiplication result in this thread. Answer just the number"
+        )
+    )
+    await bridge.aclose()
+
+
+async def test_the_hold_waits_while_the_caller_is_still_speaking():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        settle=0.02, hold_max=2.0, lag=0.1
+    )
+    live.final("Subtract 38 from the multiplication result in this thread")
+    bridge.on_user_state_changed("listening", "speaking")
+    await asyncio.sleep(0.2)
+    assert dispatcher.prompts == []
+    live.final("Answer just the number")
+    bridge.on_user_state_changed("speaking", "listening")
+    await asyncio.sleep(0.3)
+    assert len(dispatcher.prompts) == 1
+    assert dispatcher.prompts[0][0].endswith(
+        wrap_voice_prompt(
+            "Subtract 38 from the multiplication result in this thread Answer just the number"
+        )
+    )
+    await bridge.aclose()
+
+
+async def test_a_delegation_mid_request_binds_without_cutting_the_hold_short():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        settle=0.1, hold_max=2.0
+    )
+    live.final("Subtract 38 from the multiplication result in this thread")
+    live.delegate("d1", "")
+    await _settle()
+    assert dispatcher.prompts == []
+    live.final(". Answer just the number")
+    await asyncio.sleep(0.25)
+    assert len(dispatcher.prompts) == 1
+    assert dispatcher.prompts[0][0].endswith(
+        wrap_voice_prompt(
+            "Subtract 38 from the multiplication result in this thread. Answer just the number"
+        )
+    )
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    await bridge.aclose()
+
+
+async def test_words_after_a_silent_turn_started_carry_the_whole_request():
+    """When the rest of the request comes after the hold (backends that cannot
+    steer queue it as a separate turn), the follow-up must stand on its own."""
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.final("Subtract 38 from the multiplication result in this thread")
+    await _settle()
+    live.final(". Answer just the number")
+    await _settle()
+    assert len(dispatcher.prompts) == 2
+    assert dispatcher.prompts[1][0].endswith(
+        wrap_voice_prompt(
+            "Subtract 38 from the multiplication result in this thread. Answer just the number"
+        )
+    )
+    await bridge.aclose()
+
+
+@pytest.mark.parametrize("final", ["desktop, the one from yesterday", "laptop instead"])
+async def test_held_delegation_discards_pending_text_when_its_final_arrives(final):
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=5.0)
+    live.final("Read the file on my", item_id="first")
+    live.delegate("d1", "desktop")
+    live.final(final, item_id="second")
+    bridge._flush_held()
+    await _settle()
+    assert len(dispatcher.prompts) == 1
+    assert dispatcher.prompts[0][0].endswith(_voice(f"Read the file on my {final}"))
+    assert not bridge._newest_entry_for(dispatcher).open_utterance
+    await bridge.aclose()
+
+
+async def test_reconnect_unbinds_a_delegation_while_its_utterance_is_held():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=5.0)
+    live.final("Run the tests")
+    live.delegate("old-session", "")
+    live.emit("session_reconnected")
+    bridge._flush_held()
+    await _settle()
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.of("commentary", "old-session") == []
+    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    await bridge.aclose()
+
+
+@pytest.mark.parametrize("followup", ["Run the linter", "Thanks"])
+async def test_a_separate_quick_utterance_does_not_repeat_the_previous_command(followup):
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.final("Increment the counter")
+    await _settle()
+    live.final(followup)
+    await _settle()
+    if followup == "Thanks":
+        assert len(dispatcher.prompts) == 1
+    else:
+        assert len(dispatcher.prompts) == 2
+        assert dispatcher.prompts[1][0].endswith(_voice(followup))
+    await bridge.aclose()
+
+
+def test_join_fragments_attaches_leading_punctuation():
+    from openbase_coder_cli.livekit_agent.live_delegation import join_fragments
+
+    assert join_fragments("in this thread", ". Answer just the number") == (
+        "in this thread. Answer just the number"
+    )
+    assert join_fragments("What files are on my", "desktop") == (
+        "What files are on my desktop"
+    )
+    assert join_fragments("", "desktop") == "desktop"

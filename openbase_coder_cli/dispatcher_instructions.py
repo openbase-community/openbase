@@ -35,13 +35,19 @@ START_RULES = f"""{START_HEADING}
   idle with no messages.
 - Say an agent is working only after a result shows a started turn
   (turnStarted true, or a turnId). If the result says turnStarted false, start
-  the turn before confirming anything to the user."""
+  the turn before confirming anything to the user.
+- When the user names a project or folder for the agent, resolve it with
+  `openbase-coder project-dir "<name>" --json` and pass the returned `path`
+  as the agent's `cwd`. Never default to your own directory for a named
+  project. If the command reports no match or several, tell the user which
+  projects exist and ask; do not start the agent anywhere else."""
 
 
 def canonical_dispatcher_skill() -> str:
     packaged = packaged_skills_dir()
     roots = ([packaged] if packaged is not None else []) + [
-        CODEX_HOME_DIR / "skills", CLAUDE_CONFIG_DIR / "skills",
+        CODEX_HOME_DIR / "skills",
+        CLAUDE_CONFIG_DIR / "skills",
     ]
     for root in roots:
         path = Path(root) / SKILL_NAME / "SKILL.md"
@@ -57,9 +63,28 @@ def with_dispatcher_skill(instructions: str) -> str:
     procedure = canonical_dispatcher_skill()
     if not procedure:
         return instructions
-    return (instructions + "\n\n" + PROCEDURE_HEADING + "\n\n"
-            "This skill is already loaded. Apply it when resolving requests, "
-            "including before asking for clarification or reporting task state.\n\n" + procedure)
+    return (
+        instructions + "\n\n" + PROCEDURE_HEADING + "\n\n"
+        "This skill is already loaded. Apply it when resolving requests, "
+        "including before asking for clarification or reporting task state.\n\n"
+        + procedure
+    )
+
+
+SCREEN_CONTEXT_HEADING = "## What the caller has on screen"
+# A call starts on the dispatcher even from a project thread's chat screen, so
+# "this thread" reached the dispatcher with no way to resolve it (BUG 18,
+# 2026-10-09). The voice prompt now names the open thread in a system note.
+SCREEN_CONTEXT_RULES = f"""{SCREEN_CONTEXT_HEADING}
+
+- A voice prompt may start with an Openbase system note naming the thread the
+  caller has open in the phone app, with its thread id. When the caller says
+  "this thread", "here", or refers to the work on that screen, act on that
+  thread: continue it with super_agents_start_turn, or steer it with
+  super_agents_steer if a turn is running, using that thread id, and relay its
+  answer. Do not answer from this conversation and do not start a new agent.
+- The note only says what is on screen. A request that is clearly about
+  something else is handled as usual."""
 
 
 def with_dispatcher_rules(instructions: str, *, host: str | None = None) -> str:
@@ -79,4 +104,6 @@ def with_dispatcher_rules(instructions: str, *, host: str | None = None) -> str:
         instructions = instructions + "\n\n" + CURRENT_STATE_RULES
     if START_HEADING not in instructions:
         instructions = instructions + "\n\n" + START_RULES
+    if SCREEN_CONTEXT_HEADING not in instructions:
+        instructions = instructions + "\n\n" + SCREEN_CONTEXT_RULES
     return with_dispatcher_skill(instructions)

@@ -13,6 +13,7 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 from openbase_coder_cli.livekit_agent.config import (
     load_direct_livekit_developer_instructions,
 )
+from openbase_coder_cli.livekit_agent.screen_context import apply_screen_context
 from openbase_coder_cli.livekit_agent.spoken_commands import (
     _is_exit_to_dispatch_command,
 )
@@ -190,6 +191,7 @@ class CodexLLMStream(llm.LLMStream):
         prompt = wrap_voice_prompt(prompt)
         if self._voice_router.is_dispatcher_active:
             prompt = append_onboarding_reminder(prompt)
+        prompt = apply_screen_context(self._voice_router, prompt)
 
         voice_client = self._voice_router.active_client
         if delivery_record is not None:

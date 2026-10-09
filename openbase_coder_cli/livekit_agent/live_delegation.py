@@ -49,6 +49,7 @@ from typing import Any
 from openbase_coder_cli.livekit_agent.config import (
     load_direct_livekit_developer_instructions,
 )
+from openbase_coder_cli.livekit_agent.screen_context import apply_screen_context
 from openbase_coder_cli.livekit_agent.speech_formatter import (
     format_for_speech_segments,
 )
@@ -96,10 +97,24 @@ MAX_TRACKED_ENTRIES = 32
 # then "desktop" about a second later), and a pause mid-sentence does the
 # same. A closed utterance is held this long for a continuation before it goes
 # to the agent; a fragment that opens during the hold extends it (bounded by
-# the max), and a delegation from the model flushes it at once, so a request
-# the model acts on loses no time.
+# the max). A delegation binds to the held words until they settle.
 UTTERANCE_SETTLE_SECONDS = 0.7
-UTTERANCE_HOLD_MAX_SECONDS = 3.0
+UTTERANCE_HOLD_MAX_SECONDS = 6.0
+# GPT-Live's transcript trails the caller's audio. A held utterance therefore
+# also waits this long after the caller's voice (session VAD) last stopped, so
+# a sentence already spoken but not yet transcribed joins it: BUG 18
+# (2026-10-09) split "Subtract 38 from the multiplication result in this
+# thread." from ". Answer just the number", 3 s apart, into two agent turns.
+# A normal one-sentence utterance closes 0.8 s after its last transcript
+# fragment, which is already past this point, so it pays nothing extra.
+UTTERANCE_TRANSCRIPT_LAG_SECONDS = 1.5
+# Punctuation-led fragments that arrive after a turn already started on the
+# caller's previous words, before that turn said anything, continue that request:
+# the follow-up carries the whole request so a backend that queues it as a
+# separate turn (Claude Code cannot steer) still gets something
+# self-contained.
+CONTINUATION_SECONDS = 8.0
+_LEADING_PUNCTUATION = ".,;:!?"
 
 DISPATCHER_AGENT_LABEL = "the dispatcher"
 LIVE_EMPTY_ANSWER_COMMENTARY = "Done, nothing else to report."
@@ -307,6 +322,29 @@ def is_trivial_utterance(text: str) -> bool:
     return True
 
 
+def join_fragments(first: str, second: str) -> str:
+    """Two transcript fragments as one utterance.
+
+    A continuation that begins with the sentence's own punctuation
+    (". Answer just the number") attaches without a space.
+    """
+    first = (first or "").strip()
+    second = (second or "").strip()
+    if not first:
+        return second
+    if not second:
+        return first
+    if second[0] in _LEADING_PUNCTUATION:
+        return f"{first}{second}"
+    return f"{first} {second}"
+
+
+def _ends_with_words(text: str, tail: str) -> bool:
+    words = _normalize_spoken_command(text or "").split()
+    tail_words = _normalize_spoken_command(tail or "").split()
+    return bool(tail_words) and words[-len(tail_words):] == tail_words
+
+
 def remainder_after(prefix: str, text: str) -> str | None:
     """``text`` minus a leading ``prefix``, compared as normalized words.
 
@@ -342,6 +380,12 @@ class _HeldUtterance:
     first_at: float
     item_ids: list[str] = field(default_factory=list)
     timer: asyncio.TimerHandle | None = None
+    # A delegation the model emitted while the words were held; the turn
+    # binds to it when the hold settles.
+    delegation_id: str | None = None
+    pending: str = ""
+    # The words of a silent running turn these words continue.
+    lead_in: str = ""
 
 
 class LiveSpeechCursor:
@@ -429,6 +473,7 @@ class LiveDelegationBridge:
         progress_thinking_interval: float = PROGRESS_THINKING_INTERVAL_SECONDS,
         utterance_settle_seconds: float = UTTERANCE_SETTLE_SECONDS,
         utterance_hold_max_seconds: float = UTTERANCE_HOLD_MAX_SECONDS,
+        utterance_transcript_lag_seconds: float = UTTERANCE_TRANSCRIPT_LAG_SECONDS,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._voice_router = voice_router
@@ -438,6 +483,9 @@ class LiveDelegationBridge:
         self._heartbeat_interval = progress_thinking_interval
         self._settle_seconds = utterance_settle_seconds
         self._hold_max_seconds = utterance_hold_max_seconds
+        self._transcript_lag_seconds = utterance_transcript_lag_seconds
+        self._user_speaking = False
+        self._last_speech_end: float | None = None
         self._clock = clock
         self._held: _HeldUtterance | None = None
         self._live_session: Any = None
@@ -598,7 +646,7 @@ class LiveDelegationBridge:
             # the same turn (and inherits its delegation), with the fragments
             # that led into it.
             if open_entry.lead_in:
-                text = f"{open_entry.lead_in} {text}"
+                text = join_fragments(open_entry.lead_in, text)
             self._dispatch_utterance(text)
             return
         self._hold_utterance(text, item_id)
@@ -628,13 +676,58 @@ class LiveDelegationBridge:
         held = self._held
         if held is None:
             held = self._held = _HeldUtterance(text=text, first_at=now)
-            self._log_forced(text, decision="held", key="")
+            continued = self._continuable_entry(text)
+            if continued is not None:
+                held.lead_in = continued.prompt
+            self._log_forced(
+                text,
+                decision="held_continuation" if held.lead_in else "held",
+                key=continued.key if continued is not None else "",
+            )
         else:
-            held.text = f"{held.text} {text}".strip()
+            held.text = join_fragments(held.text, text)
+            held.pending = ""
             self._log_forced(held.text, decision="merged_fragment", key="")
         if item_id:
             held.item_ids.append(item_id)
-        self._schedule_flush(now + self._settle_seconds)
+        self._schedule_flush(self._settle_deadline(now))
+
+    def _settle_deadline(self, now: float) -> float:
+        held = self._held
+        if held is not None and self._user_speaking:
+            # The caller is still talking: wait for their words, bounded.
+            return held.first_at + self._hold_max_seconds
+        deadline = now + self._settle_seconds
+        if self._last_speech_end is not None:
+            deadline = max(deadline, self._last_speech_end + self._transcript_lag_seconds)
+        return deadline
+
+    def _continuable_entry(self, text: str) -> LiveDelegationEntry | None:
+        """A silent turn, just started on the caller's words, that these continue."""
+        if not text or text[0] not in _LEADING_PUNCTUATION or is_trivial_utterance(text):
+            return None
+        client = self._voice_router.active_client
+        entry = self._newest_entry_for(client)
+        if entry is None or entry.completed or entry.open_utterance:
+            return None
+        if self._clock() - entry.created_at > CONTINUATION_SECONDS:
+            return None
+        cursor = self._cursors.get(entry.turn_id or entry.key)
+        if cursor is not None and cursor.spoke_anything:
+            return None
+        return entry
+
+    def on_user_state_changed(self, old_state: str, new_state: str) -> None:
+        """The session VAD's view of the caller's voice (``user_state_changed``)."""
+        if new_state == "speaking" and old_state != "speaking":
+            self._user_speaking = True
+            if self._held is not None:
+                self._schedule_flush(self._held.first_at + self._hold_max_seconds)
+        elif old_state == "speaking" and new_state != "speaking":
+            self._user_speaking = False
+            self._last_speech_end = self._clock()
+            if self._held is not None:
+                self._schedule_flush(self._last_speech_end + self._transcript_lag_seconds)
 
     def _note_open_fragment(self, item_id: str | None) -> None:
         """A new transcript fragment opened while an utterance is held: wait for it."""
@@ -663,6 +756,11 @@ class LiveDelegationBridge:
     def _flush_held(self) -> None:
         held = self._take_held()
         if held is None or self._closed:
+            return
+        if held.lead_in:
+            held.text = join_fragments(held.lead_in, held.text)
+        if held.delegation_id:
+            self._start_turn_from_held(held, held.pending, held.delegation_id)
             return
         self._log_forced(held.text, decision="settled", key="")
         self._dispatch_utterance(held.text)
@@ -700,9 +798,17 @@ class LiveDelegationBridge:
             _hash(pending) if pending else "",
             getattr(self._voice_router.active_client, "_thread_id", "") or "",
         )
-        held = self._take_held()
+        held = self._held
         if held is not None:
-            self._start_turn_from_held(held, pending, delegation_id)
+            # The caller may still be finishing the request the model jumped
+            # on: bind the delegation and let the hold settle, rather than
+            # starting a turn on half a sentence (BUG 18).
+            held.delegation_id = delegation_id
+            if pending:
+                held.pending = pending
+            self._log_forced(
+                held.text, decision="delegation_held", key="", delegation_id=delegation_id
+            )
             return
         if not pending:
             self._on_delegation_after_utterance(delegation_id)
@@ -755,13 +861,14 @@ class LiveDelegationBridge:
         self, held: _HeldUtterance, pending: str, delegation_id: str
     ) -> None:
         """The model delegated while fragments were held: one request, now."""
-        if not pending:
+        if not pending or _ends_with_words(held.text, pending):
+            # Nothing open, or its final already merged into the held words.
             text, open_utterance, lead_in = held.text, "", ""
         elif remainder_after(held.text, pending) is not None:
             # The model's open turn already contains the held words.
             text, open_utterance, lead_in = pending, pending, ""
         else:
-            text = f"{held.text} {pending}"
+            text = join_fragments(held.text, pending)
             open_utterance, lead_in = pending, held.text
         self._log_forced(text, decision="settled", key="", delegation_id=delegation_id)
         if _is_exit_to_dispatch_command(text):
@@ -796,6 +903,9 @@ class LiveDelegationBridge:
             return
         unbound = 0
         running = 0
+        if self._held is not None:
+            self._held.delegation_id = None
+            self._held.pending = ""
         for entry in self._entries.values():
             if entry.delegation_id is not None:
                 entry.delegation_id = None
@@ -1043,6 +1153,7 @@ class LiveDelegationBridge:
         prompt = wrap_voice_prompt(entry.prompt)
         if self._voice_router.is_dispatcher_active:
             prompt = append_onboarding_reminder(prompt)
+        prompt = apply_screen_context(self._voice_router, prompt)
         entry.heartbeat = asyncio.create_task(
             self._progress_heartbeat(entry),
             name=f"openbase-live-heartbeat-{entry.key}",

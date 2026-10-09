@@ -66,6 +66,7 @@ def test_dispatcher_rules_apply_without_the_canonical_skill(tmp_path, monkeypatc
         'Load the skill through tools.\n\n' + host_kind.host_section('mac')
         + '\n\n' + instructions.CURRENT_STATE_RULES
         + '\n\n' + instructions.START_RULES
+        + '\n\n' + instructions.SCREEN_CONTEXT_RULES
     )
 
 
@@ -132,3 +133,13 @@ def test_dispatcher_rules_make_starting_a_super_agent_two_steps(monkeypatch):
     assert result.index(instructions.START_HEADING) < result.index(instructions.PROCEDURE_HEADING)
     assert instructions.with_dispatcher_rules(result) == result
     assert result.count(instructions.START_HEADING) == 1
+
+
+def test_dispatcher_rules_tell_it_to_act_on_the_thread_open_on_screen(monkeypatch):
+    """BUG 18: "this thread" means the thread named in the screen note."""
+    monkeypatch.setattr(instructions, 'canonical_dispatcher_skill', lambda: '')
+    rules = instructions.with_dispatcher_rules('Base.', host='mac')
+    assert rules.count(instructions.SCREEN_CONTEXT_HEADING) == 1
+    assert 'super_agents_start_turn' in rules and 'super_agents_steer' in rules
+    assert '"this thread"' in rules
+    assert instructions.with_dispatcher_rules(rules, host='mac') == rules

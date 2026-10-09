@@ -202,6 +202,11 @@ if [ ! -e "$HOME/.claude.json" ]; then
     ln -s "$CLAUDE_CONFIG_DIR/.claude.json" "$HOME/.claude.json"
 fi
 
+# Super Agents keeps its thread registry and Claude Code store under $HOME;
+# link them into the volume so thread ids, the Dispatcher's thread and Super
+# Agent names survive an image upgrade, not just a container restart.
+/usr/local/bin/openbase-coder-persist-home-state "$HOME" "$DATA_DIR"
+
 # Run a command under a restart-on-exit loop, prefixing its output and
 # maintaining the service pidfile the runtime's status checks read.
 start_supervised() {

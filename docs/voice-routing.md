@@ -12,6 +12,8 @@ In the apps: the [iOS app's](ios-tabs.md#calls) call, started from the waveform 
 
 Calls default to the **GPT-Live** voice model: one full-duplex model listens and speaks for the whole call while the dispatcher and Super Agents do the work behind it, so the routing below is unchanged. Everything you say goes to the agent on the call, which answers with its own tools, skills and files; the voice model only speaks the agent's answers and never answers from its own knowledge. The classic speech-to-text, agent turn, text-to-speech pipeline remains selectable (`openbase-coder defaults voice-model pipeline`, or **Settings → Voice** in the apps) and is the only option for local-only audio; the STT and TTS provider settings apply to that pipeline only. See [defaults](commands/defaults.md) and [configuration](configuration.md#dispatcher-config).
 
+On iOS, starting a call from a project thread still connects you to the dispatcher. The dispatcher receives the identity of the thread open on your screen, so requests about "this thread" can continue that conversation and relay its answer. Opening another thread updates this context; leaving chat clears it. Use **Transfer call here** to move the voice route into a thread. Once transferred, speech goes to that thread regardless of which conversation you view. This screen context works with both voice engines; Android does not publish it yet.
+
 The dispatcher, agents receiving a direct voice transfer, and the voice model receive context about the computer hosting the call. On a Cloud workspace, local file checks describe that workspace, not your personal computer's desktop or screen. The agent can use available [laptop tools](laptop-tools.md) to reach your other computer; if that access is unavailable, it explains the limitation and offers workspace files or suggests connecting to Openbase on your personal computer. The voice model still waits for the agent's answer.
 
 ## Check The Current Route
@@ -50,6 +52,18 @@ openbase-coder super-agent-name "document-voice-routing-and-glossary" --json
 
 Use the returned `agent_name` when calling Super Agents MCP tools and voice
 transfer commands.
+
+## Choose A Super Agent's Project
+
+When you name a project or folder, the dispatcher resolves it before starting the Super Agent and passes the result as its working directory:
+
+```bash
+openbase-coder project-dir "tic tac toe" --json
+```
+
+The command matches existing entries in the computer's project list and visible immediate subdirectories of `OPENBASE_CODER_PROJECTS_DIR`, the caller's current directory, and the user's home directory. Matching ignores case and treats spaces, dashes, and underscores alike. Folder aliases that resolve to the same directory count as one candidate. Unreadable roots are skipped; discovery does not search recursively. An existing absolute directory path (including a quoted `~/...` path) can also be supplied directly.
+
+JSON output contains `name`, `path`, `error`, and `candidates`. One match returns its absolute path with exit code 0. No match or multiple matches returns a null `path`, an explanation, and candidate paths with exit code 1. Without `--json`, success prints the path and failure prints an error. The dispatcher asks which folder to use on failure; it does not substitute its own directory for a named project.
 
 ## Transfer Voice To A Super Agent
 
