@@ -1,4 +1,5 @@
 from openbase_coder_cli import dispatcher_instructions as instructions
+from openbase_coder_cli import host_kind
 
 
 def test_canonical_skill_is_loaded_from_installed_link_and_not_duplicated(tmp_path, monkeypatch):
@@ -60,5 +61,42 @@ def test_dispatcher_rules_require_checking_current_state_every_time(monkeypatch)
 
 def test_dispatcher_rules_apply_without_the_canonical_skill(tmp_path, monkeypatch):
     monkeypatch.setattr(instructions, 'canonical_dispatcher_skill', lambda: '')
-    result = instructions.with_dispatcher_rules('Load the skill through tools.')
-    assert result == 'Load the skill through tools.\n\n' + instructions.CURRENT_STATE_RULES
+    result = instructions.with_dispatcher_rules('Load the skill through tools.', host='mac')
+    assert result == (
+        'Load the skill through tools.\n\n' + host_kind.host_section('mac')
+        + '\n\n' + instructions.CURRENT_STATE_RULES
+    )
+
+
+def test_dispatcher_rules_say_a_cloud_workspace_has_no_desktop(monkeypatch):
+    """Regression for the 2026-10-08 staging demo: a dispatcher on a cloud
+    container answered "what's on my desktop" as if it sat at the user's Mac."""
+    monkeypatch.setattr(instructions, 'canonical_dispatcher_skill', lambda: '')
+    cloud = instructions.with_dispatcher_rules('Base.', host=host_kind.HOST_KIND_CLOUD_WORKSPACE)
+    assert host_kind.HOST_KIND_HEADING in cloud
+    assert 'no screen, no Desktop folder' in cloud
+    assert 'their cloud workspace' in cloud
+    assert 'suggest their own Mac' in cloud
+    assert cloud.index(host_kind.HOST_KIND_HEADING) < cloud.index(instructions.CURRENT_STATE_HEADING)
+    assert cloud.count(host_kind.HOST_KIND_HEADING) == 1
+    assert instructions.with_dispatcher_rules(cloud, host=host_kind.HOST_KIND_CLOUD_WORKSPACE) == cloud
+
+
+def test_dispatcher_rules_say_the_users_own_mac_has_its_files_and_screen(monkeypatch):
+    monkeypatch.setattr(instructions, 'canonical_dispatcher_skill', lambda: '')
+    mac = instructions.with_dispatcher_rules('Base.', host=host_kind.HOST_KIND_MAC)
+    assert "runs on the user's own Mac" in mac
+    assert 'Desktop' in mac and 'screen' in mac
+    assert 'cloud workspace' not in mac
+
+
+def test_host_kind_detects_a_cloud_workspace_before_the_platform(monkeypatch):
+    import openbase_coder_cli.services.cloud_workspace as cloud_workspace
+
+    monkeypatch.setattr(cloud_workspace, 'cloud_workspace_id', lambda: 'ca0a7c808edc')
+    monkeypatch.setattr(host_kind.sys, 'platform', 'linux')
+    assert host_kind.host_kind() == host_kind.HOST_KIND_CLOUD_WORKSPACE
+    monkeypatch.setattr(cloud_workspace, 'cloud_workspace_id', lambda: None)
+    assert host_kind.host_kind() == host_kind.HOST_KIND_LINUX
+    monkeypatch.setattr(host_kind.sys, 'platform', 'darwin')
+    assert host_kind.host_kind() == host_kind.HOST_KIND_MAC

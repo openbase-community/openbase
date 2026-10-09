@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from .host_kind import HOST_KIND_HEADING, host_section
 from .paths import CLAUDE_CONFIG_DIR, CODEX_HOME_DIR
 from .runtime import packaged_skills_dir
 
@@ -47,8 +48,13 @@ def with_dispatcher_skill(instructions: str) -> str:
             "including before asking for clarification or reporting task state.\n\n" + procedure)
 
 
-def with_dispatcher_rules(instructions: str) -> str:
-    """Dispatcher developer instructions: the base, built-in rules, procedure."""
+def with_dispatcher_rules(instructions: str, *, host: str | None = None) -> str:
+    """Dispatcher developer instructions: the base, host, built-in rules, procedure.
+
+    ``host`` is a ``host_kind`` value; None detects this install's.
+    """
+    if HOST_KIND_HEADING not in instructions:
+        instructions = instructions + "\n\n" + host_section(host)
     if CURRENT_STATE_HEADING not in instructions:
         instructions = instructions + "\n\n" + CURRENT_STATE_RULES
     return with_dispatcher_skill(instructions)

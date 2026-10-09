@@ -103,7 +103,6 @@ from openbase_coder_cli.livekit_agent.config import (  # noqa: F401
     DISPATCHER_BUILTIN_DEVELOPER_INSTRUCTIONS,
     LIVE_VOICE_DEFAULT_VOICE,
     LIVE_VOICE_MODEL,
-    LIVE_VOICE_STARTUP_INSTRUCTIONS,
     LIVEKIT_AGENT_HOST,
     LIVEKIT_AGENT_LOAD_THRESHOLD_ENV,
     LIVEKIT_AGENT_NUM_IDLE_PROCESSES_ENV,
@@ -132,6 +131,7 @@ from openbase_coder_cli.livekit_agent.config import (  # noqa: F401
     _optional_float_env,
     _optional_int_env,
     _read_instruction_file,
+    live_voice_startup_instructions,
     load_direct_livekit_developer_instructions,
 )
 from openbase_coder_cli.livekit_agent.live_delegation import LiveDelegationBridge
@@ -897,7 +897,7 @@ class LiveVoiceAssistant(Agent):
     """
 
     def __init__(self, bridge: LiveDelegationBridge) -> None:
-        super().__init__(instructions=LIVE_VOICE_STARTUP_INSTRUCTIONS)
+        super().__init__(instructions=live_voice_startup_instructions())
         self._bridge = bridge
 
     async def on_enter(self) -> None:
