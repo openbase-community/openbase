@@ -814,7 +814,8 @@ class HeldClient:
             ]
         }
 
-    def held_deletes(self, root):
+    def held_deletes(self, root, limit=None):
+        assert limit == sync_state.HELD_DELETE_SAMPLE
         return ["a/gone.txt", "a"] if root == "projects" else []
 
     def release_deletes(self, root):

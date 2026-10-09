@@ -813,12 +813,13 @@ def held_deletes_summary(
         if not isinstance(root, dict) or not _int(root.get("held_deletes")):
             continue
         root_id = str(root.get("id") or "")
-        paths = client.held_deletes(root_id)
+        count = _int(root.get("held_deletes"))
+        paths = client.held_deletes(root_id, limit=sample)
         out.append(
             {
                 "id": root_id,
                 "path": str(root.get("path") or ""),
-                "count": len(paths),
+                "count": count,
                 "sample": paths[:sample],
             }
         )

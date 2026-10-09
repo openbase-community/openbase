@@ -68,7 +68,7 @@ class FakeClient:
         self._maybe_fail()
         FakeClient.calls.append(("resolve", conflict_id, choice))
 
-    def held_deletes(self, root):
+    def held_deletes(self, root, limit=None):
         FakeClient.calls.append(("held_deletes", root))
         return FakeClient.held if root == "projects" else []
 

@@ -819,8 +819,8 @@ class SyncDaemonClient:
     def hydrate(self, path: str) -> dict:
         return self.call("hydrate", path=path).get("data") or {}
 
-    def held_deletes(self, root: str) -> list[str]:
-        return self.call("held-deletes", root=root).get("data") or []
+    def held_deletes(self, root: str, limit: int | None = None) -> list[str]:
+        return self.call("held-deletes", root=root, count=limit).get("data") or []
 
     def release_deletes(self, root: str) -> int:
         return int(self.call("release-deletes", root=root).get("data") or 0)
