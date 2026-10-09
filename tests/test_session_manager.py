@@ -2820,15 +2820,19 @@ def test_backend_sessions_single_flight_lock_is_safe_across_event_loops() -> Non
         except BaseException as error:  # noqa: BLE001 - reported by the test
             errors.append(error)
 
-    first = threading.Thread(target=run_on_own_loop)
-    first.start()
-    assert entered.acquire(timeout=2.0)
-    second = threading.Thread(target=run_on_own_loop)
-    second.start()
-    # The second loop must reach the scan too, instead of raising on the
-    # first loop's lock.
-    assert entered.acquire(timeout=2.0), errors
-    gate.set()
+    first = threading.Thread(target=run_on_own_loop, daemon=True)
+    second = threading.Thread(target=run_on_own_loop, daemon=True)
+    try:
+        first.start()
+        assert entered.acquire(timeout=2.0)
+        second.start()
+        # The second loop must reach the scan too, instead of raising on the
+        # first loop's lock.
+        assert entered.acquire(timeout=2.0), errors
+    finally:
+        # Always release the scans so a failed assertion cannot leave a
+        # thread parked on the gate and keep the pytest process alive.
+        gate.set()
     first.join(3.0)
     second.join(3.0)
     assert errors == []
