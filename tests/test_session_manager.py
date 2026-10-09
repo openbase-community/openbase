@@ -2786,3 +2786,50 @@ def test_rename_thread_sets_codex_thread_name(monkeypatch, tmp_path: Path) -> No
         "set_thread_name",
         {"thread_id": "thr-1", "name": "Renamed"},
     ) in client.calls
+
+
+def test_backend_sessions_single_flight_lock_is_safe_across_event_loops() -> None:
+    """Regression for the 2026-10-08 fleet thread-list 500s.
+
+    The single-flight ``asyncio.Lock`` bound itself to the first event loop
+    that waited on it; a caller on another loop (asgiref spins one up for an
+    ``async_to_sync`` call made off the request thread) hit
+    ``RuntimeError: ... bound to a different event loop`` while the first
+    scan was in flight.
+    """
+    import threading
+
+    gate = threading.Event()
+    inside: list[int] = []
+    entered = threading.Semaphore(0)
+
+    class Client:
+        async def sessions(self):
+            inside.append(threading.get_ident())
+            entered.release()
+            while not gate.is_set():
+                await asyncio.sleep(0.01)
+            return []
+
+    manager = _manager(Client())
+    errors: list[BaseException] = []
+
+    def run_on_own_loop():
+        try:
+            asyncio.run(manager._backend_sessions())
+        except BaseException as error:  # noqa: BLE001 - reported by the test
+            errors.append(error)
+
+    first = threading.Thread(target=run_on_own_loop)
+    first.start()
+    assert entered.acquire(timeout=2.0)
+    second = threading.Thread(target=run_on_own_loop)
+    second.start()
+    # The second loop must reach the scan too, instead of raising on the
+    # first loop's lock.
+    assert entered.acquire(timeout=2.0), errors
+    gate.set()
+    first.join(3.0)
+    second.join(3.0)
+    assert errors == []
+    assert len(inside) == 2
