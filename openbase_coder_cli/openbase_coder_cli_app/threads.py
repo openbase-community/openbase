@@ -321,6 +321,48 @@ def _aware_datetime(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
+def _resolve_new_thread_model(
+    manager, requested: object, backend: str | None
+) -> tuple[str, str | None]:
+    """Validate a new thread's model and pick the backend that runs it.
+
+    Returns ``(model, backend)``; ``backend`` is set only when the mixed
+    backend facade must be pointed at a non-primary backend. Raises
+    ValueError with a user-facing message for unknown models, models whose
+    engine cannot run here, or a model that contradicts an explicit backend.
+    """
+    from openbase_coder_cli import dispatcher_config
+
+    from .thread_models import thread_engine
+
+    if not isinstance(requested, str) or not requested.strip():
+        raise ValueError("model must be a non-empty string")
+    model = requested.strip()
+    location = dispatcher_config.backend_location()
+    if not dispatcher_config.is_known_combined_model(model, location):
+        known = ", ".join(
+            option["id"]
+            for option in dispatcher_config.combined_model_options(location)
+            if option["available"]
+        )
+        raise ValueError(f"Unknown or unavailable model {model!r}. Choose one of: {known}.")
+    engine = dispatcher_config.model_engine(model)
+    if backend:
+        if thread_engine(backend) != engine:
+            raise ValueError(f"model {model!r} does not run on backend {backend!r}")
+        return model, None
+    primary = getattr(manager, "_execution_backend", None)
+    primary_runs_model = primary is None or thread_engine(primary) == engine
+    manager_for_backend = getattr(manager, "manager_for_backend", None)
+    if manager_for_backend is not None:
+        identity = dispatcher_config.identity_for_model(model, location)
+        if manager_for_backend(identity) is not None:
+            return model, identity
+    if not primary_runs_model:
+        raise ValueError(f"model {model!r} is not available on this computer")
+    return model, None
+
+
 @api_view(["GET", "POST"])
 def thread_list(request):
     """List all active threads or create a new one."""
@@ -356,7 +398,25 @@ def thread_list(request):
                     {"error": f"backend {backend!r} is not configured"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+        requested_model = request.data.get("model")
+        if requested_model is not None:
+            try:
+                model, model_backend = _resolve_new_thread_model(
+                    manager, requested_model, backend
+                )
+            except ValueError as exc:
+                return Response(
+                    {"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST
+                )
+            if model_backend is not None:
+                create_kwargs["backend"] = model_backend
+        else:
+            model = None
         thread = async_to_sync(manager.create_thread)(directory, **create_kwargs)
+        if model:
+            # The new-chat composer's model choice sticks to the thread like
+            # the in-thread model dropdown does.
+            set_thread_model_override(thread.session_id, model)
         # This endpoint is the only manual-entry chokepoint (console, desktop,
         # and mobile new-thread UIs all POST here); threads created any other
         # way (Super Agents MCP, dispatcher, voice) get no origin record and
@@ -376,6 +436,7 @@ def thread_list(request):
                 "thread_id": thread.session_id,
                 "directory": thread.directory,
                 "backend": thread.backend,
+                "model": model,
             },
             status=status.HTTP_201_CREATED,
         )
