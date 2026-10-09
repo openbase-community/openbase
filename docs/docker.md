@@ -22,7 +22,7 @@ published URL as covering independent HTTP, database, and UDP ports.
 
 ## Prerequisites
 
-The image includes the dispatcher and Super Agent instructions plus the bundled agent skills. Setup renders the instructions into the persistent data directory and links the skills into both coding backends' agent homes.
+The image includes the dispatcher and Super Agent instructions plus the bundled agent skills. Setup renders the instructions into the persistent data directory and links the skills into both coding backends' agent homes. Every container boot refreshes managed instruction files before launching the application services, so upgrading an image also restores missing files and applies template updates on an existing data volume. Django service startup also refreshes these files, including after an in-place desktop runtime upgrade. Unmarked custom dispatcher, Super Agent, and voice instruction files remain unchanged in workspace installations; standalone installations regenerate their packaged defaults. Openbase's generated base instructions are refreshed in both modes.
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (macOS,
   Windows, or Linux) or any Docker engine.
