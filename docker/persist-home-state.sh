@@ -17,27 +17,32 @@ data_dir="$2"
 
 persist_dir() {
     local home_path="$1" data_path="$2"
-    mkdir -p "$(dirname "$home_path")"
-    if [ -L "$home_path" ]; then
-        [ "$(readlink "$home_path")" = "$data_path" ] && return 0
-        rm "$home_path"
-    elif [ -d "$home_path" ]; then
-        if [ -e "$data_path" ]; then
+    mkdir -p "$(dirname "$home_path")" "$(dirname "$data_path")"
+    if [ -L "$home_path" ] && { [ "$(readlink "$home_path")" = "$data_path" ] || [ "$home_path" -ef "$data_path" ]; }; then
+        mkdir -p "$data_path"
+        chmod 0700 "$data_path"
+        return 0
+    fi
+    if [ -d "$home_path" ]; then
+        local adopting
+        adopting="$(mktemp -d "$data_path.adopting-XXXXXX")"
+        cp -a "$home_path/." "$adopting/"
+        if [ -e "$data_path" ] || [ -L "$data_path" ]; then
             local parked
-            parked="$data_path.replaced-$(date -u +%Y%m%dT%H%M%SZ)"
-            mv "$data_path" "$parked"
+            parked="$(mktemp -d "$data_path.replaced-XXXXXX")"
+            mv "$data_path" "$parked/state"
             echo "[persist-home-state] kept the previous $data_path as $parked"
         fi
-        mkdir -p "$(dirname "$data_path")"
-        # cp then rm, not mv: $HOME and the volume are different filesystems,
-        # and a half-finished cross-device mv must not lose the live copy.
-        cp -a "$home_path" "$data_path.adopting"
-        mv "$data_path.adopting" "$data_path"
-        rm -rf "$home_path"
+        mv "$adopting" "$data_path"
         echo "[persist-home-state] adopted $home_path into $data_path"
     elif [ -e "$home_path" ]; then
-        echo "[persist-home-state] $home_path is not a directory; leaving it" >&2
-        return 0
+        echo "[persist-home-state] $home_path is not a directory; refusing to start" >&2
+        return 1
+    fi
+    if [ -e "$home_path" ] || [ -L "$home_path" ]; then
+        local retired
+        retired="$(mktemp -d "$home_path.migrated-XXXXXX")"
+        mv "$home_path" "$retired/state"
     fi
     mkdir -p "$data_path"
     chmod 0700 "$data_path"
@@ -53,5 +58,4 @@ persist_dir "$home/.local/share/super-agents-claude-code" "$data_dir/super-agent
 legacy_projects="$home/.openbase/coder-projects.json"
 if [ "$home/.openbase" != "$data_dir" ] && [ -f "$legacy_projects" ] && [ ! -L "$legacy_projects" ]; then
     [ -e "$data_dir/coder-projects.json" ] || cp -p "$legacy_projects" "$data_dir/coder-projects.json"
-    rm -f "$legacy_projects"
 fi

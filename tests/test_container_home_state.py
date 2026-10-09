@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sqlite3
 import subprocess
 from pathlib import Path
 
@@ -150,3 +151,93 @@ def test_pre_upgrade_copy_lets_a_pre_fix_workspace_keep_its_registry(tmp_path, v
     upgraded = _store(monkeypatch, new_layer)
     assert upgraded.get_by_name("dispatcher").id == dispatcher.id
     assert upgraded.get_session(sunny.id).agent_name == "Sunny"
+
+
+def test_boot_adopts_state_behind_a_different_symlink(tmp_path, volume) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    previous = tmp_path / "previous-registry"
+    previous.mkdir()
+    (previous / "state.json").write_text('{"sessions": {"kept": 1}}')
+    (home / ".super-agents").symlink_to(previous, target_is_directory=True)
+
+    _boot(home, volume)
+
+    assert (home / ".super-agents").resolve() == volume / "super-agents"
+    assert (volume / "super-agents" / "state.json").read_text() == (previous / "state.json").read_text()
+
+
+@pytest.mark.parametrize("script,suffix", [(SCRIPT, "adopting"), (PRE_UPGRADE, "copying")])
+def test_retry_does_not_nest_state_in_an_interrupted_copy(tmp_path, volume, script, suffix) -> None:
+    home = tmp_path / "home"
+    source = home / ".super-agents"
+    source.mkdir(parents=True)
+    (source / "state.json").write_text('{"sessions": {"latest": 1}}')
+    partial = volume / f"super-agents.{suffix}"
+    partial.mkdir()
+    (partial / "state.json").write_text("incomplete")
+
+    subprocess.run(["bash", str(script), str(home), str(volume)], check=True, capture_output=True)
+
+    assert (volume / "super-agents" / "state.json").read_text() == '{"sessions": {"latest": 1}}'
+
+
+def test_boot_repairs_a_dangling_expected_symlink(tmp_path, volume) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    destination = volume / "super-agents"
+    (home / ".super-agents").symlink_to(destination, target_is_directory=True)
+
+    _boot(home, volume)
+
+    assert destination.is_dir()
+
+
+def test_boot_keeps_projects_when_legacy_home_is_a_volume_symlink(tmp_path, volume) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".openbase").symlink_to(volume, target_is_directory=True)
+    projects = volume / "coder-projects.json"
+    projects.write_text('[{"path": "/data/workspace/project"}]')
+
+    _boot(home, volume)
+
+    assert projects.read_text() == '[{"path": "/data/workspace/project"}]'
+
+
+def test_boot_retains_both_conflicting_project_caches(tmp_path, volume) -> None:
+    legacy = tmp_path / "home" / ".openbase" / "coder-projects.json"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('[{"path": "/data/workspace/legacy"}]')
+    durable = volume / "coder-projects.json"
+    durable.write_text('[{"path": "/data/workspace/durable"}]')
+
+    _boot(legacy.parent.parent, volume)
+
+    assert legacy.read_text() == '[{"path": "/data/workspace/legacy"}]'
+    assert durable.read_text() == '[{"path": "/data/workspace/durable"}]'
+
+
+def test_pre_upgrade_backs_up_committed_wal_with_an_open_connection(tmp_path, volume) -> None:
+    home = tmp_path / "home"
+    source = home / ".local" / "share" / "super-agents-claude-code"
+    source.mkdir(parents=True)
+    database = source / "state.sqlite3"
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("CREATE TABLE sessions (name TEXT)")
+        connection.execute("INSERT INTO sessions VALUES ('dispatcher')")
+        connection.commit()
+        assert database.with_name("state.sqlite3-wal").stat().st_size > 0
+
+        subprocess.run(["bash", str(PRE_UPGRADE), str(home), str(volume)], check=True, capture_output=True)
+
+        backup = sqlite3.connect(volume / "super-agents-claude-code" / "state.sqlite3")
+        try:
+            assert backup.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+            assert backup.execute("SELECT name FROM sessions").fetchall() == [("dispatcher",)]
+        finally:
+            backup.close()
+    finally:
+        connection.close()

@@ -102,6 +102,8 @@ docker run -d --name openbase-coder --hostname openbase-coder \
 
 ## Codex and Claude Code backends
 
+Managed Super Agent thread IDs, names, the Dispatcher session, and the tracked-project registry persist in the data volume across image replacements. Keep that volume attached when upgrading. Containers running images from before this persistence change need a one-time snapshot of their home-directory agent state before their first upgrade; follow the container migration procedure in the source repository's `docker/README.md` before replacing the old container.
+
 The container defaults to the Openbase Cloud backend. To use native Codex or
 Claude Code instead, log in *inside the container* — do not copy credential
 files in from another machine (copied logins break when the provider rotates

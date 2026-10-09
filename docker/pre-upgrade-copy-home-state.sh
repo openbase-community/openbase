@@ -11,22 +11,27 @@
 set -euo pipefail
 home="${1:-$HOME}"
 data_dir="${2:-${OPENBASE_CODER_CLI_DATA_DIR:-/data/openbase}}"
+mkdir -p "$data_dir"
 
 copy_dir() {
     local src="$1" dest="$2"
     if [ -L "$src" ] || [ ! -d "$src" ]; then echo "skip $src (not a real directory)"; return 0; fi
     if [ -e "$dest" ]; then echo "skip $src ($dest already exists)"; return 0; fi
-    cp -a "$src" "$dest.copying"
+    local copying
+    copying="$(mktemp -d "$dest.copying-XXXXXX")"
+    cp -a "$src/." "$copying/"
     # Replace any SQLite files with consistent online backups.
     find "$src" -maxdepth 1 -name '*.sqlite3' -type f | while read -r db; do
         python3 -c 'import sqlite3, sys
-src = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+from pathlib import Path
+src = sqlite3.connect(Path(sys.argv[1]).resolve().as_uri() + "?mode=ro", uri=True)
 dst = sqlite3.connect(sys.argv[2])
 src.backup(dst)
-dst.close(); src.close()' "$db" "$dest.copying/$(basename "$db")"
-        rm -f "$dest.copying/$(basename "$db")-wal" "$dest.copying/$(basename "$db")-shm"
+dst.close(); src.close()' "$db" "$copying/$(basename "$db").backup"
+        rm -f "$copying/$(basename "$db")-wal" "$copying/$(basename "$db")-shm" "$copying/$(basename "$db")-journal"
+        mv "$copying/$(basename "$db").backup" "$copying/$(basename "$db")"
     done
-    mv "$dest.copying" "$dest"
+    mv "$copying" "$dest"
     echo "copied $src -> $dest"
 }
 
