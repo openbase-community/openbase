@@ -14,7 +14,11 @@ from rest_framework.test import APIRequestFactory, force_authenticate  # noqa: E
 
 django.setup()
 
-from openbase_coder_cli import claude_auth, dispatcher_config  # noqa: E402
+from openbase_coder_cli import (  # noqa: E402
+    claude_auth,
+    cloud_models,
+    dispatcher_config,
+)
 from openbase_coder_cli.openbase_coder_cli_app import (  # noqa: E402
     backend_settings,
     model_settings,
@@ -47,6 +51,11 @@ def _install_with(
 
 @pytest.fixture(autouse=True)
 def _both_engines_available(monkeypatch) -> None:
+    monkeypatch.setattr(
+        cloud_models,
+        "cloud_model_availability",
+        lambda: dict.fromkeys(("haiku", "sonnet", "opus", "fable")),
+    )
     # Never consult the real install or shell out to ``claude``; tests that
     # exercise a partial install override this explicitly.
     _install_with(monkeypatch, backends=("codex", "claude_code"), claude_logged_in=True)

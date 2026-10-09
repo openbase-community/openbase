@@ -110,7 +110,13 @@ def is_backend_auth_failure_text(text: str | None) -> bool:
     ``BACKEND_AUTH_FAILURE_PREFIXES``); a turn that "answers" with one of these
     is a login failure masquerading as a normal reply, not a real answer.
     """
-    return bool(text) and text.strip().startswith(BACKEND_AUTH_FAILURE_PREFIXES)
+    from openbase_coder_cli.cloud_model_errors import model_plan_denial_message
+
+    return (
+        bool(text)
+        and model_plan_denial_message(text) is None
+        and text.strip().startswith(BACKEND_AUTH_FAILURE_PREFIXES)
+    )
 
 
 def is_claude_auth_failure_text(text: str | None) -> bool:
