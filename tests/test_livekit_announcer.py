@@ -39,6 +39,7 @@ def isolate_voice_config(monkeypatch, tmp_path):
     from openbase_coder_cli.services import livekit_pool_activity
     monkeypatch.setattr(livekit_pool_activity, "_ACTIVITY_DIR", tmp_path / "activity")
     monkeypatch.delenv("OPENBASE_CODER_SERVICE_SUPERVISOR", raising=False)
+    monkeypatch.setenv("SUPER_AGENTS_CLAUDE_CODE_HOME", str(tmp_path / "claude-store"))
     monkeypatch.setenv(
         "SUPER_AGENTS_STATE_FILE",
         str(tmp_path / "missing-super-agents-state.json"),

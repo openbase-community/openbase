@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from openbase_coder_cli.services import livekit_pool_watchdog as wd
+
+_REAL_VOICE_SESSION_ACTIVE = wd._voice_session_active
 
 SIGNATURE_LINE = (
     'failed to connect: Connection("wait_pc_connection timed out")\nprocess exiting\n'
@@ -49,6 +52,7 @@ class _Env:
 def env(monkeypatch, tmp_path):
     monkeypatch.setattr(wd.activity, "_ACTIVITY_DIR", tmp_path / "activity")
     monkeypatch.setenv("SUPER_AGENTS_STATE_FILE", str(tmp_path / "super-agents.json"))
+    monkeypatch.setenv("SUPER_AGENTS_CLAUDE_CODE_HOME", str(tmp_path / "claude-store"))
     monkeypatch.delenv("OPENBASE_CODER_SERVICE_SUPERVISOR", raising=False)
     monkeypatch.delenv("LIVEKIT_AGENT_IDLE_RECYCLE_SECONDS", raising=False)
     log_path = tmp_path / "livekit-agent.log"
@@ -447,3 +451,72 @@ def test_pruning_turn_history_does_not_erase_observed_activity(env):
     env.advance(wd.IDLE_RECYCLE_SECONDS - 1)
     wd.run_tick()
     assert env.bounces == []
+
+
+@pytest.mark.parametrize("table", ["turns", "sessions"])
+def test_claude_turn_and_streaming_activity_extend_idle_clock(env, table):
+    from super_agents.agent_store import database_path
+
+    wd.run_tick()
+    env.advance(wd.IDLE_RECYCLE_SECONDS - 30)
+    timestamp = datetime.fromtimestamp(env.clock["now"], UTC).isoformat()
+    path = database_path()
+    path.parent.mkdir()
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE turns (updated_at TEXT)")
+        connection.execute(
+            "CREATE TABLE sessions (updated_at TEXT, active_turn_id TEXT)"
+        )
+        if table == "turns":
+            connection.execute("INSERT INTO turns VALUES (?)", (timestamp,))
+        else:
+            connection.execute(
+                "INSERT INTO sessions VALUES (?, 'active-turn')", (timestamp,)
+            )
+    env.advance(31)
+    wd.run_tick()
+    assert env.bounces == []
+    env.advance(wd.IDLE_RECYCLE_SECONDS)
+    wd.run_tick()
+    assert env.bounces == [("livekit-agent",)]
+
+
+def test_missing_claude_store_is_not_created_by_activity_probe(env):
+    from super_agents.agent_store import database_path
+
+    assert wd.activity.latest_activity_timestamp() == 0
+    assert not database_path().parent.exists()
+
+
+def test_corrupt_claude_store_defers_idle_recycle(env):
+    from super_agents.agent_store import database_path
+
+    wd.run_tick()
+    path = database_path()
+    path.parent.mkdir()
+    path.write_text("broken database")
+    env.advance(wd.IDLE_RECYCLE_SECONDS + 1)
+    wd.run_tick()
+    assert env.bounces == []
+
+
+def test_room_probe_timeout_defers_restart_without_blocking_token_lock(
+    env, monkeypatch
+):
+    import asyncio
+
+    from openbase_coder_cli import livekit_announcer
+
+    async def unavailable(**kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(livekit_announcer, "active_voice_room_exists", unavailable)
+    monkeypatch.setattr(wd, "VOICE_ROOM_QUERY_TIMEOUT_SECONDS", 0.01)
+    # Restore the production probe in the tick so lock release is tested too.
+    monkeypatch.setattr(wd, "_voice_session_active", _REAL_VOICE_SESSION_ACTIVE)
+    wd.run_tick()
+    env.advance(wd.IDLE_RECYCLE_SECONDS + 1)
+    wd.run_tick()
+    assert env.bounces == []
+    _mark_activity(env, "token")
+    assert wd.activity.call_join_pending(env.clock["now"])
