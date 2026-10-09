@@ -41,6 +41,7 @@ from .server import server
 from .service import service
 from .services import services
 from .setup import setup
+from .project_dir import project_dir
 from .super_agent_name import super_agent_name
 from .sync import sync
 from .sync_daemon import sync_daemon_cli
@@ -141,6 +142,7 @@ main.add_command(mcp_gateway)
 main.add_command(routines)
 main.add_command(routines, name="loops")
 main.add_command(super_agent_name)
+main.add_command(project_dir)
 main.add_command(sync)
 main.add_command(sync_daemon_cli)
 main.add_command(sync_workers)

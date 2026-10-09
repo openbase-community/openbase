@@ -35,7 +35,12 @@ START_RULES = f"""{START_HEADING}
   idle with no messages.
 - Say an agent is working only after a result shows a started turn
   (turnStarted true, or a turnId). If the result says turnStarted false, start
-  the turn before confirming anything to the user."""
+  the turn before confirming anything to the user.
+- When the user names a project or folder for the agent, resolve it with
+  `openbase-coder project-dir "<name>" --json` and pass the returned `path`
+  as the agent's `cwd`. Never default to your own directory for a named
+  project. If the command reports no match or several, tell the user which
+  projects exist and ask; do not start the agent anywhere else."""
 
 
 def canonical_dispatcher_skill() -> str:
