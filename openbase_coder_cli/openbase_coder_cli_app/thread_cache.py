@@ -114,8 +114,8 @@ class _SingleFlightCache:
             inflight.event.set()
             raise
         with self._lock:
-            self._entries[key] = (time.monotonic(), value, False)
             if self._inflight.get(key) is inflight:
+                self._entries[key] = (time.monotonic(), value, False)
                 self._inflight.pop(key, None)
         inflight.value = value
         inflight.event.set()

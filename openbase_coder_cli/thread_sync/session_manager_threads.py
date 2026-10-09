@@ -311,11 +311,11 @@ class SessionManagerThreadsMixin:
         # first waits on it and raises for any other, so a caller on another
         # loop gets its own lock rather than a RuntimeError (2026-10-08).
         loop = asyncio.get_running_loop()
-        bound = self.__dict__.get("_backend_sessions_lock_bound")
-        if bound is None or bound[0] is not loop:
-            bound = (loop, asyncio.Lock())
-            self.__dict__["_backend_sessions_lock_bound"] = bound
-        lock = bound[1]
+        locks = self.__dict__.setdefault("_backend_sessions_locks", {})
+        lock = locks.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            locks[loop] = lock
         async with lock:
             now = time.monotonic()
             cached = getattr(self, "_backend_sessions_cache", None)
