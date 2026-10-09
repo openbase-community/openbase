@@ -8,6 +8,8 @@ from typing import Any
 import click
 from super_agents.app_server_client import CodexAppServerClient
 
+from openbase_coder_cli.cli.threads_terminal import list_sessions, send
+
 # Sources the Codex TUI scans when resolving `codex resume <name>`: it pages
 # thread/list (archived=false, sources cli+vscode) 100 at a time and refuses
 # any name match when the listing spans more than one page. Keeping this
@@ -63,7 +65,15 @@ async def _list_active_threads(
 
 @click.group()
 def threads() -> None:
-    """Maintain threads: archive stale ones, push one to a durable machine."""
+    """Terminal sessions and thread maintenance.
+
+    `list` and `send` reach the Codex and Claude Code sessions open in
+    terminals on this computer; `archive-stale` and `push` maintain threads.
+    """
+
+
+threads.add_command(list_sessions)
+threads.add_command(send)
 
 
 @threads.command("archive-stale")
