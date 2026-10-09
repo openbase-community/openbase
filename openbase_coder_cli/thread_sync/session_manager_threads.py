@@ -306,9 +306,16 @@ class SessionManagerThreadsMixin:
         sessions_method = getattr(self._client, "sessions", None)
         if not callable(sessions_method):
             return []
-        lock = self.__dict__.setdefault("_backend_sessions_lock", asyncio.Lock())
         # Single-flight: concurrent callers wait for one scan instead of
-        # each starting their own.
+        # each starting their own. An asyncio.Lock binds to the loop that
+        # first waits on it and raises for any other, so a caller on another
+        # loop gets its own lock rather than a RuntimeError (2026-10-08).
+        loop = asyncio.get_running_loop()
+        bound = self.__dict__.get("_backend_sessions_lock_bound")
+        if bound is None or bound[0] is not loop:
+            bound = (loop, asyncio.Lock())
+            self.__dict__["_backend_sessions_lock_bound"] = bound
+        lock = bound[1]
         async with lock:
             now = time.monotonic()
             cached = getattr(self, "_backend_sessions_cache", None)

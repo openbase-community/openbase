@@ -21,6 +21,16 @@ THREAD_LIST_CACHE_TTL_SECONDS = 8.0
 # interval. Mutation responses carry their own fresh state, so the only cost
 # is list polls trailing a mutation by at most this long.
 THREAD_LIST_STALE_SERVE_SECONDS = 2.5
+# A follower waits this long for the in-flight leader before giving up, and a
+# leader older than this is abandoned by the next caller, which computes
+# afresh. Without a bound, one computation that never returned (a coroutine
+# parked on a foreign event loop, 2026-10-08) held every later thread read,
+# and with them every offloaded request thread, until a service restart.
+THREAD_LIST_INFLIGHT_WAIT_SECONDS = 30.0
+
+
+class ThreadCacheWaitTimeout(TimeoutError):
+    """The shared in-flight computation did not finish within the bound."""
 
 _T = TypeVar("_T")
 
@@ -28,12 +38,13 @@ _T = TypeVar("_T")
 class _InFlight:
     """A computation in progress, shared with everyone waiting on the same key."""
 
-    __slots__ = ("event", "value", "error")
+    __slots__ = ("event", "value", "error", "started_at")
 
     def __init__(self) -> None:
         self.event = threading.Event()
         self.value: Any = None
         self.error: BaseException | None = None
+        self.started_at = time.monotonic()
 
 
 class _SingleFlightCache:
@@ -48,9 +59,15 @@ class _SingleFlightCache:
     misses on the *same* key still share one call and its result (or error).
     """
 
-    def __init__(self, ttl_seconds: float, stale_serve_seconds: float = 0.0) -> None:
+    def __init__(
+        self,
+        ttl_seconds: float,
+        stale_serve_seconds: float = 0.0,
+        inflight_wait_seconds: float = THREAD_LIST_INFLIGHT_WAIT_SECONDS,
+    ) -> None:
         self._ttl = ttl_seconds
         self._stale_serve = stale_serve_seconds
+        self._inflight_wait = inflight_wait_seconds
         self._lock = threading.Lock()
         # key -> (computed_at, value, stale). Invalidation flips stale rather
         # than dropping the entry so mutation churn cannot force a recompute
@@ -69,7 +86,9 @@ class _SingleFlightCache:
                 if stale and age < self._stale_serve:
                     return value
             inflight = self._inflight.get(key)
-            leader = inflight is None
+            leader = inflight is None or (
+                time.monotonic() - inflight.started_at > self._inflight_wait
+            )
             if leader:
                 inflight = _InFlight()
                 self._inflight[key] = inflight
@@ -77,7 +96,10 @@ class _SingleFlightCache:
         if not leader:
             # Wait for the in-flight leader and share its result — never hold a
             # lock or issue a duplicate app-server call.
-            inflight.event.wait()
+            if not inflight.event.wait(self._inflight_wait):
+                raise ThreadCacheWaitTimeout(
+                    "thread list is still loading; try again in a moment"
+                )
             if inflight.error is not None:
                 raise inflight.error
             return inflight.value
@@ -87,12 +109,14 @@ class _SingleFlightCache:
         except BaseException as error:  # noqa: BLE001 - re-raised to all waiters
             inflight.error = error
             with self._lock:
-                self._inflight.pop(key, None)
+                if self._inflight.get(key) is inflight:
+                    self._inflight.pop(key, None)
             inflight.event.set()
             raise
         with self._lock:
             self._entries[key] = (time.monotonic(), value, False)
-            self._inflight.pop(key, None)
+            if self._inflight.get(key) is inflight:
+                self._inflight.pop(key, None)
         inflight.value = value
         inflight.event.set()
         return value

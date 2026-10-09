@@ -440,8 +440,31 @@ def fleet_thread_page(
         ]
         if not pending:
             return
-        with ThreadPoolExecutor(max_workers=max(1, min(8, len(pending)))) as pool:
-            list(pool.map(fetch_window, pending))
+        # The local window stays on the calling thread. Its reads go through
+        # async_to_sync, which reaches the server's event loop only via
+        # asgiref's thread-local on the request thread; a pool thread has no
+        # such loop, so asgiref spins up a private one, the session manager's
+        # loop-bound primitives get used across loops, and the call either
+        # raises or never wakes. Every later request then queued behind it
+        # and the whole API stalled (2026-10-08). Only peers, plain HTTP,
+        # fetch concurrently.
+        peer_keys = [key for key in pending if key != LOCAL_SOURCE_KEY]
+        pool = (
+            ThreadPoolExecutor(max_workers=max(1, min(8, len(peer_keys))))
+            if peer_keys
+            else None
+        )
+        futures = [pool.submit(fetch_window, key) for key in peer_keys] if pool else []
+        try:
+            if LOCAL_SOURCE_KEY in pending:
+                fetch_window(LOCAL_SOURCE_KEY)
+        finally:
+            if pool is not None:
+                try:
+                    for future in futures:
+                        future.result()
+                finally:
+                    pool.shutdown(wait=True)
         # An empty page with a continuation is possible in principle; advance
         # past it here so the merge below only ever sees real windows.
         for key in pending:
