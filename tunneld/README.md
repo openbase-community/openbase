@@ -21,6 +21,18 @@ The authenticated `/probe` endpoint is intentionally limited to the Openbase
 health path on port `18080` of peers present in the node's current tailnet
 status; it is not a general-purpose tailnet proxy.
 
+## Dynamic forwards
+
+Cloud workspaces (Maritime) and other embedded-node hosts can expose one loopback port at a time-limited tailnet address through the control API, for a dev server the user wants to open on a phone or the loopback callback server of a CLI login (`openbase-coder service expose PORT`, `openbase-coder browser open URL`):
+
+| Call                               | Effect                                                                 |
+| ---------------------------------- | ---------------------------------------------------------------------- |
+| `POST /forwards` `{port, ttl_seconds?, one_shot?, peer?}` | listen on tailnet `:port`, forward to `127.0.0.1:port` |
+| `GET /forwards`                    | live forwards with their expiry and connection counts                  |
+| `DELETE /forwards/{port}`          | close one forward                                                      |
+
+Rules: ports 1024-65535 only, never the fixed ports above, at most 16 live forwards, default TTL 10 minutes and at most an hour. `one_shot` retires the forward after its first completed connection (an OAuth callback is one request). `peer` pins the forward to one device, given as a tailnet IP or stable node id (checked with the node's WhoIs); other peers are refused at accept time. Every forward listens on the tailnet only; reachability is already limited to the same account's devices by the Openbase VPN policy.
+
 ## Build
 
 ```sh
