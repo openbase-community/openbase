@@ -42,7 +42,7 @@ class FakeChannelLayer:
 
     async def receive(self, channel: str) -> dict:
         if self.ack:
-            return {"type": "ios_app_control_ack"}
+            return self.ack if isinstance(self.ack, dict) else {"type": "ios_app_control_ack"}
         await asyncio.Event().wait()
         raise AssertionError("unreachable")
 
@@ -50,6 +50,7 @@ class FakeChannelLayer:
 @pytest.fixture(autouse=True)
 def fast_ack_timeout(monkeypatch):
     monkeypatch.setattr(views, "IOS_APP_CONTROL_ACK_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(views, "IOS_CALL_CONTROL_ACK_TIMEOUT_SECONDS", 0.01)
 
 
 def _request(payload: dict):
@@ -203,3 +204,57 @@ def test_consumer_ignores_invalid_acks(content):
     asyncio.run(consumer.receive_json(content))
 
     assert consumer.channel_layer.sent == []
+
+
+@pytest.mark.parametrize("payload", [
+    {"action": "set_speaker"}, {"action": "set_speaker", "speaker": "invalid"},
+    {"action": "start_call"}, {"action": "start_call", "thread_id": "  "},
+    {"action": "start_call", "thread_id": "x" * 257},
+])
+def test_call_commands_validate_arguments(payload):
+    assert views.ios_app_control(_request(payload)).status_code == 400
+
+
+@pytest.mark.parametrize("payload", [
+    {"action": "set_speaker", "speaker": True},
+    {"action": "set_speaker", "speaker": False},
+    {"action": "end_call"},
+    {"action": "start_call", "thread_id": "dispatcher"},
+    {"action": "start_call", "thread_id": "thread-123"},
+])
+@pytest.mark.parametrize("applied", [True, False])
+def test_call_command_returns_result_and_state(monkeypatch, payload, applied):
+    state = {"connected": True, "muted": False, "speaker": True, "active": True}
+    ack = {"applied": applied, "call_state": state}
+    if not applied:
+        ack["error"] = "Audio route failed"
+    layer = FakeChannelLayer(ack=ack)
+    monkeypatch.setattr(views, "get_channel_layer", lambda: layer)
+    response = views.ios_app_control(_request(payload))
+    assert response.data["delivered"] is True
+    assert response.data["applied"] is applied
+    assert response.data["call_state"] == state
+    for key, value in payload.items():
+        assert layer.sent[0][1]["data"][key] == value
+    if not applied:
+        assert response.data["error"] == ack["error"]
+
+
+@pytest.mark.parametrize("ack", [True, False])
+def test_call_command_never_claims_success_without_result(monkeypatch, ack):
+    monkeypatch.setattr(views, "get_channel_layer", lambda: FakeChannelLayer(ack=ack))
+    response = views.ios_app_control(_request({"action": "end_call"}))
+    assert response.data["applied"] is False
+    assert "call_state" not in response.data
+
+
+def test_consumer_preserves_valid_result_and_rejects_malformed_state():
+    consumer = IOSAppControlConsumer()
+    consumer.channel_layer = FakeChannelLayer()
+    state = {"connected": False, "muted": True, "speaker": False, "active": False}
+    content = {"type": "ios_app_control_ack", "command_id": "abc", "applied": False,
+               "call_state": state, "error": "failed"}
+    asyncio.run(consumer.receive_json(content))
+    assert consumer.channel_layer.sent[-1][1] == content
+    asyncio.run(consumer.receive_json({**content, "call_state": {**state, "connected": "false"}}))
+    assert "applied" not in consumer.channel_layer.sent[-1][1]
