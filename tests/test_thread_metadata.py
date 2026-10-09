@@ -360,3 +360,19 @@ def test_voice_history_tie_breaks_matching_agent_name_by_thread_id(
 
     assert entry.thread_id == "thread-2"
     assert entry.voice_id == "voice-2"
+
+
+def test_display_name_falls_back_to_project_then_a_label_never_the_id(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    thread_id = "s_0123456789abcdef"
+
+    in_project = annotate_thread_payload(
+        {"thread_id": thread_id, "directory": "/work/tic-tac-toe/"}
+    )
+    bare = annotate_thread_payload({"thread_id": thread_id})
+
+    assert in_project["display_name"] == "tic-tac-toe"
+    assert bare["display_name"] == "Conversation"

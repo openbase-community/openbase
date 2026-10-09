@@ -217,7 +217,8 @@ def test_backend_model_settings_lists_openbase_cloud_claude_model(
     assert response.data["options"][0]["is_default"] is True
     assert response.data["options"][0]["label"] == "Claude Haiku"
     assert (
-        "Trial accounts run Claude Haiku" in response.data["options"][1]["description"]
+        response.data["options"][1]["description"]
+        == "Claude Sonnet through Openbase Cloud."
     )
     # Codex is read-only on Openbase Cloud: listed, but not selectable.
     availability = {
@@ -377,7 +378,9 @@ def _local_model_settings(monkeypatch, tmp_path: Path, backend: str) -> Path:
     config_path = tmp_path / "dispatcher-config.json"
     env_file.write_text(f"OPENBASE_CODING_BACKEND={backend}\n", encoding="utf-8")
     monkeypatch.setattr(model_settings, "DEFAULT_ENV_FILE_PATH", env_file)
-    monkeypatch.setattr(model_settings.dispatcher_config, "DEFAULT_ENV_FILE_PATH", env_file)
+    monkeypatch.setattr(
+        model_settings.dispatcher_config, "DEFAULT_ENV_FILE_PATH", env_file
+    )
     monkeypatch.setattr(
         model_settings.dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path
     )
@@ -539,9 +542,7 @@ def test_super_agents_model_choice_updates_primary_backend(
 
     assert response.status_code == 200
     assert response.data["roles"]["super_agents"]["engine"] == "claude"
-    assert "OPENBASE_CODING_BACKEND=claude_code" in env_file.read_text(
-        encoding="utf-8"
-    )
+    assert "OPENBASE_CODING_BACKEND=claude_code" in env_file.read_text(encoding="utf-8")
 
 
 def test_coding_backend_settings_persists_claude_code_selection(
@@ -932,6 +933,7 @@ def test_coding_backend_settings_verifies_claude_login_on_save(
     assert response.data["claude_auth"]["logged_in"] is False
     assert response.data["claude_auth"]["command"] == "claude login"
     assert response.data["claude_auth"]["verified"] is True
+
 
 def test_coding_backend_location_local_engages_both_engines(
     monkeypatch,

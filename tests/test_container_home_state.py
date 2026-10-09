@@ -86,6 +86,39 @@ def test_image_upgrade_keeps_thread_ids_dispatcher_and_agent_names(tmp_path, vol
     assert _store(monkeypatch, new_layer).get_session(after.id).agent_name == "Renee"
 
 
+def test_pre_upgrade_refresh_preserves_each_project_snapshot(tmp_path, volume) -> None:
+    home = tmp_path / "home"
+    source = home / ".openbase" / "coder-projects.json"
+    source.parent.mkdir(parents=True)
+    source.write_text("[]")
+    shims = tmp_path / "shims"
+    shims.mkdir()
+    (shims / "date").write_text("#!/bin/sh\nprintf '20261009T000000Z\\n'\n")
+    (shims / "date").chmod(0o755)
+    import os
+
+    env = {"PATH": f"{shims}:{os.environ['PATH']}"}
+    for version in range(3):
+        source.write_text(json.dumps([{"version": version}]))
+        result = _copy("--refresh", str(home), str(volume), env=env)
+        assert result.returncode == 0, result.stderr
+    parked = sorted(volume.glob("coder-projects.json.replaced-*"))
+    assert len(parked) == 2
+    assert sorted(json.loads((path / "state").read_text())[0]["version"] for path in parked) == [0, 1]
+
+
+def test_pre_upgrade_refresh_keeps_projects_already_on_volume(tmp_path, volume) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".openbase").symlink_to(volume, target_is_directory=True)
+    projects_file = volume / "coder-projects.json"
+    projects_file.write_text("[]")
+    result = _copy("--refresh", str(home), str(volume))
+    assert result.returncode == 0, result.stderr
+    assert projects_file.read_text() == "[]"
+    assert not list(volume.glob("coder-projects.json.replaced-*"))
+
+
 def test_boot_is_idempotent_and_never_deletes_a_volume_copy(tmp_path, volume, monkeypatch) -> None:
     home = tmp_path / "home"
     home.mkdir()
@@ -241,3 +274,139 @@ def test_pre_upgrade_backs_up_committed_wal_with_an_open_connection(tmp_path, vo
             backup.close()
     finally:
         connection.close()
+
+
+def _copy(
+    *args: str, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    import os
+
+    return subprocess.run(
+        ["bash", str(PRE_UPGRADE), *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, **(env or {})},
+    )
+
+
+def _pre_fix_layer(
+    tmp_path: Path, monkeypatch, name: str = "layer-old"
+) -> tuple[Path, AgentStore]:
+    home = tmp_path / name / "home"
+    home.mkdir(parents=True)
+    store = _store(monkeypatch, home)
+    (home / ".super-agents").mkdir()
+    (home / ".super-agents" / "state.json").write_text("{}", encoding="utf-8")
+    (home / ".openbase").mkdir()
+    (home / ".openbase" / "coder-projects.json").write_text("[]", encoding="utf-8")
+    return home, store
+
+
+def test_pre_upgrade_copy_never_reads_the_callers_home(
+    tmp_path, volume, monkeypatch
+) -> None:
+    # Maritime exec runs as root: $HOME there is /root, not the workspace
+    # user's home, so the paths are explicit and an unset one is an error,
+    # never a silent copy of the wrong (or no) registry.
+    decoy, _ = _pre_fix_layer(tmp_path, monkeypatch, "decoy")
+    result = _copy(
+        str(tmp_path / "missing-home"), str(volume), env={"HOME": str(decoy)}
+    )
+    assert result.returncode == 2
+    assert "not a directory" in result.stderr
+    assert not (volume / "super-agents").exists()
+    assert not (volume / "coder-projects.json").exists()
+
+
+def test_pre_upgrade_copy_gives_everything_to_the_home_owner(
+    tmp_path, volume, monkeypatch
+) -> None:
+    # The copy is written by root (the exec user); the workspace user must own
+    # it, or the store is read-only after the redeploy and the API fails.
+    home, store = _pre_fix_layer(tmp_path, monkeypatch)
+    store.create_session("dispatcher", cwd=str(tmp_path))
+    shims = tmp_path / "shims"
+    shims.mkdir()
+    calls = tmp_path / "chown-calls.txt"
+    (shims / "chown").write_text(
+        f'#!/bin/bash\necho "$*" >> {calls}\n', encoding="utf-8"
+    )
+    (shims / "chown").chmod(0o755)
+    import os
+
+    result = _copy(
+        str(home), str(volume), env={"PATH": f"{shims}:{os.environ['PATH']}"}
+    )
+    assert result.returncode == 0, result.stderr
+    owner = f"{home.stat().st_uid}:{home.stat().st_gid}"
+    recorded = calls.read_text(encoding="utf-8").splitlines()
+    assert f"{owner} {volume}" in recorded
+    # Each destination is handed over before it is moved into place.
+    assert any(
+        line.startswith(f"-R {owner} {volume}/super-agents.copying-")
+        for line in recorded
+    )
+    assert any(
+        line.startswith(f"-R {owner} {volume}/super-agents-claude-code.copying-")
+        for line in recorded
+    )
+    assert f"-R {owner} {volume}/coder-projects.json" in recorded
+
+    refreshed = _copy(
+        "--refresh", str(home), str(volume), env={"PATH": f"{shims}:{os.environ['PATH']}"}
+    )
+    assert refreshed.returncode == 0, refreshed.stderr
+    recorded = calls.read_text(encoding="utf-8").splitlines()
+    parked = list(volume.glob("*.replaced-*"))
+    assert len(parked) == 3
+    assert all(f"{owner} {path}" in recorded for path in parked)
+
+
+def test_pre_upgrade_copy_keeps_the_store_file_mode(
+    tmp_path, volume, monkeypatch
+) -> None:
+    home, store = _pre_fix_layer(tmp_path, monkeypatch)
+    store.create_session("dispatcher", cwd=str(tmp_path))
+    source = home / ".local" / "share" / "super-agents-claude-code" / "state.sqlite3"
+    source.chmod(0o600)
+    assert _copy(str(home), str(volume)).returncode == 0
+    copied = volume / "super-agents-claude-code" / "state.sqlite3"
+    assert copied.stat().st_mode & 0o777 == 0o600
+
+
+def test_pre_upgrade_copy_refresh_sets_the_previous_copy_aside(
+    tmp_path, volume, monkeypatch
+) -> None:
+    # The live store keeps changing while a workspace runs, and the Cloud's
+    # redeploy guard refuses a copy older than the store. --refresh remakes
+    # the copy right before the redeploy and never deletes the earlier one.
+    home, store = _pre_fix_layer(tmp_path, monkeypatch)
+    dispatcher = store.create_session("dispatcher", cwd=str(tmp_path))
+    assert "copied" in _copy(str(home), str(volume)).stdout
+    sunny = store.create_session("tic-tac-toe", cwd=str(tmp_path), agent_name="Sunny")
+    (home / ".openbase" / "coder-projects.json").write_text(
+        '[{"path": "/data/workspace/x"}]', encoding="utf-8"
+    )
+
+    refreshed = _copy("--refresh", str(home), str(volume))
+    assert refreshed.returncode == 0, refreshed.stderr
+    assert refreshed.stdout.count("set aside") == 3
+    assert refreshed.stdout.count("copied") == 3
+    parked = sorted(volume.glob("super-agents-claude-code.replaced-*"))
+    assert len(parked) == 1 and (parked[0] / "state" / "state.sqlite3").is_file()
+    assert sorted(volume.glob("coder-projects.json.replaced-*"))
+    assert json.loads((volume / "coder-projects.json").read_text(encoding="utf-8")) == [
+        {"path": "/data/workspace/x"}
+    ]
+
+    shutil.rmtree(tmp_path / "layer-old")
+    new_layer = tmp_path / "layer-new" / "home"
+    new_layer.mkdir(parents=True)
+    _boot(new_layer, volume)
+    upgraded = _store(monkeypatch, new_layer)
+    assert {session.id for session in upgraded.list_sessions()} == {
+        dispatcher.id,
+        sunny.id,
+    }
+    assert upgraded.get_session(sunny.id).agent_name == "Sunny"

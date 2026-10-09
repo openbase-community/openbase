@@ -82,6 +82,12 @@ every service picks up the new credentials:
 docker restart openbase-coder
 ```
 
+The bridge is for finishing a login in a desktop browser. To sign in from your phone instead, the image sets `BROWSER` and `GH_BROWSER` to [`openbase-coder browser open`](#sign-in-from-your-phone), which sends a login page to the Openbase app on your phone (or prints the URL when the app cannot be reached).
+
+### Sign in from your phone
+
+Agents in the container follow the bundled `openbase-cloud-workspace-logins` skill: they prefer device-code and paste-code logins (`gh auth login`, `codex login --device-auth`, `openbase-coder claude login`, `gcloud auth login --no-launch-browser`), which need no bridge at all, and use `openbase-coder browser open <url>` to put any other login page on your phone. When a login ends on a `http://localhost:<port>/...` page that fails to load on the phone, copy that full address and paste it back to the agent in the same thread; the agent replays it inside the container. The address holds a single-use code that expires within minutes, so paste it only there.
+
 ## Use it
 
 - Console: `http://openbase-coder.<your-tailnet>.ts.net:18080`
@@ -129,6 +135,8 @@ lives inside the container — bridge port `1455` from your browser machine
 over the tailnet exactly like the [Openbase login](#log-in-to-openbase)
 above, then open the printed URL. Openbase services read the shared
 `~/.codex/auth.json` directly; no re-setup is needed.
+
+`codex login --device-auth` needs no bridge: open the printed URL on any device and enter the code it shows.
 
 Then switch the backend and restart:
 

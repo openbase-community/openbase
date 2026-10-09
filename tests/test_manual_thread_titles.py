@@ -15,7 +15,7 @@ from openbase_coder_cli.thread_sync.session_manager import CodexAppServerSession
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("backend", ["claude_code", "openbase_cloud"])
-async def test_four_manual_threads_keep_distinct_first_message_titles(
+async def test_four_manual_threads_take_their_first_message_as_title(
     tmp_path: Path, monkeypatch, backend: str
 ):
     monkeypatch.setenv("SUPER_AGENTS_CLAUDE_CODE_HOME", str(tmp_path / "agents"))
@@ -44,11 +44,9 @@ async def test_four_manual_threads_keep_distinct_first_message_titles(
     threads = await asyncio.gather(
         *(manager.create_thread(str(project)) for _ in range(4))
     )
-    initial = [thread.name for thread in threads]
-    assert len(set(initial)) == 4
-    assert all(
-        name.startswith("tic-tac-toe (") and "retired" not in name for name in initial
-    )
+    # Titles are display-only and never carry the thread id; the unique
+    # lookup name stays internal.
+    assert [thread.name for thread in threads] == ["tic-tac-toe"] * 4
     assert store.get_session(named["threadId"]).name == "tic-tac-toe"
 
     prompts = [
@@ -67,11 +65,9 @@ async def test_four_manual_threads_keep_distinct_first_message_titles(
     for thread, prompt in zip(threads, prompts, strict=True):
         state = await manager.get_thread_state(thread.session_id)
         payload = annotate_thread_payload(state.model_dump(mode="json"))
-        assert payload["display_name"].startswith(prompt + " (")
-        assert payload["display_name"] == payload["name"] == payload["title"]
-        assert "retired" not in payload["display_name"]
+        assert payload["display_name"] == payload["name"] == payload["title"] == prompt
+        assert thread.session_id[-8:] not in payload["display_name"]
         displayed.append(payload["display_name"])
-    assert len(set(displayed)) == 4
     listed = {thread.session_id: thread.name for thread in await manager.list_threads()}
     assert [listed[thread.session_id] for thread in threads] == displayed
 

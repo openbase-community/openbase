@@ -286,6 +286,106 @@ def tunneld_probe(
         return {"ok": False, "error": f"tunneld probe failed: {exc}"}
 
 
+def tunneld_self_dns_name() -> str | None:
+    """This node's MagicDNS name (without the trailing dot), if the node is up."""
+    _available, payload, _error = tunneld_status()
+    if not isinstance(payload, dict):
+        return None
+    self_info = payload.get("Self")
+    if not isinstance(self_info, dict):
+        return None
+    name = str(self_info.get("DNSName") or "").rstrip(".")
+    return name or None
+
+
+class TunneldForwardError(RuntimeError):
+    """A dynamic forward request was refused by the daemon."""
+
+
+def tunneld_add_forward(
+    port: int,
+    *,
+    ttl_seconds: int | None = None,
+    one_shot: bool = False,
+    peer: str | None = None,
+) -> dict[str, Any]:
+    """Expose loopback ``port`` on the tailnet until it expires or is removed.
+
+    ``peer`` pins the forward to one device (a tailnet IP or stable node id).
+    ``one_shot`` retires the forward after its first completed connection,
+    which is what an OAuth callback needs. Raises ``TunneldForwardError`` with
+    the daemon's reason when the request is refused.
+    """
+    body: dict[str, Any] = {"port": int(port), "one_shot": bool(one_shot)}
+    if ttl_seconds is not None:
+        body["ttl_seconds"] = int(ttl_seconds)
+    if peer:
+        body["peer"] = peer
+    try:
+        response = httpx.post(
+            f"{TUNNELD_LOCAL_API}/forwards",
+            json=body,
+            headers=_control_headers(),
+            timeout=TUNNELD_TIMEOUT_SECONDS,
+        )
+    except httpx.HTTPError as exc:
+        raise TunneldForwardError(
+            f"openbase-tunneld is not reachable at {TUNNELD_LOCAL_API}: {exc}"
+        ) from exc
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise TunneldForwardError(
+            f"Unable to parse tunneld forward response: {exc}"
+        ) from exc
+    if response.status_code != 201:
+        raise TunneldForwardError(
+            str(payload.get("error") or f"HTTP {response.status_code} from tunneld")
+        )
+    return payload
+
+
+def tunneld_remove_forward(port: int) -> bool:
+    """Close the dynamic forward on ``port``; False when there was none."""
+    try:
+        response = httpx.delete(
+            f"{TUNNELD_LOCAL_API}/forwards/{int(port)}",
+            headers=_control_headers(),
+            timeout=TUNNELD_TIMEOUT_SECONDS,
+        )
+    except httpx.HTTPError as exc:
+        raise TunneldForwardError(
+            f"openbase-tunneld is not reachable at {TUNNELD_LOCAL_API}: {exc}"
+        ) from exc
+    if response.status_code == 204:
+        return True
+    if response.status_code == 404:
+        return False
+    try:
+        detail = response.json().get("error")
+    except ValueError:
+        detail = None
+    raise TunneldForwardError(
+        str(detail or f"HTTP {response.status_code} from tunneld")
+    )
+
+
+def tunneld_list_forwards() -> list[dict[str, Any]]:
+    """Live dynamic forwards, oldest port first; empty when the daemon is down."""
+    try:
+        response = httpx.get(
+            f"{TUNNELD_LOCAL_API}/forwards",
+            headers=_control_headers(),
+            timeout=TUNNELD_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError):
+        return []
+    forwards = payload.get("forwards") if isinstance(payload, dict) else None
+    return [item for item in forwards or [] if isinstance(item, dict)]
+
+
 def tunneld_login(auth_key: str) -> bool:
     """Log the running daemon into the tailnet with an auth key."""
     try:

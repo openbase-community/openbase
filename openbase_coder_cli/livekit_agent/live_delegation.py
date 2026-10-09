@@ -97,7 +97,9 @@ MAX_TRACKED_ENTRIES = 32
 # then "desktop" about a second later), and a pause mid-sentence does the
 # same. A closed utterance is held this long for a continuation before it goes
 # to the agent; a fragment that opens during the hold extends it (bounded by
-# the max). A delegation binds to the held words until they settle.
+# the max). A delegation flushes the hold at once while the caller is silent
+# (the model judged the request complete); while they are still speaking it
+# binds to the held words until they settle.
 UTTERANCE_SETTLE_SECONDS = 0.7
 UTTERANCE_HOLD_MAX_SECONDS = 6.0
 # GPT-Live's transcript trails the caller's audio. A held utterance therefore
@@ -800,15 +802,27 @@ class LiveDelegationBridge:
         )
         held = self._held
         if held is not None:
-            # The caller may still be finishing the request the model jumped
-            # on: bind the delegation and let the hold settle, rather than
-            # starting a turn on half a sentence (BUG 18).
-            held.delegation_id = delegation_id
-            if pending:
-                held.pending = pending
-            self._log_forced(
-                held.text, decision="delegation_held", key="", delegation_id=delegation_id
-            )
+            if self._user_speaking:
+                # The caller is still talking (session VAD): the model jumped
+                # on half a request. Bind the delegation and let the hold
+                # settle rather than start a turn on it (BUG 18).
+                held.delegation_id = delegation_id
+                if pending:
+                    held.pending = pending
+                self._log_forced(
+                    held.text,
+                    decision="delegation_held",
+                    key="",
+                    delegation_id=delegation_id,
+                )
+                return
+            # The caller is silent and the model judged the request complete:
+            # its delegation is a better end-of-request signal than our timer,
+            # so the agent hears the request now (no added latency).
+            held = self._take_held()
+            if held.lead_in:
+                held.text = join_fragments(held.lead_in, held.text)
+            self._start_turn_from_held(held, pending, delegation_id)
             return
         if not pending:
             self._on_delegation_after_utterance(delegation_id)

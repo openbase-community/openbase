@@ -6,6 +6,10 @@ from pathlib import Path
 
 import click
 
+from openbase_coder_cli.cli.app_control import (
+    publish_app_control as _publish_ios_app_control,
+)
+from openbase_coder_cli.cli.app_control import publish_open_url
 from openbase_coder_cli.cli.local_server import local_server_request
 from openbase_coder_cli.config.cloud_notifications import (
     UserSayNotificationError,
@@ -347,7 +351,7 @@ def ios() -> None:
 @click.argument("url")
 def ios_open_url(url: str) -> None:
     """Ask the foreground iOS app to open a URL or deep link."""
-    data = _publish_ios_app_control({"action": "open_url", "url": url})
+    data = publish_open_url(url)
     _report_ios_command_result(data, "open-url")
 
 
@@ -425,11 +429,6 @@ def ios_upload_logs(limit: int | None) -> None:
         payload["limit"] = limit
     data = _publish_ios_app_control(payload)
     _report_ios_command_result(data, "diagnostics upload")
-
-
-def _publish_ios_app_control(payload: dict[str, object], *, timeout: float = 10) -> dict:
-    response = local_server_request("POST", "/api/user/ios-app-control/", json=payload, timeout=timeout)
-    return response.json()
 
 
 def _report_ios_command_result(data: dict, label: str) -> None:

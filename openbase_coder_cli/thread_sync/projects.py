@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -13,16 +14,30 @@ from openbase_coder_cli.thread_sync.thread_sync_common import translate_home_pat
 # The data dir, not ~/.openbase: in a container only the data volume survives
 # an image upgrade (identical paths on a normal install).
 PROJECTS_FILE = OPENBASE_BASE_DIR / "coder-projects.json"
+logger = logging.getLogger(__name__)
 IGNORED_PROJECT_ROOTS = (Path("/private"), Path("/var"))
 IGNORED_EXACT_PROJECT_PATHS = (Path.home(),)
 
 
 def _load_projects() -> list[dict]:
-    """Load projects from the JSON file."""
-    if not PROJECTS_FILE.exists():
+    """Load projects from the JSON file.
+
+    The file is a derived cache, so an empty or unreadable one is an empty
+    list, never an error: a zero-byte cache carried over from an older
+    install made every thread listing fail (staging, 2026-10-09).
+    """
+    try:
+        text = PROJECTS_FILE.read_text(encoding="utf-8")
+        if not text.strip():
+            return []
+        raw = json.loads(text)
+    except FileNotFoundError:
         return []
-    with open(PROJECTS_FILE, encoding="utf-8") as f:
-        raw = json.load(f)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        logger.warning(
+            "Ignoring unreadable projects cache %s", PROJECTS_FILE, exc_info=True
+        )
+        return []
     if not isinstance(raw, list):
         return []
     projects: list[dict] = []

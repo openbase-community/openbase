@@ -1,6 +1,8 @@
 """Security invariants for isolated Maritime workspace bootstrap."""
 
 import json
+import shutil
+import subprocess
 from importlib import import_module
 from pathlib import Path
 from unittest import mock
@@ -115,6 +117,38 @@ def test_container_entrypoint_enforces_private_durable_runtime():
     assert "FROM golang:1.26.5-bookworm AS tunneld-build" in dockerfile
     assert "COPY --from=tunneld-build" in dockerfile
     assert 'VOLUME ["/home/openbase/.openbase", "/data"]' in dockerfile
+
+
+def _entrypoint_env(tmp_path, extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Run the entrypoint with a command argument (it execs it after the env
+    defaults, before any supervision) and return the environment it hands on."""
+    entrypoint = Path(__file__).parents[1] / "docker" / "entrypoint.sh"
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), **(extra or {})}
+    result = subprocess.run(
+        [shutil.which("bash") or "bash", str(entrypoint), "env"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    return dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+
+
+def test_container_routes_browser_logins_to_the_phone(tmp_path):
+    dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
+    assert 'BROWSER="openbase-browser"' in dockerfile
+    assert 'GH_BROWSER="openbase-browser"' in dockerfile
+    assert 'COPY --chmod=0755 docker/openbase-browser /usr/local/bin/openbase-browser' in dockerfile
+
+    # Maritime's VM init drops the image ENV, so the entrypoint re-asserts it.
+    env = _entrypoint_env(tmp_path)
+    assert env["BROWSER"] == "openbase-browser"
+    assert env["GH_BROWSER"] == "openbase-browser"
+
+    overridden = _entrypoint_env(tmp_path, {"BROWSER": "custom-browser", "GH_BROWSER": "custom-gh"})
+    assert overridden["BROWSER"] == "custom-browser"
+    assert overridden["GH_BROWSER"] == "custom-gh"
 
 
 def test_container_image_includes_agent_instructions_and_skills():

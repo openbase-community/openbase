@@ -1309,9 +1309,12 @@ async def test_a_delegation_mid_request_binds_without_cutting_the_hold_short():
         settle=0.1, hold_max=2.0
     )
     live.final("Subtract 38 from the multiplication result in this thread")
+    # The caller is still speaking the next sentence when the model delegates.
+    bridge.on_user_state_changed("listening", "speaking")
     live.delegate("d1", "")
     await _settle()
     assert dispatcher.prompts == []
+    bridge.on_user_state_changed("speaking", "listening")
     live.final(". Answer just the number")
     await asyncio.sleep(0.25)
     assert len(dispatcher.prompts) == 1
@@ -1347,8 +1350,10 @@ async def test_words_after_a_silent_turn_started_carry_the_whole_request():
 async def test_held_delegation_discards_pending_text_when_its_final_arrives(final):
     bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=5.0)
     live.final("Read the file on my", item_id="first")
+    bridge.on_user_state_changed("listening", "speaking")
     live.delegate("d1", "desktop")
     live.final(final, item_id="second")
+    bridge.on_user_state_changed("speaking", "listening")
     bridge._flush_held()
     await _settle()
     assert len(dispatcher.prompts) == 1
@@ -1360,8 +1365,12 @@ async def test_held_delegation_discards_pending_text_when_its_final_arrives(fina
 async def test_reconnect_unbinds_a_delegation_while_its_utterance_is_held():
     bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=5.0)
     live.final("Run the tests")
+    bridge.on_user_state_changed("listening", "speaking")
     live.delegate("old-session", "")
+    assert bridge._held is not None
+    assert bridge._held.delegation_id == "old-session"
     live.emit("session_reconnected")
+    bridge.on_user_state_changed("speaking", "listening")
     bridge._flush_held()
     await _settle()
     dispatcher.result_gate.set()
@@ -1396,3 +1405,25 @@ def test_join_fragments_attaches_leading_punctuation():
         "What files are on my desktop"
     )
     assert join_fragments("", "desktop") == "desktop"
+
+
+async def test_a_delegation_while_the_caller_is_silent_starts_the_turn_at_once():
+    """A delegation from the model is the end-of-request signal: with the
+    caller silent (session VAD) the agent hears the request without waiting
+    for the settle window, so delegated requests pay no added latency."""
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        settle=5.0, hold_max=10.0, lag=5.0
+    )
+    bridge.on_user_state_changed("listening", "speaking")
+    bridge.on_user_state_changed("speaking", "listening")
+    live.final("What files are on my desktop")
+    await _settle()
+    assert dispatcher.prompts == []
+    live.delegate("d1", "")
+    await _settle()
+    assert len(dispatcher.prompts) == 1
+    assert dispatcher.prompts[0][0].endswith(_voice("What files are on my desktop"))
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    await bridge.aclose()

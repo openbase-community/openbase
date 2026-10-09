@@ -104,6 +104,12 @@ esac
 export OPENBASE_CODER_WORKSPACE_DIR="${OPENBASE_CODER_WORKSPACE_DIR:-/opt/openbase-coder/workspace}"
 export OPENBASE_CODER_CLI_CONSOLE_BUILD_DIR="${OPENBASE_CODER_CLI_CONSOLE_BUILD_DIR:-/opt/openbase-coder/console-dist}"
 export UV_PYTHON_DOWNLOADS="${UV_PYTHON_DOWNLOADS:-never}"
+# No browser runs in the container: CLIs that open one for a login hand the
+# URL to `openbase-coder browser open`, which sends it to the user's phone
+# (or prints it with paste-back guidance). Agents and supervised services
+# inherit these from here.
+export BROWSER="${BROWSER:-openbase-browser}"
+export GH_BROWSER="${GH_BROWSER:-openbase-browser}"
 
 if [ "$#" -gt 0 ]; then
     exec "$@"

@@ -143,3 +143,15 @@ def test_dispatcher_rules_tell_it_to_act_on_the_thread_open_on_screen(monkeypatc
     assert 'super_agents_start_turn' in rules and 'super_agents_steer' in rules
     assert '"this thread"' in rules
     assert instructions.with_dispatcher_rules(rules, host='mac') == rules
+
+
+def test_dispatcher_requires_confirmed_steering_and_queue_outcomes(monkeypatch):
+    monkeypatch.setattr(instructions, 'canonical_dispatcher_skill', lambda: '')
+    result = instructions.with_dispatcher_rules('Dispatcher policy.')
+    rules = ' '.join(result.split())
+    assert 'only after a successful steer/queue call' in rules
+    assert 'steered true or queued true' in rules
+    assert 'Never promise automatic delivery when the SDK becomes ready' in rules
+    assert 'super_agents_queue_turn' in rules
+    assert 'nothing was delivered or queued' in rules
+    assert 'queued fallback does not interrupt current work' in rules
