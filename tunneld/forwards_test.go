@@ -1,0 +1,318 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+// testForwardManager runs the manager over loopback: "tailnet" listeners are
+// ephemeral loopback ports recorded per requested port, and the "local
+// target" is a tiny HTTP server that echoes the request path.
+type testForwardManager struct {
+	*forwardManager
+	mu        sync.Mutex
+	listeners map[int]net.Listener
+	target    *httptest.Server
+	whoisID   string
+	whoisIPs  []netip.Addr
+	whoisErr  error
+}
+
+func newTestForwardManager(t *testing.T, reserved ...int) *testForwardManager {
+	t.Helper()
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "callback %s", r.URL.RequestURI())
+	}))
+	t.Cleanup(target.Close)
+	tm := &testForwardManager{listeners: map[int]net.Listener{}, target: target}
+	m := &forwardManager{
+		entries:  map[int]*forwardEntry{},
+		reserved: map[int]bool{},
+		now:      time.Now,
+	}
+	for _, port := range reserved {
+		m.reserved[port] = true
+	}
+	m.listen = func(port int) (net.Listener, error) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return nil, err
+		}
+		tm.mu.Lock()
+		tm.listeners[port] = ln
+		tm.mu.Unlock()
+		return ln, nil
+	}
+	m.dial = func(ctx context.Context, port int) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "tcp", strings.TrimPrefix(target.URL, "http://"))
+	}
+	m.whois = func(ctx context.Context, remoteAddr string) (string, []netip.Addr, error) {
+		return tm.whoisID, tm.whoisIPs, tm.whoisErr
+	}
+	tm.forwardManager = m
+	t.Cleanup(m.CloseAll)
+	return tm
+}
+
+func (tm *testForwardManager) addr(port int) string {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	return tm.listeners[port].Addr().String()
+}
+
+func (tm *testForwardManager) get(t *testing.T, port int, path string) (int, string, error) {
+	t.Helper()
+	// Each request must open a fresh connection so every accept runs the
+	// peer check; keep-alive reuse would bypass it.
+	client := &http.Client{
+		Timeout:   3 * time.Second,
+		Transport: &http.Transport{DisableKeepAlives: true},
+	}
+	resp, err := client.Get("http://" + tm.addr(port) + path)
+	if err != nil {
+		return 0, "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(body), nil
+}
+
+func TestForwardLifecycle(t *testing.T) {
+	tm := newTestForwardManager(t, 18080)
+	info, err := tm.Add(forwardRequest{Port: 1455, TTLSeconds: 60})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if info.Port != 1455 || info.Target != "127.0.0.1:1455" || info.OneShot {
+		t.Fatalf("unexpected info %+v", info)
+	}
+	if ttl := info.ExpiresAt.Sub(info.CreatedAt); ttl != 60*time.Second {
+		t.Fatalf("ttl = %s, want 60s", ttl)
+	}
+	status, body, err := tm.get(t, 1455, "/auth/callback?code=abc&state=xyz")
+	if err != nil || status != 200 || body != "callback /auth/callback?code=abc&state=xyz" {
+		t.Fatalf("forwarded request: status %d body %q err %v", status, body, err)
+	}
+	// Not one-shot: a second request still works and the counter advances.
+	if _, _, err := tm.get(t, 1455, "/again"); err != nil {
+		t.Fatalf("second request: %v", err)
+	}
+	list := tm.List()
+	if len(list) != 1 || list[0].Connections != 2 {
+		t.Fatalf("list = %+v, want one forward with 2 connections", list)
+	}
+	if !tm.Remove(1455) {
+		t.Fatal("remove reported no forward")
+	}
+	if tm.Remove(1455) {
+		t.Fatal("second remove should report nothing")
+	}
+	if _, _, err := tm.get(t, 1455, "/closed"); err == nil {
+		t.Fatal("expected the removed forward to refuse connections")
+	}
+	if len(tm.List()) != 0 {
+		t.Fatalf("list after remove = %+v", tm.List())
+	}
+}
+
+func TestForwardOneShotRetiresAfterFirstConnection(t *testing.T) {
+	tm := newTestForwardManager(t)
+	if _, err := tm.Add(forwardRequest{Port: 52807, OneShot: true}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	status, body, err := tm.get(t, 52807, "/oauth/callback?code=1")
+	if err != nil || status != 200 || !strings.Contains(body, "code=1") {
+		t.Fatalf("first request: status %d body %q err %v", status, body, err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(tm.List()) != 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(tm.List()) != 0 {
+		t.Fatalf("one-shot forward still listed: %+v", tm.List())
+	}
+	if _, _, err := tm.get(t, 52807, "/second"); err == nil {
+		t.Fatal("expected the one-shot forward to be closed after its first connection")
+	}
+}
+
+func TestForwardExpiresAfterTTL(t *testing.T) {
+	tm := newTestForwardManager(t)
+	if _, err := tm.Add(forwardRequest{Port: 3000, TTLSeconds: 1}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(tm.List()) != 0 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if len(tm.List()) != 0 {
+		t.Fatalf("forward did not expire: %+v", tm.List())
+	}
+	// The port is free again after expiry.
+	if _, err := tm.Add(forwardRequest{Port: 3000}); err != nil {
+		t.Fatalf("re-add after expiry: %v", err)
+	}
+}
+
+func TestForwardValidation(t *testing.T) {
+	tm := newTestForwardManager(t, 18080)
+	cases := []struct {
+		name   string
+		req    forwardRequest
+		status int
+	}{
+		{"privileged port", forwardRequest{Port: 80}, 400},
+		{"port too high", forwardRequest{Port: 70000}, 400},
+		{"negative ttl", forwardRequest{Port: 3000, TTLSeconds: -1}, 400},
+		{"ttl too long", forwardRequest{Port: 3000, TTLSeconds: 7200}, 400},
+		{"bad peer", forwardRequest{Port: 3000, Peer: "not a/peer"}, 400},
+		{"reserved port", forwardRequest{Port: 18080}, 409},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tm.Add(tc.req)
+			var fe *forwardError
+			if !errors.As(err, &fe) || fe.status != tc.status {
+				t.Fatalf("Add(%+v) err = %v, want status %d", tc.req, err, tc.status)
+			}
+		})
+	}
+	if _, err := tm.Add(forwardRequest{Port: 3000}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	_, err := tm.Add(forwardRequest{Port: 3000})
+	var fe *forwardError
+	if !errors.As(err, &fe) || fe.status != 409 {
+		t.Fatalf("duplicate add err = %v, want 409", err)
+	}
+}
+
+func TestForwardLimit(t *testing.T) {
+	tm := newTestForwardManager(t)
+	for i := 0; i < forwardMaxCount; i++ {
+		if _, err := tm.Add(forwardRequest{Port: 20000 + i}); err != nil {
+			t.Fatalf("add %d: %v", i, err)
+		}
+	}
+	_, err := tm.Add(forwardRequest{Port: 20000 + forwardMaxCount})
+	var fe *forwardError
+	if !errors.As(err, &fe) || fe.status != 409 {
+		t.Fatalf("over-limit add err = %v, want 409", err)
+	}
+}
+
+func TestForwardPeerPinByIP(t *testing.T) {
+	tm := newTestForwardManager(t)
+	// Loopback connections arrive from 127.0.0.1; pinning another IP refuses them.
+	if _, err := tm.Add(forwardRequest{Port: 4000, Peer: "100.64.0.9"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if _, _, err := tm.get(t, 4000, "/"); err == nil {
+		t.Fatal("expected the pinned forward to refuse a connection from another address")
+	}
+	if _, err := tm.Add(forwardRequest{Port: 4001, Peer: "127.0.0.1"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if status, _, err := tm.get(t, 4001, "/"); err != nil || status != 200 {
+		t.Fatalf("pinned-to-self request: status %d err %v", status, err)
+	}
+}
+
+func TestForwardPeerPinByNodeID(t *testing.T) {
+	tm := newTestForwardManager(t)
+	tm.whoisID = "node-phone"
+	tm.whoisIPs = []netip.Addr{netip.MustParseAddr("127.0.0.1")}
+	if _, err := tm.Add(forwardRequest{Port: 4100, Peer: "node-phone"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if status, _, err := tm.get(t, 4100, "/"); err != nil || status != 200 {
+		t.Fatalf("matching node request: status %d err %v", status, err)
+	}
+	tm.whoisID = "node-other"
+	if _, _, err := tm.get(t, 4100, "/"); err == nil {
+		t.Fatal("expected a different node to be refused")
+	}
+	tm.whoisErr = errors.New("whois unavailable")
+	if _, _, err := tm.get(t, 4100, "/"); err == nil {
+		t.Fatal("expected a whois failure to refuse the connection")
+	}
+}
+
+func TestForwardLocalAPI(t *testing.T) {
+	tm := newTestForwardManager(t)
+	api := &localAPI{token: "secret", forwards: tm.forwardManager}
+	server := httptest.NewServer(api.handler())
+	t.Cleanup(server.Close)
+
+	do := func(method, path string, body any) (int, map[string]any) {
+		t.Helper()
+		var reader io.Reader
+		if body != nil {
+			raw, _ := json.Marshal(body)
+			reader = bytes.NewReader(raw)
+		}
+		req, _ := http.NewRequest(method, server.URL+path, reader)
+		req.Header.Set("Authorization", "Bearer secret")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		defer resp.Body.Close()
+		payload := map[string]any{}
+		json.NewDecoder(resp.Body).Decode(&payload)
+		return resp.StatusCode, payload
+	}
+
+	if status, payload := do("GET", "/forwards", nil); status != 200 || len(payload["forwards"].([]any)) != 0 {
+		t.Fatalf("empty list: %d %v", status, payload)
+	}
+	status, payload := do("POST", "/forwards", map[string]any{"port": 1455, "ttl_seconds": 30, "one_shot": true})
+	if status != 201 || payload["port"] != float64(1455) || payload["one_shot"] != true {
+		t.Fatalf("create: %d %v", status, payload)
+	}
+	if status, payload := do("POST", "/forwards", map[string]any{"port": 1455}); status != 409 || payload["error"] == nil {
+		t.Fatalf("duplicate create: %d %v", status, payload)
+	}
+	if status, _ := do("POST", "/forwards", map[string]any{"port": 22}); status != 400 {
+		t.Fatalf("bad port: %d", status)
+	}
+	if status, payload := do("GET", "/forwards", nil); status != 200 || len(payload["forwards"].([]any)) != 1 {
+		t.Fatalf("list: %d %v", status, payload)
+	}
+	if status, _ := do("DELETE", "/forwards/1455", nil); status != 204 {
+		t.Fatalf("delete: %d", status)
+	}
+	if status, _ := do("DELETE", "/forwards/1455", nil); status != 404 {
+		t.Fatalf("delete again: %d", status)
+	}
+	if status, _ := do("DELETE", "/forwards/abc", nil); status != 400 {
+		t.Fatalf("delete bad port: %d", status)
+	}
+
+	// Without the token nothing is reachable.
+	req, _ := http.NewRequest("GET", server.URL+"/forwards", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != 401 {
+		t.Fatalf("unauthenticated: %v %v", err, resp)
+	}
+	resp.Body.Close()
+
+	// Before the node is up the endpoint reports unavailable instead of panicking.
+	api.forwards = nil
+	if status, _ := do("POST", "/forwards", map[string]any{"port": 3000}); status != 503 {
+		t.Fatalf("not up: %d", status)
+	}
+}

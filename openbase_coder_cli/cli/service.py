@@ -7,7 +7,7 @@ from functools import wraps
 
 import click
 
-from openbase_coder_cli.services import service_recovery
+from openbase_coder_cli.services import service_recovery, tailscale_provider
 from openbase_coder_cli.services.published_service_routes import (
     allocate_private_service_hostname,
     apply_route,
@@ -32,6 +32,16 @@ from openbase_coder_cli.services.published_services import (
     validate_local_port,
     validate_name,
 )
+from openbase_coder_cli.services.tunneld import (
+    TunneldForwardError,
+    tunneld_add_forward,
+    tunneld_list_forwards,
+    tunneld_remove_forward,
+    tunneld_self_dns_name,
+)
+
+EXPOSE_DEFAULT_TTL_SECONDS = 600
+EXPOSE_MAX_TTL_SECONDS = 3600
 
 
 @click.group()
@@ -221,6 +231,96 @@ def publish(
         click.echo("  Persistence: current login session only")
 
 
+def _require_tsnet_host() -> None:
+    if not tailscale_provider.is_netmesh_tsnet():
+        raise click.ClickException(
+            "service expose needs the embedded tailnet node (Openbase Direct / "
+            "cloud workspaces). On a Mac with Openbase VPN use `service publish`."
+        )
+
+
+def exposed_url(port: int, dns_name: str | None) -> str:
+    host = dns_name or "<this-node>"
+    return f"http://{host}:{port}/"
+
+
+@service.command()
+@click.argument("port", type=int)
+@click.option(
+    "--ttl",
+    "ttl_seconds",
+    type=click.IntRange(1, EXPOSE_MAX_TTL_SECONDS),
+    default=EXPOSE_DEFAULT_TTL_SECONDS,
+    show_default=True,
+    help="Seconds until the forward closes on its own.",
+)
+@click.option(
+    "--one-shot",
+    is_flag=True,
+    help="Close the forward after its first completed connection (OAuth callbacks).",
+)
+@click.option(
+    "--peer",
+    default=None,
+    help="Only accept connections from this device (tailnet IP or node id).",
+)
+@click.option(
+    "--no-check",
+    "skip_check",
+    is_flag=True,
+    help="Do not require a listener on 127.0.0.1:PORT before exposing it.",
+)
+def expose(
+    port: int,
+    ttl_seconds: int,
+    one_shot: bool,
+    peer: str | None,
+    skip_check: bool,
+) -> None:
+    """Expose loopback PORT on this node's tailnet address for a limited time.
+
+    The forward is reachable only by the devices of this Openbase account
+    (never the public internet) and closes after --ttl seconds. Use it from a
+    cloud workspace to open a dev server or a CLI login callback on the
+    user's phone; `service publish` is the Mac path with a private hostname.
+    """
+    _require_tsnet_host()
+    try:
+        port = validate_local_port(port)
+        if not skip_check and not local_service_available(port):
+            raise ValueError(
+                f"No service is accepting connections on 127.0.0.1:{port} "
+                "(use --no-check to expose it anyway)."
+            )
+        info = tunneld_add_forward(
+            port, ttl_seconds=ttl_seconds, one_shot=one_shot, peer=peer
+        )
+    except (ValueError, TunneldForwardError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    url = exposed_url(port, tunneld_self_dns_name())
+    click.echo(f"Exposed 127.0.0.1:{port}: {url}")
+    click.echo("  Visibility: this Openbase account's devices only, over Openbase VPN")
+    click.echo(f"  Expires: {info.get('expires_at', 'unknown')}")
+    if one_shot:
+        click.echo("  Closes after the first completed connection")
+    if peer:
+        click.echo(f"  Pinned to peer: {peer}")
+
+
+@service.command()
+@click.argument("port", type=int)
+def unexpose(port: int) -> None:
+    """Close the dynamic forward for PORT created by `service expose`."""
+    _require_tsnet_host()
+    try:
+        removed = tunneld_remove_forward(port)
+    except TunneldForwardError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if not removed:
+        raise click.ClickException(f"Port {port} is not exposed.")
+    click.echo(f"Closed the forward for 127.0.0.1:{port}.")
+
+
 @service.command("list")
 def list_command() -> None:
     """List published services and their tailnet URLs."""
@@ -228,9 +328,24 @@ def list_command() -> None:
         services = list(load_registry().services)
     except (OSError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
-    if not services:
+    forwards = tunneld_list_forwards() if tailscale_provider.is_netmesh_tsnet() else []
+    if not services and not forwards:
         click.echo("No local services are published.")
         return
+    if forwards:
+        dns_name = tunneld_self_dns_name()
+        for forward in forwards:
+            port = forward.get("port")
+            flags = []
+            if forward.get("one_shot"):
+                flags.append("one-shot")
+            if forward.get("peer"):
+                flags.append(f"peer {forward['peer']}")
+            flags.append(f"expires {forward.get('expires_at', 'unknown')}")
+            click.echo(
+                f"{'port ' + str(port):<20} {exposed_url(port, dns_name)} -> "
+                f"127.0.0.1:{port} (exposed, {', '.join(flags)})"
+            )
     for item in services:
         try:
             url = service_url(item)
