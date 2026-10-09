@@ -30,7 +30,6 @@ from openbase_coder_cli.backend_config import (
 )
 from openbase_coder_cli.claude_auth import (
     is_backend_auth_failure_text,
-    is_spend_limit_text,
     verified_claude_auth_status,
 )
 from openbase_coder_cli.codex_session_defaults import (
@@ -196,14 +195,6 @@ BACKEND_ERROR_SPOKEN_FALLBACK = (
     "Please try again in a moment."
 )
 
-# A spend-limit 403 is NOT a transient outage — telling the user to "try again
-# in a moment" is misleading (they'll keep failing until next month or until
-# they subscribe). Speak the actual, actionable cause instead (FT-10).
-BACKEND_SPEND_LIMIT_SPOKEN = (
-    "You've reached your monthly Openbase model limit, so coding requests are "
-    "paused. You can raise your limit by subscribing at Openbase Cloud."
-)
-
 
 def _looks_like_raw_backend_error(text: str | None) -> bool:
     """Whether a turn answer is a raw backend/proxy error that must not be spoken."""
@@ -232,18 +223,21 @@ def _safe_spoken_answer(
     # A monthly-spend-limit 403 arrives looking like an auth failure ("Failed
     # to authenticate. API Error: 403 {...spend limit...}") but has a distinct,
     # actionable remedy — surface it accurately rather than as a generic outage.
-    from openbase_coder_cli.cloud_model_errors import model_plan_denial_message
+    from openbase_coder_cli.cloud_model_errors import (
+        model_allowance_exhausted_message,
+        model_plan_denial_message,
+    )
 
     if plan_denial := model_plan_denial_message(speech_text):
         return plan_denial
-    if is_spend_limit_text(speech_text):
+    if allowance_denial := model_allowance_exhausted_message(speech_text):
         logger.error(
             "%s stage=voice_turn_backend_spend_limit backend=%s turn_id=%s",
             DISPATCH_TIMING_LOG,
             backend or "unknown",
             turn_id or "",
         )
-        return BACKEND_SPEND_LIMIT_SPOKEN
+        return allowance_denial
     if auth_failed:
         return BACKEND_ERROR_SPOKEN_FALLBACK
     if not _looks_like_raw_backend_error(speech_text):
@@ -508,7 +502,7 @@ class SuperAgentsLiveKitClient(
         )
         try:
             result = await self._wait_for_turn(thread_id, turn_id)
-            speech_text = _speech_text_from_progress(result)
+            speech_text = _speech_text_from_progress(result, turn_id=turn_id)
             backend = getattr(self._backend_client, "backend", None)
             auth_failed = _flag_backend_auth_failure(
                 speech_text,
@@ -602,7 +596,9 @@ class SuperAgentsLiveKitClient(
             and turn_id not in self._claimed_speech_turns
             and handler is not None
         ):
-            speech_text = _speech_text_from_progress(wait_task.result())
+            speech_text = _speech_text_from_progress(
+                wait_task.result(), turn_id=turn_id
+            )
             backend = getattr(self._backend_client, "backend", None)
             auth_failed = _flag_backend_auth_failure(
                 speech_text,
@@ -675,7 +671,7 @@ class SuperAgentsLiveKitClient(
         handler = self._on_orphaned_result
         if not turn_id or handler is None or turn_id in self._claimed_speech_turns:
             return
-        speech_text = _speech_text_from_progress(wait_task.result())
+        speech_text = _speech_text_from_progress(wait_task.result(), turn_id=turn_id)
         backend = getattr(self._backend_client, "backend", None)
         auth_failed = _flag_backend_auth_failure(
             speech_text,

@@ -2913,7 +2913,22 @@ def test_backend_sessions_locks_do_not_keep_finished_event_loops_alive() -> None
     assert len(manager.__dict__["_backend_sessions_locks"]) == 0
 
 
-def test_plan_denial_live_event_is_normalized_before_broadcast(monkeypatch):
+@pytest.mark.parametrize(
+    "payload, message",
+    [
+        (
+            '{"code":"model_not_available_on_plan"}',
+            "This model is not available on your plan.",
+        ),
+        (
+            '{"detail":"Monthly Openbase model proxy spend limit reached. Model requests are blocked until next month."}',
+            "Your monthly Openbase model allowance is used up.",
+        ),
+    ],
+)
+def test_proxy_denial_live_event_is_normalized_before_broadcast(
+    monkeypatch, payload, message
+):
     monkeypatch.setenv(
         "OPENBASE_CODER_CLI_WEB_BACKEND_URL", "https://app-staging.openbase.cloud"
     )
@@ -2933,12 +2948,13 @@ def test_plan_denial_live_event_is_normalized_before_broadcast(monkeypatch):
                 "item": {
                     "id": "item-1",
                     "type": "agentMessage",
-                    "text": 'Failed to authenticate. API Error: 403 {"code":"model_not_available_on_plan"}',
+                    "text": "Failed to authenticate. API Error: 403 " + payload,
                 },
             },
         )
     )
     output = events[0]["data"]["line"]
-    assert output.startswith("This model is not available on your plan.")
+    assert output.startswith(message)
+    assert "try again" not in output
     assert "https://app-staging.openbase.cloud" in output
     assert "authenticate" not in output
