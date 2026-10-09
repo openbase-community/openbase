@@ -66,6 +66,7 @@ from openbase_coder_cli.livekit_voice_route import (
     get_livekit_voice_route_state,
     is_dispatcher_identity,
     live_target_transfer_blocker,
+    prepare_voice_route_transfer,
     publish_exit_to_dispatch,
     publish_transfer_to_thread,
     super_agent_voice_for_context,
@@ -108,11 +109,22 @@ class LiveKitRoomTokenSerializer(ExactFieldsSerializer):
     inbound_invitation_id = serializers.RegexField(
         r"^[A-Za-z0-9_-]{43}$", required=False
     )
+    # The thread the call is started from: the call talks to that thread from
+    # its first word. Absent (or the dispatcher's own id) for a dispatcher call.
+    thread_id = serializers.CharField(required=False, allow_blank=True)
+    # The name the phone shows for that thread, spoken when the thread cannot
+    # be reached and used as the Super Agent label, like a transfer's label.
+    thread_label = serializers.CharField(required=False, allow_blank=True)
 
     def validate(self, attrs):
         invitation_id = attrs.get("inbound_invitation_id")
         if invitation_id:
-            if attrs.get("room_name") or attrs.get("livekit_dispatch_agent_name"):
+            if (
+                attrs.get("room_name")
+                or attrs.get("livekit_dispatch_agent_name")
+                or attrs.get("thread_id")
+                or attrs.get("thread_label")
+            ):
                 raise serializers.ValidationError(
                     "Inbound invitations cannot override room or agent routing."
                 )
@@ -940,9 +952,24 @@ def livekit_room_token(request):
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
 
-    metadata = {
+    metadata: dict[str, Any] = {
         "user_identity": identity,
     }
+    start_thread_id = (
+        (input_serializer.validated_data.get("thread_id") or "").strip()
+        if not inbound_invitation_id
+        else ""
+    )
+    if start_thread_id:
+        started = _prepare_call_start_route(
+            start_thread_id,
+            label=(input_serializer.validated_data.get("thread_label") or "").strip()
+            or None,
+        )
+        if "response" in started:
+            return started["response"]
+        if started.get("voice_route") is not None:
+            metadata["voice_route"] = started["voice_route"]
 
     display_name = (
         request.user.get_full_name().strip()
@@ -1002,6 +1029,54 @@ def livekit_room_token(request):
             "id": workspace_id,
         }
     return Response(payload)
+
+
+def _prepare_call_start_route(thread_id: str, *, label: str | None = None) -> dict:
+    """Resolve and prepare the thread a call is started from.
+
+    Returns ``{"voice_route": payload}`` for a project thread (the prepared
+    ``transfer_to_thread`` command the agent applies before the first word),
+    ``{"voice_route": None}`` when the id is the dispatcher's own thread (a
+    dispatcher call), or ``{"response": Response}`` when the call must not
+    start: an unknown thread or a transfer this install cannot make. Silently
+    falling back to the dispatcher is the very bug this exists to fix.
+    """
+    manager = get_session_manager()
+    resolved = async_to_sync(_resolve_voice_transfer_target)(
+        manager, thread_id=thread_id, agent_name=None
+    )
+    if resolved["status"] == status.HTTP_409_CONFLICT:
+        return {"voice_route": None}
+    if resolved["status"] != status.HTTP_200_OK:
+        data = dict(resolved["data"])
+        data.setdefault("code", "thread_not_found")
+        return {"response": Response(data, status=resolved["status"])}
+    thread = resolved["thread"]
+    try:
+        transfer = async_to_sync(prepare_voice_route_transfer)(
+            thread.session_id,
+            directory=thread.directory,
+            label=label or _thread_label(thread),
+            agent_name=_thread_agent_name(thread)
+            or _derived_thread_agent_name(thread)
+            or None,
+        )
+    except VoiceRouteBlockedError as exc:
+        return {
+            "response": Response(
+                {"detail": str(exc), "code": "voice_route_blocked"},
+                status=status.HTTP_409_CONFLICT,
+            )
+        }
+    except VoiceRouteError as exc:
+        return {
+            "response": Response(
+                {"detail": str(exc), "code": "voice_route_error"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        }
+    transfer.commit()
+    return {"voice_route": transfer.command_payload()}
 
 
 @api_view(["GET"])

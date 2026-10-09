@@ -9,6 +9,7 @@ public names are re-exported here for backward compatibility.
 
 import asyncio
 import inspect
+import json
 import logging
 import os
 import uuid
@@ -167,6 +168,7 @@ from openbase_coder_cli.livekit_agent.packets import (  # noqa: F401
     publish_agent_error_packet,
     publish_voice_engine_attribute,
     publish_voice_lifecycle_packet,
+    voice_route_command_from_payload,
 )
 from openbase_coder_cli.livekit_agent.proc_pool_patch import (
     install_proc_pool_liveness_patch,
@@ -906,7 +908,11 @@ class LiveVoiceAssistant(Agent):
     """
 
     def __init__(self, bridge: LiveDelegationBridge) -> None:
-        super().__init__(instructions=live_voice_startup_instructions())
+        super().__init__(
+            instructions=live_voice_startup_instructions(
+                agent_label=bridge.starting_agent_label()
+            )
+        )
         self._bridge = bridge
 
     async def on_enter(self) -> None:
@@ -958,6 +964,7 @@ async def _start_live_voice_session(
         voice_router=voice_router,
         delivery_ledger=delivery_ledger,
         call_id=str(getattr(ctx.room, "name", "") or ""),
+        initial_agent_label=_route_agent_label(voice_router),
     )
     session_diagnostic_handlers = _register_session_diagnostics(
         session,
@@ -1238,6 +1245,9 @@ async def livekit_agent(ctx: JobContext):
     room_diagnostic_handlers = (
         _register_room_diagnostics(ctx.room) if LIVEKIT_VERBOSE_LOGGING else ()
     )
+    start_route_failure = await _apply_start_route(
+        ctx, voice_router, prepare_task=prepare_task
+    )
     decision = await decision_task
     room_id = await _room_sid(ctx.room)
     delivery_ledger = _build_delivery_ledger(
@@ -1309,6 +1319,9 @@ async def livekit_agent(ctx: JobContext):
             room_diagnostic_handlers,
         )
 
+    if start_route_failure:
+        _announce_start_route_failure(session, live_bridge, start_route_failure)
+
     # Surface stalled agent turns during the call — e.g. a spawned sub-agent
     # blocked on a macOS permission dialog on the user's computer (field-test
     # finding FT-9, 2026-09-12). Runs session-wide so it covers the dispatcher
@@ -1331,6 +1344,112 @@ async def livekit_agent(ctx: JobContext):
 
     ctx.add_shutdown_callback(_cancel_stall_watch)
     logger.info("LiveKit AgentSession started (voice_engine=%s)", decision.engine)
+
+
+def requested_start_route(ctx: JobContext) -> VoiceRouteCommand | None:
+    """The thread this call was started from, per the room-token dispatch metadata.
+
+    A call started from a project thread talks to that thread; the phone passes
+    the thread to ``/api/livekit-room-token/`` and the token view puts the
+    prepared ``transfer_to_thread`` command under ``voice_route``. A call
+    started from the dispatcher, an inbound call, or an older phone carries
+    none and stays on the dispatcher.
+    """
+    raw = getattr(getattr(ctx, "job", None), "metadata", "") or ""
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        logger.warning("Ignoring unreadable job metadata on room %s", ctx.room.name)
+        return None
+    if not isinstance(payload, dict):
+        return None
+    command = voice_route_command_from_payload(payload.get("voice_route"))
+    if command is None or command.action != "transfer_to_thread":
+        return None
+    if not command.thread_id or not command.cwd:
+        logger.warning(
+            "Ignoring incomplete start route on room %s: thread_id=%s cwd=%s",
+            ctx.room.name,
+            command.thread_id or "",
+            command.cwd or "",
+        )
+        return None
+    return command
+
+
+async def _apply_start_route(
+    ctx: JobContext,
+    voice_router: LiveKitVoiceRouter,
+    *,
+    prepare_task: "asyncio.Task[str]",
+) -> str | None:
+    """Route the call into the thread it was started from, before any speech.
+
+    Returns None when the call is on its intended route, else the label of the
+    thread that could not be reached (the call then stays on the dispatcher
+    and the caller hears about it once the voice session is up).
+    """
+    route = requested_start_route(ctx)
+    if route is None:
+        return None
+    label = route.label or route.active_target_voice_name or route.thread_id
+    assert route.thread_id is not None and route.cwd is not None
+    try:
+        # The dispatcher client persists the route file; its thread id must be
+        # known before the target route is written, or the write is skipped.
+        await prepare_task
+        await voice_router.transfer_to_thread(
+            thread_id=route.thread_id,
+            cwd=route.cwd,
+            label=route.label,
+            voice_id=route.active_target_voice_id,
+            voice_name=route.active_target_voice_name,
+        )
+    except Exception:
+        logger.warning(
+            "Unable to start the call on thread %s in room %s; staying on the "
+            "dispatcher",
+            route.thread_id,
+            ctx.room.name,
+            exc_info=True,
+        )
+        voice_router.exit_to_dispatch()
+        return str(label)
+    logger.info(
+        "dispatch_timing stage=call_started_on_thread room_name=%s thread_id=%s "
+        "label=%s",
+        ctx.room.name,
+        route.thread_id,
+        route.label or "",
+    )
+    return None
+
+
+def _route_agent_label(voice_router: LiveKitVoiceRouter) -> str | None:
+    """The name the live voice calls the active route, None for the dispatcher."""
+    if voice_router.is_dispatcher_active:
+        return None
+    client = voice_router.active_client
+    return (
+        voice_router.active_target_voice_name
+        or getattr(client, "_super_agent_name", None)
+        or None
+    )
+
+
+def _announce_start_route_failure(
+    session: AgentSession, live_bridge: LiveDelegationBridge | None, label: str
+) -> None:
+    text = f"I could not reach {label}, so you are talking to the dispatcher."
+    try:
+        if live_bridge is not None:
+            live_bridge.announce(text)
+        else:
+            session.say(text)
+    except Exception:
+        logger.warning("Unable to announce the start route failure", exc_info=True)
 
 
 def _wire_pipeline_voice_call(

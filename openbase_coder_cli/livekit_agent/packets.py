@@ -345,7 +345,15 @@ def parse_voice_route_packet(data_packet: rtc.DataPacket) -> VoiceRouteCommand |
     )
     if payload is None:
         return None
+    return voice_route_command_from_payload(payload)
 
+
+def voice_route_command_from_payload(payload) -> VoiceRouteCommand | None:
+    """The route command a ``transfer_to_thread``/``exit_to_dispatch`` payload
+    carries, whether it arrived as a data packet during the call or in the
+    agent's dispatch metadata for a call started from a thread."""
+    if not isinstance(payload, dict):
+        return None
     action = str(payload.get("action") or "").strip()
     if not action:
         return None

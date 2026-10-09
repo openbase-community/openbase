@@ -495,6 +495,7 @@ class LiveDelegationBridge:
         utterance_transcript_lag_seconds: float = UTTERANCE_TRANSCRIPT_LAG_SECONDS,
         clock: Callable[[], float] = time.monotonic,
         call_id: str = "",
+        initial_agent_label: str | None = None,
     ) -> None:
         self._voice_router = voice_router
         self._call_id = call_id
@@ -521,13 +522,23 @@ class LiveDelegationBridge:
         self._skipped: _SkippedUtterance | None = None
         self._utterance_seq = 0
         self._speaking_record: Any = None
-        self._active_agent_label = DISPATCHER_AGENT_LABEL
+        # A call started from a project thread is already routed there when
+        # the bridge is built; the dispatcher otherwise.
+        self._active_agent_label = (
+            initial_agent_label or ""
+        ).strip() or DISPATCHER_AGENT_LABEL
         self._closed = False
 
     # wiring
 
     @property
     def active_agent_label(self) -> str:
+        return self._active_agent_label
+
+    def starting_agent_label(self) -> str | None:
+        """The agent on the call from the start, None when it is the dispatcher."""
+        if self._active_agent_label == DISPATCHER_AGENT_LABEL:
+            return None
         return self._active_agent_label
 
     def _session_handlers(self) -> tuple[tuple[str, Callable[..., None]], ...]:
