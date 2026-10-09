@@ -245,10 +245,14 @@ def test_single_flight_abandons_a_stale_leader_and_computes_afresh() -> None:
         release.wait()
         return "late"
 
-    threading.Thread(target=lambda: cache.get("k", stuck_leader), daemon=True).start()
+    leader = threading.Thread(target=lambda: cache.get("k", stuck_leader))
+    leader.start()
     assert leader_started.wait(1.0)
     # Age the in-flight record past the bound: the next caller must not wait on it.
     cache._inflight["k"].started_at -= 1.0
 
     assert cache.get("k", lambda: "fresh") == "fresh"
     release.set()
+    leader.join(1.0)
+
+    assert cache.get("k", lambda: "newer") == "fresh"

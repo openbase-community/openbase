@@ -2833,3 +2833,54 @@ def test_backend_sessions_single_flight_lock_is_safe_across_event_loops() -> Non
     second.join(3.0)
     assert errors == []
     assert len(inside) == 2
+
+
+def test_backend_sessions_keeps_single_flight_per_event_loop() -> None:
+    import threading
+
+    first_loop_release = threading.Event()
+    first_loop_entered = threading.Semaphore(0)
+    foreign_loop_release = threading.Event()
+    foreign_loop_entered = threading.Semaphore(0)
+    duplicate_entered = threading.Semaphore(0)
+    sessions_calls = 0
+
+    class Client:
+        async def sessions(self):
+            nonlocal sessions_calls
+            sessions_calls += 1
+            if sessions_calls == 1:
+                first_loop_entered.release()
+                while not first_loop_release.is_set():
+                    await asyncio.sleep(0.01)
+            elif sessions_calls == 2:
+                foreign_loop_entered.release()
+                while not foreign_loop_release.is_set():
+                    await asyncio.sleep(0.01)
+            else:
+                duplicate_entered.release()
+            return []
+
+    manager = _manager(Client())
+
+    async def run_two_on_one_loop():
+        first = asyncio.create_task(manager._backend_sessions())
+        assert await asyncio.to_thread(first_loop_entered.acquire, True, 2.0)
+        foreign = asyncio.create_task(
+            asyncio.to_thread(run_once_on_foreign_loop, manager)
+        )
+        assert await asyncio.to_thread(foreign_loop_entered.acquire, True, 2.0)
+        second = asyncio.create_task(manager._backend_sessions())
+        assert not await asyncio.to_thread(duplicate_entered.acquire, True, 0.2)
+        first_loop_release.set()
+        foreign_loop_release.set()
+        await asyncio.gather(first, second)
+        await foreign
+
+    asyncio.run(run_two_on_one_loop())
+
+    assert sessions_calls == 2
+
+
+def run_once_on_foreign_loop(manager: Any) -> None:
+    asyncio.run(manager._backend_sessions())
