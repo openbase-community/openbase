@@ -321,6 +321,14 @@ awk '/^# BEGIN docker overrides/{skip=1} !skip{print} /^# END docker overrides/{
 } >>"$tmp_env"
 mv "$tmp_env" "$ENV_FILE"
 
+# Render every managed instruction file before any service starts. First-run
+# setup does this once; an image upgrade on a persisted /data does not re-run
+# setup, and workspaces redeployed in place came back with only AGENTS.md
+# until something rendered the rest (2026-10-09). Idempotent, and it leaves
+# user-authored files alone; non-fatal so a template problem cannot block boot.
+python -c "from openbase_coder_cli.codex_home_instructions import refresh_openbase_instruction_files_from_installation as refresh; refresh(report=print)" \
+    || echo "[entrypoint] warning: instruction refresh failed" >&2
+
 # Setup only auto-installs the pinned livekit-server for dev workspaces with
 # uv project state; install it explicitly here (idempotent: checks version).
 python -c "from openbase_coder_cli.livekit_install import ensure_pinned_livekit_server; ensure_pinned_livekit_server()"

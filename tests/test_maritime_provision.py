@@ -188,3 +188,12 @@ def test_container_projects_dir_prefers_durable_workspace_dir(monkeypatch):
 
     monkeypatch.setenv("OPENBASE_CODER_WORKSPACE_DIR", "/data/Projects")
     assert provision_module._container_projects_dir() == "/data/Projects"
+
+
+def test_container_boot_renders_instructions_before_services_start():
+    # Regression (2026-10-09): an image upgrade on a persisted /data does not
+    # re-run setup, so boot itself must render the instruction files.
+    entrypoint = (Path(__file__).parents[1] / "docker" / "entrypoint.sh").read_text()
+    refresh = entrypoint.index("refresh_openbase_instruction_files_from_installation as refresh; refresh(report=print)")
+    assert refresh > entrypoint.index("# --- First-run setup")
+    assert refresh < entrypoint.index('start_supervised "$name" bash "$wrapper"')

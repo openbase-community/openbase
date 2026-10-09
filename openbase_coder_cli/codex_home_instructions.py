@@ -137,7 +137,7 @@ def ensure_openbase_instruction_md(
         _report(report, f"{document_label} already configured at {target_path}")
         return False
 
-    target_path.write_text(updated, encoding="utf-8")
+    _write_atomically(target_path, updated)
     _report(report, f"Updated editable {document_label} at {target_path}")
     return True
 
@@ -217,13 +217,22 @@ def ensure_rendered_instruction_file(
         return False
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    if target_path.is_file() and not os.access(target_path, os.W_OK):
-        target_path.chmod(0o644)
-    target_path.write_text(rendered, encoding="utf-8")
+    _write_atomically(target_path, rendered)
     if standalone:
         _mark_read_only(target_path)
     _report(report, f"Updated {document_label} at {target_path}")
     return True
+
+
+def _write_atomically(target_path: Path, text: str) -> None:
+    """Replace the file in one rename. Several services refresh these files
+    at once when a container boots, and a voice call may read one meanwhile;
+    a reader must see the old text or the new text, never a partial write.
+    The rename also replaces a read-only standalone file without a chmod."""
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = target_path.with_name(f".{target_path.name}.{os.getpid()}.tmp")
+    temp_path.write_text(text, encoding="utf-8")
+    os.replace(temp_path, target_path)
 
 
 def _mark_read_only(target_path: Path) -> None:
