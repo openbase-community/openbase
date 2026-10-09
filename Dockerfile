@@ -60,6 +60,17 @@ FROM python:3.13-slim-bookworm
 # --build-arg OPENBASE_CODER_VERSION=x.y.z to stamp a real version.
 ARG OPENBASE_CODER_VERSION=0.0.0.dev0
 ARG SUPER_AGENTS_REPO=https://github.com/montaguegabe/super-agents
+# The dispatcher's full instructions, the Super Agent base instructions and
+# the bundled skills (dispatcher procedure included) come from the workspace
+# root repo's instructions/ folder and the skills repo. Without them the
+# container ran the dispatcher on the short built-in fallback with no
+# dispatch procedure, and Super Agents with no base instructions (a voice
+# demo on 2026-10-08 created a thread and never started its turn). Refs track
+# the remotes, like the console stage's.
+ARG WORKSPACE_REPO=https://github.com/openbase-community/openbase-coder-workspace
+ARG WORKSPACE_REF=develop
+ARG SKILLS_REPO=https://github.com/openbase-community/openbase-coder-skills
+ARG SKILLS_REF=develop
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -121,9 +132,16 @@ RUN chmod 0755 /usr/local/bin/openbase-coder-entrypoint \
 USER openbase
 WORKDIR /opt/openbase-coder/workspace
 
-# A minimal multi workspace: setup only requires multi.json plus a cli/ repo.
+# A minimal multi workspace: setup requires multi.json plus a cli/ repo, and
+# reads instructions/ and skills/ beside them (setup/codex.py renders the
+# instruction files into the data dir and links the skills into both agent
+# homes; Django startup and each voice call refresh them from here).
 RUN printf '{\n  "repos": []\n}\n' > multi.json \
-    && git clone --depth 1 "$SUPER_AGENTS_REPO" super-agents
+    && git clone --depth 1 "$SUPER_AGENTS_REPO" super-agents \
+    && git clone --depth 1 --branch "$SKILLS_REF" "$SKILLS_REPO" skills \
+    && git clone --depth 1 --branch "$WORKSPACE_REF" "$WORKSPACE_REPO" /tmp/workspace-root \
+    && cp -R /tmp/workspace-root/instructions instructions \
+    && rm -rf /tmp/workspace-root
 
 COPY --chown=openbase:openbase pyproject.toml uv.lock README.md LICENSE manage.py cli/
 COPY --chown=openbase:openbase openbase_coder_cli cli/openbase_coder_cli
