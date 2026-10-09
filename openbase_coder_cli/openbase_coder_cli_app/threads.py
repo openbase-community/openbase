@@ -339,13 +339,17 @@ def _resolve_new_thread_model(
         raise ValueError("model must be a non-empty string")
     model = requested.strip()
     location = dispatcher_config.backend_location()
-    if not dispatcher_config.is_known_combined_model(model, location):
-        known = ", ".join(
-            option["id"]
-            for option in dispatcher_config.combined_model_options(location)
-            if option["available"]
+    options = dispatcher_config.combined_model_options(location)
+    selected = next(
+        (option for option in options if option["id"].lower() == model.lower()), None
+    )
+    if selected is None or not selected["available"]:
+        if selected and selected.get("unavailable_reason"):
+            raise ValueError(selected["unavailable_reason"])
+        known = ", ".join(option["id"] for option in options if option["available"])
+        raise ValueError(
+            f"Unknown or unavailable model {model!r}. Choose one of: {known}."
         )
-        raise ValueError(f"Unknown or unavailable model {model!r}. Choose one of: {known}.")
     engine = dispatcher_config.model_engine(model)
     if backend:
         if thread_engine(backend) != engine:
@@ -405,9 +409,7 @@ def thread_list(request):
                     manager, requested_model, backend
                 )
             except ValueError as exc:
-                return Response(
-                    {"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST
-                )
+                return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
             if model_backend is not None:
                 create_kwargs["backend"] = model_backend
         else:

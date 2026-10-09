@@ -2915,3 +2915,34 @@ def test_backend_sessions_locks_do_not_keep_finished_event_loops_alive() -> None
     asyncio.run(run_contended_scan())
     gc.collect()
     assert len(manager.__dict__["_backend_sessions_locks"]) == 0
+
+
+def test_plan_denial_live_event_is_normalized_before_broadcast(monkeypatch):
+    monkeypatch.setenv(
+        "OPENBASE_CODER_CLI_WEB_BACKEND_URL", "https://app-staging.openbase.cloud"
+    )
+    events = []
+
+    async def broadcast(thread_id, event):
+        events.append(event)
+
+    monkeypatch.setattr(session_manager_module, "_broadcast", broadcast)
+    manager = _manager(FakeSuperAgentsClient({}))
+    asyncio.run(
+        manager._handle_client_event(
+            "item/completed",
+            {
+                "threadId": "thr-1",
+                "turnId": "turn-1",
+                "item": {
+                    "id": "item-1",
+                    "type": "agentMessage",
+                    "text": 'Failed to authenticate. API Error: 403 {"code":"model_not_available_on_plan"}',
+                },
+            },
+        )
+    )
+    output = events[0]["data"]["line"]
+    assert output.startswith("This model is not available on your plan.")
+    assert "https://app-staging.openbase.cloud" in output
+    assert "authenticate" not in output
