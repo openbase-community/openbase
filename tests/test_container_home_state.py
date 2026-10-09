@@ -18,6 +18,7 @@ import pytest
 from super_agents.agent_store import Store as AgentStore
 
 SCRIPT = Path(__file__).parents[1] / "docker" / "persist-home-state.sh"
+PRE_UPGRADE = Path(__file__).parents[1] / "docker" / "pre-upgrade-copy-home-state.sh"
 
 
 def _boot(home: Path, data_dir: Path) -> str:
@@ -116,3 +117,36 @@ def test_entrypoint_persists_home_state_before_setup_and_services() -> None:
     assert call < entrypoint.index("# --- First-run setup")
     assert call < entrypoint.index('start_supervised "$name" bash "$wrapper"')
     assert "COPY docker/persist-home-state.sh /usr/local/bin/openbase-coder-persist-home-state" in dockerfile
+
+
+def test_pre_upgrade_copy_lets_a_pre_fix_workspace_keep_its_registry(tmp_path, volume, monkeypatch) -> None:
+    # A workspace still on an image from before the fix never ran the
+    # adoption, and the redeploy replaces $HOME before the new entrypoint
+    # runs. The one-time copy made inside the running workspace bridges it.
+    old_layer = tmp_path / "layer-old" / "home"
+    old_layer.mkdir(parents=True)
+    store = _store(monkeypatch, old_layer)
+    dispatcher = store.create_session("dispatcher", cwd=str(tmp_path))
+    sunny = store.create_session("tic-tac-toe", cwd=str(tmp_path), agent_name="Sunny")
+    (old_layer / ".super-agents").mkdir()
+    (old_layer / ".super-agents" / "state.json").write_text("{}", encoding="utf-8")
+
+    copied = subprocess.run(
+        ["bash", str(PRE_UPGRADE), str(old_layer), str(volume)], check=True, capture_output=True, text=True
+    ).stdout
+    assert "copied" in copied
+    # It leaves the running layer untouched and never overwrites a volume copy.
+    assert not (old_layer / ".super-agents").is_symlink()
+    again = subprocess.run(
+        ["bash", str(PRE_UPGRADE), str(old_layer), str(volume)], check=True, capture_output=True, text=True
+    ).stdout
+    assert "already exists" in again
+
+    shutil.rmtree(tmp_path / "layer-old")
+    new_layer = tmp_path / "layer-new" / "home"
+    new_layer.mkdir(parents=True)
+    _boot(new_layer, volume)
+
+    upgraded = _store(monkeypatch, new_layer)
+    assert upgraded.get_by_name("dispatcher").id == dispatcher.id
+    assert upgraded.get_session(sunny.id).agent_name == "Sunny"

@@ -115,6 +115,12 @@ Do not set the bootstrap variable manually or copy credential files into a
 Maritime volume. The complete control-plane contract, threat model, and safe
 migration procedure are in `docker/maritime-security.md`.
 
+## State that must survive an image upgrade
+
+On Maritime only `/data` persists across an in-place image redeploy; the image layer, `$HOME` included, is replaced. Tools that keep state under `$HOME` are therefore linked into the data dir at every boot: `~/.codex`, `~/.claude` and `~/.claude.json` as before, and (since 2026-10-09) the Super Agents registry `~/.super-agents` and Claude Code store `~/.local/share/super-agents-claude-code`, via `persist-home-state.sh`. A real directory found in `$HOME` is adopted into the data dir; an older copy already there is set aside as `*.replaced-<timestamp>`, never deleted.
+
+A workspace still running an image from before that change cannot adopt on the new image, because the redeploy has already replaced `$HOME`. Before its first in-place redeploy onto a newer image, run `pre-upgrade-copy-home-state.sh` inside the running workspace (for example through the Maritime exec API, pasting the script). It copies the registry onto the volume, SQLite through the online backup API, and never overwrites an existing copy.
+
 ## Environment variables
 
 | Variable | Default | Purpose |
