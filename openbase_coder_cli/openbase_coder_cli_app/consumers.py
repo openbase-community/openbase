@@ -815,10 +815,16 @@ class IOSAppControlConsumer(AsyncJsonWebsocketConsumer):
             command_id,
             time.time() * 1000,
         )
-        await self.channel_layer.group_send(
-            ack_group_name(command_id),
-            {"type": "ios_app_control_ack", "command_id": command_id},
-        )
+        ack = {"type": "ios_app_control_ack", "command_id": command_id}
+        state = content.get("call_state")
+        if isinstance(state, dict) and all(
+            type(state.get(key)) is bool for key in ("connected", "muted", "speaker", "active")
+        ) and type(content.get("applied")) is bool:
+            ack["call_state"] = {key: state[key] for key in ("connected", "muted", "speaker", "active")}
+            ack["applied"] = content["applied"]
+            if isinstance(content.get("error"), str):
+                ack["error"] = content["error"][:1024]
+        await self.channel_layer.group_send(ack_group_name(command_id), ack)
 
     async def ios_app_control(self, event):
         await self.send_json({"type": "ios_app_control", "data": event["data"]})
