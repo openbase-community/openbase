@@ -382,13 +382,13 @@ def managed_codex_endpoint() -> str | None:
     endpoint = managed_codex_app_server_endpoint()
     if endpoint.is_unix:
         path = endpoint.socket_path
-        if path is None or not _unix_socket_accepts(path):
+        if path is None or not unix_socket_accepts(path):
             return None
         return endpoint.value
     return endpoint.value if codex_app_server_ready(endpoint) else None
 
 
-def _unix_socket_accepts(path: Path, timeout: float = 0.5) -> bool:
+def unix_socket_accepts(path: Path, timeout: float = 0.5) -> bool:
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     client.settimeout(timeout)
     try:
