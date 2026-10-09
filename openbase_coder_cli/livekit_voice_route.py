@@ -24,6 +24,7 @@ from openbase_coder_cli.dispatcher_config import (
     selected_tts_provider_id,
 )
 from openbase_coder_cli.dispatcher_instructions import with_dispatcher_rules
+from openbase_coder_cli.host_kind import with_host_section
 from openbase_coder_cli.livekit_agent.codex_thread_state import thread_state_file_lock
 from openbase_coder_cli.livekit_announcer import (
     AnnouncerError,
@@ -272,7 +273,7 @@ def load_direct_livekit_developer_instructions(
     if explicit_path:
         loaded = _read_instruction_file(Path(explicit_path).expanduser())
         if loaded:
-            return loaded
+            return with_host_section(loaded)
 
     if default_path is None:
         refresh_openbase_instruction_files_from_installation()
@@ -280,13 +281,13 @@ def load_direct_livekit_developer_instructions(
         default_path or CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH
     )
     if loaded:
-        return loaded
+        return with_host_section(loaded)
 
     text = values.get(DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV, "").strip()
     if text:
-        return text
+        return with_host_section(text)
 
-    return DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS
+    return with_host_section(DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS)
 
 
 async def prepare_target_thread_for_direct_livekit(

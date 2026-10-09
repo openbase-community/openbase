@@ -10,6 +10,7 @@ import pytest
 from livekit import rtc
 
 from openbase_coder_cli import livekit_voice_route as voice_route
+from openbase_coder_cli.host_kind import with_host_section
 from openbase_coder_cli.livekit_agent import audio_scoring, config, livekit, voices
 from openbase_coder_cli.livekit_agent.codex_app_client import CodexAppServerClient
 from openbase_coder_cli.livekit_agent.livekit import (
@@ -518,28 +519,28 @@ def test_direct_livekit_instruction_loader_priority(tmp_path):
             },
             default_path=default,
         )
-        == "explicit file instructions"
+        == with_host_section("explicit file instructions")
     )
     assert (
         load_direct_livekit_developer_instructions(
             env={DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV: "env text instructions"},
             default_path=default,
         )
-        == "default file instructions"
+        == with_host_section("default file instructions")
     )
     assert (
         load_direct_livekit_developer_instructions(
             env={DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV: "env text instructions"},
             default_path=tmp_path / "missing.md",
         )
-        == "env text instructions"
+        == with_host_section("env text instructions")
     )
     assert (
         load_direct_livekit_developer_instructions(
             env={},
             default_path=tmp_path / "missing.md",
         )
-        == DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS
+        == with_host_section(DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS)
     )
 
 

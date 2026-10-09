@@ -1,7 +1,7 @@
 """Which kind of computer this Openbase install runs on, for agent instructions.
 
 A cloud workspace is a Linux computer in the cloud with no screen, no
-Desktop folder and no apps of its own; the user's phone or Mac is a separate
+Desktop folder and no desktop apps of its own; the user's phone or PC is a separate
 device. An agent that is not told this answers "what's on my desktop" as if
 it were sitting at the user's Mac (staging demo, 2026-10-08), or the voice
 model invents an answer. The user's own computer has their files, Desktop,
@@ -22,14 +22,17 @@ HOST_KIND_HEADING = "## Where this agent runs"
 _HOST_NOTES = {
     HOST_KIND_CLOUD_WORKSPACE: (
         "This agent runs on the user's Openbase Cloud workspace: a Linux "
-        "computer in the cloud with no screen, no Desktop folder and no apps "
+        "computer in the cloud with no screen, no Desktop folder and no desktop apps "
         "of its own. What it can see is this workspace's home directory and "
-        "project folders. The user's phone and their own Mac are separate "
-        "devices this agent cannot see. When the user asks about their "
-        "desktop, their screen or an app on their computer, say plainly that "
-        "this is their cloud workspace, offer what it can see here (the "
-        "workspace's folders and projects), and suggest their own Mac for "
-        "that if they have Openbase there."
+        "project folders. The user's phone and personal computer are separate "
+        "devices; local filesystem commands do not inspect those devices. "
+        "When the user asks about their desktop, their screen or an app on "
+        "their computer, check whether available laptop tools can reach that "
+        "device, and use them when appropriate. If access is unavailable, "
+        "say plainly that this is their cloud workspace, offer its folders "
+        "and projects, and suggest connecting to Openbase on their personal "
+        "computer. Never infer that another device's desktop is empty from "
+        "a workspace listing."
     ),
     HOST_KIND_MAC: (
         "This agent runs on the user's own Mac. It can see the user's files, "
@@ -52,8 +55,9 @@ _LIVE_VOICE_NOTES = {
     HOST_KIND_CLOUD_WORKSPACE: (
         "The caller's agent runs on their Openbase Cloud workspace, a Linux "
         "computer in the cloud with no screen or Desktop folder; the caller's "
-        "phone and Mac are separate devices it cannot see. Refer to it as "
-        "their cloud workspace, never as their desktop or their Mac."
+        "phone and personal computer are separate devices. Refer to this host "
+        "as their cloud workspace, never as their desktop or their Mac. "
+        "Let the agent determine access to other devices and relay its answer."
     ),
     HOST_KIND_MAC: "The caller's agent runs on their own Mac.",
     HOST_KIND_LINUX: "The caller's agent runs on their own Linux computer.",
@@ -81,6 +85,12 @@ def host_note(kind: str | None = None) -> str:
 
 def host_section(kind: str | None = None) -> str:
     return f"{HOST_KIND_HEADING}\n\n{host_note(kind)}"
+
+
+def with_host_section(instructions: str, kind: str | None = None) -> str:
+    if HOST_KIND_HEADING in instructions:
+        return instructions
+    return f"{instructions}\n\n{host_section(kind)}"
 
 
 def live_voice_host_note(kind: str | None = None) -> str:
