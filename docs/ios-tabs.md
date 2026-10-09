@@ -83,6 +83,8 @@ The full thread list (from the drawer's search button or **See all**), with stat
 
 Tap a thread to open it as a chat. Under **⋯** → **Show details** each turn exposes its status, timestamps, return code and stderr.
 
+On iOS and Android, conversation titles omit automatically appended thread IDs, and separate threads may share the same title. Choose **⋯** → **Copy thread ID** to copy the full identifier for a bug report or CLI command. A brief **Thread ID copied** confirmation appears below the chat header.
+
 During an active call, a thread's **⋯** menu offers **Transfer Active Call** to route the voice session to that thread, and the call settings offer **Back to Dispatch** to hand it back.
 
 **On the Mac:** the desktop app and console have the same thread list and
