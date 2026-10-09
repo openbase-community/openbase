@@ -97,7 +97,7 @@ def validate_model_for_thread(backend: str | None, model: str) -> str:
 def _selected_model(
     thread_model: str | None, override: str | None, options: tuple[dict, ...]
 ) -> str | None:
-    """The option id the thread currently resolves to, if any."""
+    """Preserve a legacy current id without inserting it into picker options."""
     for candidate in (override, thread_model):
         if not candidate:
             continue
@@ -105,6 +105,7 @@ def _selected_model(
         for option in options:
             if normalized == option["id"].lower():
                 return option["id"]
+        return candidate
     return None
 
 

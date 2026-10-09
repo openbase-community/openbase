@@ -54,7 +54,14 @@ def _both_engines_available(monkeypatch) -> None:
     monkeypatch.setattr(
         cloud_models,
         "cloud_model_availability",
-        lambda: dict.fromkeys(("haiku", "sonnet", "opus", "fable")),
+        lambda: dict.fromkeys(
+            (
+                "claude-haiku-4-5-20251001",
+                "claude-sonnet-5",
+                "claude-opus-5-5",
+                "claude-fable-5-1",
+            )
+        ),
     )
     # Never consult the real install or shell out to ``claude``; tests that
     # exercise a partial install override this explicitly.
@@ -155,14 +162,14 @@ def test_backend_model_settings_lists_claude_fable(
     assert response.data["backend"] == "claude_code"
     assert response.data["location"] == "local"
     assert [option["id"] for option in response.data["options"]] == [
-        "fable",
-        "opus",
-        "sonnet",
-        "haiku",
-        "gpt-5.5",
-        "gpt-5",
-        "sol",
-        "astra",
+        "claude-fable-5-1",
+        "claude-opus-5-5",
+        "claude-sonnet-5",
+        "claude-haiku-4-5-20251001",
+        "gpt-5.6-terra",
+        "gpt-6-luna",
+        "gpt-6.1-sol",
+        "gpt-6-astra",
     ]
     # Locally, with Codex services installed and Claude logged in, both
     # engines are available; the model picks the engine.
@@ -174,7 +181,7 @@ def test_backend_model_settings_lists_claude_fable(
     codex_engines = {
         option["id"]: option["engine"]
         for option in response.data["options"]
-        if option["id"] in {"gpt-5.5", "gpt-5", "sol", "astra"}
+        if option["id"] in {"gpt-5.6-terra", "gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"}
     }
     assert set(codex_engines.values()) == {"codex"}
 
@@ -205,35 +212,32 @@ def test_backend_model_settings_lists_openbase_cloud_claude_model(
     assert response.data["backend"] == "openbase_cloud"
     assert response.data["location"] == "cloud"
     assert [option["id"] for option in response.data["options"]] == [
-        "haiku",
-        "sonnet",
-        "opus",
-        "fable",
-        "gpt-5.5",
-        "gpt-5",
-        "sol",
-        "astra",
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-5",
+        "claude-opus-5-5",
+        "claude-fable-5-1",
+        "gpt-5.6-terra",
+        "gpt-6-luna",
+        "gpt-6.1-sol",
+        "gpt-6-astra",
     ]
     assert response.data["options"][0]["is_default"] is True
-    assert response.data["options"][0]["label"] == "Claude Haiku"
-    assert (
-        response.data["options"][1]["description"]
-        == "Claude Sonnet through Openbase Cloud."
-    )
+    assert response.data["options"][0]["label"] == "Claude Haiku 4.5"
+    assert response.data["options"][1]["description"] == "Efficient for routine tasks."
     # Codex is read-only on Openbase Cloud: listed, but not selectable.
     availability = {
         option["id"]: option["available"] for option in response.data["options"]
     }
-    assert availability["gpt-5.5"] is False
-    assert availability["sol"] is False
-    assert availability["astra"] is False
-    assert availability["fable"] is True
+    assert availability["gpt-5.6-terra"] is False
+    assert availability["gpt-6.1-sol"] is False
+    assert availability["gpt-6-astra"] is False
+    assert availability["claude-fable-5-1"] is True
     reasons = {
         option["id"]: option["unavailable_reason"]
         for option in response.data["options"]
     }
-    assert reasons["gpt-5.5"] == dispatcher_config.CODEX_CLOUD_UNAVAILABLE_REASON
-    assert reasons["fable"] is None
+    assert reasons["gpt-5.6-terra"] == dispatcher_config.CODEX_CLOUD_UNAVAILABLE_REASON
+    assert reasons["claude-fable-5-1"] is None
 
 
 def test_backend_model_settings_accepts_fable(
@@ -259,12 +263,12 @@ def test_backend_model_settings_accepts_fable(
         _authenticated_request(
             "PUT",
             "/api/settings/backend-model/",
-            {"role": "super_agents", "model": "fable"},
+            {"role": "super_agents", "model": "claude-fable-5-1"},
         )
     )
 
     assert response.status_code == 200
-    assert response.data["models"]["super_agents"] == "fable"
+    assert response.data["models"]["super_agents"] == "claude-fable-5-1"
 
 
 def test_backend_model_settings_updates_dispatcher_role(
@@ -290,12 +294,12 @@ def test_backend_model_settings_updates_dispatcher_role(
         _authenticated_request(
             "PUT",
             "/api/settings/backend-model/",
-            {"role": "dispatcher", "model": "gpt-5.5"},
+            {"role": "dispatcher", "model": "gpt-5.6-terra"},
         )
     )
 
     assert response.status_code == 200
-    assert response.data["models"]["dispatcher"] == "gpt-5.5"
+    assert response.data["models"]["dispatcher"] == "gpt-5.6-terra"
     assert response.data["roles"]["dispatcher"]["engine"] == "codex"
     assert response.data["restart_required"] is True
     # The dispatcher role never rewrites the primary backend.
@@ -323,7 +327,7 @@ def test_backend_model_settings_accepts_other_codex_models(
         config_path,
     )
 
-    for model in ("gpt-5", "sol", "astra"):
+    for model in ("gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"):
         response = model_settings.backend_model_settings(
             _authenticated_request(
                 "PUT",
@@ -364,7 +368,7 @@ def test_backend_model_settings_rejects_codex_models_on_cloud(
         _authenticated_request(
             "PUT",
             "/api/settings/backend-model/",
-            {"role": "super_agents", "model": "sol"},
+            {"role": "super_agents", "model": "gpt-6.1-sol"},
         )
     )
 
@@ -403,13 +407,18 @@ def test_backend_model_settings_marks_codex_unavailable_on_claude_only_install(
     assert response.status_code == 200
     assert response.data["location"] == "local"
     options = {option["id"]: option for option in response.data["options"]}
-    for model in ("gpt-5.5", "gpt-5", "sol", "astra"):
+    for model in ("gpt-5.6-terra", "gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"):
         assert options[model]["available"] is False
         assert (
             options[model]["unavailable_reason"]
             == dispatcher_config.CODEX_NOT_INSTALLED_REASON
         )
-    for model in ("fable", "opus", "sonnet", "haiku"):
+    for model in (
+        "claude-fable-5-1",
+        "claude-opus-5-5",
+        "claude-sonnet-5",
+        "claude-haiku-4-5-20251001",
+    ):
         assert options[model]["available"] is True
         assert options[model]["unavailable_reason"] is None
 
@@ -429,13 +438,18 @@ def test_backend_model_settings_marks_claude_unavailable_without_login(
 
     assert response.status_code == 200
     options = {option["id"]: option for option in response.data["options"]}
-    for model in ("fable", "opus", "sonnet", "haiku"):
+    for model in (
+        "claude-fable-5-1",
+        "claude-opus-5-5",
+        "claude-sonnet-5",
+        "claude-haiku-4-5-20251001",
+    ):
         assert options[model]["available"] is False
         assert (
             options[model]["unavailable_reason"]
             == dispatcher_config.CLAUDE_NOT_LOGGED_IN_REASON
         )
-    for model in ("gpt-5.5", "gpt-5", "sol", "astra"):
+    for model in ("gpt-5.6-terra", "gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"):
         assert options[model]["available"] is True
         assert options[model]["unavailable_reason"] is None
 
@@ -453,7 +467,7 @@ def test_backend_model_settings_rejects_unavailable_model_with_reason(
         _authenticated_request(
             "PUT",
             "/api/settings/backend-model/",
-            {"role": "dispatcher", "model": "gpt-5.5"},
+            {"role": "dispatcher", "model": "gpt-5.6-terra"},
         )
     )
 
@@ -466,7 +480,7 @@ def test_backend_model_settings_rejects_unavailable_model_with_reason(
         _authenticated_request(
             "PUT",
             "/api/settings/backend-model/",
-            {"role": "super_agents", "model": "fable"},
+            {"role": "super_agents", "model": "claude-fable-5-1"},
         )
     )
 
@@ -494,7 +508,7 @@ def test_backend_model_settings_keeps_configured_model_listed_when_unavailable(
     (unavailable) so the picker can still show what is configured."""
     config_path = _local_model_settings(monkeypatch, tmp_path, "claude-code")
     config_path.write_text(
-        json.dumps({"role_models": {"super_agents": "sol"}}), encoding="utf-8"
+        json.dumps({"role_models": {"super_agents": "gpt-6.1-sol"}}), encoding="utf-8"
     )
     _install_with(monkeypatch, backends=("claude_code",), claude_logged_in=True)
 
@@ -503,10 +517,10 @@ def test_backend_model_settings_keeps_configured_model_listed_when_unavailable(
     )
 
     assert response.status_code == 200
-    assert response.data["roles"]["super_agents"]["model"] == "sol"
+    assert response.data["roles"]["super_agents"]["model"] == "gpt-6.1-sol"
     options = {option["id"]: option for option in response.data["options"]}
-    assert options["sol"]["available"] is False
-    assert options["sol"]["unavailable_reason"] == (
+    assert options["gpt-6.1-sol"]["available"] is False
+    assert options["gpt-6.1-sol"]["unavailable_reason"] == (
         dispatcher_config.CODEX_NOT_INSTALLED_REASON
     )
 
@@ -536,7 +550,7 @@ def test_super_agents_model_choice_updates_primary_backend(
         _authenticated_request(
             "PUT",
             "/api/settings/backend-model/",
-            {"role": "super_agents", "model": "fable"},
+            {"role": "super_agents", "model": "claude-fable-5-1"},
         )
     )
 

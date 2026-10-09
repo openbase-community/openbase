@@ -43,9 +43,18 @@ def test_cloud_policy_is_applied_to_each_alias(monkeypatch, paid):
         "https://app-staging.openbase.cloud", "/api/openbase/llm/anthropic/v1/models/"
     )
     for alias in ("haiku", "sonnet", "opus", "fable"):
-        assert options[alias]["available"] == (paid or alias == "haiku")
-        assert bool(options[alias]["unavailable_reason"]) != options[alias]["available"]
-    assert not options["gpt-5.5"]["available"]
+        assert options[cloud_models.OPENBASE_CLOUD_CLAUDE_MODEL_MAP[alias]][
+            "available"
+        ] == (paid or alias == "haiku")
+        assert (
+            bool(
+                options[cloud_models.OPENBASE_CLOUD_CLAUDE_MODEL_MAP[alias]][
+                    "unavailable_reason"
+                ]
+            )
+            != options[cloud_models.OPENBASE_CLOUD_CLAUDE_MODEL_MAP[alias]]["available"]
+        )
+    assert not options["gpt-6.1-sol"]["available"]
 
 
 @pytest.mark.parametrize(

@@ -16,6 +16,7 @@ from openbase_coder_cli.backend_config import (
     normalize_backend,
 )
 from openbase_coder_cli.local_audio import local_audio_python_error
+from openbase_coder_cli.model_catalog import CLAUDE_MODEL_OPTIONS, CODEX_MODEL_OPTIONS
 from openbase_coder_cli.paths import CODEX_DISPATCHER_CONFIG_PATH, DEFAULT_ENV_FILE_PATH
 from openbase_coder_cli.stt_providers import (
     DEFAULT_STT_PROVIDER_ID,
@@ -64,85 +65,17 @@ AUTO_LINK_PERSONAL_SKILLS_KEY = "auto_link_personal_skills"
 BACKEND_MODELS_KEY = "backend_models"
 DISPATCHER_MODEL_ROLE = "dispatcher"
 SUPER_AGENTS_MODEL_ROLE = "super_agents"
-CLAUDE_CODE_MODEL_OPTIONS = (
-    {
-        "id": "fable",
-        "label": "Claude Fable 5",
-        "description": "Claude Code family alias for claude-fable-5.",
-    },
-    {
-        "id": "opus",
-        "label": "Claude Opus",
-        "description": "Claude Code family alias for the default Opus model.",
-    },
-    {
-        "id": "sonnet",
-        "label": "Claude Sonnet",
-        "description": "Claude Code family alias for the default Sonnet model.",
-    },
-    {
-        "id": "haiku",
-        "label": "Claude Haiku",
-        "description": "Claude Code family alias for the default Haiku model.",
-    },
+# All app surfaces consume these offerings through the catalog API. Legacy
+# model ids remain an execution-resolver concern, never extra picker options.
+CLAUDE_CODE_MODEL_OPTIONS = tuple(
+    {**option, "is_default": False} for option in reversed(CLAUDE_MODEL_OPTIONS)
 )
-# Same family aliases as the local Claude Code backend; on the Cloud backend
-# they are pinned to the proxy's public model ids before reaching the SDK.
-OPENBASE_CLOUD_CLAUDE_MODEL_OPTIONS = (
-    {
-        "id": "haiku",
-        "label": "Claude Haiku",
-        "description": "Default Claude model for Openbase Cloud.",
-        "is_default": True,
-    },
-    {
-        "id": "sonnet",
-        "label": "Claude Sonnet",
-        "description": "Claude Sonnet through Openbase Cloud.",
-        "is_default": False,
-    },
-    {
-        "id": "opus",
-        "label": "Claude Opus",
-        "description": "Claude Opus through the Openbase Cloud proxy.",
-        "is_default": False,
-    },
-    {
-        "id": "fable",
-        "label": "Claude Fable 5",
-        "description": "Claude Fable 5 through the Openbase Cloud proxy.",
-        "is_default": False,
-    },
-)
+OPENBASE_CLOUD_CLAUDE_MODEL_OPTIONS = CLAUDE_MODEL_OPTIONS
 BACKEND_MODEL_OPTIONS = {
     CLAUDE_CODE_BACKEND: CLAUDE_CODE_MODEL_OPTIONS,
     OPENBASE_CLOUD_BACKEND: OPENBASE_CLOUD_CLAUDE_MODEL_OPTIONS,
 }
-CLAUDE_CODE_MODEL_ALIASES = {option["id"] for option in CLAUDE_CODE_MODEL_OPTIONS}
-# Canonical Codex slugs; must stay a subset of super-agents'
-# MODEL_CATALOG[CODEX_BACKEND] so model_engine() classifies each as codex.
-CODEX_MODEL_OPTIONS = (
-    {
-        "id": "gpt-5.5",
-        "label": "GPT-5.5",
-        "description": "Codex default model (speed is controlled by the service tier setting).",
-    },
-    {
-        "id": "gpt-5",
-        "label": "GPT-5",
-        "description": "OpenAI GPT-5 via Codex.",
-    },
-    {
-        "id": "sol",
-        "label": "Sol",
-        "description": "OpenAI Sol via Codex.",
-    },
-    {
-        "id": "astra",
-        "label": "Astra",
-        "description": "OpenAI Astra via Codex.",
-    },
-)
+CLAUDE_CODE_MODEL_ALIASES = {"fable", "opus", "sonnet", "haiku"}
 
 # Where code executes; the user-facing backend choice. Locally both engines
 # (Claude Code and Codex) are available and the MODEL picks the engine; on
@@ -259,7 +192,7 @@ def combined_model_options(location: str) -> tuple[dict[str, Any], ...]:
     unavailable when it cannot run on this install (see
     :func:`engine_unavailable_reason`); the option then carries
     ``unavailable_reason`` so the UI can say why. The currently configured
-    model stays listed either way.
+    model is returned separately; retired models never become picker options.
     """
     claude_options = (
         OPENBASE_CLOUD_CLAUDE_MODEL_OPTIONS
@@ -302,6 +235,8 @@ def is_known_combined_model(model: str, location: str) -> bool:
         normalized == option["id"].lower() and option["available"]
         for option in combined_model_options(location)
     )
+
+
 TTS_PROVIDER_KEY = "tts_provider"
 STT_PROVIDER_KEY = "stt_provider"
 # Which model renders the voice side of a call (see voice_models.py). The

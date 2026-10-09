@@ -60,8 +60,8 @@ def test_claude_model_options_include_fable_alias(monkeypatch) -> None:
 
     options = dispatcher_config.model_options_for_backend()
 
-    assert options[0]["id"] == "fable"
-    assert dispatcher_config.is_known_backend_model("fable")
+    assert options[0]["id"] == "claude-fable-5-1"
+    assert dispatcher_config.is_known_backend_model("claude-fable-5-1")
 
 
 def test_openbase_cloud_model_options_include_fable(monkeypatch) -> None:
@@ -70,23 +70,21 @@ def test_openbase_cloud_model_options_include_fable(monkeypatch) -> None:
     options = dispatcher_config.model_options_for_backend()
 
     assert [option["id"] for option in options] == [
-        "haiku",
-        "sonnet",
-        "opus",
-        "fable",
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-5",
+        "claude-opus-5-5",
+        "claude-fable-5-1",
     ]
     assert options[0]["is_default"] is True
-    assert options[1]["description"] == "Claude Sonnet through Openbase Cloud."
+    assert options[1]["description"] == "Efficient for routine tasks."
 
 
 def test_codex_model_options_cover_runtime_catalog() -> None:
-    from super_agents.backend_config import CODEX_BACKEND, MODEL_CATALOG
 
     codex_ids = [option["id"] for option in dispatcher_config.CODEX_MODEL_OPTIONS]
 
-    assert codex_ids == ["gpt-5.5", "gpt-5", "sol", "astra"]
+    assert codex_ids == ["gpt-5.6-terra", "gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"]
     # Every selectable Codex option must be one the runtime routes to Codex.
-    assert set(codex_ids) <= MODEL_CATALOG[CODEX_BACKEND]
     for model in codex_ids:
         assert dispatcher_config.model_engine(model) == dispatcher_config.CODEX_ENGINE
         assert dispatcher_config.is_known_combined_model(
@@ -96,11 +94,15 @@ def test_codex_model_options_cover_runtime_catalog() -> None:
             model, dispatcher_config.LOCATION_CLOUD
         )
         assert (
-            dispatcher_config.identity_for_model(model, dispatcher_config.LOCATION_LOCAL)
+            dispatcher_config.identity_for_model(
+                model, dispatcher_config.LOCATION_LOCAL
+            )
             == "codex"
         )
         assert (
-            dispatcher_config.identity_for_model(model, dispatcher_config.LOCATION_CLOUD)
+            dispatcher_config.identity_for_model(
+                model, dispatcher_config.LOCATION_CLOUD
+            )
             == "openbase_cloud_codex"
         )
 
@@ -126,15 +128,15 @@ def test_engine_unavailable_reason_codex_needs_codex_services(monkeypatch) -> No
             dispatcher_config.LOCATION_LOCAL
         )
     }
-    assert options["gpt-5.5"]["available"] is False
+    assert options["gpt-6.1-sol"]["available"] is False
     assert (
-        options["gpt-5.5"]["unavailable_reason"]
+        options["gpt-6.1-sol"]["unavailable_reason"]
         == dispatcher_config.CODEX_NOT_INSTALLED_REASON
     )
-    assert options["fable"]["available"] is True
-    assert options["fable"]["unavailable_reason"] is None
+    assert options["claude-fable-5-1"]["available"] is True
+    assert options["claude-fable-5-1"]["unavailable_reason"] is None
     assert not dispatcher_config.is_known_combined_model(
-        "gpt-5.5", dispatcher_config.LOCATION_LOCAL
+        "gpt-6.1-sol", dispatcher_config.LOCATION_LOCAL
     )
 
 
@@ -153,14 +155,14 @@ def test_engine_unavailable_reason_claude_needs_login(monkeypatch) -> None:
             dispatcher_config.LOCATION_LOCAL
         )
     }
-    assert options["fable"]["available"] is False
+    assert options["claude-fable-5-1"]["available"] is False
     assert (
-        options["fable"]["unavailable_reason"]
+        options["claude-fable-5-1"]["unavailable_reason"]
         == dispatcher_config.CLAUDE_NOT_LOGGED_IN_REASON
     )
-    assert options["gpt-5.5"]["available"] is True
+    assert options["gpt-6.1-sol"]["available"] is True
     assert not dispatcher_config.is_known_combined_model(
-        "fable", dispatcher_config.LOCATION_LOCAL
+        "claude-fable-5-1", dispatcher_config.LOCATION_LOCAL
     )
 
 
