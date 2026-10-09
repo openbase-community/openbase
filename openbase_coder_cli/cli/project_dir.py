@@ -20,7 +20,12 @@ def project_dir(name: str, json_output: bool) -> None:
     if json_output:
         click.echo(
             json.dumps(
-                {"name": name, "path": result.path, "error": result.error, "candidates": result.candidates},
+                {
+                    "name": name,
+                    "path": result.path,
+                    "error": result.error,
+                    "candidates": result.candidates,
+                },
                 sort_keys=True,
             )
         )

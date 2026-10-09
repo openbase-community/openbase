@@ -31,13 +31,17 @@ def test_named_project_resolves_to_its_directory_under_the_root(tmp_path) -> Non
         result = resolve_project_dir(spoken, projects=[], roots=[root])
         assert result.path == str((root / "tic-tac-toe").resolve()), spoken
         assert result.error is None
-    assert resolve_project_dir("maple app", projects=[], roots=[root]).path == str((root / "Maple_App").resolve())
+    assert resolve_project_dir("maple app", projects=[], roots=[root]).path == str(
+        (root / "Maple_App").resolve()
+    )
 
 
 def test_project_list_entries_resolve_outside_the_roots(tmp_path) -> None:
     elsewhere = tmp_path / "Projects" / "cedar" / "code" / "cedar-workspace"
     elsewhere.mkdir(parents=True)
-    result = resolve_project_dir("cedar workspace", projects=[str(elsewhere), str(tmp_path / "gone")], roots=[])
+    result = resolve_project_dir(
+        "cedar workspace", projects=[str(elsewhere), str(tmp_path / "gone")], roots=[]
+    )
     assert result.path == str(elsewhere.resolve())
 
 
@@ -48,7 +52,10 @@ def test_unknown_project_is_reported_with_candidates_not_a_root(tmp_path) -> Non
     assert result.error == "No project named 'chess' on this computer."
     assert str((root / "tic-tac-toe").resolve()) in result.candidates
     assert str(root.resolve()) not in result.candidates
-    assert not any(".hidden" in candidate or "notes.txt" in candidate for candidate in result.candidates)
+    assert not any(
+        ".hidden" in candidate or "notes.txt" in candidate
+        for candidate in result.candidates
+    )
 
 
 def test_ambiguous_project_asks_instead_of_guessing(tmp_path) -> None:
@@ -64,7 +71,9 @@ def test_ambiguous_project_asks_instead_of_guessing(tmp_path) -> None:
 
 def test_absolute_directory_is_used_as_given(tmp_path) -> None:
     root = _workspace(tmp_path)
-    assert resolve_project_dir(str(root / "tic-tac-toe"), projects=[], roots=[]).path == str((root / "tic-tac-toe").resolve())
+    assert resolve_project_dir(
+        str(root / "tic-tac-toe"), projects=[], roots=[]
+    ).path == str((root / "tic-tac-toe").resolve())
 
 
 def test_symlink_aliases_match_without_creating_duplicate_candidates(tmp_path) -> None:
@@ -78,10 +87,14 @@ def test_symlink_aliases_match_without_creating_duplicate_candidates(tmp_path) -
     for name in ("actual project", "friendly name"):
         result = resolve_project_dir(name, projects=[str(target)], roots=[root])
         assert result.path == str(target.resolve())
-    assert resolve_project_dir("missing", projects=[str(alias)], roots=[root]).candidates == [str(target.resolve())]
+    assert resolve_project_dir(
+        "missing", projects=[str(alias)], roots=[root]
+    ).candidates == [str(target.resolve())]
 
 
-def test_unreadable_root_does_not_hide_known_or_other_root_projects(tmp_path, monkeypatch) -> None:
+def test_unreadable_root_does_not_hide_known_or_other_root_projects(
+    tmp_path, monkeypatch
+) -> None:
     root = _workspace(tmp_path)
     unreadable = tmp_path / "unreadable"
     unreadable.mkdir()
@@ -93,18 +106,25 @@ def test_unreadable_root_does_not_hide_known_or_other_root_projects(tmp_path, mo
         return original_iterdir(path)
 
     monkeypatch.setattr(type(root), "iterdir", iterdir)
-    for projects, roots in (([str(root / "tic-tac-toe")], [unreadable]), ([], [unreadable, root])):
+    for projects, roots in (
+        ([str(root / "tic-tac-toe")], [unreadable]),
+        ([], [unreadable, root]),
+    ):
         result = resolve_project_dir("tic tac toe", projects=projects, roots=roots)
         assert result.path == str((root / "tic-tac-toe").resolve())
 
 
-def test_default_roots_include_the_configured_projects_dir(tmp_path, monkeypatch) -> None:
+def test_default_roots_include_the_configured_projects_dir(
+    tmp_path, monkeypatch
+) -> None:
     root = _workspace(tmp_path)
     monkeypatch.setenv(project_resolution.PROJECTS_DIR_ENV, str(root))
     assert project_resolution.project_roots()[0] == root
 
 
-def test_project_dir_command_prints_json_and_fails_closed(tmp_path, monkeypatch) -> None:
+def test_project_dir_command_prints_json_and_fails_closed(
+    tmp_path, monkeypatch
+) -> None:
     root = _workspace(tmp_path)
     monkeypatch.setenv(project_resolution.PROJECTS_DIR_ENV, str(root))
     monkeypatch.chdir(tmp_path)
@@ -128,7 +148,9 @@ def test_project_dir_command_prints_json_and_fails_closed(tmp_path, monkeypatch)
 
 
 def test_dispatcher_rules_pass_a_named_projects_directory_as_cwd(monkeypatch) -> None:
-    monkeypatch.setattr(instructions, "canonical_dispatcher_skill", lambda: "Canonical procedure.")
+    monkeypatch.setattr(
+        instructions, "canonical_dispatcher_skill", lambda: "Canonical procedure."
+    )
     rules = " ".join(instructions.with_dispatcher_rules("Dispatcher policy.").split())
     assert 'openbase-coder project-dir "<name>" --json' in rules
     assert "pass the returned `path` as the agent's `cwd`" in rules

@@ -46,7 +46,8 @@ START_RULES = f"""{START_HEADING}
 def canonical_dispatcher_skill() -> str:
     packaged = packaged_skills_dir()
     roots = ([packaged] if packaged is not None else []) + [
-        CODEX_HOME_DIR / "skills", CLAUDE_CONFIG_DIR / "skills",
+        CODEX_HOME_DIR / "skills",
+        CLAUDE_CONFIG_DIR / "skills",
     ]
     for root in roots:
         path = Path(root) / SKILL_NAME / "SKILL.md"
@@ -62,9 +63,12 @@ def with_dispatcher_skill(instructions: str) -> str:
     procedure = canonical_dispatcher_skill()
     if not procedure:
         return instructions
-    return (instructions + "\n\n" + PROCEDURE_HEADING + "\n\n"
-            "This skill is already loaded. Apply it when resolving requests, "
-            "including before asking for clarification or reporting task state.\n\n" + procedure)
+    return (
+        instructions + "\n\n" + PROCEDURE_HEADING + "\n\n"
+        "This skill is already loaded. Apply it when resolving requests, "
+        "including before asking for clarification or reporting task state.\n\n"
+        + procedure
+    )
 
 
 def with_dispatcher_rules(instructions: str, *, host: str | None = None) -> str:
