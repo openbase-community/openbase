@@ -19,6 +19,8 @@ On first launch, an account with no backend yet is asked where its backend shoul
 
 An account that already has a computer running Openbase Coder or a Cloud Workspace skips this choice: the app reads that from your cloud account state and goes straight to pairing the phone.
 
+Once this phone has completed onboarding, a sleeping Cloud Workspace keeps you in the app as long as the phone remains connected and paired. Sending a message or returning to an open conversation wakes the workspace, with a progress bar above the message box. If waking fails, the app explains why and keeps your draft for another attempt.
+
 After onboarding, sign in with your Openbase account (email + password, with
 optional two-factor authentication). The session persists in the iOS
 Keychain.
@@ -35,6 +37,8 @@ The app opens on an empty **new chat**, like the ChatGPT and Codex apps: the Ope
 - Tap the **microphone** to record a voice note. It is transcribed on the phone into the message box so you can edit it before sending; tap again to stop. Voice notes are off while a call is running.
 - With the box empty, the round **waveform** button starts a voice call.
 - The title shows the conversation name. The top-right **compose** button starts a new chat; **⋯** holds the thread actions (pin, archive, transfer the active call, refresh, details). In a conversation, the **device** dropdown under the message box chooses which computer runs the next turn and answers calls.
+
+Unsent text is saved on this phone separately for each conversation and for new chat, so reopening the app or switching conversations preserves your drafts. An accepted send clears the submitted draft; edits made while sending stay saved. Signing out clears all saved drafts.
 
 Tap the round menu button at the top left (or swipe from the left edge) to open the side drawer; the keyboard closes when it opens. From the top:
 
