@@ -180,6 +180,31 @@ def test_client_calls_and_errors(fake_daemon):
         sync_daemon.SyncDaemonClient(Path("/tmp/does-not-exist.sock")).status()
 
 
+@pytest.mark.parametrize("action", ["release", "discard"])
+def test_folder_action_refuses_older_daemon(fake_daemon, action):
+    fake_daemon.responses[f"{action}-deletes"] = {"ok": True, "data": 100}
+    client = sync_daemon.SyncDaemonClient(fake_daemon.path)
+    with pytest.raises(sync_daemon.SyncDaemonError):
+        getattr(client, f"{action}_deletes")("projects", "worktree")
+    assert not any(
+        request["op"] == f"{action}-deletes" for request in fake_daemon.requests
+    )
+
+
+@pytest.mark.parametrize("action", ["release", "discard"])
+@pytest.mark.parametrize("folder", [None, "worktree"])
+def test_folder_action_protocol(fake_daemon, action, folder):
+    fake_daemon.responses["held-folders"] = {"ok": True, "data": []}
+    fake_daemon.responses[f"{action}-deletes"] = {"ok": True, "data": 2}
+    client = sync_daemon.SyncDaemonClient(fake_daemon.path)
+    assert getattr(client, f"{action}_deletes")("projects", folder) == 2
+    expected = {"op": f"{action}-deletes", "root": "projects"}
+    if folder:
+        expected["folder"] = folder
+    assert fake_daemon.requests[-1] == expected
+    assert len(fake_daemon.requests) == (2 if folder else 1)
+
+
 def test_sync_daemon_resolve_uses_the_local_side(fake_daemon, monkeypatch, tmp_path):
     cfg = tmp_path / "config.toml"
     cfg.write_text('device_id = "laptop"\n')

@@ -307,6 +307,18 @@ def test_held_deletes_by_folder(client, monkeypatch):
     )
     assert "  1 under tmp/\n    tmp/x\n" in listed.output
 
+    scoped = CliRunner().invoke(sync, ["held-deletes", "--folder", "ws/mww/", "--json"])
+    assert scoped.exit_code == 0, scoped.output
+    [entry] = json.loads(scoped.output)
+    assert entry["count"] == 2
+    assert entry["sample"] == ["ws/mww/.local/a"]
+    assert [hold["folder"] for hold in entry["folders"]] == ["ws/mww/.local"]
+    missing_root = CliRunner().invoke(
+        sync, ["held-deletes", "--root", "missing", "--json"]
+    )
+    assert missing_root.exit_code == 0, missing_root.output
+    assert json.loads(missing_root.output) == []
+
     released = CliRunner().invoke(
         sync, ["held-deletes", "--release", "--folder", "ws/mww/.local/"]
     )

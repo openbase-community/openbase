@@ -832,14 +832,15 @@ class SyncDaemonClient:
         )
 
     def release_deletes(self, root: str, folder: str | None = None) -> int:
-        return int(
-            self.call("release-deletes", root=root, folder=folder).get("data") or 0
-        )
+        return self._decide_held_deletes("release-deletes", root, folder)
 
     def discard_deletes(self, root: str, folder: str | None = None) -> int:
-        return int(
-            self.call("discard-deletes", root=root, folder=folder).get("data") or 0
-        )
+        return self._decide_held_deletes("discard-deletes", root, folder)
+
+    def _decide_held_deletes(self, op: str, root: str, folder: str | None) -> int:
+        if folder:
+            self.held_folders(root, folder=folder)
+        return int(self.call(op, root=root, folder=folder).get("data") or 0)
 
 
 def reachable(socket_path: Path | None = None) -> bool:
