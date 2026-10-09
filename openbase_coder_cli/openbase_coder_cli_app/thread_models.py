@@ -64,7 +64,9 @@ def model_options_for_thread(backend: str | None) -> tuple[dict, ...]:
     )
 
 
-def validate_model_for_thread(backend: str | None, model: str) -> str:
+def validate_model_for_thread(
+    backend: str | None, model: str, *, current_model: str | None = None
+) -> str:
     """Normalize `model` and require it to run on the thread's own backend.
 
     Returns the option id to use, or raises ValueError with a user-facing
@@ -84,6 +86,16 @@ def validate_model_for_thread(backend: str | None, model: str) -> str:
             return option["id"]
     model_engine = dispatcher_config.model_engine(normalized)
     engine = thread_engine(backend)
+    # Older clients may repeat a saved model on every turn. Retaining that
+    # thread's own retired model is not a new picker selection. New switches
+    # still require an available catalog entry; the proxy enforces plan policy.
+    if (
+        current_model
+        and normalized == " ".join(current_model.split()).lower()
+        and model_engine is not None
+        and model_engine == engine
+    ):
+        return normalized
     if model_engine is not None and engine is not None and model_engine != engine:
         raise ValueError(
             f"Model {normalized} runs on the {model_engine} backend; this thread "

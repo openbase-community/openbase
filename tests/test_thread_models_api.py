@@ -251,6 +251,8 @@ def test_trial_catalog_disables_paid_models_and_rejects_switch_and_create(
     options = {option["id"]: option for option in response.data["options"]}
     assert options[model]["available"] is False
     assert options[model]["unavailable_reason"] == reason
+    with pytest.raises(ValueError, match="Requires a paid plan"):
+        validate_model_for_thread("openbase_cloud", model, current_model=model)
     assert options["claude-haiku-4-5-20251001"]["available"] is True
     rejected = thread_models.thread_model_settings(
         _request("put", "/api/threads/cloud-1/models/", {"model": model}), "cloud-1"
@@ -293,3 +295,62 @@ def test_legacy_thread_keeps_its_model_without_offering_it(monkeypatch, model):
     )
     assert response.status_code == 201
     assert get_thread_model_override("legacy") == model
+
+
+@pytest.mark.parametrize("model", ["gpt-5.5", "sol", "claude-opus-4-8", "fable"])
+def test_old_client_can_repeat_current_model_over_http_and_websocket(
+    monkeypatch, model
+):
+    from asgiref.sync import async_to_sync
+    from super_agents.backend_config import resolve_model
+    from openbase_coder_cli.openbase_coder_cli_app.consumers import _apply_turn_model
+
+    _, backend = resolve_model(model)
+    manager = FakeManager(
+        [
+            ThreadInfo(
+                session_id="legacy", directory="/tmp/p", backend=backend, model=model
+            )
+        ]
+    )
+    monkeypatch.setattr(thread_views, "get_session_manager", lambda: manager)
+    response = thread_views.thread_start_turn(
+        _request(
+            "post", "/api/threads/legacy/turns/", {"prompt": "continue", "model": model}
+        ),
+        "legacy",
+    )
+    assert response.status_code == 201
+    assert manager.turns[-1] == ("legacy", "continue", model)
+    assert (
+        async_to_sync(_apply_turn_model)(manager, "legacy", {"model": model}) == model
+    )
+    assert model not in {option["id"] for option in model_options_for_thread(backend)}
+    # A new selection must still use the catalog, including on the PUT route.
+    with pytest.raises(ValueError, match="Unknown model"):
+        validate_model_for_thread(backend, model)
+
+
+def test_saved_legacy_override_is_current_and_cannot_cross_backends(monkeypatch):
+    from asgiref.sync import async_to_sync
+    from openbase_coder_cli.openbase_coder_cli_app.consumers import _apply_turn_model
+
+    manager = FakeManager(
+        [
+            ThreadInfo(
+                session_id="legacy",
+                directory="/tmp/p",
+                backend="codex",
+                model="gpt-6.1-sol",
+            )
+        ]
+    )
+    set_thread_model_override("legacy", "gpt-5.5")
+    assert (
+        async_to_sync(_apply_turn_model)(manager, "legacy", {"model": "gpt-5.5"})
+        == "gpt-5.5"
+    )
+    with pytest.raises(ValueError, match="same backend"):
+        validate_model_for_thread("codex", "fable", current_model="fable")
+    with pytest.raises(ValueError, match="Unknown model"):
+        validate_model_for_thread("codex", "gpt-5.4", current_model="gpt-5.5")
