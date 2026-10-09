@@ -306,7 +306,8 @@ def sync_daemon_stale_lock_trash(request):
 
 @api_view(["GET", "POST"])
 def sync_daemon_held_deletes(request):
-    """Deletions held by the mass-delete guard; POST releases or discards one folder's."""
+    """Deletions held by the mass-delete guard; POST releases or discards one
+    synced folder's (``root``), or only its hold on ``folder`` (root-relative)."""
     if not sync_daemon.is_configured():
         return Response({"roots": []})
     try:
@@ -315,17 +316,21 @@ def sync_daemon_held_deletes(request):
             data = request.data if isinstance(request.data, dict) else {}
             root_id = str(data.get("root") or "")
             action = str(data.get("action") or "")
+            folder = str(data.get("folder") or "").strip("/") or None
             if not root_id or action not in {"release", "discard"}:
                 return Response(
                     {"error": "Pass a folder id and action 'release' or 'discard'."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             done = (
-                client.release_deletes(root_id)
+                client.release_deletes(root_id, folder)
                 if action == "release"
-                else client.discard_deletes(root_id)
+                else client.discard_deletes(root_id, folder)
             )
-            return Response({"root": root_id, "action": action, "count": done})
+            result = {"root": root_id, "action": action, "count": done}
+            if folder:
+                result["folder"] = folder
+            return Response(result)
         return Response(
             {"roots": sync_state.held_deletes_summary(client, client.status())}
         )

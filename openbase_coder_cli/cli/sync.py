@@ -78,6 +78,13 @@ def status(as_json: bool) -> None:
                     fg="yellow",
                 )
             )
+            for hold in root.get("held_folders") or []:
+                click.echo(
+                    click.style(
+                        f"      {hold.get('count', 0)} under {_hold_name(hold)}",
+                        fg="yellow",
+                    )
+                )
     peers = payload.get("peers") or []
     if peers:
         click.echo("Peers:")
@@ -243,8 +250,20 @@ def resolve(conflict_id: int, action: str | None) -> None:
     click.echo(f"Resolved conflict {conflict_id} with {action}.")
 
 
+def _hold_name(hold: dict) -> str:
+    folder = str(hold.get("folder") or "")
+    return folder + "/" if folder else "the whole folder"
+
+
 @sync.command("held-deletes")
 @click.option("--root", "root_id", help="The synced folder's id (see --json).")
+@click.option(
+    "--folder",
+    help=(
+        "Only the hold on this folder of the synced folder (relative, as listed); "
+        "without it --release and --discard act on every hold of the synced folder."
+    ),
+)
 @click.option(
     "--release",
     "action",
@@ -258,13 +277,18 @@ def resolve(conflict_id: int, action: str | None) -> None:
     help="Cancel the held deletions and bring the files back from your other computers.",
 )
 @click.option("--json", "as_json", is_flag=True, help="Print the raw summary.")
-def held_deletes(root_id: str | None, action: str | None, as_json: bool) -> None:
+def held_deletes(
+    root_id: str | None, folder: str | None, action: str | None, as_json: bool
+) -> None:
     """Show, release or discard deletions held by the mass-delete guard.
 
     When many files are deleted at once Openbase Sync stops sending deletions
     to your other computers until you confirm, so an accident (a disk that
-    was unmounted, a wrong folder moved away) cannot empty them too.
+    was unmounted, a wrong folder moved away) cannot empty them too. When the
+    burst sits in one folder only that folder's deletions are held; other
+    deletions keep syncing.
     """
+    folder = (folder or "").strip("/") or None
     _require_configured()
     client = _client()
     try:
@@ -283,16 +307,15 @@ def held_deletes(root_id: str | None, action: str | None, as_json: bool) -> None
         target = targets[0]
         try:
             done = (
-                client.release_deletes(target["id"])
+                client.release_deletes(target["id"], folder)
                 if action == "release"
-                else client.discard_deletes(target["id"])
+                else client.discard_deletes(target["id"], folder)
             )
         except sync_daemon.SyncDaemonError as exc:
             raise click.ClickException(str(exc)) from None
         verb = "Released" if action == "release" else "Discarded"
-        click.echo(
-            f"{verb} {done} held deletion{'s' if done != 1 else ''} in {target['path']}."
-        )
+        where = target["path"] + (f" under {folder}/" if folder else "")
+        click.echo(f"{verb} {done} held deletion{'s' if done != 1 else ''} in {where}.")
         return
     if as_json:
         click.echo(json.dumps(held, indent=2, sort_keys=True))
@@ -302,13 +325,21 @@ def held_deletes(root_id: str | None, action: str | None, as_json: bool) -> None
         return
     for entry in held:
         click.echo(f"{entry['path']} ({entry['id']}): {entry['count']} deletions held")
-        for path in entry["sample"]:
-            click.echo(f"  {path}")
-        if entry["count"] > len(entry["sample"]):
-            click.echo(f"  … and {entry['count'] - len(entry['sample'])} more")
+        holds = entry.get("folders") or [
+            {"folder": "", "count": entry["count"], "sample": entry["sample"]}
+        ]
+        for hold in holds:
+            click.echo(f"  {hold['count']} under {_hold_name(hold)}")
+            for path in hold.get("sample") or []:
+                click.echo(f"    {path}")
+            if hold["count"] > len(hold.get("sample") or []):
+                click.echo(
+                    f"    … and {hold['count'] - len(hold.get('sample') or [])} more"
+                )
     click.echo(
         "Release with 'openbase-coder sync held-deletes --release' (your other "
-        "computers move the files to their Trash), or bring the files back with --discard."
+        "computers move the files to their Trash), or bring the files back with "
+        "--discard; add --folder to act on one hold."
     )
 
 
