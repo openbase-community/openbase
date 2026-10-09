@@ -55,7 +55,7 @@ type localAPI struct {
 	openbaseAddr string
 	turnCreds    *turnCredentials
 	forwardsUp   atomic.Bool
-	forwards     *forwardManager // dynamic forwards (nil until the node is up)
+	forwards     atomic.Pointer[forwardManager]
 }
 
 func (a *localAPI) markForwardsUp() { a.forwardsUp.Store(true) }
@@ -109,8 +109,8 @@ func (a *localAPI) handleHealth(w http.ResponseWriter, r *http.Request) {
 			strconv.Itoa(livekitTailnetPort):  "tcp://" + livekitLocalAddr,
 		},
 	}
-	if a.forwards != nil {
-		payload["dynamic_forwards"] = a.forwards.List()
+	if forwards := a.forwards.Load(); forwards != nil {
+		payload["dynamic_forwards"] = forwards.List()
 	}
 	st, err := a.lc.Status(r.Context())
 	if err != nil {
@@ -270,24 +270,28 @@ func statusContainsProbePeer(status *ipnstate.Status, host string) bool {
 // because a tailnet listener needs the node's addresses.
 
 func (a *localAPI) handleListForwards(w http.ResponseWriter, r *http.Request) {
-	if a.forwards == nil {
+	forwards := a.forwards.Load()
+	if forwards == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"forwards": []forwardInfo{}})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"forwards": a.forwards.List()})
+	writeJSON(w, http.StatusOK, map[string]any{"forwards": forwards.List()})
 }
 
 func (a *localAPI) handleAddForward(w http.ResponseWriter, r *http.Request) {
-	if a.forwards == nil {
+	forwards := a.forwards.Load()
+	if forwards == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "tailnet node is not up yet"})
 		return
 	}
 	var req forwardRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&req); err != nil {
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 4<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
 		return
 	}
-	info, err := a.forwards.Add(req)
+	info, err := forwards.Add(req)
 	if err != nil {
 		status := http.StatusInternalServerError
 		var fe *forwardError
@@ -306,7 +310,8 @@ func (a *localAPI) handleRemoveForward(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid port"})
 		return
 	}
-	if a.forwards == nil || !a.forwards.Remove(port) {
+	forwards := a.forwards.Load()
+	if forwards == nil || !forwards.Remove(port) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no such forward"})
 		return
 	}

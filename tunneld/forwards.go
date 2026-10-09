@@ -80,6 +80,9 @@ type forwardEntry struct {
 	timer       *time.Timer
 	connections atomic.Int64
 	closeOnce   sync.Once
+	mu          sync.Mutex
+	closed      bool
+	active      map[net.Conn]struct{}
 }
 
 // forwardManager owns the dynamic listeners. The network hooks are fields so
@@ -136,11 +139,11 @@ func (m *forwardManager) Add(req forwardRequest) (forwardInfo, error) {
 	if req.TTLSeconds < 0 {
 		return forwardInfo{}, badForward("ttl_seconds must not be negative")
 	}
+	if req.TTLSeconds > int(forwardMaxTTL/time.Second) {
+		return forwardInfo{}, badForward("ttl_seconds must not exceed %d", int(forwardMaxTTL.Seconds()))
+	}
 	if req.TTLSeconds > 0 {
 		ttl = time.Duration(req.TTLSeconds) * time.Second
-	}
-	if ttl > forwardMaxTTL {
-		return forwardInfo{}, badForward("ttl_seconds must not exceed %d", int(forwardMaxTTL.Seconds()))
 	}
 	peer := strings.TrimSpace(req.Peer)
 	if strings.ContainsAny(peer, " \t\r\n/\\@") {
@@ -167,7 +170,8 @@ func (m *forwardManager) Add(req forwardRequest) (forwardInfo, error) {
 	}
 	now := m.now()
 	entry := &forwardEntry{
-		ln: ln,
+		ln:     ln,
+		active: map[net.Conn]struct{}{},
 		info: forwardInfo{
 			Port:      req.Port,
 			Target:    fmt.Sprintf("127.0.0.1:%d", req.Port),
@@ -210,9 +214,9 @@ func (m *forwardManager) remove(port int, entry *forwardEntry) bool {
 		m.mu.Unlock()
 		return false
 	}
+	entry.close()
 	delete(m.entries, port)
 	m.mu.Unlock()
-	entry.close()
 	return true
 }
 
@@ -242,11 +246,33 @@ func (e *forwardEntry) snapshot() forwardInfo {
 
 func (e *forwardEntry) close() {
 	e.closeOnce.Do(func() {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		e.closed = true
 		if e.timer != nil {
 			e.timer.Stop()
 		}
 		e.ln.Close()
+		for conn := range e.active {
+			conn.Close()
+		}
 	})
+}
+
+func (e *forwardEntry) track(conn net.Conn) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed {
+		return false
+	}
+	e.active[conn] = struct{}{}
+	return true
+}
+
+func (e *forwardEntry) untrack(conn net.Conn) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	delete(e.active, conn)
 }
 
 func (m *forwardManager) serve(entry *forwardEntry) {
@@ -261,6 +287,10 @@ func (m *forwardManager) serve(entry *forwardEntry) {
 
 func (m *forwardManager) handleConn(entry *forwardEntry, conn net.Conn) {
 	defer conn.Close()
+	if !entry.track(conn) {
+		return
+	}
+	defer entry.untrack(conn)
 	if entry.info.Peer != "" && !m.connectionFromPeer(conn.RemoteAddr(), entry.info.Peer) {
 		log.Printf("dynamic forward :%d refused %s: not the pinned peer", entry.info.Port, conn.RemoteAddr())
 		return
@@ -273,18 +303,27 @@ func (m *forwardManager) handleConn(entry *forwardEntry, conn net.Conn) {
 		return
 	}
 	defer upstream.Close()
+	if !entry.track(upstream) {
+		return
+	}
+	defer entry.untrack(upstream)
 	entry.connections.Add(1)
 	done := make(chan struct{}, 2)
-	go func() { io.Copy(upstream, conn); done <- struct{}{} }()
-	go func() { io.Copy(conn, upstream); done <- struct{}{} }()
+	copyStream := func(destination, source net.Conn) {
+		_, err := io.Copy(destination, source)
+		if halfCloser, ok := destination.(interface{ CloseWrite() error }); ok && err == nil {
+			halfCloser.CloseWrite()
+		} else {
+			conn.Close()
+			upstream.Close()
+		}
+		done <- struct{}{}
+	}
+	go copyStream(upstream, conn)
+	go copyStream(conn, upstream)
+	<-done
 	<-done
 	if entry.info.OneShot {
-		// The callback exchange completed in at least one direction; give the
-		// other direction a moment to flush the response, then retire.
-		select {
-		case <-done:
-		case <-time.After(2 * time.Second):
-		}
 		if m.remove(entry.info.Port, entry) {
 			log.Printf("dynamic forward :%d retired after its one-shot connection", entry.info.Port)
 		}
@@ -300,21 +339,23 @@ func (m *forwardManager) connectionFromPeer(remote net.Addr, peer string) bool {
 		return false
 	}
 	remoteIP := remoteAddrPort.Addr().Unmap()
-	if pinnedIP, err := netip.ParseAddr(strings.Trim(peer, "[]")); err == nil {
-		return pinnedIP.Unmap() == remoteIP
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), forwardPeerWait)
 	defer cancel()
 	nodeID, ips, err := m.whois(ctx, remote.String())
-	if err != nil {
+	if err != nil || nodeID == "" {
 		return false
 	}
-	if nodeID == peer {
-		return true
+	pinnedIP, ipErr := netip.ParseAddr(strings.Trim(peer, "[]"))
+	if ipErr == nil {
+		if pinnedIP.Unmap() != remoteIP {
+			return false
+		}
+	} else if nodeID != peer {
+		return false
 	}
 	for _, ip := range ips {
 		if ip.Unmap() == remoteIP {
-			return nodeID == peer
+			return true
 		}
 	}
 	return false

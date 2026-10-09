@@ -36,7 +36,10 @@ func newTestForwardManager(t *testing.T, reserved ...int) *testForwardManager {
 		fmt.Fprintf(w, "callback %s", r.URL.RequestURI())
 	}))
 	t.Cleanup(target.Close)
-	tm := &testForwardManager{listeners: map[int]net.Listener{}, target: target}
+	tm := &testForwardManager{
+		listeners: map[int]net.Listener{}, target: target,
+		whoisID: "node-phone", whoisIPs: []netip.Addr{netip.MustParseAddr("127.0.0.1")},
+	}
 	m := &forwardManager{
 		entries:  map[int]*forwardEntry{},
 		reserved: map[int]bool{},
@@ -60,6 +63,8 @@ func newTestForwardManager(t *testing.T, reserved ...int) *testForwardManager {
 		return d.DialContext(ctx, "tcp", strings.TrimPrefix(target.URL, "http://"))
 	}
 	m.whois = func(ctx context.Context, remoteAddr string) (string, []netip.Addr, error) {
+		tm.mu.Lock()
+		defer tm.mu.Unlock()
 		return tm.whoisID, tm.whoisIPs, tm.whoisErr
 	}
 	tm.forwardManager = m
@@ -178,6 +183,7 @@ func TestForwardValidation(t *testing.T) {
 		{"port too high", forwardRequest{Port: 70000}, 400},
 		{"negative ttl", forwardRequest{Port: 3000, TTLSeconds: -1}, 400},
 		{"ttl too long", forwardRequest{Port: 3000, TTLSeconds: 7200}, 400},
+		{"ttl overflow", forwardRequest{Port: 3000, TTLSeconds: 1 << 62}, 400},
 		{"bad peer", forwardRequest{Port: 3000, Peer: "not a/peer"}, 400},
 		{"reserved port", forwardRequest{Port: 18080}, 409},
 	}
@@ -241,11 +247,15 @@ func TestForwardPeerPinByNodeID(t *testing.T) {
 	if status, _, err := tm.get(t, 4100, "/"); err != nil || status != 200 {
 		t.Fatalf("matching node request: status %d err %v", status, err)
 	}
+	tm.mu.Lock()
 	tm.whoisID = "node-other"
+	tm.mu.Unlock()
 	if _, _, err := tm.get(t, 4100, "/"); err == nil {
 		t.Fatal("expected a different node to be refused")
 	}
+	tm.mu.Lock()
 	tm.whoisErr = errors.New("whois unavailable")
+	tm.mu.Unlock()
 	if _, _, err := tm.get(t, 4100, "/"); err == nil {
 		t.Fatal("expected a whois failure to refuse the connection")
 	}
@@ -253,7 +263,8 @@ func TestForwardPeerPinByNodeID(t *testing.T) {
 
 func TestForwardLocalAPI(t *testing.T) {
 	tm := newTestForwardManager(t)
-	api := &localAPI{token: "secret", forwards: tm.forwardManager}
+	api := &localAPI{token: "secret"}
+	api.forwards.Store(tm.forwardManager)
 	server := httptest.NewServer(api.handler())
 	t.Cleanup(server.Close)
 
@@ -289,6 +300,9 @@ func TestForwardLocalAPI(t *testing.T) {
 	if status, _ := do("POST", "/forwards", map[string]any{"port": 22}); status != 400 {
 		t.Fatalf("bad port: %d", status)
 	}
+	if status, _ := do("POST", "/forwards", map[string]any{"port": 3000, "peer_node_id": "node-phone"}); status != 400 {
+		t.Fatalf("unknown pin field must not create an unpinned forward: %d", status)
+	}
 	if status, payload := do("GET", "/forwards", nil); status != 200 || len(payload["forwards"].([]any)) != 1 {
 		t.Fatalf("list: %d %v", status, payload)
 	}
@@ -303,15 +317,21 @@ func TestForwardLocalAPI(t *testing.T) {
 	}
 
 	// Without the token nothing is reachable.
-	req, _ := http.NewRequest("GET", server.URL+"/forwards", nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil || resp.StatusCode != 401 {
-		t.Fatalf("unauthenticated: %v %v", err, resp)
+	for _, method := range []string{"GET", "POST", "DELETE"} {
+		path := "/forwards"
+		if method == "DELETE" {
+			path += "/1455"
+		}
+		req, _ := http.NewRequest(method, server.URL+path, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil || resp.StatusCode != 401 {
+			t.Fatalf("unauthenticated %s: %v %v", method, err, resp)
+		}
+		resp.Body.Close()
 	}
-	resp.Body.Close()
 
 	// Before the node is up the endpoint reports unavailable instead of panicking.
-	api.forwards = nil
+	api.forwards.Store(nil)
 	if status, _ := do("POST", "/forwards", map[string]any{"port": 3000}); status != 503 {
 		t.Fatalf("not up: %d", status)
 	}

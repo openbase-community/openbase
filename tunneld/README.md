@@ -23,7 +23,7 @@ status; it is not a general-purpose tailnet proxy.
 
 ## Dynamic forwards
 
-Cloud workspaces (Maritime) and other embedded-node hosts can expose one loopback port at a time-limited tailnet address through the control API, for a dev server the user wants to open on a phone or the loopback callback server of a CLI login (`openbase-coder service expose PORT`, `openbase-coder browser open URL`):
+Cloud workspaces (Maritime) and other embedded-node hosts can expose one loopback port at a time-limited tailnet address through the control API, for a dev server the user wants to open on a phone or a loopback callback server (`openbase-coder service expose PORT`). `openbase-coder browser open URL` currently delivers the login URL only; automatic callback forwarding is not available yet.
 
 | Call                               | Effect                                                                 |
 | ---------------------------------- | ---------------------------------------------------------------------- |
@@ -31,7 +31,7 @@ Cloud workspaces (Maritime) and other embedded-node hosts can expose one loopbac
 | `GET /forwards`                    | live forwards with their expiry and connection counts                  |
 | `DELETE /forwards/{port}`          | close one forward                                                      |
 
-Rules: ports 1024-65535 only, never the fixed ports above, at most 16 live forwards, default TTL 10 minutes and at most an hour. `one_shot` retires the forward after its first completed connection (an OAuth callback is one request). `peer` pins the forward to one device, given as a tailnet IP or stable node id (checked with the node's WhoIs); other peers are refused at accept time. Every forward listens on the tailnet only; reachability is already limited to the same account's devices by the Openbase VPN policy.
+Rules: ports 1024-65535 only, never the fixed ports above or TURN port 3478, at most 16 live forwards, default TTL 10 minutes and at most an hour. `one_shot` retires the forward after its first completed connection (an OAuth callback is one request). Expiry, removal, and one-shot retirement close active connections as well as the listener. `peer` pins the forward to one device, given as a tailnet IP or stable node id; both forms require a successful WhoIs lookup matching the remote address. Every forward listens on the tailnet only; reachability is already limited to the same account's devices by the Openbase VPN policy. All three routes require the control token, and unknown request fields are rejected so a misspelled pin cannot silently create an unpinned forward.
 
 ## Build
 
