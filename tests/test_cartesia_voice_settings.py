@@ -635,3 +635,47 @@ def test_local_audio_downloads_reject_unsupported_python(monkeypatch) -> None:
     assert "Python 3.12" in tts_response.data["detail"]
     assert stt_response.status_code == 400
     assert "Python 3.12" in stt_response.data["detail"]
+
+
+def test_livekit_room_token_lets_the_phone_publish_its_on_screen_thread(
+    monkeypatch, tmp_path,
+) -> None:
+    """BUG 18: the phone sets openbase.ui.focused_thread on itself; LiveKit
+    silently drops attribute updates unless the token grants it."""
+    import jwt
+
+    from openbase_coder_cli.services import livekit_pool_activity
+    monkeypatch.setattr(livekit_pool_activity, "_ACTIVITY_DIR", tmp_path / "activity")
+    monkeypatch.setattr(
+        views._livekit,
+        "_livekit_client_token_credentials",
+        lambda: ("livekit-client-key", "livekit-client-secret"),
+    )
+    monkeypatch.setattr(
+        views._livekit,
+        "ensure_openbase_cloud_audio_subscription",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        views._livekit,
+        "local_audio_readiness",
+        lambda **_kwargs: SimpleNamespace(ready=True, detail=None),
+    )
+
+    response = views.livekit_room_token(
+        _jwt_authenticated_request(
+            "POST",
+            "/api/livekit-room-token/",
+            {
+                "room_name": "room-test",
+                "livekit_dispatch_agent_name": "livekit-agent",
+            },
+        )
+    )
+
+    assert response.status_code == 200
+    claims = jwt.decode(response.data["token"], options={"verify_signature": False})
+    video = claims["video"]
+    assert video["roomJoin"] is True
+    assert video["room"] == "room-test"
+    assert video["canUpdateOwnMetadata"] is True
