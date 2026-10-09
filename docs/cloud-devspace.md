@@ -105,7 +105,7 @@ start and call before automatic resume is available.
 
 ## Sign CLIs In from Your Phone
 
-A headless workspace has no browser of its own, so log tools in with their device-code or paste-code flows (`gh auth login`, `codex login --device-auth`, `claude auth login`, `gcloud auth login --no-launch-browser`), or run `openbase-coder browser open <url>` to send a login page to the Openbase app on your phone. Agents do this for you by following the bundled `openbase-cloud-workspace-logins` skill; if a login ends on a `http://localhost:<port>/...` page that fails to load on the phone, paste that full address back into the agent's thread and the agent completes the login inside the workspace.
+A headless workspace has no browser of its own, so log tools in with their device-code or paste-code flows (`gh auth login`, `codex login --device-auth`, `claude auth login`, `gcloud auth login --no-launch-browser`), or run `openbase-coder browser open <url>` to send a login page to the Openbase app on your phone (as a notification to tap when the app is not in front). For logins that redirect to `localhost:<port>`, the command exposes that port on the workspace's VPN address and asks the phone to forward its own loopback port there for ten minutes. Agents do this for you by following the bundled `openbase-cloud-workspace-logins` skill; if a login ends on a `http://localhost:<port>/...` page that fails to load on the phone, paste that full address back into the agent's thread and the agent completes the login inside the workspace.
 
 ## Quick Recovery
 

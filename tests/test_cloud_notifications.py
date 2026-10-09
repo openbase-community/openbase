@@ -17,7 +17,9 @@ class TokenManager:
 
 def test_send_user_say_fallback_uses_fixed_cloud_contract(monkeypatch) -> None:
     calls = []
-    monkeypatch.setattr(cloud_notifications, "web_backend_url", lambda: "https://cloud.example")
+    monkeypatch.setattr(
+        cloud_notifications, "web_backend_url", lambda: "https://cloud.example"
+    )
     monkeypatch.setattr(
         cloud_notifications,
         "get_token_manager",
@@ -26,8 +28,10 @@ def test_send_user_say_fallback_uses_fixed_cloud_contract(monkeypatch) -> None:
     monkeypatch.setattr(
         cloud_notifications.httpx,
         "post",
-        lambda url, **kwargs: calls.append((url, kwargs))
-        or httpx.Response(202, json={"message": "Notification accepted."}),
+        lambda url, **kwargs: (
+            calls.append((url, kwargs))
+            or httpx.Response(202, json={"message": "Notification accepted."})
+        ),
     )
 
     cloud_notifications.send_user_say_fallback(
@@ -113,7 +117,9 @@ def test_send_user_say_fallback_surfaces_drf_field_errors(monkeypatch) -> None:
 
 
 def test_send_user_say_fallback_requires_cloud_login(monkeypatch) -> None:
-    monkeypatch.setattr(cloud_notifications, "web_backend_url", lambda: "https://cloud.example")
+    monkeypatch.setattr(
+        cloud_notifications, "web_backend_url", lambda: "https://cloud.example"
+    )
     monkeypatch.setattr(
         cloud_notifications,
         "get_token_manager",
@@ -133,8 +139,12 @@ def test_send_user_say_fallback_requires_cloud_login(monkeypatch) -> None:
         )
 
 
-def test_send_user_say_fallback_preserves_retryable_network_failure(monkeypatch) -> None:
-    monkeypatch.setattr(cloud_notifications, "web_backend_url", lambda: "https://cloud.example")
+def test_send_user_say_fallback_preserves_retryable_network_failure(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        cloud_notifications, "web_backend_url", lambda: "https://cloud.example"
+    )
     monkeypatch.setattr(
         cloud_notifications,
         "get_token_manager",
@@ -152,3 +162,100 @@ def test_send_user_say_fallback_preserves_retryable_network_failure(monkeypatch)
             message="Review is ready",
             thread_id="thread-42",
         )
+
+
+def test_send_notification_push_uses_owner_token_when_logged_in(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        cloud_notifications, "web_backend_url", lambda: "https://cloud.example"
+    )
+    monkeypatch.setattr(
+        cloud_notifications, "get_token_manager", lambda _url: TokenManager()
+    )
+    monkeypatch.setattr(
+        cloud_notifications.httpx,
+        "post",
+        lambda url, **kwargs: (
+            calls.append((url, kwargs))
+            or httpx.Response(202, json={"message": "Notification accepted."})
+        ),
+    )
+
+    cloud_notifications.send_notification_push(
+        title="Open a link",
+        body="Tap",
+        user_info={"openbase_destination": "open_url", "url": "https://x"},
+    )
+
+    assert calls[0][1]["headers"]["Authorization"] == "Bearer jwt-token"
+
+
+def test_send_notification_push_falls_back_to_workspace_machine_token(
+    monkeypatch,
+) -> None:
+    from openbase_coder_cli.config import machine_token_manager
+
+    class LoggedOut:
+        def get_access_token(self) -> str:
+            raise AuthLoginRequiredError("no login")
+
+    class Machine:
+        def __init__(self, url, token_manager=None):
+            self.url = url
+
+        def has_cached_token(self, *, scopes):
+            return tuple(scopes) == ("llm_proxy", "audio_proxy", "notify")
+
+        def get_machine_token(self, *, scopes):
+            return "obmt_workspace"
+
+    calls = []
+    monkeypatch.setattr(
+        cloud_notifications, "web_backend_url", lambda: "https://cloud.example"
+    )
+    monkeypatch.setattr(
+        cloud_notifications, "get_token_manager", lambda _url: LoggedOut()
+    )
+    monkeypatch.setattr(machine_token_manager, "MachineTokenManager", Machine)
+    monkeypatch.setattr(
+        cloud_notifications.httpx,
+        "post",
+        lambda url, **kwargs: (
+            calls.append((url, kwargs))
+            or httpx.Response(202, json={"message": "Notification accepted."})
+        ),
+    )
+
+    cloud_notifications.send_notification_push(
+        title="Open a link", body="Tap", user_info={}
+    )
+
+    assert calls[0][1]["headers"]["Authorization"] == "Bearer obmt_workspace"
+
+
+def test_send_notification_push_requires_login_without_a_notify_token(
+    monkeypatch,
+) -> None:
+    from openbase_coder_cli.config import machine_token_manager
+
+    class LoggedOut:
+        def get_access_token(self) -> str:
+            raise AuthLoginRequiredError("no login")
+
+    class NoMachine:
+        def __init__(self, url, token_manager=None):
+            pass
+
+        def has_cached_token(self, *, scopes):
+            return False
+
+    monkeypatch.setattr(
+        cloud_notifications, "web_backend_url", lambda: "https://cloud.example"
+    )
+    monkeypatch.setattr(
+        cloud_notifications, "get_token_manager", lambda _url: LoggedOut()
+    )
+    monkeypatch.setattr(machine_token_manager, "MachineTokenManager", NoMachine)
+
+    with pytest.raises(AuthLoginRequiredError):
+        cloud_notifications.send_notification_push(title="Open", body="", user_info={})

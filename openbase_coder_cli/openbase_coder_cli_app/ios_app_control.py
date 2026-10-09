@@ -23,6 +23,12 @@ IOS_APP_CONTROL_ACK_TIMEOUT_SECONDS = 5.0
 # Channel-layer group names only allow [a-zA-Z0-9._-]; command ids are
 # validated against this before being embedded in an ack group name.
 COMMAND_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+# Bounds for the loopback forward a phone may be asked to run for a login.
+FORWARD_MIN_PORT = 1024
+FORWARD_MAX_PORT = 65535
+FORWARD_MAX_TTL_SECONDS = 3600
+FORWARD_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
+FORWARD_TARGET_RE = re.compile(r"^[A-Za-z0-9.:\[\]-]{1,253}$")
 IOS_CALL_CONTROL_ACTIONS = {"set_speaker", "end_call", "start_call"}
 IOS_CALL_CONTROL_ACK_TIMEOUT_SECONDS = 45.0
 IOS_APP_CONTROL_ACTIONS = IOS_CALL_CONTROL_ACTIONS | {
@@ -34,8 +40,22 @@ IOS_APP_CONTROL_ACTIONS = IOS_CALL_CONTROL_ACTIONS | {
 }
 
 
+class LoopbackForwardSerializer(serializers.Serializer):
+    """Ask the phone to forward its loopback ``port`` to ``target:port``.
+
+    Carried with ``open_url`` for CLI logins whose redirect points at
+    localhost; the phone keeps the forward for ``ttl_seconds`` at most.
+    """
+
+    port = serializers.IntegerField(min_value=FORWARD_MIN_PORT, max_value=FORWARD_MAX_PORT)
+    target = serializers.RegexField(FORWARD_TARGET_RE, max_length=253)
+    ttl_seconds = serializers.IntegerField(min_value=1, max_value=FORWARD_MAX_TTL_SECONDS)
+    token = serializers.RegexField(FORWARD_TOKEN_RE, max_length=128)
+
+
 class IOSAppControlSerializer(serializers.Serializer):
     action = serializers.ChoiceField(choices=sorted(IOS_APP_CONTROL_ACTIONS))
+    loopback_forward = LoopbackForwardSerializer(required=False)
     url = serializers.CharField(
         required=False,
         trim_whitespace=True,
@@ -53,6 +73,8 @@ class IOSAppControlSerializer(serializers.Serializer):
             if not url:
                 raise serializers.ValidationError("url is required for open_url.")
             _validate_url(url)
+        elif "loopback_forward" in attrs:
+            raise serializers.ValidationError("loopback_forward only applies to open_url.")
         elif action == "set_call_muted" and "muted" not in attrs:
             raise serializers.ValidationError("muted is required for set_call_muted.")
         elif action == "set_speaker" and "speaker" not in attrs:
@@ -112,6 +134,11 @@ def publish_ios_app_control(payload: dict[str, Any]) -> dict[str, Any]:
     )
     delivered = ack is not None
     result = {}
+    if ack is not None and type(ack.get("opened")) is bool:
+        # Newer apps ack after the open attempt and report its outcome.
+        result["opened"] = ack["opened"]
+        if isinstance(ack.get("error"), str):
+            result["error"] = ack["error"]
     if is_call_control:
         result = {"applied": False}
         if ack is not None:
@@ -142,7 +169,11 @@ def ios_app_control(request):
             "status": "delivered" if command["delivered"] else "published",
             "delivered": command["delivered"],
             "action": command["action"],
-            **{key: command[key] for key in ("applied", "call_state", "error") if key in command},
+            **{
+                key: command[key]
+                for key in ("applied", "call_state", "error", "opened")
+                if key in command
+            },
         },
         status=status.HTTP_202_ACCEPTED,
     )

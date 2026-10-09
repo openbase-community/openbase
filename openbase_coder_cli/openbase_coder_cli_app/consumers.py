@@ -823,6 +823,11 @@ class IOSAppControlConsumer(AsyncJsonWebsocketConsumer):
             time.time() * 1000,
         )
         ack = {"type": "ios_app_control_ack", "command_id": command_id}
+        if type(content.get("opened")) is bool:
+            # open_url acks report whether the URL actually opened.
+            ack["opened"] = content["opened"]
+            if isinstance(content.get("error"), str):
+                ack["error"] = content["error"][:1024]
         state = content.get("call_state")
         if isinstance(state, dict) and all(
             type(state.get(key)) is bool for key in ("connected", "muted", "speaker", "active")

@@ -12,6 +12,8 @@ from openbase_coder_cli.config.token_manager import (
 from openbase_coder_cli.services.onboarding import web_backend_url
 
 USER_SAY_FALLBACK_PATH = "/api/openbase/notifications/user-say-fallback/"
+# Scopes a workspace machine token needs to push to the owner's phones.
+NOTIFY_MACHINE_TOKEN_SCOPES = ("llm_proxy", "audio_proxy", "notify")
 NOTIFY_PATH = "/api/openbase/notifications/notify/"
 REQUEST_TIMEOUT_SECONDS = 15
 MAX_NOTIFICATION_AGENT_NAME_LENGTH = 80
@@ -40,7 +42,7 @@ def send_notification_push(
     must leave local notification behavior unchanged.
     """
     backend_url = web_backend_url()
-    token = get_token_manager(backend_url).get_access_token()
+    token = _notify_bearer_token(backend_url)
     try:
         response = httpx.post(
             f"{backend_url}{NOTIFY_PATH}",
@@ -68,6 +70,32 @@ def send_notification_push(
         )
     if response.status_code != 202:
         raise NotificationPushError(_response_detail(response))
+
+
+def _notify_bearer_token(backend_url: str) -> str:
+    """The owner's access token, or a cloud workspace's machine token.
+
+    Cloud workspaces hold no owner login; their bootstrap machine token
+    carries the ``notify`` scope instead (Cloud accepts either on the notify
+    endpoint, and both can only reach the owner's own devices).
+    """
+    try:
+        return get_token_manager(backend_url).get_access_token()
+    except AuthLoginRequiredError:
+        from openbase_coder_cli.config.machine_token_manager import (
+            MachineTokenError,
+            MachineTokenManager,
+        )
+
+        machine_tokens = MachineTokenManager(backend_url)
+        if not machine_tokens.has_cached_token(scopes=NOTIFY_MACHINE_TOKEN_SCOPES):
+            raise
+        try:
+            return machine_tokens.get_machine_token(scopes=NOTIFY_MACHINE_TOKEN_SCOPES)
+        except MachineTokenError as exc:
+            raise AuthLoginRequiredError(
+                "Openbase Cloud login is required to notify your devices."
+            ) from exc
 
 
 def send_user_say_fallback(
