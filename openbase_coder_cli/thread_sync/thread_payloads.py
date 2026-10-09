@@ -271,6 +271,10 @@ def _thread_payload(result: dict[str, Any]) -> dict[str, Any] | None:
 def _normalize_backend_thread_payload(payload: dict[str, Any]) -> dict[str, Any]:
     session = payload.get("session") if isinstance(payload.get("session"), dict) else {}
     normalized = {**session, **payload}
+    # Claude-compatible sessions can carry a display title independently of
+    # their unique internal lookup name. All app surfaces use this snapshot.
+    if title := _optional_thread_string(normalized, "title"):
+        normalized["name"] = title
     if "threadId" not in normalized and isinstance(normalized.get("id"), str):
         normalized["threadId"] = normalized["id"]
     return normalized

@@ -1378,7 +1378,7 @@ def test_create_session_omits_missing_super_agent_instructions_for_backend_sessi
     ]
 
 
-def test_create_thread_requests_fresh_backend_session_when_directory_exists(
+def test_create_thread_uses_unique_internal_name_when_directory_exists(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1414,17 +1414,13 @@ def test_create_thread_requests_fresh_backend_session_when_directory_exists(
     thread = asyncio.run(_manager(client).create_thread(str(project_dir)))
 
     assert thread.session_id == "s_new"
-    assert client.calls == [
-        ("sessions", {}),
-        (
-            "start_thread",
-            {
-                "name": "project",
-                "cwd": str(project_dir.resolve()),
-                "fresh": True,
-            },
-        ),
-    ]
+    assert client.calls[0] == ("sessions", {})
+    method, request = client.calls[1]
+    assert method == "start_thread"
+    assert request["name"].startswith("thread-")
+    assert request["cwd"] == str(project_dir.resolve())
+    assert request["autoTitle"] is True
+    assert "fresh" not in request
 
 
 def test_send_message_starts_claude_code_backend_turn(tmp_path: Path) -> None:

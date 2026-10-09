@@ -424,7 +424,10 @@ class SessionManagerThreadsMixin:
                 **self._codex_permission_defaults(),
             }
             if not reuse_existing:
-                thread_input["fresh"] = True
+                # Manual conversations never compete for the reusable agent
+                # label. Keep the unique lookup name out of display titles.
+                thread_input["name"] = f"thread-{uuid.uuid4().hex}"
+                thread_input["autoTitle"] = True
             if model := self._model_for_role(SUPER_AGENTS_MODEL_ROLE):
                 thread_input["model"] = model
             developer_instructions = load_super_agent_developer_instructions()
