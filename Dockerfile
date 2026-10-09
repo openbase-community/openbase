@@ -121,8 +121,9 @@ COPY --from=ghcr.io/astral-sh/uv:0.12.14 /uv /usr/local/bin/uv
 COPY --from=tunneld-build /out/openbase-tunneld /usr/local/bin/openbase-tunneld
 
 COPY docker/entrypoint.sh /usr/local/bin/openbase-coder-entrypoint
+COPY docker/persist-home-state.sh /usr/local/bin/openbase-coder-persist-home-state
 # Pre-create the state dir so the named volume inherits openbase ownership.
-RUN chmod 0755 /usr/local/bin/openbase-coder-entrypoint \
+RUN chmod 0755 /usr/local/bin/openbase-coder-entrypoint /usr/local/bin/openbase-coder-persist-home-state \
     && useradd --create-home --uid 1000 openbase \
     && mkdir -p /home/openbase/.openbase /data \
     && chown openbase:openbase /home/openbase/.openbase /data \

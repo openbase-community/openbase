@@ -7,9 +7,12 @@ from datetime import datetime
 from pathlib import Path
 
 from openbase_coder_cli.multi_config import multi_repo_name_set
+from openbase_coder_cli.paths import OPENBASE_BASE_DIR
 from openbase_coder_cli.thread_sync.thread_sync_common import translate_home_path
 
-PROJECTS_FILE = Path.home() / ".openbase" / "coder-projects.json"
+# The data dir, not ~/.openbase: in a container only the data volume survives
+# an image upgrade (identical paths on a normal install).
+PROJECTS_FILE = OPENBASE_BASE_DIR / "coder-projects.json"
 IGNORED_PROJECT_ROOTS = (Path("/private"), Path("/var"))
 IGNORED_EXACT_PROJECT_PATHS = (Path.home(),)
 

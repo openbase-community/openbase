@@ -2,7 +2,7 @@
 
 Routine state (in super-agents) knows only a free-form ``cwd``. Openbase's
 product notion of a *project* is the tracked project registry
-(``~/.openbase/coder-projects.json``), so the join is derived here on the
+(``coder-projects.json`` in the data dir), so the join is derived here on the
 read side: a loop belongs to the tracked project whose path is the longest
 prefix of its ``cwd``. Nothing is persisted, so existing routine state needs
 no migration and the attribution follows the registry as projects come and go.
