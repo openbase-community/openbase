@@ -34,6 +34,7 @@ stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 owner_of() { stat -c '%u:%g' "$1" 2>/dev/null || stat -f '%u:%g' "$1"; }
 mode_of() { stat -c '%a' "$1" 2>/dev/null || stat -f '%OLp' "$1"; }
 owner="$(owner_of "$home")"
+chown "$owner" "$data_dir"
 
 give_to_owner() {
     chown -R "$owner" "$@"
@@ -42,6 +43,7 @@ give_to_owner() {
 set_aside() {
     local dest="$1" parked
     parked="$(mktemp -d "$dest.replaced-$stamp-XXXXXX")"
+    chown "$owner" "$parked"
     mv "$dest" "$parked/state"
     echo "set aside $dest as $parked/state"
 }
@@ -77,12 +79,11 @@ dst.close(); src.close()' "$db" "$copying/$(basename "$db").backup"
 copy_dir "$home/.super-agents" "$data_dir/super-agents"
 copy_dir "$home/.local/share/super-agents-claude-code" "$data_dir/super-agents-claude-code"
 legacy_projects="$home/.openbase/coder-projects.json"
-if [ -f "$legacy_projects" ] && [ "$home/.openbase" != "$data_dir" ]; then
-    if [ -e "$data_dir/coder-projects.json" ] && [ "$refresh" = 1 ]; then
-        mv "$data_dir/coder-projects.json" "$data_dir/coder-projects.json.replaced-$stamp"
-        echo "set aside $data_dir/coder-projects.json as $data_dir/coder-projects.json.replaced-$stamp"
+if [ -f "$legacy_projects" ] && [ ! "$legacy_projects" -ef "$data_dir/coder-projects.json" ]; then
+    if { [ -e "$data_dir/coder-projects.json" ] || [ -L "$data_dir/coder-projects.json" ]; } && [ "$refresh" = 1 ]; then
+        set_aside "$data_dir/coder-projects.json"
     fi
-    if [ ! -e "$data_dir/coder-projects.json" ]; then
+    if [ ! -e "$data_dir/coder-projects.json" ] && [ ! -L "$data_dir/coder-projects.json" ]; then
         cp -p "$legacy_projects" "$data_dir/coder-projects.json"
         give_to_owner "$data_dir/coder-projects.json"
         echo "copied coder-projects.json"

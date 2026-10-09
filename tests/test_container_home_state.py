@@ -86,6 +86,39 @@ def test_image_upgrade_keeps_thread_ids_dispatcher_and_agent_names(tmp_path, vol
     assert _store(monkeypatch, new_layer).get_session(after.id).agent_name == "Renee"
 
 
+def test_pre_upgrade_refresh_preserves_each_project_snapshot(tmp_path, volume) -> None:
+    home = tmp_path / "home"
+    source = home / ".openbase" / "coder-projects.json"
+    source.parent.mkdir(parents=True)
+    source.write_text("[]")
+    shims = tmp_path / "shims"
+    shims.mkdir()
+    (shims / "date").write_text("#!/bin/sh\nprintf '20261009T000000Z\\n'\n")
+    (shims / "date").chmod(0o755)
+    import os
+
+    env = {"PATH": f"{shims}:{os.environ['PATH']}"}
+    for version in range(3):
+        source.write_text(json.dumps([{"version": version}]))
+        result = _copy("--refresh", str(home), str(volume), env=env)
+        assert result.returncode == 0, result.stderr
+    parked = sorted(volume.glob("coder-projects.json.replaced-*"))
+    assert len(parked) == 2
+    assert sorted(json.loads((path / "state").read_text())[0]["version"] for path in parked) == [0, 1]
+
+
+def test_pre_upgrade_refresh_keeps_projects_already_on_volume(tmp_path, volume) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".openbase").symlink_to(volume, target_is_directory=True)
+    projects_file = volume / "coder-projects.json"
+    projects_file.write_text("[]")
+    result = _copy("--refresh", str(home), str(volume))
+    assert result.returncode == 0, result.stderr
+    assert projects_file.read_text() == "[]"
+    assert not list(volume.glob("coder-projects.json.replaced-*"))
+
+
 def test_boot_is_idempotent_and_never_deletes_a_volume_copy(tmp_path, volume, monkeypatch) -> None:
     home = tmp_path / "home"
     home.mkdir()
@@ -308,6 +341,7 @@ def test_pre_upgrade_copy_gives_everything_to_the_home_owner(
     assert result.returncode == 0, result.stderr
     owner = f"{home.stat().st_uid}:{home.stat().st_gid}"
     recorded = calls.read_text(encoding="utf-8").splitlines()
+    assert f"{owner} {volume}" in recorded
     # Each destination is handed over before it is moved into place.
     assert any(
         line.startswith(f"-R {owner} {volume}/super-agents.copying-")
@@ -318,6 +352,15 @@ def test_pre_upgrade_copy_gives_everything_to_the_home_owner(
         for line in recorded
     )
     assert f"-R {owner} {volume}/coder-projects.json" in recorded
+
+    refreshed = _copy(
+        "--refresh", str(home), str(volume), env={"PATH": f"{shims}:{os.environ['PATH']}"}
+    )
+    assert refreshed.returncode == 0, refreshed.stderr
+    recorded = calls.read_text(encoding="utf-8").splitlines()
+    parked = list(volume.glob("*.replaced-*"))
+    assert len(parked) == 3
+    assert all(f"{owner} {path}" in recorded for path in parked)
 
 
 def test_pre_upgrade_copy_keeps_the_store_file_mode(

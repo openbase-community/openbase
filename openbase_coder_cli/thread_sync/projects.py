@@ -26,14 +26,14 @@ def _load_projects() -> list[dict]:
     list, never an error: a zero-byte cache carried over from an older
     install made every thread listing fail (staging, 2026-10-09).
     """
-    if not PROJECTS_FILE.exists():
-        return []
-    text = PROJECTS_FILE.read_text(encoding="utf-8")
-    if not text.strip():
-        return []
     try:
+        text = PROJECTS_FILE.read_text(encoding="utf-8")
+        if not text.strip():
+            return []
         raw = json.loads(text)
-    except json.JSONDecodeError:
+    except FileNotFoundError:
+        return []
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         logger.warning(
             "Ignoring unreadable projects cache %s", PROJECTS_FILE, exc_info=True
         )
