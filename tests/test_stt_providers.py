@@ -94,7 +94,9 @@ def test_openbase_cloud_stt_contract_matches_the_assemblyai_plugin_defaults() ->
 
     defaults = {
         name: parameter.default
-        for name, parameter in inspect.signature(assemblyai.STT.__init__).parameters.items()
+        for name, parameter in inspect.signature(
+            assemblyai.STT.__init__
+        ).parameters.items()
     }
 
     assert defaults["model"] == OPENBASE_CLOUD_STT_MODEL
