@@ -13,6 +13,7 @@ import hashlib
 import re
 from typing import Any
 
+from openbase_coder_cli.cloud_model_errors import model_proxy_denial_message
 from openbase_coder_cli.livekit_agent.codex_turns import (
     _speech_excerpt,
 )
@@ -60,15 +61,19 @@ def _speech_text_from_progress(
     ``turn_id`` is given, a turn or summary that names a different turn is
     ignored as well.
     """
-    # A failed turn produced no fresh assistant output; every
-    # lastUsefulMessage value in the snapshot is CACHED text from an earlier
-    # successful turn (the generic extractors walk every key, so filtering
-    # candidate names is not enough — strip the keys themselves). Speaking a
-    # cached value as if it were the reply silently replays a stale answer
-    # on every failed turn: a broken session resume once repeated a July
-    # reply on every call, with nothing suggesting breakage. Item-derived
-    # text still speaks — it is this turn's own output, e.g. a real error
-    # message.
+    # Claude stores the failed turn's own proxy error in lastUsefulMessage.
+    # Recover only a recognized denial positively tied to the requested turn;
+    # session caches and earlier turns must never become the current answer.
+    current_turn_id = turn_id or progress.get("turnId")
+    if current_turn_id:
+        for key in ("turn", "summary"):
+            turn = progress.get(key)
+            if isinstance(turn, dict) and _turn_identifier(turn) == current_turn_id:
+                if denial := model_proxy_denial_message(_own_last_useful_message(turn)):
+                    return denial
+
+    # Other lastUsefulMessage values on failed turns may be stale session
+    # answers. Strip them recursively; fresh item-derived text remains usable.
     if _turn_failed(progress):
         progress = _without_cached_messages(progress)
 
@@ -233,7 +238,7 @@ def _select_speech_candidate(
             len(text),
             text_hash,
         )
-        return _speech_excerpt(text)
+        return model_proxy_denial_message(text) or _speech_excerpt(text)
     return ""
 
 
