@@ -10,7 +10,8 @@ from __future__ import annotations
 import json
 import math
 import os
-from contextlib import contextmanager
+import sqlite3
+from contextlib import closing, contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -72,6 +73,26 @@ def _timestamp(value: object) -> float:
     return timestamp
 
 
+def _claude_activity_timestamp() -> float:
+    from super_agents.agent_store import database_path
+
+    path = database_path()
+    if not path.exists():
+        return 0.0
+    # Do not construct Store: it initializes/migrates the database. A read-only
+    # connection also prevents a missing/deleted store from being recreated.
+    with closing(
+        sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.1)
+    ) as connection:
+        rows = connection.execute(
+            "SELECT MAX(updated_at) FROM turns UNION ALL "
+            "SELECT MAX(updated_at) FROM sessions WHERE active_turn_id IS NOT NULL"
+        ).fetchall()
+    # Streaming Claude progress refreshes the active session; completion and
+    # steering refresh the turn itself. Both local and Cloud Claude use this store.
+    return max((_timestamp(row[0]) for row in rows), default=0.0)
+
+
 def latest_activity_timestamp() -> float:
     """Latest token, job, or dispatcher/thread turn, including completed turns.
 
@@ -80,7 +101,11 @@ def latest_activity_timestamp() -> float:
     """
     from super_agents.app_server_client import DEFAULT_STATE_FILE
 
-    latest = max(activity_timestamp("token"), activity_timestamp("job"))
+    latest = max(
+        activity_timestamp("token"),
+        activity_timestamp("job"),
+        _claude_activity_timestamp(),
+    )
     path = Path(
         os.environ.get("SUPER_AGENTS_STATE_FILE") or DEFAULT_STATE_FILE
     ).expanduser()

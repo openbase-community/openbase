@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 import time
 
 from openbase_coder_cli.paths import DEFAULT_LOG_DIR, OPENBASE_BASE_DIR
@@ -50,6 +51,7 @@ STALE_POOL_SIGNATURE = "wait_pc_connection timed out"
 
 # Branch A tick cadence (env override wired into the SyncJob in sync_workers).
 WATCHDOG_TICK_SECONDS = 30.0
+VOICE_ROOM_QUERY_TIMEOUT_SECONDS = 3.0
 
 # A signature recurrence within this window of the previous watchdog failure
 # bounce escalates from bouncing the agent to bouncing server + agent.
@@ -95,9 +97,12 @@ def _voice_session_active() -> bool:
 
     try:
         return asyncio.run(
-            active_voice_room_exists(
-                include_agent_only_rooms=True,
-                recent_room_seconds=activity.CALL_JOIN_GRACE_SECONDS,
+            asyncio.wait_for(
+                active_voice_room_exists(
+                    include_agent_only_rooms=True,
+                    recent_room_seconds=activity.CALL_JOIN_GRACE_SECONDS,
+                ),
+                timeout=VOICE_ROOM_QUERY_TIMEOUT_SECONDS,
             )
         )
     except Exception:
@@ -324,7 +329,7 @@ def _bounce_idle(state: dict, now: float) -> bool:
 
     try:
         recent_activity = activity.latest_activity_timestamp()
-    except (OSError, ValueError, TypeError, AttributeError):
+    except (OSError, ValueError, TypeError, AttributeError, sqlite3.Error):
         logger.warning("livekit_pool_watchdog deferred activity_unavailable")
         return False
     state["last_activity_ts"] = max(
