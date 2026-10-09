@@ -108,8 +108,8 @@ export UV_PYTHON_DOWNLOADS="${UV_PYTHON_DOWNLOADS:-never}"
 # URL to `openbase-coder browser open`, which sends it to the user's phone
 # (or prints it with paste-back guidance). Agents and supervised services
 # inherit these from here.
-export BROWSER="${BROWSER:-openbase-coder browser open}"
-export GH_BROWSER="${GH_BROWSER:-openbase-coder browser open}"
+export BROWSER="${BROWSER:-openbase-browser}"
+export GH_BROWSER="${GH_BROWSER:-openbase-browser}"
 
 if [ "$#" -gt 0 ]; then
     exec "$@"
