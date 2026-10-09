@@ -488,3 +488,30 @@ def test_project_metadata_git_status_reports_missing_directory() -> None:
 
     metadata = project_views._project_metadata("/tmp/definitely-missing-project")
     assert metadata["git_status"] == "missing"
+
+
+def test_load_projects_treats_an_empty_cache_as_no_projects(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # A zero-byte cache carried over from an older install made every thread
+    # listing fail with a 500 (staging, 2026-10-09). The cache is derived
+    # state, so an empty or unreadable file is simply no projects yet.
+    projects_file = tmp_path / "coder-projects.json"
+    monkeypatch.setattr(projects, "PROJECTS_FILE", projects_file)
+    for content in ("", "   \n", "{"):
+        projects_file.write_text(content, encoding="utf-8")
+        assert projects._load_projects() == []
+        assert projects.get_recent_projects() == []
+
+
+def test_track_project_recovers_from_an_empty_cache(
+    tmp_path: Path, monkeypatch
+) -> None:
+    projects_file = tmp_path / "coder-projects.json"
+    projects_file.write_text("", encoding="utf-8")
+    monkeypatch.setattr(projects, "PROJECTS_FILE", projects_file)
+    monkeypatch.setattr(projects, "IGNORED_PROJECT_ROOTS", ())
+    project = tmp_path / "real-project"
+    project.mkdir()
+    projects.track_project(str(project))
+    assert [item["path"] for item in projects._load_projects()] == [str(project)]
