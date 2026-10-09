@@ -1,9 +1,6 @@
 # Voice Routing
 
-Openbase Coder voice sessions normally start with the LiveKit dispatcher. The
-dispatcher is the routing agent for the private voice room: it can start or
-resume Super Agents, transfer the active voice route to one of them, and accept
-the route back when the user is done speaking directly with that agent.
+A voice call belongs to the conversation you start it from. Start a call from a project thread and you are talking to that thread: what you say becomes turns in it, its agent answers in its own voice, and the transcript stays there. Start a call from the dispatcher and you are talking to the dispatcher, which is a pinned conversation like any other. The dispatcher is also the routing agent for the private voice room: it can start or resume Super Agents, transfer the active voice route to one of them, and accept the route back when you are done speaking directly with that agent.
 
 These commands affect only the private LiveKit voice route for the active room.
 They do not publish code, send public messages, or change product behavior.
@@ -12,7 +9,7 @@ In the apps: the [iOS app's](ios-tabs.md#calls) call, started from the waveform 
 
 Calls default to the **GPT-Live** voice model: one full-duplex model listens and speaks for the whole call while the dispatcher and Super Agents do the work behind it, so the routing below is unchanged. Everything you say goes to the agent on the call, which answers with its own tools, skills and files; the voice model only speaks the agent's answers and never answers from its own knowledge. The classic speech-to-text, agent turn, text-to-speech pipeline remains selectable (`openbase-coder defaults voice-model pipeline`, or **Settings → Voice** in the apps) and is the only option for local-only audio; the STT and TTS provider settings apply to that pipeline only. See [defaults](commands/defaults.md) and [configuration](configuration.md#dispatcher-config).
 
-On iOS, starting a call from a project thread still connects you to the dispatcher. The dispatcher receives the identity of the thread open on your screen, so requests about "this thread" can continue that conversation and relay its answer. Opening another thread updates this context; leaving chat clears it. Use **Transfer call here** to move the voice route into a thread. Once transferred, speech goes to that thread regardless of which conversation you view. This screen context works with both voice engines; Android does not publish it yet.
+On the phone, the call button at the bottom of a thread starts a call in that thread: the first thing you say reaches that thread's agent, and the call shows that thread as its active voice conversation. If the thread cannot be reached (for example it no longer exists), the call does not start and the app shows why; a call never falls back to the dispatcher silently. Opening a different thread during a call does not move the call: use **Transfer call here** in that thread's menu to move the voice route there, and **Back to Dispatch** in the call settings to return to the dispatcher. On a dispatcher call, the dispatcher also receives the identity of the thread open on your screen (iOS), so requests about "this thread" can continue that conversation and relay its answer; opening another thread updates this context and leaving chat clears it.
 
 The dispatcher, agents receiving a direct voice transfer, and the voice model receive context about the computer hosting the call. On a Cloud workspace, local file checks describe that workspace, not your personal computer's desktop or screen. The agent can use available [laptop tools](laptop-tools.md) to reach your other computer; if that access is unavailable, it explains the limitation and offers workspace files or suggests connecting to Openbase on your personal computer. The voice model still waits for the agent's answer.
 
