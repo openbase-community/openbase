@@ -177,6 +177,7 @@ from openbase_coder_cli.livekit_agent.room_diagnostics import (  # noqa: F401
     _register_room_diagnostics,
     _track_log_fields,
 )
+from openbase_coder_cli.livekit_agent.screen_context import FocusedThreadTracker
 from openbase_coder_cli.livekit_agent.session_diagnostics import (
     _register_session_diagnostics,
 )
@@ -1081,6 +1082,14 @@ def _wire_live_voice_call(
 
     session.on("agent_state_changed", on_agent_state_changed)
 
+    def on_user_state_changed(event) -> None:
+        bridge.on_user_state_changed(
+            str(getattr(event, "old_state", "") or ""),
+            str(getattr(event, "new_state", "") or ""),
+        )
+
+    session.on("user_state_changed", on_user_state_changed)
+
     audio_queue = AnnouncerSpeechQueue(
         session=session,
         announcer_tts=None,
@@ -1162,6 +1171,7 @@ def _wire_live_voice_call(
         for event_name, handler in audio_queue_session_handlers:
             session.off(event_name, handler)
         session.off("agent_state_changed", on_agent_state_changed)
+        session.off("user_state_changed", on_user_state_changed)
         await bridge.aclose()
         await audio_queue.close()
         await voice_router.close()
@@ -1208,6 +1218,14 @@ async def livekit_agent(ctx: JobContext):
         )
         raise
     logger.info("Connected to LiveKit room")
+    focused_thread_tracker = FocusedThreadTracker()
+    focused_thread_tracker.attach(ctx.room)
+    voice_router.focused_thread_tracker = focused_thread_tracker
+
+    async def _detach_focused_thread_tracker() -> None:
+        focused_thread_tracker.detach()
+
+    ctx.add_shutdown_callback(_detach_focused_thread_tracker)
     room_diagnostic_handlers = (
         _register_room_diagnostics(ctx.room) if LIVEKIT_VERBOSE_LOGGING else ()
     )
