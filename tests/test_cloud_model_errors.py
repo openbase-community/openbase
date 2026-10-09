@@ -32,7 +32,7 @@ def test_denial_is_presented_as_plan_error_in_thread_history_and_voice(
 
     monkeypatch.setenv("OPENBASE_CODER_CLI_WEB_BACKEND_URL", url)
     raw = "Failed to authenticate. API Error: 403 " + json.dumps(payload)
-    expected = f"This model is not available on your plan. Choose Claude Haiku or Sonnet, or upgrade at {url}."
+    expected = f"This model is not available on your plan. Choose Claude Haiku, or upgrade at {url}."
     assert normalize_model_proxy_error(raw) == expected
     assert not is_backend_auth_failure_text(raw)
     run = _run_from_turn(

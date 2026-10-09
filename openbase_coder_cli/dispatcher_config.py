@@ -98,10 +98,7 @@ OPENBASE_CLOUD_CLAUDE_MODEL_OPTIONS = (
     {
         "id": "sonnet",
         "label": "Claude Sonnet",
-        "description": (
-            "Claude Sonnet through Openbase Cloud. Trial accounts run Claude "
-            "Haiku instead."
-        ),
+        "description": "Claude Sonnet through Openbase Cloud.",
         "is_default": False,
     },
     {

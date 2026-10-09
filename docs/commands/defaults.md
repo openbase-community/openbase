@@ -13,7 +13,7 @@ The model implies the engine. Codex models are `gpt-5.5` (default), `gpt-5`,
 `sol`, and `astra`; Claude Code models are `fable`, `opus`, `sonnet`, and
 `haiku`. Codex models are listed but not selectable on Openbase Cloud.
 
-Fresh Openbase Cloud installs default both dispatcher and Super Agents to Claude Haiku, and the Settings UI marks it as the default. Existing Sonnet selections remain supported; trial accounts run those requests on Haiku and the UI explains that compatibility behavior.
+Fresh Openbase Cloud installs default both dispatcher and Super Agents to Claude Haiku, and the Settings UI marks it as the default. Free and trial accounts can select Haiku. The catalog disables Sonnet, Opus, and Fable with a paid-plan reason. Existing Sonnet configurations retain a Haiku compatibility fallback for older clients.
 
 ## Usage
 

@@ -37,7 +37,7 @@ def model_plan_denial_message(text: str | None) -> str | None:
     if payload.get("code") != "model_not_available_on_plan" and not legacy_denial:
         return None
     return (
-        "This model is not available on your plan. Choose Claude Haiku or Sonnet, "
+        "This model is not available on your plan. Choose Claude Haiku, "
         f"or upgrade at {configured_web_backend_url()}."
     )
 

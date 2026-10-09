@@ -76,7 +76,7 @@ def test_openbase_cloud_model_options_include_fable(monkeypatch) -> None:
         "fable",
     ]
     assert options[0]["is_default"] is True
-    assert "Trial accounts run Claude Haiku" in options[1]["description"]
+    assert options[1]["description"] == "Claude Sonnet through Openbase Cloud."
 
 
 def test_codex_model_options_cover_runtime_catalog() -> None:
