@@ -30,16 +30,17 @@ pairing — see [Desktop App](desktop-app.md#install-and-first-run-setup).
 
 The app opens on an empty **new chat**, like the ChatGPT and Codex apps: the Openbase mark sits faded in the middle and a message box sits at the bottom. Every conversation, with the Dispatcher or with a coding thread, is this same screen: your messages on the right in gray bubbles, the agent's replies on the left as plain text, with copy and share under the latest reply. A reply that is still being written streams in with a **Stop** control. The Android app uses the same layout.
 
-- Type a message and tap the arrow to send it. On a new chat it goes to the **Dispatcher**, which routes the work, and the screen becomes that conversation. To start a new coding thread instead, tap **+** and pick a recent project; the app creates the thread on the computer that owns the project and the screen becomes that thread. In a conversation, sending while the agent is working steers it (hold the button to queue instead).
+- A new chat starts a new coding thread. Two choices sit under the message box: the **project** it works in (your recent projects, on whichever computer owns them) and the **model** it uses. Both default to what you picked last time. Send creates the thread on the computer that owns the project, and the screen becomes that thread. In a conversation, sending while the agent is working steers it (hold the button to queue instead).
+- The **Dispatcher** is not something you start: it is one persistent conversation, always at the top of **Pinned** in the drawer. Open it there to talk to it.
 - Tap the **microphone** to record a voice note. It is transcribed on the phone into the message box so you can edit it before sending; tap again to stop. Voice notes are off while a call is running.
 - With the box empty, the round **waveform** button starts a voice call.
 - The title shows the conversation name. The top-right **compose** button starts a new chat; **⋯** holds the thread actions (pin, archive, transfer the active call, refresh, details). In a conversation, **+** also chooses which computer runs the thread.
 
-Tap the round menu button at the top left (or swipe from the left edge) to open the side drawer. From the top:
+Tap the round menu button at the top left (or swipe from the left edge) to open the side drawer; the keyboard closes when it opens. From the top:
 
 - **Openbase** and a **search** button that opens the full thread list.
-- Dispatch, Approvals, Notifications (with an unread badge), Reports, Sync, Cloud, and the developer Voice Test screen.
-- **Pinned** — your favorite threads.
+- Approvals, Notifications (with an unread badge), Reports, Sync, Cloud, and the developer Voice Test screen.
+- **Pinned** — the Dispatcher conversation first, then your favorite threads.
 - **Recents** — your most recently updated threads, with **See all** for the full list. A green dot marks a running thread.
 - A floating **New chat** button and a **Settings** gear at the bottom.
 
@@ -66,7 +67,7 @@ into the same call.
 
 ## Dispatch
 
-The Dispatcher's conversation, opened from the drawer. It is the same chat screen as any thread, so you can read what the dispatcher did, steer it, and start a call from it.
+The Dispatcher's conversation, opened from the top of **Pinned** in the drawer. It is the same chat screen as any thread, so you can read what the dispatcher did, steer it, and start a call from it. There is only ever one Dispatcher; it is recreated only from Settings.
 
 ## Threads
 
