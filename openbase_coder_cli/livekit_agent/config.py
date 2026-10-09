@@ -19,6 +19,7 @@ from openbase_coder_cli.direct_voice_instructions import (
     DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS,
 )
 from openbase_coder_cli.dispatcher_instructions import with_dispatcher_rules
+from openbase_coder_cli.host_kind import with_host_section
 from openbase_coder_cli.paths import (
     CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH,
     CODEX_DISPATCHER_CONFIG_PATH,
@@ -181,6 +182,20 @@ the agent by name when a transfer or announcement names one. Speak naturally,
 stop when interrupted, and never read code, paths or identifiers character
 by character.
 """.strip()
+
+
+def live_voice_startup_instructions(host: str | None = None) -> str:
+    """The GPT-Live persona plus one line on where the caller's agent runs.
+
+    ``host`` is a ``host_kind`` value; None detects this install's. On a cloud
+    workspace the model otherwise acknowledges "checking your desktop" for a
+    computer that has none (staging demo, 2026-10-08).
+    """
+    from openbase_coder_cli.host_kind import live_voice_host_note
+
+    return f"{LIVE_VOICE_STARTUP_INSTRUCTIONS}\n{live_voice_host_note(host)}"
+
+
 LIVEKIT_CODEX_THREAD_STATE_PATH = os.getenv("LIVEKIT_CODEX_THREAD_STATE_PATH")
 LIVEKIT_CODEX_FRESH_THREAD_PER_SESSION = os.getenv(
     "LIVEKIT_CODEX_FRESH_THREAD_PER_SESSION", ""
@@ -289,19 +304,19 @@ def load_direct_livekit_developer_instructions(
     if explicit_path:
         loaded = _read_instruction_file(Path(explicit_path).expanduser())
         if loaded:
-            return loaded
+            return with_host_section(loaded)
 
     loaded = _read_instruction_file(
         default_path or DEFAULT_DIRECT_LIVEKIT_INSTRUCTIONS_PATH
     )
     if loaded:
-        return loaded
+        return with_host_section(loaded)
 
     text = values.get(DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV, "").strip()
     if text:
-        return text
+        return with_host_section(text)
 
-    return DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS
+    return with_host_section(DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS)
 
 
 def _read_instruction_file(path: Path) -> str | None:

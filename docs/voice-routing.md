@@ -12,6 +12,8 @@ In the apps: the [iOS app's](ios-tabs.md#calls) call, started from the waveform 
 
 Calls default to the **GPT-Live** voice model: one full-duplex model listens and speaks for the whole call while the dispatcher and Super Agents do the work behind it, so the routing below is unchanged. Everything you say goes to the agent on the call, which answers with its own tools, skills and files; the voice model only speaks the agent's answers and never answers from its own knowledge. The classic speech-to-text, agent turn, text-to-speech pipeline remains selectable (`openbase-coder defaults voice-model pipeline`, or **Settings → Voice** in the apps) and is the only option for local-only audio; the STT and TTS provider settings apply to that pipeline only. See [defaults](commands/defaults.md) and [configuration](configuration.md#dispatcher-config).
 
+The dispatcher, agents receiving a direct voice transfer, and the voice model receive context about the computer hosting the call. On a Cloud workspace, local file checks describe that workspace, not your personal computer's desktop or screen. The agent can use available [laptop tools](laptop-tools.md) to reach your other computer; if that access is unavailable, it explains the limitation and offers workspace files or suggests connecting to Openbase on your personal computer. The voice model still waits for the agent's answer.
+
 ## Check The Current Route
 
 ```bash
@@ -50,6 +52,8 @@ Use the returned `agent_name` when calling Super Agents MCP tools and voice
 transfer commands.
 
 ## Transfer Voice To A Super Agent
+
+Creating a Super Agent thread does not by itself give it work. The dispatcher passes the task as `prompt` to `super_agents_start`, which creates the thread and starts its first turn, or follows creation with `super_agents_start_turn`. It confirms that the agent is working only after the tool reports a started turn. Standing `developerInstructions` do not count as a task. In the mobile apps, a thread with no past, current, or queued turns explains that the agent has not been given a task yet; sending a message starts the work.
 
 Transfer by speaking agent name when you know the active Super Agent voice:
 

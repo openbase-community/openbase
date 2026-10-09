@@ -20,8 +20,10 @@ accruing. It runs on the ``sync-workers`` service tick and does two things:
   remedy). Only newly-appended lines are ever considered, so a restart never
   re-reacts to historical failures.
 - **Branch B — idle recycling.** When the agent has sat idle long enough
-  (default 45 min) with no active call, it proactively recycles the agent so
+  (default 45 min) on a host, it proactively recycles the agent so
   a fresh pool replaces the potentially-stale one before the next call lands.
+  Tokens, room activity, turns, and job starts reset the clock. Container
+  workspaces skip this branch; their lifecycle already handles idle sleep.
 
 Both branches are guarded so self-heal never harms a live call and never
 churns the service: they never bounce while a voice session is active (a
@@ -35,9 +37,12 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 import time
 
 from openbase_coder_cli.paths import DEFAULT_LOG_DIR, OPENBASE_BASE_DIR
+from openbase_coder_cli.services import livekit_pool_activity as activity
+from openbase_coder_cli.services.launchd import _external_supervisor
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +51,7 @@ STALE_POOL_SIGNATURE = "wait_pc_connection timed out"
 
 # Branch A tick cadence (env override wired into the SyncJob in sync_workers).
 WATCHDOG_TICK_SECONDS = 30.0
+VOICE_ROOM_QUERY_TIMEOUT_SECONDS = 3.0
 
 # A signature recurrence within this window of the previous watchdog failure
 # bounce escalates from bouncing the agent to bouncing server + agent.
@@ -90,7 +96,15 @@ def _voice_session_active() -> bool:
     from openbase_coder_cli.livekit_announcer import active_voice_room_exists
 
     try:
-        return asyncio.run(active_voice_room_exists(include_agent_only_rooms=True))
+        return asyncio.run(
+            asyncio.wait_for(
+                active_voice_room_exists(
+                    include_agent_only_rooms=True,
+                    recent_room_seconds=activity.CALL_JOIN_GRACE_SECONDS,
+                ),
+                timeout=VOICE_ROOM_QUERY_TIMEOUT_SECONDS,
+            )
+        )
     except Exception:
         # A failed room query cannot authorize killing a possibly speaking worker.
         logger.warning("livekit_pool_watchdog deferred voice_room_query_unavailable")
@@ -246,10 +260,11 @@ def _pending_active(state: dict, now: float) -> bool:
     return (now - created) <= PENDING_TTL_SECONDS
 
 
+@activity.call_start_lock()
 def _bounce_failure(state: dict, now: float) -> bool:
     """Fire (or defer) a stale-pool-signature bounce. Returns True if a bounce
     was executed this tick."""
-    if _voice_session_active():
+    if _call_join_pending(now) or _voice_session_active():
         # Defer: remember the intent so the next tick bounces once the call
         # ends. The signature lines are already consumed; the flag carries on.
         state["pending"] = {"created_ts": now}
@@ -289,12 +304,44 @@ def _bounce_failure(state: dict, now: float) -> bool:
     return True
 
 
+def _call_join_pending(now: float) -> bool:
+    try:
+        return activity.call_join_pending(now)
+    except OSError:
+        # Unknown activity cannot authorize a restart during call setup.
+        return True
+
+
+@activity.call_start_lock()
 def _bounce_idle(state: dict, now: float) -> bool:
     """Proactively recycle the idle agent. Returns True if it bounced."""
+    # Container pools do not experience host sleep/network churn. Cloud
+    # workspaces already sleep when idle; only failure-driven recovery belongs
+    # here. The Docker entrypoint sets the existing supervisor marker.
+    if _external_supervisor():
+        return False
+
     idle_seconds = _env_float(
         "LIVEKIT_AGENT_IDLE_RECYCLE_SECONDS", IDLE_RECYCLE_SECONDS
     )
     if idle_seconds <= 0:
+        return False
+
+    try:
+        recent_activity = activity.latest_activity_timestamp()
+    except (OSError, ValueError, TypeError, AttributeError, sqlite3.Error):
+        logger.warning("livekit_pool_watchdog deferred activity_unavailable")
+        return False
+    state["last_activity_ts"] = max(
+        recent_activity,
+        state.get("last_activity_ts") or 0.0,
+    )
+    if _call_join_pending(now):
+        return False
+    if _voice_session_active():
+        # Remember calls/room creation even after the room disappears. Sampling
+        # only when the idle timer expired would forget intervening activity.
+        state["last_voice_activity_ts"] = now
         return False
 
     baseline = state.get("baseline_ts") or 0.0
@@ -305,11 +352,19 @@ def _bounce_idle(state: dict, now: float) -> bool:
     # container restored after sleeping for hours, where the wall clock jumps
     # far past a baseline recorded before the sleep).
     started = _agent_started_ts() or 0.0
-    last_activity = max(baseline, last_failure, last_idle, started)
+    last_activity = max(
+        baseline,
+        last_failure,
+        last_idle,
+        started,
+        state["last_activity_ts"],
+        state.get("last_voice_activity_ts") or 0.0,
+    )
     if (now - last_activity) < idle_seconds:
         return False
 
-    if _voice_session_active():
+    # Recheck under the same lock immediately before committing the bounce.
+    if _call_join_pending(now):
         return False
 
     if not _rate_limit_allow(state, now):

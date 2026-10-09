@@ -6,8 +6,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import livekit.api as livekit_api
+import pytest
 
 from openbase_coder_cli import livekit_voice_route as voice_route
+from openbase_coder_cli.host_kind import HOST_KIND_HEADING, with_host_section
 from openbase_coder_cli.livekit_announcer import NoActiveLiveKitRoomError
 from openbase_coder_cli.livekit_voice_history import (
     get_voice_history_entry,
@@ -374,7 +376,7 @@ def test_direct_livekit_instruction_loader_priority(tmp_path: Path):
             },
             default_path=default,
         )
-        == "explicit file instructions"
+        == with_host_section("explicit file instructions")
     )
 
     assert (
@@ -382,7 +384,7 @@ def test_direct_livekit_instruction_loader_priority(tmp_path: Path):
             env={DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV: "env text instructions"},
             default_path=default,
         )
-        == "default file instructions"
+        == with_host_section("default file instructions")
     )
 
     assert (
@@ -390,7 +392,7 @@ def test_direct_livekit_instruction_loader_priority(tmp_path: Path):
             env={DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV: "env text instructions"},
             default_path=tmp_path / "missing.md",
         )
-        == "env text instructions"
+        == with_host_section("env text instructions")
     )
 
     assert (
@@ -398,7 +400,7 @@ def test_direct_livekit_instruction_loader_priority(tmp_path: Path):
             env={},
             default_path=tmp_path / "missing.md",
         )
-        == DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS
+        == with_host_section(DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS)
     )
 
 
@@ -410,7 +412,7 @@ def test_direct_instruction_loader_refreshes_managed_file_before_reading(tmp_pat
         managed.write_text("current managed instructions")
         return True
     monkeypatch.setattr(voice_route, "refresh_openbase_instruction_files_from_installation", refresh)
-    assert load_direct_livekit_developer_instructions(env={}) == "current managed instructions"
+    assert load_direct_livekit_developer_instructions(env={}) == with_host_section("current managed instructions")
 
 
 def test_direct_instruction_explicit_override_does_not_refresh_managed_files(tmp_path: Path, monkeypatch):
@@ -420,7 +422,35 @@ def test_direct_instruction_explicit_override_does_not_refresh_managed_files(tmp
         raise AssertionError("Explicit instruction override must remain independent of managed defaults")
     monkeypatch.setattr(voice_route, "refresh_openbase_instruction_files_from_installation", unexpected_refresh)
     assert load_direct_livekit_developer_instructions(
-        env={DIRECT_LIVEKIT_INSTRUCTIONS_PATH_ENV: str(explicit)}) == "custom instructions"
+        env={DIRECT_LIVEKIT_INSTRUCTIONS_PATH_ENV: str(explicit)}) == with_host_section("custom instructions")
+
+
+@pytest.mark.parametrize("loader_module", ["route", "config"])
+@pytest.mark.parametrize("source", ["explicit", "default", "text", "builtin"])
+def test_direct_voice_instructions_include_cloud_host(tmp_path, monkeypatch, loader_module, source):
+    from openbase_coder_cli.livekit_agent import config
+    from openbase_coder_cli.services import cloud_workspace
+
+    monkeypatch.setattr(cloud_workspace, 'cloud_workspace_id', lambda: 'test-workspace')
+    module = voice_route if loader_module == 'route' else config
+    instruction_file = tmp_path / 'instructions.md'
+    instruction_file.write_text('Direct agent policy.')
+    default_path = tmp_path / 'missing.md'
+    env = {}
+    if source == 'explicit':
+        env[DIRECT_LIVEKIT_INSTRUCTIONS_PATH_ENV] = str(instruction_file)
+    elif source == 'default':
+        default_path = instruction_file
+    elif source == 'text':
+        env[DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV] = 'Direct agent policy.'
+    result = module.load_direct_livekit_developer_instructions(env=env, default_path=default_path)
+    assert "runs on the user's Openbase Cloud workspace" in result
+    assert result.count(HOST_KIND_HEADING) == 1
+    assert 'Loaded canonical Super Agent dispatch procedure' not in result
+    instruction_file.write_text(result)
+    assert module.load_direct_livekit_developer_instructions(
+        env={}, default_path=instruction_file,
+    ) == result
 
 
 def test_transfer_to_thread_prepares_then_publishes(tmp_path: Path, monkeypatch):
@@ -467,7 +497,7 @@ def test_transfer_to_thread_prepares_then_publishes(tmp_path: Path, monkeypatch)
     )
 
     assert result.state.active_target_thread_id == "target-1"
-    assert manager.calls == [("target-1", "/tmp/project", "direct voice instructions")]
+    assert manager.calls == [("target-1", "/tmp/project", with_host_section("direct voice instructions"))]
     sent = client.room.sent[0]
     payload = json.loads(sent.data.decode("utf-8"))
     assert payload["action"] == "transfer_to_thread"

@@ -1,4 +1,5 @@
 from openbase_coder_cli import dispatcher_instructions as instructions
+from openbase_coder_cli import host_kind
 
 
 def test_canonical_skill_is_loaded_from_installed_link_and_not_duplicated(tmp_path, monkeypatch):
@@ -60,5 +61,74 @@ def test_dispatcher_rules_require_checking_current_state_every_time(monkeypatch)
 
 def test_dispatcher_rules_apply_without_the_canonical_skill(tmp_path, monkeypatch):
     monkeypatch.setattr(instructions, 'canonical_dispatcher_skill', lambda: '')
-    result = instructions.with_dispatcher_rules('Load the skill through tools.')
-    assert result == 'Load the skill through tools.\n\n' + instructions.CURRENT_STATE_RULES
+    result = instructions.with_dispatcher_rules('Load the skill through tools.', host='mac')
+    assert result == (
+        'Load the skill through tools.\n\n' + host_kind.host_section('mac')
+        + '\n\n' + instructions.CURRENT_STATE_RULES
+        + '\n\n' + instructions.START_RULES
+    )
+
+
+def test_dispatcher_rules_say_a_cloud_workspace_has_no_desktop(monkeypatch):
+    """Regression for the 2026-10-08 staging demo: a dispatcher on a cloud
+    container answered "what's on my desktop" as if it sat at the user's Mac."""
+    monkeypatch.setattr(instructions, 'canonical_dispatcher_skill', lambda: '')
+    cloud = instructions.with_dispatcher_rules('Base.', host=host_kind.HOST_KIND_CLOUD_WORKSPACE)
+    assert host_kind.HOST_KIND_HEADING in cloud
+    assert 'no screen, no Desktop folder' in cloud
+    assert 'their cloud workspace' in cloud
+    assert 'check whether available laptop tools can reach' in cloud
+    assert 'If access is unavailable' in cloud
+    assert "Never infer that another device's desktop is empty" in cloud
+    assert cloud.index(host_kind.HOST_KIND_HEADING) < cloud.index(instructions.CURRENT_STATE_HEADING)
+    assert cloud.count(host_kind.HOST_KIND_HEADING) == 1
+    assert instructions.with_dispatcher_rules(cloud, host=host_kind.HOST_KIND_CLOUD_WORKSPACE) == cloud
+
+
+def test_dispatcher_rules_say_the_users_own_mac_has_its_files_and_screen(monkeypatch):
+    monkeypatch.setattr(instructions, 'canonical_dispatcher_skill', lambda: '')
+    mac = instructions.with_dispatcher_rules('Base.', host=host_kind.HOST_KIND_MAC)
+    assert "runs on the user's own Mac" in mac
+    assert 'Desktop' in mac and 'screen' in mac
+    assert 'cloud workspace' not in mac
+
+
+def test_host_kind_detects_a_cloud_workspace_before_the_platform(monkeypatch):
+    import openbase_coder_cli.services.cloud_workspace as cloud_workspace
+
+    monkeypatch.setattr(cloud_workspace, 'cloud_workspace_id', lambda: 'ca0a7c808edc')
+    monkeypatch.setattr(host_kind.sys, 'platform', 'linux')
+    assert host_kind.host_kind() == host_kind.HOST_KIND_CLOUD_WORKSPACE
+    monkeypatch.setattr(cloud_workspace, 'cloud_workspace_id', lambda: None)
+    assert host_kind.host_kind() == host_kind.HOST_KIND_LINUX
+    monkeypatch.setattr(host_kind.sys, 'platform', 'darwin')
+    assert host_kind.host_kind() == host_kind.HOST_KIND_MAC
+    monkeypatch.setattr(host_kind.sys, 'platform', 'win32')
+    assert host_kind.host_kind() == host_kind.HOST_KIND_WINDOWS
+
+
+def test_host_section_precedes_existing_current_state_rules(monkeypatch):
+    monkeypatch.setattr(instructions, 'canonical_dispatcher_skill', lambda: '')
+    existing = 'Base.\n\n' + instructions.CURRENT_STATE_RULES
+    result = instructions.with_dispatcher_rules(existing, host='cloud_workspace')
+    assert result.index(host_kind.HOST_KIND_HEADING) < result.index(instructions.CURRENT_STATE_HEADING)
+    assert result.count(instructions.CURRENT_STATE_HEADING) == 1
+    assert instructions.with_dispatcher_rules(result, host='cloud_workspace') == result
+
+
+def test_dispatcher_rules_make_starting_a_super_agent_two_steps(monkeypatch):
+    # Regression (2026-10-08 staging voice demo): the dispatcher created a
+    # tic-tac-toe thread with the task in developerInstructions, never started
+    # a turn, and said the agent was working; the thread showed no messages.
+    monkeypatch.setattr(instructions, 'canonical_dispatcher_skill', lambda: 'Canonical procedure.')
+    result = instructions.with_dispatcher_rules('Dispatcher policy.')
+    rules = ' '.join(instructions.START_RULES.split())
+    assert 'super_agents_start only creates the thread' in rules
+    assert 'Pass the task as `prompt` in that same call' in rules
+    assert 'developerInstructions is standing guidance, never the task' in rules
+    assert 'turnStarted true' in rules
+    assert 'start the turn before confirming' in rules
+    assert result.index(instructions.CURRENT_STATE_HEADING) < result.index(instructions.START_HEADING)
+    assert result.index(instructions.START_HEADING) < result.index(instructions.PROCEDURE_HEADING)
+    assert instructions.with_dispatcher_rules(result) == result
+    assert result.count(instructions.START_HEADING) == 1

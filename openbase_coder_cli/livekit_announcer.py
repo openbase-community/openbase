@@ -266,13 +266,16 @@ class _TargetRoom:
     agent_identities: tuple[str, ...]
 
 
-async def active_voice_room_exists(*, include_agent_only_rooms: bool = False) -> bool:
+async def active_voice_room_exists(
+    *, include_agent_only_rooms: bool = False, recent_room_seconds: float = 0.0,
+) -> bool:
     """Detect active calls, optionally retaining an agent while its user reconnects."""
 
     async def operation(client) -> bool:
         try:
             await _resolve_target_room(client, room_name=None,
-                require_user=not include_agent_only_rooms)
+                require_user=not include_agent_only_rooms,
+                recent_room_seconds=recent_room_seconds)
         except NoActiveLiveKitRoomError:
             return False
         return True
@@ -319,6 +322,7 @@ async def _resolve_target_room(
     *,
     room_name: str | None,
     require_user: bool = True,
+    recent_room_seconds: float = 0.0,
 ) -> _TargetRoom:
     import livekit.api as livekit_api
 
@@ -341,6 +345,12 @@ async def _resolve_target_room(
         reverse=True,
     )
     for room in rooms:
+        created = (getattr(room, "creation_time_ms", 0) or 0) / 1000.0
+        created = created or getattr(room, "creation_time", 0) or 0
+        if recent_room_seconds > 0 and created > 0 and time.time() - created < recent_room_seconds:
+            # Room creation precedes participant/agent registration. Watchdogs
+            # must protect that gap; ordinary announcement routing stays strict.
+            return _TargetRoom(room_name=room.name, agent_identities=())
         # Room summary counts lag newly connected participants. Query the
         # current membership even when the summary still says zero.
         participant_response = await client.room.list_participants(

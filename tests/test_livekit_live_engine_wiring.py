@@ -206,10 +206,15 @@ async def _run_entrypoint(ctx, decision, monkeypatch):
 
 
 async def test_live_engine_builds_a_duplex_session_and_publishes_the_attribute(
-    wiring, monkeypatch
+    wiring, monkeypatch, tmp_path
 ):
+    from openbase_coder_cli.services import livekit_pool_activity
+
+    monkeypatch.setattr(livekit_pool_activity, "_ACTIVITY_DIR", tmp_path / "activity")
+    assert livekit_pool_activity.activity_timestamp("job") == 0
     ctx = _fake_ctx()
     await _run_entrypoint(ctx, _live_decision(), monkeypatch)
+    assert livekit_pool_activity.activity_timestamp("job") > 0
 
     assert wiring.pipeline_calls == []
     (model,) = _FakeGPTLiveModel.instances
@@ -227,7 +232,8 @@ async def test_live_engine_builds_a_duplex_session_and_publishes_the_attribute(
     assert session.kwargs["turn_handling"] == {"interruption": {"mode": "vad"}}
     agent, room = session.started_with
     assert isinstance(agent, livekit.LiveVoiceAssistant)
-    assert agent.instructions == config.LIVE_VOICE_STARTUP_INSTRUCTIONS
+    assert agent.instructions == config.live_voice_startup_instructions()
+    assert agent.instructions.startswith(config.LIVE_VOICE_STARTUP_INSTRUCTIONS)
     # The bridge subscribed to the plugin session once the agent entered:
     # every closed caller utterance goes to the agent, delegations bind.
     assert len(wiring.live.handlers["input_audio_transcription_completed"]) == 1
@@ -377,3 +383,19 @@ def test_live_startup_instructions_never_let_the_voice_model_answer_itself():
     assert "desktop" in text and "files" in text
     assert "Only the agent answers." in text
     assert "relay commentary faithfully" in text.lower()
+
+
+def test_live_voice_persona_names_the_host_kind_for_both_kinds():
+    from openbase_coder_cli import host_kind
+
+    cloud = config.live_voice_startup_instructions(host_kind.HOST_KIND_CLOUD_WORKSPACE)
+    assert cloud.startswith(config.LIVE_VOICE_STARTUP_INSTRUCTIONS)
+    assert "Openbase Cloud workspace" in cloud
+    assert "never as their desktop or their Mac" in cloud
+    assert "Let the agent determine access to other devices" in cloud
+    mac = config.live_voice_startup_instructions(host_kind.HOST_KIND_MAC)
+    assert mac.startswith(config.LIVE_VOICE_STARTUP_INSTRUCTIONS)
+    assert "runs on their own Mac" in mac
+    assert "cloud workspace" not in mac.lower()
+    # Still the voice, never the brain: the host line adds no answering licence.
+    assert "Never answer a question or request yourself" in cloud
