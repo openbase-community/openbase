@@ -141,6 +141,8 @@ launchd/systemd, which the container does not run.)
 
 ## Notes and limits
 
+- On a graceful stop, the entrypoint signals services to exit, flushes filesystem buffers immediately, then flushes again after services finish. Allow enough stop time for service shutdown and disk I/O. A forced kill or a VM halt that bypasses the entrypoint cannot guarantee that recent writes are durable.
+- The entrypoint attempts to shorten Linux page-cache writeback using `OPENBASE_DIRTY_EXPIRE_CENTISECS` (default `500`) and `OPENBASE_DIRTY_WRITEBACK_CENTISECS` (default `100`). Values are in hundredths of a second and must contain only digits. Maritime applies these settings before dropping root privileges; an ordinary unprivileged container usually cannot change them and continues with the current kernel settings. This reduces exposure to abrupt stops but does not guarantee durability.
 - Service status in the console reflects the container's supervisor, but the
   console's service start/stop buttons do not apply inside Docker — restart
   the container instead.

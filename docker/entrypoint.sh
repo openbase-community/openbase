@@ -42,7 +42,7 @@ tune_writeback() {
         && printf '%s\n' "$writeback" >"$vm_dir/dirty_writeback_centisecs"; } 2>/dev/null; then
         echo "[entrypoint] Page-cache writeback window set: dirty_expire_centisecs=$expire dirty_writeback_centisecs=$writeback." >&2
     else
-        echo "[entrypoint] Could not set the page-cache writeback window ($vm_dir not writable); continuing with kernel defaults." >&2
+        echo "[entrypoint] Could not fully set the page-cache writeback window; keeping current kernel settings." >&2
     fi
 }
 
@@ -208,6 +208,7 @@ start_supervised() {
     name="$1"
     shift
     (
+        trap 'trap "" TERM INT; wait || true; exit 0' TERM INT
         while :; do
             "$@" 2>&1 &
             svc_pid=$!
@@ -218,7 +219,7 @@ start_supervised() {
             echo "[supervisor] exited with status $rc; restarting in 5s"
             sleep 5
         done
-    ) 2>&1 | sed -u "s/^/[$name] /" &
+    ) 2>&1 | (trap '' TERM; exec sed -u "s/^/[$name] /") &
 }
 
 # Stop every service, then flush the page cache so a VM halted right after
@@ -228,6 +229,8 @@ start_supervised() {
 shutdown() {
     trap '' TERM INT
     kill 0 2>/dev/null || true
+    echo "[entrypoint] Flushing filesystem buffers before waiting for services." >&2
+    sync || true
     wait || true
     echo "[entrypoint] Services stopped; flushing filesystem buffers." >&2
     sync || true

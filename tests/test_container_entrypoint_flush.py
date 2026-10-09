@@ -13,8 +13,11 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
+
+import pytest
 
 ENTRYPOINT = Path(__file__).parents[1] / "docker" / "entrypoint.sh"
 
@@ -91,7 +94,7 @@ def test_tune_writeback_failure_is_tolerated(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "CONTINUED" in result.stdout
     assert result.stderr.count("\n") == 1
-    assert "Could not set the page-cache writeback window" in result.stderr
+    assert "Could not fully set the page-cache writeback window" in result.stderr
 
 
 def test_tune_writeback_rejects_non_numeric_values(tmp_path):
@@ -159,3 +162,75 @@ def test_shutdown_trap_syncs_after_services_exit(tmp_path):
     assert proc.returncode == 0, stderr
     assert marker.read_text() == "synced\n"
     assert "flushing filesystem buffers" in stderr
+
+
+@pytest.mark.parametrize("supervised", [False, True])
+@pytest.mark.parametrize("stubborn", [False, True])
+def test_shutdown_flushes_before_wait_and_after_final_write(
+    tmp_path, supervised, stubborn
+):
+    marker = tmp_path / "sync-marker"
+    ready = tmp_path / "ready"
+    stopped = tmp_path / "stopped"
+    service = tmp_path / "service.py"
+    service.write_text(
+        "import os, signal, sys, time\n"
+        "from pathlib import Path\n"
+        "def stop(signum, frame):\n"
+        "    time.sleep(0.3)\n"
+        "    print('service shutdown complete', flush=True)\n"
+        "    Path(os.environ['STOPPED']).write_text('final write')\n"
+        "    sys.exit(0)\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN if os.environ['STUBBORN'] == '1' else stop)\n"
+        "Path(os.environ['READY']).touch()\n"
+        "while True: time.sleep(1)\n"
+    )
+    script = (
+        "set -euo pipefail\n"
+        'sync() { if [ -f "$STOPPED" ]; then echo stopped >>"$MARKER"; else echo running >>"$MARKER"; fi; }\n'
+        + _function("start_supervised")
+        + _function("shutdown")
+        + "trap shutdown TERM INT\n"
+        + ('start_supervised delayed "$1" "$2"\n' if supervised else '"$1" "$2" &\n')
+        + "wait\n"
+    )
+    proc = subprocess.Popen(
+        ["bash", "-c", script, "shutdown", sys.executable, str(service)],
+        start_new_session=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={
+            **os.environ,
+            "RUN_DIR": str(tmp_path),
+            "READY": str(ready),
+            "STOPPED": str(stopped),
+            "MARKER": str(marker),
+            "STUBBORN": "1" if stubborn else "0",
+        },
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while not ready.exists():
+            assert proc.poll() is None, proc.communicate()
+            assert time.monotonic() < deadline, "service never became ready"
+            time.sleep(0.05)
+        os.kill(proc.pid, signal.SIGTERM)
+        if stubborn:
+            while not marker.exists():
+                assert time.monotonic() < deadline, "no flush before waiting"
+                time.sleep(0.05)
+            assert marker.read_text().splitlines() == ["running"]
+            assert proc.poll() is None
+            assert not stopped.exists()
+        else:
+            stdout, stderr = proc.communicate(timeout=10)
+            assert proc.returncode == 0, stderr
+            assert marker.read_text().splitlines() == ["running", "stopped"]
+            assert "service shutdown complete" in stdout
+    finally:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait()
