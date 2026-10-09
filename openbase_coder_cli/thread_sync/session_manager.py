@@ -40,6 +40,7 @@ from .session_manager_base import (
     logger,
     resolve_super_agent_instructions_path,
 )
+from .session_manager_claude_events import ClaudeEventsMixin
 from .session_manager_routines import SessionManagerRoutinesMixin
 from .session_manager_threads import SessionManagerThreadsMixin
 from .session_manager_turns import SessionManagerTurnsMixin
@@ -177,6 +178,7 @@ def _agent_message_boundary(previous_text: str, next_text: str) -> str:
 
 
 class CodexAppServerSessionManager(
+    ClaudeEventsMixin,
     SessionManagerThreadsMixin,
     SessionManagerTurnsMixin,
     SessionManagerRoutinesMixin,
@@ -209,6 +211,7 @@ class CodexAppServerSessionManager(
         self._turn_prompt: dict[str, str] = {}
         self._turn_steers: dict[str, list[Any]] = {}
         self._state_lock = asyncio.Lock()
+        self._claude_watchers: dict[str, asyncio.Task[None]] = {}
 
     def _default_client(self, execution_backend: str) -> _SuperAgentsClient:
         return _default_client_for_execution_backend(
@@ -258,6 +261,7 @@ class CodexAppServerSessionManager(
                 raise RuntimeError("Super Agents did not return a turn id")
             async with self._state_lock:
                 self._remember_turn_prompt_locked(turn_id, message)
+            self._watch_legacy_claude_thread(session_id)
             return turn_id
 
         turn_input = {
@@ -321,6 +325,7 @@ class CodexAppServerSessionManager(
         return turn_id
 
     async def _broadcast_thread_state(self, thread_id: str) -> None:
+        self._watch_legacy_claude_thread(thread_id)
         session_state = await self.get_session_state(thread_id)
         if session_state is not None:
             await _broadcast(
