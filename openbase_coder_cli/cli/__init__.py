@@ -18,6 +18,7 @@ from .auth import auth, login, logout
 from .backend import backend
 from .boilersync import boilersync
 from .bootstrap import bootstrap
+from .browser import browser
 from .claude import claude
 from .claude_chrome import claude_chrome
 from .claude_sync import claude_sync
@@ -127,6 +128,7 @@ main.add_command(provision)
 main.add_command(report)
 main.add_command(reports)
 main.add_command(bootstrap)
+main.add_command(browser)
 main.add_command(restart)
 main.add_command(self_restart)
 main.add_command(user)

@@ -8,13 +8,14 @@ import re
 import time
 import uuid
 from typing import Any
-from urllib.parse import urlparse
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from rest_framework import serializers, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+
+from openbase_coder_cli.open_url_policy import open_url_error
 
 IOS_APP_CONTROL_GROUP = "ios_app_control"
 logger = logging.getLogger(__name__)
@@ -31,8 +32,6 @@ IOS_APP_CONTROL_ACTIONS = IOS_CALL_CONTROL_ACTIONS | {
     "start_livekit_voice_test_call",
     "upload_diagnostics",
 }
-DISALLOWED_URL_SCHEMES = {"data", "file", "javascript"}
-URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*$")
 
 
 class IOSAppControlSerializer(serializers.Serializer):
@@ -64,16 +63,9 @@ class IOSAppControlSerializer(serializers.Serializer):
 
 
 def _validate_url(value: str) -> None:
-    parsed = urlparse(value)
-    scheme = parsed.scheme
-    if not scheme:
-        raise serializers.ValidationError("url must include a scheme.")
-    if not URL_SCHEME_RE.match(scheme):
-        raise serializers.ValidationError("url has an invalid scheme.")
-    if scheme.lower() in DISALLOWED_URL_SCHEMES:
-        raise serializers.ValidationError(f"{scheme} URLs are not allowed.")
-    if any(ord(char) < 32 for char in value):
-        raise serializers.ValidationError("url must not contain control characters.")
+    error = open_url_error(value)
+    if error:
+        raise serializers.ValidationError(error)
 
 
 def ack_group_name(command_id: str) -> str:

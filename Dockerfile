@@ -180,7 +180,9 @@ WORKDIR /home/openbase
 ENV PATH="/home/openbase/.openbase/bin:/opt/openbase-coder/workspace/cli/.venv/bin:${PATH}" \
     OPENBASE_CODER_WORKSPACE_DIR=/opt/openbase-coder/workspace \
     OPENBASE_CODER_CLI_CONSOLE_BUILD_DIR=/opt/openbase-coder/console-dist \
-    OPENBASE_CODER_SERVICE_SUPERVISOR=external
+    OPENBASE_CODER_SERVICE_SUPERVISOR=external \
+    BROWSER="openbase-coder browser open" \
+    GH_BROWSER="openbase-coder browser open"
 
 # All state (env file, sqlite DB, downloaded backend binaries, logs) lives in
 # ~/.openbase; keep it on a volume so logins and setup survive restarts.
