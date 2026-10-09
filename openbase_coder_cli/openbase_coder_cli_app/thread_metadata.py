@@ -145,8 +145,8 @@ def _thread_display_name(payload: dict[str, Any]) -> str:
         basename = directory.rstrip("/").rsplit("/", 1)[-1]
         if basename:
             return basename
-    thread_id = payload.get("thread_id") or payload.get("session_id")
-    return str(thread_id or "thread")
+    # Never the thread id: display names are titles, not identifiers.
+    return "Conversation"
 
 
 def _thread_agent_name(payload: dict[str, Any]) -> str | None:
