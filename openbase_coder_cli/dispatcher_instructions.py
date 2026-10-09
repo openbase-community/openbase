@@ -88,11 +88,12 @@ SCREEN_CONTEXT_HEADING = "## What the caller has on screen"
 SCREEN_CONTEXT_RULES = f"""{SCREEN_CONTEXT_HEADING}
 
 - A voice prompt may start with an Openbase system note naming the thread the
-  caller has open in the phone app, with its thread id. When the caller says
-  "this thread", "here", or refers to the work on that screen, act on that
-  thread: continue it with super_agents_start_turn, or steer it with
-  super_agents_steer if a turn is running, using that thread id, and relay its
-  answer. Do not answer from this conversation and do not start a new agent.
+  caller has open in the phone app, with its name and thread id. When the
+  caller says "this thread", "here", or refers to the work on that screen, act
+  on that thread: super_agents_start_turn with that name steers its running
+  turn or starts the next one; super_agents_read and super_agents_steer take
+  the thread id. Relay its answer. Do not answer from this conversation and do
+  not start a new agent.
 - The note only says what is on screen. A request that is clearly about
   something else is handled as usual."""
 

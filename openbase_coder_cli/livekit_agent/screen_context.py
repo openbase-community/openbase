@@ -74,10 +74,11 @@ def screen_context_note(focus: FocusedThread) -> str:
         f"{label} open in the Openbase phone app (thread id {focus.thread_id}"
         f'{where}) while speaking to you. When they say "this thread" or '
         "refer to what is on their screen, they mean that thread: continue "
-        "it with super_agents_start_turn, or steer it with super_agents_steer "
-        "if a turn is running, using that thread id, and relay its answer. "
-        "Do not answer it from this conversation and do not start a new agent "
-        "for it.]"
+        "it with super_agents_start_turn using that thread name (it steers a "
+        "running turn or starts the next one); the thread id is for "
+        "super_agents_read or super_agents_steer. Relay its answer. Do not "
+        "answer it from this conversation and do not start a new agent for "
+        "it.]"
     )
 
 
