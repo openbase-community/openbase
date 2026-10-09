@@ -56,7 +56,7 @@ CARTESIA_VOICE_CATALOG: tuple[CartesiaVoiceCatalogEntry, ...] = (
         "2f251ac3-89a9-4a77-a452-704b474ccd01", "Lucy", "en", "GB", "feminine"
     ),
     CartesiaVoiceCatalogEntry(
-        "a4a16c5e-5902-4732-b9b6-2a48efd2e11b", "Grace", "en", "AU", "feminine"
+        "f6ff7c0c-e396-40a9-a70b-f7607edb6937", "Emma", "en", "US", "feminine"
     ),
     CartesiaVoiceCatalogEntry(
         "a33f7a4c-100f-41cf-a1fd-5822e8fc253f", "Lauren", "en", "US", "feminine"

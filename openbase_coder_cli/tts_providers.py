@@ -21,6 +21,7 @@ CARTESIA_PROVIDER_ID = "cartesia"
 OPENBASE_CLOUD_TTS_PROVIDER_ID = "openbase_cloud"
 KOKORO_PROVIDER_ID = "kokoro"
 DEFAULT_TTS_PROVIDER_ID: TTSProviderId = CARTESIA_PROVIDER_ID
+DEFAULT_CARTESIA_TTS_MODEL = "sonic-3.6"
 DEFAULT_CARTESIA_VOICE_ID = "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"
 DEFAULT_CARTESIA_ANNOUNCER_VOICE_ID = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
 DEFAULT_CARTESIA_TTS_VOLUME = 0.8
@@ -213,7 +214,7 @@ class CartesiaTTSProvider(BaseTTSProvider):
         api_key: str | None = None,
         base_url: str | None = None,
         api_version: str | None = None,
-        model: str = "sonic-3",
+        model: str = DEFAULT_CARTESIA_TTS_MODEL,
         volume: float = DEFAULT_CARTESIA_TTS_VOLUME,
         **kwargs,
     ) -> livekit_tts.TTS:

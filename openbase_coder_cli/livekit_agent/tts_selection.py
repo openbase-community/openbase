@@ -17,6 +17,7 @@ from openbase_coder_cli.livekit_agent.speech_formatter import format_for_speech
 from openbase_coder_cli.livekit_agent.tts_progress import TTSProgressGuard, TTSStreamStalled
 from openbase_coder_cli.tts_providers import (
     CARTESIA_PROVIDER_ID,
+    DEFAULT_CARTESIA_TTS_MODEL,
     DEFAULT_CARTESIA_TTS_VOLUME,
     get_tts_provider,
 )
@@ -50,7 +51,7 @@ class VoiceSelectingTTS(livekit_tts.TTS):
         api_key_provider: Callable[[], str | None] | None = None,
         provider=None,
         role: str = "direct",
-        model: str = "sonic-3",
+        model: str = DEFAULT_CARTESIA_TTS_MODEL,
         volume: float = DEFAULT_CARTESIA_TTS_VOLUME,
         base_url: str | None = None,
         api_version: str | None = None,
