@@ -855,10 +855,8 @@ async def test_two_utterances_in_a_row_steer_and_only_the_newest_speaks():
     # Both reach the thread; run_turn steers the running turn with the second.
     assert len(dispatcher.prompts) == 2
     assert dispatcher.prompts[0][0].endswith(wrap_voice_prompt("Check the build"))
-    # The first turn had said nothing yet, so the follow-up carries the
-    # whole request (a backend that queues it still gets it complete).
     assert dispatcher.prompts[1][0].endswith(
-        wrap_voice_prompt("Check the build And also run the linter")
+        wrap_voice_prompt("And also run the linter")
     )
     # A late delegation binds to the newest utterance.
     live.delegate("d1", "")
@@ -1342,6 +1340,49 @@ async def test_words_after_a_silent_turn_started_carry_the_whole_request():
             "Subtract 38 from the multiplication result in this thread. Answer just the number"
         )
     )
+    await bridge.aclose()
+
+
+@pytest.mark.parametrize("final", ["desktop, the one from yesterday", "laptop instead"])
+async def test_held_delegation_discards_pending_text_when_its_final_arrives(final):
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=5.0)
+    live.final("Read the file on my", item_id="first")
+    live.delegate("d1", "desktop")
+    live.final(final, item_id="second")
+    bridge._flush_held()
+    await _settle()
+    assert len(dispatcher.prompts) == 1
+    assert dispatcher.prompts[0][0].endswith(_voice(f"Read the file on my {final}"))
+    assert not bridge._newest_entry_for(dispatcher).open_utterance
+    await bridge.aclose()
+
+
+async def test_reconnect_unbinds_a_delegation_while_its_utterance_is_held():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=5.0)
+    live.final("Run the tests")
+    live.delegate("old-session", "")
+    live.emit("session_reconnected")
+    bridge._flush_held()
+    await _settle()
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.of("commentary", "old-session") == []
+    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    await bridge.aclose()
+
+
+@pytest.mark.parametrize("followup", ["Run the linter", "Thanks"])
+async def test_a_separate_quick_utterance_does_not_repeat_the_previous_command(followup):
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.final("Increment the counter")
+    await _settle()
+    live.final(followup)
+    await _settle()
+    if followup == "Thanks":
+        assert len(dispatcher.prompts) == 1
+    else:
+        assert len(dispatcher.prompts) == 2
+        assert dispatcher.prompts[1][0].endswith(_voice(followup))
     await bridge.aclose()
 
 

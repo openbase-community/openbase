@@ -121,6 +121,7 @@ class FocusedThreadTracker:
         self._room = room
         for participant in (getattr(room, "remote_participants", None) or {}).values():
             self._observe(participant)
+        room.on("participant_connected", self._observe)
         room.on("participant_attributes_changed", self._on_attributes_changed)
         room.on("participant_disconnected", self._on_participant_disconnected)
 
@@ -129,13 +130,11 @@ class FocusedThreadTracker:
         if room is None:
             return
         for event_name, handler in (
+            ("participant_connected", self._observe),
             ("participant_attributes_changed", self._on_attributes_changed),
             ("participant_disconnected", self._on_participant_disconnected),
         ):
-            try:
-                room.off(event_name, handler)
-            except Exception:
-                logger.debug("room off(%s) failed", event_name, exc_info=True)
+            room.off(event_name, handler)
 
     def _observe(self, participant: Any) -> None:
         if participant is None or _is_agent(participant):

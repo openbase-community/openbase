@@ -109,3 +109,15 @@ def test_tracker_follows_the_phone_attribute_and_ignores_agents():
 
     tracker.detach()
     assert room.handlers == {}
+
+
+def test_tracker_reads_attributes_on_a_phone_that_joins_after_attach():
+    room = _Room()
+    tracker = FocusedThreadTracker()
+    tracker.attach(room)
+    handler = room.handlers.get("participant_connected")
+    assert handler is not None
+    handler(_phone({FOCUSED_THREAD_ATTRIBUTE: json.dumps(LIGHTHOUSE)}))
+    assert tracker.current() == FocusedThread(**LIGHTHOUSE)
+    tracker.detach()
+    assert room.handlers == {}
