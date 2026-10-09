@@ -62,18 +62,20 @@ def resolve_project_dir(
         return ProjectResolution(path=str(explicit.resolve()))
 
     wanted = normalize_project_name(raw)
-    candidates: dict[str, str] = {}
+    candidates: dict[str, set[str]] = {}
     for path in projects if projects is not None else known_project_paths():
         if Path(path).is_dir():
-            candidates.setdefault(str(Path(path).resolve()), Path(path).name)
+            candidates.setdefault(str(Path(path).resolve()), set()).add(normalize_project_name(Path(path).name))
     for root in roots if roots is not None else project_roots():
-        if not root.is_dir():
+        try:
+            children = sorted(root.iterdir())
+        except OSError:
             continue
-        for child in sorted(root.iterdir()):
+        for child in children:
             if child.is_dir() and not child.name.startswith("."):
-                candidates.setdefault(str(child.resolve()), child.name)
+                candidates.setdefault(str(child.resolve()), set()).add(normalize_project_name(child.name))
 
-    matches = sorted(path for path, base in candidates.items() if normalize_project_name(base) == wanted)
+    matches = sorted(path for path, names in candidates.items() if wanted in names)
     if len(matches) == 1:
         return ProjectResolution(path=matches[0])
     if matches:

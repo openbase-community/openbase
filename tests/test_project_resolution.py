@@ -67,6 +67,37 @@ def test_absolute_directory_is_used_as_given(tmp_path) -> None:
     assert resolve_project_dir(str(root / "tic-tac-toe"), projects=[], roots=[]).path == str((root / "tic-tac-toe").resolve())
 
 
+def test_symlink_aliases_match_without_creating_duplicate_candidates(tmp_path) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    target = root / "actual-project"
+    target.mkdir()
+    alias = root / "friendly-name"
+    alias.symlink_to(target, target_is_directory=True)
+
+    for name in ("actual project", "friendly name"):
+        result = resolve_project_dir(name, projects=[str(target)], roots=[root])
+        assert result.path == str(target.resolve())
+    assert resolve_project_dir("missing", projects=[str(alias)], roots=[root]).candidates == [str(target.resolve())]
+
+
+def test_unreadable_root_does_not_hide_known_or_other_root_projects(tmp_path, monkeypatch) -> None:
+    root = _workspace(tmp_path)
+    unreadable = tmp_path / "unreadable"
+    unreadable.mkdir()
+    original_iterdir = type(root).iterdir
+
+    def iterdir(path):
+        if path == unreadable:
+            raise PermissionError("Cannot list directory")
+        return original_iterdir(path)
+
+    monkeypatch.setattr(type(root), "iterdir", iterdir)
+    for projects, roots in (([str(root / "tic-tac-toe")], [unreadable]), ([], [unreadable, root])):
+        result = resolve_project_dir("tic tac toe", projects=projects, roots=roots)
+        assert result.path == str((root / "tic-tac-toe").resolve())
+
+
 def test_default_roots_include_the_configured_projects_dir(tmp_path, monkeypatch) -> None:
     root = _workspace(tmp_path)
     monkeypatch.setenv(project_resolution.PROJECTS_DIR_ENV, str(root))

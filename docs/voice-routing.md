@@ -51,6 +51,18 @@ openbase-coder super-agent-name "document-voice-routing-and-glossary" --json
 Use the returned `agent_name` when calling Super Agents MCP tools and voice
 transfer commands.
 
+## Choose A Super Agent's Project
+
+When you name a project or folder, the dispatcher resolves it before starting the Super Agent and passes the result as its working directory:
+
+```bash
+openbase-coder project-dir "tic tac toe" --json
+```
+
+The command matches existing entries in the computer's project list and visible immediate subdirectories of `OPENBASE_CODER_PROJECTS_DIR`, the caller's current directory, and the user's home directory. Matching ignores case and treats spaces, dashes, and underscores alike. Folder aliases that resolve to the same directory count as one candidate. Unreadable roots are skipped; discovery does not search recursively. An existing absolute directory path (including a quoted `~/...` path) can also be supplied directly.
+
+JSON output contains `name`, `path`, `error`, and `candidates`. One match returns its absolute path with exit code 0. No match or multiple matches returns a null `path`, an explanation, and candidate paths with exit code 1. Without `--json`, success prints the path and failure prints an error. The dispatcher asks which folder to use on failure; it does not substitute its own directory for a named project.
+
 ## Transfer Voice To A Super Agent
 
 Creating a Super Agent thread does not by itself give it work. The dispatcher passes the task as `prompt` to `super_agents_start`, which creates the thread and starts its first turn, or follows creation with `super_agents_start_turn`. It confirms that the agent is working only after the tool reports a started turn. Standing `developerInstructions` do not count as a task. In the mobile apps, a thread with no past, current, or queued turns explains that the agent has not been given a task yet; sending a message starts the work.
