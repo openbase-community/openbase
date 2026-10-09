@@ -11,7 +11,7 @@ openbase-coder threads archive-stale [--days N] [--dry-run]
 openbase-coder threads push THREAD_ID [--to DEVICE] [-m MESSAGE]
 ```
 
-`openbase-coder threads ...` is the same command.
+The same subcommands are available through the `openbase` launcher when that alias is installed.
 
 ## threads list
 

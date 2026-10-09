@@ -360,28 +360,6 @@ def _busy_from_tail(tail: str) -> bool | None:
             )
             return stop_reason == "tool_use"
     return None
-    for line in reversed(tail.splitlines()):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(entry, dict):
-            continue
-        kind = entry.get("type")
-        if kind == "user":
-            if _starts_turn(entry):
-                return True
-            continue
-        if kind == "assistant":
-            message = entry.get("message")
-            stop_reason = (
-                message.get("stop_reason") if isinstance(message, dict) else None
-            )
-            return stop_reason == "tool_use"
-    return None
 
 
 # --- joining threads with terminals ---------------------------------------------
