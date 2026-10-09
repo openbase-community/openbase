@@ -2884,3 +2884,17 @@ def test_backend_sessions_keeps_single_flight_per_event_loop() -> None:
 
 def run_once_on_foreign_loop(manager: Any) -> None:
     asyncio.run(manager._backend_sessions())
+
+
+def test_backend_sessions_locks_do_not_keep_finished_event_loops_alive() -> None:
+    import gc
+
+    class Client:
+        async def sessions(self):
+            return []
+
+    manager = _manager(Client())
+    for _ in range(3):
+        asyncio.run(manager._backend_sessions())
+    gc.collect()
+    assert len(manager.__dict__["_backend_sessions_locks"]) == 0
