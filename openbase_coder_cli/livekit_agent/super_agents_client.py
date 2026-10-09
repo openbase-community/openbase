@@ -232,6 +232,10 @@ def _safe_spoken_answer(
     # A monthly-spend-limit 403 arrives looking like an auth failure ("Failed
     # to authenticate. API Error: 403 {...spend limit...}") but has a distinct,
     # actionable remedy — surface it accurately rather than as a generic outage.
+    from openbase_coder_cli.cloud_model_errors import model_plan_denial_message
+
+    if plan_denial := model_plan_denial_message(speech_text):
+        return plan_denial
     if is_spend_limit_text(speech_text):
         logger.error(
             "%s stage=voice_turn_backend_spend_limit backend=%s turn_id=%s",

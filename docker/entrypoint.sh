@@ -20,6 +20,32 @@
 set -euo pipefail
 umask 077
 
+# --- Page-cache writeback window ----------------------------------------------
+# A Maritime stop or idle sleep halts the VM without flushing the page cache,
+# and /data's ext4 keeps dirty data up to vm.dirty_expire_centisecs (kernel
+# default 30 s) before writing it back: a file written just before a stop came
+# back 0 bytes (2026-10-09). Shorten the window so dirty data reaches disk
+# within a few seconds. Needs root (Maritime runs this before the privilege
+# drop); best-effort everywhere else, since /proc/sys is usually read-only in
+# a plain Docker container. Builtins only: this runs as root with a fixed PATH.
+tune_writeback() {
+    local vm_dir="${1:-/proc/sys/vm}"
+    local expire="${OPENBASE_DIRTY_EXPIRE_CENTISECS:-500}"
+    local writeback="${OPENBASE_DIRTY_WRITEBACK_CENTISECS:-100}"
+    case "$expire$writeback" in
+        *[!0-9]*)
+            echo "[entrypoint] Ignoring non-numeric dirty writeback settings ($expire/$writeback); kernel defaults kept." >&2
+            return 0
+            ;;
+    esac
+    if { printf '%s\n' "$expire" >"$vm_dir/dirty_expire_centisecs" \
+        && printf '%s\n' "$writeback" >"$vm_dir/dirty_writeback_centisecs"; } 2>/dev/null; then
+        echo "[entrypoint] Page-cache writeback window set: dirty_expire_centisecs=$expire dirty_writeback_centisecs=$writeback." >&2
+    else
+        echo "[entrypoint] Could not fully set the page-cache writeback window; keeping current kernel settings." >&2
+    fi
+}
+
 # --- Privilege drop (Maritime) ----------------------------------------------
 # Maritime's VM init launches the image entrypoint as root regardless of the
 # Dockerfile USER and without the image ENV (observed 2026-09-28; without
@@ -54,6 +80,7 @@ if [ "${OPENBASE_CODER_RUNTIME:-}" = "maritime" ] && [ "$(/usr/bin/id -u)" = "0"
     # never follow links (-h) so nothing under /data can redirect the chown.
     /usr/bin/find /data -maxdepth 2 -user root \
         -exec /bin/chown -h openbase:openbase {} + 2>/dev/null || true
+    tune_writeback
     echo "[entrypoint] Started as root; re-executing as 'openbase'." >&2
     exec /usr/bin/setpriv --reuid=openbase --regid=openbase --init-groups \
         --inh-caps=-all --bounding-set=-all --no-new-privs \
@@ -80,6 +107,11 @@ export UV_PYTHON_DOWNLOADS="${UV_PYTHON_DOWNLOADS:-never}"
 
 if [ "$#" -gt 0 ]; then
     exec "$@"
+fi
+
+# Maritime already tuned writeback as root, before the privilege drop.
+if [ "${OPENBASE_CODER_RUNTIME:-}" != "maritime" ]; then
+    tune_writeback
 fi
 
 DATA_DIR="${OPENBASE_CODER_CLI_DATA_DIR:-$HOME/.openbase}"
@@ -176,6 +208,7 @@ start_supervised() {
     name="$1"
     shift
     (
+        trap 'trap "" TERM INT; wait || true; exit 0' TERM INT
         while :; do
             "$@" 2>&1 &
             svc_pid=$!
@@ -186,13 +219,21 @@ start_supervised() {
             echo "[supervisor] exited with status $rc; restarting in 5s"
             sleep 5
         done
-    ) 2>&1 | sed -u "s/^/[$name] /" &
+    ) 2>&1 | (trap '' TERM; exec sed -u "s/^/[$name] /") &
 }
 
+# Stop every service, then flush the page cache so a VM halted right after
+# the stop keeps what the services last wrote (see tune_writeback). TERM/INT
+# are ignored, not reset: `kill 0` signals this shell too, and with the
+# default action it died there, before `wait` (or any flush) could run.
 shutdown() {
-    trap - TERM INT
+    trap '' TERM INT
     kill 0 2>/dev/null || true
+    echo "[entrypoint] Flushing filesystem buffers before waiting for services." >&2
+    sync || true
     wait || true
+    echo "[entrypoint] Services stopped; flushing filesystem buffers." >&2
+    sync || true
     exit 0
 }
 trap shutdown TERM INT
@@ -320,6 +361,14 @@ awk '/^# BEGIN docker overrides/{skip=1} !skip{print} /^# END docker overrides/{
     echo "# END docker overrides"
 } >>"$tmp_env"
 mv "$tmp_env" "$ENV_FILE"
+
+# Render every managed instruction file before any service starts. First-run
+# setup does this once; an image upgrade on a persisted /data does not re-run
+# setup, and workspaces redeployed in place came back with only AGENTS.md
+# until something rendered the rest (2026-10-09). Idempotent, and it leaves
+# user-authored files alone; non-fatal so a template problem cannot block boot.
+python -c "from openbase_coder_cli.codex_home_instructions import refresh_openbase_instruction_files_from_installation as refresh; refresh(report=print)" \
+    || echo "[entrypoint] warning: instruction refresh failed" >&2
 
 # Setup only auto-installs the pinned livekit-server for dev workspaces with
 # uv project state; install it explicitly here (idempotent: checks version).

@@ -271,14 +271,20 @@ def combined_model_options(location: str) -> tuple[dict[str, Any], ...]:
     )
     claude_reason = engine_unavailable_reason(CLAUDE_ENGINE, location)
     codex_reason = engine_unavailable_reason(CODEX_ENGINE, location)
+    cloud_reasons = {}
+    if location == LOCATION_CLOUD:
+        from openbase_coder_cli.cloud_models import cloud_model_availability
+
+        cloud_reasons = cloud_model_availability()
     combined: list[dict[str, Any]] = []
     for option in claude_options:
+        reason = claude_reason or cloud_reasons.get(option["id"])
         combined.append(
             {
                 **option,
                 "engine": CLAUDE_ENGINE,
-                "available": claude_reason is None,
-                "unavailable_reason": claude_reason,
+                "available": reason is None,
+                "unavailable_reason": reason,
             }
         )
     for option in CODEX_MODEL_OPTIONS:

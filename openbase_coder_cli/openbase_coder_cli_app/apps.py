@@ -23,6 +23,9 @@ class OpenbaseCoderCliAppConfig(AppConfig):
         from openbase_coder_cli.cli.setup.codex import (
             relink_workspace_skills_from_installation,
         )
+        from openbase_coder_cli.codex_home_instructions import (
+            refresh_openbase_instruction_files_from_installation,
+        )
 
         try:
             skills_autolink.sync_auto_linked_skills()
@@ -32,3 +35,9 @@ class OpenbaseCoderCliAppConfig(AppConfig):
         # links with another machine's home paths; relink so this machine
         # self-heals on every service start.
         relink_workspace_skills_from_installation()
+        # An upgrade can bring new or changed instruction templates while the
+        # persisted data dir keeps the old rendered set: Cloud workspaces
+        # redeployed in place onto an image that newly shipped instructions/
+        # came back with only AGENTS.md until the first voice call rendered
+        # the rest (2026-10-09). Render them on every service start.
+        refresh_openbase_instruction_files_from_installation()

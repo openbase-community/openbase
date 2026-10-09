@@ -187,19 +187,21 @@ def _file_edit_paths(turn: dict[str, Any]) -> list[str]:
 
 
 def _extract_agent_output(turn: dict[str, Any]) -> str:
+    from openbase_coder_cli.cloud_model_errors import normalize_model_plan_error
+
     final_parts: list[str] = []
     fallback_parts: list[str] = []
     for item in turn.get("items", []):
         if item.get("type") != "agentMessage":
             continue
-        text = item.get("text", "").strip()
+        text = normalize_model_plan_error(item.get("text", "").strip())
         if not text:
             continue
         fallback_parts.append(text)
         phase = item.get("phase")
         if isinstance(phase, str) and phase.startswith("final"):
             final_parts.append(text)
-    return (
+    return normalize_model_plan_error(
         "\n\n".join(final_parts or fallback_parts)
         or _optional_turn_string(
             turn,
@@ -271,6 +273,10 @@ def _thread_payload(result: dict[str, Any]) -> dict[str, Any] | None:
 def _normalize_backend_thread_payload(payload: dict[str, Any]) -> dict[str, Any]:
     session = payload.get("session") if isinstance(payload.get("session"), dict) else {}
     normalized = {**session, **payload}
+    # Claude-compatible sessions can carry a display title independently of
+    # their unique internal lookup name. All app surfaces use this snapshot.
+    if title := _optional_thread_string(normalized, "title"):
+        normalized["name"] = title
     if "threadId" not in normalized and isinstance(normalized.get("id"), str):
         normalized["threadId"] = normalized["id"]
     return normalized

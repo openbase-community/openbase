@@ -1378,7 +1378,7 @@ def test_create_session_omits_missing_super_agent_instructions_for_backend_sessi
     ]
 
 
-def test_create_thread_requests_fresh_backend_session_when_directory_exists(
+def test_create_thread_uses_unique_internal_name_when_directory_exists(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1414,17 +1414,13 @@ def test_create_thread_requests_fresh_backend_session_when_directory_exists(
     thread = asyncio.run(_manager(client).create_thread(str(project_dir)))
 
     assert thread.session_id == "s_new"
-    assert client.calls == [
-        ("sessions", {}),
-        (
-            "start_thread",
-            {
-                "name": "project",
-                "cwd": str(project_dir.resolve()),
-                "fresh": True,
-            },
-        ),
-    ]
+    assert client.calls[0] == ("sessions", {})
+    method, request = client.calls[1]
+    assert method == "start_thread"
+    assert request["name"].startswith("thread-")
+    assert request["cwd"] == str(project_dir.resolve())
+    assert request["autoTitle"] is True
+    assert "fresh" not in request
 
 
 def test_send_message_starts_claude_code_backend_turn(tmp_path: Path) -> None:
@@ -2915,3 +2911,34 @@ def test_backend_sessions_locks_do_not_keep_finished_event_loops_alive() -> None
     asyncio.run(run_contended_scan())
     gc.collect()
     assert len(manager.__dict__["_backend_sessions_locks"]) == 0
+
+
+def test_plan_denial_live_event_is_normalized_before_broadcast(monkeypatch):
+    monkeypatch.setenv(
+        "OPENBASE_CODER_CLI_WEB_BACKEND_URL", "https://app-staging.openbase.cloud"
+    )
+    events = []
+
+    async def broadcast(thread_id, event):
+        events.append(event)
+
+    monkeypatch.setattr(session_manager_module, "_broadcast", broadcast)
+    manager = _manager(FakeSuperAgentsClient({}))
+    asyncio.run(
+        manager._handle_client_event(
+            "item/completed",
+            {
+                "threadId": "thr-1",
+                "turnId": "turn-1",
+                "item": {
+                    "id": "item-1",
+                    "type": "agentMessage",
+                    "text": 'Failed to authenticate. API Error: 403 {"code":"model_not_available_on_plan"}',
+                },
+            },
+        )
+    )
+    output = events[0]["data"]["line"]
+    assert output.startswith("This model is not available on your plan.")
+    assert "https://app-staging.openbase.cloud" in output
+    assert "authenticate" not in output

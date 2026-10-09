@@ -207,3 +207,45 @@ def test_start_turn_with_cross_backend_model_is_400(monkeypatch) -> None:
     assert "same backend" in response.data["error"]
     assert manager.turns == []
     assert get_thread_model_override("codex-1") == "gpt-5.5"
+
+
+@pytest.mark.parametrize("model", ["opus", "fable"])
+def test_trial_catalog_disables_paid_models_and_rejects_switch_and_create(
+    monkeypatch, model
+):
+    from openbase_coder_cli import cloud_models
+
+    reason = "This model is not available on your plan. Upgrade at https://app-staging.openbase.cloud."
+    monkeypatch.setattr(
+        cloud_models,
+        "cloud_model_availability",
+        lambda: {"haiku": None, "sonnet": None, "opus": reason, "fable": reason},
+    )
+    monkeypatch.setenv("OPENBASE_CODING_BACKEND", "openbase_cloud")
+    manager = FakeManager(
+        [
+            ThreadInfo(
+                session_id="cloud-1",
+                directory="/tmp/p",
+                backend="openbase_cloud",
+                model="haiku",
+            )
+        ]
+    )
+    monkeypatch.setattr(thread_models, "get_session_manager", lambda: manager)
+    response = thread_models.thread_model_settings(
+        _request("get", "/api/threads/cloud-1/models/"), "cloud-1"
+    )
+    options = {option["id"]: option for option in response.data["options"]}
+    assert options[model]["available"] is False
+    assert options[model]["unavailable_reason"] == reason
+    assert options["sonnet"]["available"] is True
+    rejected = thread_models.thread_model_settings(
+        _request("put", "/api/threads/cloud-1/models/", {"model": model}), "cloud-1"
+    )
+    assert rejected.status_code == 400
+    assert rejected.data["error"] == reason
+    assert get_thread_model_override("cloud-1") is None
+    with pytest.raises(ValueError, match="not available on your plan"):
+        thread_views._resolve_new_thread_model(manager, model, "openbase_cloud")
+    assert validate_model_for_thread("openbase_cloud", "sonnet") == "sonnet"

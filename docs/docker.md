@@ -22,7 +22,7 @@ published URL as covering independent HTTP, database, and UDP ports.
 
 ## Prerequisites
 
-The image includes the dispatcher and Super Agent instructions plus the bundled agent skills. Setup renders the instructions into the persistent data directory and links the skills into both coding backends' agent homes.
+The image includes the dispatcher and Super Agent instructions plus the bundled agent skills. Setup renders the instructions into the persistent data directory and links the skills into both coding backends' agent homes. Every container boot refreshes managed instruction files before launching the application services, so upgrading an image also restores missing files and applies template updates on an existing data volume. Django service startup also refreshes these files, including after an in-place desktop runtime upgrade. Unmarked custom dispatcher, Super Agent, and voice instruction files remain unchanged in workspace installations; standalone installations regenerate their packaged defaults. Openbase's generated base instructions are refreshed in both modes.
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (macOS,
   Windows, or Linux) or any Docker engine.
@@ -141,6 +141,8 @@ launchd/systemd, which the container does not run.)
 
 ## Notes and limits
 
+- On a graceful stop, the entrypoint signals services to exit, flushes filesystem buffers immediately, then flushes again after services finish. Allow enough stop time for service shutdown and disk I/O. A forced kill or a VM halt that bypasses the entrypoint cannot guarantee that recent writes are durable.
+- The entrypoint attempts to shorten Linux page-cache writeback using `OPENBASE_DIRTY_EXPIRE_CENTISECS` (default `500`) and `OPENBASE_DIRTY_WRITEBACK_CENTISECS` (default `100`). Values are in hundredths of a second and must contain only digits. Maritime applies these settings before dropping root privileges; an ordinary unprivileged container usually cannot change them and continues with the current kernel settings. This reduces exposure to abrupt stops but does not guarantee durability.
 - Service status in the console reflects the container's supervisor, but the
   console's service start/stop buttons do not apply inside Docker — restart
   the container instead.

@@ -78,7 +78,8 @@ def validate_model_for_thread(backend: str | None, model: str) -> str:
         if normalized == option["id"].lower():
             if not option["available"]:
                 raise ValueError(
-                    f"Model {option['id']} is not available on this backend location."
+                    option.get("unavailable_reason")
+                    or f"Model {option['id']} is not available on this backend location."
                 )
             return option["id"]
     model_engine = dispatcher_config.model_engine(normalized)
