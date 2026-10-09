@@ -57,6 +57,18 @@ own [login helpers](commands/claude.md).
 If a profile is missing, the launcher stops and tells you to run
 `openbase-coder profiles install`.
 
+## Send a message to a running session
+
+From any other terminal, `openbase-coder threads list` shows the sessions you have open and `openbase-coder threads send` sends one a message: a new turn when it is idle, a correction to the current turn when it is busy.
+
+```bash
+openbase-coder threads list
+openbase-coder threads send "fix the build" "use pnpm instead of npm"
+openbase-coder threads send build "run the tests" --wait   # part of a name works; prints the reply
+```
+
+See [`threads`](commands/threads.md) for names, stdin, and what a Claude Code session does with a message from outside.
+
 ## Laptop and hub
 
 If you use [Openbase Sync](code-sync.md) with an always-on hub, running
