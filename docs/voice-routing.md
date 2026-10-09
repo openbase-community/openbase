@@ -53,6 +53,8 @@ transfer commands.
 
 ## Transfer Voice To A Super Agent
 
+Creating a Super Agent thread does not by itself give it work. The dispatcher passes the task as `prompt` to `super_agents_start`, which creates the thread and starts its first turn, or follows creation with `super_agents_start_turn`. It confirms that the agent is working only after the tool reports a started turn. Standing `developerInstructions` do not count as a task. In the mobile apps, a thread with no past, current, or queued turns explains that the agent has not been given a task yet; sending a message starts the work.
+
 Transfer by speaking agent name when you know the active Super Agent voice:
 
 ```bash

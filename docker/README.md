@@ -34,6 +34,8 @@ docker build --build-arg OPENBASE_CODER_VERSION=1.2.3 -t openbase-coder:1.2.3 .
 
 Or with compose: `docker compose up --build`.
 
+The build clones the bundled skills and copies `instructions/` from the workspace root repository beside `cli/`. `SKILLS_REPO` / `SKILLS_REF` and `WORKSPACE_REPO` / `WORKSPACE_REF` select those sources; both refs default to `develop`. Like the console inputs, these are remote refs, so local sibling changes are not included automatically.
+
 ## Run
 
 ```sh

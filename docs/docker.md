@@ -22,6 +22,8 @@ published URL as covering independent HTTP, database, and UDP ports.
 
 ## Prerequisites
 
+The image includes the dispatcher and Super Agent instructions plus the bundled agent skills. Setup renders the instructions into the persistent data directory and links the skills into both coding backends' agent homes.
+
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (macOS,
   Windows, or Linux) or any Docker engine.
 - A free [Tailscale](https://tailscale.com) account, with the Tailscale app

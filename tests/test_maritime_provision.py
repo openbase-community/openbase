@@ -117,6 +117,16 @@ def test_container_entrypoint_enforces_private_durable_runtime():
     assert 'VOLUME ["/home/openbase/.openbase", "/data"]' in dockerfile
 
 
+def test_container_image_includes_agent_instructions_and_skills():
+    dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
+
+    assert 'ARG WORKSPACE_REF=develop' in dockerfile
+    assert 'ARG SKILLS_REF=develop' in dockerfile
+    assert 'git clone --depth 1 --branch "$SKILLS_REF" "$SKILLS_REPO" skills' in dockerfile
+    assert 'git clone --depth 1 --branch "$WORKSPACE_REF" "$WORKSPACE_REPO" /tmp/workspace-root' in dockerfile
+    assert 'cp -R /tmp/workspace-root/instructions instructions' in dockerfile
+
+
 def test_container_entrypoint_maritime_selects_netmesh():
     """Maritime must never silently boot the tailscale path (PRD R1)."""
     root = Path(__file__).parents[1]
