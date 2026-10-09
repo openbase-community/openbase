@@ -321,25 +321,30 @@ class SessionManagerThreadsMixin:
         if lock is None:
             lock = asyncio.Lock()
             locks[loop] = lock
-        async with lock:
-            now = time.monotonic()
-            cached = getattr(self, "_backend_sessions_cache", None)
-            if (
-                cached is not None
-                and now - cached[0] < self.BACKEND_SESSIONS_SHARE_SECONDS
-            ):
-                return list(cached[1])
-            raw_sessions = await sessions_method()
-            sessions = [
-                _session_from_thread(
-                    _normalize_backend_thread_payload(session),
-                    include_turns=False,
-                )
-                for session in raw_sessions
-                if isinstance(session, dict)
-            ]
-            self._backend_sessions_cache = (time.monotonic(), sessions)
-            return list(sessions)
+        try:
+            async with lock:
+                now = time.monotonic()
+                cached = getattr(self, "_backend_sessions_cache", None)
+                if (
+                    cached is not None
+                    and now - cached[0] < self.BACKEND_SESSIONS_SHARE_SECONDS
+                ):
+                    return list(cached[1])
+                raw_sessions = await sessions_method()
+                sessions = [
+                    _session_from_thread(
+                        _normalize_backend_thread_payload(session),
+                        include_turns=False,
+                    )
+                    for session in raw_sessions
+                    if isinstance(session, dict)
+                ]
+                self._backend_sessions_cache = (time.monotonic(), sessions)
+                return list(sessions)
+        finally:
+            waiters = getattr(lock, "_waiters", None)
+            if not lock.locked() and not waiters:
+                locks.pop(loop, None)
 
     async def _list_thread_page_result(
         self,

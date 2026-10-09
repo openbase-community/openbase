@@ -2888,13 +2888,26 @@ def run_once_on_foreign_loop(manager: Any) -> None:
 
 def test_backend_sessions_locks_do_not_keep_finished_event_loops_alive() -> None:
     import gc
+    import threading
 
     class Client:
         async def sessions(self):
+            first_entered.release()
+            await asyncio.to_thread(release.wait, 2.0)
             return []
 
+    first_entered = threading.Semaphore(0)
+    release = threading.Event()
     manager = _manager(Client())
-    for _ in range(3):
-        asyncio.run(manager._backend_sessions())
+
+    async def run_contended_scan():
+        first = asyncio.create_task(manager._backend_sessions())
+        assert await asyncio.to_thread(first_entered.acquire, True, 2.0)
+        second = asyncio.create_task(manager._backend_sessions())
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.gather(first, second)
+
+    asyncio.run(run_contended_scan())
     gc.collect()
     assert len(manager.__dict__["_backend_sessions_locks"]) == 0
