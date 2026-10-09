@@ -34,7 +34,7 @@ The app opens on an empty **new chat**, like the ChatGPT and Codex apps: the Ope
 
 - A new chat starts a new coding thread. Three dropdowns sit under the message box: the **project** it works in (your recent projects), the **model** it uses, and the **device**, the computer that runs it and answers your calls. They default to what you picked last time, and choosing a device narrows the projects to that computer's. Send creates the thread on the computer that owns the project, and the screen becomes that thread. In a conversation, sending while the agent is working steers it (hold the button to queue instead).
 - The **Dispatcher** is not something you start: it is one persistent conversation, always at the top of **Pinned** in the drawer. Open it there to talk to it.
-- Tap the **microphone** to record a voice note. It is transcribed on the phone into the message box so you can edit it before sending; tap again to stop. Voice notes are off while a call is running.
+- Tap the **microphone** to record a voice note. Openbase speech-to-text transcribes it into the message box so you can edit it before sending; tap again to stop. Dictation requires an Openbase connection and audio credits, with no on-device fallback. It stops when the app goes into the background, after ten seconds without new speech, or after five minutes. Voice notes are off while a call is running.
 - With the box empty, the round **waveform** button starts a voice call.
 - The title shows the conversation name. The top-right **compose** button starts a new chat; **⋯** holds the thread actions (pin, archive, transfer the active call, refresh, details). In a conversation, the **device** dropdown under the message box chooses which computer runs the next turn and answers calls.
 
