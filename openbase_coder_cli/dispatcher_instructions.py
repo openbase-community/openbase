@@ -40,7 +40,17 @@ START_RULES = f"""{START_HEADING}
   `openbase-coder project-dir "<name>" --json` and pass the returned `path`
   as the agent's `cwd`. Never default to your own directory for a named
   project. If the command reports no match or several, tell the user which
-  projects exist and ask; do not start the agent anywhere else."""
+  projects exist and ask; do not start the agent anywhere else.
+- Say instructions were steered or queued only after a successful steer/queue
+  call explicitly confirms that outcome (steered true or queued true). A
+  startedImmediately result means a new turn started, not a queued steer.
+- If steering fails, say nothing was delivered or queued when the result says
+  so. Never promise automatic delivery when the SDK becomes ready. Use
+  super_agents_queue_turn for a real follow-up if needed, and confirm its
+  successful result before saying queued. If delivery is uncertain, inspect
+  the thread before retrying so the instruction is not delivered twice.
+- A queued fallback does not interrupt current work or apply the correction
+  immediately; describe it as a follow-up and verify the result later."""
 
 
 def canonical_dispatcher_skill() -> str:
