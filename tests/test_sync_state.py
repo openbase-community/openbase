@@ -801,7 +801,8 @@ def test_overview_reports_held_deletes_as_attention():
 
 
 class HeldClient:
-    released: list[str] = []
+    released: list[tuple] = []
+    folders: list[dict] = []
 
     def __init__(self, *args, **kwargs):
         pass
@@ -818,11 +819,15 @@ class HeldClient:
         assert limit == sync_state.HELD_DELETE_SAMPLE
         return ["a/gone.txt", "a"] if root == "projects" else []
 
-    def release_deletes(self, root):
-        HeldClient.released.append(root)
+    def held_folders(self, root, folder=None, limit=None):
+        assert limit == sync_state.HELD_DELETE_SAMPLE
+        return self.folders if root == "projects" else []
+
+    def release_deletes(self, root, folder=None):
+        HeldClient.released.append((root, folder))
         return 2
 
-    def discard_deletes(self, root):
+    def discard_deletes(self, root, folder=None):
         return 2
 
 
@@ -845,6 +850,7 @@ def test_held_deletes_api_lists_and_releases(monkeypatch):
             "path": "/Users/x/Projects",
             "count": 2,
             "sample": ["a/gone.txt", "a"],
+            "folders": [],
         }
     ]
 
@@ -865,4 +871,64 @@ def test_held_deletes_api_lists_and_releases(monkeypatch):
         )
     )
     assert done.data == {"root": "projects", "action": "release", "count": 2}
-    assert HeldClient.released == ["projects"]
+    assert HeldClient.released == [("projects", None)]
+
+    one = sync_daemon_api.sync_daemon_held_deletes(
+        _request(
+            "POST",
+            "/api/sync/daemon/held-deletes/",
+            {"root": "projects", "action": "release", "folder": "a/"},
+        )
+    )
+    assert one.data == {
+        "root": "projects",
+        "action": "release",
+        "count": 2,
+        "folder": "a",
+    }
+    assert HeldClient.released[-1] == ("projects", "a")
+
+
+def test_held_deletes_summary_lists_holds_by_folder():
+    class FolderClient(HeldClient):
+        def status(self):
+            return {
+                "roots": [
+                    {
+                        "id": "projects",
+                        "path": "/Users/x/Projects",
+                        "held_deletes": 2,
+                        "held_folders": [{"folder": "a", "count": 2}],
+                    }
+                ]
+            }
+
+    FolderClient.folders = [
+        {
+            "folder": "a",
+            "count": 2,
+            "since": "2026-10-09T00:00:00Z",
+            "rule": "count",
+            "sample": ["a", "a/gone.txt"],
+        }
+    ]
+    client = FolderClient()
+    [root] = sync_state.held_deletes_summary(client, client.status())
+    assert root["folders"] == [
+        {
+            "folder": "a",
+            "count": 2,
+            "since": "2026-10-09T00:00:00Z",
+            "rule": "count",
+            "sample": ["a", "a/gone.txt"],
+        }
+    ]
+
+    status = _status(open_conflicts=0)
+    status["roots"][0]["held_deletes"] = 2
+    status["roots"][0]["held_folders"] = [{"folder": "a", "count": 2, "rule": "count"}]
+    overview = sync_state.overview(status)
+    assert overview["roots"][0]["held_folders"] == [
+        {"folder": "a", "count": 2, "since": "", "rule": "count"}
+    ]
+    assert overview["roots"][1]["held_folders"] == []
