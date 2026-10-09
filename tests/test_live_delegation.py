@@ -1365,8 +1365,12 @@ async def test_held_delegation_discards_pending_text_when_its_final_arrives(fina
 async def test_reconnect_unbinds_a_delegation_while_its_utterance_is_held():
     bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=5.0)
     live.final("Run the tests")
+    bridge.on_user_state_changed("listening", "speaking")
     live.delegate("old-session", "")
+    assert bridge._held is not None
+    assert bridge._held.delegation_id == "old-session"
     live.emit("session_reconnected")
+    bridge.on_user_state_changed("speaking", "listening")
     bridge._flush_held()
     await _settle()
     dispatcher.result_gate.set()
