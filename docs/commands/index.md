@@ -26,6 +26,7 @@ openbase-coder [OPTIONS] COMMAND [ARGS]
 | [`backend`](backend.md) | View or switch the selected coding backend |
 | [`claude`](claude.md) | Start Claude Code with Openbase's profile; inspect its login |
 | [`codex`](codex.md) | Start Codex with Openbase's profile, attached to the managed app-server |
+| [`threads`](threads.md) | List the Codex and Claude Code sessions open in terminals, send one a message, and maintain threads |
 | [`claude-sync`](claude-sync.md) | Synchronize Claude Code session snapshots across devices |
 | [`codex-sync`](codex-sync.md) | Synchronize Codex session snapshots across devices |
 | [`defaults`](defaults.md) | Manage default dispatcher and Super Agents model/reasoning settings |
