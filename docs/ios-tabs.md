@@ -40,6 +40,8 @@ The app opens on an empty **new chat**, like the ChatGPT and Codex apps: the Ope
 
 Unsent text is saved on this phone separately for each conversation and for new chat, so reopening the app or switching conversations preserves your drafts. An accepted send clears the submitted draft; edits made while sending stay saved. Signing out clears all saved drafts.
 
+On iOS and Android, tapping **Send** immediately adds your message to the conversation and clears the message box. The bubble says **Sending…** while the app wakes the computer if needed and delivers messages in send order. When the server shows the message, its copy replaces the pending bubble. A failed send stays marked **Not sent** with a reason: choose **Retry** to send it again or **Edit** to bring it back into the message box. If a new thread was created but its first message failed, Retry uses that same thread. These controls also apply to the Dispatcher and messages sent during a call.
+
 Tap the round menu button at the top left (or swipe from the left edge) to open the side drawer; the keyboard closes when it opens. From the top:
 
 - The Openbase mark and name (on the Openbase VPN the mark doubles as the tunnel status: solid when connected, outline when not) and a **search** button that opens the full thread list.
