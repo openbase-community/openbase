@@ -8,6 +8,7 @@ unchanged and reaches sibling state through ``self``.
 from __future__ import annotations
 
 import asyncio
+import weakref
 import os
 import time
 import uuid
@@ -311,7 +312,11 @@ class SessionManagerThreadsMixin:
         # first waits on it and raises for any other, so a caller on another
         # loop gets its own lock rather than a RuntimeError (2026-10-08).
         loop = asyncio.get_running_loop()
-        locks = self.__dict__.setdefault("_backend_sessions_locks", {})
+        # Weak keys: a private loop asgiref spins up for one call must not be
+        # kept alive (with its lock) for the life of the manager.
+        locks = self.__dict__.setdefault(
+            "_backend_sessions_locks", weakref.WeakKeyDictionary()
+        )
         lock = locks.get(loop)
         if lock is None:
             lock = asyncio.Lock()
