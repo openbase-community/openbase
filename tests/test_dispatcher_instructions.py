@@ -65,6 +65,7 @@ def test_dispatcher_rules_apply_without_the_canonical_skill(tmp_path, monkeypatc
     assert result == (
         'Load the skill through tools.\n\n' + host_kind.host_section('mac')
         + '\n\n' + instructions.CURRENT_STATE_RULES
+        + '\n\n' + instructions.START_RULES
     )
 
 
@@ -113,3 +114,21 @@ def test_host_section_precedes_existing_current_state_rules(monkeypatch):
     assert result.index(host_kind.HOST_KIND_HEADING) < result.index(instructions.CURRENT_STATE_HEADING)
     assert result.count(instructions.CURRENT_STATE_HEADING) == 1
     assert instructions.with_dispatcher_rules(result, host='cloud_workspace') == result
+
+
+def test_dispatcher_rules_make_starting_a_super_agent_two_steps(monkeypatch):
+    # Regression (2026-10-08 staging voice demo): the dispatcher created a
+    # tic-tac-toe thread with the task in developerInstructions, never started
+    # a turn, and said the agent was working; the thread showed no messages.
+    monkeypatch.setattr(instructions, 'canonical_dispatcher_skill', lambda: 'Canonical procedure.')
+    result = instructions.with_dispatcher_rules('Dispatcher policy.')
+    rules = ' '.join(instructions.START_RULES.split())
+    assert 'super_agents_start only creates the thread' in rules
+    assert 'Pass the task as `prompt` in that same call' in rules
+    assert 'developerInstructions is standing guidance, never the task' in rules
+    assert 'turnStarted true' in rules
+    assert 'start the turn before confirming' in rules
+    assert result.index(instructions.CURRENT_STATE_HEADING) < result.index(instructions.START_HEADING)
+    assert result.index(instructions.START_HEADING) < result.index(instructions.PROCEDURE_HEADING)
+    assert instructions.with_dispatcher_rules(result) == result
+    assert result.count(instructions.START_HEADING) == 1
