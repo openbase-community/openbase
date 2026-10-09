@@ -18,10 +18,10 @@ def catalog(paid=False):
         "data": [
             {
                 "id": model,
-                "available": paid or alias in {"haiku", "sonnet"},
+                "available": paid or alias == "haiku",
                 "unavailable_reason": None
-                if paid or alias in {"haiku", "sonnet"}
-                else "This model is not available on your plan.",
+                if paid or alias == "haiku"
+                else "Requires a paid plan.",
             }
             for alias, model in cloud_models.OPENBASE_CLOUD_CLAUDE_MODEL_MAP.items()
         ]
@@ -43,7 +43,7 @@ def test_cloud_policy_is_applied_to_each_alias(monkeypatch, paid):
         "https://app-staging.openbase.cloud", "/api/openbase/llm/anthropic/v1/models/"
     )
     for alias in ("haiku", "sonnet", "opus", "fable"):
-        assert options[alias]["available"] == (paid or alias in {"haiku", "sonnet"})
+        assert options[alias]["available"] == (paid or alias == "haiku")
         assert bool(options[alias]["unavailable_reason"]) != options[alias]["available"]
     assert not options["gpt-5.5"]["available"]
 
@@ -119,3 +119,14 @@ def test_local_catalog_does_not_contact_cloud(monkeypatch):
         for option in dispatcher_config.combined_model_options("local")
     )
     get.assert_not_called()
+
+
+def test_sonnet_selection_tracks_catalog_upgrade_and_downgrade(monkeypatch):
+    monkeypatch.setattr(
+        cloud_models,
+        "_cloud_json_get",
+        Mock(side_effect=[catalog(), catalog(True), catalog()]),
+    )
+    assert cloud_models.cloud_model_availability()["sonnet"] == "Requires a paid plan."
+    assert cloud_models.cloud_model_availability()["sonnet"] is None
+    assert cloud_models.cloud_model_availability()["sonnet"] == "Requires a paid plan."
