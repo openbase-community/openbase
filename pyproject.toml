@@ -50,7 +50,7 @@ dependencies = [
     "livekit-plugins-noise-cancellation>=0.2.5",
     "aiohttp>=3.13.3",
     "psutil>=6.1.0",
-    "super-agents[claude]>=0.1.14",
+    "super-agents[claude]>=0.1.15",
     "websockets>=16.0",
     "numpy>=2.3.0",
 ]

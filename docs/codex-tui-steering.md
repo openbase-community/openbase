@@ -22,6 +22,8 @@ defaults, use [`openbase codex`](agent-launchers.md): it attaches explicitly
 (`codex -p openbase --remote unix:// -C "$PWD"`) and, on a paired Openbase
 Sync edge, can run the session on your hub.
 
+To send a session a message from the command line, use [`openbase-coder threads send`](commands/threads.md); `openbase-coder threads list` shows which Codex TUIs are attached and steerable.
+
 Implicit discovery is best-effort: if the socket is not ready or the
 invocation is ineligible, the TUI silently keeps a private embedded owner, and
 that session is invisible to the dispatcher, Super Agents, and the mobile

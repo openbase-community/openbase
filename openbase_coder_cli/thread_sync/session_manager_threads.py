@@ -11,6 +11,7 @@ import asyncio
 import os
 import time
 import uuid
+import weakref
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -306,28 +307,44 @@ class SessionManagerThreadsMixin:
         sessions_method = getattr(self._client, "sessions", None)
         if not callable(sessions_method):
             return []
-        lock = self.__dict__.setdefault("_backend_sessions_lock", asyncio.Lock())
         # Single-flight: concurrent callers wait for one scan instead of
-        # each starting their own.
-        async with lock:
-            now = time.monotonic()
-            cached = getattr(self, "_backend_sessions_cache", None)
-            if (
-                cached is not None
-                and now - cached[0] < self.BACKEND_SESSIONS_SHARE_SECONDS
-            ):
-                return list(cached[1])
-            raw_sessions = await sessions_method()
-            sessions = [
-                _session_from_thread(
-                    _normalize_backend_thread_payload(session),
-                    include_turns=False,
-                )
-                for session in raw_sessions
-                if isinstance(session, dict)
-            ]
-            self._backend_sessions_cache = (time.monotonic(), sessions)
-            return list(sessions)
+        # each starting their own. An asyncio.Lock binds to the loop that
+        # first waits on it and raises for any other, so a caller on another
+        # loop gets its own lock rather than a RuntimeError (2026-10-08).
+        loop = asyncio.get_running_loop()
+        # Weak keys: a private loop asgiref spins up for one call must not be
+        # kept alive (with its lock) for the life of the manager.
+        locks = self.__dict__.setdefault(
+            "_backend_sessions_locks", weakref.WeakKeyDictionary()
+        )
+        lock = locks.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            locks[loop] = lock
+        try:
+            async with lock:
+                now = time.monotonic()
+                cached = getattr(self, "_backend_sessions_cache", None)
+                if (
+                    cached is not None
+                    and now - cached[0] < self.BACKEND_SESSIONS_SHARE_SECONDS
+                ):
+                    return list(cached[1])
+                raw_sessions = await sessions_method()
+                sessions = [
+                    _session_from_thread(
+                        _normalize_backend_thread_payload(session),
+                        include_turns=False,
+                    )
+                    for session in raw_sessions
+                    if isinstance(session, dict)
+                ]
+                self._backend_sessions_cache = (time.monotonic(), sessions)
+                return list(sessions)
+        finally:
+            waiters = getattr(lock, "_waiters", None)
+            if not lock.locked() and not waiters:
+                locks.pop(loop, None)
 
     async def _list_thread_page_result(
         self,

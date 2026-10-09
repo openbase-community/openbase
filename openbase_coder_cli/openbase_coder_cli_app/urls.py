@@ -23,6 +23,7 @@ from openbase_coder_cli.openbase_coder_cli_app.sync_daemon_api import (
     sync_daemon_conflict_detail,
     sync_daemon_conflicts,
     sync_daemon_conflicts_resolve,
+    sync_daemon_held_deletes,
     sync_daemon_hydrate,
     sync_daemon_settings,
     sync_daemon_stale_lock_trash,
@@ -664,6 +665,11 @@ urlpatterns = [
         "sync/daemon/stale-locks/trash/",
         offloaded_view(sync_daemon_stale_lock_trash),
         name="sync-daemon-stale-lock-trash",
+    ),
+    path(
+        "sync/daemon/held-deletes/",
+        offloaded_view(sync_daemon_held_deletes),
+        name="sync-daemon-held-deletes",
     ),
     path(
         "sync/daemon/conflicts/resolve/",

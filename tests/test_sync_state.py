@@ -117,6 +117,7 @@ def test_overview_backlog_per_root_and_peer():
         "conflicts": 3,
         "stale_locks": 2,
         "low_disk": [],
+        "held_deletes": [],
         "needed": True,
     }
     assert projects["disk"] is None and result["versions"] is None
@@ -135,6 +136,7 @@ def test_overview_states():
         "conflicts": 0,
         "stale_locks": None,
         "low_disk": [],
+        "held_deletes": [],
         "needed": False,
     }
 
@@ -782,3 +784,85 @@ def test_stale_locks_unconfigured(monkeypatch, tmp_path):
         _request("GET", "/api/sync/daemon/stale-locks/")
     )
     assert response.data["locks"] == []
+
+
+def test_overview_reports_held_deletes_as_attention():
+    status = _status(open_conflicts=0)
+    status["roots"][0]["held_deletes"] = 3
+
+    result = sync_state.overview(status)
+
+    assert result["roots"][0]["held_deletes"] == 3
+    assert result["roots"][1]["held_deletes"] == 0
+    assert result["attention"]["held_deletes"] == [
+        {"id": "projects", "path": "/Users/x/Projects", "count": 3}
+    ]
+    assert result["attention"]["needed"] is True
+
+
+class HeldClient:
+    released: list[str] = []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def status(self):
+        return {
+            "roots": [
+                {"id": "projects", "path": "/Users/x/Projects", "held_deletes": 2},
+                {"id": "skills", "path": "/Users/x/.agents/skills", "held_deletes": 0},
+            ]
+        }
+
+    def held_deletes(self, root, limit=None):
+        assert limit == sync_state.HELD_DELETE_SAMPLE
+        return ["a/gone.txt", "a"] if root == "projects" else []
+
+    def release_deletes(self, root):
+        HeldClient.released.append(root)
+        return 2
+
+    def discard_deletes(self, root):
+        return 2
+
+
+def test_held_deletes_api_lists_and_releases(monkeypatch):
+    HeldClient.released = []
+    monkeypatch.setattr(sync_daemon, "SyncDaemonClient", HeldClient)
+    monkeypatch.setattr(sync_daemon, "is_configured", lambda config_path=None: True)
+    assert (
+        resolve_url("/api/sync/daemon/held-deletes/").url_name
+        == "sync-daemon-held-deletes"
+    )
+
+    listed = sync_daemon_api.sync_daemon_held_deletes(
+        _request("GET", "/api/sync/daemon/held-deletes/")
+    )
+    assert listed.status_code == 200
+    assert listed.data["roots"] == [
+        {
+            "id": "projects",
+            "path": "/Users/x/Projects",
+            "count": 2,
+            "sample": ["a/gone.txt", "a"],
+        }
+    ]
+
+    bad = sync_daemon_api.sync_daemon_held_deletes(
+        _request(
+            "POST",
+            "/api/sync/daemon/held-deletes/",
+            {"root": "projects", "action": "delete"},
+        )
+    )
+    assert bad.status_code == 400
+
+    done = sync_daemon_api.sync_daemon_held_deletes(
+        _request(
+            "POST",
+            "/api/sync/daemon/held-deletes/",
+            {"root": "projects", "action": "release"},
+        )
+    )
+    assert done.data == {"root": "projects", "action": "release", "count": 2}
+    assert HeldClient.released == ["projects"]

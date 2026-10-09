@@ -93,6 +93,7 @@ def fake_daemon(tmp_path, monkeypatch):
         "barrier": {"ok": True, "result": "ok", "lag": 0},
         "stubs": {"ok": True, "data": [{"Path": "big.bin", "Size": 123}]},
         "hydrate": {"ok": True, "data": {"requested": 1}},
+        "held-deletes": {"ok": True, "data": ["a.txt"]},
     }
     daemon = FakeDaemon(sock, responses)
     monkeypatch.setattr(sync_daemon, "SYNC_DAEMON_SOCKET_PATH", sock)
@@ -167,6 +168,12 @@ def test_client_calls_and_errors(fake_daemon):
     client.resolve(7, "b")
     assert fake_daemon.requests[-1] == {"op": "resolve", "id": 7, "choice": "b"}
     assert client.barrier("settle", path="/Users/x/Projects")["result"] == "ok"
+    assert client.held_deletes("projects", limit=20) == ["a.txt"]
+    assert fake_daemon.requests[-1] == {
+        "op": "held-deletes",
+        "root": "projects",
+        "count": 20,
+    }
     with pytest.raises(sync_daemon.SyncDaemonError):
         client.resolve(7, "c")
     with pytest.raises(sync_daemon.SyncDaemonError):

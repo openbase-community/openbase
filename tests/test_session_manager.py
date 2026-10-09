@@ -2786,3 +2786,132 @@ def test_rename_thread_sets_codex_thread_name(monkeypatch, tmp_path: Path) -> No
         "set_thread_name",
         {"thread_id": "thr-1", "name": "Renamed"},
     ) in client.calls
+
+
+def test_backend_sessions_single_flight_lock_is_safe_across_event_loops() -> None:
+    """Regression for the 2026-10-08 fleet thread-list 500s.
+
+    The single-flight ``asyncio.Lock`` bound itself to the first event loop
+    that waited on it; a caller on another loop (asgiref spins one up for an
+    ``async_to_sync`` call made off the request thread) hit
+    ``RuntimeError: ... bound to a different event loop`` while the first
+    scan was in flight.
+    """
+    import threading
+
+    gate = threading.Event()
+    inside: list[int] = []
+    entered = threading.Semaphore(0)
+
+    class Client:
+        async def sessions(self):
+            inside.append(threading.get_ident())
+            entered.release()
+            while not gate.is_set():
+                await asyncio.sleep(0.01)
+            return []
+
+    manager = _manager(Client())
+    errors: list[BaseException] = []
+
+    def run_on_own_loop():
+        try:
+            asyncio.run(manager._backend_sessions())
+        except BaseException as error:  # noqa: BLE001 - reported by the test
+            errors.append(error)
+
+    first = threading.Thread(target=run_on_own_loop, daemon=True)
+    second = threading.Thread(target=run_on_own_loop, daemon=True)
+    try:
+        first.start()
+        assert entered.acquire(timeout=2.0)
+        second.start()
+        # The second loop must reach the scan too, instead of raising on the
+        # first loop's lock.
+        assert entered.acquire(timeout=2.0), errors
+    finally:
+        # Always release the scans so a failed assertion cannot leave a
+        # thread parked on the gate and keep the pytest process alive.
+        gate.set()
+    first.join(3.0)
+    second.join(3.0)
+    assert errors == []
+    assert len(inside) == 2
+
+
+def test_backend_sessions_keeps_single_flight_per_event_loop() -> None:
+    import threading
+
+    first_loop_release = threading.Event()
+    first_loop_entered = threading.Semaphore(0)
+    foreign_loop_release = threading.Event()
+    foreign_loop_entered = threading.Semaphore(0)
+    duplicate_entered = threading.Semaphore(0)
+    sessions_calls = 0
+
+    class Client:
+        async def sessions(self):
+            nonlocal sessions_calls
+            sessions_calls += 1
+            if sessions_calls == 1:
+                first_loop_entered.release()
+                while not first_loop_release.is_set():
+                    await asyncio.sleep(0.01)
+            elif sessions_calls == 2:
+                foreign_loop_entered.release()
+                while not foreign_loop_release.is_set():
+                    await asyncio.sleep(0.01)
+            else:
+                duplicate_entered.release()
+            return []
+
+    manager = _manager(Client())
+
+    async def run_two_on_one_loop():
+        first = asyncio.create_task(manager._backend_sessions())
+        assert await asyncio.to_thread(first_loop_entered.acquire, True, 2.0)
+        foreign = asyncio.create_task(
+            asyncio.to_thread(run_once_on_foreign_loop, manager)
+        )
+        assert await asyncio.to_thread(foreign_loop_entered.acquire, True, 2.0)
+        second = asyncio.create_task(manager._backend_sessions())
+        assert not await asyncio.to_thread(duplicate_entered.acquire, True, 0.2)
+        first_loop_release.set()
+        foreign_loop_release.set()
+        await asyncio.gather(first, second)
+        await foreign
+
+    asyncio.run(run_two_on_one_loop())
+
+    assert sessions_calls == 2
+
+
+def run_once_on_foreign_loop(manager: Any) -> None:
+    asyncio.run(manager._backend_sessions())
+
+
+def test_backend_sessions_locks_do_not_keep_finished_event_loops_alive() -> None:
+    import gc
+    import threading
+
+    class Client:
+        async def sessions(self):
+            first_entered.release()
+            await asyncio.to_thread(release.wait, 2.0)
+            return []
+
+    first_entered = threading.Semaphore(0)
+    release = threading.Event()
+    manager = _manager(Client())
+
+    async def run_contended_scan():
+        first = asyncio.create_task(manager._backend_sessions())
+        assert await asyncio.to_thread(first_entered.acquire, True, 2.0)
+        second = asyncio.create_task(manager._backend_sessions())
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.gather(first, second)
+
+    asyncio.run(run_contended_scan())
+    gc.collect()
+    assert len(manager.__dict__["_backend_sessions_locks"]) == 0

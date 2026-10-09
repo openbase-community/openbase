@@ -198,3 +198,61 @@ def test_concurrent_misses_same_key_coalesce(monkeypatch) -> None:
 
     assert manager.calls == 1
     assert len(results) == 4
+
+
+def test_single_flight_follower_gives_up_when_the_leader_never_returns() -> None:
+    import threading
+    import time
+
+    from openbase_coder_cli.openbase_coder_cli_app import thread_cache
+
+    cache = thread_cache._SingleFlightCache(60.0, inflight_wait_seconds=0.2)
+    release = threading.Event()
+    leader_started = threading.Event()
+
+    def stuck_leader():
+        leader_started.set()
+        release.wait()
+        return "late"
+
+    leader = threading.Thread(target=lambda: cache.get("k", stuck_leader), daemon=True)
+    leader.start()
+    assert leader_started.wait(1.0)
+
+    started = time.monotonic()
+    try:
+        cache.get("k", lambda: "follower")
+    except thread_cache.ThreadCacheWaitTimeout:
+        pass
+    else:
+        raise AssertionError("expected the follower to time out")
+    assert time.monotonic() - started < 2.0
+    release.set()
+    leader.join(1.0)
+
+
+def test_single_flight_abandons_a_stale_leader_and_computes_afresh() -> None:
+    import threading
+
+    from openbase_coder_cli.openbase_coder_cli_app import thread_cache
+
+    cache = thread_cache._SingleFlightCache(60.0, inflight_wait_seconds=0.2)
+    release = threading.Event()
+    leader_started = threading.Event()
+
+    def stuck_leader():
+        leader_started.set()
+        release.wait()
+        return "late"
+
+    leader = threading.Thread(target=lambda: cache.get("k", stuck_leader))
+    leader.start()
+    assert leader_started.wait(1.0)
+    # Age the in-flight record past the bound: the next caller must not wait on it.
+    cache._inflight["k"].started_at -= 1.0
+
+    assert cache.get("k", lambda: "fresh") == "fresh"
+    release.set()
+    leader.join(1.0)
+
+    assert cache.get("k", lambda: "newer") == "fresh"

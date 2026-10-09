@@ -68,6 +68,16 @@ def status(as_json: bool) -> None:
         disk = root.get("disk") if isinstance(root.get("disk"), dict) else None
         if disk:
             _echo_disk(disk)
+        held = int(root.get("held_deletes") or 0)
+        if held:
+            click.echo(
+                click.style(
+                    f"    {held} deletion{'s' if held != 1 else ''} held by the "
+                    "mass-delete guard: not sent to your other computers "
+                    "(see 'openbase-coder sync held-deletes')",
+                    fg="yellow",
+                )
+            )
     peers = payload.get("peers") or []
     if peers:
         click.echo("Peers:")
@@ -95,6 +105,7 @@ def status(as_json: bool) -> None:
         )
     if (payload.get("placement") or {}).get("thin"):
         click.echo("Placement: large files stay on the other computer until used")
+    _echo_agent_config(payload.get("agent_config"))
     open_conflicts = int(payload.get("open_conflicts") or 0)
     if open_conflicts:
         click.echo(
@@ -105,6 +116,22 @@ def status(as_json: bool) -> None:
         )
     else:
         click.echo("Conflicts: 0")
+
+
+def _echo_agent_config(agents) -> None:
+    """Skills, MCP servers and sign-in of the coding agents (docs: code-sync)."""
+    if not isinstance(agents, dict) or not agents.get("enabled"):
+        click.echo(
+            "Agents:    configuration not synced on this computer "
+            "(openbase-coder sync-daemon agent-config enable)"
+        )
+        return
+    details = f"{int(agents.get('entries') or 0)} entries"
+    if agents.get("secrets"):
+        details += f", {int(agents['secrets'])} sign-ins"
+    click.echo(f"Agents:    skills, MCP servers and sign-in synced ({details})")
+    for problem in agents.get("errors") or []:
+        click.echo(click.style(f"           could not sync {problem}", fg="yellow"))
 
 
 def _size(value) -> str:
@@ -214,6 +241,75 @@ def resolve(conflict_id: int, action: str | None) -> None:
     except sync_daemon.SyncDaemonError as exc:
         raise click.ClickException(str(exc)) from None
     click.echo(f"Resolved conflict {conflict_id} with {action}.")
+
+
+@sync.command("held-deletes")
+@click.option("--root", "root_id", help="The synced folder's id (see --json).")
+@click.option(
+    "--release",
+    "action",
+    flag_value="release",
+    help="Send the held deletions to your other computers (they move the files to their Trash).",
+)
+@click.option(
+    "--discard",
+    "action",
+    flag_value="discard",
+    help="Cancel the held deletions and bring the files back from your other computers.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Print the raw summary.")
+def held_deletes(root_id: str | None, action: str | None, as_json: bool) -> None:
+    """Show, release or discard deletions held by the mass-delete guard.
+
+    When many files are deleted at once Openbase Sync stops sending deletions
+    to your other computers until you confirm, so an accident (a disk that
+    was unmounted, a wrong folder moved away) cannot empty them too.
+    """
+    _require_configured()
+    client = _client()
+    try:
+        held = sync_state.held_deletes_summary(client, client.status())
+    except sync_daemon.SyncDaemonError as exc:
+        raise click.ClickException(str(exc)) from None
+    if action:
+        targets = [entry for entry in held if not root_id or entry["id"] == root_id]
+        if not targets:
+            raise click.ClickException("No deletions are held.")
+        if len(targets) > 1:
+            ids = ", ".join(entry["id"] for entry in targets)
+            raise click.ClickException(
+                f"Deletions are held in several folders ({ids}); pass --root."
+            )
+        target = targets[0]
+        try:
+            done = (
+                client.release_deletes(target["id"])
+                if action == "release"
+                else client.discard_deletes(target["id"])
+            )
+        except sync_daemon.SyncDaemonError as exc:
+            raise click.ClickException(str(exc)) from None
+        verb = "Released" if action == "release" else "Discarded"
+        click.echo(
+            f"{verb} {done} held deletion{'s' if done != 1 else ''} in {target['path']}."
+        )
+        return
+    if as_json:
+        click.echo(json.dumps(held, indent=2, sort_keys=True))
+        return
+    if not held:
+        click.echo("No deletions are held.")
+        return
+    for entry in held:
+        click.echo(f"{entry['path']} ({entry['id']}): {entry['count']} deletions held")
+        for path in entry["sample"]:
+            click.echo(f"  {path}")
+        if entry["count"] > len(entry["sample"]):
+            click.echo(f"  … and {entry['count'] - len(entry['sample'])} more")
+    click.echo(
+        "Release with 'openbase-coder sync held-deletes --release' (your other "
+        "computers move the files to their Trash), or bring the files back with --discard."
+    )
 
 
 @sync.command("migrate-from-syncthing")
