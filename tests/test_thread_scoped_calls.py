@@ -305,6 +305,31 @@ async def test_live_call_started_from_a_thread_talks_to_that_thread(
     assert thread_call.dispatcher.prompts == []
 
 
+async def test_ending_a_thread_call_resets_the_persisted_route(
+    thread_call, monkeypatch
+):
+    """The route file must not keep naming the thread after the call ends."""
+    await _run_entrypoint(thread_call.ctx, _pipeline_decision(), monkeypatch)
+    (router,) = thread_call.routers
+    assert (
+        thread_call.dispatcher.persisted_routes[-1]["active_target_thread_id"]
+        == THREAD_ID
+    )
+
+    await router.close()
+
+    assert thread_call.dispatcher.persisted_routes[-1] == {
+        "active_target_thread_id": None
+    }
+
+
+async def test_ending_a_dispatcher_call_leaves_the_route_alone(wiring, monkeypatch):  # noqa: F811
+    dispatcher = _RecordingClient(DISPATCHER_ID)
+    router = voice_routing.LiveKitVoiceRouter(dispatcher)
+    await router.close()
+    assert dispatcher.persisted_routes == []
+
+
 async def test_dispatcher_call_is_unchanged(wiring, monkeypatch):  # noqa: F811
     """No thread in the metadata: the call starts on the dispatcher, as before."""
     _FakeTargetClient.instances.clear()
