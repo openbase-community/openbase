@@ -42,11 +42,68 @@ def _compact(value) -> str:
     return "".join(str(value).split())[:80]
 
 
-def log_gateway_event(log, event) -> None:
+class OutputTranscriptLog:
+    """Log what the model said, per burst of output transcript deltas.
+
+    A reply that reaches the phone as a second of near-silent audio (Maritime,
+    2026-10-10 20:56Z and 22:16Z) leaves no trace of what the model actually
+    produced; the per-burst transcript shows whether it read the text, cut it
+    short, or said something else. Deltas are joined and flushed when
+    ``flush_after`` seconds pass without one, or when any other event arrives.
+    """
+
+    def __init__(self, log, *, flush_after: float = 1.5) -> None:
+        self._log = log
+        self._flush_after = flush_after
+        self._parts: list[str] = []
+        self._timer = None
+
+    def delta(self, text: str) -> None:
+        if text:
+            self._parts.append(text)
+        self._schedule()
+
+    def _schedule(self) -> None:
+        import asyncio
+
+        if self._timer is not None:
+            self._timer.cancel()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._timer = None
+            return
+        self._timer = loop.call_later(self._flush_after, self.flush)
+
+    def flush(self) -> None:
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
+        if not self._parts:
+            return
+        text = "".join(self._parts)
+        self._parts = []
+        self._log.info(
+            "%s stage=live_output_transcript chars=%d text=%r",
+            DISPATCH_TIMING_LOG,
+            len(text),
+            text[:160],
+        )
+
+
+def log_gateway_event(
+    log, event, transcript: OutputTranscriptLog | None = None
+) -> None:
     """One line per response lifecycle, close or error event from the gateway."""
     if not isinstance(event, dict):
         return
     kind = str(event.get("type") or "")
+    if transcript is not None:
+        if kind == "session.output_transcript.delta":
+            transcript.delta(str(event.get("delta") or ""))
+            return
+        if kind not in _QUIET_GATEWAY_EVENTS:
+            transcript.flush()
     if not kind or kind in _QUIET_GATEWAY_EVENTS:
         return
     detail = ""

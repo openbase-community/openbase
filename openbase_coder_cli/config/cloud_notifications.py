@@ -33,13 +33,16 @@ def send_notification_push(
     title: str,
     body: str,
     user_info: dict[str, str] | None = None,
-) -> None:
+) -> int | None:
     """Relay a feed notification to the user's devices via Openbase Cloud.
 
     The cloud fans out to APNs (iOS) and FCM (Android). Callers treat this
     as delivery-only and fire-and-forget: read/unread state stays with the
     local server, and any failure (offline, old cloud without the endpoint)
     must leave local notification behavior unchanged.
+
+    Returns how many registered push devices the cloud could send to, or
+    None from an older cloud that does not report it.
     """
     backend_url = web_backend_url()
     token = _notify_bearer_token(backend_url)
@@ -70,6 +73,11 @@ def send_notification_push(
         )
     if response.status_code != 202:
         raise NotificationPushError(_response_detail(response))
+    try:
+        device_count = response.json().get("device_count")
+    except (ValueError, AttributeError):
+        return None
+    return device_count if isinstance(device_count, int) else None
 
 
 def _notify_bearer_token(backend_url: str) -> str:

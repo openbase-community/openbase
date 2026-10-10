@@ -2585,3 +2585,54 @@ async def test_gateway_response_lifecycle_is_logged_but_deltas_stay_quiet(caplog
         )
     finally:
         await bridge.aclose()
+
+
+async def test_output_transcript_deltas_are_logged_per_burst(caplog):
+    import logging
+
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    try:
+        with caplog.at_level(
+            logging.INFO, logger="openbase_coder_cli.livekit_agent.live_delegation"
+        ):
+            for piece in ("I'm not ", "in a dispatcher ", "session."):
+                live.emit(
+                    "openai_server_event_received",
+                    {"type": "session.output_transcript.delta", "delta": piece},
+                )
+            live.emit(
+                "openai_server_event_received",
+                {"type": "session.closed", "reason": "done"},
+            )
+        lines = [
+            r.getMessage()
+            for r in caplog.records
+            if "live_output_transcript" in r.getMessage()
+        ]
+        assert len(lines) == 1
+        assert "chars=32" in lines[0] and "I'm not in a dispatcher session." in lines[0]
+    finally:
+        await bridge.aclose()
+
+
+async def test_a_reconnect_after_a_planned_gateway_restart_resumes_silently():
+    """cloud-audio-403 (2026-10-10): the staging gateway now drains and sends
+    code gateway_restarting before closing 1012; nothing was cut, so no briefing."""
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    try:
+        live.emit(
+            "openai_server_event_received",
+            {
+                "type": "error",
+                "error": {"code": "gateway_restarting", "type": "server_error"},
+            },
+        )
+        live.drop()
+        live.emit("session_reconnected")
+        assert live.of("thinking", None) == []
+        # An unexplained drop still briefs.
+        live.drop()
+        live.emit("session_reconnected")
+        assert any("re-established" in note for note in live.of("thinking", None))
+    finally:
+        await bridge.aclose()

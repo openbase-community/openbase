@@ -183,13 +183,15 @@ def test_send_notification_push_uses_owner_token_when_logged_in(monkeypatch) -> 
         ),
     )
 
-    cloud_notifications.send_notification_push(
+    device_count = cloud_notifications.send_notification_push(
         title="Open a link",
         body="Tap",
         user_info={"openbase_destination": "open_url", "url": "https://x"},
     )
 
     assert calls[0][1]["headers"]["Authorization"] == "Bearer jwt-token"
+    # An older cloud does not report a device count.
+    assert device_count is None
 
 
 def test_send_notification_push_falls_back_to_workspace_machine_token(

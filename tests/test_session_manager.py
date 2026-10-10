@@ -2978,3 +2978,60 @@ def test_proxy_denial_live_event_is_normalized_before_broadcast(
     assert "try again" not in output
     assert "https://app-staging.openbase.cloud" in output
     assert "authenticate" not in output
+
+
+def test_default_resume_keeps_the_dispatcher_threads_own_instructions(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """2026-10-10 Maritime: a typed turn resumed the Dispatcher thread with the
+    generic Super Agent instructions, which replaced the Claude session's
+    system prompt; the next voice turn said it was not in a dispatcher session."""
+    from types import SimpleNamespace
+
+    from openbase_coder_cli import livekit_voice_route
+    from openbase_coder_cli.thread_sync import session_manager_threads
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    monkeypatch.setattr(
+        livekit_voice_route,
+        "get_livekit_voice_route_state",
+        lambda: SimpleNamespace(dispatcher_thread_id="s_dispatch"),
+    )
+    monkeypatch.setattr(
+        livekit_voice_route,
+        "dispatcher_developer_instructions",
+        lambda: "dispatcher rules",
+    )
+    monkeypatch.setattr(
+        session_manager_threads,
+        "load_super_agent_developer_instructions",
+        lambda: "generic super agent rules",
+    )
+
+    def resumed(thread_id: str):
+        return FakeBackendSessionClient(
+            {
+                "resume_by_label": [
+                    {
+                        "threadId": thread_id,
+                        "backend": "claude_code",
+                        "session": {
+                            "id": thread_id,
+                            "name": "x",
+                            "agentName": "Grace",
+                            "cwd": str(project_dir),
+                            "status": "waiting",
+                        },
+                    }
+                ]
+            }
+        )
+
+    dispatcher = resumed("s_dispatch")
+    asyncio.run(_manager(dispatcher)._resume_thread("s_dispatch", str(project_dir)))
+    assert dispatcher.calls[0][1]["developer_instructions"] == "dispatcher rules"
+
+    worker = resumed("s_grace")
+    asyncio.run(_manager(worker)._resume_thread("s_grace", str(project_dir)))
+    assert worker.calls[0][1]["developer_instructions"] == "generic super agent rules"

@@ -563,6 +563,27 @@ def test_symlink_codex_home_skills_replaces_existing_symlink(
     assert target.resolve() == skill.resolve()
 
 
+def test_symlink_codex_home_skills_removes_dangling_retired_links(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    skill = workspace / "skills" / "skills" / "phone-app-control"
+    codex_home, claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("# Phone\n", encoding="utf-8")
+    retired = codex_home / "skills" / "ios-app-control"
+    retired.parent.mkdir(parents=True)
+    retired.symlink_to(workspace / "skills" / "skills" / "ios-app-control")
+    users_copy = claude_config / "skills" / "ios-app-control"
+    users_copy.mkdir(parents=True)
+
+    setup_cli._symlink_codex_home_skills(str(workspace))
+
+    assert not retired.is_symlink()
+    assert users_copy.is_dir()
+    assert (codex_home / "skills" / "phone-app-control").resolve() == skill.resolve()
+
+
 def test_symlink_codex_home_skills_preserves_real_directories(
     tmp_path, monkeypatch
 ) -> None:

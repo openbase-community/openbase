@@ -257,3 +257,15 @@ async def test_transfer_and_return_leave_events_in_both_transcripts(
             "Call transferred to Cooper.",
             "Back with the Dispatcher, from Cooper.",
         ]
+
+
+def test_a_new_call_resumes_the_dispatcher_thread_again():
+    """The shared Dispatcher client must not keep instructions another writer
+    left on the backend session (Maritime, 2026-10-10 22:16Z refusal)."""
+    from unittest.mock import Mock
+
+    client = Mock()
+    voice_routing.LiveKitVoiceRouter(client)
+    client.reload_thread_on_next_use.assert_called_once()
+    # Fakes without the hook (older clients) still construct.
+    voice_routing.LiveKitVoiceRouter(object())

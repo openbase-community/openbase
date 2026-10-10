@@ -485,12 +485,24 @@ async def warm_livekit_dispatcher_thread(
             await client.aclose()
 
 
-def _dispatcher_developer_instructions() -> str | None:
+def dispatcher_developer_instructions() -> str | None:
+    """The Dispatcher thread's developer instructions: its file, else the built-in."""
     loaded = _read_instruction_file(CODEX_DISPATCHER_INSTRUCTIONS_PATH)
     if loaded:
         return with_dispatcher_rules(loaded)
 
     return with_dispatcher_rules(DISPATCHER_BUILTIN_DEVELOPER_INSTRUCTIONS)
+
+
+_dispatcher_developer_instructions = dispatcher_developer_instructions
+
+
+def is_dispatcher_thread(thread_id: str | None) -> bool:
+    """Whether ``thread_id`` is the pinned Dispatcher thread of this install."""
+    if not thread_id:
+        return False
+    dispatcher_thread_id = get_livekit_voice_route_state().dispatcher_thread_id
+    return bool(dispatcher_thread_id) and thread_id == dispatcher_thread_id
 
 
 async def publish_exit_to_dispatch(
