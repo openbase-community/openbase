@@ -62,6 +62,26 @@ def bounded_history(context):
     return result
 
 
+def _open_gateway_early(model):
+    """Start the gateway handshake now so it overlaps the framework handoff."""
+    preconnect = getattr(model, "preconnect", None)
+    if preconnect is None:
+        return
+    try:
+        preconnect()
+    except Exception:
+        logger.warning(
+            "dispatch_timing stage=live_character_preconnect_failed", exc_info=True
+        )
+
+
+async def _close_model(model):
+    discard = getattr(model, "discard_preconnected", None)
+    if discard is not None:
+        await discard()
+    await model.aclose()
+
+
 class CharacterAssistant(SpeechGatedAgent):
     def __init__(
         self, *, model, instructions, history, on_enter=None, speech_gate=None
@@ -89,11 +109,12 @@ class LiveCharacterController:
         model_factory,
         instructions,
         on_error,
-        timeout=15.0,
+        timeout=20.0,
         caller_drain_timeout=12.0,
         ledger=None,
         initial_model=None,
         speech_gate=None,
+        start_attempts=2,
     ):
         self.session = session
         self.bridge = bridge
@@ -102,6 +123,7 @@ class LiveCharacterController:
         self.instructions = instructions
         self.on_error = on_error
         self.timeout = timeout
+        self.start_attempts = max(1, start_attempts)
         self.caller_drain_timeout = caller_drain_timeout
         self.ledger = ledger
         self._record = None
@@ -196,24 +218,50 @@ class LiveCharacterController:
         self._wake.set()
 
     async def _replace(self, *, identity, history, instructions, on_enter=None):
+        """Hand the call to a fresh GPT-Live session in ``identity``'s voice.
+
+        The call must survive a slow or failed swap: the gateway handshake is
+        opened before the framework drains the old agent, the wait is bounded
+        by the character-start timeout rather than the start-up preflight, and
+        a session that does not come up is replaced by another attempt before
+        the failure ends the call.
+        """
         await self.session.interrupt()
-        model = self.model_factory(identity.gpt_live_voice)
-        assistant = CharacterAssistant(
-            model=model,
-            instructions=instructions,
-            history=history,
-            on_enter=on_enter,
-            speech_gate=self._speech_gate,
-        )
         previous = self._model
-        self._model = model
         try:
-            self.session.update_agent(assistant)
-            async with asyncio.timeout(self.timeout):
-                await assistant.entered.wait()
-                await wait_live_session_started(
-                    assistant.duplex_session, timeout=self.timeout
+            for attempt in range(1, self.start_attempts + 1):
+                model = self.model_factory(identity.gpt_live_voice)
+                self._model = model
+                _open_gateway_early(model)
+                assistant = CharacterAssistant(
+                    model=model,
+                    instructions=instructions,
+                    history=history,
+                    on_enter=on_enter,
+                    speech_gate=self._speech_gate,
                 )
+                try:
+                    self.session.update_agent(assistant)
+                    async with asyncio.timeout(self.timeout):
+                        await assistant.entered.wait()
+                        await wait_live_session_started(
+                            assistant.duplex_session, timeout=self.timeout
+                        )
+                except Exception as exc:
+                    if self._closed or attempt >= self.start_attempts:
+                        raise
+                    logger.warning(
+                        "dispatch_timing stage=live_character_start_retry "
+                        "attempt=%d/%d gpt_live_voice=%s error=%s: %s",
+                        attempt,
+                        self.start_attempts,
+                        identity.gpt_live_voice,
+                        type(exc).__name__,
+                        exc,
+                    )
+                    await _close_model(model)
+                    continue
+                break
         finally:
             if previous is not None:
                 await previous.aclose()

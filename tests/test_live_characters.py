@@ -421,6 +421,7 @@ async def test_failed_handoff_closes_both_owned_models():
         on_error=AsyncMock(),
         initial_model=previous,
         timeout=0.01,
+        start_attempts=1,
     )
     with pytest.raises(TimeoutError):
         await controller._replace(
@@ -431,6 +432,94 @@ async def test_failed_handoff_closes_both_owned_models():
     previous.aclose.assert_awaited_once()
     await controller.close()
     replacement.aclose.assert_awaited_once()
+
+
+def _owned_model(name):
+    model = Mock(name=name)
+    model.aclose = AsyncMock()
+    model.discard_preconnected = AsyncMock()
+    return model
+
+
+async def test_slow_character_start_retries_with_a_fresh_session(monkeypatch):
+    """A transfer whose new live session stalls must not end the call.
+
+    2026-10-10: the Cooper swap hit the start timeout and the call dropped.
+    The gateway handshake now opens before the handoff, and a stalled session
+    is replaced by a second attempt; only the previous character and the
+    failed attempt are closed.
+    """
+    previous, slow, fresh = (_owned_model(n) for n in ("previous", "slow", "fresh"))
+    models = iter([slow, fresh])
+    live = SimpleNamespace(session_id="live_fresh")
+    monkeypatch.setattr(CharacterAssistant, "duplex_session", property(lambda _: live))
+    session = Mock(interrupt=AsyncMock(), aclose=AsyncMock())
+
+    def update_agent(agent):
+        # The stalled session never acknowledges; the fresh one enters at once.
+        slow.preconnect.assert_called_once()
+        if agent.llm is fresh:
+            agent.entered.set()
+
+    session.update_agent = Mock(side_effect=update_agent)
+    router = Mock()
+    router.route_snapshot.return_value = SimpleNamespace(active_thread_id="s_cooper")
+    controller = LiveCharacterController(
+        session=session,
+        bridge=Mock(),
+        router=router,
+        model_factory=lambda _: next(models),
+        instructions=Mock(),
+        on_error=AsyncMock(),
+        initial_model=previous,
+        timeout=0.05,
+        start_attempts=2,
+    )
+    assistant = await controller._replace(
+        identity=SimpleNamespace(gpt_live_voice="beacon", voice_id="v-cooper"),
+        history=llm.ChatContext(),
+        instructions="Cooper",
+    )
+    assert assistant.llm is fresh
+    assert session.update_agent.call_count == 2
+    fresh.preconnect.assert_called_once()
+    slow.discard_preconnected.assert_awaited_once()
+    slow.aclose.assert_awaited_once()
+    previous.aclose.assert_awaited_once()
+    fresh.aclose.assert_not_awaited()
+    controller._task = None
+    await controller.close()
+    fresh.aclose.assert_awaited_once()
+
+
+async def test_character_start_gives_up_after_the_last_attempt():
+    previous, first, second = (_owned_model(n) for n in ("previous", "a", "b"))
+    models = iter([first, second])
+    session = Mock(interrupt=AsyncMock(), aclose=AsyncMock())
+    controller = LiveCharacterController(
+        session=session,
+        bridge=Mock(),
+        router=Mock(),
+        model_factory=lambda _: next(models),
+        instructions=Mock(),
+        on_error=AsyncMock(),
+        initial_model=previous,
+        timeout=0.01,
+        start_attempts=2,
+    )
+    with pytest.raises(TimeoutError):
+        await controller._replace(
+            identity=SimpleNamespace(gpt_live_voice="cedar", voice_id="v"),
+            history=llm.ChatContext(),
+            instructions="Agent",
+        )
+    assert session.update_agent.call_count == 2
+    first.aclose.assert_awaited_once()
+    previous.aclose.assert_awaited_once()
+    second.aclose.assert_not_awaited()
+    controller._task = None
+    await controller.close()
+    second.aclose.assert_awaited_once()
 
 
 async def test_transfer_during_announcement_start_never_injects_old_commentary(
