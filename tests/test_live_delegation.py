@@ -8,6 +8,7 @@ import logging
 from types import SimpleNamespace
 
 import pytest
+from livekit.agents import APIConnectionError, APIError
 
 from openbase_coder_cli.livekit_agent import live_delegation
 from openbase_coder_cli.livekit_agent.live_delegation import (
@@ -85,6 +86,26 @@ class FakeGPTLiveSession:
         self.emit(
             "input_audio_transcription_completed",
             SimpleNamespace(item_id=item_id, transcript=transcript, is_final=False),
+        )
+
+    def drop(self) -> None:
+        """The gateway socket closed: the plugin's recoverable error before it retries."""
+        self.emit(
+            "error",
+            SimpleNamespace(
+                error=APIConnectionError("GPT-Live connection closed unexpectedly"),
+                recoverable=True,
+            ),
+        )
+
+    def server_error(self) -> None:
+        """The server rejected one event; the socket is still up."""
+        self.emit(
+            "error",
+            SimpleNamespace(
+                error=APIError("GPT-Live returned an error", retryable=True),
+                recoverable=True,
+            ),
         )
 
     def of(self, kind: str, delegation_id=...) -> list[str]:
@@ -694,6 +715,353 @@ async def test_an_utterance_closed_by_the_reconnect_still_reaches_the_agent():
     await bridge.aclose()
 
 
+def _progress_snapshot(text: str, turn_id: str = "turn-1") -> dict:
+    return {
+        "status": "running",
+        "turnId": turn_id,
+        "summary": {
+            "items": [{"type": "agentMessage", "phase": "finalAnswer", "text": text}]
+        },
+    }
+
+
+def _redelivery_notes(live: FakeGPTLiveSession) -> list[str]:
+    return [t for t in live.of("thinking", None) if "before the caller heard" in t]
+
+
+async def test_commentary_produced_during_the_gap_is_spoken_once_after_reconnect():
+    """Progress the turn streams while the socket is down reaches the new session.
+
+    Appended during the gap it would be queued bound to the dead delegation
+    and rejected by the new session ("Unknown client delegation").
+    """
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.delegate("d1", "Run the tests")
+    await _settle()
+    live.drop()
+    dispatcher.progress("turn-1", _progress_snapshot("Tests are running. Six passed."))
+    assert live.of("commentary") == []
+
+    live.emit("session_reconnected")
+    assert live.of("commentary", "d1") == []
+    assert live.of("commentary", None) == ["Tests are running. Six passed."]
+    (note,) = _redelivery_notes(live)
+    assert "progress on the caller's last request" in note
+    assert "the dispatcher is still working" in note
+    thinking = live.of("thinking", None)
+    assert thinking.index(next(t for t in thinking if "re-established" in t)) < (
+        thinking.index(note)
+    )
+
+    # The rest of the turn is spoken once, session-wide, as before.
+    dispatcher.result = {
+        "_livekit_speech_text": "Tests are running. Six passed. All green.",
+        "_livekit_turn_id": "turn-1",
+        "status": "completed",
+        "progress": {},
+    }
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.of("commentary", None) == [
+        "Tests are running. Six passed.",
+        "All green.",
+    ]
+    await bridge.aclose()
+
+
+async def test_final_produced_during_the_gap_is_spoken_once_as_the_answer():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.delegate("d1", "Run the tests")
+    await _settle()
+    live.drop()
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.of("commentary") == []
+    assert dispatcher.claimed == ["turn-1"]
+
+    live.emit("session_reconnected")
+    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    (note,) = _redelivery_notes(live)
+    assert "present it as the answer" in note
+    (briefing,) = [t for t in live.of("thinking", None) if "re-established" in t]
+    assert "still working" not in briefing
+    # Spoken by the new session: a later reconnect does not repeat it.
+    await asyncio.sleep(live_delegation.DELIVERY_CONFIRM_MIN_SECONDS + 0.05)
+    bridge.on_agent_state_changed("listening", "speaking")
+    live.drop()
+    live.emit("session_reconnected")
+    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    assert len(_redelivery_notes(live)) == 1
+    await bridge.aclose()
+
+
+async def test_commentary_spoken_before_the_drop_is_not_redelivered():
+    clock = {"now": 100.0}
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        clock=lambda: clock["now"]
+    )
+    live.delegate("d1", "Run the tests")
+    await _settle()
+    dispatcher.progress("turn-1", _progress_snapshot("Tests are running. Six passed."))
+    assert live.of("commentary", "d1") == ["Tests are running. Six passed."]
+    clock["now"] += 1.0
+    bridge.on_agent_state_changed("listening", "speaking")
+    bridge.on_agent_state_changed("speaking", "listening")
+    clock["now"] += 5.0
+
+    live.drop()
+    live.emit("session_reconnected")
+    assert live.of("commentary", None) == []
+    assert _redelivery_notes(live) == []
+    await bridge.aclose()
+
+
+async def test_bound_commentary_the_model_never_spoke_is_redelivered_once():
+    """Sent to the old session's delegation just before it died."""
+    clock = {"now": 100.0}
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        clock=lambda: clock["now"]
+    )
+    live.delegate("d1", "Run the tests")
+    await _settle()
+    # The acknowledgement already under way does not count as speaking this.
+    bridge.on_agent_state_changed("listening", "speaking")
+    dispatcher.progress("turn-1", _progress_snapshot("Tests are running. Six passed."))
+    clock["now"] += 0.1
+    bridge.on_agent_state_changed("speaking", "listening")
+    bridge.on_agent_state_changed("listening", "speaking")
+    clock["now"] += 0.4
+
+    live.drop()
+    live.emit("session_reconnected")
+    assert live.of("commentary", None) == ["Tests are running. Six passed."]
+    assert len(_redelivery_notes(live)) == 1
+    await bridge.aclose()
+
+
+async def test_old_bound_commentary_is_not_redelivered_without_a_speaking_cue():
+    clock = {"now": 100.0}
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        clock=lambda: clock["now"]
+    )
+    live.delegate("d1", "Run the tests")
+    await _settle()
+    dispatcher.progress("turn-1", _progress_snapshot("Tests are running. Six passed."))
+    clock["now"] += live_delegation.REDELIVERY_MAX_AGE_SECONDS + 1
+    live.drop()
+    live.emit("session_reconnected")
+    assert live.of("commentary", None) == []
+    await bridge.aclose()
+
+
+async def test_a_held_utterance_and_a_redelivered_final_do_not_interleave():
+    """The caller was mid-sentence at the drop and the turn finished meanwhile.
+
+    The plugin closes the caller's speech before ``session_reconnected``, so
+    the new words are held when the reconnect arrives; the finished answer
+    goes out first, and the held words start their own turn after it instead
+    of superseding the answer away.
+    """
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=5.0)
+    live.delegate("d1", "Run the tests")
+    live.final("Run the tests")  # covered by the delegation
+    await _settle()
+    live.drop()
+    dispatcher.result_gate.set()
+    await _settle()
+    live.final("And then the linter")
+    assert bridge._held is not None
+
+    live.emit("session_reconnected")
+    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    assert bridge._held is not None
+    assert len(dispatcher.prompts) == 1
+
+    bridge._flush_held()
+    await _settle()
+    assert len(dispatcher.prompts) == 2
+    assert dispatcher.prompts[1][0].endswith(_voice("And then the linter"))
+    answer_at = live.appends.index(
+        ("commentary", "All tests pass. The build is green.", None)
+    )
+    taken_at = next(
+        i
+        for i, (kind, text, _) in enumerate(live.appends)
+        if kind == "thinking" and "And then the linter" in text
+    )
+    assert answer_at < taken_at
+    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    await bridge.aclose()
+
+
+async def test_a_recoverable_server_error_does_not_hold_commentary():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.delegate("d1", "Run the tests")
+    await _settle()
+    live.server_error()
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    await bridge.aclose()
+
+
+@pytest.mark.parametrize("held", [False, True])
+async def test_reconnect_retains_every_unheard_streamed_chunk(held):
+    clock = {"now": 100.0}
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        clock=lambda: clock["now"]
+    )
+    live.delegate("d1", "Run the tests")
+    await _settle()
+    if held:
+        live.drop()
+    sentences = [f"Test number {number} passed." for number in range(12)]
+    for count in range(1, len(sentences) + 1):
+        dispatcher.progress("turn-1", _progress_snapshot(" ".join(sentences[:count])))
+    dispatcher.result = {
+        "_livekit_speech_text": " ".join(sentences),
+        "_livekit_turn_id": "turn-1",
+        "status": "completed",
+        "progress": {},
+    }
+    dispatcher.result_gate.set()
+    await _settle()
+    if not held:
+        live.drop()
+    live.emit("session_reconnected")
+    assert live.of("commentary", None) == sentences
+    await bridge.aclose()
+
+
+async def test_buffered_speech_during_the_gap_does_not_confirm_old_appends():
+    clock = {"now": 100.0}
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        clock=lambda: clock["now"]
+    )
+    live.delegate("d1", "Run the tests")
+    await _settle()
+    dispatcher.result_gate.set()
+    await _settle()
+    live.drop()
+    clock["now"] += 1.0
+    bridge.on_agent_state_changed("listening", "speaking")
+    live.emit("session_reconnected")
+    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    await bridge.aclose()
+
+
+async def test_steering_during_the_gap_preserves_the_shared_turns_unheard_prefix():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.delegate("d1", "Run the tests")
+    live.final("Run the tests")
+    await _settle()
+    live.drop()
+    dispatcher.progress("turn-1", _progress_snapshot("Tests passed."))
+    live.final("Also run the linter")
+    await _settle()
+    dispatcher.result = {
+        "_livekit_speech_text": "Tests passed. Linter passed.",
+        "_livekit_turn_id": "turn-1",
+        "status": "completed",
+        "progress": {},
+    }
+    dispatcher.result_gate.set()
+    await _settle()
+    live.emit("session_reconnected")
+    assert live.of("commentary", None) == ["Tests passed.", "Linter passed."]
+    assert len(_redelivery_notes(live)) == 1
+    await bridge.aclose()
+
+
+@pytest.mark.parametrize("drop_seen", [False, True])
+async def test_unbound_delivery_reconnect_requires_an_observed_drop(drop_seen):
+    clock = {"now": 100.0}
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        clock=lambda: clock["now"]
+    )
+    live.final("Run the tests")
+    await _settle()
+    dispatcher.result_gate.set()
+    await _settle()
+    clock["now"] += 1.0
+    if drop_seen:
+        live.drop()
+    live.emit("session_reconnected")
+    assert live.of("commentary", None) == ["All tests pass. The build is green."] * (
+        2 if drop_seen else 1
+    )
+    if drop_seen:
+        clock["now"] += 1.0
+        live.drop()
+        live.emit("session_reconnected")
+        assert len(live.of("commentary", None)) == 3
+    await bridge.aclose()
+
+
+@pytest.mark.parametrize("stale_reason", ["completed_turn_superseded", "route_changed"])
+async def test_reconnect_does_not_replay_stale_held_answers(stale_reason):
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.delegate("d1", "Run the tests")
+    live.final("Run the tests")
+    await _settle()
+    live.drop()
+    dispatcher.result_gate.set()
+    await _settle()
+    if stale_reason == "route_changed":
+        router.transfer(FakeVoiceClient(thread_id="other-thread"))
+    else:
+        dispatcher.result_gate.clear()
+        live.final("Now inspect the build")
+        await _settle()
+    live.emit("session_reconnected")
+    assert live.of("commentary") == []
+    await bridge.aclose()
+
+
+async def test_held_answer_survives_a_long_outage_and_claims_orphan_delivery():
+    clock = {"now": 100.0}
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        clock=lambda: clock["now"]
+    )
+    live.delegate("d1", "Run the tests")
+    await _settle()
+    live.drop()
+    dispatcher.result_gate.set()
+    await _settle()
+    bridge.deliver_orphaned_result(
+        dispatcher, "turn-1", "All tests pass. The build is green."
+    )
+    assert live.of("commentary") == []
+    clock["now"] += 120.0
+    live.emit("session_reconnected")
+    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    await bridge.aclose()
+
+
+async def test_appends_during_the_gap_are_not_bound_to_the_dead_session():
+    """A turn steered during the gap inherits the dead delegation; its thinking
+    must not be queued for that id (the new session would reject it)."""
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.delegate("d1", "Run the tests")
+    live.final("Run the tests")
+    await _settle()
+    bound_before = len(live.of("thinking", "d1"))
+    live.drop()
+    live.final("Also run the linter")
+    await _settle()
+    assert len(dispatcher.prompts) == 2
+    assert bridge._newest_entry_for(dispatcher).delegation_id == "d1"
+    assert len(live.of("thinking", "d1")) == bound_before
+    assert any("Also run the linter" in t for t in live.of("thinking", None))
+
+    live.emit("session_reconnected")
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.of("commentary", "d1") == []
+    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    await bridge.aclose()
+
+
 async def test_pending_approval_is_spoken_once_and_retained_as_instructions():
     bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
     live.delegate("d1", "Deploy it")
@@ -998,9 +1366,13 @@ async def test_bridge_subscribes_to_closed_utterances_and_delegations():
     bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
     assert len(live._handlers["input_audio_transcription_completed"]) == 1
     assert len(live._handlers["delegation_created"]) == 1
+    assert len(live._handlers["session_reconnected"]) == 1
+    assert len(live._handlers["error"]) == 1
     await bridge.aclose()
     assert live._handlers["input_audio_transcription_completed"] == []
     assert live._handlers["delegation_created"] == []
+    assert live._handlers["session_reconnected"] == []
+    assert live._handlers["error"] == []
 
 
 # --- overlapping delegations / steering ----------------------------------------
@@ -1593,8 +1965,10 @@ async def test_every_bridge_line_names_the_call(caplog):
 
     live.final("What is on my desktop?")
     await _settle()
+    live.drop()
     dispatcher.result_gate.set()
     await _settle()
+    live.emit("session_reconnected")
     await bridge.aclose()
 
     # Only the bridge's own lines: the delivery ledger logs dispatch_timing
@@ -1609,6 +1983,14 @@ async def test_every_bridge_line_names_the_call(caplog):
     assert all(m.endswith(" call=room-abc%1") for m in messages), messages
     assert _lines(caplog, "live_forced_delegation")
     assert _lines(caplog, "live_append_commentary")
+    for stage in (
+        "live_session_dropped",
+        "live_commentary_held",
+        "live_session_reconnected",
+        "live_commentary_redelivered",
+    ):
+        assert _lines(caplog, stage)
+    assert "drop_seen=True" in _lines(caplog, "live_session_reconnected")[0]
 
 
 async def test_bridge_lines_carry_no_call_tag_without_a_call_id(caplog):

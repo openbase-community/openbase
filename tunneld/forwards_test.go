@@ -154,6 +154,34 @@ func TestForwardOneShotRetiresAfterFirstConnection(t *testing.T) {
 	}
 }
 
+func TestForwardOneShotSurvivesAnEmptyPreconnect(t *testing.T) {
+	tm := newTestForwardManager(t)
+	if _, err := tm.Add(forwardRequest{Port: 52808, OneShot: true}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	// A browser preconnect: open the connection, send nothing, close it.
+	preconnect, err := net.Dial("tcp", tm.addr(52808))
+	if err != nil {
+		t.Fatalf("preconnect: %v", err)
+	}
+	preconnect.Close()
+	time.Sleep(200 * time.Millisecond)
+	if len(tm.List()) != 1 {
+		t.Fatalf("an empty preconnect retired the one-shot forward: %+v", tm.List())
+	}
+	status, body, err := tm.get(t, 52808, "/oauth/callback?code=1")
+	if err != nil || status != 200 || !strings.Contains(body, "code=1") {
+		t.Fatalf("callback after preconnect: status %d body %q err %v", status, body, err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(tm.List()) != 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(tm.List()) != 0 {
+		t.Fatalf("one-shot forward not retired after the real exchange: %+v", tm.List())
+	}
+}
+
 func TestForwardExpiresAfterTTL(t *testing.T) {
 	tm := newTestForwardManager(t)
 	if _, err := tm.Add(forwardRequest{Port: 3000, TTLSeconds: 1}); err != nil {
@@ -169,6 +197,30 @@ func TestForwardExpiresAfterTTL(t *testing.T) {
 	// The port is free again after expiry.
 	if _, err := tm.Add(forwardRequest{Port: 3000}); err != nil {
 		t.Fatalf("re-add after expiry: %v", err)
+	}
+}
+
+func TestForwardOneShotTTLClosesIdlePreconnect(t *testing.T) {
+	tm := newTestForwardManager(t)
+	if _, err := tm.Add(forwardRequest{Port: 52809, OneShot: true, TTLSeconds: 1}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	preconnect, err := net.Dial("tcp", tm.addr(52809))
+	if err != nil {
+		t.Fatalf("preconnect: %v", err)
+	}
+	defer preconnect.Close()
+	preconnect.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buffer := make([]byte, 1)
+	if _, err := preconnect.Read(buffer); err != io.EOF {
+		t.Fatalf("idle connection was not closed by expiry: %v", err)
+	}
+	if len(tm.List()) != 0 {
+		t.Fatalf("one-shot forward survived its TTL: %+v", tm.List())
+	}
+	if connection, err := net.DialTimeout("tcp", tm.addr(52809), time.Second); err == nil {
+		connection.Close()
+		t.Fatal("expired forward still accepts connections")
 	}
 }
 

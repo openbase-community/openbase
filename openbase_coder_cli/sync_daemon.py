@@ -822,11 +822,25 @@ class SyncDaemonClient:
     def held_deletes(self, root: str, limit: int | None = None) -> list[str]:
         return self.call("held-deletes", root=root, count=limit).get("data") or []
 
-    def release_deletes(self, root: str) -> int:
-        return int(self.call("release-deletes", root=root).get("data") or 0)
+    def held_folders(
+        self, root: str, folder: str | None = None, limit: int | None = None
+    ) -> list[dict]:
+        """The guard's holds of a root by folder ("" = the whole root)."""
+        return (
+            self.call("held-folders", root=root, folder=folder, count=limit).get("data")
+            or []
+        )
 
-    def discard_deletes(self, root: str) -> int:
-        return int(self.call("discard-deletes", root=root).get("data") or 0)
+    def release_deletes(self, root: str, folder: str | None = None) -> int:
+        return self._decide_held_deletes("release-deletes", root, folder)
+
+    def discard_deletes(self, root: str, folder: str | None = None) -> int:
+        return self._decide_held_deletes("discard-deletes", root, folder)
+
+    def _decide_held_deletes(self, op: str, root: str, folder: str | None) -> int:
+        if folder:
+            self.held_folders(root, folder=folder)
+        return int(self.call(op, root=root, folder=folder).get("data") or 0)
 
 
 def reachable(socket_path: Path | None = None) -> bool:

@@ -177,6 +177,10 @@ def test_container_image_includes_agent_instructions_and_skills():
     assert 'git clone --depth 1 --branch "$SKILLS_REF" "$SKILLS_REPO" skills' in dockerfile
     assert 'git clone --depth 1 --branch "$WORKSPACE_REF" "$WORKSPACE_REPO" /tmp/workspace-root' in dockerfile
     assert 'cp -R /tmp/workspace-root/instructions instructions' in dockerfile
+    # The workflow passes the built branch, so a staging image bundles the
+    # staging super-agents, not develop's.
+    assert 'ARG SUPER_AGENTS_REF=develop' in dockerfile
+    assert 'git clone --depth 1 --branch "$SUPER_AGENTS_REF" "$SUPER_AGENTS_REPO" super-agents' in dockerfile
 
 
 def test_container_entrypoint_maritime_selects_netmesh():

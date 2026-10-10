@@ -147,3 +147,13 @@ def _livekit_agent_worker_ready(monkeypatch):
     livekit_views = sys.modules.get("openbase_coder_cli.openbase_coder_cli_app.livekit")
     if livekit_views is not None:
         monkeypatch.setattr(livekit_views, "livekit_agent_worker_ready", lambda: True)
+
+
+@pytest.fixture
+def volume(tmp_path, monkeypatch):
+    """A container's durable data directory (Maritime's /data/openbase) for the
+    docker home-state scripts (test_container_home_state*.py)."""
+    monkeypatch.delenv("SUPER_AGENTS_CLAUDE_CODE_HOME", raising=False)
+    data_dir = tmp_path / "data" / "openbase"
+    data_dir.mkdir(parents=True)
+    return data_dir

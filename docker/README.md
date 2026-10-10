@@ -16,11 +16,9 @@ docs.openbase.cloud); this file is the deeper image/development reference.
 
 ## Publishing
 
-CI publishes `openbaseai/openbase` (linux/amd64 + linux/arm64) via
-`.github/workflows/docker-image.yml` on pushes to `main` that touch the
-image inputs, tagging `latest` plus a version derived from the newest `v*`
-tag. It needs the `DOCKERHUB_TOKEN` repo secret (a Docker Hub access token
-for the `openbaseai` account); without it the workflow warns and skips.
+CI publishes `openbaseai/openbase` (linux/amd64 + linux/arm64) via `.github/workflows/docker-image.yml` on pushes to `main` that touch the image inputs, tagging `latest` plus a version derived from the newest `v*` tag (`.github/scripts/release-version.sh stamp`). It needs the `DOCKERHUB_TOKEN` repo secret (a Docker Hub access token for the `openbaseai` account); without it the workflow warns and skips.
+
+Staging promotions dispatch the workflow on `staging` with a custom `maritime-<sha>` tag and `platforms=amd64` (Maritime runs x86_64), right after the push. The stamp uses an existing tag at HEAD or computes the next staging version, so the build does not wait for the release. Independently started release and image builds can observe different tag baselines during concurrent releases. The workflow clones the sibling repos (console, coder-react, super-agents, skills, workspace root) at the branch being built (`main` and `staging` use their own branch, anything else `develop`) and passes their head SHAs as `SIBLING_REVS` to invalidate cached clones when siblings change. These SHAs invalidate the cache; they do not pin clones against a branch moving during the build.
 
 ## Build
 
@@ -34,7 +32,7 @@ docker build --build-arg OPENBASE_CODER_VERSION=1.2.3 -t openbase-coder:1.2.3 .
 
 Or with compose: `docker compose up --build`.
 
-The build clones the bundled skills and copies `instructions/` from the workspace root repository beside `cli/`. `SKILLS_REPO` / `SKILLS_REF` and `WORKSPACE_REPO` / `WORKSPACE_REF` select those sources; both refs default to `develop`. Like the console inputs, these are remote refs, so local sibling changes are not included automatically.
+The build clones the bundled skills and copies `instructions/` from the workspace root repository beside `cli/`. `SKILLS_REPO` / `SKILLS_REF` and `WORKSPACE_REPO` / `WORKSPACE_REF` select those sources (`SUPER_AGENTS_REPO` / `SUPER_AGENTS_REF` the super-agents sibling); the refs default to `develop`. Like the console inputs, these are remote refs, so local sibling changes are not included automatically, and a local rebuild reuses a cached clone unless you pass a changing `--build-arg SIBLING_REVS=...` (or `--no-cache`).
 
 ## Run
 

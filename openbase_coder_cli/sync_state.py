@@ -191,6 +191,8 @@ def overview(
                 # local deletions the mass-delete guard holds back from the
                 # other computers until released or discarded
                 "held_deletes": _int(root.get("held_deletes")),
+                # the same by hold: a folder of the root, or "" for all of it
+                "held_folders": _held_folders(root.get("held_folders")),
             }
         )
         totals["unsent"] += unsent
@@ -800,27 +802,56 @@ def move_lock_to_trash(
 HELD_DELETE_SAMPLE = 20
 
 
+def _held_folders(value: Any, *, sample: bool = False) -> list[dict[str, Any]]:
+    """The daemon's holds by folder (empty for an older daemon, which holds
+    only root-wide)."""
+    out: list[dict[str, Any]] = []
+    for hold in value if isinstance(value, list) else []:
+        if not isinstance(hold, dict):
+            continue
+        row: dict[str, Any] = {
+            "folder": str(hold.get("folder") or ""),
+            "count": _int(hold.get("count")),
+            "since": str(hold.get("since") or ""),
+            "rule": str(hold.get("rule") or ""),
+        }
+        if sample:
+            row["sample"] = [str(p) for p in hold.get("sample") or []]
+        out.append(row)
+    return out
+
+
 def held_deletes_summary(
     client: Any, status: dict[str, Any], *, sample: int = HELD_DELETE_SAMPLE
 ) -> list[dict[str, Any]]:
-    """Per root with held deletions: its count and the first few paths.
+    """Per root with held deletions: its count, the first few paths, and the
+    holds by folder with the first few paths of each.
 
-    The count comes from the daemon's status (cheap); the paths are fetched
-    only for roots that hold any.
+    The counts come from the daemon's status (cheap); the paths are fetched
+    only for roots that hold any. An older daemon reports no folders (its
+    hold is always the whole root).
     """
     out: list[dict[str, Any]] = []
     for root in status.get("roots") or []:
-        if not isinstance(root, dict) or not _int(root.get("held_deletes")):
+        if not isinstance(root, dict) or not (
+            _int(root.get("held_deletes")) or root.get("held_folders")
+        ):
             continue
         root_id = str(root.get("id") or "")
         count = _int(root.get("held_deletes"))
         paths = client.held_deletes(root_id, limit=sample)
+        folders = (
+            _held_folders(client.held_folders(root_id, limit=sample), sample=True)
+            if root.get("held_folders")
+            else []
+        )
         out.append(
             {
                 "id": root_id,
                 "path": str(root.get("path") or ""),
                 "count": count,
                 "sample": paths[:sample],
+                "folders": folders,
             }
         )
     return out

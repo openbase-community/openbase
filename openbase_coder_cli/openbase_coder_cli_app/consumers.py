@@ -293,9 +293,7 @@ class ThreadTerminalConsumer(AsyncWebsocketConsumer):
         if not reattached:
             try:
                 launch = await self._resolve_launch()
-                session = registry.open(
-                    self.thread_id, launch, self._cols, self._rows
-                )
+                session = registry.open(self.thread_id, launch, self._cols, self._rows)
             except TerminalUnavailableError as exc:
                 await self._send_control("error", {"message": str(exc)})
                 return
@@ -598,8 +596,9 @@ class _ApprovalStoreWatcher:
         try:
             async for _changes in awatch(
                 store_path.parent,
-                watch_filter=lambda _change, changed_path: Path(changed_path)
-                == store_path,
+                watch_filter=lambda _change, changed_path: (
+                    Path(changed_path) == store_path
+                ),
                 debounce=50,
                 step=25,
             ):
@@ -722,8 +721,9 @@ class _NotificationStoreWatcher:
         try:
             async for _changes in awatch(
                 store_path.parent,
-                watch_filter=lambda _change, changed_path: Path(changed_path)
-                == store_path,
+                watch_filter=lambda _change, changed_path: (
+                    Path(changed_path) == store_path
+                ),
                 debounce=50,
                 step=25,
             ):
@@ -828,13 +828,25 @@ class IOSAppControlConsumer(AsyncJsonWebsocketConsumer):
             ack["opened"] = content["opened"]
             if type(content.get("notified")) is bool:
                 ack["notified"] = content["notified"]
+            # Loopback-forward outcome (step 4 phones): started|vpn_down|failed|unsupported.
+            if isinstance(content.get("forward"), str):
+                ack["forward"] = content["forward"][:32]
+                if isinstance(content.get("forward_error"), str):
+                    ack["forward_error"] = content["forward_error"][:1024]
             if isinstance(content.get("error"), str):
                 ack["error"] = content["error"][:1024]
         state = content.get("call_state")
-        if isinstance(state, dict) and all(
-            type(state.get(key)) is bool for key in ("connected", "muted", "speaker", "active")
-        ) and type(content.get("applied")) is bool:
-            ack["call_state"] = {key: state[key] for key in ("connected", "muted", "speaker", "active")}
+        if (
+            isinstance(state, dict)
+            and all(
+                type(state.get(key)) is bool
+                for key in ("connected", "muted", "speaker", "active")
+            )
+            and type(content.get("applied")) is bool
+        ):
+            ack["call_state"] = {
+                key: state[key] for key in ("connected", "muted", "speaker", "active")
+            }
             ack["applied"] = content["applied"]
             if isinstance(content.get("error"), str):
                 ack["error"] = content["error"][:1024]

@@ -42,7 +42,11 @@ class FakeChannelLayer:
 
     async def receive(self, channel: str) -> dict:
         if self.ack:
-            return self.ack if isinstance(self.ack, dict) else {"type": "ios_app_control_ack"}
+            return (
+                self.ack
+                if isinstance(self.ack, dict)
+                else {"type": "ios_app_control_ack"}
+            )
         await asyncio.Event().wait()
         raise AssertionError("unreachable")
 
@@ -206,22 +210,30 @@ def test_consumer_ignores_invalid_acks(content):
     assert consumer.channel_layer.sent == []
 
 
-@pytest.mark.parametrize("payload", [
-    {"action": "set_speaker"}, {"action": "set_speaker", "speaker": "invalid"},
-    {"action": "start_call"}, {"action": "start_call", "thread_id": "  "},
-    {"action": "start_call", "thread_id": "x" * 257},
-])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"action": "set_speaker"},
+        {"action": "set_speaker", "speaker": "invalid"},
+        {"action": "start_call"},
+        {"action": "start_call", "thread_id": "  "},
+        {"action": "start_call", "thread_id": "x" * 257},
+    ],
+)
 def test_call_commands_validate_arguments(payload):
     assert views.ios_app_control(_request(payload)).status_code == 400
 
 
-@pytest.mark.parametrize("payload", [
-    {"action": "set_speaker", "speaker": True},
-    {"action": "set_speaker", "speaker": False},
-    {"action": "end_call"},
-    {"action": "start_call", "thread_id": "dispatcher"},
-    {"action": "start_call", "thread_id": "thread-123"},
-])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"action": "set_speaker", "speaker": True},
+        {"action": "set_speaker", "speaker": False},
+        {"action": "end_call"},
+        {"action": "start_call", "thread_id": "dispatcher"},
+        {"action": "start_call", "thread_id": "thread-123"},
+    ],
+)
 @pytest.mark.parametrize("applied", [True, False])
 def test_call_command_returns_result_and_state(monkeypatch, payload, applied):
     state = {"connected": True, "muted": False, "speaker": True, "active": True}
@@ -252,11 +264,20 @@ def test_consumer_preserves_valid_result_and_rejects_malformed_state():
     consumer = IOSAppControlConsumer()
     consumer.channel_layer = FakeChannelLayer()
     state = {"connected": False, "muted": True, "speaker": False, "active": False}
-    content = {"type": "ios_app_control_ack", "command_id": "abc", "applied": False,
-               "call_state": state, "error": "failed"}
+    content = {
+        "type": "ios_app_control_ack",
+        "command_id": "abc",
+        "applied": False,
+        "call_state": state,
+        "error": "failed",
+    }
     asyncio.run(consumer.receive_json(content))
     assert consumer.channel_layer.sent[-1][1] == content
-    asyncio.run(consumer.receive_json({**content, "call_state": {**state, "connected": "false"}}))
+    asyncio.run(
+        consumer.receive_json(
+            {**content, "call_state": {**state, "connected": "false"}}
+        )
+    )
     assert "applied" not in consumer.channel_layer.sent[-1][1]
 
 
@@ -268,7 +289,13 @@ def test_ios_app_control_open_url_carries_loopback_forward(monkeypatch):
     monkeypatch.setattr(views, "get_channel_layer", lambda: channel_layer)
 
     response = views.ios_app_control(
-        _request({"action": "open_url", "url": "https://a.example/", "loopback_forward": FORWARD})
+        _request(
+            {
+                "action": "open_url",
+                "url": "https://a.example/",
+                "loopback_forward": FORWARD,
+            }
+        )
     )
 
     assert response.status_code == 202
@@ -298,7 +325,13 @@ def test_ios_app_control_rejects_bad_loopback_forwards(monkeypatch, forward):
     monkeypatch.setattr(views, "get_channel_layer", lambda: channel_layer)
 
     response = views.ios_app_control(
-        _request({"action": "open_url", "url": "https://a.example/", "loopback_forward": forward})
+        _request(
+            {
+                "action": "open_url",
+                "url": "https://a.example/",
+                "loopback_forward": forward,
+            }
+        )
     )
 
     assert response.status_code == 400
@@ -310,7 +343,9 @@ def test_ios_app_control_rejects_loopback_forward_for_other_actions(monkeypatch)
     monkeypatch.setattr(views, "get_channel_layer", lambda: channel_layer)
 
     response = views.ios_app_control(
-        _request({"action": "set_call_muted", "muted": True, "loopback_forward": FORWARD})
+        _request(
+            {"action": "set_call_muted", "muted": True, "loopback_forward": FORWARD}
+        )
     )
 
     assert response.status_code == 400
@@ -318,7 +353,12 @@ def test_ios_app_control_rejects_loopback_forward_for_other_actions(monkeypatch)
 
 def test_ios_app_control_reports_opened_from_device_ack(monkeypatch):
     channel_layer = FakeChannelLayer(
-        ack={"type": "ios_app_control_ack", "opened": False, "notified": True, "error": "app not active"}
+        ack={
+            "type": "ios_app_control_ack",
+            "opened": False,
+            "notified": True,
+            "error": "app not active",
+        }
     )
     monkeypatch.setattr(views, "get_channel_layer", lambda: channel_layer)
 
@@ -339,7 +379,12 @@ def test_consumer_forwards_opened_in_ack():
 
     asyncio.run(
         consumer.receive_json(
-            {"type": "ios_app_control_ack", "command_id": "cmd-1", "opened": True, "notified": False}
+            {
+                "type": "ios_app_control_ack",
+                "command_id": "cmd-1",
+                "opened": True,
+                "notified": False,
+            }
         )
     )
 
@@ -347,3 +392,90 @@ def test_consumer_forwards_opened_in_ack():
     assert group == views.ack_group_name("cmd-1")
     assert message["opened"] is True
     assert message["notified"] is False
+
+
+def test_consumer_and_view_surface_the_forward_outcome(monkeypatch):
+    consumer = IOSAppControlConsumer()
+    consumer.channel_layer = FakeChannelLayer()
+    asyncio.run(
+        consumer.receive_json(
+            {
+                "type": "ios_app_control_ack",
+                "command_id": "cmd-2",
+                "opened": True,
+                "forward": "vpn_down",
+                "forward_error": "the Openbase VPN is not connected on the phone",
+                "ignored": "x",
+            }
+        )
+    )
+    _group, message = consumer.channel_layer.sent[-1]
+    assert message["forward"] == "vpn_down"
+    assert message["forward_error"].startswith("the Openbase VPN")
+    assert "ignored" not in message
+
+    channel_layer = FakeChannelLayer(
+        ack={"type": "ios_app_control_ack", "opened": True, "forward": "started"}
+    )
+    monkeypatch.setattr(views, "get_channel_layer", lambda: channel_layer)
+    response = views.ios_app_control(
+        _request(
+            {
+                "action": "open_url",
+                "url": "https://a.example/",
+                "loopback_forward": FORWARD,
+            }
+        )
+    )
+    assert response.status_code == 202
+    assert response.data["forward"] == "started"
+    assert "forward_error" not in response.data
+
+
+@pytest.mark.parametrize(
+    "fields, expected",
+    [
+        (
+            {"forward": "x" * 100, "forward_error": "y" * 2000},
+            {"forward": "x" * 32, "forward_error": "y" * 1024},
+        ),
+        ({"forward": "future_status"}, {"forward": "future_status"}),
+        ({"forward": "failed", "forward_error": []}, {"forward": "failed"}),
+        ({"forward": [], "forward_error": "ignored"}, {}),
+        ({"forward": None, "forward_error": "ignored"}, {}),
+        ({"forward_error": "ignored"}, {}),
+    ],
+)
+def test_forward_receipt_validation_survives_the_api_round_trip(
+    monkeypatch, fields, expected
+):
+    consumer = IOSAppControlConsumer()
+    consumer.channel_layer = FakeChannelLayer()
+    asyncio.run(
+        consumer.receive_json(
+            {
+                "type": "ios_app_control_ack",
+                "command_id": "cmd-bounded",
+                "opened": True,
+                **fields,
+            }
+        )
+    )
+    _group, message = consumer.channel_layer.sent[-1]
+    channel_layer = FakeChannelLayer(ack=message)
+    monkeypatch.setattr(views, "get_channel_layer", lambda: channel_layer)
+    response = views.ios_app_control(
+        _request(
+            {
+                "action": "open_url",
+                "url": "https://a.example/",
+                "loopback_forward": FORWARD,
+            }
+        )
+    )
+    assert response.status_code == 202
+    assert {
+        key: response.data[key]
+        for key in ("forward", "forward_error")
+        if key in response.data
+    } == expected

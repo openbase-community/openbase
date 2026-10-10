@@ -15,6 +15,7 @@ class FakeClient:
     calls: list[tuple] = []
     fail = False
     held: list[str] = []
+    folders: list[dict] = []
 
     def __init__(self, *args, **kwargs):
         pass
@@ -72,12 +73,16 @@ class FakeClient:
         FakeClient.calls.append(("held_deletes", root))
         return FakeClient.held if root == "projects" else []
 
-    def release_deletes(self, root):
-        FakeClient.calls.append(("release_deletes", root))
+    def held_folders(self, root, folder=None, limit=None):
+        FakeClient.calls.append(("held_folders", root))
+        return FakeClient.folders if root == "projects" else []
+
+    def release_deletes(self, root, folder=None):
+        FakeClient.calls.append(("release_deletes", root, folder))
         return len(FakeClient.held)
 
-    def discard_deletes(self, root):
-        FakeClient.calls.append(("discard_deletes", root))
+    def discard_deletes(self, root, folder=None):
+        FakeClient.calls.append(("discard_deletes", root, folder))
         return len(FakeClient.held)
 
 
@@ -86,6 +91,7 @@ def client(monkeypatch):
     FakeClient.calls = []
     FakeClient.fail = False
     FakeClient.held = []
+    FakeClient.folders = []
     monkeypatch.setattr(sync_daemon, "SyncDaemonClient", FakeClient)
     monkeypatch.setattr(sync_daemon, "is_configured", lambda config_path=None: True)
     monkeypatch.setattr(
@@ -263,7 +269,78 @@ def test_held_deletes_list_and_release(client, monkeypatch):
     released = CliRunner().invoke(sync, ["held-deletes", "--release"])
     assert released.exit_code == 0, released.output
     assert "Released 2 held deletions in ~/Projects." in released.output
-    assert ("release_deletes", "projects") in client.calls
+    assert ("release_deletes", "projects", None) in client.calls
+
+
+def test_held_deletes_by_folder(client, monkeypatch):
+    status = client.status
+
+    def held_status(self):
+        payload = status(self)
+        payload["roots"][0]["held_deletes"] = 3
+        payload["roots"][0]["held_folders"] = [
+            {"folder": "ws/mww/.local", "count": 2, "rule": "count"},
+            {"folder": "tmp", "count": 1, "rule": "count"},
+        ]
+        return payload
+
+    monkeypatch.setattr(client, "status", held_status)
+    client.held = ["tmp/x", "ws/mww/.local/a", "ws/mww/.local/b"]
+    client.folders = [
+        {"folder": "tmp", "count": 1, "rule": "count", "sample": ["tmp/x"]},
+        {
+            "folder": "ws/mww/.local",
+            "count": 2,
+            "rule": "count",
+            "sample": ["ws/mww/.local/a"],
+        },
+    ]
+
+    shown = CliRunner().invoke(sync, ["status"])
+    assert shown.exit_code == 0, shown.output
+    assert "2 under ws/mww/.local/" in shown.output and "1 under tmp/" in shown.output
+
+    listed = CliRunner().invoke(sync, ["held-deletes"])
+    assert listed.exit_code == 0, listed.output
+    assert "  2 under ws/mww/.local/\n    ws/mww/.local/a\n    … and 1 more" in (
+        listed.output
+    )
+    assert "  1 under tmp/\n    tmp/x\n" in listed.output
+
+    scoped = CliRunner().invoke(sync, ["held-deletes", "--folder", "ws/mww/", "--json"])
+    assert scoped.exit_code == 0, scoped.output
+    [entry] = json.loads(scoped.output)
+    assert entry["count"] == 2
+    assert entry["sample"] == ["ws/mww/.local/a"]
+    assert [hold["folder"] for hold in entry["folders"]] == ["ws/mww/.local"]
+    missing_root = CliRunner().invoke(
+        sync, ["held-deletes", "--root", "missing", "--json"]
+    )
+    assert missing_root.exit_code == 0, missing_root.output
+    assert json.loads(missing_root.output) == []
+
+    released = CliRunner().invoke(
+        sync, ["held-deletes", "--release", "--folder", "ws/mww/.local/"]
+    )
+    assert released.exit_code == 0, released.output
+    assert "in ~/Projects under ws/mww/.local/." in released.output
+    assert ("release_deletes", "projects", "ws/mww/.local") in client.calls
+
+
+def test_held_deletes_root_wide_from_older_daemon(client, monkeypatch):
+    status = client.status
+
+    def held_status(self):
+        payload = status(self)
+        payload["roots"][0]["held_deletes"] = 2
+        return payload
+
+    monkeypatch.setattr(client, "status", held_status)
+    client.held = ["app/gone.py", "app"]
+    listed = CliRunner().invoke(sync, ["held-deletes"])
+    assert listed.exit_code == 0, listed.output
+    assert "  2 under the whole folder\n    app/gone.py\n    app\n" in listed.output
+    assert not [c for c in client.calls if c[0] == "held_folders"]
 
 
 def test_held_deletes_none(client):

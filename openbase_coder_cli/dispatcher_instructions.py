@@ -26,6 +26,10 @@ START_HEADING = "## Starting a Super Agent"
 # A voice dispatcher once created a thread with the task in
 # developerInstructions, never started a turn, and told the user the agent
 # was working; the thread showed no messages and nothing ran (2026-10-08).
+# A Super Agent's cwd is the dispatcher's judgment after listing folders,
+# never an exact match of the transcript against folder names: speech
+# recognition mangles project names (Gabe, 2026-10-09, replacing BUG 15's
+# `project-dir` command).
 START_RULES = f"""{START_HEADING}
 
 - super_agents_start only creates the thread. Pass the task as `prompt` in
@@ -36,11 +40,17 @@ START_RULES = f"""{START_HEADING}
 - Say an agent is working only after a result shows a started turn
   (turnStarted true, or a turnId). If the result says turnStarted false, start
   the turn before confirming anything to the user.
-- When the user names a project or folder for the agent, resolve it with
-  `openbase-coder project-dir "<name>" --json` and pass the returned `path`
-  as the agent's `cwd`. Never default to your own directory for a named
-  project. If the command reports no match or several, tell the user which
-  projects exist and ask; do not start the agent anywhere else.
+- Your own working directory never changes; nothing the user says moves it.
+  When you start a Super Agent, choose its `cwd` yourself by looking: `ls`
+  your own directory (the projects folder on a Cloud workspace, home on a
+  Mac), the folders where the user keeps projects, any place they named, and
+  the recent projects listed in ~/.openbase/coder-projects.json; then use
+  judgment to map what they meant to a real folder. Speech recognition
+  mangles names ("tick tack toe" is `tic-tac-toe`) and users say partial
+  names, so never require an exact match. Ask only when two folders are
+  genuinely plausible. Never start an agent in your own directory just
+  because nothing matched exactly; for a new project, create its folder
+  first.
 - Say instructions were steered or queued only after a successful steer/queue
   call explicitly confirms that outcome (steered true or queued true). A
   startedImmediately result means a new turn started, not a queued steer.

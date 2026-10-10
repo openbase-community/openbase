@@ -19,6 +19,8 @@ On first launch, an account with no backend yet is asked where its backend shoul
 
 An account that already has a computer running Openbase Coder or a Cloud Workspace skips this choice: the app reads that from your cloud account state and goes straight to pairing the phone.
 
+On iOS and Android, the final onboarding step shows an estimated progress bar while the paired backend comes online. The estimate allows 90 seconds for a Cloud Workspace or 120 seconds for a computer; it is not a deadline. The bar completes when the backend answers and disappears when you leave the step.
+
 Once this phone has completed onboarding, a sleeping Cloud Workspace keeps you in the app as long as the phone remains connected and paired. Sending a message or returning to an open conversation wakes the workspace, with a progress bar above the message box. If waking fails, the app explains why and keeps your draft for another attempt.
 
 After onboarding, sign in with your Openbase account (email + password, with
@@ -57,6 +59,8 @@ There is no separate Call page. Start a call from the waveform button in any cha
 While a call is running, the chat screen becomes the voice view: the agent orb in the middle with the call state and the latest spoken reply under it, and the message box with **mute** and **speaker** buttons and a round **✕** to end the call. You can still type to steer. **Show messages** swaps the orb for the conversation, with a small orb in the title bar. The **settings** button at the top right opens the call settings: which computer answers, speaker, auto-mute and auto-unmute, room and call state, a shared screen, and **Back to Dispatch**. Other screens show the call in their top bar; tapping it opens the same settings.
 
 While connected you can ask the dispatcher to transfer you to a Super Agent, or say "go back to dispatch" to return. The same routing is scriptable from the CLI — see [Voice Routing](voice-routing.md).
+
+On iOS and Android, starting a call shows one estimated progress bar: a Cloud Workspace wake bar, or a 20-second estimate while waiting for the agent on a computer. It completes when the agent is ready or the wait ends, and does not restart if the agent later becomes temporarily unavailable. These estimates can take longer than expected. The services banner also waits until stopped services have been reported for at least 45 seconds; with normal 30-second polling, the warning appears on the third consecutive stopped poll, so brief restarts usually remain invisible.
 
 Voice Test is a developer screen for exercising LiveKit connection parameters directly; it is reached only through remote app control, not the drawer.
 

@@ -3,6 +3,11 @@
 # builds natively on its own runner (no QEMU), pushes by digest, and a final
 # job merges the digests into the multi-arch latest + version tags.
 #
+# Staging promotions dispatch it on the staging ref with a maritime-<sha> tag
+# and platforms=amd64 (Maritime runs x86_64), right after the push and in
+# parallel with the staging CLI release: the version stamp is computed, not
+# read from the release tag (.github/scripts/release-version.sh).
+#
 # Requires the DOCKERHUB_TOKEN repo secret (a Docker Hub access token for the
 # openbaseai account; override the username with a DOCKERHUB_USERNAME
 # secret). Without the token the workflow warns and skips publishing rather
@@ -20,6 +25,7 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - ".github/workflows/docker-image.yml"
+      - ".github/scripts/release-version.sh"
   workflow_dispatch:
     inputs:
       tag:
@@ -29,6 +35,13 @@ on:
           without moving latest.
         required: false
         default: ""
+      platforms:
+        description: >-
+          Platforms to build. Maritime cloud workspaces run amd64 only, so a
+          staging image for them skips the arm64 build.
+        type: choice
+        options: [all, amd64]
+        default: all
 
 env:
   IMAGE: openbaseai/openbase
@@ -39,6 +52,9 @@ jobs:
     outputs:
       publish: ${{ steps.check.outputs.publish }}
       version: ${{ steps.version.outputs.version }}
+      matrix: ${{ steps.platforms.outputs.matrix }}
+      sibling_ref: ${{ steps.siblings.outputs.ref }}
+      sibling_revs: ${{ steps.siblings.outputs.revs }}
     steps:
       - id: check
         env:
@@ -54,17 +70,57 @@ jobs:
         with:
           fetch-depth: 0
       - id: version
-        # PEP440-ish stamp from the latest release tag: vX.Y.Z at the tag,
-        # X.Y.Z.postN for N commits past it (matches manual publishes).
+        # Valid PEP 440 stamp; on staging it is the version of the staging
+        # release the same push cuts, so the image need not wait for its tag.
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          tag=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo v0.0.0)
-          count=$(git rev-list --count "$tag"..HEAD)
-          base="${tag#v}"
-          if [ "$count" = "0" ]; then
-            echo "version=$base" >> "$GITHUB_OUTPUT"
+          version="$(.github/scripts/release-version.sh stamp "$REF_NAME")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - id: platforms
+        env:
+          PLATFORMS: ${{ inputs.platforms || 'all' }}
+        run: |
+          amd64='{"platform":"linux/amd64","slug":"amd64","runner":"ubuntu-latest"}'
+          arm64='{"platform":"linux/arm64","slug":"arm64","runner":"ubuntu-24.04-arm"}'
+          if [ "$PLATFORMS" = "amd64" ]; then
+            echo "matrix=[$amd64]" >> "$GITHUB_OUTPUT"
           else
-            echo "version=$base.post$count" >> "$GITHUB_OUTPUT"
+            echo "matrix=[$amd64,$arm64]" >> "$GITHUB_OUTPUT"
           fi
+      - id: siblings
+        # The image clones sibling repos at build time. Use the branch being
+        # built (a staging image bundles staging's console, skills and
+        # super-agents), and pass their head SHAs as a build arg: an
+        # unchanged clone line is otherwise served from the layer cache
+        # after the remote moved (staging images shipped a cached console).
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          case "$REF_NAME" in
+            main|staging) ref="$REF_NAME" ;;
+            *) ref=develop ;;
+          esac
+          revs=""
+          while read -r repo branch; do
+            sha="$(git ls-remote "https://github.com/$repo" "refs/heads/$branch" | cut -f1)"
+            if [ -z "$sha" ]; then
+              echo "::error::$repo has no branch $branch"
+              exit 1
+            fi
+            echo "$repo@$branch = $sha"
+            revs="$revs${sha:0:12},"
+          done <<EOF
+          openbase-community/openbase-coder-console $ref
+          openbase-community/openbase-coder-react $ref
+          montaguegabe/multi-react main
+          montaguegabe/boilersync-react main
+          montaguegabe/super-agents $ref
+          openbase-community/openbase-coder-skills $ref
+          openbase-community/openbase-coder-workspace $ref
+          EOF
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "revs=$revs" >> "$GITHUB_OUTPUT"
 
   build:
     needs: preflight
@@ -72,13 +128,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: linux/amd64
-            slug: amd64
-            runner: ubuntu-latest
-          - platform: linux/arm64
-            slug: arm64
-            runner: ubuntu-24.04-arm
+        include: ${{ fromJSON(needs.preflight.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     steps:
@@ -95,6 +145,12 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             OPENBASE_CODER_VERSION=${{ needs.preflight.outputs.version }}
+            SIBLING_REVS=${{ needs.preflight.outputs.sibling_revs }}
+            CONSOLE_REF=${{ needs.preflight.outputs.sibling_ref }}
+            CODER_REACT_REF=${{ needs.preflight.outputs.sibling_ref }}
+            SUPER_AGENTS_REF=${{ needs.preflight.outputs.sibling_ref }}
+            SKILLS_REF=${{ needs.preflight.outputs.sibling_ref }}
+            WORKSPACE_REF=${{ needs.preflight.outputs.sibling_ref }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=docker-image-${{ matrix.slug }}
           cache-to: type=gha,mode=max,scope=docker-image-${{ matrix.slug }}
