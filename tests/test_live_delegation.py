@@ -101,6 +101,8 @@ class FakeVoiceClient:
     def __init__(self, *, thread_id="thread-1") -> None:
         self._thread_id = thread_id
         self.prompts: list[tuple[str, str | None]] = []
+        # Parallel to ``prompts``: whether each run replaced the running turn.
+        self.replaces: list[bool] = []
         self.listeners: list = []
         self.claimed: list[str] = []
         self.result_gate = asyncio.Event()
@@ -112,8 +114,11 @@ class FakeVoiceClient:
         }
         self.busy = False
 
-    async def run_turn(self, prompt, *, developer_instructions=None):
+    async def run_turn(
+        self, prompt, *, developer_instructions=None, replaces_active_turn=False
+    ):
         self.prompts.append((prompt, developer_instructions))
+        self.replaces.append(replaces_active_turn)
         await self.result_gate.wait()
         if isinstance(self.result, Exception):
             raise self.result
@@ -855,12 +860,14 @@ async def test_two_utterances_in_a_row_steer_and_only_the_newest_speaks():
     await _settle()
     live.final("And also run the linter")
     await _settle()
-    # Both reach the thread; run_turn steers the running turn with the second.
+    # Both reach the thread; the conjunction-led second carries the whole
+    # request and replaces the running turn (run_turn steers or interrupts).
     assert len(dispatcher.prompts) == 2
     assert dispatcher.prompts[0][0].endswith(wrap_voice_prompt("Check the build"))
     assert dispatcher.prompts[1][0].endswith(
-        wrap_voice_prompt("And also run the linter")
+        wrap_voice_prompt("Check the build And also run the linter")
     )
+    assert dispatcher.replaces == [False, True]
     # A late delegation binds to the newest utterance.
     live.delegate("d1", "")
     await _settle()
@@ -1396,6 +1403,103 @@ async def test_a_separate_quick_utterance_does_not_repeat_the_previous_command(
     else:
         assert len(dispatcher.prompts) == 2
         assert dispatcher.prompts[1][0].endswith(_voice(followup))
+        # A separate request never replaces the running turn: on a backend
+        # that cannot steer, replacing would interrupt the counter increment.
+        assert dispatcher.replaces == [False, False]
+    await bridge.aclose()
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (". Answer just the number", True),
+        (", the one from yesterday", True),
+        ("and answer just the number", True),
+        ("And answer just the number", True),
+        ("but only the first ten lines", True),
+        ("or the staging one", True),
+        ("answer just the number", True),
+        ("Run the linter", False),
+        ("Then run the tests", False),
+        ("Also run the linter", False),
+        ("What time is it", False),
+        ("", False),
+    ],
+)
+def test_looks_like_continuation(text, expected):
+    from openbase_coder_cli.livekit_agent.live_delegation import looks_like_continuation
+
+    assert looks_like_continuation(text) is expected
+
+
+async def test_split_request_after_a_silent_delegation_replaces_the_fragment_turn():
+    """The caller pauses mid-request while silent, the model delegates on the
+    first half (which starts a turn at once), and the rest arrives a moment
+    later: the merged request replaces that turn, inherits its delegation and
+    speaks once. Without the replace flag a backend that cannot steer queued
+    the whole request as a second turn (duplicate work, duplicate answer)."""
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=0.05)
+    bridge.on_user_state_changed("listening", "speaking")
+    bridge.on_user_state_changed("speaking", "listening")
+    live.final("Subtract 38 from the result in this thread")
+    live.delegate("d1", "")
+    await _settle()
+    assert len(dispatcher.prompts) == 1
+    assert dispatcher.replaces == [False]
+    live.final("and answer just the number")
+    await _settle()
+    await asyncio.sleep(0.12)
+    assert len(dispatcher.prompts) == 2
+    assert dispatcher.prompts[1][0].endswith(
+        _voice("Subtract 38 from the result in this thread and answer just the number")
+    )
+    assert dispatcher.replaces == [False, True]
+    merged = bridge._newest_entry_for(dispatcher)
+    assert merged.replaces_turn and merged.delegation_id == "d1"
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.of("commentary") == ["All tests pass. The build is green."]
+    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    first = next(r for r in ledger._records.values() if r.message_id == "live-d1")
+    assert first.status == "cancelled"
+    await bridge.aclose()
+
+
+async def test_split_request_merged_by_the_hold_does_not_replace_anything():
+    """Fragments merged before any turn starts are one plain turn."""
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=0.08)
+    live.final("Subtract 38 from the result in this thread")
+    await asyncio.sleep(0.03)
+    live.final("and answer just the number")
+    await asyncio.sleep(0.15)
+    assert len(dispatcher.prompts) == 1
+    assert dispatcher.replaces == [False]
+    await bridge.aclose()
+
+
+async def test_the_rest_of_a_delegated_open_utterance_replaces_its_turn():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=0.05)
+    live.final("What's in the grocery list file on my", item_id="speech_1")
+    live.delegate("d1", "desktop")
+    await _settle()
+    await asyncio.sleep(0.12)
+    live.final("desktop, the one from yesterday", item_id="speech_2")
+    await _settle()
+    assert len(dispatcher.prompts) == 2
+    assert dispatcher.replaces == [False, True]
+    await bridge.aclose()
+
+
+async def test_a_continuation_after_the_turn_spoke_is_a_new_request():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.final("Subtract 38 from the result in this thread")
+    await _settle()
+    dispatcher.progress("turn-1", _running_snapshot(lastUsefulMessage="It is 4."))
+    live.final("and answer just the number")
+    await _settle()
+    assert len(dispatcher.prompts) == 2
+    assert dispatcher.prompts[1][0].endswith(_voice("and answer just the number"))
+    assert dispatcher.replaces == [False, False]
     await bridge.aclose()
 
 
