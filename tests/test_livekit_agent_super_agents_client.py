@@ -2610,3 +2610,14 @@ async def test_claude_dispatcher_resume_uses_configured_speaking_identity(
     assert "Retain the project context." in prompt
     assert backend._session_view(after, None)["agentName"] == "Jacqueline"
     await client.aclose()
+
+
+def test_reload_thread_on_next_use_forces_a_resume_before_the_next_turn():
+    from openbase_coder_cli.livekit_agent.super_agents_client import (
+        SuperAgentsLiveKitClient,
+    )
+
+    client = SuperAgentsLiveKitClient.__new__(SuperAgentsLiveKitClient)
+    client._thread_loaded = True
+    client.reload_thread_on_next_use()
+    assert client._thread_loaded is False

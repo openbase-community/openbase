@@ -40,6 +40,10 @@ class LiveKitVoiceRouter:
     ) -> None:
         self._dispatcher_client = dispatcher_client
         self._active_client = dispatcher_client
+        # A new call: re-assert the Dispatcher's instructions on its thread.
+        reload = getattr(dispatcher_client, "reload_thread_on_next_use", None)
+        if callable(reload):
+            reload()
         self._target_clients: dict[str, SuperAgentsLiveKitClient] = {}
         self._active_target_voice_id: str | None = None
         self._active_target_voice_name: str | None = None

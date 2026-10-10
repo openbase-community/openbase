@@ -75,6 +75,17 @@ class SuperAgentsClientThreadsMixin:
     async def prepare(self) -> str:
         return await self._ensure_thread()
 
+    def reload_thread_on_next_use(self) -> None:
+        """Resume the thread again before its next turn.
+
+        A shared, already-loaded client keeps whatever developer instructions
+        the backend session last got. Another writer can change them between
+        calls (a typed turn's generic resume did, Maritime 2026-10-10 22:16Z,
+        and the Dispatcher then refused to transfer); resuming once per call
+        re-asserts this client's own instructions.
+        """
+        self._thread_loaded = False
+
     async def warm(self) -> bool:
         """Get the thread's backend session ready for its first turn.
 
