@@ -65,9 +65,9 @@ def test_interactive_setup_summarizes_developer_agent_configuration(
     paragraph = next(
         line
         for line in result.output.splitlines()
-        if line.startswith("ℹ️ Your Codex and Claude Code setup")
+        if line.startswith("ℹ️  Your Codex and Claude Code setup")
     )
-    assert paragraph.startswith("ℹ️ Your Codex and Claude Code setup")
+    assert paragraph.startswith("ℹ️  Your Codex and Claude Code setup")
     assert "session profiles" in paragraph
     assert "bundled Openbase skills" in paragraph
     assert (
