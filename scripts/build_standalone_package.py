@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import platform
+import plistlib
 import shutil
 import stat
 import subprocess
@@ -22,6 +23,16 @@ SKILLS_ROOT = REPO_ROOT / "skills"
 SUPER_AGENTS_ROOT = REPO_ROOT / "super-agents"
 METADATA_FILENAME = "openbase-coder-package.json"
 SYNC_ENGINE_BINARIES = ("openbase-syncd", "openbase-sync", "edge")
+# The Openbase Services launcher app bundle (cli/macos/service-launcher):
+# the launchd job process for every service on macOS, whose signed bundle
+# identity is what TCC keys folder/network grants on. The package metadata
+# records its executable under ``serviceLauncher`` so the runtime never
+# hardcodes this layout (dev-docs/MACOS_SERVICE_IDENTITY.md).
+SERVICE_LAUNCHER_APP_NAME = "Openbase Services.app"
+SERVICE_LAUNCHER_EXECUTABLE = "openbase-services"
+SERVICE_LAUNCHER_RELATIVE_PATH = (
+    f"libexec/{SERVICE_LAUNCHER_APP_NAME}/Contents/MacOS/{SERVICE_LAUNCHER_EXECUTABLE}"
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,6 +61,14 @@ def parse_args() -> argparse.Namespace:
         "--sync-engine-dir",
         type=Path,
         help="Directory with the prebuilt sync engine binaries (openbase-syncd, openbase-sync, edge) to bundle.",
+    )
+    parser.add_argument(
+        "--service-launcher-app",
+        type=Path,
+        help=(
+            "Prebuilt 'Openbase Services.app' from build_service_launcher.py. "
+            "macOS targets build it in place with the system clang when omitted."
+        ),
     )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--skip-console-build", action="store_true")
@@ -80,12 +99,19 @@ def main() -> int:
     stage_console(package_dir, skip_build=args.skip_console_build)
     stage_optional_tree(INSTRUCTIONS_ROOT, package_dir / "instructions")
     stage_optional_tree(SKILLS_ROOT / "skills", package_dir / "skills")
+    service_launcher = stage_service_launcher(
+        package_dir,
+        args.service_launcher_app.resolve() if args.service_launcher_app else None,
+        version=args.version,
+        target=args.target,
+    )
     write_metadata(
         package_dir,
         version=args.version,
         target=args.target,
         channel=args.channel,
         repo_shas=parse_repo_shas(args.repo_shas),
+        service_launcher=service_launcher,
     )
     prune_rebuildable_bytecode(python_dir)
     ad_hoc_sign_macos_package(package_dir)
@@ -93,6 +119,7 @@ def main() -> int:
         package_dir,
         args.version,
         require_sync_engine=args.sync_engine_dir is not None,
+        require_service_launcher=service_launcher is not None,
     )
 
     if args.archive_output:
@@ -390,6 +417,69 @@ def stage_bin(
             (bin_dir / name).chmod(0o755)
 
 
+def is_macos_target(target: str) -> bool:
+    return target.endswith("-apple-darwin")
+
+
+def stage_service_launcher(
+    package_dir: Path,
+    launcher_app: Path | None,
+    *,
+    version: str,
+    target: str,
+) -> str | None:
+    """Stage the Openbase Services launcher bundle; return its metadata path.
+
+    macOS packages always carry the launcher: a prebuilt bundle is copied
+    verbatim, otherwise it is compiled here (``build_service_launcher.py``,
+    which needs the system clang). Non-macOS targets stage nothing.
+    """
+    if not is_macos_target(target):
+        if launcher_app is not None:
+            raise RuntimeError(
+                f"--service-launcher-app only applies to macOS targets, not {target}"
+            )
+        return None
+    destination = package_dir / "libexec" / SERVICE_LAUNCHER_APP_NAME
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if launcher_app is None:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from build_service_launcher import build_launcher_app
+
+        build_launcher_app(destination, version=version, target=target)
+    else:
+        if launcher_app.suffix != ".app" or not launcher_app.is_dir():
+            raise RuntimeError(f"Service launcher is not an app bundle: {launcher_app}")
+        shutil.copytree(launcher_app, destination, symlinks=True)
+    validate_service_launcher(package_dir)
+    return SERVICE_LAUNCHER_RELATIVE_PATH
+
+
+def validate_service_launcher(package_dir: Path) -> None:
+    executable = package_dir / SERVICE_LAUNCHER_RELATIVE_PATH
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+        raise RuntimeError(
+            f"Package validation failed; service launcher missing: {executable}"
+        )
+    info_path = executable.parents[1] / "Info.plist"
+    try:
+        info = plistlib.loads(info_path.read_bytes())
+    except (OSError, plistlib.InvalidFileException) as exc:
+        raise RuntimeError(
+            f"Package validation failed; unreadable launcher Info.plist: {info_path}"
+        ) from exc
+    if info.get("CFBundleExecutable") != SERVICE_LAUNCHER_EXECUTABLE:
+        raise RuntimeError(
+            "Package validation failed; launcher Info.plist does not name "
+            f"{SERVICE_LAUNCHER_EXECUTABLE}: {info_path}"
+        )
+    if not str(info.get("CFBundleIdentifier", "")).strip():
+        raise RuntimeError(
+            "Package validation failed; launcher Info.plist has no "
+            f"CFBundleIdentifier: {info_path}"
+        )
+
+
 def stage_console(package_dir: Path, *, skip_build: bool) -> None:
     if not skip_build:
         install_args = (
@@ -438,6 +528,7 @@ def write_metadata(
     target: str,
     channel: str,
     repo_shas: dict[str, str],
+    service_launcher: str | None = None,
 ) -> None:
     metadata = {
         "layoutVersion": 1,
@@ -452,15 +543,20 @@ def write_metadata(
         "tunneld": "bin/openbase-tunneld",
         "repo_shas": repo_shas,
     }
+    if service_launcher:
+        metadata["serviceLauncher"] = service_launcher
     (package_dir / METADATA_FILENAME).write_text(
         json.dumps(metadata, indent=2) + "\n",
         encoding="utf-8",
     )
 
 
-def validate_package(
-    package_dir: Path, version: str, *, require_sync_engine: bool = False
-) -> None:
+def required_package_files(
+    package_dir: Path,
+    *,
+    require_sync_engine: bool = False,
+    require_service_launcher: bool = False,
+) -> list[Path]:
     required = [
         package_dir / METADATA_FILENAME,
         package_dir / "bin" / "openbase-coder",
@@ -471,9 +567,27 @@ def validate_package(
     ]
     if require_sync_engine:
         required.extend(package_dir / "bin" / name for name in SYNC_ENGINE_BINARIES)
-    for path in required:
+    if require_service_launcher:
+        required.append(package_dir / SERVICE_LAUNCHER_RELATIVE_PATH)
+    return required
+
+
+def validate_package(
+    package_dir: Path,
+    version: str,
+    *,
+    require_sync_engine: bool = False,
+    require_service_launcher: bool = False,
+) -> None:
+    for path in required_package_files(
+        package_dir,
+        require_sync_engine=require_sync_engine,
+        require_service_launcher=require_service_launcher,
+    ):
         if not path.exists():
             raise RuntimeError(f"Package validation failed; missing {path}")
+    if require_service_launcher:
+        validate_service_launcher(package_dir)
     _validate_no_external_python_links(package_dir)
     _validate_no_host_macos_library_links(package_dir)
     _validate_relocatable_bin_shebangs(package_dir)
@@ -513,17 +627,39 @@ def write_archive(package_dir: Path, archive_path: Path, *, force: bool) -> None
 
 
 def ad_hoc_sign_macos_package(package_dir: Path) -> None:
+    """Ad-hoc sign every Mach-O file, then each app bundle as a unit.
+
+    This only makes the package runnable on Apple silicon; the release
+    workflow replaces these signatures with the Developer ID identity
+    (sign_standalone_package.py), which is what gives the service launcher
+    its stable TCC identity. Bundles are signed after their contents so the
+    bundle seal (Info.plist, main executable) is the final signature.
+    """
     if platform.system() != "Darwin" or not shutil.which("codesign"):
         return
     for path in sorted(
         _macho_files(package_dir), key=lambda item: len(item.parts), reverse=True
     ):
-        subprocess.run(
-            ["codesign", "--force", "--sign", "-", "--timestamp=none", str(path)],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        _ad_hoc_sign(path)
+    for bundle in _app_bundles(package_dir):
+        _ad_hoc_sign(bundle)
+
+
+def _ad_hoc_sign(path: Path) -> None:
+    subprocess.run(
+        ["codesign", "--force", "--sign", "-", "--timestamp=none", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _app_bundles(package_dir: Path) -> list[Path]:
+    return sorted(
+        path
+        for path in package_dir.rglob("*.app")
+        if path.is_dir() and (path / "Contents" / "Info.plist").is_file()
+    )
 
 
 def runtime_python(python_dir: Path) -> Path:
