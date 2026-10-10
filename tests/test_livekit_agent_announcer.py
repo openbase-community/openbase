@@ -1412,7 +1412,9 @@ def test_cloud_audio_handshake_error_is_clear_and_redacted():
 
     assert livekit._agent_error_code(exc) == "cloud_audio_auth_failed"
     detail = livekit._agent_error_detail(exc)
-    assert "Openbase Cloud audio authorization failed" in detail
+    assert "Openbase Cloud refused the audio connection" in detail
+    assert "monthly Openbase audio allowance is used up" in detail
+    assert "sign in to Openbase Cloud again" in detail
     assert "machine-secret" not in detail
     assert "access-secret" not in detail
     assert "secret-token" not in livekit.exception_chain_summary(exc)
@@ -1482,7 +1484,7 @@ def test_verify_cloud_audio_subscription_reports_lapsed_subscription(monkeypatch
     assert payload["type"] == "agent_error"
     assert payload["code"] == "subscription_required"
     assert payload["detail"] == "Subscribe in Openbase Cloud to use managed audio."
-    assert spoken and "Openbase Cloud audio is unavailable" in spoken[0]
+    assert spoken == [livekit.CLOUD_AUDIO_ALLOWANCE_SPOKEN]
 
 
 def test_verify_cloud_audio_subscription_skips_transient_errors(monkeypatch):

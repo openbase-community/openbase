@@ -230,13 +230,13 @@ def _safe_spoken_answer(
     # to authenticate. API Error: 403 {...spend limit...}") but has a distinct,
     # actionable remedy — surface it accurately rather than as a generic outage.
     from openbase_coder_cli.cloud_model_errors import (
-        model_allowance_exhausted_message,
+        model_allowance_exhausted_spoken_message,
         model_plan_denial_message,
     )
 
     if plan_denial := model_plan_denial_message(speech_text):
         return plan_denial
-    if allowance_denial := model_allowance_exhausted_message(speech_text):
+    if allowance_denial := model_allowance_exhausted_spoken_message(speech_text):
         logger.error(
             "%s stage=voice_turn_backend_spend_limit backend=%s turn_id=%s",
             DISPATCH_TIMING_LOG,

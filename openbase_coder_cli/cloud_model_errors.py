@@ -61,8 +61,29 @@ def model_allowance_exhausted_message(text: str | None) -> str | None:
     )
 
 
+# One short, complete sentence for voice: a live call's speech gate cuts the
+# rest of a reply as soon as the caller is heard, so the spoken form must not
+# depend on a second clause to make sense. The thread keeps the full text.
+MODEL_ALLOWANCE_EXHAUSTED_SPOKEN = (
+    "This account's monthly Openbase model allowance is used up."
+)
+
+
+def model_allowance_exhausted_spoken_message(text: str | None) -> str | None:
+    if model_allowance_exhausted_message(text) is None:
+        return None
+    return MODEL_ALLOWANCE_EXHAUSTED_SPOKEN
+
+
 def model_proxy_denial_message(text: str | None) -> str | None:
     return model_allowance_exhausted_message(text) or model_plan_denial_message(text)
+
+
+def model_proxy_denial_spoken_message(text: str | None) -> str | None:
+    """The denial as the voice agent should say it."""
+    return model_allowance_exhausted_spoken_message(text) or model_plan_denial_message(
+        text
+    )
 
 
 def normalize_model_proxy_error(text: str) -> str:

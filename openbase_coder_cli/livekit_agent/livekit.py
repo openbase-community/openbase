@@ -524,11 +524,17 @@ def _agent_error_detail(exc: Exception) -> str:
     ):
         return str(exc)
     if _is_openbase_cloud_audio_authorization_error(exc):
+        # The audio proxy refuses the websocket handshake with a bare 403 both
+        # when the account's allowance is used up and when the token is bad;
+        # ``_refine_cloud_audio_error`` asks Openbase Cloud which it was before
+        # this text is used, so this wording covers the remaining ambiguity.
         return (
-            "Openbase Cloud audio authorization failed while starting this call. "
-            "Sign in to Openbase Cloud again on your computer, then restart the "
-            "Openbase Coder services or switch voice settings to direct provider "
-            "keys or local audio."
+            "Openbase Cloud refused the audio connection for this call. This "
+            "usually means this account's monthly Openbase audio allowance is "
+            "used up; upgrade your plan at app.openbase.cloud or wait for it to "
+            "reset. If credit remains, sign in to Openbase Cloud again on your "
+            "computer and restart the Openbase Coder services, or switch voice "
+            "settings to direct provider keys or local audio."
         )
     if _is_openbase_cloud_audio_provider_error(exc):
         return (
@@ -545,8 +551,45 @@ def _agent_error_detail(exc: Exception) -> str:
     )
 
 
+async def _refine_cloud_audio_error(exc: Exception) -> Exception:
+    """Replace a bare Openbase Cloud audio refusal with the account's real reason.
+
+    The audio proxy closes a refused websocket before the handshake completes,
+    so an exhausted allowance and a rejected token both reach the agent as an
+    HTTP 403 with no body (an over-cap stream closed mid-call is just as
+    mute). Ask Openbase Cloud for the audio usage summary: when it reports the
+    credits used up (or a sign-in problem), return that exception so the
+    status packet carries the plain reason instead of "authorization failed".
+    Any other outcome keeps the original error.
+    """
+    if not _is_openbase_cloud_audio_provider_error(exc):
+        return exc
+    try:
+        await asyncio.to_thread(
+            ensure_openbase_cloud_audio_subscription,
+            tts_provider_id=selected_tts_provider_id(),
+            stt_provider_id=selected_stt_provider_id(),
+            web_backend_url=WEB_BACKEND_URL,
+        )
+    except (OpenbaseCloudAudioSubscriptionError, AuthLoginRequiredError) as reason:
+        logger.info(
+            "Openbase Cloud audio error refined to %s: %s",
+            type(reason).__name__,
+            reason,
+        )
+        reason.__cause__ = exc
+        return reason
+    except Exception:
+        logger.debug(
+            "Openbase Cloud audio usage check did not explain the audio error",
+            exc_info=True,
+        )
+    return exc
+
+
 async def _report_agent_error(room: rtc.Room, exc: Exception) -> None:
     """Best-effort: tell room participants why the agent cannot operate."""
+    exc = await _refine_cloud_audio_error(exc)
     try:
         await publish_agent_error_packet(
             room,
@@ -664,6 +707,13 @@ def _exception_mentions_openbase_cloud_audio(exc: BaseException) -> bool:
     )
 
 
+# Spoken when the Openbase Cloud audio allowance is used up: short enough to
+# finish before anything can interrupt it.
+CLOUD_AUDIO_ALLOWANCE_SPOKEN = (
+    "This account's monthly Openbase audio allowance is used up."
+)
+
+
 def _uses_openbase_cloud_audio() -> bool:
     return (
         selected_tts_provider_id() == OPENBASE_CLOUD_TTS_PROVIDER_ID
@@ -692,9 +742,14 @@ async def _verify_cloud_audio_subscription(room: rtc.Room, session) -> None:
         logger.error("Openbase Cloud audio is unusable for this voice session: %s", exc)
         await _report_agent_error(room, exc)
         try:
+            # One short, complete sentence: the live speech gate drops the rest
+            # of a reply as soon as the caller is heard, so a long explanation
+            # risks ending mid-word. The packet carries the full detail.
             session.say(
-                "Openbase Cloud audio is unavailable for this call. "
-                "Check your Openbase subscription or voice settings."
+                CLOUD_AUDIO_ALLOWANCE_SPOKEN
+                if isinstance(exc, OpenbaseCloudAudioSubscriptionError)
+                else "Openbase Cloud audio is unavailable for this call. "
+                "Check your Openbase sign-in or voice settings."
             )
         except Exception:
             logger.warning(
