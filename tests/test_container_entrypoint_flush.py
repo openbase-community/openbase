@@ -188,6 +188,7 @@ def test_shutdown_flushes_before_wait_and_after_final_write(
     script = (
         "set -euo pipefail\n"
         'sync() { if [ -f "$STOPPED" ]; then echo stopped >>"$MARKER"; else echo running >>"$MARKER"; fi; }\n'
+        + 'python() { "$TEST_PYTHON" "$@"; }\n'
         + _function("service_log_sink")
         + _function("start_supervised")
         + _function("shutdown")
@@ -204,6 +205,9 @@ def test_shutdown_flushes_before_wait_and_after_final_write(
         env={
             **os.environ,
             "RUN_DIR": str(tmp_path),
+            "LOG_DIR": str(tmp_path / "logs"),
+            "TEST_PYTHON": sys.executable,
+            "PYTHONPATH": str(ENTRYPOINT.parents[1]),
             "READY": str(ready),
             "STOPPED": str(stopped),
             "MARKER": str(marker),
@@ -229,6 +233,11 @@ def test_shutdown_flushes_before_wait_and_after_final_write(
             assert proc.returncode == 0, stderr
             assert marker.read_text().splitlines() == ["running", "stopped"]
             assert "service shutdown complete" in stdout
+            if supervised:
+                assert (
+                    "service shutdown complete"
+                    in (tmp_path / "logs" / "delayed.log").read_text()
+                )
     finally:
         try:
             os.killpg(proc.pid, signal.SIGKILL)

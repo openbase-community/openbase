@@ -109,3 +109,23 @@ def test_main_parses_the_path_and_cap(tmp_path, monkeypatch):
     assert path.read_bytes() == b"hello\n"
     stdout.flush()
     assert stdout.buffer.getvalue() == b"hello\n"
+
+
+def test_write_failure_disables_the_file_and_keeps_passing_output(
+    tmp_path, monkeypatch
+):
+    sink, out, err = _sink(tmp_path / "svc.log", max_bytes=1)
+
+    def fail_trim(*args, **kwargs):
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(
+        "openbase_coder_cli.services.container_log_sink.trim_to_tail", fail_trim
+    )
+    sink.write(b"first\n")
+    sink.write(b"second\n")
+    sink.close()
+
+    assert out.getvalue() == b"first\nsecond\n"
+    assert err.getvalue().count(b"[log-sink]") == 1
+    assert b"cannot write" in err.getvalue()

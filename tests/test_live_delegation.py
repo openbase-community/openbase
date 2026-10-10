@@ -1535,6 +1535,7 @@ async def test_closing_the_bridge_logs_one_call_summary(caplog):
     await _settle()
     now[0] = 142.25
     await bridge.aclose()
+    await bridge.aclose()
 
     summary = _lines(caplog, "live_call_summary")
     assert len(summary) == 1, summary
@@ -1548,3 +1549,32 @@ async def test_closing_the_bridge_logs_one_call_summary(caplog):
     assert "append_thinking=" in line
     assert "superseded=0" in line
     assert line.endswith(" call=room-1")
+
+
+async def test_call_summary_keeps_totals_after_entries_are_pruned(caplog, monkeypatch):
+    caplog.set_level(logging.INFO, logger=BRIDGE_LOGGER)
+    monkeypatch.setattr(live_delegation, "MAX_TRACKED_ENTRIES", 1)
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    dispatcher.result_gate.set()
+
+    for index in range(3):
+        live.final(f"Run the tests for package {index}")
+        await _settle()
+    await bridge.aclose()
+
+    assert len(bridge._entries) == 1
+    summary = _lines(caplog, "live_call_summary")[0]
+    assert "utterances=3" in summary
+    assert "superseded=2" in summary
+
+
+@pytest.mark.parametrize("args", [(), ("value",)])
+def test_call_tag_preserves_percent_with_and_without_format_args(caplog, args):
+    caplog.set_level(logging.DEBUG, logger=BRIDGE_LOGGER)
+    adapter = live_delegation._CallLogAdapter(
+        logging.getLogger(BRIDGE_LOGGER), "room-abc%1"
+    )
+
+    adapter.debug("diagnostic %s" if args else "diagnostic", *args)
+
+    assert caplog.records[-1].getMessage().endswith(" call=room-abc%1")

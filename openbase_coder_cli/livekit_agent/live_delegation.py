@@ -467,10 +467,14 @@ class _CallLogAdapter(logging.LoggerAdapter):
 
     def __init__(self, base: logging.Logger, call_id: str) -> None:
         super().__init__(base, {"call": call_id})
-        self._suffix = f" call={call_id.replace('%', '%%')}" if call_id else ""
+        self._suffix = f" call={call_id}" if call_id else ""
 
-    def process(self, msg, kwargs):
-        return f"{msg}{self._suffix}", kwargs
+    def log(self, level, msg, *args, **kwargs):
+        if self.isEnabledFor(level):
+            msg, kwargs = self.process(msg, kwargs)
+            suffix = self._suffix.replace("%", "%%") if args else self._suffix
+            kwargs["stacklevel"] = kwargs.get("stacklevel", 1) + 1
+            self.logger.log(level, f"{msg}{suffix}", *args, **kwargs)
 
 
 class LiveDelegationBridge:
@@ -495,7 +499,7 @@ class LiveDelegationBridge:
         self._voice_router = voice_router
         self._call_id = call_id
         self._log = _CallLogAdapter(logger, call_id)
-        self._stats: Counter[str] = Counter()
+        self._stats: Counter[str] = Counter(superseded=0)
         self._attached_at: float | None = None
         self._ledger = delivery_ledger
         self._developer_instructions = developer_instructions
@@ -551,6 +555,8 @@ class LiveDelegationBridge:
         self._live_session = None
 
     async def aclose(self) -> None:
+        if self._closed:
+            return
         self._closed = True
         self._log_call_summary()
         self.detach()
@@ -1024,6 +1030,7 @@ class LiveDelegationBridge:
             if other.client is not client or other.superseded:
                 continue
             other.superseded = True
+            self._stats["superseded"] += 1
             # run_turn steers the running turn, so its merged answer also
             # answers the delegation the superseded utterance was bound to.
             if (
@@ -1385,11 +1392,10 @@ class LiveDelegationBridge:
         duration = (
             self._clock() - self._attached_at if self._attached_at is not None else 0.0
         )
-        self._stats["utterances"] = len(self._entries)
-        self._stats["superseded"] = sum(
-            1 for e in self._entries.values() if e.superseded
+        self._stats["utterances"] = self._stats["decision_started"]
+        counts = " ".join(
+            f"{name}={count}" for name, count in sorted(self._stats.items())
         )
-        counts = " ".join(f"{k}={v}" for k, v in sorted(self._stats.items()))
         self._log.info(
             "%s stage=live_call_summary duration_s=%.1f %s",
             DISPATCH_TIMING_LOG,
@@ -1404,6 +1410,7 @@ class LiveDelegationBridge:
         for entry in self._entries.values():
             if not entry.superseded:
                 entry.superseded = True
+                self._stats["superseded"] += 1
         self._active_agent_label = DISPATCHER_AGENT_LABEL
         self._reset_utterance_state()
         if changed or delegation_id is not None:
