@@ -252,7 +252,7 @@ def live_voice_identity_note(agent_label: str) -> str:
         "to invent answers or claim unverified work. Earlier assistant messages "
         "may belong to a different agent; they do not change your current name. "
         "Do not prefix ordinary replies with your name or reintroduce yourself. "
-        "Say your name only in supplied greeting/announcement commentary or "
+        "Say your name only in a supplied greeting, announcement, or "
         "the supplied answer to a caller's name question."
     )
 
