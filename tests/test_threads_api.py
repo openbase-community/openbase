@@ -3,6 +3,7 @@ from __future__ import annotations
 # ruff: noqa: E402, I001
 
 import os
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -256,6 +257,52 @@ def test_thread_dispatcher_returns_cached_dispatcher_thread(monkeypatch) -> None
     assert first_response.data["thread_id"] == dispatcher_thread.session_id
     assert manager.page_calls == []
     assert manager.thread_state_calls == [dispatcher_thread.session_id]
+
+
+def test_dispatcher_api_and_catalog_keep_canonical_identity_after_transfer(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    canonical, distinct, active = [_thread(index) for index in (1, 2, 3)]
+    canonical.name = "Dispatcher"
+    distinct.name = "dispatcher"
+    active.name = "Agent"
+    (tmp_path / "livekit-voice-route.json").write_text(
+        json.dumps(
+            {
+                "dispatcher_thread_id": canonical.session_id,
+                "active_target_thread_id": active.session_id,
+            }
+        )
+    )
+    thread_cache.clear_thread_cache()
+    manager = FakeThreadManager([canonical, distinct, active])
+    monkeypatch.setattr(thread_views, "get_session_manager", lambda: manager)
+    monkeypatch.setattr(thread_views, "_refresh_projects_from_threads", lambda _: None)
+    factory = APIRequestFactory()
+
+    def get(view, path):
+        request = factory.get(path)
+        force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+        response = view(request)
+        assert response.status_code == 200
+        return response.data
+
+    catalog = get(thread_views.thread_list, "/api/threads/")
+    by_id = {thread["thread_id"]: thread for thread in catalog["threads"]}
+    pinned = get(thread_views.thread_dispatcher, "/api/threads/dispatcher/")
+    call = get(thread_views.thread_active_voice, "/api/threads/active-voice/")
+
+    assert set(by_id) == {canonical.session_id, distinct.session_id, active.session_id}
+    assert pinned["thread_id"] == canonical.session_id
+    assert pinned["conversation_role"] == "dispatcher"
+    assert by_id[canonical.session_id]["conversation_role"] == "dispatcher"
+    assert pinned["voice_route"]["active"] is False
+    assert by_id[distinct.session_id]["conversation_role"] == "agent"
+    assert by_id[distinct.session_id]["display_name"] == "dispatcher"
+    assert call["thread_id"] == active.session_id
+    assert call["conversation_role"] == "agent"
+    assert call["voice_route"] == {"role": "active_target", "active": True}
 
 
 def test_thread_dispatcher_warms_missing_dispatcher(monkeypatch) -> None:
