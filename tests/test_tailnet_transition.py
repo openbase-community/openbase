@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from threading import Event
+
 import pytest
 
 from openbase_coder_cli.services import runners, tailnet_transition
@@ -31,6 +36,7 @@ def vpn(monkeypatch, tmp_path):
     monkeypatch.setattr(
         tailnet_transition, "AWAITING_TAILNET_MARKER", tmp_path / "awaiting"
     )
+    monkeypatch.setattr(tailnet_transition, "LEASE_PATH", tmp_path / "lease")
     monkeypatch.setattr(tailnet_transition, "_last_restart_monotonic", None)
     monkeypatch.setattr(
         runners.InstallationConfig, "exists", staticmethod(lambda: False)
@@ -115,8 +121,8 @@ def test_tick_ignores_marker_when_livekit_server_is_not_running(vpn, monkeypatch
 def test_tick_retries_no_sooner_than_retry_window(vpn, monkeypatch):
     runners.run("livekit-server")
     vpn.ipv4 = "100.64.1.2"
-    clock = iter([1000.0, 1000.0 + 60, 1000.0 + tailnet_transition.RETRY_SECONDS])
-    monkeypatch.setattr(tailnet_transition.time, "monotonic", lambda: next(clock))
+    clock = [1000.0]
+    monkeypatch.setattr(tailnet_transition.time, "monotonic", lambda: clock[0])
 
     def restart_without_address():
         vpn.restarts.append(tailnet_transition.TRANSPORT_SERVICES)
@@ -129,7 +135,9 @@ def test_tick_retries_no_sooner_than_retry_window(vpn, monkeypatch):
     )
     # The marker survives (the restart raced the address away again).
     assert tailnet_transition.run_tick() is True
+    clock[0] += 60
     assert tailnet_transition.run_tick() is False
+    clock[0] = 1000.0 + tailnet_transition.RETRY_SECONDS
     assert tailnet_transition.run_tick() is True
     assert len(vpn.restarts) == 2
 
@@ -137,8 +145,8 @@ def test_tick_retries_no_sooner_than_retry_window(vpn, monkeypatch):
 def test_partial_transition_retries_after_server_has_recovered(vpn, monkeypatch):
     runners.run("livekit-server")
     vpn.ipv4 = "100.64.1.2"
-    clock = iter([1000.0, 1000.0 + tailnet_transition.RETRY_SECONDS])
-    monkeypatch.setattr(tailnet_transition.time, "monotonic", lambda: next(clock))
+    clock = [1000.0]
+    monkeypatch.setattr(tailnet_transition.time, "monotonic", lambda: clock[0])
 
     def restart_with_consumer_failure():
         runners.run("livekit-server")
@@ -153,6 +161,7 @@ def test_partial_transition_retries_after_server_has_recovered(vpn, monkeypatch)
     assert tailnet_transition.AWAITING_TAILNET_MARKER.exists()
 
     monkeypatch.setattr(tailnet_transition, "_restart_transport_services", lambda: None)
+    clock[0] += tailnet_transition.RETRY_SECONDS
     assert tailnet_transition.run_tick() is True
     assert not tailnet_transition.AWAITING_TAILNET_MARKER.exists()
 
@@ -287,8 +296,135 @@ def test_stale_lease_from_a_dead_login_expires(vpn, monkeypatch, tmp_path):
     monkeypatch.setattr(
         tailnet_transition.time,
         "time",
-        lambda: tailnet_transition.LEASE_PATH.stat().st_mtime
-        + tailnet_transition.LEASE_SECONDS,
+        lambda: (
+            tailnet_transition.LEASE_PATH.stat().st_mtime
+            + tailnet_transition.LEASE_SECONDS
+        ),
     )
     assert tailnet_transition.run_tick() is True
     assert vpn.restarts == [tailnet_transition.TRANSPORT_SERVICES]
+
+
+def test_job_rechecks_lease_after_network_probe(vpn, monkeypatch, tmp_path):
+    monkeypatch.setattr(tailnet_transition, "LEASE_PATH", tmp_path / "lease")
+    runners.run("livekit-server")
+
+    def login_connects_during_probe():
+        tailnet_transition.LEASE_PATH.touch()
+        vpn.ipv4 = "100.64.1.2"
+        return True
+
+    monkeypatch.setattr(
+        tailnet_transition, "_tailnet_ready", login_connects_during_probe
+    )
+    assert tailnet_transition.run_tick() is False
+    assert vpn.restarts == []
+
+
+def test_job_rechecks_pending_transition_after_network_probe(
+    vpn, login_kickstart, monkeypatch
+):
+    runners.run("livekit-server")
+
+    def login_finishes_during_probe():
+        vpn.ipv4 = "100.64.1.2"
+        assert tailnet_transition.kickstart_transport_services() is True
+        return True
+
+    monkeypatch.setattr(
+        tailnet_transition, "_tailnet_ready", login_finishes_during_probe
+    )
+    assert tailnet_transition.run_tick() is False
+    assert vpn.restarts == []
+
+
+def test_loopback_start_during_marker_removal_is_not_lost(vpn, monkeypatch):
+    runners.run("livekit-server")
+    generation = tailnet_transition.pending_generation()
+    removal_started = Event()
+    recorded = Event()
+    original_unlink = Path.unlink
+
+    def record_during_removal():
+        assert removal_started.wait(timeout=2)
+        tailnet_transition.record_livekit_start(awaiting_tailnet=True)
+        recorded.set()
+
+    def unlink(path, *args, **kwargs):
+        if path == tailnet_transition.AWAITING_TAILNET_MARKER:
+            removal_started.set()
+            recorded.wait(timeout=0.1)
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        writer = executor.submit(record_during_removal)
+        tailnet_transition.finish_transition(generation)
+        writer.result(timeout=2)
+
+    assert tailnet_transition.AWAITING_TAILNET_MARKER.exists()
+
+
+def test_async_loopback_start_after_login_kicks_restores_pending_transition(
+    vpn, monkeypatch
+):
+    from openbase_coder_cli.services import launchd
+
+    runners.run("livekit-server")
+    monkeypatch.setattr(launchd, "launchctl_kickstart", lambda service: True)
+
+    assert tailnet_transition.kickstart_transport_services() is True
+    assert not tailnet_transition.AWAITING_TAILNET_MARKER.exists()
+
+    runners.run("livekit-server")
+    assert tailnet_transition.AWAITING_TAILNET_MARKER.exists()
+    vpn.ipv4 = "100.64.1.2"
+    assert tailnet_transition.run_tick() is True
+
+
+def test_job_defers_when_another_service_mutation_is_running(vpn):
+    runners.run("livekit-server")
+    vpn.ipv4 = "100.64.1.2"
+
+    with tailnet_transition.service_mutation():
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            assert (
+                executor.submit(tailnet_transition.run_tick).result(timeout=2) is False
+            )
+
+    assert vpn.restarts == []
+    assert tailnet_transition.run_tick() is True
+
+
+def test_restart_batch_serializes_lease_creation(vpn, monkeypatch):
+    runners.run("livekit-server")
+    vpn.ipv4 = "100.64.1.2"
+    attempted = Event()
+    entered = Event()
+
+    def login():
+        attempted.set()
+        with tailnet_transition.transport_lease():
+            entered.set()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        logins = []
+
+        def restart():
+            logins.append(executor.submit(login))
+            assert attempted.wait(timeout=2)
+            assert not entered.wait(timeout=0.1)
+
+        monkeypatch.setattr(tailnet_transition, "_restart_transport_services", restart)
+        assert tailnet_transition.run_tick() is True
+        logins[0].result(timeout=2)
+
+    assert entered.is_set()
+
+
+def test_lease_cleanup_preserves_a_newer_owner(vpn):
+    with tailnet_transition.transport_lease():
+        timestamp = tailnet_transition.LEASE_PATH.stat().st_mtime_ns + 1_000_000
+        os.utime(tailnet_transition.LEASE_PATH, ns=(timestamp, timestamp))
+
+    assert tailnet_transition.LEASE_PATH.exists()
