@@ -4,13 +4,14 @@ Standalone packages bundle the pinned engine by construction; dev installs
 historically ran whatever Homebrew had. This downloads the exact pin from
 ``livekit_version.py`` into ``~/.openbase/bin`` so both pathways run the same
 engine: Linux from the official LiveKit release binaries, macOS by extracting
-the bundled binary from the latest Openbase Coder standalone package
+the checksum-pinned binary from a declared Openbase Coder standalone package
 (upstream publishes no darwin builds). Homebrew/PATH remains a last-resort
 fallback and still trips the version-skew health warning when it diverges.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import platform
 import re
@@ -21,14 +22,14 @@ import tempfile
 import urllib.error
 import urllib.request
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import click
 
+from openbase_coder_cli.livekit_artifacts import DARWIN_LIVEKIT_ARTIFACTS
 from openbase_coder_cli.livekit_version import LIVEKIT_SERVER_PINNED_VERSION
 from openbase_coder_cli.paths import OPENBASE_BIN_DIR
 from openbase_coder_cli.platforms import is_windows
-from openbase_coder_cli.self_update import RELEASE_REPO
 
 LIVEKIT_RELEASE_URL_TEMPLATE = (
     "https://github.com/livekit/livekit/releases/download/"
@@ -37,10 +38,6 @@ LIVEKIT_RELEASE_URL_TEMPLATE = (
 LIVEKIT_WINDOWS_RELEASE_URL_TEMPLATE = (
     "https://github.com/livekit/livekit/releases/download/"
     "v{version}/livekit_{version}_windows_{arch}.zip"
-)
-PACKAGE_ASSET_URL_TEMPLATE = (
-    f"https://github.com/{RELEASE_REPO}/releases/latest/download/"
-    "openbase-coder-package-{target}.tar.gz"
 )
 
 
@@ -201,35 +198,65 @@ def _download_from_openbase_package(pin: str) -> Path:
     arch = {"arm64": "aarch64", "aarch64": "aarch64", "x86_64": "x86_64"}.get(machine)
     if arch is None:
         raise RuntimeError(f"unsupported architecture {platform.machine()}")
-    url = PACKAGE_ASSET_URL_TEMPLATE.format(target=f"{arch}-apple-darwin")
-    return _extract_livekit_server(url)
+    artifact = DARWIN_LIVEKIT_ARTIFACTS.get((pin, arch))
+    if artifact is None:
+        raise RuntimeError(
+            f"no verified Darwin {arch} artifact is declared for livekit-server "
+            f"{pin}; add its release URL and checksums to livekit_artifacts.py"
+        )
+    return _extract_livekit_server(
+        artifact.url,
+        archive_sha256=artifact.archive_sha256,
+        binary_sha256=artifact.binary_sha256,
+        member_name=artifact.member,
+    )
 
 
-def _extract_livekit_server(url: str) -> Path:
+def _extract_livekit_server(
+    url: str,
+    *,
+    archive_sha256: str | None = None,
+    binary_sha256: str | None = None,
+    member_name: str | None = None,
+) -> Path:
     staging = Path(tempfile.mkdtemp(prefix="openbase-livekit-"))
     archive_path = staging / "archive.tar.gz"
     urllib.request.urlretrieve(url, archive_path)  # noqa: S310 — pinned https URL
+    if archive_sha256 is not None:
+        _verify_sha256(archive_path, archive_sha256)
     with tarfile.open(archive_path, "r:gz") as archive:
-        member = next(
-            (
-                item
-                for item in archive
-                if item.isfile()
-                and (
-                    item.name == "livekit-server"
-                    or item.name.endswith("/livekit-server")
-                    or item.name.endswith("bin/livekit-server")
-                )
-            ),
-            None,
-        )
-        if member is None:
-            raise RuntimeError(f"no livekit-server binary inside {url}")
-        member.name = "livekit-server"
-        archive.extract(member, staging, filter="data")
+        members = [
+            item
+            for item in archive
+            if item.isfile()
+            and (
+                PurePosixPath(item.name).as_posix() == member_name
+                if member_name is not None
+                else PurePosixPath(item.name).name == "livekit-server"
+            )
+        ]
+        if len(members) != 1:
+            raise RuntimeError(f"expected one livekit-server binary inside {url}")
+        # Copy only regular-file bytes to a fixed destination; archive paths,
+        # links, ownership and modes must not control extraction on the host.
+        source = archive.extractfile(members[0])
+        assert source is not None  # regular file selected above
+        with source, (staging / "livekit-server").open("wb") as target:
+            shutil.copyfileobj(source, target)
     staged = staging / "livekit-server"
+    if binary_sha256 is not None:
+        _verify_sha256(staged, binary_sha256)
     staged.chmod(0o755)
     return staged
+
+
+def _verify_sha256(path: Path, expected: str) -> None:
+    with path.open("rb") as source:
+        actual = hashlib.file_digest(source, "sha256").hexdigest()
+    if actual != expected:
+        raise RuntimeError(
+            f"SHA-256 mismatch for {path.name}: {actual}, expected {expected}"
+        )
 
 
 def _binary_version(binary: Path) -> str | None:
@@ -243,5 +270,10 @@ def _binary_version(binary: Path) -> str | None:
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
-    match = re.search(r"(\d+\.\d+\.\d+)", result.stdout + result.stderr)
+    if result.returncode != 0:
+        return None
+    match = re.search(
+        r"\blivekit-server version (\d+\.\d+\.\d+)(?![\w.+-])",
+        result.stdout + result.stderr,
+    )
     return match.group(1) if match else None
