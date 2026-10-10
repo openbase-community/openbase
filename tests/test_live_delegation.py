@@ -860,14 +860,12 @@ async def test_two_utterances_in_a_row_steer_and_only_the_newest_speaks():
     await _settle()
     live.final("And also run the linter")
     await _settle()
-    # Both reach the thread; the conjunction-led second carries the whole
-    # request and replaces the running turn (run_turn steers or interrupts).
     assert len(dispatcher.prompts) == 2
     assert dispatcher.prompts[0][0].endswith(wrap_voice_prompt("Check the build"))
     assert dispatcher.prompts[1][0].endswith(
-        wrap_voice_prompt("Check the build And also run the linter")
+        wrap_voice_prompt("And also run the linter")
     )
-    assert dispatcher.replaces == [False, True]
+    assert dispatcher.replaces == [False, False]
     # A late delegation binds to the newest utterance.
     live.delegate("d1", "")
     await _settle()
@@ -1389,7 +1387,17 @@ async def test_reconnect_unbinds_a_delegation_while_its_utterance_is_held():
     await bridge.aclose()
 
 
-@pytest.mark.parametrize("followup", ["Run the linter", "Thanks"])
+@pytest.mark.parametrize(
+    "followup",
+    [
+        "Run the linter",
+        "run the linter",
+        "what time is it",
+        "and also run the linter",
+        "And then run the tests",
+        "Thanks",
+    ],
+)
 async def test_a_separate_quick_utterance_does_not_repeat_the_previous_command(
     followup,
 ):
@@ -1416,9 +1424,13 @@ async def test_a_separate_quick_utterance_does_not_repeat_the_previous_command(
         (", the one from yesterday", True),
         ("and answer just the number", True),
         ("And answer just the number", True),
+        ("And also run the linter", False),
+        ("and then run the tests", False),
         ("but only the first ten lines", True),
         ("or the staging one", True),
-        ("answer just the number", True),
+        ("answer just the number", False),
+        ("run the linter", False),
+        ("what time is it", False),
         ("Run the linter", False),
         ("Then run the tests", False),
         ("Also run the linter", False),
@@ -1487,6 +1499,27 @@ async def test_the_rest_of_a_delegated_open_utterance_replaces_its_turn():
     await _settle()
     assert len(dispatcher.prompts) == 2
     assert dispatcher.replaces == [False, True]
+    await bridge.aclose()
+
+
+async def test_repeated_open_delegations_preserve_the_held_request():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=0.05)
+    live.final("What's in the grocery list file on my", item_id="speech_1")
+    live.delegate("d1", "desktop")
+    await _settle()
+    live.delegate("d2", "desktop, the one from yesterday")
+    await _settle()
+    live.final("desktop, the one from yesterday, read it aloud", item_id="speech_2")
+    await _settle()
+    assert dispatcher.replaces == [False, True, True]
+    assert dispatcher.prompts[1][0].endswith(
+        _voice("What's in the grocery list file on my desktop, the one from yesterday")
+    )
+    assert dispatcher.prompts[2][0].endswith(
+        _voice(
+            "What's in the grocery list file on my desktop, the one from yesterday, read it aloud"
+        )
+    )
     await bridge.aclose()
 
 

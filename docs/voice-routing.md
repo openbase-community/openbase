@@ -13,6 +13,8 @@ On the phone, the call button at the bottom of a thread starts a call in that th
 
 The dispatcher, agents receiving a direct voice transfer, and the voice model receive context about the computer hosting the call. On a Cloud workspace, local file checks describe that workspace, not your personal computer's desktop or screen. The agent can use available [laptop tools](laptop-tools.md) to reach your other computer; if that access is unavailable, it explains the limitation and offers workspace files or suggests connecting to Openbase on your personal computer. The voice model still waits for the agent's answer.
 
+If a pause splits a GPT-Live request, a brief continuation can update the request already being handled. Codex accepts it during the running turn; Claude Code interrupts the partial request and receives the complete request. An interruption does not undo actions already performed before the continuation arrived.
+
 ## Check The Current Route
 
 ```bash

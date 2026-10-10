@@ -358,7 +358,8 @@ class SuperAgentsLiveKitClient(
         the request into the running turn as usual. Claude Code cannot: its
         steer becomes a queued follow-up that re-runs the whole request after
         the fragment turn finishes, so there the fragment turn is interrupted
-        and the merged request runs in its place, exactly once.
+        and the merged request runs in its place. Interruption does not undo
+        actions the fragment turn already performed.
         """
         dispatch_id = f"voice-{uuid.uuid4().hex[:12]}"
         dispatch_started = time.monotonic()
@@ -439,7 +440,7 @@ class SuperAgentsLiveKitClient(
                 elif replaces_active_turn and not self._backend_is_codex():
                     # The fragment turn must not finish its half of the
                     # request: interrupt it and send the whole request (no
-                    # remainder trimming; the interrupted work is discarded).
+                    # remainder trimming; completed actions are not rolled back).
                     logger.info(
                         "%s stage=voice_request_replaced_active_turn dispatch_id=%s "
                         "thread_id=%s turn_id=%s prompt_hash=%s",
