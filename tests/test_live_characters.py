@@ -10,6 +10,7 @@ from livekit.plugins.openai.realtime import GPTLiveModel
 from test_live_voice import FakeGPTLiveServer, _close_caller_utterance
 
 from openbase_coder_cli.livekit_agent.config import live_voice_startup_instructions
+from openbase_coder_cli.livekit_agent.live_announcement import announcement_commands
 from openbase_coder_cli.livekit_agent.live_characters import (
     CharacterAssistant,
     LiveCharacterController,
@@ -43,7 +44,9 @@ def test_bounded_history_keeps_recent_text_and_excludes_old_personas():
 
 
 def test_completion_announcement_preserves_script_and_names_agent_once():
-    instructions = announcement_instructions("Gemma", "Done creating voice acceptance file.")
+    instructions = announcement_instructions(
+        "Gemma", "Done creating voice acceptance file."
+    )
     assert 'Script: "Gemma: Done creating voice acceptance file."' in instructions
     introduction = announcement_instructions("Gemma", "Hi, I'm Gemma.")
     assert introduction.endswith('Script: "Hi, I\'m Gemma."')
@@ -171,6 +174,9 @@ async def test_announcement_restores_route_and_holds_backend_speech(monkeypatch)
     assert not controller.announcing
     live.append_commentary.assert_not_called()
     live.append_instructions.assert_called_once()
+    assert (
+        'Text to read: "Hi, I\'m Oliver."' in live.append_instructions.call_args.args[0]
+    )
 
 
 async def test_queue_deduplicates_and_shutdown_cancels_owned_worker():
@@ -336,7 +342,10 @@ async def test_real_announcement_talkover_preserves_final_once_and_rejects_old_r
                 )
             )
             await server.wait_for_append("instructions")
-            assert 'Script: "Oliver: The work is ready."' in server.session_start["session"]["instructions"]
+            assert (
+                'Script: "Oliver: The work is ready."'
+                in server.session_start["session"]["instructions"]
+            )
             announcement = session.current_agent.duplex_session
             await server.send(
                 {
@@ -468,7 +477,7 @@ async def test_transfer_during_announcement_start_never_injects_old_commentary(
     )
     live.append_commentary.assert_not_called()
     live.append_instructions.assert_not_called()
-    live.off.assert_called_once()
+    assert live.off.call_count == 3
     controller._conversation.assert_awaited_once()
 
 
@@ -482,3 +491,140 @@ def test_bounded_history_drops_nontext_payloads():
         ],
     )
     assert bounded_history(history).items[0].content == ["Look at this"]
+
+
+def test_announcement_commands_are_self_contained_and_bounded():
+    import json
+
+    from openbase_coder_cli.livekit_agent.live_delegation import estimate_tokens
+
+    text = "The file is complete. " * 180
+    commands = list(announcement_commands("Blake", text))
+    assert len(commands) > 1
+    chunks = [json.loads(command.split("Text to read: ", 1)[1]) for command in commands]
+    assert " ".join(chunks) == "Blake: " + text.strip()
+    assert all(estimate_tokens(command) < 500 for command in commands)
+    assert all("Do not wait for the caller" in command for command in commands)
+
+
+async def test_real_announcement_stream_keeps_input_and_restores_after_pcm(
+    monkeypatch, caplog
+):
+    import base64
+    import time
+    from array import array
+
+    from livekit import rtc
+    from livekit.agents.voice import io
+    from test_live_speech_gate import RecordingOutput
+
+    import openbase_coder_cli.livekit_agent.live_characters as module
+    from openbase_coder_cli.livekit_agent.live_speech_gate import LiveSpeechGate
+
+    class SilentInput(io.AudioInput):
+        async def __anext__(self):
+            await asyncio.sleep(0.02)
+            return rtc.AudioFrame.create(24000, 1, 480)
+
+    class PlayingOutput(RecordingOutput):
+        async def capture_frame(self, frame):
+            await super().capture_frame(frame)
+            self.on_playback_started(created_at=time.time())
+
+    caplog.set_level(
+        "INFO", logger="openbase_coder_cli.livekit_agent.live_announcement"
+    )
+    identity = SimpleNamespace(
+        gpt_live_voice="cedar", voice_id="blake", voice_name="Blake"
+    )
+    dispatcher = SimpleNamespace(gpt_live_voice="marin", voice_id="dispatcher")
+    monkeypatch.setattr(module, "agent_voice_identity", lambda _: identity)
+    monkeypatch.setattr(module, "route_voice_identity", lambda _: dispatcher)
+    gate = LiveSpeechGate()
+    sink = PlayingOutput()
+    router, bridge = Mock(), Mock()
+    router.route_snapshot.return_value = SimpleNamespace(active_thread_id="dispatcher")
+    router.can_deliver_for_snapshot.return_value = True
+    bridge.suspend_session.side_effect = gate.revoke
+    async with FakeGPTLiveServer() as server:
+        models = []
+
+        def model(voice):
+            value = GPTLiveModel(
+                voice=voice,
+                delegation="client",
+                api_key="cloud-token",
+                base_url=server.base_url,
+            )
+            models.append(value)
+            return value
+
+        session = AgentSession()
+        session.input.audio = SilentInput(label="in-memory silence")
+        session.output.audio = sink
+        first = CharacterAssistant(
+            model=model("marin"),
+            instructions="Dispatcher",
+            history=llm.ChatContext(),
+            speech_gate=gate,
+        )
+        controller = LiveCharacterController(
+            session=session,
+            bridge=bridge,
+            router=router,
+            model_factory=model,
+            instructions=lambda _: "Dispatcher",
+            on_error=AsyncMock(),
+            initial_model=models[0],
+            speech_gate=gate,
+        )
+        session.on("agent_state_changed", controller.state_changed)
+        try:
+            await session.start(agent=first)
+            await wait_live_session_started(first.duplex_session, timeout=5)
+            task = asyncio.create_task(
+                controller._announcement(
+                    AnnouncerMessage("hello", "Hi, I'm Blake.", "blake", "Blake")
+                )
+            )
+            controller._task = task
+            commands = await server.wait_for_append("instructions")
+            assert commands[-1]["delegation_id"] is None
+            assert 'Text to read: "Hi, I\'m Blake."' in commands[-1]["content"]
+            assert (
+                server.session_start["session"]["audio"]["output"]["voice"] == "cedar"
+            )
+            await asyncio.sleep(0.1)
+            assert not task.done()  # instruction ACK is not speech completion
+            await server.send(
+                {
+                    "type": "session.output_audio.delta",
+                    "delta": base64.b64encode(array("h", [7000] * 4800)).decode(),
+                }
+            )
+            await server.send(
+                {
+                    "type": "session.output_audio.delta",
+                    "delta": base64.b64encode(bytes(48000)).decode(),
+                }
+            )
+            await asyncio.wait_for(task, 5)
+            assert any(7000 in frame.data for frame in sink.frames)
+            assert (
+                server.session_start["session"]["audio"]["output"]["voice"] == "marin"
+            )
+            router.transfer_to_thread.assert_not_called()
+            router.exit_to_dispatch.assert_not_called()
+            events = [
+                r.message
+                for r in caplog.records
+                if "stage=live_announcement_wire" in r.message
+            ]
+            assert len(events) == 1
+            assert "input_audio=0 " not in events[0]
+            assert "output_audio=2 " in events[0]
+            assert "instructions_sent=1 instructions_ack=1 errors=0" in events[0]
+        finally:
+            await controller.close()
+            for value in models:
+                await value.aclose()
