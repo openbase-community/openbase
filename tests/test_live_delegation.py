@@ -1848,6 +1848,39 @@ async def test_the_hold_waits_while_the_caller_is_still_speaking():
     await bridge.aclose()
 
 
+@pytest.mark.parametrize("delegated", [False, True])
+async def test_long_spoken_request_outlives_hold_cap_without_executing_its_prefix(
+    delegated,
+):
+    # Android field regression: a 19-second request was dispatched twice at
+    # the six-second cap, before its completion wording and constraints arrived.
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        settle=0.02, hold_max=0.06, lag=0.1
+    )
+    try:
+        bridge.on_user_state_changed("listening", "speaking")
+        live.final("Ask Gemma to read the README", item_id="part-1")
+        if delegated:
+            live.delegate("d1", "")
+        await asyncio.sleep(0.15)
+        assert dispatcher.prompts == []
+        live.final("and announce completion", item_id="part-2")
+        bridge.on_user_state_changed("speaking", "listening")
+        await asyncio.sleep(0.04)
+        assert dispatcher.prompts == []  # The expired cap must not erase STT lag.
+        live.final("without changing files or starting agents", item_id="part-3")
+        await asyncio.sleep(0.15)
+        assert len(dispatcher.prompts) == 1
+        assert dispatcher.prompts[0][0].endswith(
+            wrap_voice_prompt(
+                "Ask Gemma to read the README and announce completion "
+                "without changing files or starting agents"
+            )
+        )
+    finally:
+        await bridge.aclose()
+
+
 async def test_a_delegation_mid_request_binds_without_cutting_the_hold_short():
     bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
         settle=0.1, hold_max=2.0

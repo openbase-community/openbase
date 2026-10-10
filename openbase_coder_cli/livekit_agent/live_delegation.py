@@ -118,7 +118,9 @@ MAX_TRACKED_ENTRIES = 32
 # then "desktop" about a second later), and a pause mid-sentence does the
 # same. A closed utterance is held this long for a continuation before it goes
 # to the agent; a fragment that opens during the hold extends it (bounded by
-# the max). A delegation flushes the hold at once while the caller is silent
+# the max while silent). Active caller speech and its trailing transcript lag
+# must finish before that cap can dispatch anything. A delegation flushes the
+# hold at once while the caller is silent
 # (the model judged the request complete); while they are still speaking it
 # binds to the held words until they settle.
 UTTERANCE_SETTLE_SECONDS = 0.7
@@ -879,10 +881,6 @@ class LiveDelegationBridge:
         self._schedule_flush(self._settle_deadline(now))
 
     def _settle_deadline(self, now: float) -> float:
-        held = self._held
-        if held is not None and self._user_speaking:
-            # The caller is still talking: wait for their words, bounded.
-            return held.first_at + self._hold_max_seconds
         deadline = now + self._settle_seconds
         if self._last_speech_end is not None:
             deadline = max(
@@ -933,9 +931,19 @@ class LiveDelegationBridge:
         held = self._held
         if held is None:
             return
-        deadline = min(at, held.first_at + self._hold_max_seconds)
         if held.timer is not None:
             held.timer.cancel()
+            held.timer = None
+        # A time cap bounds a stalled transcript, not the length of a spoken
+        # request. Dispatching during speech executes a prefix before later
+        # constraints arrive. The VAD's stop event will schedule the flush.
+        if self._user_speaking:
+            return
+        deadline = min(at, held.first_at + self._hold_max_seconds)
+        if self._last_speech_end is not None:
+            deadline = max(
+                deadline, self._last_speech_end + self._transcript_lag_seconds
+            )
         delay = max(0.0, deadline - self._clock())
         try:
             loop = asyncio.get_running_loop()
@@ -945,6 +953,8 @@ class LiveDelegationBridge:
         held.timer = loop.call_later(delay, self._flush_held)
 
     def _flush_held(self) -> None:
+        if self._user_speaking:
+            return
         held = self._take_held()
         if held is None or self._closed:
             return
