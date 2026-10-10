@@ -288,6 +288,7 @@ def send(
     thread id, or a Claude Code session id. MESSAGE comes from the argument
     or, when omitted or `-`, from stdin. An idle session starts a new turn
     with it; a busy session reads it as steering during the current turn.
+    A foreign Claude inbox only confirms submission, not resumed work.
     """
     text = _message_text(message)
     threads, sessions, terminals = gather()
@@ -314,7 +315,12 @@ def send(
         verb = {"steer": "steered", "start": "sent to"}.get(
             str(result.get("delivery")), "delivered to"
         )
-        click.echo(f"Message {verb} {target.name} via {how}.")
+        if result.get("delivery") in {"unavailable", "inbox_unavailable"}:
+            click.echo(str(result.get("message") or "Nothing was delivered or queued; the owner is unavailable."))
+        elif result.get("delivery") == "inbox" and not result.get("confirmed"):
+            click.echo(f"Message submitted to {target.name} via {how}; delivery is unconfirmed. Do not blindly retry.")
+        else:
+            click.echo(f"Message {verb} {target.name} via {how}.")
         if result.get("delivery") == "inbox" and target.backend == CLAUDE_BACKEND:
             click.echo(
                 "A session running with permissions bypassed may hold it until "
@@ -323,6 +329,11 @@ def send(
             )
     if not wait:
         return
+    if result.get("confirmed") is False or result.get("delivery") in {"inbox", "unavailable", "inbox_unavailable"}:
+        raise click.ClickException(
+            "Cannot wait for confirmed work from this receipt: delivery is unconfirmed or unavailable. "
+            "Inspect the thread before considering a retry."
+        )
     thread_id = target.thread_id
     if thread_id is None:
         raise click.ClickException(

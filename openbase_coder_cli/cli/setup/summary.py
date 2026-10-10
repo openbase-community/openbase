@@ -7,7 +7,7 @@ def print_agent_setup_summary(
     *, include_default_hooks: bool, shared_super_agents_mcp: bool
 ) -> None:
     sentences = [
-        "ℹ️ Your Codex and Claude Code setup now includes Openbase session "
+        "ℹ️  Your Codex and Claude Code setup now includes Openbase session "
         "profiles for model and tool settings, plus links to the bundled "
         "Openbase skills."
     ]

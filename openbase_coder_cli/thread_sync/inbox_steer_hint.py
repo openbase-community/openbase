@@ -20,8 +20,9 @@ from openbase_coder_cli.openbase_coder_cli_app.notification_store import KIND_TH
 
 _HINT_TITLE = "Steering your terminal Claude Code session"
 _HINT_BODY = (
-    "Openbase sent your steer to a Claude Code session running in a terminal. "
-    "It is read between tool calls while that session works. If the session is "
+    "Openbase submitted your message to a Claude Code inbox; delivery is unconfirmed. "
+    "This does not confirm resumed work. Check the thread before retrying. Messages "
+    "can be read between tool calls while that session works. If the session is "
     "running with permissions bypassed, Claude Code holds messages from other "
     'sessions until you approve them there — set "crossSessionInbound" to '
     '"accept" in your Claude settings to let Openbase steers land automatically.'

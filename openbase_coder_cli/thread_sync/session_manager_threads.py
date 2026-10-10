@@ -29,6 +29,10 @@ from openbase_coder_cli.dispatcher_config import (
     DISPATCHER_MODEL_ROLE,
     SUPER_AGENTS_MODEL_ROLE,
 )
+from openbase_coder_cli.thread_archives import (
+    archive_backend_thread,
+    archived_thread_ids,
+)
 from openbase_coder_cli.thread_model_overrides import get_thread_model_override
 
 from .models import ThreadInfo as SessionInfo
@@ -332,7 +336,7 @@ class SessionManagerThreadsMixin:
                     cached is not None
                     and now - cached[0] < self.BACKEND_SESSIONS_SHARE_SECONDS
                 ):
-                    return list(cached[1])
+                    return await self._unarchived_backend_sessions(cached[1])
                 raw_sessions = await sessions_method()
                 sessions = [
                     _session_from_thread(
@@ -345,11 +349,19 @@ class SessionManagerThreadsMixin:
                 for session in sessions:
                     await ensure_speaking_identity(self._client, session)
                 self._backend_sessions_cache = (time.monotonic(), sessions)
-                return list(sessions)
+                return await self._unarchived_backend_sessions(sessions)
         finally:
             waiters = getattr(lock, "_waiters", None)
             if not lock.locked() and not waiters:
                 locks.pop(loop, None)
+
+    async def _unarchived_backend_sessions(
+        self, sessions: list[SessionInfo]
+    ) -> list[SessionInfo]:
+        # Apply after the shared scan cache: another API process may archive
+        # a thread while this manager still has a warm backend listing.
+        archived = await asyncio.to_thread(archived_thread_ids, self._execution_backend)
+        return [session for session in sessions if session.session_id not in archived]
 
     async def _list_thread_page_result(
         self,
@@ -477,7 +489,12 @@ class SessionManagerThreadsMixin:
         """Archive a persisted thread."""
         await self.interrupt_run(session_id)
         if self._uses_backend_session_api():
-            return await self.get_session_state(session_id) is not None
+            if await self.get_session_state(session_id) is None:
+                return False
+            await asyncio.to_thread(
+                archive_backend_thread, self._execution_backend, session_id
+            )
+            return True
         try:
             await self._client.ensure_connected()
             await self._client.request("thread/archive", {"threadId": session_id})

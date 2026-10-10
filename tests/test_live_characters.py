@@ -507,8 +507,9 @@ def test_announcement_commands_are_self_contained_and_bounded():
     assert all("Do not wait for the caller" in command for command in commands)
 
 
+@pytest.mark.parametrize("continuous_seconds", [0, 13])
 async def test_real_announcement_stream_keeps_input_and_restores_after_pcm(
-    monkeypatch, caplog
+    monkeypatch, caplog, continuous_seconds
 ):
     import base64
     import time
@@ -542,7 +543,7 @@ async def test_real_announcement_stream_keeps_input_and_restores_after_pcm(
     monkeypatch.setattr(module, "route_voice_identity", lambda _: dispatcher)
     gate = LiveSpeechGate()
     sink = PlayingOutput()
-    router, bridge = Mock(), Mock()
+    router, bridge, ledger = Mock(), Mock(), Mock()
     router.route_snapshot.return_value = SimpleNamespace(active_thread_id="dispatcher")
     router.can_deliver_for_snapshot.return_value = True
     bridge.suspend_session.side_effect = gate.revoke
@@ -577,6 +578,7 @@ async def test_real_announcement_stream_keeps_input_and_restores_after_pcm(
             on_error=AsyncMock(),
             initial_model=models[0],
             speech_gate=gate,
+            ledger=ledger,
         )
         session.on("agent_state_changed", controller.state_changed)
         try:
@@ -602,6 +604,19 @@ async def test_real_announcement_stream_keeps_input_and_restores_after_pcm(
                     "delta": base64.b64encode(array("h", [7000] * 4800)).decode(),
                 }
             )
+            # A continuous utterance emits one speaking transition, not one
+            # per PCM frame. Keep real SDK playout active past the startup
+            # deadline, then verify the final audio reaches the output sink.
+            extra_frames = int(continuous_seconds / 0.2)
+            for _ in range(extra_frames):
+                await asyncio.sleep(0.2)
+                assert not task.done(), "continuous announcement was cut off"
+                await server.send(
+                    {
+                        "type": "session.output_audio.delta",
+                        "delta": base64.b64encode(array("h", [9000] * 4800)).decode(),
+                    }
+                )
             await server.send(
                 {
                     "type": "session.output_audio.delta",
@@ -609,6 +624,10 @@ async def test_real_announcement_stream_keeps_input_and_restores_after_pcm(
                 }
             )
             await asyncio.wait_for(task, 5)
+            ledger.mark_live_audio_finished.assert_called_once()
+            ledger.mark_cancelled.assert_not_called()
+            if continuous_seconds:
+                assert any(9000 in frame.data for frame in sink.frames)
             assert any(7000 in frame.data for frame in sink.frames)
             assert (
                 server.session_start["session"]["audio"]["output"]["voice"] == "marin"
@@ -622,7 +641,7 @@ async def test_real_announcement_stream_keeps_input_and_restores_after_pcm(
             ]
             assert len(events) == 1
             assert "input_audio=0 " not in events[0]
-            assert "output_audio=2 " in events[0]
+            assert f"output_audio={2 + extra_frames} " in events[0]
             assert "instructions_sent=1 instructions_ack=1 errors=0" in events[0]
         finally:
             await controller.close()

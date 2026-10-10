@@ -32,6 +32,7 @@ from .mcp_gateway import mcp_gateway
 from .onboarding import onboarding
 from .plugins import plugins
 from .profiles import profiles
+from .projects import projects
 from .provision import provision
 from .report import report
 from .reports import reports
@@ -123,6 +124,7 @@ main.add_command(logout)
 main.add_command(auth)
 main.add_command(plugins)
 main.add_command(profiles)
+main.add_command(projects)
 main.add_command(provision)
 main.add_command(report)
 main.add_command(reports)

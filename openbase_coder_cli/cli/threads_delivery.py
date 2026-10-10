@@ -215,7 +215,7 @@ def send_via_server(thread_id: str, text: str, *, busy: bool) -> dict[str, Any]:
         path = base + "steer/" if action == "steer" else base
         status, payload = _thread_api("POST", path, json={"prompt": text})
         if status < 400:
-            return {**payload, "delivery": action}
+            return {"delivery": action, **payload}
         last_error = _server_error(payload)
         lowered = last_error.lower()
         retry = (action == "start" and _ACTIVE_TURN_MARKER in lowered) or (
@@ -236,7 +236,7 @@ def send_via_inbox(terminal: ClaudeTerminal, text: str) -> dict[str, Any]:
             from_name=INBOX_FROM_NAME,
         )
     )
-    if not result.written:
+    if not result.written and not result.may_have_been_written:
         reasons = {
             "socket_unreachable": "its inbox socket no longer accepts connections (the session has probably ended)",
             "rejected_by_peer": "the session rejected the message (stale inbox record; start a new session with `openbase-coder claude`)",

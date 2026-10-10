@@ -2047,7 +2047,7 @@ def test_steer_turn_sends_prompt_to_active_super_agents_turn(
             # the post-steer thread_state broadcast, and the fourth the final
             # get_session_state assertion below.
             "read_thread": [active_thread, active_thread, active_thread, active_thread],
-            "steer_by_label": [{"turnId": "turn-1"}],
+            "steer_by_label": [{"turnId": "turn-1", "steered": True}],
         }
     )
 
@@ -2632,6 +2632,8 @@ def test_steer_turn_delivers_to_terminal_inbox_and_fires_hint(
 
     # The steer reached steer_by_label despite there being no store active turn.
     assert result["delivery"] == "inbox"
+    assert result["steered"] is False
+    assert result["turn_id"] is None
     assert (
         "steer_by_label",
         {

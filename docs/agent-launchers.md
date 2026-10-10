@@ -59,7 +59,7 @@ If a profile is missing, the launcher stops and tells you to run
 
 ## Send a message to a running session
 
-From any other terminal, `openbase-coder threads list` shows the sessions you have open and `openbase-coder threads send` sends one a message: a new turn when it is idle, a correction to the current turn when it is busy.
+From any other terminal, `openbase-coder threads list` shows the sessions you have open and `openbase-coder threads send` submits a message. Managed idle sessions start a new turn; active sessions receive steering. A foreign Claude Code terminal inbox returns an unconfirmed submission, not proof of resumed work. Inspect that thread before retrying an uncertain submission.
 
 ```bash
 openbase-coder threads list

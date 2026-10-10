@@ -85,6 +85,7 @@ Setup and operations:
 Reference:
 
 - [Commands](commands/index.md)
+- [Projects](projects.md)
 - [Configuration](configuration.md)
 - [Files and Paths](files-and-paths.md)
 - [Release](release.md)

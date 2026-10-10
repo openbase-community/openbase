@@ -256,3 +256,32 @@ def test_single_flight_abandons_a_stale_leader_and_computes_afresh() -> None:
     leader.join(1.0)
 
     assert cache.get("k", lambda: "newer") == "fresh"
+
+
+def test_hard_clear_detaches_inflight_read_and_prevents_stale_republication() -> None:
+    import threading
+
+    from openbase_coder_cli.openbase_coder_cli_app import thread_cache
+
+    cache = thread_cache._SingleFlightCache(60.0, stale_serve_seconds=10.0)
+    started, release = threading.Event(), threading.Event()
+    results = []
+
+    def before_archive():
+        started.set()
+        assert release.wait(2.0)
+        return ["archived-thread", "retained-thread"]
+
+    reader = threading.Thread(target=lambda: results.append(cache.get("list", before_archive)))
+    reader.start()
+    try:
+        assert started.wait(1.0)
+        cache.clear()
+        # A post-archive reader starts a fresh scan instead of joining the old one.
+        assert cache.get("list", lambda: ["retained-thread"]) == ["retained-thread"]
+    finally:
+        release.set()
+        reader.join(2.0)
+    assert not reader.is_alive()
+    assert results == [["archived-thread", "retained-thread"]]
+    assert cache.get("list", lambda: ["unexpected recompute"]) == ["retained-thread"]

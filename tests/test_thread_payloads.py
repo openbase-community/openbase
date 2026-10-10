@@ -269,3 +269,35 @@ def test_real_turn_error_is_preserved_even_with_stopped_or_completed_status(stat
     assert turn.status == ThreadStatus.error
     assert turn.return_code == -1
     assert "Backend failed" in turn.accumulated_stderr
+
+
+def test_turn_messages_preserve_interleaved_input_and_output():
+    run = _run_from_turn(
+        {
+            "id": "turn",
+            "status": "inProgress",
+            "items": [
+                {
+                    "type": "userMessage",
+                    "id": "p",
+                    "content": [{"type": "text", "text": "Hello"}],
+                },
+                {"type": "agentMessage", "id": "a", "text": "First answer"},
+                {
+                    "type": "userMessage",
+                    "id": "s",
+                    "content": [{"type": "text", "text": "Follow up"}],
+                },
+                {"type": "agentMessage", "id": "b", "text": "Second answer"},
+            ],
+        }
+    )
+    assert [(item.role, item.text) for item in run.messages] == [
+        ("user", "Hello"),
+        ("assistant", "First answer"),
+        ("user", "Follow up"),
+        ("assistant", "Second answer"),
+    ]
+    assert run.message == "Hello"
+    assert [steer.text for steer in run.steers] == ["Follow up"]
+    assert run.accumulated_output == "First answer\n\nSecond answer"

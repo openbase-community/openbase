@@ -431,6 +431,11 @@ class LiveCharacterController:
                     await asyncio.wait_for(self._speech_changed.wait(), timeout=1.2)
                 except TimeoutError:
                     return
+            elif self._spoken:
+                # One speaking transition can cover a long continuous utterance.
+                # The 12-second deadline bounds startup, not healthy playback;
+                # the enclosing announcement deadline still bounds a stuck SDK.
+                await self._speech_changed.wait()
             else:
                 await asyncio.wait_for(self._speech_changed.wait(), timeout=12)
 

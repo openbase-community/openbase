@@ -26,6 +26,7 @@ from openbase_coder_cli.openbase_coder_cli_app.livekit_activity import (
     count_active_voice_calls,
 )
 from openbase_coder_cli.openbase_coder_cli_app.thread_cache import (
+    clear_thread_cache,
     get_cached_thread_history_page,
     get_cached_thread_list,
     get_cached_thread_page,
@@ -676,7 +677,9 @@ def thread_detail(request, thread_id):
                 {"error": f"Thread {thread_id} not found"},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        invalidate_thread_list_cache()
+        # Archive changes list membership; do not serve the mutation-churn
+        # stale floor or join a list read that began before the archive.
+        clear_thread_cache()
         return Response({"success": True})
 
     try:
