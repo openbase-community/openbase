@@ -494,6 +494,40 @@ async def test_live_session_start_failure_closes_the_preconnected_session_and_cl
     assert "live_session_start_failed" in packet["detail"]
 
 
+@pytest.mark.parametrize("failure", ["error", "closed", "timeout"])
+async def test_gateway_startup_failure_after_framework_start_falls_back(
+    wiring, monkeypatch, failure
+):
+    ctx = _fake_ctx()
+    ended = []
+
+    async def record_end(ctx, exc):
+        ended.append(exc)
+
+    async def connection():
+        if failure == "timeout":
+            await asyncio.Event().wait()
+        if failure == "error":
+            raise RuntimeError("gateway rejected startup")
+
+    monkeypatch.setattr(livekit, "_end_call_after_agent_error", record_end)
+    monkeypatch.setattr(livekit, "LIVE_VOICE_PREFLIGHT_TIMEOUT_SECONDS", 0.01)
+    wiring.live._session_started_fut = asyncio.get_running_loop().create_future()
+    wiring.live._main_atask = asyncio.create_task(connection())
+    try:
+        await _run_entrypoint(ctx, _live_decision(), monkeypatch)
+        assert len(wiring.pipeline_calls) == 1
+        assert not ended and not ctx.shutdowns
+        (packet,) = _status_packets(ctx.room)
+        assert "live_session_start_failed" in packet["detail"]
+        assert packet["severity"] == "warning"
+    finally:
+        wiring.live._main_atask.cancel()
+        await asyncio.gather(wiring.live._main_atask, return_exceptions=True)
+        for callback in ctx.shutdown_callbacks:
+            await callback()
+
+
 async def test_preconnect_is_skipped_when_disabled(wiring, monkeypatch):
     monkeypatch.setattr(livekit, "LIVE_VOICE_PRECONNECT", False)
     ctx = _fake_ctx()
@@ -578,7 +612,12 @@ async def test_a_caller_joining_in_time_keeps_the_call(wiring, monkeypatch):
     ctx = _fake_ctx()
     await _run_entrypoint(ctx, VoiceEngineDecision(engine="pipeline"), monkeypatch)
     for handler in ctx.room.handlers["participant_connected"]:
-        handler(SimpleNamespace(identity="caller"))
+        handler(
+            SimpleNamespace(
+                identity="caller",
+                kind=livekit.rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+            )
+        )
     await asyncio.sleep(0.05)
     assert deleted == [] and ctx.shutdowns == []
     for callback in ctx.shutdown_callbacks:
@@ -594,7 +633,12 @@ async def test_a_caller_already_in_the_room_counts_as_joined(wiring, monkeypatch
     monkeypatch.setattr(livekit, "_delete_room", fake_delete)
     monkeypatch.setattr(livekit, "LIVEKIT_PARTICIPANT_JOIN_TIMEOUT_SECONDS", 0.01)
     ctx = _fake_ctx()
-    ctx.room.remote_participants = {"caller": SimpleNamespace(identity="caller")}
+    ctx.room.remote_participants = {
+        "caller": SimpleNamespace(
+            identity="caller",
+            kind=livekit.rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD,
+        )
+    }
     await _run_entrypoint(ctx, VoiceEngineDecision(engine="pipeline"), monkeypatch)
     await asyncio.sleep(0.05)
     assert deleted == [] and ctx.shutdowns == []
@@ -611,6 +655,43 @@ async def test_warm_failures_never_reach_the_call(wiring, monkeypatch):
     await _run_entrypoint(ctx, VoiceEngineDecision(engine="pipeline"), monkeypatch)
     await asyncio.sleep(0)
     assert len(wiring.pipeline_calls) == 1
+    for callback in ctx.shutdown_callbacks:
+        await callback()
+
+
+async def test_another_agent_does_not_disable_the_caller_timeout(wiring, monkeypatch):
+    deleted = []
+
+    async def fake_delete(room_name):
+        deleted.append(room_name)
+
+    monkeypatch.setattr(livekit, "_delete_room", fake_delete)
+    monkeypatch.setattr(livekit, "LIVEKIT_PARTICIPANT_JOIN_TIMEOUT_SECONDS", 0.01)
+    ctx = _fake_ctx()
+    ctx.room.remote_participants = {
+        "agent": SimpleNamespace(
+            identity="agent",
+            kind=livekit.rtc.ParticipantKind.PARTICIPANT_KIND_AGENT,
+        )
+    }
+    await _run_entrypoint(ctx, VoiceEngineDecision(engine="pipeline"), monkeypatch)
+    await asyncio.sleep(0.05)
+    assert deleted == ["room-1"]
+    assert ctx.shutdowns == ["participant-join-timeout"]
+    for callback in ctx.shutdown_callbacks:
+        await callback()
+
+
+async def test_dispatcher_warmup_can_be_disabled(wiring, monkeypatch):
+    monkeypatch.setattr(livekit, "LIVEKIT_DISPATCHER_WARMUP", False)
+
+    async def unexpected_warm():
+        pytest.fail("dispatcher warm-up is disabled")
+
+    wiring.backend.warm = unexpected_warm
+    ctx = _fake_ctx()
+    await _run_entrypoint(ctx, VoiceEngineDecision(engine="pipeline"), monkeypatch)
+    await asyncio.sleep(0)
     for callback in ctx.shutdown_callbacks:
         await callback()
 

@@ -982,11 +982,6 @@ def livekit_room_token(request):
         display_name = identity
 
     dispatch_metadata = json.dumps(metadata)
-    # Dispatch the agent now, so its start-up (room connect, engine checks,
-    # GPT-Live session, dispatcher warm-up) overlaps the phone's join instead
-    # of starting when the phone arrives. The token's room configuration is
-    # the fallback when that is not possible: LiveKit then dispatches the
-    # agent as the phone creates the room, as before.
     dispatched_at_token = (
         False
         if inbound_invitation_id
@@ -1015,17 +1010,16 @@ def livekit_room_token(request):
             )
         )
     )
-    if not dispatched_at_token:
-        access_token = access_token.with_room_config(
-            livekit_api.RoomConfiguration(
-                agents=[
-                    livekit_api.RoomAgentDispatch(
-                        agent_name=livekit_dispatch_agent_name,
-                        metadata=dispatch_metadata,
-                    )
-                ]
-            )
+    access_token = access_token.with_room_config(
+        livekit_api.RoomConfiguration(
+            agents=[
+                livekit_api.RoomAgentDispatch(
+                    agent_name=livekit_dispatch_agent_name,
+                    metadata=dispatch_metadata,
+                )
+            ]
         )
+    )
     token = access_token.with_ttl(timedelta(hours=1)).to_jwt()
 
     from openbase_coder_cli.services.livekit_pool_activity import record_activity
@@ -1119,14 +1113,11 @@ def dispatch_agent_before_join(
 ) -> bool:
     """Create the room and dispatch the agent into it now.
 
-    Returns True when the agent is on its way (the token then carries no room
-    configuration), False when the token must keep the room configuration:
-    the feature is off, the room already exists (a second device joining a
-    call; dispatching again would put a second agent in it), the server API
-    is unreachable, or the call failed. Never raises: a token is always
-    issued. Forensics F6 (2026-10-09) measured 2.1 s from token to job on a
-    cloud workspace; this moves the agent's whole start-up ahead of the
-    phone's join.
+    Room creation carries the initial agent configuration atomically, so
+    concurrent requests cannot append duplicate dispatches. An existing
+    room keeps its original configuration. The token also retains that
+    configuration in case the room expires before the caller joins.
+    Returns False on failure so token issuance can proceed normally.
     """
     if not explicit_agent_dispatch_enabled():
         return False
@@ -1162,19 +1153,14 @@ async def _create_agent_dispatch(
     client = _build_livekit_client()
     try:
         async with asyncio.timeout(EXPLICIT_AGENT_DISPATCH_TIMEOUT_SECONDS):
-            rooms = await client.room.list_rooms(
-                livekit_api.ListRoomsRequest(names=[room_name])
-            )
-            if any(room.name == room_name for room in rooms.rooms):
-                logger.info(
-                    "dispatch_timing stage=agent_dispatch_at_token_skipped "
-                    "room_name=%s reason=room_exists",
-                    room_name,
-                )
-                return False
-            await client.agent_dispatch.create_dispatch(
-                livekit_api.CreateAgentDispatchRequest(
-                    agent_name=agent_name, room=room_name, metadata=metadata
+            await client.room.create_room(
+                livekit_api.CreateRoomRequest(
+                    name=room_name,
+                    agents=[
+                        livekit_api.RoomAgentDispatch(
+                            agent_name=agent_name, metadata=metadata
+                        )
+                    ],
                 )
             )
     finally:

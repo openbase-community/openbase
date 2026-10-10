@@ -584,19 +584,64 @@ class _FakeRouter:
         return True
 
 
-async def test_real_gpt_live_session_delegation_flows_through_the_bridge():
+async def test_real_gateway_rejection_fails_the_startup_readiness_wait():
+    import contextlib
+
+    from livekit.agents import APIConnectionError, APIConnectOptions
+    from livekit.plugins.openai.realtime import GPTLiveModel
+
+    from openbase_coder_cli.livekit_agent.live_preconnect import (
+        wait_live_session_started,
+    )
+
+    async with FakeGPTLiveServer(handshake_status=503) as server:
+        model = GPTLiveModel(
+            api_key="cloud-token",
+            base_url=server.base_url,
+            conn_options=APIConnectOptions(max_retry=0),
+        )
+        live = model.session()
+        try:
+            with pytest.raises(APIConnectionError):
+                await wait_live_session_started(live, timeout=5)
+            assert server.connections == 1
+            assert not live._session_started_fut.done()
+        finally:
+            with contextlib.suppress(APIConnectionError):
+                await live.aclose()
+            await model.aclose()
+
+
+@pytest.mark.parametrize("preconnect", [False, True])
+async def test_real_gpt_live_session_delegation_flows_through_the_bridge(preconnect):
     from livekit.agents.llm import ChatContext
     from livekit.plugins.openai.realtime import GPTLiveModel
 
+    from openbase_coder_cli.livekit_agent.live_preconnect import (
+        _preconnecting_model_class,
+        wait_live_session_started,
+    )
+
     async with FakeGPTLiveServer() as server:
-        model = GPTLiveModel(
+        model_class = (
+            _preconnecting_model_class(GPTLiveModel) if preconnect else GPTLiveModel
+        )
+        model = model_class(
             model="gpt-live-1",
             voice="marin",
             delegation="client",
             api_key="cloud-token",
             base_url=server.base_url,
         )
+        pending = model.preconnect() if preconnect else None
+        if pending is not None:
+            async with asyncio.timeout(5):
+                while server._ws is None:
+                    await asyncio.sleep(0.01)
+            assert server.session_start is None
         live = model.session()
+        if pending is not None:
+            assert live is pending
         client = _FakeClient()
         bridge = LiveDelegationBridge(
             voice_router=_FakeRouter(client),
@@ -611,6 +656,8 @@ async def test_real_gpt_live_session_delegation_flows_through_the_bridge():
                 tools=[],
             )
             await asyncio.wait_for(server.started.wait(), 5)
+            await wait_live_session_started(live, timeout=5)
+            assert server.connections == 1
             assert server.session_start["session"]["delegation"] == {"type": "client"}
             assert server.session_start["session"]["model"] == "gpt-live-1"
             assert (
@@ -848,6 +895,33 @@ async def test_decision_never_caches_a_failure():
         cache.get(_creds(), tts_provider_id="cartesia", stt_provider_id="assemblyai")
         is None
     )
+
+
+@pytest.mark.parametrize("unexpected", [False, True])
+async def test_failed_refresh_invalidates_previous_readiness(monkeypatch, unexpected):
+    monkeypatch.setattr(
+        live_voice, "OPENBASE_CLOUD_LIVE_BASE_URL", "https://c.example/live/v1"
+    )
+    cache = live_voice.LiveVoiceReadinessCache(ttl=100)
+    cache.store(_creds(), tts_provider_id="cartesia", stt_provider_id="assemblyai")
+
+    async def failing_preflight(credentials):
+        if unexpected:
+            raise RuntimeError("gateway down")
+        raise LiveVoiceUnavailable("gateway_unreachable", "down")
+
+    decision = await _decide(
+        preflight=failing_preflight,
+        readiness_cache=cache,
+        use_cached_readiness=False,
+    )
+    assert not decision.is_live
+    assert (
+        cache.get(_creds(), tts_provider_id="cartesia", stt_provider_id="assemblyai")
+        is None
+    )
+    recovered = await _decide(readiness_cache=cache)
+    assert recovered.is_live and recovered.readiness == live_voice.READINESS_PROBED
 
 
 async def test_decision_can_force_a_probe_despite_the_cache(monkeypatch):

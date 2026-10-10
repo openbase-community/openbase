@@ -527,8 +527,12 @@ async def decide_voice_engine(
         )
         await preflight(credentials)
     except LiveVoiceUnavailable as exc:
+        if readiness_cache is not None:
+            readiness_cache.clear()
         return _fallback(exc.reason, exc.detail)
     except Exception as exc:
+        if readiness_cache is not None:
+            readiness_cache.clear()
         return _fallback(
             "unexpected_error",
             f"Unexpected error preparing live voice: {exception_chain_summary(exc)}.",
