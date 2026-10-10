@@ -284,6 +284,12 @@ def test_ios_app_control_open_url_carries_loopback_forward(monkeypatch):
         {**FORWARD, "ttl_seconds": 7200},
         {**FORWARD, "token": "short"},
         {**FORWARD, "target": "bad host/with/path"},
+        {**FORWARD, "target": "example.com"},
+        {**FORWARD, "target": "workspace.net.obs.so"},
+        {**FORWARD, "target": "127.0.0.1"},
+        {**FORWARD, "target": "192.168.1.1"},
+        {**FORWARD, "target": "8.8.8.8"},
+        {**FORWARD, "target": "::1"},
         {"port": 1455},
     ],
 )
@@ -312,7 +318,7 @@ def test_ios_app_control_rejects_loopback_forward_for_other_actions(monkeypatch)
 
 def test_ios_app_control_reports_opened_from_device_ack(monkeypatch):
     channel_layer = FakeChannelLayer(
-        ack={"type": "ios_app_control_ack", "opened": False, "error": "app not active"}
+        ack={"type": "ios_app_control_ack", "opened": False, "notified": True, "error": "app not active"}
     )
     monkeypatch.setattr(views, "get_channel_layer", lambda: channel_layer)
 
@@ -323,6 +329,7 @@ def test_ios_app_control_reports_opened_from_device_ack(monkeypatch):
     assert response.status_code == 202
     assert response.data["delivered"] is True
     assert response.data["opened"] is False
+    assert response.data["notified"] is True
     assert response.data["error"] == "app not active"
 
 
@@ -332,10 +339,11 @@ def test_consumer_forwards_opened_in_ack():
 
     asyncio.run(
         consumer.receive_json(
-            {"type": "ios_app_control_ack", "command_id": "cmd-1", "opened": True}
+            {"type": "ios_app_control_ack", "command_id": "cmd-1", "opened": True, "notified": False}
         )
     )
 
     group, message = consumer.channel_layer.sent[-1]
     assert group == views.ack_group_name("cmd-1")
     assert message["opened"] is True
+    assert message["notified"] is False

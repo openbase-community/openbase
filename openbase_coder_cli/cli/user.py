@@ -9,7 +9,7 @@ import click
 from openbase_coder_cli.cli.app_control import (
     publish_app_control as _publish_ios_app_control,
 )
-from openbase_coder_cli.cli.app_control import publish_open_url
+from openbase_coder_cli.cli.browser import browser_open
 from openbase_coder_cli.cli.local_server import local_server_request
 from openbase_coder_cli.config.cloud_notifications import (
     UserSayNotificationError,
@@ -349,10 +349,10 @@ def ios() -> None:
 
 @ios.command("open-url")
 @click.argument("url")
-def ios_open_url(url: str) -> None:
-    """Ask the foreground iOS app to open a URL or deep link."""
-    data = publish_open_url(url)
-    _report_ios_command_result(data, "open-url")
+@click.pass_context
+def ios_open_url(ctx: click.Context, url: str) -> None:
+    """Open a URL on the phone, with push fallback and no callback forward."""
+    ctx.invoke(browser_open, url=url, no_forward=True, callback_port=None, no_push=False)
 
 
 @ios.command("mute")

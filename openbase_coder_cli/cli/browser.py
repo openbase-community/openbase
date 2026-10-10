@@ -20,9 +20,9 @@ reaches the CLI unchanged.
 
 from __future__ import annotations
 
-import ipaddress
 import logging
 import threading
+from collections.abc import Callable
 from urllib.parse import urlsplit
 
 import click
@@ -31,6 +31,7 @@ from openbase_coder_cli.cli.app_control import publish_open_url
 from openbase_coder_cli.login_callback import (
     DEFAULT_FORWARD_TTL_SECONDS,
     LoopbackForward,
+    is_tailnet_forward_target,
     loopback_callback_port,
 )
 from openbase_coder_cli.open_url_policy import open_url_error
@@ -96,6 +97,11 @@ def browser_open(
         port = callback_port or loopback_callback_port(url)
         if port is not None:
             forward = _arrange_forward(port)
+            if forward is None:
+                click.echo(
+                    f"Could not expose localhost:{port} for this login; "
+                    "paste the final localhost address back here instead."
+                )
 
     if _deliver(url, forward):
         click.echo(OPENED_MESSAGE)
@@ -105,12 +111,17 @@ def browser_open(
         click.echo(NOT_DELIVERED_HINT)
     if forward is not None:
         click.echo(
-            f"Your phone will forward localhost:{forward.port} back to this "
-            f"workspace for {forward.ttl_seconds // 60} minutes."
+            f"Workspace callback localhost:{forward.port} is exposed on the VPN "
+            f"for up to {forward.ttl_seconds // 60} minutes. If your phone cannot "
+            "forward it, paste the final localhost address back here."
         )
 
 
 def _arrange_forward(port: int) -> LoopbackForward | None:
+    return _bounded_attempt(lambda: _try_arrange_forward(port))
+
+
+def _try_arrange_forward(port: int) -> LoopbackForward | None:
     """Expose ``port`` on this node's tailnet for the login, if possible.
 
     Only embedded-node hosts (cloud workspaces) can do this today; elsewhere
@@ -119,59 +130,50 @@ def _arrange_forward(port: int) -> LoopbackForward | None:
     """
     from openbase_coder_cli.services import tailscale_provider
     from openbase_coder_cli.services.tunneld import (
-        TunneldForwardError,
         tunneld_add_forward,
-        tunneld_self_dns_name,
         tunneld_status,
     )
 
     if not tailscale_provider.is_netmesh_tsnet():
-        click.echo(
-            f"Login callback on localhost:{port} cannot be forwarded from "
-            "this host; paste the final localhost address back here instead."
-        )
         return None
-    target = _self_tailnet_target(tunneld_status, tunneld_self_dns_name)
+    target = _self_tailnet_target(tunneld_status)
     if target is None:
-        click.echo("The tailnet node is not up, so the callback cannot be forwarded.")
         return None
-    try:
-        tunneld_add_forward(
-            port, ttl_seconds=DEFAULT_FORWARD_TTL_SECONDS, one_shot=True
-        )
-    except TunneldForwardError as exc:
-        click.echo(f"Could not expose localhost:{port} on the tailnet: {exc}")
-        return None
+    tunneld_add_forward(port, ttl_seconds=DEFAULT_FORWARD_TTL_SECONDS, one_shot=True)
     return LoopbackForward.create(port, target)
 
 
-def _self_tailnet_target(status_fn, dns_name_fn) -> str | None:
-    """This node's IPv4 tailnet address (phones dial it without DNS), else
-    its MagicDNS name."""
+def _self_tailnet_target(status_fn) -> str | None:
+    """A literal VPN address, without resolving sender-controlled DNS names."""
     _available, payload, _error = status_fn()
     self_info = payload.get("Self") if isinstance(payload, dict) else None
     if isinstance(self_info, dict):
         for raw in self_info.get("TailscaleIPs") or []:
-            try:
-                address = ipaddress.ip_address(str(raw))
-            except ValueError:
-                continue
-            if address.version == 4:
-                return str(address)
-    return dns_name_fn()
+            if isinstance(raw, str) and is_tailnet_forward_target(raw):
+                return raw
+    return None
 
 
 def _deliver(url: str, forward: LoopbackForward | None) -> bool:
     """Bound the delivery attempt even if authentication or the server stalls."""
-    delivered = []
+    return bool(_bounded_attempt(lambda: _try_deliver(url, forward)))
+
+
+def _bounded_attempt[Result](
+    operation: Callable[[], Result], *, timeout: float | None = None
+) -> Result | None:
+    results = []
 
     def attempt() -> None:
-        delivered.append(_try_deliver(url, forward))
+        try:
+            results.append(operation())
+        except Exception as exc:
+            logger.info("browser open: delivery step unavailable: %s", exc)
 
     worker = threading.Thread(target=attempt, daemon=True)
     worker.start()
-    worker.join(BROWSER_DELIVERY_TIMEOUT_SECONDS)
-    return bool(delivered and delivered[0])
+    worker.join(BROWSER_DELIVERY_TIMEOUT_SECONDS if timeout is None else timeout)
+    return results[0] if results else None
 
 
 def _try_deliver(url: str, forward: LoopbackForward | None) -> bool:
@@ -184,31 +186,26 @@ def _try_deliver(url: str, forward: LoopbackForward | None) -> bool:
         # Server unreachable, rejected, or answered garbage: the printed URL
         # and hint are the fallback, and the calling CLI must keep going.
         return False
-    return isinstance(data, dict) and data.get("delivered") is True
+    return (
+        isinstance(data, dict)
+        and data.get("delivered") is True
+        and (data.get("opened") is not False or data.get("notified") is True)
+    )
 
 
 def _push(url: str, forward: LoopbackForward | None) -> bool:
     """Ask Openbase Cloud to notify the phone; False on any failure."""
-    from openbase_coder_cli.config.cloud_notifications import send_notification_push
-
     user_info = {"openbase_destination": "open_url", "url": url}
     if forward is not None:
         user_info.update(forward.as_push_user_info())
     host = urlsplit(url).hostname or url
-    done = []
 
-    def attempt() -> None:
-        try:
-            send_notification_push(
-                title=PUSH_TITLE, body=f"Tap to open {host}", user_info=user_info
-            )
-        except Exception as exc:  # noqa: BLE001 - handler must never fail the CLI
-            logger.info("browser open: push fallback unavailable: %s", exc)
-            done.append(False)
-            return
-        done.append(True)
+    def attempt() -> bool:
+        from openbase_coder_cli.config.cloud_notifications import send_notification_push
 
-    worker = threading.Thread(target=attempt, daemon=True)
-    worker.start()
-    worker.join(BROWSER_DELIVERY_TIMEOUT_SECONDS * 3)
-    return bool(done and done[0])
+        send_notification_push(
+            title=PUSH_TITLE, body=f"Tap to open {host}", user_info=user_info
+        )
+        return True
+
+    return bool(_bounded_attempt(attempt, timeout=BROWSER_DELIVERY_TIMEOUT_SECONDS * 3))

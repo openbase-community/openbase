@@ -79,9 +79,13 @@ def _notify_bearer_token(backend_url: str) -> str:
     carries the ``notify`` scope instead (Cloud accepts either on the notify
     endpoint, and both can only reach the owner's own devices).
     """
+    owner_tokens = get_token_manager(backend_url)
+    had_owner_login = owner_tokens.has_refresh_token
     try:
-        return get_token_manager(backend_url).get_access_token()
+        return owner_tokens.get_access_token()
     except AuthLoginRequiredError:
+        if had_owner_login or owner_tokens.has_refresh_token:
+            raise
         from openbase_coder_cli.config.machine_token_manager import (
             MachineTokenError,
             MachineTokenManager,

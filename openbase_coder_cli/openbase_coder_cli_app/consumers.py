@@ -826,6 +826,8 @@ class IOSAppControlConsumer(AsyncJsonWebsocketConsumer):
         if type(content.get("opened")) is bool:
             # open_url acks report whether the URL actually opened.
             ack["opened"] = content["opened"]
+            if type(content.get("notified")) is bool:
+                ack["notified"] = content["notified"]
             if isinstance(content.get("error"), str):
                 ack["error"] = content["error"][:1024]
         state = content.get("call_state")

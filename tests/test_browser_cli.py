@@ -110,7 +110,8 @@ def test_browser_open_forwards_the_login_callback_on_an_embedded_node(monkeypatc
     assert forward["target"] == "100.64.0.12"
     assert forward["ttl_seconds"] == 600
     assert len(forward["token"]) >= 16
-    assert "forward localhost:1455 back to this workspace" in result.output
+    assert "Workspace callback localhost:1455 is exposed" in result.output
+    assert "If your phone cannot forward it" in result.output
 
 
 def test_browser_open_explicit_callback_port_and_no_forward(monkeypatch):
@@ -133,7 +134,7 @@ def test_browser_open_without_embedded_node_explains_paste_back(monkeypatch):
     result = CliRunner().invoke(browser_cli.browser, ["open", LOGIN_URL])
 
     assert result.exit_code == 0
-    assert "cannot be forwarded from this host" in result.output
+    assert "Could not expose localhost:1455" in result.output
     assert calls == [LOGIN_URL]
 
 
@@ -144,7 +145,7 @@ def test_browser_open_survives_a_refused_forward(monkeypatch):
     result = CliRunner().invoke(browser_cli.browser, ["open", LOGIN_URL])
 
     assert result.exit_code == 0
-    assert "already forwarded" in result.output
+    assert "Could not expose localhost:1455" in result.output
     assert calls == [LOGIN_URL]
 
 
@@ -345,3 +346,82 @@ def test_container_browser_shim_works_with_python_webbrowser(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(capture.read_text()) == ["browser", "open", LOGIN_URL]
+
+
+@pytest.mark.parametrize("notified", [True, False])
+def test_failed_open_only_suppresses_push_when_a_notification_was_posted(
+    monkeypatch, notified
+):
+    _patch_publish(
+        monkeypatch, {"delivered": True, "opened": False, "notified": notified}
+    )
+    pushes = []
+    monkeypatch.setattr(browser_cli, "_push", lambda *args: pushes.append(args) or True)
+    result = CliRunner().invoke(browser_cli.browser, ["open", PLAIN_URL])
+    assert result.exit_code == 0
+    assert len(pushes) == (0 if notified else 1)
+
+
+@pytest.mark.parametrize("stage", ["forward", "push"])
+def test_browser_bounds_stalled_forward_and_push(monkeypatch, stage):
+    from openbase_coder_cli.config import cloud_notifications
+    from openbase_coder_cli.services import tunneld
+
+    release = threading.Event()
+    finished = threading.Event()
+
+    def stalled(*args, **kwargs):
+        release.wait(5)
+        finished.set()
+        raise OSError("unavailable")
+
+    if stage == "forward":
+        _patch_tunneld(monkeypatch)
+        monkeypatch.setattr(tunneld, "tunneld_status", stalled)
+    else:
+        monkeypatch.setattr(cloud_notifications, "send_notification_push", stalled)
+    _patch_publish(monkeypatch, {"delivered": False})
+    monkeypatch.setattr(browser_cli, "BROWSER_DELIVERY_TIMEOUT_SECONDS", 0.02)
+    started = time.monotonic()
+    try:
+        result = CliRunner().invoke(browser_cli.browser, ["open", LOGIN_URL])
+        assert time.monotonic() - started < 1
+        assert result.exit_code == 0
+        assert browser_cli.NOT_DELIVERED_HINT in result.output
+    finally:
+        release.set()
+        assert finished.wait(1)
+
+
+def test_forward_setup_exception_does_not_fail_browser_handler(monkeypatch):
+    from openbase_coder_cli.services import tunneld
+
+    _patch_tunneld(monkeypatch)
+
+    def unavailable():
+        raise OSError("control token unavailable")
+
+    monkeypatch.setattr(tunneld, "tunneld_status", unavailable)
+    _patch_publish(monkeypatch, {"delivered": True})
+    result = CliRunner().invoke(browser_cli.browser, ["open", LOGIN_URL])
+    assert result.exit_code == 0
+    assert browser_cli.OPENED_MESSAGE in result.output
+
+
+def test_forward_target_never_falls_back_to_dns_or_a_non_vpn_address():
+    assert (
+        browser_cli._self_tailnet_target(
+            lambda: (
+                True,
+                {"Self": {"TailscaleIPs": ["192.168.1.2"], "DNSName": "evil.example"}},
+                None,
+            )
+        )
+        is None
+    )
+    assert (
+        browser_cli._self_tailnet_target(
+            lambda: (True, {"Self": {"TailscaleIPs": ["fd7a:115c:a1e0::12"]}}, None)
+        )
+        == "fd7a:115c:a1e0::12"
+    )

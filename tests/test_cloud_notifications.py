@@ -11,6 +11,8 @@ from openbase_coder_cli.config.token_manager import (
 
 
 class TokenManager:
+    has_refresh_token = True
+
     def get_access_token(self) -> str:
         return "jwt-token"
 
@@ -196,6 +198,8 @@ def test_send_notification_push_falls_back_to_workspace_machine_token(
     from openbase_coder_cli.config import machine_token_manager
 
     class LoggedOut:
+        has_refresh_token = False
+
         def get_access_token(self) -> str:
             raise AuthLoginRequiredError("no login")
 
@@ -239,6 +243,8 @@ def test_send_notification_push_requires_login_without_a_notify_token(
     from openbase_coder_cli.config import machine_token_manager
 
     class LoggedOut:
+        has_refresh_token = False
+
         def get_access_token(self) -> str:
             raise AuthLoginRequiredError("no login")
 
@@ -259,3 +265,24 @@ def test_send_notification_push_requires_login_without_a_notify_token(
 
     with pytest.raises(AuthLoginRequiredError):
         cloud_notifications.send_notification_push(title="Open", body="", user_info={})
+
+
+def test_rejected_owner_login_never_uses_workspace_machine_token(monkeypatch):
+    from openbase_coder_cli.config import machine_token_manager
+
+    class RejectedOwner(TokenManager):
+        def get_access_token(self):
+            raise AuthLoginRequiredError("refresh rejected")
+
+    monkeypatch.setattr(
+        cloud_notifications, "get_token_manager", lambda _url: RejectedOwner()
+    )
+    monkeypatch.setattr(
+        machine_token_manager,
+        "MachineTokenManager",
+        lambda *_args: pytest.fail(
+            "must not load a machine token for an existing owner login"
+        ),
+    )
+    with pytest.raises(AuthLoginRequiredError, match="refresh rejected"):
+        cloud_notifications._notify_bearer_token("https://cloud.example")

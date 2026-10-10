@@ -11,6 +11,7 @@ handler and must start fast.
 
 from __future__ import annotations
 
+import ipaddress
 import secrets
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlsplit
@@ -21,6 +22,18 @@ FORWARD_MIN_PORT = 1024
 FORWARD_MAX_PORT = 65535
 DEFAULT_FORWARD_TTL_SECONDS = 600
 FORWARD_TOKEN_BYTES = 24
+FORWARD_NETWORKS = (
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("fd7a:115c:a1e0::/48"),
+)
+
+
+def is_tailnet_forward_target(target: str) -> bool:
+    try:
+        address = ipaddress.ip_address(target)
+    except ValueError:
+        return False
+    return "%" not in target and any(address in network for network in FORWARD_NETWORKS)
 
 
 def loopback_callback_port(login_url: str) -> int | None:

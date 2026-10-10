@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from openbase_coder_cli.login_callback import LoopbackForward, loopback_callback_port
+from openbase_coder_cli.login_callback import (
+    LoopbackForward,
+    is_tailnet_forward_target,
+    loopback_callback_port,
+)
 
 
 @pytest.mark.parametrize(
@@ -56,3 +60,29 @@ def test_loopback_forward_payloads():
         "forward_token": forward.token,
     }
     assert LoopbackForward.create(1, "x").token != forward.token
+
+
+@pytest.mark.parametrize(
+    "target", ["100.64.0.1", "100.127.255.254", "fd7a:115c:a1e0::12"]
+)
+def test_forward_target_accepts_only_vpn_literals(target):
+    assert is_tailnet_forward_target(target)
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "127.0.0.1",
+        "192.168.1.2",
+        "8.8.8.8",
+        "100.128.0.1",
+        "100.63.255.255",
+        "::1",
+        "2001:db8::1",
+        "fd7a:115c:a1e0::12%en0",
+        "workspace.net.obs.so",
+        "evil.example",
+    ],
+)
+def test_forward_target_rejects_dns_and_non_vpn_addresses(target):
+    assert not is_tailnet_forward_target(target)
