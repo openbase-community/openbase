@@ -71,12 +71,15 @@ The voice model is picked like the agent model: one selectable id whose engine f
 | `LIVEKIT_API_KEY`          | Yes      | LiveKit server auth          |
 | `LIVEKIT_API_SECRET`       | Yes      | LiveKit server auth          |
 | `LIVEKIT_URL`              | Yes      | LiveKit websocket URL        |
+| `LIVEKIT_AGENT_LOAD_THRESHOLD` | Optional | Worker load cutoff; defaults to `inf` (no load-based rejection). Set a positive finite value to enable load shedding. Requires restarting the voice service. |
 | `CODEX_APP_SERVER_URL`     | Yes      | Codex app-server endpoint (`unix://` by default on macOS/Linux; WebSocket compatibility URL on Windows or explicit deployments) |
 | `LIVEKIT_CODEX_THREAD_CWD` | Yes      | Shared Codex thread working directory |
 | `ASSEMBLY_AI_API_KEY`      | Optional | Speech-to-text provider      |
 | `CARTESIA_API_KEY`         | Optional | Text-to-speech provider      |
 | `CARTESIA_VOICE_ID`        | Optional | Text-to-speech voice ID      |
 | `OPENBASE_CODER_TTS_REPLACEMENTS_PATH` | Optional | Override the editable TTS replacements file path |
+
+The voice worker on your computer or Cloud DevSpace accepts calls even when CPU load is high, for both GPT-Live and pipeline voice. This prevents load-based rejection from leaving your phone waiting for an agent; it does not guarantee audio quality on an overloaded machine. Deployments that intentionally share a worker can set `LIVEKIT_AGENT_LOAD_THRESHOLD` explicitly to limit load.
 
 ## TTS Replacements
 

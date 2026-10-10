@@ -279,7 +279,6 @@ def build_livekit_agent(env: dict[str, str], binaries: dict[str, str]) -> Runner
         print(f"Unsupported LIVEKIT_NETWORK_MODE: {mode}", file=sys.stderr)
         raise SystemExit(1)
 
-    env.setdefault("LIVEKIT_AGENT_LOAD_THRESHOLD", "2.0")
     argv = [
         binaries["python"],
         "-m",
