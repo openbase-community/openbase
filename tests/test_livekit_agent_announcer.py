@@ -1196,6 +1196,7 @@ async def test_voice_router_transfers_to_prepared_target(monkeypatch, tmp_path):
         "active_target_voice_name": livekit.stable_super_agent_voice(
             "target-1", "Renamed Project"
         ).name,
+        "route_owner_id": router._route_owner_id,
     }
 
 

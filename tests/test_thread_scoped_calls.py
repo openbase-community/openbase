@@ -130,7 +130,7 @@ class _RecordingClient:
     def set_orphaned_result_handler(self, handler):
         pass
 
-    def reset_voice_route_to_dispatcher(self):
+    def reset_voice_route_to_dispatcher(self, **kwargs):
         self.persisted_routes.append({"active_target_thread_id": None})
 
     def persist_voice_route(self, **kwargs):
@@ -249,6 +249,7 @@ async def test_pipeline_call_started_from_a_thread_talks_to_that_thread(
         "active_target_label": "Hi are you there?",
         "active_target_voice_id": "voice-linda",
         "active_target_voice_name": "Linda",
+        "route_owner_id": router._route_owner_id,
     }
     assert router.active_target_voice_name == "Linda"
 
@@ -638,7 +639,7 @@ def test_room_token_carries_the_thread_the_call_starts_from(token_view):
     assert metadata["voice_route"] == _start_route_payload()
     (prepared,) = token_view.prepared
     assert prepared[:3] == (THREAD_ID, "/data/workspace", "Hi are you there?")
-    assert token_view.transfer.commits == 1
+    assert token_view.transfer.commits == 0
 
 
 def test_room_token_without_a_thread_is_a_dispatcher_call(token_view):

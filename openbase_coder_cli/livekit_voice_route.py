@@ -418,7 +418,7 @@ def prepare_livekit_dispatcher_recreation() -> dict:
             updated_at=time.time(),
             instruction_override_supported=instruction_override_supported(),
         )
-        _write_state(preserved_state)
+        _write_state(preserved_state, already_locked=True)
 
     return {
         "previous_dispatcher_thread_id": previous_state.dispatcher_thread_id,
@@ -761,7 +761,15 @@ def _read_instruction_file(path: Path) -> str | None:
     return content or None
 
 
-def _write_state(state: VoiceRouteState) -> None:
+def _write_state(state: VoiceRouteState, *, already_locked: bool = False) -> None:
     path = _route_state_path()
+    if not already_locked:
+        with thread_state_file_lock(path):
+            _write_state(state, already_locked=True)
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(asdict(state), indent=2) + "\n", encoding="utf-8")
+    payload = asdict(state)
+    owner_id = (_read_json(path) or {}).get("route_owner_id")
+    if owner_id and state.active_target_thread_id:
+        payload["route_owner_id"] = owner_id
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
