@@ -131,6 +131,9 @@ class _SingleFlightCache:
     def clear(self) -> None:
         with self._lock:
             self._entries.clear()
+            # Existing readers may finish, but cannot republish a snapshot
+            # taken before a hard mutation such as archiving a thread.
+            self._inflight.clear()
 
 
 _thread_cache = _SingleFlightCache(
