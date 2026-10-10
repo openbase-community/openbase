@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # mode, the backend's serve/status probing, the agent's LiveKit connection).
 TRANSPORT_SERVICES = ("livekit-server", "livekit-agent", "django-cli")
 
-# Present while the running livekit-server started without a tailnet address.
+# Present until all transport services have recovered from a loopback start.
 AWAITING_TAILNET_MARKER = OPENBASE_BASE_DIR / "livekit-awaiting-tailnet"
 
 # If a restart still leaves livekit-server waiting (the address vanished again
@@ -38,12 +38,10 @@ _last_restart_monotonic: float | None = None
 
 
 def record_livekit_start(*, awaiting_tailnet: bool) -> None:
-    """Called by the livekit-server runner just before it execs LiveKit."""
+    """Record loopback starts; only a completed transport transition clears it."""
     if awaiting_tailnet:
         AWAITING_TAILNET_MARKER.parent.mkdir(parents=True, exist_ok=True)
         AWAITING_TAILNET_MARKER.touch()
-    else:
-        AWAITING_TAILNET_MARKER.unlink(missing_ok=True)
 
 
 def _livekit_server_running() -> bool:
@@ -112,5 +110,11 @@ def run_tick() -> bool:
         list(TRANSPORT_SERVICES),
     )
     _last_restart_monotonic = now
+    marker_generation = AWAITING_TAILNET_MARKER.stat().st_mtime_ns
     _restart_transport_services()
+    if (
+        AWAITING_TAILNET_MARKER.exists()
+        and AWAITING_TAILNET_MARKER.stat().st_mtime_ns == marker_generation
+    ):
+        AWAITING_TAILNET_MARKER.unlink()
     return True
