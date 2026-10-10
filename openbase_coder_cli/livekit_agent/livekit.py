@@ -177,7 +177,7 @@ from openbase_coder_cli.livekit_agent.room_diagnostics import (  # noqa: F401
     _register_room_diagnostics,
     _track_log_fields,
 )
-from openbase_coder_cli.livekit_agent.screen_context import FocusedThreadTracker
+from openbase_coder_cli.livekit_agent.screen_context import CallerAttributeTracker
 from openbase_coder_cli.livekit_agent.session_diagnostics import (
     _register_session_diagnostics,
 )
@@ -1218,14 +1218,16 @@ async def livekit_agent(ctx: JobContext):
         )
         raise
     logger.info("Connected to LiveKit room")
-    focused_thread_tracker = FocusedThreadTracker()
-    focused_thread_tracker.attach(ctx.room)
-    voice_router.focused_thread_tracker = focused_thread_tracker
+    # The phone's open thread and call controls (screen_context), read off
+    # its participant attributes for the rest of the call.
+    caller_attribute_tracker = CallerAttributeTracker()
+    caller_attribute_tracker.attach(ctx.room)
+    voice_router.focused_thread_tracker = caller_attribute_tracker
 
-    async def _detach_focused_thread_tracker() -> None:
-        focused_thread_tracker.detach()
+    async def _detach_caller_attribute_tracker() -> None:
+        caller_attribute_tracker.detach()
 
-    ctx.add_shutdown_callback(_detach_focused_thread_tracker)
+    ctx.add_shutdown_callback(_detach_caller_attribute_tracker)
     room_diagnostic_handlers = (
         _register_room_diagnostics(ctx.room) if LIVEKIT_VERBOSE_LOGGING else ()
     )

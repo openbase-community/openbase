@@ -1260,6 +1260,44 @@ async def test_no_screen_note_once_the_call_is_transferred_into_a_thread():
     await bridge.aclose()
 
 
+class _Caller(_Focus):
+    def __init__(self, focus, call_state):
+        super().__init__(focus)
+        self.state = call_state
+
+    def call_state(self):
+        return self.state
+
+
+async def test_call_state_note_reaches_the_dispatcher_and_a_transferred_thread():
+    """Forensics F2/F3 (staging call 2026-10-09): "are you on speakerphone?"
+    got an invented answer because no route knew the call controls."""
+    from openbase_coder_cli.livekit_agent.screen_context import CallState
+
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    router.focused_thread_tracker = _Caller(LIGHTHOUSE, CallState(False, False, "earpiece"))
+    live.final("Are you on speakerphone?")
+    await _settle()
+    (prompt, _instructions) = dispatcher.prompts[0]
+    assert prompt.startswith("[Openbase system note: the caller has the thread")
+    assert "Call state: microphone on, speakerphone off (earpiece)." in prompt
+    assert prompt.endswith("<voice>Are you on speakerphone?</voice>")
+
+    target = FakeVoiceClient(thread_id=LIGHTHOUSE.thread_id)
+    router.transfer(target)
+    router.focused_thread_tracker.state = CallState(True, True, "speaker", auto_muted=True)
+    live.final("Am I muted?")
+    await _settle()
+    assert target.prompts
+    (prompt, _instructions) = target.prompts[0]
+    assert prompt.startswith(
+        "[Openbase system note: Call state: microphone auto-muted while the agent works, speakerphone on."
+    )
+    assert "the caller has the thread" not in prompt
+    assert prompt.endswith("<voice>Am I muted?</voice>")
+    await bridge.aclose()
+
+
 async def test_a_sentence_still_being_transcribed_joins_the_held_one():
     """Regression for BUG 18's split: "... in this thread" closed first and
     ". Answer just the number" arrived later as its own final, so the

@@ -155,3 +155,20 @@ def test_dispatcher_requires_confirmed_steering_and_queue_outcomes(monkeypatch):
     assert 'super_agents_queue_turn' in rules
     assert 'nothing was delivered or queued' in rules
     assert 'queued fallback does not interrupt current work' in rules
+
+
+def test_dispatcher_rules_answer_call_state_questions_only_from_the_note(monkeypatch):
+    """Regression (staging call 2026-10-09, forensics F2/F3): asked "are you on
+    speakerphone?", the dispatcher answered as if asked "can you hear me" and
+    invented "No, I'm not on speaker". The voice prompt now carries the call
+    state in its system note and the dispatcher answers from it alone."""
+    monkeypatch.setattr(instructions, 'canonical_dispatcher_skill', lambda: '')
+    result = instructions.with_dispatcher_rules('Dispatcher policy.', host='mac')
+    rules = ' '.join(instructions.SCREEN_CONTEXT_RULES.split())
+    assert 'may also carry the call state' in rules
+    assert 'on, muted or auto-muted' in rules
+    assert 'whether speakerphone is on' in rules
+    assert 'from that note and only from it' in rules
+    assert 'never invent or infer a state' in rules
+    assert result.count(instructions.SCREEN_CONTEXT_HEADING) == 1
+    assert instructions.with_dispatcher_rules(result, host='mac') == result

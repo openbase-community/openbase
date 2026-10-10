@@ -85,6 +85,9 @@ SCREEN_CONTEXT_HEADING = "## What the caller has on screen"
 # A call starts on the dispatcher even from a project thread's chat screen, so
 # "this thread" reached the dispatcher with no way to resolve it (BUG 18,
 # 2026-10-09). The voice prompt now names the open thread in a system note.
+# The same note carries the call controls: asked "are you on speakerphone?",
+# a dispatcher once answered as if asked "can you hear me" and invented a
+# speaker state (staging call 2026-10-09, forensics F2/F3).
 SCREEN_CONTEXT_RULES = f"""{SCREEN_CONTEXT_HEADING}
 
 - A voice prompt may start with an Openbase system note naming the thread the
@@ -95,7 +98,13 @@ SCREEN_CONTEXT_RULES = f"""{SCREEN_CONTEXT_HEADING}
   the thread id. Relay its answer. Do not answer from this conversation and do
   not start a new agent.
 - The note only says what is on screen. A request that is clearly about
-  something else is handled as usual."""
+  something else is handled as usual.
+- The note may also carry the call state: whether the caller's microphone is
+  on, muted or auto-muted, whether speakerphone is on, and the audio route
+  (earpiece, Bluetooth, wired headset). Answer questions about mute,
+  speakerphone, the earpiece or a headset from that note and only from it.
+  Without a call-state note, say you cannot see the call controls; never
+  invent or infer a state."""
 
 
 def with_dispatcher_rules(instructions: str, *, host: str | None = None) -> str:

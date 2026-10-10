@@ -963,10 +963,11 @@ def livekit_room_token(request):
                 can_publish=True,
                 can_subscribe=True,
                 can_publish_data=True,
-                # The phone publishes the thread open on its screen as a
-                # participant attribute (openbase.ui.focused_thread) so the
-                # dispatcher knows what "this thread" means (BUG 18). Without
-                # this grant LiveKit drops the update silently.
+                # The phone publishes the thread open on its screen
+                # (openbase.ui.focused_thread, BUG 18) and its call controls
+                # (openbase.call.state) as participant attributes for the
+                # voice agent. Without this grant LiveKit drops the updates
+                # silently.
                 can_update_own_metadata=True,
             )
         )
