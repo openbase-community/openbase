@@ -29,6 +29,8 @@ development installs need:
 
 `./scripts/setup` checks for all of these before it does anything else and exits with the install command for each one that is missing.
 
+If `pnpm --version` already works (for example from `npm install -g pnpm` or Corepack), keep that pnpm and skip installing another. A second copy only conflicts: `brew install pnpm` then stops with a link error because `pnpm` already exists in the Homebrew `bin` directory. That error is harmless, since setup uses whichever pnpm is on your `PATH`; to switch to the Homebrew copy instead, run `brew link --overwrite pnpm`.
+
 `uv tool install` puts `multi` in `~/.local/bin`, which is not on the `PATH` of a fresh Mac. If uv warns about that, run `uv tool update-shell` and open a new terminal, or run `export PATH="$HOME/.local/bin:$PATH"` in the current one. Otherwise setup reports `multi` as missing even though it is installed.
 
 Contributors who commit to the repos also need [`gitleaks`](https://github.com/gitleaks/gitleaks) (`brew install gitleaks`). Setup does not need it, but the git hooks that `multi sync` installs refuse commits and pushes without it.
