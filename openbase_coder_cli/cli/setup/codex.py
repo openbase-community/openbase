@@ -144,6 +144,11 @@ def relink_workspace_skills_from_installation(
         return False
 
 
+# Bundled skills that were renamed or removed. Their old links dangle once
+# the installation updates, so the linker drops them.
+RETIRED_BUNDLED_SKILLS = ("ios-app-control",)
+
+
 def _symlink_skills_to_root(
     skill_sources: list[Path],
     *,
@@ -152,6 +157,13 @@ def _symlink_skills_to_root(
     report: Callable[[str], None] = click.echo,
 ) -> None:
     target_root.mkdir(parents=True, exist_ok=True)
+
+    for retired_name in RETIRED_BUNDLED_SKILLS:
+        retired_path = target_root / retired_name
+        # Only a dangling link is ours to remove; a user's own copy stays.
+        if retired_path.is_symlink() and not retired_path.exists():
+            retired_path.unlink()
+            report(f"Removed retired {label} skill link {retired_path}")
 
     for source_path in skill_sources:
         target_path = target_root / source_path.name

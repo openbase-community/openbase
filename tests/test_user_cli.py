@@ -266,7 +266,8 @@ def test_user_say_rejects_blank_agent_name():
     assert "Agent name is required and cannot be blank" in result.output
 
 
-def test_user_ios_open_url_posts_control_command(monkeypatch):
+@pytest.mark.parametrize("group", ["phone", "ios"])
+def test_user_open_url_posts_control_command(monkeypatch, group):
     calls = []
 
     def fake_request(method, url, **kwargs):
@@ -285,7 +286,7 @@ def test_user_ios_open_url_posts_control_command(monkeypatch):
 
     result = CliRunner().invoke(
         user_cli.user,
-        ["ios", "open-url", "openbase://threads/123"],
+        [group, "open-url", "openbase://threads/123"],
     )
 
     assert result.exit_code == 0
@@ -325,7 +326,8 @@ def test_user_ios_open_url_pushes_when_no_app_confirms_receipt(monkeypatch):
     assert pushes[0]["user_info"] == {"openbase_destination": "open_url", "url": "openbase://threads/123"}
 
 
-def test_user_ios_mute_and_unmute_post_control_commands(monkeypatch):
+@pytest.mark.parametrize("group", ["phone", "ios"])
+def test_user_mute_and_unmute_post_control_commands(monkeypatch, group):
     calls = []
 
     def fake_request(method, url, **kwargs):
@@ -342,8 +344,8 @@ def test_user_ios_mute_and_unmute_post_control_commands(monkeypatch):
 
     patch_local_server_request(monkeypatch, fake_request)
 
-    mute_result = CliRunner().invoke(user_cli.user, ["ios", "mute"])
-    unmute_result = CliRunner().invoke(user_cli.user, ["ios", "unmute"])
+    mute_result = CliRunner().invoke(user_cli.user, [group, "mute"])
+    unmute_result = CliRunner().invoke(user_cli.user, [group, "unmute"])
 
     assert mute_result.exit_code == 0
     assert unmute_result.exit_code == 0

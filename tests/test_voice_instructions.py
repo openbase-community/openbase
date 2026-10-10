@@ -21,7 +21,7 @@ def test_direct_voice_instructions_include_conservative_background_auto_mute() -
         AGENT_BUILTIN_VOICE_INSTRUCTIONS,
         ROUTE_BUILTIN_VOICE_INSTRUCTIONS,
     ):
-        assert "openbase-coder user ios mute" in instructions
+        assert "openbase-coder user phone mute" in instructions
         assert "clearly appears to be background conversation" in instructions
         assert "not addressing Openbase Coder" in instructions
         assert "Do not auto-mute ambiguous transcripts" in instructions

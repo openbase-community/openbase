@@ -342,19 +342,38 @@ def voice_route() -> None:
         click.echo(f"Target transfer blocked: {data.get('blocked_reason')}")
 
 
-@user.group("ios")
-def ios() -> None:
-    """Control the foreground Openbase iOS app."""
+@user.group("phone")
+def phone() -> None:
+    """Control the Openbase app on the user's phone (iOS or Android)."""
 
 
-@ios.command("open-url")
+@phone.command("open-url")
 @click.argument("url")
 @click.pass_context
-def ios_open_url(ctx: click.Context, url: str) -> None:
+def phone_open_url(ctx: click.Context, url: str) -> None:
     """Open a URL on the phone, with push fallback and no callback forward."""
     ctx.invoke(
         browser_open, url=url, no_forward=True, callback_port=None, no_push=False
     )
+
+
+@phone.command("mute")
+def phone_mute() -> None:
+    """Mute the active voice call on the phone."""
+    data = _publish_ios_app_control({"action": "set_call_muted", "muted": True})
+    _report_app_command_result(data, "mute", device="phone")
+
+
+@phone.command("unmute")
+def phone_unmute() -> None:
+    """Unmute the active voice call on the phone."""
+    data = _publish_ios_app_control({"action": "set_call_muted", "muted": False})
+    _report_app_command_result(data, "unmute", device="phone")
+
+
+@user.group("ios")
+def ios() -> None:
+    """Control the foreground Openbase iOS app."""
 
 
 @ios.command("mute")
@@ -441,19 +460,26 @@ def ios_upload_logs(limit: int | None) -> None:
 
 
 def _report_ios_command_result(data: dict, label: str) -> None:
+    _report_app_command_result(data, label, device="iOS")
+
+
+def _report_app_command_result(data: dict, label: str, *, device: str) -> None:
     command_id = data.get("command_id")
     if data.get("delivered"):
-        click.echo(f"iOS {label} command delivered: {command_id}")
+        click.echo(f"{device} {label} command delivered: {command_id}")
         return
-    click.echo(f"iOS {label} command published (unconfirmed): {command_id}")
+    click.echo(f"{device} {label} command published (unconfirmed): {command_id}")
     raise click.ClickException(
-        "No iOS app confirmed receipt before the timeout. The command may already "
+        f"No {device} app confirmed receipt before the timeout. The command may already "
         "have executed; inspect the phone before retrying. Check its connection, "
         "foreground state, and sign-in if it did not execute."
     )
 
 
-ios.add_command(ios_open_url, "open-link")
+phone.add_command(phone_open_url, "open-link")
+# Older iOS-only spellings, kept for agents and scripts that still use them.
+ios.add_command(phone_open_url, "open-url")
+ios.add_command(phone_open_url, "open-link")
 ios.add_command(ios_start_livekit_voice_test, "debug-livekit-call")
 ios.add_command(ios_start_developer_call, "developer-call")
 
