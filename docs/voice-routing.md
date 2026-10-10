@@ -18,6 +18,8 @@ The dispatcher, agents receiving a direct voice transfer, and the voice model re
 
 ## Check The Current Route
 
+During an iOS or Android call, the agent receives the phone's latest microphone, speakerphone, and audio-route state with each voice request, including after a transfer to a Super Agent. You can ask whether the microphone is muted or which audio output is in use. These answers describe the state last reported by the phone; the agent says it cannot see the call controls when that information is unavailable.
+
 ```bash
 openbase-coder user voice-route
 ```

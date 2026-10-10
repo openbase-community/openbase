@@ -116,6 +116,28 @@ def test_tracker_follows_the_phone_attribute_and_ignores_agents():
     assert room.handlers == {}
 
 
+def test_missing_call_state_invalidates_prior_notes_after_transfer():
+    phone = _phone({CALL_STATE_ATTRIBUTE: json.dumps(EARPIECE)})
+    room = _Room([phone])
+    tracker = CallerAttributeTracker()
+    tracker.attach(room)
+    router = SimpleNamespace(is_dispatcher_active=False, focused_thread_tracker=tracker)
+    prompt = "<voice>Am I still on speakerphone?</voice>"
+    assert "speakerphone off (earpiece)" in apply_screen_context(router, prompt)
+    room.handlers["participant_disconnected"](phone)
+    unavailable = apply_screen_context(router, prompt)
+    assert "Current call state is unavailable" in unavailable
+    assert "do not reuse earlier call-state notes or guess" in unavailable
+    assert "speakerphone off" not in unavailable
+    from super_agents.claude_prompts import user_prompt_for_display
+
+    assert user_prompt_for_display(unavailable) == "Am I still on speakerphone?"
+    room.handlers["participant_connected"](phone)
+    assert "speakerphone off (earpiece)" in apply_screen_context(router, prompt)
+    room.handlers["participant_attributes_changed"]({CALL_STATE_ATTRIBUTE: "invalid"}, phone)
+    assert "Current call state is unavailable" in apply_screen_context(router, prompt)
+
+
 def test_tracker_reads_attributes_on_a_phone_that_joins_after_attach():
     room = _Room()
     tracker = FocusedThreadTracker()

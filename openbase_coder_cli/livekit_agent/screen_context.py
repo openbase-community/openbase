@@ -143,7 +143,10 @@ def call_state_clause(state: CallState) -> str:
 
 
 def screen_context_note(
-    focus: FocusedThread | None, call_state: CallState | None = None
+    focus: FocusedThread | None,
+    call_state: CallState | None = None,
+    *,
+    call_state_unavailable: bool = False,
 ) -> str:
     """The system note; empty when there is nothing to say."""
     parts: list[str] = []
@@ -167,6 +170,12 @@ def screen_context_note(
             + " Answer questions about mute, speakerphone or the audio route "
             "from this, never from a guess."
         )
+    elif call_state_unavailable:
+        parts.append(
+            "Current call state is unavailable. For questions about mute, "
+            "speakerphone or the audio route, say you cannot see the call "
+            "controls; do not reuse earlier call-state notes or guess."
+        )
     if not parts:
         return ""
     return "[Openbase system note: " + " ".join(parts) + "]"
@@ -178,6 +187,7 @@ def with_screen_context(
     *,
     dispatcher_thread_id: str | None = None,
     call_state: CallState | None = None,
+    call_state_unavailable: bool = False,
 ) -> str:
     """``prompt`` with the system note in front, when there is one.
 
@@ -190,7 +200,9 @@ def with_screen_context(
         or (dispatcher_thread_id and focus.thread_id == dispatcher_thread_id)
     ):
         focus = None
-    note = screen_context_note(focus, call_state)
+    note = screen_context_note(
+        focus, call_state, call_state_unavailable=call_state_unavailable
+    )
     if not note:
         return prompt
     return f"{note}\n\n{prompt}"
@@ -310,12 +322,17 @@ def apply_screen_context(voice_router: Any, prompt: str) -> str:
         return prompt
     call_state_of = getattr(tracker, "call_state", None)
     call_state = call_state_of() if callable(call_state_of) else None
+    call_state_unavailable = callable(call_state_of) and call_state is None
     if not getattr(voice_router, "is_dispatcher_active", False):
-        return with_screen_context(prompt, None, call_state=call_state)
+        return with_screen_context(
+            prompt, None, call_state=call_state,
+            call_state_unavailable=call_state_unavailable,
+        )
     dispatcher = getattr(voice_router, "active_client", None)
     return with_screen_context(
         prompt,
         tracker.current(),
         dispatcher_thread_id=getattr(dispatcher, "_thread_id", None) or None,
         call_state=call_state,
+        call_state_unavailable=call_state_unavailable,
     )
