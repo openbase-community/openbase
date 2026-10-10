@@ -122,6 +122,9 @@ def annotate_thread_payload(
         "is_favorite": favorite["is_favorite"],
         "favorited_at": favorite["favorited_at"],
         "model_override": get_thread_model_override(resolved_thread_id),
+        # Conversation identity survives transfers; voice_route describes
+        # only the current call. Never infer this role from a display title.
+        "conversation_role": "dispatcher" if is_dispatcher else "agent",
         # Set while the thread is being pushed to (or has moved to) another
         # computer; this copy is then read-only.
         "moved_to": moved_to_payload(resolved_thread_id),

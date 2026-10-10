@@ -42,6 +42,7 @@ from .session_manager_base import (
     load_super_agent_developer_instructions,
     logger,
 )
+from .speaking_identity import ensure_speaking_identity
 from .thread_payloads import (
     _datetime_to_iso,
     _merge_tracked_turn_details,
@@ -278,6 +279,8 @@ class SessionManagerThreadsMixin:
         sessions = [
             _session_from_thread(thread, include_turns=False) for thread in raw_threads
         ]
+        for session in sessions:
+            await ensure_speaking_identity(self._client, session)
         return sorted(sessions, key=_session_sort_key, reverse=True)
 
     async def _backend_thread_page(
@@ -339,6 +342,8 @@ class SessionManagerThreadsMixin:
                     for session in raw_sessions
                     if isinstance(session, dict)
                 ]
+                for session in sessions:
+                    await ensure_speaking_identity(self._client, session)
                 self._backend_sessions_cache = (time.monotonic(), sessions)
                 return list(sessions)
         finally:
@@ -434,10 +439,11 @@ class SessionManagerThreadsMixin:
             if developer_instructions is not None:
                 thread_input["developerInstructions"] = developer_instructions
             started = await self._client.start_thread(thread_input)
-            return _session_from_thread(
+            session = _session_from_thread(
                 _normalize_backend_thread_payload(started),
                 include_turns=False,
             )
+            return await ensure_speaking_identity(self._client, session)
 
         if reuse_existing:
             result = await self._client.list_threads(
@@ -460,7 +466,9 @@ class SessionManagerThreadsMixin:
         thread = _thread_payload(started)
         if thread is None:
             raise RuntimeError("Super Agents did not return a thread")
-        return _session_from_thread(thread, include_turns=False)
+        return await ensure_speaking_identity(
+            self._client, _session_from_thread(thread, include_turns=False)
+        )
 
     async def close_session(self, session_id: str) -> bool:
         """Archive a persisted thread."""
@@ -499,6 +507,7 @@ class SessionManagerThreadsMixin:
         if result is None:
             return None
         session = _session_from_thread(result, include_turns=True)
+        await ensure_speaking_identity(self._client, session)
         await self._apply_local_turn_state(session_id, session)
         return session
 
@@ -531,6 +540,8 @@ class SessionManagerThreadsMixin:
         sessions = [
             _session_from_thread(thread, include_turns=False) for thread in raw_threads
         ]
+        for session in sessions:
+            await ensure_speaking_identity(self._client, session)
         return sorted(sessions, key=_session_sort_key, reverse=True)
 
     async def _read_thread(

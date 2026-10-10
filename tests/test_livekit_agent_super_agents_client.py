@@ -2449,3 +2449,69 @@ async def test_claude_auth_check_never_memoizes_a_logged_out_answer(
     await client.run_turn("one")
     await client.run_turn("two")
     assert calls == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_discovery_reuses_casefolded_name_and_persists_exact_id(
+    tmp_path,
+):
+    backend = FakeCodexSuperAgentsBackend()
+
+    async def sessions():
+        return [
+            {
+                "threadId": "older",
+                "name": "dispatcher",
+                "cwd": "/tmp/project",
+                "updatedAt": "2026-01-01",
+            },
+            {
+                "threadId": "canonical",
+                "name": "Dispatcher",
+                "cwd": "/tmp/project",
+                "updatedAt": "2026-02-01",
+            },
+            {
+                "threadId": "other-project",
+                "name": "Dispatcher",
+                "cwd": "/tmp/other",
+                "updatedAt": "2026-03-01",
+            },
+        ]
+
+    backend.sessions = sessions
+    state = tmp_path / "route.json"
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project", state_path=str(state), backend_client=backend
+    )
+    assert await client.prepare() == "canonical"
+    assert not backend.started_threads
+    assert json.loads(state.read_text())["dispatcher_thread_id"] == "canonical"
+
+    # A later, differently cased name cannot replace the persisted exact ID.
+    async def changed_sessions():
+        raise AssertionError("Persisted canonical ID must avoid discovery")
+
+    backend.sessions = changed_sessions
+    restarted = SuperAgentsLiveKitClient(
+        cwd="/tmp/project", state_path=str(state), backend_client=backend
+    )
+    assert await restarted.prepare() == "canonical"
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_explicit_recreation_skips_discovery(tmp_path):
+    backend = FakeCodexSuperAgentsBackend()
+
+    async def sessions():
+        raise AssertionError("Fresh recreation must not reuse history")
+
+    backend.sessions = sessions
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "route.json"),
+        backend_client=backend,
+        fresh_thread=True,
+    )
+    assert await client.prepare() == "dispatcher-thread"
+    assert backend.started_threads[0]["fresh"] is True

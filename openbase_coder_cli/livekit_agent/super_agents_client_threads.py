@@ -122,6 +122,10 @@ class SuperAgentsClientThreadsMixin:
                             self._thread_id = None
                             self._thread_loaded = False
 
+                    if not self._fresh_thread:
+                        existing = await self._find_existing_dispatcher()
+                        if existing:
+                            return await self._resume_thread(existing)
                     return await self._start_thread()
 
             if self._thread_loaded and self._thread_id:
@@ -138,6 +142,32 @@ class SuperAgentsClientThreadsMixin:
                     self._thread_id = None
                     self._thread_loaded = False
             return await self._start_thread()
+
+    async def _find_existing_dispatcher(self) -> str | None:
+        """Adopt an existing Dispatcher after route-state loss, without deleting history.
+
+        Persisted exact IDs always win. Only discovery is case insensitive;
+        distinct historical conversations remain distinct backend records.
+        """
+        sessions = getattr(self._backend_client, "sessions", None)
+        if not callable(sessions):
+            return None
+        candidates = []
+        for item in await sessions():
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name") or item.get("label")
+            thread_id = item.get("threadId") or item.get("id")
+            if (
+                isinstance(name, str)
+                and name.strip().casefold() == DEFAULT_DISPATCHER_LABEL.casefold()
+                and isinstance(thread_id, str)
+                and thread_id
+                and not item.get("archived")
+                and item.get("cwd") == self._cwd
+            ):
+                candidates.append((str(item.get("updatedAt") or ""), thread_id))
+        return max(candidates)[1] if candidates else None
 
     async def _start_thread(self) -> str:
         params: dict[str, Any] = {

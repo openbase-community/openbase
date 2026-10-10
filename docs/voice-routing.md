@@ -90,6 +90,8 @@ Direct voice instructions ask about unclear transcript portions while continuing
 
 ## Return To The Dispatcher
 
+Openbase reuses the persisted Dispatcher conversation by its exact thread ID. If that saved reference is missing, it discovers an existing Dispatcher conversation in the dispatcher's working directory, treating `Dispatcher` and `dispatcher` as the same name for discovery. Separate historical conversations remain visible. Transfers change the active call target without changing the canonical conversation's identity. Agent speaking names are saved in backend metadata so the conversation list, roster tools, and agent instructions use the same character.
+
 From any direct Super Agent voice route, return the active private voice session
 to the dispatcher with:
 
