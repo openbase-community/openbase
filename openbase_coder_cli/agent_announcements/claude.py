@@ -5,6 +5,11 @@ from __future__ import annotations
 import inspect
 import json
 
+from super_agents.claude_system_prompt import (
+    compose_system_prompt,
+    supports_refreshable_system_prompt,
+)
+
 from openbase_coder_cli.cli.utils import get_data_dir
 from openbase_coder_cli.livekit_voice_route import get_livekit_voice_route_state
 
@@ -66,6 +71,20 @@ class ManagedAnnouncements:
                 )
             self.protocol.store.update_session(session.id, agent_name=voice.name)
         thread_id = session.id
+        if not supports_refreshable_system_prompt(sdk):
+            raise RuntimeError(
+                "Managed announcements require the pinned refreshable Claude SDK."
+            )
+        identity = (
+            " Your speaking name is "
+            + str(self.protocol.store.get_session(thread_id).agent_name)
+            + "."
+        )
+        options.system_prompt = compose_system_prompt(
+            options.system_prompt or {"type": "preset", "preset": "claude_code"},
+            PROTOCOL_INSTRUCTIONS + identity,
+            sdk,
+        )
 
         async def task_announcement(arguments):
             # The installed SDK turns handler exceptions into MCP error results.
@@ -83,15 +102,13 @@ class ManagedAnnouncements:
             return await self.protocol.stop(thread_id)
 
         async def prompt(event, tool_use_id, context):
+            current = await self.protocol.context(thread_id)
+            origin = "direct conversation" if current.direct else "delegated task"
             return {
                 "hookSpecificOutput": {
                     "hookEventName": "UserPromptSubmit",
-                    "additionalContext": (
-                        PROTOCOL_INSTRUCTIONS
-                        + " Your speaking name is "
-                        + str(self.protocol.store.get_session(thread_id).agent_name)
-                        + "."
-                    ),
+                    "additionalContext": f"This request's recorded origin is {origin}."
+                    + identity,
                 }
             }
 

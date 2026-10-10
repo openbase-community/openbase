@@ -538,3 +538,49 @@ async def test_cancel_before_submission_releases_unattempted_intro_claim(worker)
     set_prompt(w, "A new delegated task.")
     await begin(w)
     assert len(w.receipts) == 1
+
+
+@pytest.mark.parametrize(
+    "base",
+    [
+        {"type": "preset", "preset": "claude_code", "append": "Older user.say policy."},
+        {"type": "custom", "prompt": "Custom base and older user.say policy."},
+    ],
+)
+async def test_reused_worker_gets_authoritative_protocol_and_actual_request_origin(
+    worker, monkeypatch, base
+):
+    import claude_agent_sdk as sdk
+
+    from openbase_coder_cli.agent_announcements import claude
+
+    w = worker
+    monkeypatch.setattr(
+        claude,
+        "get_livekit_voice_route_state",
+        lambda: SimpleNamespace(dispatcher_thread_id="parent"),
+    )
+    options = sdk.ClaudeAgentOptions(system_prompt=base)
+    ManagedAnnouncements(w.store, protocol=w.protocol).configure_session(
+        w.session, options, sdk
+    )
+    text = options.system_prompt.get("append") or options.system_prompt["prompt"]
+    assert text.startswith(base.get("append") or base["prompt"])
+    assert "replaces older default user.say instructions" in text
+    assert "Your speaking name is Rowan." in text
+    assert options.system_prompt["snapshot"] is False
+    prompt_hook = options.hooks["UserPromptSubmit"][-1].hooks[0]
+    output = await prompt_hook({}, None, None)
+    assert (
+        "recorded origin is delegated task"
+        in output["hookSpecificOutput"]["additionalContext"]
+    )
+    turn = w.store.create_turn(
+        w.session.id, "An ordinary direct text conversation.", status="running"
+    )
+    w.store.update_session(w.session.id, active_turn_id=turn.id, last_turn_id=turn.id)
+    output = await prompt_hook({}, None, None)
+    assert (
+        "recorded origin is direct conversation"
+        in output["hookSpecificOutput"]["additionalContext"]
+    )
