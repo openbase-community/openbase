@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import plistlib
 import py_compile
 import subprocess
 from pathlib import Path
@@ -151,3 +153,115 @@ def test_validate_package_requires_sync_engine_when_requested(tmp_path: Path) ->
             "1.0.0",
             require_sync_engine=True,
         )
+
+
+def _fake_launcher_app(app: Path) -> Path:
+    executable = app / "Contents" / "MacOS" / "openbase-services"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o755)
+    (app / "Contents" / "Info.plist").write_bytes(
+        plistlib.dumps(
+            {
+                "CFBundleExecutable": "openbase-services",
+                "CFBundleIdentifier": "cloud.openbase.coder.services",
+            }
+        )
+    )
+    return executable
+
+
+def test_stage_service_launcher_copies_the_prebuilt_bundle_for_macos(
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    source = tmp_path / "Openbase Services.app"
+    _fake_launcher_app(source)
+
+    relative = build_standalone_package.stage_service_launcher(
+        package_dir, source, version="1.0.0", target="aarch64-apple-darwin"
+    )
+
+    assert relative == build_standalone_package.SERVICE_LAUNCHER_RELATIVE_PATH
+    assert (package_dir / relative).is_file()
+    assert (package_dir / relative).parents[1].joinpath("Info.plist").is_file()
+
+
+def test_stage_service_launcher_rejects_bundles_without_an_identifier(
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    source = tmp_path / "Openbase Services.app"
+    _fake_launcher_app(source)
+    (source / "Contents" / "Info.plist").write_bytes(
+        plistlib.dumps({"CFBundleExecutable": "openbase-services"})
+    )
+
+    with pytest.raises(RuntimeError, match="CFBundleIdentifier"):
+        build_standalone_package.stage_service_launcher(
+            package_dir, source, version="1.0.0", target="aarch64-apple-darwin"
+        )
+
+
+def test_stage_service_launcher_is_macos_only(tmp_path: Path) -> None:
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+
+    assert (
+        build_standalone_package.stage_service_launcher(
+            package_dir, None, version="1.0.0", target="x86_64-unknown-linux-gnu"
+        )
+        is None
+    )
+    assert not (package_dir / "libexec").exists()
+
+
+def test_metadata_records_the_service_launcher(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        build_standalone_package, "package_python_version", lambda _dir: "3.12.0"
+    )
+    build_standalone_package.write_metadata(
+        tmp_path,
+        version="1.0.0",
+        target="aarch64-apple-darwin",
+        channel="stable",
+        repo_shas={},
+        service_launcher=build_standalone_package.SERVICE_LAUNCHER_RELATIVE_PATH,
+    )
+    metadata = json.loads(
+        (tmp_path / build_standalone_package.METADATA_FILENAME).read_text()
+    )
+    assert (
+        metadata["serviceLauncher"]
+        == "libexec/Openbase Services.app/Contents/MacOS/openbase-services"
+    )
+
+    build_standalone_package.write_metadata(
+        tmp_path,
+        version="1.0.0",
+        target="x86_64-unknown-linux-gnu",
+        channel="stable",
+        repo_shas={},
+    )
+    metadata = json.loads(
+        (tmp_path / build_standalone_package.METADATA_FILENAME).read_text()
+    )
+    assert "serviceLauncher" not in metadata
+
+
+def test_required_package_files_include_the_service_launcher(tmp_path: Path) -> None:
+    required = build_standalone_package.required_package_files(
+        tmp_path, require_sync_engine=True, require_service_launcher=True
+    )
+    assert (
+        tmp_path / build_standalone_package.SERVICE_LAUNCHER_RELATIVE_PATH in required
+    )
+    assert tmp_path / "bin" / "openbase-syncd" in required
+    assert (
+        tmp_path / build_standalone_package.SERVICE_LAUNCHER_RELATIVE_PATH
+        not in build_standalone_package.required_package_files(tmp_path)
+    )

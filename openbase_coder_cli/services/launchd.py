@@ -500,9 +500,40 @@ def _associated_bundle_id(config: InstallationConfig) -> str | None:
     return None
 
 
+def _service_launcher_path() -> Path | None:
+    """The runtime package's Openbase Services launcher, when it ships one.
+
+    macOS attributes TCC decisions (Desktop/Documents folders, Local Network)
+    to the launchd job's own process and keys the grant on that executable's
+    code identity. Running the wrapper through the launcher — a Developer
+    ID-signed app bundle with a fixed bundle identifier — makes every service
+    (and every agent process they spawn) present the same stable identity to
+    TCC across self-updates, instead of the ad-hoc-signed Python binary of
+    the current release. Routed through ``current`` like every other package
+    path. Development installs carry no package and run the wrapper directly.
+    """
+    if not _is_macos():
+        return None
+    package = stable_runtime_package()
+    if package is None:
+        return None
+    launcher = package.service_launcher_path
+    if launcher is None or not launcher.is_file():
+        return None
+    return launcher
+
+
 def render_plist(svc: ServiceDefinition, config: InstallationConfig) -> str:
     label = _service_label(svc)
     wrapper = _wrapper_path(svc)
+    launcher = _service_launcher_path()
+    # Indented so the dedented plist keeps the exact layout of earlier
+    # releases: a byte-identical plist is what lets install_service restart
+    # in place instead of re-registering the background item.
+    program_arguments = "\n".join(
+        f"    <string>{argument}</string>"
+        for argument in ([launcher, wrapper] if launcher else [wrapper])
+    )
     workdir = svc.workdir_template.format(
         workspace=config.workspace_path or _runtime_workdir(config),
         data_dir=str(OPENBASE_BASE_DIR),
@@ -533,7 +564,7 @@ def render_plist(svc: ServiceDefinition, config: InstallationConfig) -> str:
 {textwrap.indent(associated_bundle, "            ")}
             <key>ProgramArguments</key>
             <array>
-                <string>{wrapper}</string>
+{textwrap.indent(program_arguments, "            ")}
             </array>
             <key>WorkingDirectory</key>
             <string>{workdir}</string>

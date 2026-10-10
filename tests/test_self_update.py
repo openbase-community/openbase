@@ -17,6 +17,10 @@ from openbase_coder_cli.runtime import RuntimePackage
 from openbase_coder_cli.services.installation import InstallationConfig
 from openbase_coder_cli.sync_daemon import SYNC_ENGINE_BINARY_NAMES
 
+SERVICE_LAUNCHER_RELATIVE_PATH = (
+    "libexec/Openbase Services.app/Contents/MacOS/openbase-services"
+)
+
 
 def _make_fake_package(
     root: Path, *, version: str, python_version: str = "3.12.8"
@@ -35,6 +39,10 @@ def _make_fake_package(
         binary = root / "bin" / name
         binary.write_text("#!/bin/sh\n", encoding="utf-8")
         binary.chmod(0o755)
+    service_launcher = root / SERVICE_LAUNCHER_RELATIVE_PATH
+    service_launcher.parent.mkdir(parents=True)
+    service_launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    service_launcher.chmod(0o755)
     (root / "openbase-coder-package.json").write_text(
         json.dumps(
             {
@@ -43,6 +51,7 @@ def _make_fake_package(
                 "target": "aarch64-apple-darwin",
                 "channel": "stable",
                 "pythonVersion": python_version,
+                "serviceLauncher": SERVICE_LAUNCHER_RELATIVE_PATH,
             }
         ),
         encoding="utf-8",
@@ -297,6 +306,31 @@ def test_download_rejects_checksum_mismatch(monkeypatch, tmp_path) -> None:
             target="aarch64-apple-darwin",
             report=lambda _msg: None,
         )
+
+
+def test_validate_release_dir_requires_the_declared_service_launcher(
+    tmp_path: Path,
+) -> None:
+    # A macOS release without its launcher would fall back to the
+    # per-release Python identity and re-prompt for Desktop access.
+    release = _make_fake_package(tmp_path / "release", version="2.0.0")
+    (release / SERVICE_LAUNCHER_RELATIVE_PATH).unlink()
+
+    with pytest.raises(self_update.SelfUpdateError, match="service launcher"):
+        self_update._validate_release_dir(release)
+
+
+def test_validate_release_dir_requires_macos_packages_to_declare_a_launcher(
+    tmp_path: Path,
+) -> None:
+    release = _make_fake_package(tmp_path / "release", version="2.0.0")
+    metadata_path = release / "openbase-coder-package.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    del metadata["serviceLauncher"]
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(self_update.SelfUpdateError, match="serviceLauncher"):
+        self_update._validate_release_dir(release)
 
 
 def test_validate_release_dir_requires_sync_engine(tmp_path: Path) -> None:
