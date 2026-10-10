@@ -125,17 +125,7 @@ Agents can make a short spoken announcement in the active private voice session:
 openbase-coder user say "Lucy" "I finished the documentation update."
 ```
 
-The first argument is the speaking agent name. The remaining words are the
-message to speak. Announcements always speak with your dispatcher voice, so
-every background notice sounds like the same assistant; the agent is named in
-the words, not the voice. On a GPT-Live call the voice model speaks the
-announcement itself, in the call's voice. This is useful for Super Agent introductions, plan-mode
-questions, completion notices, and brief requests for user attention. If no
-voice room is active, the command sends the same message as a phone alert
-that opens the speaking agent's thread. This fallback requires an Openbase
-Cloud login and a phone (iPhone or Android) registered for notifications; if
-either delivery path fails, the command exits with an error instead of
-claiming success.
+The first argument is the speaking agent name. The remaining words are the message to speak. Announcements use your chosen dispatcher voice. If you pin a different GPT-Live voice with `LIVEKIT_LIVE_VOICE_VOICE`, Cartesia and Openbase Cloud announcements use its paired Cartesia voice; local Kokoro announcements keep the chosen Kokoro voice. On a GPT-Live call the voice model speaks the announcement itself, in the call's voice. This is useful for Super Agent introductions, plan-mode questions, completion notices, and brief requests for user attention. If no voice room is active, the command sends the same message as a phone alert that opens the speaking agent's thread. This fallback requires an Openbase Cloud login and a phone (iPhone or Android) registered for notifications; if either delivery path fails, the command exits with an error instead of claiming success.
 
 For local audio cues:
 
