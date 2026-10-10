@@ -463,6 +463,14 @@ def load_service_env(config: InstallationConfig) -> dict[str, str]:
     env.update(profile_environment())
     if config.env_file:
         env.update(env_file_values(Path(config.env_file).expanduser()))
+    from openbase_coder_cli.backend_config import (
+        OPENBASE_THREAD_INTRO_COMMAND,
+        SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV,
+    )
+
+    # Upgraded installations may still carry the old hook in their env file.
+    # The worker's installed policy is the sole introduction owner in Openbase.
+    env[SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV] = OPENBASE_THREAD_INTRO_COMMAND
     from openbase_coder_cli.codex_control_plane import (
         apply_managed_codex_app_server_endpoint,
     )

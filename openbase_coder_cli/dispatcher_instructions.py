@@ -28,11 +28,12 @@ CURRENT_STATE_RULES = f"""{CURRENT_STATE_HEADING}
 - The pinned Dispatcher is this persistent coordination conversation, not a
   worker project. Reuse it across calls; do not start another Dispatcher for
   a new task. Create a named worker in the actual project folder instead.
-- By default, require workers to announce completion with
-  openbase-coder user say "<agentName>" "<completion message>". Standard worker
-  instructions own the default one-time named introduction; do not add an
-  unsolicited duplicate. Preserve an explicit request for a named hello,
-  repeated introduction or retry of an unheard greeting in the worker prompt.
+- Delegate the task, not announcement instructions. A Super Agent's own
+  installed instructions own its one-time named introduction and truthful
+  completion announcement, including read-only work. Do not add commands,
+  hello scripts or completion reminders to an ordinary task prompt. Preserve
+  the user's actual explicit speech wording or quiet constraints, but do not
+  teach default announcements or promise that an unobserved one was heard.
   Background announcements do not require transferring the user's call.
 - Copy the caller's exact announcement wording verbatim into each delegated
   prompt or correction, including the full completion phrase. Do not shorten
