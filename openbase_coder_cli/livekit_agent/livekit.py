@@ -291,22 +291,20 @@ class OpenbaseCloudAudioAuthenticationError(RuntimeError):
     """Openbase Cloud audio requires a valid Openbase machine token."""
 
 
-def _uses_local_voice_model() -> bool:
-    return (
-        selected_stt_provider_id() == LOCAL_MLX_WHISPER_STT_PROVIDER_ID
-        or selected_tts_provider_id() == KOKORO_PROVIDER_ID
-    )
-
-
 def _livekit_agent_server_options() -> dict[str, float | int]:
-    uses_local_model = _uses_local_voice_model()
     options: dict[str, float | int] = {}
 
+    # This worker serves one user's calls on their own computer or workspace,
+    # so it must take every call regardless of how busy the machine is.
+    # livekit-agents' production default (0.7 CPU) made a busy Mac decline
+    # its own user's call: LiveKit answered "no servers available" and the
+    # phone sat on "Waiting for agent" (field test 2026-10-09, a CPU-bound
+    # desktop rejected a call outright). The env override stays for a
+    # deliberately shared deployment.
     load_threshold = _optional_float_env(LIVEKIT_AGENT_LOAD_THRESHOLD_ENV)
-    if load_threshold is not None:
-        options["load_threshold"] = load_threshold
-    elif uses_local_model:
-        options["load_threshold"] = float("inf")
+    options["load_threshold"] = (
+        load_threshold if load_threshold is not None else float("inf")
+    )
 
     # livekit-agents defaults num_idle_processes to the CPU count, which on a
     # 16-core machine prewarms 16 job processes (each holding a VAD model,
