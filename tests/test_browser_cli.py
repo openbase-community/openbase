@@ -425,3 +425,21 @@ def test_forward_target_never_falls_back_to_dns_or_a_non_vpn_address():
         )
         == "fd7a:115c:a1e0::12"
     )
+
+
+def test_browser_open_reports_the_phone_forward_outcome(monkeypatch):
+    _patch_tunneld(monkeypatch)
+    for forward_status, expected in [
+        ("started", "is forwarding the login callback"),
+        ("vpn_down", "Openbase VPN is off"),
+        ("failed", "could not forward the callback (port busy)"),
+        (None, "predates callback forwarding"),
+    ]:
+        receipt = {"command_id": "c-1", "delivered": True, "opened": True}
+        if forward_status:
+            receipt["forward"] = forward_status
+            receipt["forward_error"] = "port busy"
+        _patch_publish(monkeypatch, receipt)
+        result = CliRunner().invoke(browser_cli.browser, ["open", LOGIN_URL])
+        assert result.exit_code == 0, result.output
+        assert expected in result.output, (forward_status, result.output)

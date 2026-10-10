@@ -103,8 +103,11 @@ def browser_open(
                     "paste the final localhost address back here instead."
                 )
 
-    if _deliver(url, forward):
+    receipt = _deliver(url, forward)
+    if receipt:
         click.echo(OPENED_MESSAGE)
+        if forward is not None:
+            click.echo(_forward_note(receipt))
     elif not no_push and _push(url, forward):
         click.echo(PUSHED_MESSAGE)
     else:
@@ -154,9 +157,32 @@ def _self_tailnet_target(status_fn) -> str | None:
     return None
 
 
-def _deliver(url: str, forward: LoopbackForward | None) -> bool:
-    """Bound the delivery attempt even if authentication or the server stalls."""
-    return bool(_bounded_attempt(lambda: _try_deliver(url, forward)))
+def _deliver(url: str, forward: LoopbackForward | None) -> dict | None:
+    """The phone's receipt when it acknowledged delivery, else None; bounded
+    even if authentication or the server stalls."""
+    return _bounded_attempt(lambda: _try_deliver(url, forward))
+
+
+def _forward_note(receipt: dict) -> str:
+    """What the phone said about the loopback forward it was asked to run."""
+    status = receipt.get("forward")
+    if status == "started":
+        return "Your phone is forwarding the login callback to this workspace."
+    if status == "vpn_down":
+        return (
+            "Your phone's Openbase VPN is off, so it cannot forward the callback; "
+            "turn it on and retry, or paste the final localhost address back here."
+        )
+    if status in {"failed", "unsupported"}:
+        reason = receipt.get("forward_error") or status
+        return (
+            f"Your phone could not forward the callback ({reason}); paste the "
+            "final localhost address back here instead."
+        )
+    return (
+        "Your phone app predates callback forwarding; paste the final localhost "
+        "address back here if the login ends on a localhost page."
+    )
 
 
 def _bounded_attempt[Result](
@@ -176,8 +202,8 @@ def _bounded_attempt[Result](
     return results[0] if results else None
 
 
-def _try_deliver(url: str, forward: LoopbackForward | None) -> bool:
-    """Whether the phone app acknowledged receipt; any failure means no."""
+def _try_deliver(url: str, forward: LoopbackForward | None) -> dict | None:
+    """The phone app's receipt when it acknowledged; any failure means None."""
     try:
         data = publish_open_url(
             url, loopback_forward=forward.as_app_control() if forward else None
@@ -185,12 +211,14 @@ def _try_deliver(url: str, forward: LoopbackForward | None) -> bool:
     except (click.ClickException, OSError, ValueError):
         # Server unreachable, rejected, or answered garbage: the printed URL
         # and hint are the fallback, and the calling CLI must keep going.
-        return False
-    return (
+        return None
+    if (
         isinstance(data, dict)
         and data.get("delivered") is True
         and (data.get("opened") is not False or data.get("notified") is True)
-    )
+    ):
+        return data
+    return None
 
 
 def _push(url: str, forward: LoopbackForward | None) -> bool:
