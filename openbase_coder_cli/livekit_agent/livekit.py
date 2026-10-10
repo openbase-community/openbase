@@ -149,6 +149,7 @@ from openbase_coder_cli.livekit_agent.live_preconnect import (
     _preconnecting_model_class,
     wait_live_session_started,
 )
+from openbase_coder_cli.livekit_agent.live_speech_gate import SpeechGatedAgent
 from openbase_coder_cli.livekit_agent.live_voice import (
     LIVE_VOICE_PROVIDER_FAILED_CODE,
     LIVE_VOICE_UNAVAILABLE_CODE,
@@ -955,7 +956,7 @@ async def _start_voice_session(
     return session, announcer_tts, session_diagnostic_handlers
 
 
-class LiveVoiceAssistant(Agent):
+class LiveVoiceAssistant(SpeechGatedAgent):
     """The LiveKit agent for the live engine: GPT-Live persona plus the bridge.
 
     The persona is fixed at ``session.start``; everything that changes during
@@ -973,6 +974,7 @@ class LiveVoiceAssistant(Agent):
             )
         )
         self._bridge = bridge
+        self._speech_gate = bridge.speech_gate
 
     async def on_enter(self) -> None:
         self._bridge.attach(self.duplex_session)
@@ -1083,9 +1085,8 @@ async def _start_live_voice_session(
         live_model = _build_live_voice_model(decision, voice=identity.gpt_live_voice)
     session_start = time.monotonic()
     session_vad = _diagnostic_vad(ctx.proc.userdata["vad"])
-    # No STT, TTS or turn detector: the voice model listens, speaks and owns
-    # turn-taking. The explicit VAD lets the session cut playout on barge-in
-    # (the plugin drops the default VAD for duplex models).
+    # The model listens continuously. VAD drives our explicit output gate:
+    # the duplex adapter permits overlap and cannot cancel provider output.
     session = AgentSession(
         conn_options=voice_connect_options(),
         llm=live_model,
@@ -1112,6 +1113,15 @@ async def _start_live_voice_session(
         on_unrecoverable_error=handle_live_error,
         proactive_steering=False,
     )
+
+    def gate_caller_speech(event):
+        bridge.speech_gate.user_state_changed(event.new_state)
+        if event.new_state == "speaking":
+            session.interrupt(force=True)
+
+    # Bind before start, including callers who speak over the first greeting.
+    session.on("user_state_changed", gate_caller_speech)
+    session_diagnostic_handlers += (("user_state_changed", gate_caller_speech),)
     logger.info(
         "dispatch_timing stage=agent_session_start_begin room_name=%s "
         "voice_engine=live readiness=%s",
@@ -1134,6 +1144,7 @@ async def _start_live_voice_session(
             on_error=handle_live_error,
             ledger=delivery_ledger,
             initial_model=live_model,
+            speech_gate=bridge.speech_gate,
             timeout=LIVE_VOICE_PREFLIGHT_TIMEOUT_SECONDS,
         )
         bridge.characters = characters

@@ -69,6 +69,7 @@ from typing import Any
 from openbase_coder_cli.livekit_agent.config import (
     load_direct_livekit_developer_instructions,
 )
+from openbase_coder_cli.livekit_agent.live_speech_gate import LiveSpeechGate
 from openbase_coder_cli.livekit_agent.screen_context import apply_screen_context
 from openbase_coder_cli.livekit_agent.speech_formatter import (
     format_for_speech_segments,
@@ -623,6 +624,7 @@ class LiveDelegationBridge:
         self._suspended_input_session = None
         self._suspended_input_handler = None
         self._input_route = None
+        self.speech_gate = LiveSpeechGate()
 
     # wiring
 
@@ -671,6 +673,7 @@ class LiveDelegationBridge:
 
     def suspend_session(self) -> None:
         """Hold backend deliveries while the immutable character is replaced."""
+        self.speech_gate.revoke()
         if self._session_down_at is None:
             self._session_down_at = self._clock()
         old = self._live_session
@@ -751,6 +754,8 @@ class LiveDelegationBridge:
                     exc_info=True,
                 )
                 return
+            if method == "append_commentary":
+                self.speech_gate.authorize()
             self._stats[method] += 1
             self._log.info(
                 "%s stage=live_%s delegation_id=%s text_len=%d text_hash=%s",
@@ -842,6 +847,9 @@ class LiveDelegationBridge:
                 return
         if is_trivial_utterance(text):
             self._skipped = _SkippedUtterance(text=text, at=self._clock())
+            # Only settled social speech may be answered without a backend.
+            # Substantive input remains muted until current commentary arrives.
+            self.speech_gate.authorize()
             self._log_forced(text, decision="skipped_trivial")
             return
         self._skipped = None
@@ -899,6 +907,7 @@ class LiveDelegationBridge:
 
     def on_user_state_changed(self, old_state: str, new_state: str) -> None:
         """The session VAD's view of the caller's voice (``user_state_changed``)."""
+        self.speech_gate.user_state_changed(new_state)
         if new_state == "speaking" and old_state != "speaking":
             self._user_speaking = True
             if self._held is not None:
@@ -1182,6 +1191,7 @@ class LiveDelegationBridge:
         if self._session_down_at is not None:
             return
         self._session_down_at = self._clock()
+        self.speech_gate.revoke()
         self._log.info(
             "%s stage=live_session_dropped running=%d",
             DISPATCH_TIMING_LOG,
