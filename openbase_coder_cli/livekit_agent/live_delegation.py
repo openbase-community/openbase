@@ -509,7 +509,7 @@ class LiveSpeechCursor:
 
 @dataclass
 class LiveDelegationEntry:
-    """One caller utterance handed to a Super Agent turn.
+    """One caller utterance or an owned orphaned Super Agent result.
 
     ``key`` names the entry: the delegation id when GPT-Live's delegation
     started it, otherwise ``utt-<n>``. ``delegation_id`` is the GPT-Live
@@ -1510,15 +1510,44 @@ class LiveDelegationBridge:
 
     def deliver_orphaned_result(self, client, turn_id: str, speech_text: str) -> None:
         """Speak a completed turn answer no delegation consumed."""
-        if not speech_text or not turn_id:
+        if self._closed or not speech_text or not turn_id:
+            return
+        matching = [
+            entry
+            for entry in self._entries.values()
+            if entry.client is client and entry.turn_id == turn_id
+        ]
+        current = [
+            entry
+            for entry in matching
+            if not entry.superseded
+            and self._voice_router.can_deliver_for_snapshot(entry.route)
+        ]
+        if matching and not current:
             return
         if not self._voice_router.claim_speech(client, turn_id):
             return
         cursor = self._cursor(turn_id)
         chunks = cursor.advance(speech_text, final=True)
-        delegation_id = self._newest_delegation_id_for(client)
-        for chunk in chunks:
-            self._append_commentary(chunk, delegation_id)
+        if not chunks:
+            return
+        if current:
+            entry = max(current, key=lambda item: item.created_at)
+        else:
+            self._utterance_seq += 1
+            entry = LiveDelegationEntry(
+                key=f"orphan-{self._utterance_seq}",
+                prompt="",
+                route=self._voice_router.route_snapshot(),
+                client=client,
+                source="orphaned_result",
+                turn_id=turn_id,
+                completed=True,
+                created_at=self._clock(),
+            )
+            self._entries[entry.key] = entry
+            self._prune_entries()
+        self._deliver(entry, chunks, final=True)
 
     # delegation execution
 
@@ -1754,14 +1783,14 @@ class LiveDelegationBridge:
     def _newest_entry_for(self, client) -> LiveDelegationEntry | None:
         newest: LiveDelegationEntry | None = None
         for entry in self._entries.values():
-            if entry.client is client and not entry.superseded:
+            if (
+                entry.client is client
+                and not entry.superseded
+                and entry.source != "orphaned_result"
+            ):
                 if newest is None or entry.created_at >= newest.created_at:
                     newest = entry
         return newest
-
-    def _newest_delegation_id_for(self, client) -> str | None:
-        entry = self._newest_entry_for(client)
-        return entry.delegation_id if entry is not None else None
 
     def _open_utterance_entry(self) -> LiveDelegationEntry | None:
         """The newest turn a delegation started on a still-open utterance."""
@@ -1778,7 +1807,12 @@ class LiveDelegationBridge:
         cutoff = self._clock() - DELEGATION_BIND_WINDOW_SECONDS
         newest: LiveDelegationEntry | None = None
         for entry in self._entries.values():
-            if entry.superseded or entry.delegation_id or entry.created_at < cutoff:
+            if (
+                entry.superseded
+                or entry.delegation_id
+                or entry.created_at < cutoff
+                or entry.source == "orphaned_result"
+            ):
                 continue
             if newest is None or entry.created_at >= newest.created_at:
                 newest = entry

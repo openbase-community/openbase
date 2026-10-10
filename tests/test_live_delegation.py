@@ -1546,6 +1546,99 @@ async def test_orphaned_results_are_spoken_once():
     await bridge.aclose()
 
 
+@pytest.mark.parametrize("gap", ["suspend", "disconnect"])
+async def test_orphaned_result_is_retained_until_the_conversation_session_returns(gap):
+    clock = {"now": 100.0}
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        clock=lambda: clock["now"]
+    )
+    if gap == "suspend":
+        bridge.suspend_session()
+    else:
+        live.drop()
+    bridge.deliver_orphaned_result(dispatcher, "turn-9", "The deploy finished.")
+    bridge.deliver_orphaned_result(dispatcher, "turn-9", "The deploy finished.")
+    assert dispatcher.claimed == ["turn-9"]
+    assert live.of("commentary") == []
+    clock["now"] += 120
+    replacement = FakeGPTLiveSession()
+    bridge.attach(replacement)
+    bridge.on_session_reconnected()
+    assert replacement.of("commentary", None) == ["The deploy finished."]
+    clock["now"] += 1
+    bridge.on_agent_state_changed("listening", "speaking")
+    bridge.suspend_session()
+    next_session = FakeGPTLiveSession()
+    bridge.attach(next_session)
+    bridge.on_session_reconnected()
+    assert next_session.of("commentary") == []
+    await bridge.aclose()
+
+
+@pytest.mark.parametrize("return_to_route", [False, True])
+async def test_held_orphaned_result_never_replays_after_route_changes(return_to_route):
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    bridge.suspend_session()
+    bridge.deliver_orphaned_result(dispatcher, "turn-9", "Old route answer.")
+    router.transfer(FakeVoiceClient(thread_id="other-thread"))
+    if return_to_route:
+        router.exit_to_dispatch()
+    replacement = FakeGPTLiveSession()
+    bridge.attach(replacement)
+    bridge.on_session_reconnected()
+    bridge.deliver_orphaned_result(dispatcher, "turn-9", "Old route answer.")
+    assert replacement.of("commentary") == []
+    await bridge.aclose()
+
+
+async def test_orphaned_result_does_not_take_over_a_callers_pending_delegation():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.delegate("current", "Run the tests")
+    await _settle()
+    current = bridge._newest_entry_for(dispatcher)
+    bridge.suspend_session()
+    bridge.deliver_orphaned_result(dispatcher, "orphaned-turn", "Prior work finished.")
+    assert bridge._newest_entry_for(dispatcher) is current
+    replacement = FakeGPTLiveSession()
+    bridge.attach(replacement)
+    bridge.on_session_reconnected()
+    replacement.delegate("new-session-delegation")
+    assert current.delegation_id == "new-session-delegation"
+    dispatcher.result_gate.set()
+    await _settle()
+    assert replacement.of("commentary", None) == ["Prior work finished."]
+    assert replacement.of("commentary", "new-session-delegation") == ["All tests pass. The build is green."]
+    await bridge.aclose()
+
+
+async def test_orphaned_result_reuses_its_matching_turn_delivery():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.delegate("current", "Run the tests")
+    await _settle()
+    dispatcher.progress("turn-1", {})
+    entry = bridge._newest_entry_for(dispatcher)
+    bridge.suspend_session()
+    bridge.deliver_orphaned_result(dispatcher, "turn-1", "All tests pass. The build is green.")
+    assert list(bridge._entries.values()) == [entry]
+    dispatcher.result_gate.set()
+    await _settle()
+    replacement = FakeGPTLiveSession()
+    bridge.attach(replacement)
+    bridge.on_session_reconnected()
+    assert replacement.of("commentary", None) == ["All tests pass. The build is green."]
+    assert dispatcher.claimed == ["turn-1"]
+    await bridge.aclose()
+
+
+async def test_orphaned_result_is_not_a_new_caller_utterance():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    bridge.deliver_orphaned_result(dispatcher, "turn-9", "The deploy finished.")
+    live.delegate("no-new-caller-input")
+    assert all(entry.delegation_id is None for entry in bridge._entries.values())
+    assert dispatcher.prompts == []
+    await bridge.aclose()
+
+
 # --- lifecycle packets --------------------------------------------------------------
 
 
