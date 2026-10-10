@@ -1189,6 +1189,157 @@ async def test_super_agents_livekit_client_proactively_steers_active_turn(
 
 
 @pytest.mark.asyncio
+async def test_replacing_a_fragment_turn_interrupts_it_on_a_non_steering_backend(
+    tmp_path: Path,
+) -> None:
+    """Claude Code cannot steer mid-turn: a plain steer becomes a queued
+    follow-up that runs the whole request again after the fragment turn.
+    The merged request interrupts the fragment turn and runs once."""
+    backend = FakeLongRunningSuperAgentsBackend()
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "livekit-voice-route.json"),
+        backend_client=backend,
+    )
+    first = asyncio.create_task(
+        client.run_turn("Subtract 38 from the result in this thread")
+    )
+    await backend.progress_called.wait()
+
+    merged = asyncio.create_task(
+        client.run_turn(
+            "Subtract 38 from the result in this thread and answer just the number",
+            replaces_active_turn=True,
+        )
+    )
+    await asyncio.sleep(0)
+    backend.release_progress.set()
+    first_result, merged_result = await asyncio.gather(first, merged)
+
+    assert len(backend.started_turns) == 1
+    assert len(backend.steered) == 1
+    steer_input, prompt = backend.steered[0]
+    assert steer_input.turn_id == "turn-1"
+    # The whole request, not the unsubmitted remainder: the interrupted
+    # work is discarded.
+    assert prompt == (
+        "Subtract 38 from the result in this thread and answer just the number"
+    )
+    assert backend.steer_turn_inputs[0]["interruptCurrentWork"] is True
+    assert first_result["_livekit_turn_id"] == "turn-1"
+    assert merged_result["_livekit_turn_id"] == "turn-1"
+
+
+@pytest.mark.asyncio
+async def test_replacing_a_fragment_turn_steers_the_remainder_on_codex(
+    tmp_path: Path,
+) -> None:
+    class CodexLongRunningBackend(FakeLongRunningSuperAgentsBackend):
+        backend = "codex"
+
+    backend = CodexLongRunningBackend()
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "livekit-voice-route.json"),
+        backend_client=backend,
+    )
+    first = asyncio.create_task(
+        client.run_turn("Subtract 38 from the result in this thread")
+    )
+    await backend.progress_called.wait()
+
+    merged = asyncio.create_task(
+        client.run_turn(
+            "Subtract 38 from the result in this thread and answer just the number",
+            replaces_active_turn=True,
+        )
+    )
+    await asyncio.sleep(0)
+    backend.release_progress.set()
+    await asyncio.gather(first, merged)
+
+    assert len(backend.started_turns) == 1
+    assert len(backend.steered) == 1
+    _steer_input, prompt = backend.steered[0]
+    # Codex steers mid-turn natively: only the new words reach the turn and
+    # nothing is interrupted.
+    assert prompt == "<voice>and answer just the number</voice>"
+    assert "interruptCurrentWork" not in backend.steer_turn_inputs[0]
+
+
+@pytest.mark.asyncio
+async def test_a_plain_follow_up_never_interrupts_the_active_turn(
+    tmp_path: Path,
+) -> None:
+    backend = FakeLongRunningSuperAgentsBackend()
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "livekit-voice-route.json"),
+        backend_client=backend,
+    )
+    first = asyncio.create_task(client.run_turn("Increment the counter"))
+    await backend.progress_called.wait()
+    follow_up = asyncio.create_task(client.run_turn("Run the linter"))
+    await asyncio.sleep(0)
+    backend.release_progress.set()
+    await asyncio.gather(first, follow_up)
+
+    assert len(backend.steered) == 1
+    assert "interruptCurrentWork" not in backend.steer_turn_inputs[0]
+
+
+class FakeSteerTimeoutSuperAgentsBackend(FakeLongRunningSuperAgentsBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.cancelled: list[Any] = []
+        self.queued: list[tuple[Any, dict[str, Any]]] = []
+
+    async def steer_by_label(self, input_data, prompt, turn_input=None):
+        self.steered.append((input_data, prompt))
+        self.steer_turn_inputs.append(turn_input)
+        raise TimeoutError("turn/steer timed out")
+
+    async def cancel_by_label(self, input_data) -> dict[str, Any]:
+        self.cancelled.append(input_data)
+        return {"cancelled": True}
+
+    async def queue_turn_by_label(self, input_data, turn_input) -> dict[str, Any]:
+        self.queued.append((input_data, turn_input))
+        return {"queued": True, "queuedId": "queued-1"}
+
+
+@pytest.mark.asyncio
+async def test_a_replacement_whose_steer_times_out_cancels_the_fragment_turn(
+    tmp_path: Path,
+) -> None:
+    backend = FakeSteerTimeoutSuperAgentsBackend()
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "livekit-voice-route.json"),
+        backend_client=backend,
+    )
+    first = asyncio.create_task(client.run_turn("Subtract 38 from the result"))
+    await backend.progress_called.wait()
+    merged = asyncio.create_task(
+        client.run_turn(
+            "Subtract 38 from the result and answer just the number",
+            replaces_active_turn=True,
+        )
+    )
+    await asyncio.sleep(0)
+    backend.release_progress.set()
+    await asyncio.gather(first, merged)
+
+    # The queued follow-up re-runs the whole request, so the fragment turn
+    # it replaces is cancelled before it can finish its half.
+    assert [c.turn_id for c in backend.cancelled] == ["turn-1"]
+    assert len(backend.queued) == 1
+    assert backend.queued[0][1]["prompt"] == (
+        "Subtract 38 from the result and answer just the number"
+    )
+
+
+@pytest.mark.asyncio
 async def test_super_agents_livekit_client_passes_dispatcher_reasoning_to_steer(
     tmp_path: Path,
 ) -> None:
