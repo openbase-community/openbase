@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -37,6 +39,9 @@ from openbase_coder_cli.config.token_manager import (
 from openbase_coder_cli.livekit_agent.config import (
     LIVE_VOICE_PREFLIGHT_CLOSE_WAIT_SECONDS,
     LIVE_VOICE_PREFLIGHT_TIMEOUT_SECONDS,
+    LIVE_VOICE_READINESS_REFRESH_SECONDS,
+    LIVE_VOICE_READINESS_RETRY_SECONDS,
+    LIVE_VOICE_READINESS_TTL_SECONDS,
     OPENBASE_CLOUD_LIVE_BASE_URL,
     WEB_BACKEND_URL,
 )
@@ -94,12 +99,20 @@ class LiveVoiceCredentials:
         return urlunparse((scheme, parsed.netloc, path, "", "", ""))
 
 
+READINESS_PROBED = "probed"
+READINESS_CACHED = "cached"
+
+
 @dataclass(frozen=True)
 class VoiceEngineDecision:
     engine: str
     credentials: LiveVoiceCredentials | None = None
     fallback_reason: str | None = None
     fallback_detail: str | None = None
+    # How the live engine's prerequisites were established for this call:
+    # ``probed`` (entitlement + gateway handshake ran now) or ``cached`` (a
+    # fresh result from the readiness cache, nothing was waited on).
+    readiness: str = READINESS_PROBED
 
     @property
     def is_live(self) -> bool:
@@ -275,6 +288,196 @@ def _display_url(url: str) -> str:
     return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
 
 
+@dataclass(frozen=True)
+class LiveVoiceReadiness:
+    """One successful entitlement + handshake check, keyed by what it proved."""
+
+    credentials: LiveVoiceCredentials
+    tts_provider_id: str
+    stt_provider_id: str
+    checked_at: float
+
+    def matches(
+        self,
+        credentials: LiveVoiceCredentials,
+        *,
+        tts_provider_id: str,
+        stt_provider_id: str,
+    ) -> bool:
+        return (
+            self.credentials == credentials
+            and self.tts_provider_id == tts_provider_id
+            and self.stt_provider_id == stt_provider_id
+        )
+
+
+class LiveVoiceReadinessCache:
+    """Remembers that the live engine's prerequisites held, for a while.
+
+    The entitlement call and the gateway handshake probe (which waits
+    ``LIVE_VOICE_PREFLIGHT_CLOSE_WAIT_SECONDS`` for a rejection) cost about a
+    second per call on a cloud workspace (forensics F6, 2026-10-09). A result
+    is reused for ``ttl`` seconds as long as the gateway URL, the Cloud token
+    and the providers are unchanged; only successes are stored, so a failure
+    is always re-probed on the next call and a recovered gateway is picked
+    up immediately. Thread-safe: the refresher thread writes while job
+    processes read.
+    """
+
+    def __init__(self, ttl: float = LIVE_VOICE_READINESS_TTL_SECONDS) -> None:
+        self.ttl = ttl
+        self._lock = threading.Lock()
+        self._readiness: LiveVoiceReadiness | None = None
+
+    def get(
+        self,
+        credentials: LiveVoiceCredentials,
+        *,
+        tts_provider_id: str,
+        stt_provider_id: str,
+        now: float | None = None,
+    ) -> LiveVoiceReadiness | None:
+        """The fresh, matching readiness or None."""
+        with self._lock:
+            readiness = self._readiness
+        if readiness is None or not readiness.matches(
+            credentials,
+            tts_provider_id=tts_provider_id,
+            stt_provider_id=stt_provider_id,
+        ):
+            return None
+        age = (time.monotonic() if now is None else now) - readiness.checked_at
+        if age > self.ttl:
+            return None
+        return readiness
+
+    def store(
+        self,
+        credentials: LiveVoiceCredentials,
+        *,
+        tts_provider_id: str,
+        stt_provider_id: str,
+        now: float | None = None,
+    ) -> LiveVoiceReadiness:
+        readiness = LiveVoiceReadiness(
+            credentials=credentials,
+            tts_provider_id=tts_provider_id,
+            stt_provider_id=stt_provider_id,
+            checked_at=time.monotonic() if now is None else now,
+        )
+        with self._lock:
+            self._readiness = readiness
+        return readiness
+
+    def clear(self) -> None:
+        with self._lock:
+            self._readiness = None
+
+
+class LiveVoiceReadinessRefresher:
+    """Keeps a readiness cache warm from a daemon thread.
+
+    Runs ``probe`` (a sync callable that performs the full check and stores a
+    success in the cache) right away, then every ``interval`` seconds, or
+    ``retry_interval`` seconds after a probe that failed, until ``stop`` is
+    called. Meant for the idle agent job process: ``prewarm`` starts it, so
+    the call that lands on the process finds a fresh result instead of
+    paying the probe, and the entrypoint stops it so no probe runs during a
+    call. Probe errors are logged, never raised.
+    """
+
+    def __init__(
+        self,
+        probe: Callable[[], bool],
+        *,
+        interval: float = LIVE_VOICE_READINESS_REFRESH_SECONDS,
+        retry_interval: float = LIVE_VOICE_READINESS_RETRY_SECONDS,
+    ) -> None:
+        self._probe = probe
+        self._interval = interval
+        self._retry_interval = retry_interval
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self.probes = 0
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(self) -> None:
+        if self.running:
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._run, name="live-voice-readiness", daemon=True
+        )
+        self._thread.start()
+
+    def stop(self, *, join_timeout: float | None = None) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is not None and join_timeout is not None:
+            thread.join(join_timeout)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                ok = bool(self._probe())
+            except Exception:
+                logger.warning("Live voice readiness probe crashed", exc_info=True)
+                ok = False
+            self.probes += 1
+            wait = self._interval if ok else self._retry_interval
+            if self._stop.wait(wait):
+                return
+
+
+def probe_live_voice_readiness(
+    cache: LiveVoiceReadinessCache,
+    *,
+    selected_engine: str,
+    tts_provider_id: str,
+    stt_provider_id: str,
+    cloud_token_provider: Callable[[], str],
+) -> bool:
+    """Run the live engine's checks now and store a success in ``cache``.
+
+    Sync (runs on its own event loop) so a daemon thread can call it. Returns
+    False, without storing anything, when the live engine is not selected or
+    any check fails; the reason is logged once at info level since a probe
+    failure in the background is expected whenever the install has no live
+    voice, and the per-call decision reports its own fallback.
+    """
+    if selected_engine != VOICE_ENGINE_LIVE:
+        return False
+    started = time.monotonic()
+
+    async def _run() -> VoiceEngineDecision:
+        # The checks are named here (not left to the defaults) so they are
+        # the module's current functions at call time.
+        return await decide_voice_engine(
+            selected_engine=selected_engine,
+            tts_provider_id=tts_provider_id,
+            stt_provider_id=stt_provider_id,
+            cloud_token_provider=cloud_token_provider,
+            import_model=import_live_model,
+            check_entitlement=check_live_voice_entitlement,
+            preflight=preflight_live_voice,
+            readiness_cache=cache,
+            use_cached_readiness=False,
+        )
+
+    decision = asyncio.run(_run())
+    logger.info(
+        "dispatch_timing stage=live_voice_readiness_probe engine=%s reason=%s "
+        "elapsed_ms=%d",
+        decision.engine,
+        decision.fallback_reason or "",
+        int((time.monotonic() - started) * 1000),
+    )
+    return decision.is_live
+
+
 async def decide_voice_engine(
     *,
     selected_engine: str,
@@ -287,13 +490,35 @@ async def decide_voice_engine(
     ),
     check_entitlement: Callable[..., None] = check_live_voice_entitlement,
     preflight: Callable[..., Any] = preflight_live_voice,
+    readiness_cache: LiveVoiceReadinessCache | None = None,
+    use_cached_readiness: bool = True,
 ) -> VoiceEngineDecision:
-    """Pick the engine for this call, falling back to the pipeline when live cannot start."""
+    """Pick the engine for this call, falling back to the pipeline when live cannot start.
+
+    With a ``readiness_cache``, a fresh matching entry stands in for the
+    entitlement check and the handshake probe (``readiness == "cached"``), and
+    a probe that passes is stored for the next call.
+    """
     if selected_engine != VOICE_ENGINE_LIVE:
         return VoiceEngineDecision(engine=VOICE_ENGINE_PIPELINE)
     try:
         import_model()
         credentials = resolve_credentials(cloud_token_provider=cloud_token_provider)
+        if (
+            readiness_cache is not None
+            and use_cached_readiness
+            and readiness_cache.get(
+                credentials,
+                tts_provider_id=tts_provider_id,
+                stt_provider_id=stt_provider_id,
+            )
+            is not None
+        ):
+            return VoiceEngineDecision(
+                engine=VOICE_ENGINE_LIVE,
+                credentials=credentials,
+                readiness=READINESS_CACHED,
+            )
         await asyncio.to_thread(
             check_entitlement,
             credentials,
@@ -307,6 +532,12 @@ async def decide_voice_engine(
         return _fallback(
             "unexpected_error",
             f"Unexpected error preparing live voice: {exception_chain_summary(exc)}.",
+        )
+    if readiness_cache is not None:
+        readiness_cache.store(
+            credentials,
+            tts_provider_id=tts_provider_id,
+            stt_provider_id=stt_provider_id,
         )
     return VoiceEngineDecision(engine=VOICE_ENGINE_LIVE, credentials=credentials)
 

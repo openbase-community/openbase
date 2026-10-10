@@ -75,6 +75,23 @@ class SuperAgentsClientThreadsMixin:
     async def prepare(self) -> str:
         return await self._ensure_thread()
 
+    async def warm(self) -> bool:
+        """Get the thread's backend session ready for its first turn.
+
+        Runs the Claude auth check (its result is reused by the first turn)
+        and asks a backend that supports it to connect the session's client
+        now; Codex threads are already loaded by ``prepare``. Returns whether
+        a backend session was warmed. Meant to run concurrently with the call
+        start-up, never on a turn's critical path.
+        """
+        thread_id = await self._ensure_thread()
+        await self._ensure_claude_auth_ready()
+        warm = getattr(self._backend_client, "warm_session_by_label", None)
+        if warm is None or self._backend_is_codex():
+            return False
+        result = await warm(self._query(thread_id=thread_id), self._turn_model_fields())
+        return bool(result.get("warmed")) if isinstance(result, dict) else False
+
     async def _ensure_thread(self) -> str:
         async with self._state_lock:
             if self._state_path is not None:

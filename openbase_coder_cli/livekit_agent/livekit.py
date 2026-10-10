@@ -12,8 +12,10 @@ import inspect
 import json
 import logging
 import os
+import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 from livekit import rtc
 from livekit.agents import (
@@ -104,6 +106,8 @@ from openbase_coder_cli.livekit_agent.config import (  # noqa: F401
     DISPATCHER_BUILTIN_DEVELOPER_INSTRUCTIONS,
     LIVE_VOICE_DEFAULT_VOICE,
     LIVE_VOICE_MODEL,
+    LIVE_VOICE_PRECONNECT,
+    LIVE_VOICE_READINESS_PREWARM,
     LIVEKIT_AGENT_HOST,
     LIVEKIT_AGENT_LOAD_THRESHOLD_ENV,
     LIVEKIT_AGENT_NUM_IDLE_PROCESSES_ENV,
@@ -117,6 +121,7 @@ from openbase_coder_cli.livekit_agent.config import (  # noqa: F401
     LIVEKIT_CODEX_THREAD_STATE_PATH,
     LIVEKIT_DISPATCH_AGENT_NAME,
     LIVEKIT_DISPATCHER_CONFIG_PATH,
+    LIVEKIT_PARTICIPANT_JOIN_TIMEOUT_SECONDS,
     LIVEKIT_STT_PROVIDER,
     LIVEKIT_VERBOSE_LOGGING,
     OPENBASE_CLOUD_AUDIO_BASE_URL,
@@ -139,11 +144,14 @@ from openbase_coder_cli.livekit_agent.live_delegation import LiveDelegationBridg
 from openbase_coder_cli.livekit_agent.live_voice import (
     LIVE_VOICE_PROVIDER_FAILED_CODE,
     LIVE_VOICE_UNAVAILABLE_CODE,
+    LiveVoiceReadinessCache,
+    LiveVoiceReadinessRefresher,
     LiveVoiceSessionError,
     VoiceEngineDecision,
     decide_voice_engine,
     import_live_model,
     live_voice_unavailable_detail,
+    probe_live_voice_readiness,
 )
 from openbase_coder_cli.livekit_agent.logging_utils import (  # noqa: F401
     _event_text_hash,
@@ -342,9 +350,33 @@ def prewarm(proc: JobProcess):
     proc.userdata["vad"] = (
         LoggingVAD(vad_model) if LIVEKIT_VERBOSE_LOGGING else vad_model
     )
+    if LIVE_VOICE_READINESS_PREWARM:
+        _live_voice_readiness_refresher.start()
 
 
 server.setup_fnc = prewarm
+
+# Live-engine readiness (entitlement + gateway handshake) proven ahead of the
+# call. The job process is prewarmed by the pool, so the refresher runs in it
+# while it idles and the call it eventually serves skips the ~1 s probe; the
+# entrypoint stops the refresher so nothing probes during the call.
+_live_voice_readiness_cache = LiveVoiceReadinessCache()
+
+
+def _probe_live_voice_readiness() -> bool:
+    _refresh_audio_credentials()
+    return probe_live_voice_readiness(
+        _live_voice_readiness_cache,
+        selected_engine=selected_voice_engine(),
+        tts_provider_id=selected_tts_provider_id(),
+        stt_provider_id=selected_stt_provider_id(),
+        cloud_token_provider=_openbase_cloud_audio_token,
+    )
+
+
+_live_voice_readiness_refresher = LiveVoiceReadinessRefresher(
+    _probe_live_voice_readiness
+)
 
 
 def _build_voice_backend_client(*, persist_thread: bool) -> SuperAgentsLiveKitClient:
@@ -512,29 +544,34 @@ async def _end_call_after_agent_error(ctx: JobContext, exc: Exception) -> None:
     instead of sitting in a silent, half-dead call."""
     await _report_agent_error(ctx.room, exc)
     await asyncio.sleep(0.75)
-    room_name = str(getattr(ctx.room, "name", "") or "")
+    await _delete_room(str(getattr(ctx.room, "name", "") or ""))
+    ctx.shutdown(reason="agent-error")
+
+
+async def _delete_room(room_name: str) -> None:
+    """Best-effort room delete so every participant is disconnected.
+
+    On failure the agent still leaves, and LiveKit's empty-room timeout
+    eventually ends the call.
+    """
     api_key = os.environ.get("LIVEKIT_API_KEY")
     api_secret = os.environ.get("LIVEKIT_API_SECRET")
-    if room_name and api_key and api_secret:
-        import livekit.api as livekit_api
+    if not (room_name and api_key and api_secret):
+        return
+    import livekit.api as livekit_api
 
+    try:
+        client = livekit_api.LiveKitAPI(
+            url=os.environ.get("LIVEKIT_URL", "ws://localhost:7880"),
+            api_key=api_key,
+            api_secret=api_secret,
+        )
         try:
-            client = livekit_api.LiveKitAPI(
-                url=os.environ.get("LIVEKIT_URL", "ws://localhost:7880"),
-                api_key=api_key,
-                api_secret=api_secret,
-            )
-            try:
-                await client.room.delete_room(
-                    livekit_api.DeleteRoomRequest(room=room_name)
-                )
-            finally:
-                await client.aclose()
-        except Exception:
-            # Fall through to shutdown: the agent still leaves, and LiveKit's
-            # empty-room timeout eventually ends the call.
-            logger.exception("Unable to delete LiveKit room %s", room_name)
-    ctx.shutdown(reason="agent-error")
+            await client.room.delete_room(livekit_api.DeleteRoomRequest(room=room_name))
+        finally:
+            await client.aclose()
+    except Exception:
+        logger.exception("Unable to delete LiveKit room %s", room_name)
 
 
 async def _room_sid(room: rtc.Room) -> str:
@@ -918,17 +955,24 @@ class LiveVoiceAssistant(Agent):
 
 
 async def _decide_voice_engine_for_call() -> VoiceEngineDecision:
-    """Read the voice model per call and check the live engine can start."""
+    """Read the voice model per call and check the live engine can start.
+
+    A fresh readiness-cache entry (see ``prewarm``) stands in for the
+    entitlement check and the handshake probe.
+    """
     return await decide_voice_engine(
         selected_engine=selected_voice_engine(),
         tts_provider_id=selected_tts_provider_id(),
         stt_provider_id=selected_stt_provider_id(),
         cloud_token_provider=_openbase_cloud_audio_token,
+        readiness_cache=_live_voice_readiness_cache,
     )
 
 
-def _build_live_voice_model(decision: VoiceEngineDecision):
+def _build_live_voice_model(decision: VoiceEngineDecision, *, preconnect: bool = False):
     gpt_live_model = import_live_model()
+    if preconnect:
+        gpt_live_model = _preconnecting_model_class(gpt_live_model)
     credentials = decision.credentials
     assert credentials is not None
     return gpt_live_model(
@@ -940,14 +984,144 @@ def _build_live_voice_model(decision: VoiceEngineDecision):
     )
 
 
+_preconnecting_model_classes: dict[type, type] = {}
+
+
+def _preconnecting_model_class(base: type) -> type:
+    """``base`` (the GPT-Live model class) with a ``preconnect`` step.
+
+    The plugin opens the gateway websocket when a session object is created,
+    which normally happens inside ``AgentSession.start``, after the room has
+    connected. ``preconnect`` creates that session earlier so the connection
+    overlaps the room connect and the start route; ``session`` then hands the
+    open session to the framework once. A preconnected session that already
+    failed (its connection task ended, or it reported an error before the
+    framework attached its handlers) is dropped and a fresh one is created,
+    so the error path is the same as without preconnect.
+    """
+    cls = _preconnecting_model_classes.get(base)
+    if cls is not None:
+        return cls
+
+    class PreconnectingLiveModel(base):  # type: ignore[misc, valid-type]
+        _pending_session: Any = None
+        _pending_errors: list = []
+
+        def preconnect(self) -> Any:
+            if self._pending_session is not None:
+                return self._pending_session
+            create = getattr(super(), "session", None)
+            if create is None:
+                return None
+            session = create()
+            errors: list = []
+            on = getattr(session, "on", None)
+            if callable(on):
+                on("error", errors.append)
+            self._pending_session = session
+            self._pending_errors = errors
+            return session
+
+        def session(self) -> Any:
+            session, self._pending_session = self._pending_session, None
+            errors, self._pending_errors = self._pending_errors, []
+            if session is None:
+                return super().session()
+            if errors or not _live_session_is_connecting(session):
+                logger.warning(
+                    "dispatch_timing stage=live_session_preconnect_discarded errors=%d",
+                    len(errors),
+                )
+                _schedule_live_session_close(session)
+                return super().session()
+            return session
+
+        async def discard_preconnected(self) -> None:
+            session, self._pending_session = self._pending_session, None
+            self._pending_errors = []
+            if session is not None:
+                await _close_live_session(session)
+
+    PreconnectingLiveModel.__name__ = f"Preconnecting{base.__name__}"
+    _preconnecting_model_classes[base] = PreconnectingLiveModel
+    return PreconnectingLiveModel
+
+
+def _live_session_is_connecting(session: Any) -> bool:
+    task = getattr(session, "_main_atask", None)
+    return task is None or not task.done()
+
+
+async def _close_live_session(session: Any) -> None:
+    aclose = getattr(session, "aclose", None)
+    if aclose is None:
+        return
+    try:
+        await aclose()
+    except Exception:
+        logger.debug("preconnected live session close failed", exc_info=True)
+
+
+def _schedule_live_session_close(session: Any) -> None:
+    try:
+        asyncio.get_running_loop().create_task(_close_live_session(session))
+    except RuntimeError:
+        logger.debug("no running loop to close the preconnected live session")
+
+
+async def _prepare_live_voice_model(
+    decision_task: "asyncio.Task[VoiceEngineDecision]",
+) -> Any | None:
+    """Build the live model and open its gateway connection as early as possible.
+
+    Resolves to the model once the engine decision is live, or None (pipeline,
+    preconnect disabled, or the preconnect itself failing: the session start
+    then connects as before).
+    """
+    decision = await decision_task
+    if not decision.is_live or not LIVE_VOICE_PRECONNECT:
+        return None
+    live_model = _build_live_voice_model(decision, preconnect=True)
+    try:
+        session = live_model.preconnect()
+    except Exception:
+        logger.warning(
+            "dispatch_timing stage=live_session_preconnect_failed", exc_info=True
+        )
+        return live_model
+    if session is not None:
+        logger.info("dispatch_timing stage=live_session_preconnect_start")
+    return live_model
+
+
+async def _discard_live_voice_model(live_model_task: "asyncio.Task[Any]") -> None:
+    if not live_model_task.done():
+        live_model_task.cancel()
+    try:
+        live_model = await live_model_task
+    except (asyncio.CancelledError, Exception):
+        return
+    discard = getattr(live_model, "discard_preconnected", None)
+    if discard is not None:
+        await discard()
+
+
 async def _start_live_voice_session(
     ctx: JobContext,
     voice_router: LiveKitVoiceRouter,
     delivery_ledger: VoiceDeliveryLedger,
     decision: VoiceEngineDecision,
+    *,
+    live_model: Any | None = None,
 ) -> tuple[AgentSession, LiveDelegationBridge, tuple]:
-    """Start the GPT-Live full-duplex session with the delegation bridge."""
-    live_model = _build_live_voice_model(decision)
+    """Start the GPT-Live full-duplex session with the delegation bridge.
+
+    ``live_model`` is the model prepared by ``_prepare_live_voice_model``
+    (its gateway connection already opening); None builds one here.
+    """
+    if live_model is None:
+        live_model = _build_live_voice_model(decision)
+    session_start = time.monotonic()
     session_vad = _diagnostic_vad(ctx.proc.userdata["vad"])
     # No STT, TTS or turn detector: the voice model listens, speaks and owns
     # turn-taking. The explicit VAD lets the session cut playout on barge-in
@@ -973,6 +1147,12 @@ async def _start_live_voice_session(
         ),
         proactive_steering=False,
     )
+    logger.info(
+        "dispatch_timing stage=agent_session_start_begin room_name=%s "
+        "voice_engine=live readiness=%s",
+        ctx.room.name,
+        decision.readiness,
+    )
     try:
         await session.start(agent=LiveVoiceAssistant(bridge), room=ctx.room)
     except BaseException:
@@ -982,12 +1162,17 @@ async def _start_live_voice_session(
             await session.aclose()
         except Exception:
             logger.debug("live AgentSession close after failed start", exc_info=True)
+        discard = getattr(live_model, "discard_preconnected", None)
+        if discard is not None:
+            await discard()
         raise
     logger.info(
         "dispatch_timing stage=agent_session_start_complete room_name=%s "
-        "voice_engine=live live_base_url=%s",
+        "voice_engine=live live_base_url=%s readiness=%s elapsed_ms=%d",
         ctx.room.name,
         decision.credentials.base_url if decision.credentials else "",
+        decision.readiness,
+        int((time.monotonic() - session_start) * 1000),
     )
     return session, bridge, session_diagnostic_handlers
 
@@ -1197,11 +1382,14 @@ def _wire_live_voice_call(
 async def livekit_agent(ctx: JobContext):
     from openbase_coder_cli.services.livekit_pool_activity import record_activity
 
+    job_received = time.monotonic()
     record_activity("job")
+    _live_voice_readiness_refresher.stop()
     _refresh_audio_credentials()
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
+    _log_job_received(ctx)
     logger.info(
         "Connecting LiveKit voice session to Super Agents backend with cwd=%s",
         LIVEKIT_CODEX_THREAD_CWD,
@@ -1213,17 +1401,32 @@ async def livekit_agent(ctx: JobContext):
     )
     prepare_task = asyncio.create_task(voice_backend_client.prepare())
     prepare_task.add_done_callback(_log_prepare_result)
+    # Warm the dispatcher's backend session (Claude CLI resume, auth check)
+    # while the call starts, so the first turn does not pay it (F6: 2.4 s).
+    warm_task = asyncio.create_task(
+        _warm_voice_backend(voice_backend_client, prepare_task, room_name=ctx.room.name)
+    )
+
+    async def _cancel_warm_task() -> None:
+        warm_task.cancel()
+
+    ctx.add_shutdown_callback(_cancel_warm_task)
     voice_router = LiveKitVoiceRouter(voice_backend_client)
     # Read the voice model per call (no restart needed) and check the live
     # engine's prerequisites while the room connects; a live engine that
     # cannot start falls back to the pipeline for this call.
     decision_task = asyncio.create_task(_decide_voice_engine_for_call())
+    # Open the GPT-Live gateway connection as soon as the engine is decided,
+    # while the room connects, instead of inside AgentSession.start.
+    live_model_task = asyncio.create_task(_prepare_live_voice_model(decision_task))
 
     logger.info("Connecting to LiveKit room")
     try:
         await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     except Exception:
         decision_task.cancel()
+        warm_task.cancel()
+        await _discard_live_voice_model(live_model_task)
         logger.error(
             "LiveKit agent failed to connect to room %s; participants will "
             "stay at 'waiting for agent'",
@@ -1231,7 +1434,15 @@ async def livekit_agent(ctx: JobContext):
             exc_info=True,
         )
         raise
-    logger.info("Connected to LiveKit room")
+    # Keep the exact "Connected to LiveKit room" wording: the troubleshooting
+    # runbook greps for it.
+    logger.info(
+        "Connected to LiveKit room "
+        "dispatch_timing stage=agent_room_connected room_name=%s since_job_ms=%d",
+        ctx.room.name,
+        int((time.monotonic() - job_received) * 1000),
+    )
+    _watch_participant_join(ctx, job_received=job_received)
     focused_thread_tracker = FocusedThreadTracker()
     focused_thread_tracker.attach(ctx.room)
     voice_router.focused_thread_tracker = focused_thread_tracker
@@ -1247,6 +1458,15 @@ async def livekit_agent(ctx: JobContext):
         ctx, voice_router, prepare_task=prepare_task
     )
     decision = await decision_task
+    logger.info(
+        "dispatch_timing stage=voice_engine_decided room_name=%s engine=%s "
+        "readiness=%s fallback_reason=%s since_job_ms=%d",
+        ctx.room.name,
+        decision.engine,
+        decision.readiness,
+        decision.fallback_reason or "",
+        int((time.monotonic() - job_received) * 1000),
+    )
     room_id = await _room_sid(ctx.room)
     delivery_ledger = _build_delivery_ledger(
         ctx, voice_router, room_id=room_id, live_mode=decision.is_live
@@ -1260,10 +1480,17 @@ async def livekit_agent(ctx: JobContext):
                 live_bridge,
                 session_diagnostic_handlers,
             ) = await _start_live_voice_session(
-                ctx, voice_router, delivery_ledger, decision
+                ctx,
+                voice_router,
+                delivery_ledger,
+                decision,
+                live_model=await live_model_task,
             )
         except Exception as exc:
             summary = exception_chain_summary(exc)
+            # The cached readiness was wrong about the gateway: the next
+            # call probes again instead of trusting it.
+            _live_voice_readiness_cache.clear()
             logger.warning(
                 "Live voice session failed to start in room %s (%s); falling back "
                 "to the pipeline voice engine for this call",
@@ -1341,7 +1568,138 @@ async def livekit_agent(ctx: JobContext):
         stall_task.cancel()
 
     ctx.add_shutdown_callback(_cancel_stall_watch)
-    logger.info("LiveKit AgentSession started (voice_engine=%s)", decision.engine)
+    logger.info(
+        "LiveKit AgentSession started (voice_engine=%s) "
+        "dispatch_timing stage=agent_call_ready room_name=%s engine=%s "
+        "since_job_ms=%d",
+        decision.engine,
+        ctx.room.name,
+        decision.engine,
+        int((time.monotonic() - job_received) * 1000),
+    )
+
+
+def _log_job_received(ctx: JobContext) -> None:
+    """Stamp the job's arrival; ``room_age_ms`` is the dispatch latency.
+
+    The room's creation time (set when the token view dispatched the agent,
+    or when the phone created the room on join) to this job starting is the
+    part of the start-up that happens before any of our code runs.
+    """
+    job = getattr(ctx, "job", None)
+    room_info = getattr(job, "room", None)
+    created_ms = int(getattr(room_info, "creation_time_ms", 0) or 0)
+    if not created_ms:
+        created_ms = int(getattr(room_info, "creation_time", 0) or 0) * 1000
+    room_age_ms = int(time.time() * 1000) - created_ms if created_ms else -1
+    logger.info(
+        "dispatch_timing stage=agent_job_received room_name=%s job_id=%s "
+        "dispatch_id=%s room_age_ms=%d",
+        ctx.room.name,
+        getattr(job, "id", "") or "",
+        getattr(job, "dispatch_id", "") or "",
+        room_age_ms,
+    )
+
+
+async def _warm_voice_backend(
+    voice_backend_client: SuperAgentsLiveKitClient,
+    prepare_task: "asyncio.Task[str]",
+    *,
+    room_name: str,
+) -> None:
+    """Fire-and-forget warm-up of the dispatcher's backend session.
+
+    Waits for the thread to be prepared (the sibling start-route logic also
+    awaits that task), then asks the client to connect its backend session so
+    the first ``run_turn`` finds it open. Never raises: a failed warm-up just
+    means the first turn connects as before.
+    """
+    started = time.monotonic()
+    try:
+        await prepare_task
+    except Exception:
+        return
+    warm = getattr(voice_backend_client, "warm", None)
+    if warm is None:
+        return
+    try:
+        warmed = await warm()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning(
+            "dispatch_timing stage=dispatcher_session_warm_failed room_name=%s "
+            "elapsed_ms=%d",
+            room_name,
+            int((time.monotonic() - started) * 1000),
+            exc_info=True,
+        )
+        return
+    logger.info(
+        "dispatch_timing stage=dispatcher_session_warm_complete room_name=%s "
+        "warmed=%s elapsed_ms=%d",
+        room_name,
+        warmed,
+        int((time.monotonic() - started) * 1000),
+    )
+
+
+def _watch_participant_join(ctx: JobContext, *, job_received: float) -> None:
+    """Log the caller's arrival and end a call nobody joins.
+
+    With explicit dispatch at token time the agent is usually in the room
+    before the caller. A token that is never used (the app died, the network
+    dropped) would otherwise leave a live session running until the room's
+    empty timeout; after ``LIVEKIT_PARTICIPANT_JOIN_TIMEOUT_SECONDS`` without
+    a caller the job shuts down and deletes the room.
+    """
+    room = ctx.room
+    joined = asyncio.Event()
+
+    def on_participant_connected(participant) -> None:
+        if joined.is_set():
+            return
+        joined.set()
+        logger.info(
+            "dispatch_timing stage=participant_joined room_name=%s identity=%s "
+            "since_job_ms=%d",
+            room.name,
+            getattr(participant, "identity", "") or "",
+            int((time.monotonic() - job_received) * 1000),
+        )
+
+    room.on("participant_connected", on_participant_connected)
+    remote = getattr(room, "remote_participants", None) or {}
+    for participant in list(remote.values()):
+        on_participant_connected(participant)
+
+    async def watch() -> None:
+        try:
+            await asyncio.wait_for(
+                joined.wait(), LIVEKIT_PARTICIPANT_JOIN_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "dispatch_timing stage=participant_join_timeout room_name=%s "
+                "timeout_s=%s",
+                room.name,
+                LIVEKIT_PARTICIPANT_JOIN_TIMEOUT_SECONDS,
+            )
+            await _end_unjoined_call(ctx)
+
+    watch_task = asyncio.create_task(watch(), name="openbase-participant-join-watch")
+
+    async def _cancel_join_watch() -> None:
+        room.off("participant_connected", on_participant_connected)
+        watch_task.cancel()
+
+    ctx.add_shutdown_callback(_cancel_join_watch)
+
+
+async def _end_unjoined_call(ctx: JobContext) -> None:
+    await _delete_room(str(getattr(ctx.room, "name", "") or ""))
+    ctx.shutdown(reason="participant-join-timeout")
 
 
 def requested_start_route(ctx: JobContext) -> VoiceRouteCommand | None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -980,7 +981,22 @@ def livekit_room_token(request):
     if not display_name:
         display_name = identity
 
-    token = (
+    dispatch_metadata = json.dumps(metadata)
+    # Dispatch the agent now, so its start-up (room connect, engine checks,
+    # GPT-Live session, dispatcher warm-up) overlaps the phone's join instead
+    # of starting when the phone arrives. The token's room configuration is
+    # the fallback when that is not possible: LiveKit then dispatches the
+    # agent as the phone creates the room, as before.
+    dispatched_at_token = (
+        False
+        if inbound_invitation_id
+        else dispatch_agent_before_join(
+            room_name=room_name,
+            agent_name=livekit_dispatch_agent_name,
+            metadata=dispatch_metadata,
+        )
+    )
+    access_token = (
         livekit_api.AccessToken(api_key=api_key, api_secret=api_secret)
         .with_identity(identity)
         .with_name(display_name)
@@ -998,23 +1014,28 @@ def livekit_room_token(request):
                 can_update_own_metadata=True,
             )
         )
-        .with_room_config(
+    )
+    if not dispatched_at_token:
+        access_token = access_token.with_room_config(
             livekit_api.RoomConfiguration(
                 agents=[
                     livekit_api.RoomAgentDispatch(
                         agent_name=livekit_dispatch_agent_name,
-                        metadata=json.dumps(metadata),
+                        metadata=dispatch_metadata,
                     )
                 ]
             )
         )
-        .with_ttl(timedelta(hours=1))
-        .to_jwt()
-    )
+    token = access_token.with_ttl(timedelta(hours=1)).to_jwt()
 
     from openbase_coder_cli.services.livekit_pool_activity import record_activity
 
     record_activity("token")
+    logger.info(
+        "dispatch_timing stage=room_token_issued room_name=%s dispatch=%s",
+        room_name,
+        "explicit" if dispatched_at_token else "room_config",
+    )
     payload: dict[str, Any] = {"token": token, "room_name": room_name}
     if inbound_invitation_id:
         payload.update(
@@ -1077,6 +1098,88 @@ def _prepare_call_start_route(thread_id: str, *, label: str | None = None) -> di
             )
         }
     return {"voice_route": transfer.command_payload()}
+
+
+EXPLICIT_AGENT_DISPATCH_TIMEOUT_SECONDS = 3.0
+
+
+def explicit_agent_dispatch_enabled() -> bool:
+    return os.environ.get(
+        "LIVEKIT_EXPLICIT_AGENT_DISPATCH", "1"
+    ).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def dispatch_agent_before_join(
+    *, room_name: str, agent_name: str, metadata: str
+) -> bool:
+    """Create the room and dispatch the agent into it now.
+
+    Returns True when the agent is on its way (the token then carries no room
+    configuration), False when the token must keep the room configuration:
+    the feature is off, the room already exists (a second device joining a
+    call; dispatching again would put a second agent in it), the server API
+    is unreachable, or the call failed. Never raises: a token is always
+    issued. Forensics F6 (2026-10-09) measured 2.1 s from token to job on a
+    cloud workspace; this moves the agent's whole start-up ahead of the
+    phone's join.
+    """
+    if not explicit_agent_dispatch_enabled():
+        return False
+    started = time.monotonic()
+    try:
+        created = async_to_sync(_create_agent_dispatch)(
+            room_name=room_name, agent_name=agent_name, metadata=metadata
+        )
+    except Exception:
+        logger.warning(
+            "dispatch_timing stage=agent_dispatch_at_token_failed room_name=%s "
+            "elapsed_ms=%d",
+            room_name,
+            int((time.monotonic() - started) * 1000),
+            exc_info=True,
+        )
+        return False
+    logger.info(
+        "dispatch_timing stage=agent_dispatch_at_token room_name=%s dispatched=%s "
+        "elapsed_ms=%d",
+        room_name,
+        created,
+        int((time.monotonic() - started) * 1000),
+    )
+    return created
+
+
+async def _create_agent_dispatch(
+    *, room_name: str, agent_name: str, metadata: str
+) -> bool:
+    from openbase_coder_cli.livekit_announcer import _build_livekit_client
+
+    client = _build_livekit_client()
+    try:
+        async with asyncio.timeout(EXPLICIT_AGENT_DISPATCH_TIMEOUT_SECONDS):
+            rooms = await client.room.list_rooms(
+                livekit_api.ListRoomsRequest(names=[room_name])
+            )
+            if any(room.name == room_name for room in rooms.rooms):
+                logger.info(
+                    "dispatch_timing stage=agent_dispatch_at_token_skipped "
+                    "room_name=%s reason=room_exists",
+                    room_name,
+                )
+                return False
+            await client.agent_dispatch.create_dispatch(
+                livekit_api.CreateAgentDispatchRequest(
+                    agent_name=agent_name, room=room_name, metadata=metadata
+                )
+            )
+    finally:
+        await client.aclose()
+    return True
 
 
 @api_view(["GET"])

@@ -259,6 +259,24 @@ class SuperAgentsClientTurnsMixin:
         )
         return turn_id
 
+    def _turn_model_fields(self) -> dict[str, Any]:
+        """The model, reasoning effort and service tier every turn is run with.
+
+        Shared with the session warm-up so the backend client it connects
+        matches the first turn and is reused instead of replaced.
+        """
+        fields: dict[str, Any] = {}
+        if self._backend_is_codex():
+            # Service tiers are Codex-only; on Claude a tier would be remapped
+            # to a reasoning-effort downgrade, so never forward it.
+            fields["serviceTier"] = self._service_tier
+            fields["model"] = self._model_name
+        elif self._model_name:
+            fields["model"] = self._model_name
+        if reasoning_effort := self._configured_reasoning_effort():
+            fields["reasoningEffort"] = reasoning_effort
+        return fields
+
     def _turn_input(
         self,
         prompt: str,
@@ -266,7 +284,6 @@ class SuperAgentsClientTurnsMixin:
         developer_instructions: str | None,
         dispatch_id: str,
     ) -> dict[str, Any]:
-        reasoning_effort = self._configured_reasoning_effort()
         turn_input: dict[str, Any] = {
             "prompt": prompt,
             "cwd": self._cwd,
@@ -275,16 +292,8 @@ class SuperAgentsClientTurnsMixin:
             "approvalPolicy": self._approval_policy,
             "sandbox": self._sandbox,
             "_mcpCallId": dispatch_id,
+            **self._turn_model_fields(),
         }
-        if self._backend_is_codex():
-            # Service tiers are Codex-only; on Claude a tier would be remapped
-            # to a reasoning-effort downgrade, so never forward it.
-            turn_input["serviceTier"] = self._service_tier
-            turn_input["model"] = self._model_name
-        elif self._model_name:
-            turn_input["model"] = self._model_name
-        if reasoning_effort:
-            turn_input["reasoningEffort"] = reasoning_effort
         if effective_developer_instructions := self._turn_developer_instructions(
             developer_instructions
         ):
