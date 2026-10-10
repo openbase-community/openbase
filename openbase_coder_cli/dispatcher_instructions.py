@@ -77,8 +77,11 @@ START_RULES = f"""{START_HEADING}
   mangles names ("tick tack toe" is `tic-tac-toe`) and users say partial
   names, so never require an exact match. Ask only when two folders are
   genuinely plausible. Never start an agent in your own directory just
-  because nothing matched exactly; for a new project, create its folder
-  first.
+  because nothing matched exactly. For a new project, load the bundled
+  openbase-coder-projects skill and run `openbase-coder projects create PATH`
+  first; use the returned absolute path as the worker cwd. Projects are also
+  discovered automatically from worker directories, but discovery does not
+  create folders.
 - Say instructions were steered or queued only after a successful steer/queue
   call explicitly confirms that outcome (steered true or queued true). A
   startedImmediately result means a new turn started, not a queued steer.

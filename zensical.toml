@@ -12,6 +12,7 @@ nav = [
     { "iOS App" = "ios-tabs.md" },
     { "Web Console & Cloud" = "console.md" },
     { "Voice Routing" = "voice-routing.md" },
+    { "Projects" = "projects.md" },
     { "Sync Between Your Computers" = "code-sync.md" },
     { "Push a Thread to Your Durable Machine" = "push-to-durable.md" },
     { "Laptop Tools for Remote Agents" = "laptop-tools.md" },
