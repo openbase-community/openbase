@@ -15,6 +15,9 @@ from openbase_coder_cli.openbase_coder_cli_app.notifications import (
     notification_mark_all_read,
     notification_mark_read,
 )
+from openbase_coder_cli.openbase_coder_cli_app.oauth_callback_replay import (
+    oauth_callback_replay,
+)
 from openbase_coder_cli.openbase_coder_cli_app.skill_settings import (
     skill_sharing_settings,
 )
@@ -198,6 +201,11 @@ urlpatterns = [
     ),
     path("diagnostics/ios-logs/", ios_logs_upload, name="ios-logs-upload"),
     path("user/ios-app-control/", ios_app_control, name="ios-app-control"),
+    path(
+        "user/oauth-callback-replay/",
+        oauth_callback_replay,
+        name="oauth-callback-replay",
+    ),
     path("devices/", devices_list, name="devices-list"),
     path("onboarding/status/", onboarding_status, name="onboarding-status"),
     # Desktop reaches Openbase Cloud only through this server; both slash forms

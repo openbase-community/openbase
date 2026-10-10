@@ -249,3 +249,38 @@ def _push(url: str, forward: LoopbackForward | None) -> bool:
         return True
 
     return bool(_bounded_attempt(attempt, timeout=BROWSER_DELIVERY_TIMEOUT_SECONDS * 3))
+
+
+@browser.command("replay")
+@click.argument("url")
+def browser_replay(url: str) -> None:
+    """Replay a login callback the phone pasted back, against this host.
+
+    URL is the http://localhost:<port>/... address the phone's browser ended
+    on. The same request is made here so the waiting CLI receives it. Only
+    loopback addresses are accepted; the single-use code in URL is not
+    printed or logged.
+    """
+    from openbase_coder_cli.openbase_coder_cli_app.oauth_callback_replay import (
+        replay_loopback_callback,
+    )
+
+    try:
+        result = replay_loopback_callback(url)
+    except ValueError:
+        raise click.BadParameter(
+            "expected http://localhost:<port>/... (or 127.0.0.1 / [::1]) with a "
+            "port of 1024 or higher",
+            param_hint="URL",
+        ) from None
+    if result["ok"]:
+        click.echo(
+            f"Replayed the callback to localhost:{result['port']} "
+            f"(HTTP {result['status_code']}); the login should now complete."
+        )
+        return
+    detail = result.get("error") or f"HTTP {result.get('status_code')}"
+    raise click.ClickException(
+        f"The callback was not accepted on localhost:{result['port']}: {detail}. "
+        "Is the login still waiting? Codes expire within minutes."
+    )

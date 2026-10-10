@@ -128,3 +128,44 @@ def relay_capability(port: int, expires_at: int, nonce: str) -> str:
     compared as part of the complete token by the workspace relay.
     """
     return f"OBR1_{port}_{expires_at}_{nonce}"
+
+
+@dataclass(frozen=True)
+class LoopbackReplayTarget:
+    """A pasted-back callback address, reduced to what may be replayed."""
+
+    port: int
+    path: str  # path plus query, exactly as the browser requested it
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.port}{self.path}"
+
+
+def loopback_replay_target(pasted: str) -> LoopbackReplayTarget | None:
+    """Parse a callback address the user pasted back from the phone.
+
+    Only ``http://localhost|127.0.0.1|[::1]:<port>/...`` with an explicit
+    unprivileged port qualifies; anything else returns None so a pasted
+    address can never make the workspace fetch a non-loopback host. The
+    fragment is dropped (browsers never send it).
+    """
+    candidate = pasted.strip()
+    if any(ord(char) < 32 or char == "\x7f" for char in candidate):
+        return None
+    try:
+        parts = urlsplit(candidate)
+        host = parts.hostname
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.scheme.lower() != "http" or host is None:
+        return None
+    if host.lower() not in LOOPBACK_HOSTS or host.lower() == "0.0.0.0":
+        return None
+    if port is None or not FORWARD_MIN_PORT <= port <= FORWARD_MAX_PORT:
+        return None
+    path = parts.path or "/"
+    if parts.query:
+        path += "?" + parts.query
+    return LoopbackReplayTarget(port=port, path=path)

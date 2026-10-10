@@ -452,3 +452,38 @@ def test_browser_open_reports_the_phone_forward_outcome(monkeypatch):
         result = CliRunner().invoke(browser_cli.browser, ["open", LOGIN_URL])
         assert result.exit_code == 0, result.output
         assert expected in result.output, (forward_status, result.output)
+
+
+def test_browser_replay_command(monkeypatch):
+    from openbase_coder_cli.openbase_coder_cli_app import (
+        oauth_callback_replay as replay,
+    )
+
+    monkeypatch.setattr(
+        replay.httpx,
+        "get",
+        lambda url, **kwargs: httpx.Response(200, request=httpx.Request("GET", url)),
+    )
+    ok = CliRunner().invoke(
+        browser_cli.browser,
+        ["replay", "http://localhost:1455/auth/callback?code=secret"],
+    )
+    assert ok.exit_code == 0, ok.output
+    assert "Replayed the callback to localhost:1455" in ok.output
+    assert "secret" not in ok.output
+
+    def refuse(url, **kwargs):
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(replay.httpx, "get", refuse)
+    closed = CliRunner().invoke(
+        browser_cli.browser, ["replay", "http://localhost:1455/cb"]
+    )
+    assert closed.exit_code != 0
+    assert "not accepted on localhost:1455" in closed.output
+
+    bad = CliRunner().invoke(
+        browser_cli.browser, ["replay", "https://evil.example/cb?code=1"]
+    )
+    assert bad.exit_code != 0
+    assert "loopback" in bad.output or "localhost" in bad.output
