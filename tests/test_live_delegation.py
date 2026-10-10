@@ -1965,8 +1965,10 @@ async def test_every_bridge_line_names_the_call(caplog):
 
     live.final("What is on my desktop?")
     await _settle()
+    live.drop()
     dispatcher.result_gate.set()
     await _settle()
+    live.emit("session_reconnected")
     await bridge.aclose()
 
     # Only the bridge's own lines: the delivery ledger logs dispatch_timing
@@ -1981,6 +1983,14 @@ async def test_every_bridge_line_names_the_call(caplog):
     assert all(m.endswith(" call=room-abc%1") for m in messages), messages
     assert _lines(caplog, "live_forced_delegation")
     assert _lines(caplog, "live_append_commentary")
+    for stage in (
+        "live_session_dropped",
+        "live_commentary_held",
+        "live_session_reconnected",
+        "live_commentary_redelivered",
+    ):
+        assert _lines(caplog, stage)
+    assert "drop_seen=True" in _lines(caplog, "live_session_reconnected")[0]
 
 
 async def test_bridge_lines_carry_no_call_tag_without_a_call_id(caplog):
