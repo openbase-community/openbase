@@ -50,7 +50,7 @@ dependencies = [
     "livekit-plugins-noise-cancellation>=0.2.5",
     "aiohttp>=3.13.3",
     "psutil>=6.1.0",
-    "super-agents[claude]>=0.1.15",
+    "super-agents[claude]>=0.1.16",
     # Mutable session policies require snapshot control in the bundled Claude CLI.
     "claude-agent-sdk==0.2.165",
     "websockets>=16.0",

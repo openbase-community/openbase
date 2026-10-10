@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 import json
 
 from super_agents.claude_system_prompt import (
@@ -145,8 +144,7 @@ def managed_claude_client(client_type=None, **kwargs):
         from super_agents.claude_sdk import ClaudeAgentSdkClient
 
         client_type = ClaudeAgentSdkClient
-    parameters = inspect.signature(client_type.__init__).parameters
-    if not {"configure_session", "validate_turn_result"}.issubset(parameters):
+    if getattr(client_type, "embedding_callbacks_version", 0) < 1:
         raise RuntimeError(
             "Managed worker announcements require Super Agents session extensions. "
             "Update the complete Openbase runtime before starting Claude workers."
