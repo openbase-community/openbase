@@ -101,6 +101,7 @@ def test_requested_start_route_is_none_for_dispatcher_calls(metadata):
 
 def test_requested_start_route_tolerates_a_context_without_a_job():
     ctx = _fake_ctx()
+    del ctx.job
     assert not hasattr(ctx, "job")
     assert livekit.requested_start_route(ctx) is None
 
@@ -139,6 +140,7 @@ class _RecordingClient:
     async def run_turn(
         self, prompt, *, developer_instructions=None, replaces_active_turn=False
     ):
+        assert replaces_active_turn is False
         self.prompts.append(prompt)
         return {
             "_livekit_speech_text": f"{self._thread_id} says hi",
@@ -291,6 +293,7 @@ async def test_live_call_started_from_a_thread_talks_to_that_thread(
     assert config.live_voice_start_route_note("Linda") in agent.instructions
     assert agent._bridge.active_agent_label == "Linda"
     assert agent._bridge.starting_agent_label() == "Linda"
+    assert agent._bridge._call_id == thread_call.ctx.room.name
     # No "You are now talking to" transfer chatter at call start.
     assert wiring.live.appends == []
 
