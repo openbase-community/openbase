@@ -17,7 +17,7 @@ LOCAL_MLX_WHISPER_MODEL_ID = "mlx-community/whisper-small.en-mlx"
 # The AssemblyAI streaming session every Openbase Cloud STT client opens through
 # the Cloud audio proxy (``/api/openbase/audio/assemblyai/v3/ws``): the LiveKit
 # pipeline engine here, and composer dictation in the iOS and Android apps,
-# which mirror these values so speech is transcribed the same way everywhere.
+# which mirror these values for both managed and BYOK dictation sessions.
 # Contract: dev-docs/dictation.md.
 OPENBASE_CLOUD_STT_MODEL = "universal-3-6-pro"
 OPENBASE_CLOUD_STT_SAMPLE_RATE = 16000
