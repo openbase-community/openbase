@@ -237,6 +237,9 @@ class VoiceRouteTransferSerializer(VoiceRouteCommandSerializer):
         allow_blank=True,
         trim_whitespace=True,
     )
+    # The dispatcher confirms its own transfers aloud; a transfer started
+    # from a thread's menu has no such confirmation and keeps the default.
+    announce = serializers.BooleanField(required=False, default=True)
 
     def validate(self, attrs):
         if not attrs.get("thread_id") and not attrs.get("agent_name"):
@@ -675,6 +678,7 @@ def livekit_voice_route_transfer(request):
         "directory": thread.directory,
         "label": label,
         "room_name": input_serializer.validated_data.get("room_name") or None,
+        "announce": input_serializer.validated_data.get("announce", True),
     }
     if agent_name:
         transfer_kwargs["agent_name"] = agent_name

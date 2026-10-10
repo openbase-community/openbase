@@ -11,17 +11,15 @@ single-use code, so it is never logged.
 
 from __future__ import annotations
 
-import logging
-
-import httpx
 from rest_framework import serializers, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from openbase_coder_cli.login_callback import loopback_replay_target
+from openbase_coder_cli.login_callback import (
+    loopback_replay_target,
+    replay_loopback_callback,
+)
 
-logger = logging.getLogger(__name__)
-REPLAY_TIMEOUT_SECONDS = 10.0
 MAX_PASTED_URL_LENGTH = 4096
 
 
@@ -35,33 +33,6 @@ class OAuthCallbackReplaySerializer(serializers.Serializer):
                 "with a port of 1024 or higher."
             )
         return value
-
-
-def replay_loopback_callback(url: str) -> dict:
-    """GET the pasted callback against this host's loopback; result only."""
-    target = loopback_replay_target(url)
-    if target is None:
-        raise ValueError("not a loopback callback address")
-    try:
-        response = httpx.get(
-            target.url, follow_redirects=False, timeout=REPLAY_TIMEOUT_SECONDS
-        )
-    except httpx.HTTPError as exc:
-        logger.info(
-            "oauth callback replay to port %s failed: %s",
-            target.port,
-            type(exc).__name__,
-        )
-        return {
-            "ok": False,
-            "port": target.port,
-            "error": f"localhost:{target.port} did not answer: {type(exc).__name__}",
-        }
-    return {
-        "ok": response.status_code < 400,
-        "port": target.port,
-        "status_code": response.status_code,
-    }
 
 
 @api_view(["POST"])

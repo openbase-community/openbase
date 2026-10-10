@@ -136,6 +136,12 @@ LIVE_VOICE_PRECONNECT = os.getenv(
 # (2026-10-10: a transfer to Cooper hit the 5-second cap and ended the call
 # while a healthy swap takes about 2 seconds). A swap that still fails is
 # retried with a fresh session before the call is given up.
+# Caller speech shorter than this does not count as a barge-in: speakerphone
+# echo of the agent's own words ("...Cooper" heard back as "uper", 2026-10-10)
+# trips the VAD for a few hundred milliseconds and must not cut the answer.
+LIVE_VOICE_BARGE_IN_MIN_SECONDS = float(
+    os.getenv("LIVEKIT_LIVE_VOICE_BARGE_IN_MIN_SECONDS", "0.5") or 0.5
+)
 LIVE_VOICE_CHARACTER_START_TIMEOUT_SECONDS = float(
     os.getenv("LIVEKIT_LIVE_VOICE_CHARACTER_START_TIMEOUT_SECONDS", "20") or 20
 )

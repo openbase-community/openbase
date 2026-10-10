@@ -21,10 +21,10 @@ option today.)
 In addition to the shared [prerequisites](index.md#prerequisites),
 development installs need:
 
-- Git
+- Git: `xcode-select --install` on macOS, or your distribution's package on Linux (for example `sudo apt install git`)
 - [`uv`](https://docs.astral.sh/uv/): `curl -LsSf https://astral.sh/uv/install.sh | sh`
 - [`multi`](https://pypi.org/project/multi-workspace/) 3.2.21 or newer, which setup uses to sync the sub-repos: `uv tool install multi-workspace` (or `uv tool upgrade multi-workspace`)
-- The current Go toolchain from [go.dev/dl](https://go.dev/dl/). Setup builds the Openbase Direct transport from source, so Go is required whichever transport you pick.
+- Go: `brew install go` on macOS, or the current toolchain from [go.dev/dl](https://go.dev/dl/). Setup builds the Openbase Direct transport from source, so Go is required whichever transport you pick.
 - Node 20+ (`brew install node`, or `pnpm env use --global 22`) and pnpm (`curl -fsSL https://get.pnpm.io/install.sh | sh -`) for building the console from source
 
 `./scripts/setup` checks for all of these before it does anything else and exits with the install command for each one that is missing.
@@ -33,8 +33,8 @@ Contributors who commit to the repos also need [`gitleaks`](https://github.com/g
 
 Optional developer backends:
 
-- Codex CLI authenticated in your normal user account when using the `codex` backend
-- Claude Code login for the `claude-code` backend (Openbase uses your own
+- Codex CLI (`npm install -g @openai/codex`, then `codex login`) authenticated in your normal user account when using the `codex` backend
+- Claude Code (`curl -fsSL https://claude.ai/install.sh | bash`, then `claude login`) for the `claude-code` backend (Openbase uses your own
   `claude login` directly; `openbase-coder claude login` is a thin wrapper)
 
 ## Clone and Run Setup

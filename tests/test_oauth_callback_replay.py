@@ -65,7 +65,7 @@ def test_replay_gets_the_callback_on_loopback_without_following_redirects(monkey
         seen.update(url=url, kwargs=kwargs)
         return httpx.Response(200, request=httpx.Request("GET", url))
 
-    monkeypatch.setattr(replay.httpx, "get", fake_get)
+    monkeypatch.setattr(httpx, "get", fake_get)
     response = _post({"url": CALLBACK})
 
     assert response.status_code == 200
@@ -78,7 +78,7 @@ def test_replay_reports_a_closed_port(monkeypatch):
     def refuse(url, **kwargs):
         raise httpx.ConnectError("refused")
 
-    monkeypatch.setattr(replay.httpx, "get", refuse)
+    monkeypatch.setattr(httpx, "get", refuse)
     response = _post({"url": CALLBACK})
 
     assert response.status_code == 502
@@ -90,7 +90,7 @@ def test_replay_reports_a_closed_port(monkeypatch):
 
 def test_replay_reports_a_rejected_callback(monkeypatch):
     monkeypatch.setattr(
-        replay.httpx,
+        httpx,
         "get",
         lambda url, **kwargs: httpx.Response(400, request=httpx.Request("GET", url)),
     )
@@ -111,7 +111,7 @@ def test_replay_reports_a_rejected_callback(monkeypatch):
 )
 def test_replay_rejects_non_loopback_addresses(monkeypatch, url):
     called = []
-    monkeypatch.setattr(replay.httpx, "get", lambda *a, **k: called.append(a))
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: called.append(a))
     response = _post({"url": url})
 
     assert response.status_code == 400

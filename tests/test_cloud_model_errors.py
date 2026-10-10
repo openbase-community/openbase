@@ -100,7 +100,11 @@ def test_allowance_denial_in_history_voice_and_auth_classification(
         run = _run_from_turn(turn)
         assert run.accumulated_output == expected
         assert run.return_code == -1
-    assert _safe_spoken_answer(raw, auth_failed=False) == expected
+    # The voice agent says one short sentence; the thread keeps the full text.
+    assert (
+        _safe_spoken_answer(raw, auth_failed=False)
+        == "This account's monthly Openbase model allowance is used up."
+    )
     assert "try again" not in expected
 
 

@@ -195,6 +195,26 @@ LIVE_CHARACTER_REDELIVERY = (
     "The following from {label} has not yet been spoken. Relay it now; "
     "{disposition}. Do not repeat anything already spoken."
 )
+# A thread can hold an earlier request that never got its answer (a text
+# turn that failed on allowance, for instance). A spoken turn answers what
+# was just said, not that backlog (2026-10-10: a voice question was answered
+# with an eight-item roster from a failed text turn first).
+LIVE_TURN_SCOPE_NOTE = (
+    "[Openbase system note: answer only what the caller just said in this "
+    "spoken request. Do not resume, retry or restate earlier requests in this "
+    "thread that were not spoken during this call.]"
+)
+LIVE_STARVED_REDELIVERY = (
+    "The caller could not hear what you just said. Say the following from "
+    "{label} now, in full; {disposition}."
+)
+# A permitted answer that starts this soon after a starved burst closes was
+# the model's own continuation; redelivery waits it out to avoid saying it twice.
+STARVED_REDELIVERY_GRACE_SECONDS = 1.0
+# A lone word this short, heard while the agent was audibly answering, is
+# speakerphone echo of the agent's own words ("uper" for "Cooper"), not a
+# request: it is dropped instead of becoming a turn that answers nothing.
+ECHO_FRAGMENT_MAX_LETTERS = 4
 LIVE_REDELIVERY_ANSWER = (
     "it is the answer to the caller's last request, so present it as the "
     "answer, not as an update"
@@ -357,6 +377,12 @@ TRIVIAL_UTTERANCE_MAX_WORDS = 6
 _TRIVIAL_PHRASE_MAX_WORDS = max(len(p.split()) for p in TRIVIAL_UTTERANCE_PHRASES)
 
 
+def is_echo_fragment(text: str) -> bool:
+    """A lone short word: what speakerphone echo of the agent's speech transcribes to."""
+    words = _normalize_spoken_command(text or "").split()
+    return len(words) == 1 and len(words[0]) <= ECHO_FRAGMENT_MAX_LETTERS
+
+
 def is_trivial_utterance(text: str) -> bool:
     """True only for an utterance made entirely of known trivial phrases.
 
@@ -461,6 +487,7 @@ class _CommentaryDelivery:
     delegation_id: str | None
     at: float
     held: bool = False
+    reissued: bool = False
 
 
 @dataclass
@@ -634,7 +661,11 @@ class LiveDelegationBridge:
         self._suspended_input_session = None
         self._suspended_input_handler = None
         self._input_route = None
-        self.speech_gate = LiveSpeechGate()
+        self._agent_speaking = False
+        self._caller_spoke_over_agent = False
+        self._starved_timer: Any = None
+        self.speech_gate = LiveSpeechGate(clock=clock)
+        self.speech_gate.on_starved = self._on_starved_burst_closed
 
     # wiring
 
@@ -718,6 +749,9 @@ class LiveDelegationBridge:
         self._log_call_summary()
         self.detach()
         self._take_held()
+        if self._starved_timer is not None:
+            self._starved_timer.cancel()
+            self._starved_timer = None
         for entry in list(self._entries.values()):
             if entry.heartbeat is not None:
                 entry.heartbeat.cancel()
@@ -889,6 +923,9 @@ class LiveDelegationBridge:
             self.speech_gate.authorize()
             self._log_forced(text, decision="skipped_trivial")
             return
+        if self._caller_spoke_over_agent and is_echo_fragment(text):
+            self._log_forced(text, decision="ignored_echo_fragment")
+            return
         self._skipped = None
         self._start_turn(text, source="transcript", replaces_turn=replaces_turn)
 
@@ -943,6 +980,7 @@ class LiveDelegationBridge:
         self.speech_gate.user_state_changed(new_state)
         if new_state == "speaking" and old_state != "speaking":
             self._user_speaking = True
+            self._caller_spoke_over_agent = self._agent_speaking
             if self._held is not None:
                 self._schedule_flush(self._held.first_at + self._hold_max_seconds)
         elif old_state == "speaking" and new_state != "speaking":
@@ -1363,6 +1401,75 @@ class LiveDelegationBridge:
             for chunk in chunks:
                 self._append_answer(chunk, None)
 
+    def _on_starved_burst_closed(self) -> None:
+        """An authorized answer was folded into discarded speech; ask again soon."""
+        if self._closed or self._starved_timer is not None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._redeliver_starved()
+            return
+        self._starved_timer = loop.call_later(
+            STARVED_REDELIVERY_GRACE_SECONDS, self._redeliver_starved
+        )
+
+    def _redeliver_starved(self) -> None:
+        """Re-append what the model has not audibly spoken since it was sent.
+
+        The gate discarded a burst that began before the answer authorized
+        it, and nothing permitted has played since (a permitted start would
+        have confirmed the deliveries). Each delivery is re-asked once.
+        """
+        self._starved_timer = None
+        if self._closed or self._session_down_at is not None:
+            return
+        if not self.speech_gate.authorized or self.speech_gate.speaking:
+            return
+        now = self._clock()
+        oldest = now - REDELIVERY_MAX_AGE_SECONDS
+        for entry in self._entries.values():
+            due = [
+                d
+                for d in entry.deliveries
+                if not d.held and not d.reissued and d.at >= oldest
+            ]
+            if not due or entry.superseded:
+                continue
+            if not self._voice_router.can_deliver_for_snapshot(entry.route):
+                continue
+            entry.deliveries = [d for d in entry.deliveries if d not in due]
+            chunks = [chunk for d in due for chunk in d.chunks]
+            label = self._active_agent_label
+            disposition = (
+                LIVE_REDELIVERY_ANSWER
+                if entry.completed
+                else LIVE_REDELIVERY_PROGRESS.format(label=label)
+            )
+            self._log.info(
+                "%s stage=live_commentary_redelivered key=%s chunks=%d held=0 "
+                "bound=0 answer=%s reason=starved",
+                DISPATCH_TIMING_LOG,
+                entry.key,
+                len(chunks),
+                entry.completed,
+            )
+            self._append_thinking(
+                LIVE_STARVED_REDELIVERY.format(label=label, disposition=disposition),
+                None,
+            )
+            entry.deliveries.append(
+                _CommentaryDelivery(
+                    chunks=chunks,
+                    final=entry.completed,
+                    delegation_id=None,
+                    at=now,
+                    reissued=True,
+                )
+            )
+            for chunk in chunks:
+                self._append_answer(chunk, None)
+
     def _on_delegation_after_utterance(self, delegation_id: str) -> None:
         """A delegation with no open utterance: the caller's words already closed."""
         if self._take_recent_exit_command():
@@ -1539,6 +1646,7 @@ class LiveDelegationBridge:
 
     def on_agent_state_changed(self, old_state: str, new_state: str) -> None:
         """Synthetic ``agent_audio_started`` / ``agent_audio_finished``."""
+        self._agent_speaking = new_state == "speaking"
         if new_state == "speaking" and old_state != "speaking":
             self._confirm_deliveries()
         if self._ledger is None:
@@ -1653,6 +1761,7 @@ class LiveDelegationBridge:
         prompt = wrap_voice_prompt(entry.prompt)
         if self._voice_router.is_dispatcher_active:
             prompt = append_onboarding_reminder(prompt)
+        prompt = f"{LIVE_TURN_SCOPE_NOTE}\n\n{prompt}"
         prompt = apply_screen_context(self._voice_router, prompt)
         prompt = self._call_context.apply(prompt)
         entry.heartbeat = asyncio.create_task(

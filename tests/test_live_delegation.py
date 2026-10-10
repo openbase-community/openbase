@@ -229,6 +229,7 @@ def _make_bridge(
     hold_max=3.0,
     lag=0.0,
     call_id="",
+    barge_in_min=0.0,
 ):
     dispatcher = FakeVoiceClient(thread_id="dispatcher-thread")
     router = FakeVoiceRouter(dispatcher)
@@ -254,6 +255,8 @@ def _make_bridge(
         **({"clock": clock} if clock is not None else {}),
     )
     bridge.attach(live)
+    # Caller speech interrupts at once unless a test exercises the echo debounce.
+    bridge.speech_gate.barge_in_min_seconds = barge_in_min
     return bridge, live, router, dispatcher, delivery_ledger, lifecycle
 
 
@@ -2412,3 +2415,94 @@ async def test_complete_backend_answer_uses_one_explicit_speech_command():
     assert live.of("commentary", "d1") == []
     assert ledger.record_for_turn("turn-1").status == "text_generated"
     await bridge.aclose()
+
+
+# --- speakerphone echo and starved answers -----------------------------------
+
+
+async def test_a_lone_short_word_over_the_agents_speech_is_dropped_as_echo():
+    """ "...Cooper" heard back as "uper" must not interrupt with a turn that
+    answers nothing (2026-10-10, Android speakerphone)."""
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    try:
+        bridge.on_agent_state_changed("listening", "speaking")
+        bridge.on_user_state_changed("listening", "speaking")
+        bridge.on_user_state_changed("speaking", "listening")
+        live.final("uper")
+        await _settle()
+        assert dispatcher.prompts == []
+        assert bridge._stats["decision_ignored_echo_fragment"] == 1
+
+        # The same fragment while the agent is quiet is the caller's own word.
+        bridge.on_agent_state_changed("speaking", "listening")
+        bridge.on_user_state_changed("listening", "speaking")
+        bridge.on_user_state_changed("speaking", "listening")
+        live.final("Run.")
+        await _settle()
+        assert len(dispatcher.prompts) == 1
+    finally:
+        await bridge.aclose()
+
+
+async def test_a_real_question_over_the_agents_speech_still_reaches_the_agent():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    try:
+        bridge.on_agent_state_changed("listening", "speaking")
+        bridge.on_user_state_changed("listening", "speaking")
+        bridge.on_user_state_changed("speaking", "listening")
+        live.final("Stop. What is seven times eight?")
+        await _settle()
+        assert len(dispatcher.prompts) == 1
+    finally:
+        await bridge.aclose()
+
+
+async def test_an_answer_the_gate_starved_is_asked_for_again_once(monkeypatch):
+    """The owed answer was spoken into a discarded burst; after that burst
+    closes with nothing permitted played, the bridge re-asks for it once."""
+    import openbase_coder_cli.livekit_agent.live_delegation as module
+
+    monkeypatch.setattr(module, "STARVED_REDELIVERY_GRACE_SECONDS", 0.0)
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    try:
+        live.delegate("d1", "What did Cooper say about occupied squares")
+        await _settle()
+        dispatcher.result_gate.set()
+        await _settle()
+        assert live.speech() == ["All tests pass. The build is green."]
+        assert bridge.speech_gate.authorized
+
+        bridge.speech_gate.on_starved()
+        await _settle()
+        assert live.speech() == ["All tests pass. The build is green."] * 2
+        notes = live.of("thinking", None)
+        assert notes and "could not hear" in notes[-1]
+
+        # Re-asked once: a second starved burst does not produce a third copy.
+        bridge.speech_gate.on_starved()
+        await _settle()
+        assert live.speech() == ["All tests pass. The build is green."] * 2
+    finally:
+        await bridge.aclose()
+
+
+async def test_a_starved_report_after_the_model_spoke_is_not_redelivered(monkeypatch):
+    import openbase_coder_cli.livekit_agent.live_delegation as module
+
+    monkeypatch.setattr(module, "STARVED_REDELIVERY_GRACE_SECONDS", 0.0)
+    clock = {"now": 100.0}
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        clock=lambda: clock["now"]
+    )
+    try:
+        live.delegate("d1", "Check the build")
+        await _settle()
+        dispatcher.result_gate.set()
+        await _settle()
+        clock["now"] += 1.0
+        bridge.on_agent_state_changed("listening", "speaking")  # it was heard
+        bridge.speech_gate.on_starved()
+        await _settle()
+        assert live.speech() == ["All tests pass. The build is green."]
+    finally:
+        await bridge.aclose()

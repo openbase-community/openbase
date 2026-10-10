@@ -13,7 +13,7 @@ import hashlib
 import re
 from typing import Any
 
-from openbase_coder_cli.cloud_model_errors import model_proxy_denial_message
+from openbase_coder_cli.cloud_model_errors import model_proxy_denial_spoken_message
 from openbase_coder_cli.livekit_agent.codex_turns import (
     _speech_excerpt,
 )
@@ -69,7 +69,9 @@ def _speech_text_from_progress(
         for key in ("turn", "summary"):
             turn = progress.get(key)
             if isinstance(turn, dict) and _turn_identifier(turn) == current_turn_id:
-                if denial := model_proxy_denial_message(_own_last_useful_message(turn)):
+                if denial := model_proxy_denial_spoken_message(
+                    _own_last_useful_message(turn)
+                ):
                     return denial
 
     # Other lastUsefulMessage values on failed turns may be stale session
@@ -238,7 +240,7 @@ def _select_speech_candidate(
             len(text),
             text_hash,
         )
-        return model_proxy_denial_message(text) or _speech_excerpt(text)
+        return model_proxy_denial_spoken_message(text) or _speech_excerpt(text)
     return ""
 
 

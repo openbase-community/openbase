@@ -36,7 +36,7 @@ async def test_bridge_opens_speech_only_for_current_commentary_and_revokes_on_ha
 
 
 async def test_caller_interrupt_discards_stale_tail_even_after_new_authorization():
-    gate = LiveSpeechGate()
+    gate = LiveSpeechGate(barge_in_min_seconds=0)
     gate.authorize()
 
     async def frames():
@@ -58,7 +58,7 @@ async def test_caller_interrupt_discards_stale_tail_even_after_new_authorization
 
 
 async def test_early_name_is_not_unmuted_mid_burst_by_backend_result():
-    gate = LiveSpeechGate()
+    gate = LiveSpeechGate(barge_in_min_seconds=0)
 
     async def frames():
         yield "Gemma"
@@ -94,7 +94,7 @@ async def test_real_sdk_output_node_blocks_early_audio_and_passes_authorized_rep
 ):
     # Real plugin, adapter and AgentSession; PCM stays in memory, no speakers,
     # room, external provider, paid synthesis or mocked SDK internals.
-    gate = LiveSpeechGate()
+    gate = LiveSpeechGate(barge_in_min_seconds=0)
     caplog.set_level("INFO", logger="openbase_coder_cli.livekit_agent.live_speech_gate")
     sink = RecordingOutput()
     async with FakeGPTLiveServer() as server:
@@ -176,3 +176,80 @@ async def test_real_sdk_output_node_blocks_early_audio_and_passes_authorized_rep
         finally:
             await session.aclose()
             await model.aclose()
+
+
+async def test_short_caller_blip_does_not_cut_the_answer_but_sustained_speech_does():
+    """Speakerphone echo trips the VAD for a moment; a real interruption lasts."""
+    clock = {"now": 10.0}
+    gate = LiveSpeechGate(barge_in_min_seconds=0.5, clock=lambda: clock["now"])
+    gate.authorize()
+
+    async def answer():
+        yield "part one"
+        gate.user_state_changed("speaking")  # "...uper" echoing back
+        clock["now"] += 0.2
+        yield "part two"
+        gate.user_state_changed("listening")
+        yield "part three"
+        gate.user_state_changed("speaking")  # the caller really talks over it
+        clock["now"] += 0.6
+        yield "cut"
+        yield "cut too"
+
+    heard = [frame async for frame in gate.filter_audio(answer())]
+    assert heard == ["part one", "part two", "part three"]
+    assert gate.barge_ins_ignored == 1
+    assert not gate.authorized
+
+
+async def test_sustained_speech_with_no_burst_in_flight_still_revokes_on_stop():
+    clock = {"now": 10.0}
+    gate = LiveSpeechGate(barge_in_min_seconds=0.5, clock=lambda: clock["now"])
+    gate.authorize()
+    gate.user_state_changed("speaking")
+    clock["now"] += 0.7
+    gate.user_state_changed("listening")
+    assert not gate.authorized
+
+    gate.authorize()
+    gate.user_state_changed("speaking")
+    clock["now"] += 0.1
+    gate.user_state_changed("listening")
+    assert gate.authorized
+
+
+async def test_answer_authorized_during_a_discarded_burst_is_reported_starved():
+    """2026-10-10: the model folded the owed answer into speech the gate was
+    discarding, so the caller saw the caption and heard nothing."""
+    gate = LiveSpeechGate(barge_in_min_seconds=0)
+    starved = []
+    gate.on_starved = lambda: starved.append(True)
+
+    async def unsolicited():
+        yield "the model answers on its own"
+        gate.authorize()  # the backend answer arrives mid-burst
+        yield "and reads the backend answer into the same breath"
+
+    assert [frame async for frame in gate.filter_audio(unsolicited())] == []
+    assert starved == [True]
+
+    async def permitted():
+        yield "the re-asked answer"
+
+    assert [frame async for frame in gate.filter_audio(permitted())] == [
+        "the re-asked answer"
+    ]
+    assert starved == [True]
+
+
+async def test_a_permitted_burst_is_never_reported_starved():
+    gate = LiveSpeechGate(barge_in_min_seconds=0)
+    gate.on_starved = lambda: (_ for _ in ()).throw(AssertionError("starved"))
+    gate.authorize()
+
+    async def reply():
+        yield "answer"
+        gate.authorize()
+        yield "more"
+
+    assert [frame async for frame in gate.filter_audio(reply())] == ["answer", "more"]

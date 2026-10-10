@@ -696,7 +696,7 @@ def test_voice_route_reports_blocker(monkeypatch):
 def test_transfer_to_thread_reports_blocker(monkeypatch):
     def fake_request(method, url, **kwargs):
         assert method == "POST"
-        assert kwargs["json"] == {"thread_id": "thread-1"}
+        assert kwargs["json"] == {"thread_id": "thread-1", "announce": False}
         return httpx.Response(409, json={"detail": "transfer blocked"})
 
     patch_local_server_request(monkeypatch, fake_request)
@@ -731,7 +731,7 @@ def test_transfer_to_agent_posts_agent_name(monkeypatch):
     assert calls == [
         (
             "http://127.0.0.1:7999/api/livekit-voice-route/transfer/",
-            {"agent_name": "Build Agent"},
+            {"agent_name": "Build Agent", "announce": False},
         )
     ]
 

@@ -352,7 +352,9 @@ def ios() -> None:
 @click.pass_context
 def ios_open_url(ctx: click.Context, url: str) -> None:
     """Open a URL on the phone, with push fallback and no callback forward."""
-    ctx.invoke(browser_open, url=url, no_forward=True, callback_port=None, no_push=False)
+    ctx.invoke(
+        browser_open, url=url, no_forward=True, callback_port=None, no_push=False
+    )
 
 
 @ios.command("mute")
@@ -408,11 +410,18 @@ def _run_ios_call_control(payload: dict[str, object]) -> None:
     click.echo(json.dumps(data, sort_keys=True))
     state = data.get("call_state")
     if (
-        not data.get("delivered") or data.get("applied") is not True
+        not data.get("delivered")
+        or data.get("applied") is not True
         or not isinstance(state, dict)
-        or not all(type(state.get(key)) is bool for key in ("connected", "muted", "speaker", "active"))
+        or not all(
+            type(state.get(key)) is bool
+            for key in ("connected", "muted", "speaker", "active")
+        )
     ):
-        raise click.ClickException(data.get("error") or "Call command unconfirmed; do not assume it was applied. Use end-call to clean up before retrying a start.")
+        raise click.ClickException(
+            data.get("error")
+            or "Call command unconfirmed; do not assume it was applied. Use end-call to clean up before retrying a start."
+        )
 
 
 @ios.command("upload-logs")
@@ -487,7 +496,8 @@ def transfer_to_thread(
     thread_id: str, room_name: str, label: str, agent_name: str
 ) -> None:
     """Route the active voice session to a Codex thread if instruction-safe."""
-    payload: dict[str, str] = {"thread_id": thread_id}
+    # The agent running this command tells the caller itself.
+    payload: dict[str, str | bool] = {"thread_id": thread_id, "announce": False}
     if room_name.strip():
         payload["room_name"] = room_name.strip()
     if label.strip():
@@ -512,7 +522,7 @@ def transfer_to_thread(
 )
 def transfer_to_agent(agent_name: str, room_name: str) -> None:
     """Route the active voice session to a named Super Agent."""
-    payload: dict[str, str] = {"agent_name": agent_name}
+    payload: dict[str, str | bool] = {"agent_name": agent_name, "announce": False}
     if room_name.strip():
         payload["room_name"] = room_name.strip()
     response = local_server_request(
