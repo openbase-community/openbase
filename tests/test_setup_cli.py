@@ -2212,25 +2212,9 @@ def test_resolve_interactive_mode_non_tty_disables_prompts(monkeypatch) -> None:
         assert setup_cli._resolve_interactive_mode(None, False) is False
 
 
-def test_interactive_login_checks_skip_when_declined(tmp_path, monkeypatch) -> None:
-    class _LoggedOut:
-        def __init__(self, url):
-            self.has_refresh_token = False
-
-    calls = []
-    monkeypatch.setattr(setup_cli, "TokenManager", _LoggedOut)
-    monkeypatch.setattr(setup_cli, "register_and_report", lambda **kw: calls.append(kw))
-    _fake_tty_stdin(monkeypatch, "n\n")
-
-    setup_cli._interactive_cloud_login_and_checks(
-        str(tmp_path / ".env"), cli_configured=True
-    )
-
-    assert calls == []
-
-
-def test_interactive_login_checks_run_login_when_accepted(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("ready_input", ["\n", "n\n"])
+def test_interactive_login_checks_run_login_after_enter(
+    tmp_path, monkeypatch, capsys, ready_input
 ) -> None:
     class _LoggedOut:
         def __init__(self, url):
@@ -2265,7 +2249,7 @@ def test_interactive_login_checks_run_login_when_accepted(
             or SimpleNamespace(ok=True, supported=True, error=None)
         ),
     )
-    _fake_tty_stdin(monkeypatch, "y\n")
+    _fake_tty_stdin(monkeypatch, ready_input)
 
     ctx = setup_cli.setup.make_context("setup", [])
     with ctx:
@@ -2276,6 +2260,10 @@ def test_interactive_login_checks_run_login_when_accepted(
     assert login_calls == [True]
     assert reports == [{"cli_configured": True, "serve_healthy": True}]
     assert providers == ["tailscale"]
+    output = capsys.readouterr().out
+    assert "Press Enter when you're ready to log in to Openbase Cloud" in output
+    assert "[Y/n]" not in output
+    assert "Skipping login" not in output
 
 
 def test_interactive_login_checks_report_when_logged_in(tmp_path, monkeypatch) -> None:

@@ -549,18 +549,13 @@ def _interactive_cloud_login_and_checks(
     )
     if TokenManager(web_backend_url).has_refresh_token:
         click.echo("Already logged in to Openbase Cloud.")
-    elif click.confirm(
-        "Log in to Openbase Cloud now? (required for iPhone pairing and "
-        "cloud onboarding)",
-        default=True,
-    ):
-        click.get_current_context().invoke(login_command)
     else:
-        click.echo(
-            "Skipping login. Run 'openbase-coder login' later; iPhone pairing "
-            "and cloud onboarding need it."
+        click.prompt(
+            "Press Enter when you're ready to log in to Openbase Cloud",
+            default="",
+            show_default=False,
         )
-        return
+        click.get_current_context().invoke(login_command)
 
     # Login already registers the device; re-report with the freshest facts
     # so the cloud sees this install as configured, and surface the result.
