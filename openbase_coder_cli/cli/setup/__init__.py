@@ -657,19 +657,17 @@ _AUDIO_PROVIDER_PICKER_OPTIONS = (
     (
         AUDIO_PROVIDER_OPENBASE_CLOUD,
         "Cloud TTS/STT",
-        "managed speech-to-text and text-to-speech through Openbase Cloud "
-        "(recommended)",
+        "recommended, easy, generous free usage",
     ),
     (
         AUDIO_PROVIDER_CARTESIA,
         "Bring your own keys",
-        "AssemblyAI speech-to-text and Cartesia text-to-speech with your own API keys",
+        "AssemblyAI + Cartesia keys required",
     ),
     (
         AUDIO_PROVIDER_LOCAL,
         "Local models",
-        "on-device Kokoro TTS and MLX Whisper STT; Apple Silicon with Python "
-        "3.12 only (not recommended)",
+        "beta, not recommended (Apple Silicon, Python 3.12 only)",
     ),
 )
 
