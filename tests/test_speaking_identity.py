@@ -8,6 +8,52 @@ from openbase_coder_cli.thread_sync.speaking_identity import ensure_speaking_ide
 
 
 @pytest.mark.asyncio
+async def test_migration_keeps_recorded_voice_character_without_backend_name(
+    tmp_path, monkeypatch
+):
+    from super_agents.app_server_client import CodexAppServerClient
+
+    from openbase_coder_cli.livekit_voice_history import record_voice_assignment
+    from openbase_coder_cli.livekit_voice_route import super_agent_voice_for_agent_name
+
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    fallback = super_agent_voice_for_context("old-thread", "project")
+    expected = "Dottie" if fallback.name != "Dottie" else "Blake"
+    voice = super_agent_voice_for_agent_name(expected)
+    record_voice_assignment(
+        thread_id="old-thread",
+        agent_name=None,
+        cwd=str(tmp_path),
+        voice_id=voice.voice_id,
+        voice_name=voice.name,
+        kind="codex_thread",
+        source="route_state",
+    )
+    client = CodexAppServerClient(state_file=tmp_path / "state.json")
+    thread = ThreadInfo(
+        session_id="old-thread", directory=str(tmp_path), name="project"
+    )
+    await ensure_speaking_identity(client, thread)
+    assert thread.agent_name == expected
+    assert (await client.get_session("old-thread")).agent_name == expected
+    # The next text turn/start announcement must use the same history-based
+    # voice as a transfer, even when the person has a custom speaking name.
+    record_voice_assignment(
+        thread_id="old-thread",
+        agent_name="Build Agent",
+        cwd=str(tmp_path),
+        voice_id=voice.voice_id,
+        voice_name=voice.name,
+        kind="codex_thread",
+        source="route_state",
+    )
+    assert (
+        super_agent_voice_for_context("old-thread", "project", "Build Agent") == voice
+    )
+    await client.close()
+
+
+@pytest.mark.asyncio
 async def test_claude_identity_is_available_to_real_roster_and_turn_prompt(
     tmp_path, monkeypatch
 ):

@@ -11,6 +11,7 @@ from typing import Any
 from openbase_coder_cli.livekit_agent.codex_turns import (
     _with_super_agent_identity_instructions,
 )
+from openbase_coder_cli.livekit_voice_history import get_voice_history_entry
 from openbase_coder_cli.livekit_voice_route import (
     is_dispatcher_identity,
     super_agent_voice_for_context,
@@ -25,10 +26,14 @@ async def ensure_speaking_identity(client: Any, thread: ThreadInfo) -> ThreadInf
     voice = super_agent_voice_for_context(thread.session_id, thread.name)
     if voice is None:
         return thread
+    history = get_voice_history_entry(thread.session_id)
+    # Older calls recorded their character before the backend carried an
+    # agentName. Keep that assignment, just as the UI and transfer resolver do.
+    recorded_name = (history.agent_name or history.voice_name) if history else None
     name = (
         "dispatcher"
         if is_dispatcher_identity(thread.session_id, thread.name)
-        else voice.name
+        else recorded_name or voice.name
     )
     # Claude's public store preserves custom instructions while its SDK
     # prompt builder reads the persisted agent_name on every turn.
