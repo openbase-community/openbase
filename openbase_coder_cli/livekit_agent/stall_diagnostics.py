@@ -627,8 +627,10 @@ def speak_via_local_api(text: str, *, agent_name: str = "Dispatcher") -> bool:
     except Exception:  # noqa: BLE001 - a diagnostic must never crash the call
         logger.warning("stall hint not spoken: local API token unavailable")
         return False
+    from openbase_coder_cli.cli.local_server import local_server_url
+
     request = urllib.request.Request(
-        "http://127.0.0.1:7999/api/user/say/",
+        f"{local_server_url()}/api/user/say/",
         data=json.dumps({"agent_name": agent_name, "text": text}).encode(),
         headers={
             "Authorization": f"Bearer {token}",

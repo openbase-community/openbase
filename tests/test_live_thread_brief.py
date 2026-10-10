@@ -113,3 +113,33 @@ async def test_fetcher_runs_off_the_loop(monkeypatch):
     )
     assert await brief.fetch_thread_exchanges("s_1") == [ThreadExchange("s_1", "ok")]
     await asyncio.sleep(0)
+
+
+def test_fetcher_uses_the_configured_local_server_address(monkeypatch):
+    """Maritime serves the local API on 18789, not 7999 (2026-10-10)."""
+    monkeypatch.setenv("OPENBASE_CODER_CLI_PORT", "18789")
+    monkeypatch.delenv("OPENBASE_CODER_CLI_SERVER_URL", raising=False)
+    monkeypatch.setattr(brief, "get_local_api_token", lambda: "tok")
+    seen = {}
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self):
+            return (
+                b'{"turn_history": [{"prompt": "hi", "accumulated_output": "hello"}]}'
+            )
+
+    def fake_urlopen(request, timeout):
+        seen["url"] = request.full_url
+        seen["auth"] = request.get_header("Authorization")
+        return _Response()
+
+    monkeypatch.setattr(brief.urllib.request, "urlopen", fake_urlopen)
+    assert brief.fetch_thread_exchanges_sync("s_1") == [ThreadExchange("hi", "hello")]
+    assert seen["url"] == "http://127.0.0.1:18789/api/threads/s_1/"
+    assert seen["auth"] == "Bearer tok"

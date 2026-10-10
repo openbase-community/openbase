@@ -18,12 +18,11 @@ import urllib.request
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
+from openbase_coder_cli.cli.local_server import local_server_url
 from openbase_coder_cli.config.local_api_token import get_local_api_token
 from openbase_coder_cli.voice_tags import VOICE_TAG_CLOSE, VOICE_TAG_OPEN
 
 logger = logging.getLogger(__name__)
-
-LOCAL_API_BASE_URL = "http://127.0.0.1:7999"
 BRIEF_MAX_EXCHANGES = 6
 BRIEF_MAX_FIELD_CHARS = 280
 BRIEF_MAX_CHARS = 1600
@@ -103,10 +102,14 @@ def thread_brief_note(
 
 
 def fetch_thread_exchanges_sync(thread_id: str) -> list[ThreadExchange]:
-    """Read the thread's detail from the local API (the agent runs beside it)."""
+    """Read the thread's detail from the local API (the agent runs beside it).
+
+    The server's address comes from the same source the CLI uses: container
+    runtimes move it off 7999 (Maritime serves on 18789, 2026-10-10).
+    """
     token = get_local_api_token()
     request = urllib.request.Request(
-        f"{LOCAL_API_BASE_URL}/api/threads/{thread_id}/",
+        f"{local_server_url()}/api/threads/{thread_id}/",
         headers={"Authorization": f"Bearer {token}"},
     )
     with urllib.request.urlopen(request, timeout=8) as response:
