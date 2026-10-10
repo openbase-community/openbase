@@ -130,6 +130,18 @@ LIVE_VOICE_READINESS_PREWARM = os.getenv(
 LIVE_VOICE_PRECONNECT = os.getenv(
     "LIVEKIT_LIVE_VOICE_PRECONNECT", "1"
 ).strip().lower() not in {"0", "false", "no", "off"}
+# A character swap (transfer, return, announcement) opens a fresh GPT-Live
+# session mid-call: a cold gateway handshake plus the plugin's own reconnect
+# backoff. The 5-second preflight bounds the initial probe, not this swap
+# (2026-10-10: a transfer to Cooper hit the 5-second cap and ended the call
+# while a healthy swap takes about 2 seconds). A swap that still fails is
+# retried with a fresh session before the call is given up.
+LIVE_VOICE_CHARACTER_START_TIMEOUT_SECONDS = float(
+    os.getenv("LIVEKIT_LIVE_VOICE_CHARACTER_START_TIMEOUT_SECONDS", "20") or 20
+)
+LIVE_VOICE_CHARACTER_START_ATTEMPTS = max(
+    1, int(os.getenv("LIVEKIT_LIVE_VOICE_CHARACTER_START_ATTEMPTS", "2") or 2)
+)
 LIVEKIT_DISPATCHER_WARMUP = os.getenv(
     "LIVEKIT_DISPATCHER_WARMUP", "1"
 ).strip().lower() not in {"0", "false", "no", "off"}

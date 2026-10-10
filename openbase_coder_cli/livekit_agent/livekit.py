@@ -105,6 +105,8 @@ from openbase_coder_cli.livekit_agent.config import (  # noqa: F401
     DIRECT_LIVEKIT_INSTRUCTIONS_PATH_ENV,
     DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV,
     DISPATCHER_BUILTIN_DEVELOPER_INSTRUCTIONS,
+    LIVE_VOICE_CHARACTER_START_ATTEMPTS,
+    LIVE_VOICE_CHARACTER_START_TIMEOUT_SECONDS,
     LIVE_VOICE_DEFAULT_VOICE,
     LIVE_VOICE_MODEL,
     LIVE_VOICE_PRECONNECT,
@@ -1139,13 +1141,16 @@ async def _start_live_voice_session(
         live_ready = True
         characters = LiveCharacterController(
             session=session, bridge=bridge, router=voice_router,
-            model_factory=lambda voice: _build_live_voice_model(decision, voice=voice),
+            model_factory=lambda voice: _build_live_voice_model(
+                decision, voice=voice, preconnect=LIVE_VOICE_PRECONNECT
+            ),
             instructions=lambda label: live_voice_startup_instructions(agent_label=label),
             on_error=handle_live_error,
             ledger=delivery_ledger,
             initial_model=live_model,
             speech_gate=bridge.speech_gate,
-            timeout=LIVE_VOICE_PREFLIGHT_TIMEOUT_SECONDS,
+            timeout=LIVE_VOICE_CHARACTER_START_TIMEOUT_SECONDS,
+            start_attempts=LIVE_VOICE_CHARACTER_START_ATTEMPTS,
         )
         bridge.characters = characters
         bridge.character_route_changed = characters.route_changed
