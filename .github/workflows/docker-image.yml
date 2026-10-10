@@ -25,6 +25,7 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - ".github/workflows/docker-image.yml"
+      - ".github/scripts/release-version.sh"
   workflow_dispatch:
     inputs:
       tag:
@@ -73,7 +74,9 @@ jobs:
         # release the same push cuts, so the image need not wait for its tag.
         env:
           REF_NAME: ${{ github.ref_name }}
-        run: echo "version=$(.github/scripts/release-version.sh stamp "$REF_NAME")" >> "$GITHUB_OUTPUT"
+        run: |
+          version="$(.github/scripts/release-version.sh stamp "$REF_NAME")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - id: platforms
         env:
           PLATFORMS: ${{ inputs.platforms || 'all' }}
