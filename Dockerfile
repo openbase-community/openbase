@@ -26,6 +26,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
+# Head SHAs of the cloned repos (set by docker-image.yml). Declaring it here
+# makes the clone below a cache miss whenever a remote moved; without it the
+# layer cache served a stale clone.
+ARG SIBLING_REVS=
 RUN git clone --depth 1 --branch "$CONSOLE_REF" "$CONSOLE_REPO" console \
     && git clone --depth 1 --branch "$CODER_REACT_REF" "$CODER_REACT_REPO" coder-react \
     && git clone --depth 1 --branch "$MULTI_REACT_REF" "$MULTI_REACT_REPO" multi-react \
@@ -60,6 +64,7 @@ FROM python:3.13-slim-bookworm
 # --build-arg OPENBASE_CODER_VERSION=x.y.z to stamp a real version.
 ARG OPENBASE_CODER_VERSION=0.0.0.dev0
 ARG SUPER_AGENTS_REPO=https://github.com/montaguegabe/super-agents
+ARG SUPER_AGENTS_REF=develop
 # The dispatcher's full instructions, the Super Agent base instructions and
 # the bundled skills (dispatcher procedure included) come from the workspace
 # root repo's instructions/ folder and the skills repo. Without them the
@@ -138,8 +143,10 @@ WORKDIR /opt/openbase-coder/workspace
 # reads instructions/ and skills/ beside them (setup/codex.py renders the
 # instruction files into the data dir and links the skills into both agent
 # homes; Django startup and each voice call refresh them from here).
+# SIBLING_REVS: see the console stage.
+ARG SIBLING_REVS=
 RUN printf '{\n  "repos": []\n}\n' > multi.json \
-    && git clone --depth 1 "$SUPER_AGENTS_REPO" super-agents \
+    && git clone --depth 1 --branch "$SUPER_AGENTS_REF" "$SUPER_AGENTS_REPO" super-agents \
     && git clone --depth 1 --branch "$SKILLS_REF" "$SKILLS_REPO" skills \
     && git clone --depth 1 --branch "$WORKSPACE_REF" "$WORKSPACE_REPO" /tmp/workspace-root \
     && cp -R /tmp/workspace-root/instructions instructions \
