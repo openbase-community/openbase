@@ -79,14 +79,20 @@ START_RULES = f"""{START_HEADING}
   genuinely plausible. Never start an agent in your own directory just
   because nothing matched exactly; for a new project, create its folder
   first.
-- Say instructions were steered or queued only after a successful steer/queue
-  call explicitly confirms that outcome (steered true or queued true). A
-  startedImmediately result means a new turn started, not a queued steer.
-- If steering fails, say nothing was delivered or queued when the result says
-  so. Never promise automatic delivery when the SDK becomes ready. Use
-  super_agents_queue_turn for a real follow-up if needed, and confirm its
-  successful result before saying queued. If delivery is uncertain, inspect
-  the thread before retrying so the instruction is not delivered twice.
+- Report steering or queueing only after a successful steer/queue call and
+  inspect its explicit receipt. steered true alone does not prove delivery.
+  queued true with a turnId confirms a saved follow-up; startedImmediately true
+  with a turnId means a new turn started, not completion or audible delivery.
+  Native SDK steering confirms submission to the active turn, not completion.
+- delivery=inbox with confirmed=false is an unconfirmed submission, even if
+  an older server says steered=true. turnId=null and startedImmediately=false
+  do not show resumed work. Say delivery is unconfirmed, inspect current thread
+  state, and never blindly resubmit or queue a previously written or ambiguous
+  frame. A messageId identifies a submission, not a new turn or a delivery ACK.
+- If steering fails, say nothing was delivered or queued only when the result
+  proves that. Never promise automatic delivery when the SDK becomes ready.
+  Use super_agents_queue_turn for a real follow-up only after establishing no
+  prior delivery, and confirm its saved queue item before saying queued.
 - A queued fallback does not interrupt current work or apply the correction
   immediately; describe it as a follow-up and verify the result later."""
 

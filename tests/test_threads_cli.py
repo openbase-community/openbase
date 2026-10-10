@@ -238,7 +238,7 @@ def test_send_to_claude_terminal_uses_its_inbox(fake_env):
     assert fake_env["delivered"] == [
         (CLAUDE_SID, "please stop and summarize", CLAUDE_SID, "openbase-coder")
     ]
-    assert "delivered to tui-send-probe via its Claude Code inbox" in result.output
+    assert "submitted to tui-send-probe via its Claude Code inbox; delivery is unconfirmed" in result.output
     assert "crossSessionInbound" in result.output
 
 
@@ -448,3 +448,48 @@ def test_send_wait_needs_a_thread_openbase_lists(fake_env):
     assert result.exit_code == 1
     assert "Cannot wait" in result.output
     assert fake_env["delivered"]
+
+
+def test_server_inbox_receipt_is_preserved_without_retry(fake_env):
+    server = fake_env["install"](FakeServer([codex_row("running")]))
+    receipt = {"delivery": "inbox", "confirmed": False, "steered": True,
+               "turnId": None, "startedImmediately": False, "messageId": "frame-1"}
+    server.turn_responses = [(200, receipt)]
+    result = invoke("send", CODEX_THREAD, "follow up")
+    assert result.exit_code == 0, result.output
+    assert "delivery is unconfirmed" in result.output
+    assert "Message steered" not in result.output
+    assert len([call for call in server.calls if call[0] == "POST"]) == 1
+
+
+def test_ambiguous_inbox_write_does_not_retry_or_claim_failure(fake_env):
+    fake_env["delivery_result"] = InboxDeliveryResult(
+        written=False, reason="write_failed", may_have_been_written=True, message_id="frame-2",
+    )
+    server = fake_env["install"](FakeServer([claude_row()]))
+    result = invoke("send", "tui-send-probe", "follow up")
+    assert result.exit_code == 0, result.output
+    assert "delivery is unconfirmed" in result.output
+    assert "Do not blindly retry" in result.output
+    assert len(fake_env["delivered"]) == 1
+    assert not [call for call in server.calls if call[0] == "POST"]
+
+
+def test_unconfirmed_wait_cannot_misattribute_an_old_completion(fake_env):
+    server = fake_env["install"](FakeServer([claude_row()]))
+    result = invoke("send", "tui-send-probe", "follow up", "--wait")
+    assert result.exit_code == 1
+    assert "Cannot wait for confirmed work" in result.output
+    assert len(fake_env["delivered"]) == 1
+    assert not [call for call in server.calls if call[1] == f"/api/threads/{CLAUDE_THREAD}/"]
+
+
+def test_unavailable_receipt_does_not_claim_delivery(fake_env):
+    server = fake_env["install"](FakeServer([codex_row("running")]))
+    server.turn_responses = [(200, {"delivery": "unavailable", "confirmed": False,
+                                  "steered": False, "turnId": None})]
+    result = invoke("send", CODEX_THREAD, "follow up")
+    assert result.exit_code == 0, result.output
+    assert "Nothing was delivered or queued" in result.output
+    assert "Message delivered" not in result.output
+    assert len([call for call in server.calls if call[0] == "POST"]) == 1

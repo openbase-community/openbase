@@ -154,7 +154,10 @@ def test_dispatcher_requires_confirmed_steering_and_queue_outcomes(monkeypatch):
     result = instructions.with_dispatcher_rules('Dispatcher policy.')
     rules = ' '.join(result.split())
     assert 'only after a successful steer/queue call' in rules
-    assert 'steered true or queued true' in rules
+    assert 'steered true alone does not prove delivery' in rules
+    assert 'delivery=inbox with confirmed=false is an unconfirmed submission' in rules
+    assert 'never blindly resubmit or queue' in rules
+    assert 'not completion or audible delivery' in rules
     assert 'Never promise automatic delivery when the SDK becomes ready' in rules
     assert 'super_agents_queue_turn' in rules
     assert 'nothing was delivered or queued' in rules
