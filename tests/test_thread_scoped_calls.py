@@ -428,14 +428,23 @@ async def test_pipeline_fallback_speaks_through_the_session(thread_call, monkeyp
 # --- live persona --------------------------------------------------------------
 
 
-def test_live_startup_instructions_name_the_thread_agent_only_for_thread_calls():
+def test_live_startup_instructions_use_the_dispatcher_or_thread_character(monkeypatch):
+    from openbase_coder_cli import voice_identity
+
+    monkeypatch.setattr(
+        voice_identity,
+        "current_voice_identity",
+        lambda: SimpleNamespace(voice_name="Jacqueline"),
+    )
     plain = config.live_voice_startup_instructions("mac")
     assert "This call started inside" not in plain
     routed = config.live_voice_startup_instructions("mac", agent_label="Linda")
     assert routed.startswith(config.LIVE_VOICE_STARTUP_INSTRUCTIONS)
-    assert "Your name in this call is Dispatcher." in plain
+    assert "Your name in this call is Jacqueline." in plain
+    assert "Your name in this call is Dispatcher." not in plain
     assert "Your name in this call is Linda." in routed
     assert "Your name in this call is Dispatcher." not in routed
+    assert "Your name in this call is Jacqueline." not in routed
     assert "everything the caller says goes to Linda" in routed
     assert "do not mention the dispatcher" in routed
     # Still the voice, never the brain.
