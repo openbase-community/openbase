@@ -949,6 +949,7 @@ async def _start_live_voice_session(
     bridge = LiveDelegationBridge(
         voice_router=voice_router,
         delivery_ledger=delivery_ledger,
+        call_id=str(getattr(ctx.room, "name", "") or ""),
     )
     session_diagnostic_handlers = _register_session_diagnostics(
         session,
