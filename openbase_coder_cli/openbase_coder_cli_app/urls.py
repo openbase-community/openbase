@@ -175,7 +175,7 @@ from openbase_coder_cli.openbase_coder_cli_app.voice_model_settings import (
 router = DefaultRouter()
 
 urlpatterns = [
-    path("dictation/session/", dictation_session, name="dictation-session"),
+    path("dictation/session/", offloaded_view(dictation_session), name="dictation-session"),
     path("auth/session/", auth_session, name="auth-session"),
     path(
         "auth/refresh-jwt/",
