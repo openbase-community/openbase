@@ -639,18 +639,17 @@ _BACKEND_PICKER_OPTIONS = (
     (
         CODEX_BACKEND,
         "codex",
-        "native Codex app-server with OpenAI models, using your Codex CLI login",
+        "Make sure the codex CLI is installed and logged in.",
     ),
     (
         CLAUDE_CODE_BACKEND,
         "claude-code",
-        "Claude Code using your local Claude login and billing",
+        "Make sure the claude CLI is installed and logged in.",
     ),
     (
         OPENBASE_CLOUD_BACKEND,
         "openbase-cloud",
-        "Cloud-proxied Claude Code with only an Openbase login; no personal "
-        "Anthropic account needed",
+        "No personal AI accounts needed.",
     ),
 )
 
