@@ -1460,8 +1460,13 @@ async def test_every_bridge_line_names_the_call(caplog):
     await _settle()
     await bridge.aclose()
 
+    # Only the bridge's own lines: the delivery ledger logs dispatch_timing
+    # lines too, and they reach caplog once any earlier test configured
+    # Django logging (root at INFO).
     messages = [
-        r.getMessage() for r in caplog.records if "dispatch_timing" in r.getMessage()
+        r.getMessage()
+        for r in caplog.records
+        if r.name == BRIDGE_LOGGER and "dispatch_timing" in r.getMessage()
     ]
     assert messages, "no bridge log lines"
     assert all(m.endswith(" call=room-abc%1") for m in messages), messages
