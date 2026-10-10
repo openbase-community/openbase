@@ -4,7 +4,7 @@ Standalone packages bundle the pinned engine by construction; dev installs
 historically ran whatever Homebrew had. This downloads the exact pin from
 ``livekit_version.py`` into ``~/.openbase/bin`` so both pathways run the same
 engine: Linux from the official LiveKit release binaries, macOS by extracting
-the bundled binary from the latest Openbase Coder standalone package
+the bundled binary from a verified Openbase Coder standalone package
 (upstream publishes no darwin builds). Homebrew/PATH remains a last-resort
 fallback and still trips the version-skew health warning when it diverges.
 """
@@ -24,11 +24,17 @@ import zipfile
 from pathlib import Path
 
 import click
+from packaging.version import Version
 
+from openbase_coder_cli import self_update
+from openbase_coder_cli.cloud_environment import (
+    STAGING_WEB_BACKEND_URL,
+    configured_web_backend_url,
+)
 from openbase_coder_cli.livekit_version import LIVEKIT_SERVER_PINNED_VERSION
 from openbase_coder_cli.paths import OPENBASE_BIN_DIR
 from openbase_coder_cli.platforms import is_windows
-from openbase_coder_cli.self_update import RELEASE_REPO
+from openbase_coder_cli.self_update_network import download_file
 
 LIVEKIT_RELEASE_URL_TEMPLATE = (
     "https://github.com/livekit/livekit/releases/download/"
@@ -37,10 +43,6 @@ LIVEKIT_RELEASE_URL_TEMPLATE = (
 LIVEKIT_WINDOWS_RELEASE_URL_TEMPLATE = (
     "https://github.com/livekit/livekit/releases/download/"
     "v{version}/livekit_{version}_windows_{arch}.zip"
-)
-PACKAGE_ASSET_URL_TEMPLATE = (
-    f"https://github.com/{RELEASE_REPO}/releases/latest/download/"
-    "openbase-coder-package-{target}.tar.gz"
 )
 
 
@@ -201,14 +203,46 @@ def _download_from_openbase_package(pin: str) -> Path:
     arch = {"arm64": "aarch64", "aarch64": "aarch64", "x86_64": "x86_64"}.get(machine)
     if arch is None:
         raise RuntimeError(f"unsupported architecture {platform.machine()}")
-    url = PACKAGE_ASSET_URL_TEMPLATE.format(target=f"{arch}-apple-darwin")
-    return _extract_livekit_server(url)
+    target = f"{arch}-apple-darwin"
+    # Source builds carry a PEP 440 development version. Their engine can
+    # precede production, irrespective of the Cloud account they connect to.
+    channel = (
+        "staging"
+        if Version(self_update.__version__).is_devrelease
+        or configured_web_backend_url() == STAGING_WEB_BACKEND_URL
+        else "stable"
+    )
+    manifest = self_update._fetch_manifest(channel)
+    if manifest.get("channel") != channel:
+        raise RuntimeError(f"LiveKit package manifest does not match {channel} channel")
+    entry = manifest.get("targets", {}).get(target, {})
+    url = entry.get("url", "")
+    checksum = entry.get("sha256", "")
+    if not url or not re.fullmatch(r"[0-9a-f]{64}", checksum):
+        raise RuntimeError(f"LiveKit package manifest has no verified target {target}")
+    click.echo(
+        f"Downloading LiveKit {pin} from {channel} Openbase "
+        f"{manifest.get('version', 'unknown')} ({target})"
+    )
+    return _extract_livekit_server(
+        url, sha256=checksum, member_name="bin/livekit-server"
+    )
 
 
-def _extract_livekit_server(url: str) -> Path:
+def _extract_livekit_server(
+    url: str, *, sha256: str | None = None, member_name: str | None = None
+) -> Path:
     staging = Path(tempfile.mkdtemp(prefix="openbase-livekit-"))
     archive_path = staging / "archive.tar.gz"
-    urllib.request.urlretrieve(url, archive_path)  # noqa: S310 — pinned https URL
+    if sha256 is not None:
+        download_file(
+            url,
+            archive_path,
+            sha256=sha256,
+            timeout=self_update.DOWNLOAD_TIMEOUT_SECONDS,
+        )
+    else:
+        urllib.request.urlretrieve(url, archive_path)  # noqa: S310 — pinned https URL
     with tarfile.open(archive_path, "r:gz") as archive:
         member = next(
             (
@@ -216,7 +250,9 @@ def _extract_livekit_server(url: str) -> Path:
                 for item in archive
                 if item.isfile()
                 and (
-                    item.name == "livekit-server"
+                    str(Path(item.name)) == member_name
+                    if member_name is not None
+                    else item.name == "livekit-server"
                     or item.name.endswith("/livekit-server")
                     or item.name.endswith("bin/livekit-server")
                 )
