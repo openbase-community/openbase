@@ -107,12 +107,6 @@ class LoopbackForward:
             "token": self.token,
         }
 
-        if self.relay_port is not None:
-            payload.update(
-                relay_port=self.relay_port,
-                protocol="OPENBASE-LOOPBACK/1",
-                expires_at=self.expires_at,
-            )
         return payload
 
     def as_push_user_info(self) -> dict[str, str]:
@@ -124,10 +118,13 @@ class LoopbackForward:
             "forward_token": self.token,
         }
 
-        if self.relay_port is not None:
-            payload.update(
-                forward_relay_port=str(self.relay_port),
-                forward_protocol="OPENBASE-LOOPBACK/1",
-                forward_expires_at=str(self.expires_at),
-            )
         return payload
+
+
+def relay_capability(port: int, expires_at: int, nonce: str) -> str:
+    """Versioned capability in the existing URL-safe token wire field.
+
+    Routing metadata is not a secret. The random suffix grants access and is
+    compared as part of the complete token by the workspace relay.
+    """
+    return f"OBR1_{port}_{expires_at}_{nonce}"

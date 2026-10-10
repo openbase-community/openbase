@@ -67,7 +67,7 @@ def _patch_tunneld(monkeypatch, *, add_error=None, ipv4="100.64.0.12"):
 
     monkeypatch.setattr(tunneld, "tunneld_add_forward", add_forward)
 
-    def relay(port, token, ttl):
+    def relay(port, token, ttl, *, expires_at):
         add_forward(49152, ttl_seconds=ttl, one_shot=False)
         return 49152
 
