@@ -420,9 +420,11 @@ def test_livekit_room_token_blocks_openbase_cloud_audio_without_subscription(
 
 
 def test_livekit_room_token_includes_proven_cloud_workspace_identity(
-    monkeypatch, tmp_path,
+    monkeypatch,
+    tmp_path,
 ) -> None:
     from openbase_coder_cli.services import livekit_pool_activity
+
     monkeypatch.setattr(livekit_pool_activity, "_ACTIVITY_DIR", tmp_path / "activity")
     assert livekit_pool_activity.activity_timestamp("token") == 0
     monkeypatch.setattr(
@@ -638,13 +640,15 @@ def test_local_audio_downloads_reject_unsupported_python(monkeypatch) -> None:
 
 
 def test_livekit_room_token_lets_the_phone_publish_its_on_screen_thread(
-    monkeypatch, tmp_path,
+    monkeypatch,
+    tmp_path,
 ) -> None:
     """BUG 18: the phone sets openbase.ui.focused_thread on itself; LiveKit
     silently drops attribute updates unless the token grants it."""
     import jwt
 
     from openbase_coder_cli.services import livekit_pool_activity
+
     monkeypatch.setattr(livekit_pool_activity, "_ACTIVITY_DIR", tmp_path / "activity")
     monkeypatch.setattr(
         views._livekit,
@@ -730,15 +734,15 @@ def _room_token(monkeypatch, tmp_path: Path, *, dispatched: bool):
 
 
 def test_room_token_dispatches_the_agent_before_the_phone_joins(monkeypatch, tmp_path):
-    """The agent is dispatched when the token is minted, with the same metadata
-    the room configuration would have carried, and the token then carries no
-    room configuration (LiveKit would otherwise dispatch a second agent)."""
+    """A late join can recreate an expired room with the same agent metadata."""
     calls, claims = _room_token(monkeypatch, tmp_path, dispatched=True)
     (call,) = calls
     assert call["room_name"] == "room-fast"
     assert call["agent_name"] == "livekit-agent"
     assert json.loads(call["metadata"]) == {"user_identity": "gabe@example.com"}
-    assert "roomConfig" not in claims
+    (agent,) = claims["roomConfig"]["agents"]
+    assert agent["agentName"] == call["agent_name"]
+    assert agent["metadata"] == call["metadata"]
     assert claims["video"]["room"] == "room-fast"
 
 
@@ -784,18 +788,16 @@ class _FakeDispatchClient:
         self.existing_rooms = existing_rooms
         self.dispatches: list = []
         self.closed = False
-        self.room = SimpleNamespace(list_rooms=self._list_rooms)
-        self.agent_dispatch = SimpleNamespace(create_dispatch=self._create_dispatch)
+        self.room = SimpleNamespace(create_room=self._create_room)
 
-    async def _list_rooms(self, request):
-        names = list(request.names)
-        return SimpleNamespace(
-            rooms=[SimpleNamespace(name=n) for n in self.existing_rooms if n in names]
-        )
+    async def _create_room(self, request):
+        import asyncio
 
-    async def _create_dispatch(self, request):
-        self.dispatches.append(request)
-        return SimpleNamespace(id="AD_1")
+        await asyncio.sleep(0)
+        if request.name not in self.existing_rooms:
+            self.existing_rooms.append(request.name)
+            self.dispatches.extend(request.agents)
+        return SimpleNamespace(name=request.name)
 
     async def aclose(self):
         self.closed = True
@@ -818,9 +820,9 @@ def test_create_agent_dispatch_creates_the_room_once(monkeypatch):
         is True
     )
     (request,) = fresh.dispatches
-    assert (request.agent_name, request.room, request.metadata) == (
+    assert (request.agent_name, fresh.existing_rooms, request.metadata) == (
         "livekit-agent",
-        "room-new",
+        ["room-new"],
         '{"a": 1}',
     )
     assert fresh.closed is True
@@ -834,9 +836,28 @@ def test_create_agent_dispatch_creates_the_room_once(monkeypatch):
                 room_name="room-busy", agent_name="livekit-agent", metadata="{}"
             )
         )
-        is False
+        is True
     )
     assert taken.dispatches == [] and taken.closed is True
+
+
+async def test_concurrent_room_creation_dispatches_only_once(monkeypatch):
+    import asyncio
+
+    from openbase_coder_cli import livekit_announcer
+
+    client = _FakeDispatchClient(existing_rooms=[])
+    monkeypatch.setattr(livekit_announcer, "_build_livekit_client", lambda: client)
+    results = await asyncio.gather(
+        *(
+            views._livekit._create_agent_dispatch(
+                room_name="room-shared", agent_name="livekit-agent", metadata="{}"
+            )
+            for _attempt in range(2)
+        )
+    )
+    assert results == [True, True]
+    assert len(client.dispatches) == 1
 
 
 def test_explicit_agent_dispatch_switch_reads_the_environment(monkeypatch):

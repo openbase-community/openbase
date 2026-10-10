@@ -130,6 +130,9 @@ LIVE_VOICE_READINESS_PREWARM = os.getenv(
 LIVE_VOICE_PRECONNECT = os.getenv(
     "LIVEKIT_LIVE_VOICE_PRECONNECT", "1"
 ).strip().lower() not in {"0", "false", "no", "off"}
+LIVEKIT_DISPATCHER_WARMUP = os.getenv(
+    "LIVEKIT_DISPATCHER_WARMUP", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
 # The room token view dispatches the agent to the room when the token is
 # issued (explicit dispatch) instead of when the phone joins, so the agent's
 # start-up overlaps the phone's join. A job started that way may sit in the
