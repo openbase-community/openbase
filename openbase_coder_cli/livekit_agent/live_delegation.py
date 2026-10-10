@@ -71,7 +71,10 @@ from openbase_coder_cli.livekit_agent.config import (
     load_direct_livekit_developer_instructions,
 )
 from openbase_coder_cli.livekit_agent.live_call_context import LiveCallContext
-from openbase_coder_cli.livekit_agent.live_gateway_events import log_gateway_event
+from openbase_coder_cli.livekit_agent.live_gateway_events import (
+    OutputTranscriptLog,
+    log_gateway_event,
+)
 from openbase_coder_cli.livekit_agent.live_speech_gate import LiveSpeechGate
 from openbase_coder_cli.livekit_agent.live_spoken_output import answer_commands
 from openbase_coder_cli.livekit_agent.live_thread_brief import (
@@ -645,6 +648,7 @@ class LiveDelegationBridge:
         self._max_tokens = max_commentary_tokens
         self._thread_exchange_fetcher = thread_exchange_fetcher
         self._brief_task: Any = None
+        self._output_transcript = OutputTranscriptLog(self._log)
         self._heartbeat_interval = progress_thinking_interval
         self._settle_seconds = utterance_settle_seconds
         self._hold_max_seconds = utterance_hold_max_seconds
@@ -706,7 +710,7 @@ class LiveDelegationBridge:
         )
 
     def _on_gateway_event(self, event) -> None:
-        log_gateway_event(self._log, event)
+        log_gateway_event(self._log, event, self._output_transcript)
 
     def attach(self, live_session) -> None:
         """Subscribe to the plugin session: closed caller utterances and delegations."""
@@ -775,6 +779,7 @@ class LiveDelegationBridge:
             self._starved_timer = None
         if self._brief_task is not None and not self._brief_task.done():
             self._brief_task.cancel()
+        self._output_transcript.flush()
         for entry in list(self._entries.values()):
             if entry.heartbeat is not None:
                 entry.heartbeat.cancel()
