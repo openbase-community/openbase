@@ -1818,6 +1818,59 @@ async def test_no_screen_note_once_the_call_is_transferred_into_a_thread():
     await bridge.aclose()
 
 
+async def test_return_keeps_spoken_agent_context_separate_from_viewed_thread():
+    bridge, live, router, dispatcher, _, _ = _make_bridge()
+    marian = FakeVoiceClient(thread_id="marian-thread")
+    marian.result = {
+        "_livekit_turn_id": "marian-answer",
+        "_livekit_speech_text": "I am Marian. Our test project is Seaglass. 42.",
+    }
+    router.transfer(marian)
+    bridge.notify_route_changed(action="transfer_to_thread", agent_label="Marian")
+    live.final("Remember our test project is Seaglass. What is seven times six?")
+    await _settle()
+    marian.result_gate.set()
+    await _settle()
+    router.focused_thread_tracker = _Focus(FocusedThread("theo-thread", "Theo"))
+    # Background announcements and reconnects must not become call transfers.
+    bridge.announce("Unrelated project is Orchard", agent_name="Gemma")
+    live.drop()
+    live.emit("session_reconnected")
+    live.final("Back to dispatch")
+    await _settle()
+    live.final("Which agent was I just speaking with and what is our project named?")
+    await _settle()
+    prompt = dispatcher.prompts[-1][0]
+    assert "Seaglass" in prompt
+    assert '"agent": "Marian"' in prompt
+    assert '"thread_id": "marian-thread"' in prompt
+    assert '"role": "dispatcher"' in prompt
+    assert "theo-thread" in prompt  # Screen routing still available explicitly.
+    assert "not the previously spoken agent" in prompt
+    assert "Orchard" not in prompt
+    await bridge.aclose()
+
+
+async def test_late_old_route_result_does_not_enter_return_context():
+    bridge, live, router, dispatcher, _, _ = _make_bridge()
+    marian = FakeVoiceClient(thread_id="marian-thread")
+    marian.result["_livekit_speech_text"] = "Stale secret project answer."
+    router.transfer(marian)
+    bridge.notify_route_changed(action="transfer_to_thread", agent_label="Marian")
+    live.final("Check the project")
+    await _settle()
+    live.final("Back to dispatch")
+    await _settle()
+    marian.result_gate.set()
+    await _settle()
+    live.final("Who was I speaking with?")
+    await _settle()
+    prompt = dispatcher.prompts[-1][0]
+    assert '"agent": "Marian"' in prompt
+    assert "Stale secret project answer" not in prompt
+    await bridge.aclose()
+
+
 async def test_a_sentence_still_being_transcribed_joins_the_held_one():
     """Regression for BUG 18's split: "... in this thread" closed first and
     ". Answer just the number" arrived later as its own final, so the

@@ -70,6 +70,7 @@ from typing import Any
 from openbase_coder_cli.livekit_agent.config import (
     load_direct_livekit_developer_instructions,
 )
+from openbase_coder_cli.livekit_agent.live_call_context import LiveCallContext
 from openbase_coder_cli.livekit_agent.live_speech_gate import LiveSpeechGate
 from openbase_coder_cli.livekit_agent.screen_context import apply_screen_context
 from openbase_coder_cli.livekit_agent.speech_formatter import (
@@ -531,6 +532,7 @@ class LiveDelegationEntry:
     prompt: str
     route: Any
     client: Any
+    agent_label: str = ""
     delegation_id: str | None = None
     source: str = "transcript"
     open_utterance: str = ""
@@ -620,6 +622,10 @@ class LiveDelegationBridge:
         self._active_agent_label = (
             initial_agent_label or ""
         ).strip() or DISPATCHER_AGENT_LABEL
+        self._call_context = LiveCallContext()
+        self._call_context.observe_route(
+            self._voice_router.route_snapshot(), self._active_agent_label
+        )
         # When the plugin reported the gateway socket gone; None while it is up.
         self._session_down_at: float | None = None
         self._closed = False
@@ -721,6 +727,7 @@ class LiveDelegationBridge:
             if callable(remove):
                 remove(self._on_turn_progress)
         self._listening_clients.clear()
+        self._call_context.clear()
 
     # model-facing appends
 
@@ -1383,6 +1390,7 @@ class LiveDelegationBridge:
         client = self._voice_router.active_client
         route = self._voice_router.route_snapshot()
         inherited: LiveDelegationEntry | None = None
+        self._call_context.observe_route(route, self._active_agent_label)
         pending_deliveries: list[_CommentaryDelivery] = []
         for other in self._entries.values():
             if other.client is not client or other.superseded:
@@ -1416,6 +1424,7 @@ class LiveDelegationBridge:
             prompt=text,
             route=route,
             client=client,
+            agent_label=self._active_agent_label,
             delegation_id=delegation_id
             or (inherited.delegation_id if inherited is not None else None),
             source=source,
@@ -1549,6 +1558,7 @@ class LiveDelegationBridge:
         if action == "exit_to_dispatch":
             label = DISPATCHER_AGENT_LABEL
         self._active_agent_label = label
+        self._call_context.observe_route(self._voice_router.route_snapshot(), label)
         self._reset_utterance_state()
         if self.character_route_changed is not None:
             for entry in self._entries.values():
@@ -1621,6 +1631,7 @@ class LiveDelegationBridge:
         if self._voice_router.is_dispatcher_active:
             prompt = append_onboarding_reminder(prompt)
         prompt = apply_screen_context(self._voice_router, prompt)
+        prompt = self._call_context.apply(prompt)
         entry.heartbeat = asyncio.create_task(
             self._progress_heartbeat(entry),
             name=f"openbase-live-heartbeat-{entry.key}",
@@ -1724,6 +1735,9 @@ class LiveDelegationBridge:
                     entry.record, reason="route_changed_before_commentary"
                 )
             return
+        self._call_context.completed_exchange(
+            entry.route, entry.agent_label, entry.prompt, speech_text
+        )
         cursor = self._cursor(turn_id or entry.key)
         chunks = cursor.advance(speech_text, final=True) if speech_text else []
         if ledger is not None and entry.record is not None and speech_text:
@@ -1836,6 +1850,9 @@ class LiveDelegationBridge:
                 entry.superseded = True
                 self._stats["superseded"] += 1
         self._active_agent_label = DISPATCHER_AGENT_LABEL
+        self._call_context.observe_route(
+            self._voice_router.route_snapshot(), self._active_agent_label
+        )
         self._reset_utterance_state()
         if changed and self.character_route_changed is not None:
             self.character_route_changed()
