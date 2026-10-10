@@ -208,7 +208,9 @@ def test_archive_storage_failure_is_not_reported_as_success(tmp_path, monkeypatc
     def cannot_persist(*_):
         raise OSError("Archive storage unavailable")
 
-    monkeypatch.setattr(session_manager_threads, "archive_backend_thread", cannot_persist)
+    monkeypatch.setattr(
+        session_manager_threads, "archive_backend_thread", cannot_persist
+    )
     with pytest.raises(OSError, match="Archive storage unavailable"):
         asyncio.run(current.archive_thread("archived-target"))
     assert len(asyncio.run(current.list_threads())) == 2
@@ -239,3 +241,36 @@ def test_codex_archive_keeps_native_backend_operation(tmp_path, monkeypatch):
     assert asyncio.run(current.archive_thread("codex-thread"))
     assert client.calls == [("thread/archive", {"threadId": "codex-thread"})]
     assert not (tmp_path / ARCHIVES_FILE).exists()
+
+
+def test_reader_between_first_database_open_and_archive_transaction(
+    tmp_path, monkeypatch
+):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from openbase_coder_cli import thread_archives
+
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    opened, release = threading.Event(), threading.Event()
+    real_connect = thread_archives.sqlite3.connect
+
+    def pause_first_writer(*args, **kwargs):
+        connection = real_connect(*args, **kwargs)
+        if not kwargs.get("uri"):
+            # sqlite3.connect creates an empty file before BEGIN EXCLUSIVE.
+            opened.set()
+            assert release.wait(5)
+        return connection
+
+    monkeypatch.setattr(thread_archives.sqlite3, "connect", pause_first_writer)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        writer = pool.submit(
+            thread_archives.archive_backend_thread, "claude_code", "target"
+        )
+        try:
+            assert opened.wait(2)
+            assert thread_archives.archived_thread_ids("claude_code") == set()
+        finally:
+            release.set()
+        writer.result(timeout=5)
+    assert thread_archives.archived_thread_ids("claude_code") == {"target"}

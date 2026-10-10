@@ -31,6 +31,18 @@ def archived_thread_ids(backend: str) -> set[str]:
     with closing(
         sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
     ) as connection:
+        connection.execute("BEGIN")
+        # connect() creates the file before the first writer can begin its
+        # transaction. An empty schema contains no committed archive yet.
+        # Read the schema and markers in one snapshot; populated unknown
+        # schemas still fail closed instead of being treated as empty.
+        if (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1"
+            ).fetchone()
+            is None
+        ):
+            return set()
         _check_schema(connection)
         return {
             row[0]
