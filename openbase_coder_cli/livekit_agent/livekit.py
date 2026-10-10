@@ -1213,6 +1213,7 @@ async def _start_live_voice_session(
         )
         log_character_started(identity, assistant.duplex_session, voice_router)
         bridge.greet(live_voice_greeting(bridge.starting_agent_label()))
+        bridge.brief_active_thread()
         live_ready = True
         characters = LiveCharacterController(
             session=session,

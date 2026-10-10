@@ -230,6 +230,7 @@ def _make_bridge(
     lag=0.0,
     call_id="",
     barge_in_min=0.0,
+    thread_exchange_fetcher=None,
 ):
     dispatcher = FakeVoiceClient(thread_id="dispatcher-thread")
     router = FakeVoiceRouter(dispatcher)
@@ -253,11 +254,21 @@ def _make_bridge(
         utterance_transcript_lag_seconds=lag,
         call_id=call_id,
         **({"clock": clock} if clock is not None else {}),
+        **(
+            {"thread_exchange_fetcher": thread_exchange_fetcher}
+            if thread_exchange_fetcher is not None
+            else {"thread_exchange_fetcher": _no_exchanges}
+        ),
     )
     bridge.attach(live)
     # Caller speech interrupts at once unless a test exercises the echo debounce.
     bridge.speech_gate.barge_in_min_seconds = barge_in_min
     return bridge, live, router, dispatcher, delivery_ledger, lifecycle
+
+
+async def _no_exchanges(thread_id: str):
+    # Tests that are not about the thread brief get a quiet voice session.
+    return []
 
 
 async def _settle():

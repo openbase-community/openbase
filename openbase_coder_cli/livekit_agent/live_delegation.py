@@ -74,6 +74,11 @@ from openbase_coder_cli.livekit_agent.live_call_context import LiveCallContext
 from openbase_coder_cli.livekit_agent.live_gateway_events import log_gateway_event
 from openbase_coder_cli.livekit_agent.live_speech_gate import LiveSpeechGate
 from openbase_coder_cli.livekit_agent.live_spoken_output import answer_commands
+from openbase_coder_cli.livekit_agent.live_thread_brief import (
+    ThreadExchangeFetcher,
+    fetch_thread_exchanges,
+    thread_brief_note,
+)
 from openbase_coder_cli.livekit_agent.screen_context import apply_screen_context
 from openbase_coder_cli.livekit_agent.speech_formatter import (
     format_for_speech_segments,
@@ -613,6 +618,7 @@ class LiveDelegationBridge:
             load_direct_livekit_developer_instructions
         ),
         max_commentary_tokens: int = COMMENTARY_MAX_TOKENS,
+        thread_exchange_fetcher: ThreadExchangeFetcher = fetch_thread_exchanges,
         progress_thinking_interval: float = PROGRESS_THINKING_INTERVAL_SECONDS,
         utterance_settle_seconds: float = UTTERANCE_SETTLE_SECONDS,
         utterance_hold_max_seconds: float = UTTERANCE_HOLD_MAX_SECONDS,
@@ -629,6 +635,8 @@ class LiveDelegationBridge:
         self._ledger = delivery_ledger
         self._developer_instructions = developer_instructions
         self._max_tokens = max_commentary_tokens
+        self._thread_exchange_fetcher = thread_exchange_fetcher
+        self._brief_task: Any = None
         self._heartbeat_interval = progress_thinking_interval
         self._settle_seconds = utterance_settle_seconds
         self._hold_max_seconds = utterance_hold_max_seconds
@@ -757,6 +765,8 @@ class LiveDelegationBridge:
         if self._starved_timer is not None:
             self._starved_timer.cancel()
             self._starved_timer = None
+        if self._brief_task is not None and not self._brief_task.done():
+            self._brief_task.cancel()
         for entry in list(self._entries.values()):
             if entry.heartbeat is not None:
                 entry.heartbeat.cancel()
@@ -1222,6 +1232,49 @@ class LiveDelegationBridge:
         not inject reconnect narration or a competing no-greeting briefing.
         """
         self._resume_session(connection_lost=False)
+        self.brief_active_thread()
+
+    def brief_active_thread(self) -> None:
+        """Tell the fresh voice session what this thread recently discussed.
+
+        A GPT-Live session starts blank; the agent turn does not (it resumes
+        the thread). Appended as thinking, bounded, once per session start.
+        """
+        if self._closed or self._live_session is None:
+            return
+        thread_id = getattr(self._voice_router.active_client, "_thread_id", "") or ""
+        if not thread_id:
+            return
+        label = self._active_agent_label
+        route = self._voice_router.route_snapshot()
+        if self._brief_task is not None and not self._brief_task.done():
+            self._brief_task.cancel()
+
+        async def brief() -> None:
+            try:
+                exchanges = await self._thread_exchange_fetcher(thread_id)
+            except Exception as exc:  # noqa: BLE001 - context is best effort
+                self._log.info(
+                    "%s stage=live_thread_brief_unavailable thread_id=%s error=%s",
+                    DISPATCH_TIMING_LOG,
+                    thread_id,
+                    type(exc).__name__,
+                )
+                return
+            if self._closed or not self._voice_router.can_deliver_for_snapshot(route):
+                return
+            note = thread_brief_note(exchanges, agent_label=label)
+            self._log.info(
+                "%s stage=live_thread_brief thread_id=%s exchanges=%d chars=%d",
+                DISPATCH_TIMING_LOG,
+                thread_id,
+                len(exchanges),
+                len(note or ""),
+            )
+            if note:
+                self._append_thinking(note, None)
+
+        self._brief_task = asyncio.create_task(brief(), name="live-thread-brief")
 
     def _resume_session(self, *, connection_lost: bool) -> None:
         if self._closed:
