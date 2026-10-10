@@ -146,6 +146,9 @@ from openbase_coder_cli.livekit_agent.config import (  # noqa: F401
     live_voice_startup_instructions,
     load_direct_livekit_developer_instructions,
 )
+from openbase_coder_cli.livekit_agent.gpt_live_reconnect_patch import (
+    install_gpt_live_reconnect_patch,
+)
 from openbase_coder_cli.livekit_agent.live_delegation import LiveDelegationBridge
 from openbase_coder_cli.livekit_agent.live_preconnect import (
     _preconnecting_model_class,
@@ -358,6 +361,7 @@ server = LiveKitAgentServer(
 
 def prewarm(proc: JobProcess):
     install_vad_backlog_patch()
+    install_gpt_live_reconnect_patch()
     vad_model = silero.VAD.load()
     proc.userdata["vad"] = (
         LoggingVAD(vad_model) if LIVEKIT_VERBOSE_LOGGING else vad_model
@@ -2113,6 +2117,7 @@ def main():
     install_proc_pool_liveness_patch()
     install_assemblyai_idle_noise_filter()
     install_vad_backlog_patch()
+    install_gpt_live_reconnect_patch()
     cli.run_app(server)
 
 
