@@ -157,7 +157,7 @@ class CallbackRelay:
             self.active.discard(task)
 
 
-def start_relay(port: int, token: str, ttl: int = 600) -> int:
+def start_relay(port: int, token: str, ttl: int = 600, *, expires_at: int) -> int:
     """Start an isolated child; acknowledge only once its VPN listener is up."""
     owner = ListenerOwner.find(port)
     child = subprocess.Popen(
@@ -169,7 +169,14 @@ def start_relay(port: int, token: str, ttl: int = 600) -> int:
     )
     try:
         child.stdin.write(
-            json.dumps({"owner": asdict(owner), "token": token, "ttl": ttl}).encode()
+            json.dumps(
+                {
+                    "owner": asdict(owner),
+                    "token": token,
+                    "ttl": ttl,
+                    "expires_at": expires_at,
+                }
+            ).encode()
             + b"\n"
         )
         child.stdin.close()
@@ -200,6 +207,9 @@ async def _main(config: dict) -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, relay.done.set)
     port = await relay.start()
+    from openbase_coder_cli.login_callback import relay_capability
+
+    relay.token = relay_capability(port, config["expires_at"], config["token"])
     exposed = False
     try:
         # The authentication handshake itself carries bytes both ways. Only

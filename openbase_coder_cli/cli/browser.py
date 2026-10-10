@@ -35,6 +35,7 @@ from openbase_coder_cli.login_callback import (
     LoopbackForward,
     is_tailnet_forward_target,
     loopback_callback_port,
+    relay_capability,
 )
 from openbase_coder_cli.open_url_policy import open_url_error
 
@@ -144,8 +145,15 @@ def _try_arrange_forward(port: int) -> LoopbackForward | None:
         return None
     forward = LoopbackForward.create(port, target)
     expires_at = int(time.time()) + DEFAULT_FORWARD_TTL_SECONDS
-    relay_port = start_relay(port, forward.token, DEFAULT_FORWARD_TTL_SECONDS)
-    return replace(forward, relay_port=relay_port, expires_at=expires_at)
+    relay_port = start_relay(
+        port, forward.token, DEFAULT_FORWARD_TTL_SECONDS, expires_at=expires_at
+    )
+    return replace(
+        forward,
+        relay_port=relay_port,
+        expires_at=expires_at,
+        token=relay_capability(relay_port, expires_at, forward.token),
+    )
 
 
 def _self_tailnet_target(status_fn) -> str | None:
