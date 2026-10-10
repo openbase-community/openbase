@@ -720,9 +720,14 @@ def _validate_service_launcher(release_dir: Path) -> None:
         raise SelfUpdateError(
             "Downloaded package declares no service launcher (serviceLauncher)."
         )
-    if not (release_dir / relative).is_file():
+    launcher = release_dir / relative
+    if not launcher.is_file():
         raise SelfUpdateError(
             f"Downloaded package is missing its service launcher {relative}."
+        )
+    if not os.access(launcher, os.X_OK):
+        raise SelfUpdateError(
+            f"Downloaded package service launcher is not executable: {relative}."
         )
 
 

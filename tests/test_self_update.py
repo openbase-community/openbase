@@ -240,12 +240,19 @@ def test_self_update_flips_current_and_keeps_previous(
 
 
 @pytest.mark.parametrize("activation_timeout", [False, True])
+@pytest.mark.parametrize("legacy_release", [False, True])
 def test_self_update_rolls_back_on_failed_health_gate(
-    monkeypatch, tmp_path, activation_timeout
+    monkeypatch, tmp_path, activation_timeout, legacy_release
 ) -> None:
     layout = _patch_standalone_layout(monkeypatch, tmp_path)
     old_root = layout["releases"] / "1.0.0-aarch64-apple-darwin"
     _make_fake_package(old_root, version="1.0.0")
+    if legacy_release:
+        metadata_path = old_root / "openbase-coder-package.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        del metadata["serviceLauncher"]
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+        (old_root / SERVICE_LAUNCHER_RELATIVE_PATH).unlink()
     layout["current"].parent.mkdir(parents=True, exist_ok=True)
     layout["current"].symlink_to(old_root)
 
@@ -331,6 +338,30 @@ def test_validate_release_dir_requires_macos_packages_to_declare_a_launcher(
 
     with pytest.raises(self_update.SelfUpdateError, match="serviceLauncher"):
         self_update._validate_release_dir(release)
+
+
+def test_validate_release_dir_rejects_a_nonexecutable_service_launcher(
+    tmp_path: Path,
+) -> None:
+    release = _make_fake_package(tmp_path / "release", version="2.0.0")
+    (release / SERVICE_LAUNCHER_RELATIVE_PATH).chmod(0o644)
+
+    with pytest.raises(self_update.SelfUpdateError, match="not executable"):
+        self_update._validate_release_dir(release)
+
+
+def test_validate_release_dir_accepts_linux_without_a_service_launcher(
+    tmp_path: Path,
+) -> None:
+    release = _make_fake_package(tmp_path / "release", version="2.0.0")
+    metadata_path = release / "openbase-coder-package.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["target"] = "x86_64-unknown-linux-gnu"
+    del metadata["serviceLauncher"]
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    (release / SERVICE_LAUNCHER_RELATIVE_PATH).unlink()
+
+    self_update._validate_release_dir(release)
 
 
 def test_validate_release_dir_requires_sync_engine(tmp_path: Path) -> None:
