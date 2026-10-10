@@ -288,11 +288,13 @@ class SuperAgentsClientThreadsMixin:
         )
 
         if execution_backend == CLAUDE_CODE_BACKEND:
-            from super_agents.claude_sdk import ClaudeAgentSdkClient
+            from openbase_coder_cli.agent_announcements.claude import (
+                managed_claude_client,
+            )
 
             from .dispatcher_task_context import dispatcher_disallowed_tools
 
-            return ClaudeAgentSdkClient(
+            return managed_claude_client(
                 backend_identity=identity,
                 disallowed_tools_for_session=dispatcher_disallowed_tools,
             )

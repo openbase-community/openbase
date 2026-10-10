@@ -12,6 +12,7 @@ import av
 from livekit import rtc
 from livekit.agents import AgentSession
 
+from openbase_coder_cli.agent_announcements.playback import monitor_speech, speech_guard
 from openbase_coder_cli.livekit_agent.announcement_audio import (
     AnnouncementSynthesisOutcome,
     announcement_audio,
@@ -200,6 +201,10 @@ class AnnouncerSpeechQueue:
             len(message.text),
         )
 
+        guard = await speech_guard(message.message_id)
+        if guard and not await asyncio.to_thread(guard.current):
+            return
+
         outcome = AnnouncementSynthesisOutcome()
         handle = self._session.say(
             spoken_text,
@@ -212,13 +217,16 @@ class AnnouncerSpeechQueue:
             allow_interruptions=False,
             add_to_chat_ctx=False,
         )
-        await self._bracketed_playout(
-            handle,
-            text=spoken_text,
-            voice_id=self._announcer_tts.resolve_voice_id(message.voice_id),
-            voice_name=self._announcer_tts.resolve_voice_name(message.voice_id),
-            synthesis_outcome=outcome,
-        )
+        async with monitor_speech(
+            guard, (lambda: handle.interrupt(force=True)) if guard else lambda: None
+        ):
+            await self._bracketed_playout(
+                handle,
+                text=spoken_text,
+                voice_id=self._announcer_tts.resolve_voice_id(message.voice_id),
+                voice_name=self._announcer_tts.resolve_voice_name(message.voice_id),
+                synthesis_outcome=outcome,
+            )
         logger.info(
             "dispatch_timing stage=announcer_playout_end message_id=%s elapsed_ms=%d "
             "synthesis_completed=%s audio_events=%d",

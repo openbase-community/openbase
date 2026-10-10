@@ -13,6 +13,7 @@ from collections import deque
 
 from livekit.agents import llm
 
+from openbase_coder_cli.agent_announcements.playback import monitor_speech, speech_guard
 from openbase_coder_cli.voice_identity import agent_voice_identity, route_voice_identity
 
 from .config import live_voice_greeting
@@ -277,6 +278,18 @@ class LiveCharacterController:
             await self.on_error(exc)
 
     async def _announcement(self, message):
+        guard = await speech_guard(message.message_id)
+        if guard and not await asyncio.to_thread(guard.current):
+            logger.info("managed_announcement_stale message_id=%s", message.message_id)
+            return
+        async with monitor_speech(guard, self._cancel_managed_announcement):
+            await self._play_announcement(message)
+
+    def _cancel_managed_announcement(self):
+        self._announcement_stop.set()
+        self._speech_changed.set()
+
+    async def _play_announcement(self, message):
         voice_id = message.voice_id
         if not voice_id and message.agent_name:
             from openbase_coder_cli.livekit_voice_route import (
