@@ -1681,6 +1681,17 @@ async def livekit_agent(ctx: JobContext):
     )
 
 
+def _dispatcher_voice_id() -> str | None:
+    """The Dispatcher's assigned voice, for announcements spoken as the Dispatcher."""
+    from openbase_coder_cli.livekit_voice_route import get_livekit_voice_route_state
+
+    try:
+        return get_livekit_voice_route_state().dispatcher_voice_id or None
+    except Exception:  # noqa: BLE001 - a missing voice falls back to the announcer default
+        logger.debug("dispatcher voice unavailable for announcement", exc_info=True)
+        return None
+
+
 def _live_stall_hint_speaker(live_bridge: LiveDelegationBridge):
     """Speak a blocked-turn hint through the live character, keeping the call."""
 
@@ -2046,10 +2057,13 @@ def _wire_pipeline_voice_call(
         )
         if route_command.action == "exit_to_dispatch":
             if voice_router.exit_to_dispatch():
+                # Spoken by the Dispatcher's own voice, as when the Dispatcher
+                # says it itself (2026-10-10: the announcer default voice said it).
                 announcer_queue.enqueue(
                     AnnouncerMessage(
                         message_id=f"voice-route-{uuid.uuid4().hex}",
                         text="Back to dispatch.",
+                        voice_id=_dispatcher_voice_id(),
                     )
                 )
         elif route_command.action == "transfer_to_thread":
