@@ -316,6 +316,31 @@ async def test_live_engine_builds_a_duplex_session_and_publishes_the_attribute(
         await callback()
 
 
+async def test_live_hangup_ends_job_and_closes_character_resources(wiring, monkeypatch):
+    from livekit.agents.voice.events import CloseEvent, CloseReason
+
+    deleted = []
+
+    async def delete_room(name):
+        deleted.append(name)
+
+    monkeypatch.setattr(livekit, "_delete_room", delete_room)
+    ctx = _fake_ctx()
+    await _run_entrypoint(ctx, _live_decision(), monkeypatch)
+    (session,) = _FakeAgentSession.instances
+    for handler in tuple(session.handlers["close"]):
+        handler(CloseEvent(reason=CloseReason.PARTICIPANT_DISCONNECTED))
+    await asyncio.sleep(0)
+    assert deleted == ["room-1"]
+    assert ctx.shutdowns == ["caller-disconnected"]
+    for callback in ctx.shutdown_callbacks:
+        await callback()
+    assert session.closed
+    assert _FakeGPTLiveModel.instances[0].closed
+    assert not ctx.room.handlers["data_received"]
+    assert not wiring.live.handlers["input_audio_transcription_completed"]
+
+
 async def test_pipeline_engine_is_untouched_and_publishes_pipeline(wiring, monkeypatch):
     ctx = _fake_ctx()
     await _run_entrypoint(ctx, VoiceEngineDecision(engine="pipeline"), monkeypatch)
