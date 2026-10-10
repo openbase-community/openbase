@@ -325,6 +325,8 @@ def _run_from_turn(
         else _optional_turn_string(turn, "prompt", "promptPreview") or ""
     )
 
+    from .thread_messages import turn_messages
+
     return RunInfo(
         run_id=turn_id,
         started_at=started_at,
@@ -350,6 +352,7 @@ def _run_from_turn(
             or _recorded_turn_steers(turn)
         ),
         file_edits=_file_edit_paths(turn),
+        messages=turn_messages(turn),
     )
 
 
