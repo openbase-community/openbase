@@ -188,6 +188,7 @@ def test_shutdown_flushes_before_wait_and_after_final_write(
     script = (
         "set -euo pipefail\n"
         'sync() { if [ -f "$STOPPED" ]; then echo stopped >>"$MARKER"; else echo running >>"$MARKER"; fi; }\n'
+        + _function("service_log_sink")
         + _function("start_supervised")
         + _function("shutdown")
         + "trap shutdown TERM INT\n"

@@ -31,6 +31,7 @@ from openbase_coder_cli.paths import (
 from openbase_coder_cli.runtime import stable_runtime_package
 from openbase_coder_cli.services import process_utils
 from openbase_coder_cli.services import tailscale_provider as tp
+from openbase_coder_cli.services.container_log_sink import SERVICE_LOG_CAP_BYTES
 from openbase_coder_cli.services.definitions import (
     RETIRED_SERVICE_NAMES,
     SERVICES,
@@ -283,8 +284,8 @@ def _truncate_existing_logs(svc: ServiceDefinition) -> None:
 # A service log is trimmed on every start, so it only grows unbounded when
 # the supervisor respawns a failing runner faster than anyone restarts it
 # (2026-10-07: 12,080 identical tracebacks, 14.6 MB). Each runner start
-# therefore also caps its own log once it passes this size.
-SERVICE_LOG_CAP_BYTES = 4 * 1024 * 1024
+# therefore also caps its own log once it passes SERVICE_LOG_CAP_BYTES (owned
+# by the container log sink, which applies the same cap continuously).
 
 
 def cap_service_log(

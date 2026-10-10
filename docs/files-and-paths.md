@@ -104,6 +104,7 @@ Agents create these inside a project, workspace, or worktree root. Neither is pr
 | `~/.config/systemd/user/com.openbase.coder.<service>.service` | `services install/regenerate` (Linux) | systemd user unit definitions |
 | `~/.openbase/logs/<service>.stdout.log` | launchd services | Service stdout logs |
 | `~/.openbase/logs/<service>.stderr.log` | launchd services | Service stderr logs |
+| `<data dir>/logs/<service>.log` | container entrypoint (Docker image, cloud DevSpace) | Service output mirrored from the container console, trimmed to its tail past 4 MiB |
 
 Wrappers for `codex-app-server`, `livekit-agent`, and `django-cli` prefer binaries from
 `<workspace>/.venv/bin/`, then `<workspace>/cli/.venv/bin/`, then
