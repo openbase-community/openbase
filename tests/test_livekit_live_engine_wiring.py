@@ -505,6 +505,11 @@ def test_live_startup_instructions_never_let_the_voice_model_answer_itself():
     assert "no general knowledge" in text
     assert "desktop" in text and "files" in text
     assert "Only the agent answers." in text
+    assert "spoken-answer instructions" in text
+    assert "Read every sentence" in text
+    assert "do not shorten" in text
+    assert "agent's answer reaches you as commentary" not in text
+    assert "A greeting arrives as commentary" not in text
     assert "relay commentary faithfully" in text.lower()
 
 
