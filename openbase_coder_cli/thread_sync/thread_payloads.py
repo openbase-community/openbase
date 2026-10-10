@@ -33,7 +33,12 @@ DEFAULT_THREAD_HISTORY_LIMIT = 25
 
 RUNNING_STATUSES = {"active", "inProgress", "in_progress", "running", "pending"}
 COMPLETED_STATUSES = {"completed", "success"}
-ERROR_STATUSES = {"failed", "error", "cancelled", "canceled", "interrupted"}
+ERROR_STATUSES = {"failed", "error"}
+STOPPED_STATUSES = {
+    "cancelled": SessionStatus.cancelled,
+    "canceled": SessionStatus.cancelled,
+    "interrupted": SessionStatus.interrupted,
+}
 THREAD_IDLE_STATUSES = {"notLoaded", "not_loaded", "idle", "unknown"}
 WAITING_FLAGS = {"waitingOnUserInput", "waiting_on_user_input"}
 WAITING_STATUSES = {"waiting", "waitingOnUserInput", "waiting_on_user_input"}
@@ -93,9 +98,11 @@ def _is_waiting_status(status: Any) -> bool:
 
 
 def _thread_status(status: Any) -> SessionStatus:
+    status_type = _status_type(status)
+    if status_type in STOPPED_STATUSES:
+        return STOPPED_STATUSES[status_type]
     if _is_waiting_status(status):
         return SessionStatus.waiting
-    status_type = _status_type(status)
     if status_type in ERROR_STATUSES:
         return SessionStatus.error
     if status_type in RUNNING_STATUSES:
@@ -110,9 +117,11 @@ def _thread_status(status: Any) -> SessionStatus:
 def _turn_status(status: Any, error: Any) -> SessionStatus:
     if error not in (None, ""):
         return SessionStatus.error
+    status_type = _status_type(status)
+    if status_type in STOPPED_STATUSES:
+        return STOPPED_STATUSES[status_type]
     if _is_waiting_status(status):
         return SessionStatus.waiting
-    status_type = _status_type(status)
     if status_type in COMPLETED_STATUSES:
         return SessionStatus.completed
     if status_type in RUNNING_STATUSES:

@@ -17,6 +17,8 @@ class ThreadStatus(str, Enum):
     running = "running"
     completed = "completed"
     error = "error"
+    cancelled = "cancelled"
+    interrupted = "interrupted"
 
 
 class TurnSteerInfo(BaseModel):
