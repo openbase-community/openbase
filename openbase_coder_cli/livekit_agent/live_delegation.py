@@ -25,9 +25,9 @@ replaces_active_turn=True)``: a mid-turn steer where the backend supports it,
 interrupt-and-rerun where it does not), avoiding a full queued replay.
 A delegation the model does emit is bound to the turn already running
 for the same utterance instead of starting a second one, and spoken results
-then go out as ``append_commentary`` bound to that delegation; without one
+then go out as explicit spoken ``append_instructions`` bound to that delegation; without one
 they go out with ``delegation_id=None``. Progress-only output is ``append_thinking``.
-Commentary is sentence-bounded, in chunks of at most 500 tokens. Pure small
+Answer commands preserve each segment and fit the 500-token context-event cap. Pure small
 talk and noise (``is_trivial_utterance``) is the one thing kept off the agent.
 See ``dev-docs/live-voice.md``.
 
@@ -72,6 +72,7 @@ from openbase_coder_cli.livekit_agent.config import (
 )
 from openbase_coder_cli.livekit_agent.live_call_context import LiveCallContext
 from openbase_coder_cli.livekit_agent.live_speech_gate import LiveSpeechGate
+from openbase_coder_cli.livekit_agent.live_spoken_output import answer_commands
 from openbase_coder_cli.livekit_agent.screen_context import apply_screen_context
 from openbase_coder_cli.livekit_agent.speech_formatter import (
     format_for_speech_segments,
@@ -737,11 +738,31 @@ class LiveDelegationBridge:
     def _append_commentary(self, text: str, delegation_id: str | None) -> None:
         self._append("append_commentary", text, delegation_id)
 
+    def _append_answer(self, text: str, delegation_id: str | None) -> None:
+        # Commentary is paraphrasable. Backend answers require every part to
+        # survive, including multiple questions answered in the same turn.
+        for command in answer_commands(
+            text, max_chars=int(COMMENTARY_MAX_TOKENS * CHARS_PER_TOKEN_ESTIMATE)
+        ):
+            self._append(
+                "append_instructions",
+                command,
+                delegation_id,
+                spoken=True,
+                atomic=True,
+            )
+
     def _append_instructions(self, text: str, delegation_id: str | None) -> None:
         self._append("append_instructions", text, delegation_id)
 
     def _append(
-        self, method: str, text: str, delegation_id: str | None, *, spoken=False
+        self,
+        method: str,
+        text: str,
+        delegation_id: str | None,
+        *,
+        spoken=False,
+        atomic=False,
     ) -> None:
         if self._live_session is None or not text:
             return
@@ -749,10 +770,14 @@ class LiveDelegationBridge:
             # The plugin queues this for the next session, whose delegations
             # are new: a bound append would only be rejected there.
             delegation_id = None
-        chunks = chunk_commentary(
-            text,
-            max_tokens=self._max_tokens,
-            speech_format=method == "append_commentary",
+        chunks = (
+            [text]
+            if atomic
+            else chunk_commentary(
+                text,
+                max_tokens=self._max_tokens,
+                speech_format=method == "append_commentary",
+            )
         )
         for chunk in chunks or [text]:
             try:
@@ -1236,9 +1261,7 @@ class LiveDelegationBridge:
             held=self._session_down_at is not None,
         )
         cutoff = (
-            self._session_down_at
-            if self._session_down_at is not None
-            else delivery.at
+            self._session_down_at if self._session_down_at is not None else delivery.at
         ) - REDELIVERY_MAX_AGE_SECONDS
         entry.deliveries = [
             pending
@@ -1258,7 +1281,7 @@ class LiveDelegationBridge:
             )
             return
         for chunk in chunks:
-            self._append_commentary(chunk, entry.delegation_id)
+            self._append_answer(chunk, entry.delegation_id)
 
     def _confirm_deliveries(self) -> None:
         """The model started speaking: bound commentary before that was spoken."""
@@ -1338,7 +1361,7 @@ class LiveDelegationBridge:
                 )
             )
             for chunk in chunks:
-                self._append_commentary(chunk, None)
+                self._append_answer(chunk, None)
 
     def _on_delegation_after_utterance(self, delegation_id: str) -> None:
         """A delegation with no open utterance: the caller's words already closed."""
@@ -1754,8 +1777,8 @@ class LiveDelegationBridge:
             # commentary: add nothing. A thinking note here ("already
             # answered") arrived a moment after that commentary and GPT-Live
             # spoke the note instead of the answer (staging, 2026-10-08).
-            if ledger is not None and entry.record is not None:
-                ledger.mark_cancelled(entry.record, reason="live_answer_already_spoken")
+            # The cursor deduplicates submitted text, not heard audio. Keep
+            # this delivery pending so actual speech binds to the same turn.
             return
         self._deliver(entry, [LIVE_EMPTY_ANSWER_COMMENTARY], final=True)
         if ledger is not None and entry.record is not None and not speech_text:

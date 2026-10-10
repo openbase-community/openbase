@@ -554,7 +554,7 @@ class _FakeClient:
         self.started.set()
         await self.gate.wait()
         return {
-            "_livekit_speech_text": "The build passed.",
+            "_livekit_speech_text": "The build passed. The release is awaiting approval.",
             "_livekit_turn_id": "turn-1",
             "status": "completed",
             "progress": {},
@@ -716,17 +716,21 @@ async def test_real_gpt_live_session_delegation_flows_through_the_bridge(
             assert "Check whether the build passes" in thinking[0]["content"]
 
             client.gate.set()
-            commentary = await server.wait_for_append("commentary")
-            assert commentary[0]["delegation_id"] == "item_1"
-            assert commentary[0]["content"] == "The build passed."
+            answers = await server.wait_for_append("instructions", count=2)
+            answer = answers[1]
+            assert answer["delegation_id"] == "item_1"
+            assert json.loads(answer["content"].split("Text to read: ", 1)[1]) == (
+                "The build passed. The release is awaiting approval."
+            )
+            assert bridge.speech_gate.authorized
 
             bridge.announce("Report ready.", agent_name="Lucy")
-            announcements = await server.wait_for_append("commentary", count=2)
+            announcements = await server.wait_for_append("commentary")
             assert (
-                announcements[1]["delegation_id"] is None
-                or "delegation_id" not in announcements[1]
+                announcements[0]["delegation_id"] is None
+                or "delegation_id" not in announcements[0]
             )
-            assert announcements[1]["content"] == "Lucy: Report ready."
+            assert announcements[0]["content"] == "Lucy: Report ready."
         finally:
             await bridge.aclose()
             await live.aclose()
@@ -816,10 +820,12 @@ async def test_real_gpt_live_session_sends_every_closed_utterance_to_the_agent(
                 expected_delegation = "item_1"
 
             client.gate.set()
-            commentary = await server.wait_for_append("commentary")
+            answers = await server.wait_for_append("instructions")
             assert len(client.prompts) == 1, "exactly one agent turn"
-            assert commentary[0]["content"] == "The build passed."
-            assert commentary[0].get("delegation_id") == expected_delegation
+            assert json.loads(answers[0]["content"].split("Text to read: ", 1)[1]) == (
+                "The build passed. The release is awaiting approval."
+            )
+            assert answers[0].get("delegation_id") == expected_delegation
         finally:
             await bridge.aclose()
             await live.aclose()

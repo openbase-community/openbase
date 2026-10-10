@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import json
 import logging
 from types import SimpleNamespace
 
@@ -107,6 +108,21 @@ class FakeGPTLiveSession:
                 recoverable=True,
             ),
         )
+
+    def speech(self, delegation_id=...) -> list[str]:
+        """Requested spoken text, distinct from model audio/playback evidence."""
+        prefix = (
+            "Read this next backend answer segment aloud exactly once and in full. "
+        )
+        result = []
+        for method, text, d_id in self.appends:
+            if delegation_id is not ... and d_id != delegation_id:
+                continue
+            if method == "commentary":
+                result.append(text)
+            elif method == "instructions" and text.startswith(prefix):
+                result.append(json.loads(text.split("Text to read: ", 1)[1]))
+        return result
 
     def of(self, kind: str, delegation_id=...) -> list[str]:
         return [
@@ -377,13 +393,13 @@ async def test_delegation_runs_a_voice_tagged_turn_and_streams_the_answer():
     # Acceptance goes to thinking immediately, bound to the delegation.
     thinking = live.of("thinking", "d1")
     assert thinking and "Check whether the build passes" in thinking[0]
-    assert live.of("commentary") == []
+    assert live.speech() == []
     assert ("utterance_accepted", "live-d1") in lifecycle
 
     dispatcher.result_gate.set()
     await _settle()
 
-    commentary = live.of("commentary", "d1")
+    commentary = live.speech("d1")
     assert commentary == ["All tests pass. The build is green."]
     assert dispatcher.claimed == ["turn-1"]
     record = ledger.record_for_turn("turn-1")
@@ -414,7 +430,7 @@ async def test_progress_snapshots_stream_commentary_before_the_turn_finishes():
     )
     # The snapshot text is speech-formatted upstream (terminal period added),
     # so both sentences count as complete and stream right away.
-    assert live.of("commentary", "d1") == ["Tests are running. Twelve passed so far."]
+    assert live.speech("d1") == ["Tests are running. Twelve passed so far."]
 
     dispatcher.result = {
         "_livekit_speech_text": "Tests are running. Twelve passed so far. All done.",
@@ -424,7 +440,7 @@ async def test_progress_snapshots_stream_commentary_before_the_turn_finishes():
     }
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary", "d1") == [
+    assert live.speech("d1") == [
         "Tests are running. Twelve passed so far.",
         "All done.",
     ]
@@ -472,7 +488,7 @@ async def test_progress_never_relays_the_previous_turns_answer_as_commentary():
 
     dispatcher.progress("turn-1", _running_snapshot())
 
-    assert live.of("commentary") == []
+    assert live.speech() == []
     dispatcher.result_gate.set()
     await _settle()
     await bridge.aclose()
@@ -487,7 +503,7 @@ async def test_progress_streams_the_current_turns_own_text():
         "turn-1", _running_snapshot(lastUsefulMessage="Checking your desktop now.")
     )
 
-    assert live.of("commentary", "d1") == ["Checking your desktop now."]
+    assert live.speech("d1") == ["Checking your desktop now."]
     dispatcher.result_gate.set()
     await _settle()
     await bridge.aclose()
@@ -515,7 +531,7 @@ async def test_desktop_question_after_an_answered_question_speaks_only_the_new_a
     dispatcher.result_gate.set()
     await _settle()
 
-    assert live.of("commentary") == ["Your desktop is empty."]
+    assert live.speech() == ["Your desktop is empty."]
     await bridge.aclose()
 
 
@@ -537,13 +553,18 @@ async def test_answer_streamed_by_progress_is_not_followed_by_an_already_answere
     dispatcher.result_gate.set()
     await _settle()
 
-    assert live.of("commentary", "d1") == [answer]
+    assert live.speech("d1") == [answer]
     assert not any("already answered" in note for note in live.of("thinking", "d1"))
     record = ledger.record_for_turn("turn-1")
     assert record is not None
-    assert record.status == "cancelled"
-    assert record.terminal_reason == "live_answer_already_spoken"
-    assert not ledger.has_pending_delivery_for_current_route()
+    assert record.status == "text_generated"
+    assert record.terminal_reason is None
+    assert not record.delivered
+    assert ledger.has_pending_delivery_for_current_route()
+    bridge.on_agent_state_changed("thinking", "speaking")
+    assert bridge._speaking_record is record
+    bridge.on_agent_state_changed("speaking", "listening")
+    assert record.delivered
     await bridge.aclose()
 
 
@@ -632,7 +653,7 @@ async def test_a_delegation_during_the_hold_sends_the_held_words_with_its_pendin
     assert len(dispatcher.prompts) == 1
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    assert live.speech("d1") == ["All tests pass. The build is green."]
     await bridge.aclose()
 
 
@@ -646,7 +667,7 @@ async def test_a_delegation_with_nothing_pending_during_the_hold_takes_the_held_
     assert dispatcher.prompts[0][0].endswith(_voice("Run the tests"))
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    assert live.speech("d1") == ["All tests pass. The build is green."]
     await bridge.aclose()
 
 
@@ -684,8 +705,8 @@ async def test_a_reconnect_unbinds_dead_delegations_and_answers_session_wide():
     dispatcher.result_gate.set()
     await _settle()
 
-    assert live.of("commentary", "d1") == []
-    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    assert live.speech("d1") == []
+    assert live.speech(None) == ["All tests pass. The build is green."]
     (briefing,) = [t for t in live.of("thinking", None) if "re-established" in t]
     assert "Do not greet the caller again" in briefing
     assert "the dispatcher is still working" in briefing
@@ -740,11 +761,11 @@ async def test_commentary_produced_during_the_gap_is_spoken_once_after_reconnect
     await _settle()
     live.drop()
     dispatcher.progress("turn-1", _progress_snapshot("Tests are running. Six passed."))
-    assert live.of("commentary") == []
+    assert live.speech() == []
 
     live.emit("session_reconnected")
-    assert live.of("commentary", "d1") == []
-    assert live.of("commentary", None) == ["Tests are running. Six passed."]
+    assert live.speech("d1") == []
+    assert live.speech(None) == ["Tests are running. Six passed."]
     (note,) = _redelivery_notes(live)
     assert "progress on the caller's last request" in note
     assert "the dispatcher is still working" in note
@@ -762,7 +783,7 @@ async def test_commentary_produced_during_the_gap_is_spoken_once_after_reconnect
     }
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary", None) == [
+    assert live.speech(None) == [
         "Tests are running. Six passed.",
         "All green.",
     ]
@@ -776,11 +797,11 @@ async def test_final_produced_during_the_gap_is_spoken_once_as_the_answer():
     live.drop()
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary") == []
+    assert live.speech() == []
     assert dispatcher.claimed == ["turn-1"]
 
     live.emit("session_reconnected")
-    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    assert live.speech(None) == ["All tests pass. The build is green."]
     (note,) = _redelivery_notes(live)
     assert "present it as the answer" in note
     (briefing,) = [t for t in live.of("thinking", None) if "re-established" in t]
@@ -790,7 +811,7 @@ async def test_final_produced_during_the_gap_is_spoken_once_as_the_answer():
     bridge.on_agent_state_changed("listening", "speaking")
     live.drop()
     live.emit("session_reconnected")
-    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    assert live.speech(None) == ["All tests pass. The build is green."]
     assert len(_redelivery_notes(live)) == 1
     await bridge.aclose()
 
@@ -803,7 +824,7 @@ async def test_commentary_spoken_before_the_drop_is_not_redelivered():
     live.delegate("d1", "Run the tests")
     await _settle()
     dispatcher.progress("turn-1", _progress_snapshot("Tests are running. Six passed."))
-    assert live.of("commentary", "d1") == ["Tests are running. Six passed."]
+    assert live.speech("d1") == ["Tests are running. Six passed."]
     clock["now"] += 1.0
     bridge.on_agent_state_changed("listening", "speaking")
     bridge.on_agent_state_changed("speaking", "listening")
@@ -811,7 +832,7 @@ async def test_commentary_spoken_before_the_drop_is_not_redelivered():
 
     live.drop()
     live.emit("session_reconnected")
-    assert live.of("commentary", None) == []
+    assert live.speech(None) == []
     assert _redelivery_notes(live) == []
     await bridge.aclose()
 
@@ -834,7 +855,7 @@ async def test_bound_commentary_the_model_never_spoke_is_redelivered_once():
 
     live.drop()
     live.emit("session_reconnected")
-    assert live.of("commentary", None) == ["Tests are running. Six passed."]
+    assert live.speech(None) == ["Tests are running. Six passed."]
     assert len(_redelivery_notes(live)) == 1
     await bridge.aclose()
 
@@ -850,7 +871,7 @@ async def test_old_bound_commentary_is_not_redelivered_without_a_speaking_cue():
     clock["now"] += live_delegation.REDELIVERY_MAX_AGE_SECONDS + 1
     live.drop()
     live.emit("session_reconnected")
-    assert live.of("commentary", None) == []
+    assert live.speech(None) == []
     await bridge.aclose()
 
 
@@ -873,7 +894,7 @@ async def test_a_held_utterance_and_a_redelivered_final_do_not_interleave():
     assert bridge._held is not None
 
     live.emit("session_reconnected")
-    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    assert live.speech(None) == ["All tests pass. The build is green."]
     assert bridge._held is not None
     assert len(dispatcher.prompts) == 1
 
@@ -881,8 +902,10 @@ async def test_a_held_utterance_and_a_redelivered_final_do_not_interleave():
     await _settle()
     assert len(dispatcher.prompts) == 2
     assert dispatcher.prompts[1][0].endswith(_voice("And then the linter"))
-    answer_at = live.appends.index(
-        ("commentary", "All tests pass. The build is green.", None)
+    answer_at = next(
+        i
+        for i, (kind, text, _) in enumerate(live.appends)
+        if kind == "instructions" and "All tests pass. The build is green." in text
     )
     taken_at = next(
         i
@@ -890,7 +913,7 @@ async def test_a_held_utterance_and_a_redelivered_final_do_not_interleave():
         if kind == "thinking" and "And then the linter" in text
     )
     assert answer_at < taken_at
-    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    assert live.speech(None) == ["All tests pass. The build is green."]
     await bridge.aclose()
 
 
@@ -901,7 +924,7 @@ async def test_a_recoverable_server_error_does_not_hold_commentary():
     live.server_error()
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    assert live.speech("d1") == ["All tests pass. The build is green."]
     await bridge.aclose()
 
 
@@ -929,7 +952,7 @@ async def test_reconnect_retains_every_unheard_streamed_chunk(held):
     if not held:
         live.drop()
     live.emit("session_reconnected")
-    assert live.of("commentary", None) == sentences
+    assert live.speech(None) == sentences
     await bridge.aclose()
 
 
@@ -946,7 +969,7 @@ async def test_buffered_speech_during_the_gap_does_not_confirm_old_appends():
     clock["now"] += 1.0
     bridge.on_agent_state_changed("listening", "speaking")
     live.emit("session_reconnected")
-    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    assert live.speech(None) == ["All tests pass. The build is green."]
     await bridge.aclose()
 
 
@@ -968,7 +991,7 @@ async def test_steering_during_the_gap_preserves_the_shared_turns_unheard_prefix
     dispatcher.result_gate.set()
     await _settle()
     live.emit("session_reconnected")
-    assert live.of("commentary", None) == ["Tests passed.", "Linter passed."]
+    assert live.speech(None) == ["Tests passed.", "Linter passed."]
     assert len(_redelivery_notes(live)) == 1
     await bridge.aclose()
 
@@ -987,14 +1010,14 @@ async def test_unbound_delivery_reconnect_requires_an_observed_drop(drop_seen):
     if drop_seen:
         live.drop()
     live.emit("session_reconnected")
-    assert live.of("commentary", None) == ["All tests pass. The build is green."] * (
+    assert live.speech(None) == ["All tests pass. The build is green."] * (
         2 if drop_seen else 1
     )
     if drop_seen:
         clock["now"] += 1.0
         live.drop()
         live.emit("session_reconnected")
-        assert len(live.of("commentary", None)) == 3
+        assert len(live.speech(None)) == 3
     await bridge.aclose()
 
 
@@ -1014,7 +1037,7 @@ async def test_reconnect_does_not_replay_stale_held_answers(stale_reason):
         live.final("Now inspect the build")
         await _settle()
     live.emit("session_reconnected")
-    assert live.of("commentary") == []
+    assert live.speech() == []
     await bridge.aclose()
 
 
@@ -1031,10 +1054,10 @@ async def test_held_answer_survives_a_long_outage_and_claims_orphan_delivery():
     bridge.deliver_orphaned_result(
         dispatcher, "turn-1", "All tests pass. The build is green."
     )
-    assert live.of("commentary") == []
+    assert live.speech() == []
     clock["now"] += 120.0
     live.emit("session_reconnected")
-    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    assert live.speech(None) == ["All tests pass. The build is green."]
     await bridge.aclose()
 
 
@@ -1057,8 +1080,8 @@ async def test_appends_during_the_gap_are_not_bound_to_the_dead_session():
     live.emit("session_reconnected")
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary", "d1") == []
-    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    assert live.speech("d1") == []
+    assert live.speech(None) == ["All tests pass. The build is green."]
     await bridge.aclose()
 
 
@@ -1069,9 +1092,9 @@ async def test_pending_approval_is_spoken_once_and_retained_as_instructions():
     snapshot = {"status": "waiting", "pendingRequests": [{"id": "approval-1"}]}
     dispatcher.progress("turn-1", snapshot)
     dispatcher.progress("turn-1", snapshot)
-    assert live.of("commentary", "d1") == [LIVE_APPROVAL_PENDING_COMMENTARY]
-    assert len(live.of("instructions", "d1")) == 1
-    assert "Approvals" in live.of("instructions", "d1")[0]
+    assert live.speech("d1") == [LIVE_APPROVAL_PENDING_COMMENTARY]
+    assert len(live.of("instructions", "d1")) == 2
+    assert "Approvals" in live.of("instructions", "d1")[-1]
     dispatcher.result_gate.set()
     await _settle()
     await bridge.aclose()
@@ -1089,7 +1112,7 @@ async def test_empty_answer_closes_the_delegation_with_a_short_commentary():
     await _settle()
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary", "d1") == [LIVE_EMPTY_ANSWER_COMMENTARY]
+    assert live.speech("d1") == [LIVE_EMPTY_ANSWER_COMMENTARY]
     await bridge.aclose()
 
 
@@ -1142,14 +1165,12 @@ async def test_desktop_question_reaches_the_agent_without_any_delegation():
     (thinking,) = live.of("thinking", None)
     assert "what's on my desktop" in thinking
     assert "do not answer it yourself" in thinking
-    assert live.of("commentary") == []
+    assert live.speech() == []
     assert ("utterance_accepted", "live-utt-1") in lifecycle
 
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary", None) == [
-        "Your desktop has two folders and a screenshot."
-    ]
+    assert live.speech(None) == ["Your desktop has two folders and a screenshot."]
     assert dispatcher.claimed == ["turn-1"]
     await bridge.aclose()
 
@@ -1169,8 +1190,8 @@ async def test_delegation_after_the_final_binds_to_the_running_turn():
 
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
-    assert live.of("commentary", None) == []
+    assert live.speech("d1") == ["All tests pass. The build is green."]
+    assert live.speech(None) == []
     await bridge.aclose()
 
 
@@ -1186,8 +1207,8 @@ async def test_delegation_before_the_final_is_not_sent_twice():
 
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
-    assert live.of("commentary", None) == []
+    assert live.speech("d1") == ["All tests pass. The build is green."]
+    assert live.speech(None) == []
     await bridge.aclose()
 
 
@@ -1205,8 +1226,8 @@ async def test_words_added_after_the_delegation_steer_the_same_delegation():
     dispatcher.result_gate.set()
     await _settle()
     # The steered turn's merged answer is spoken once, still answering d1.
-    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
-    assert live.of("commentary", None) == []
+    assert live.speech("d1") == ["All tests pass. The build is green."]
+    assert live.speech(None) == []
     await bridge.aclose()
 
 
@@ -1241,8 +1262,8 @@ async def test_two_utterances_in_a_row_steer_and_only_the_newest_speaks():
     dispatcher.result_gate.set()
     await _settle()
     # The superseded first result is dropped; the merged answer speaks once.
-    assert live.of("commentary") == ["All tests pass. The build is green."]
-    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    assert live.speech() == ["All tests pass. The build is green."]
+    assert live.speech("d1") == ["All tests pass. The build is green."]
     assert dispatcher.claimed == ["turn-1"]
     first = next(r for r in ledger._records.values() if r.message_id == "live-utt-1")
     assert first.status == "cancelled"
@@ -1266,7 +1287,7 @@ async def test_trivial_utterances_stay_off_the_agent_unless_the_model_delegates(
     assert dispatcher.prompts[0][0].endswith(wrap_voice_prompt("Okay."))
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    assert live.speech("d1") == ["All tests pass. The build is green."]
     await bridge.aclose()
 
 
@@ -1279,7 +1300,7 @@ async def test_trivial_open_utterance_delegation_binds_to_the_running_request():
     assert len(dispatcher.prompts) == 1
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    assert live.speech("d1") == ["All tests pass. The build is green."]
     await bridge.aclose()
 
 
@@ -1288,14 +1309,14 @@ async def test_late_delegation_for_an_answered_utterance_is_not_rerun():
     live.final("Check the build")
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    assert live.speech(None) == ["All tests pass. The build is green."]
 
     live.delegate("d1", "")
     await _settle()
     assert len(dispatcher.prompts) == 1
     (thinking,) = live.of("thinking", "d1")
     assert "already answered" in thinking
-    assert live.of("commentary", "d1") == []
+    assert live.speech("d1") == []
     await bridge.aclose()
 
 
@@ -1343,7 +1364,7 @@ async def test_exit_command_delegated_first_is_not_sent_when_its_final_arrives()
     live.final("Exit to dispatch.")
     await _settle()
     assert dispatcher.prompts == [] and other.prompts == []
-    assert live.of("commentary", "d1") == [BACK_TO_DISPATCH_COMMENTARY]
+    assert live.speech("d1") == [BACK_TO_DISPATCH_COMMENTARY]
     await bridge.aclose()
 
 
@@ -1358,7 +1379,7 @@ async def test_exit_command_marker_does_not_swallow_the_next_request():
     assert len(dispatcher.prompts) == 1
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    assert live.speech("d1") == ["All tests pass. The build is green."]
     await bridge.aclose()
 
 
@@ -1384,11 +1405,11 @@ async def test_character_suspension_preserves_input_and_holds_results_until_rest
     assert len(dispatcher.prompts) == 1
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary") == []
+    assert live.speech() == []
     replacement = FakeGPTLiveSession()
     bridge.attach(replacement)
     bridge.on_character_session_started()
-    assert replacement.of("commentary", None) == ["All tests pass. The build is green."]
+    assert replacement.speech(None) == ["All tests pass. The build is green."]
     assert all("connection dropped" not in text for text in replacement.of("thinking"))
     assert all("Do not greet" not in text for text in replacement.of("thinking"))
     assert live._handlers["input_audio_transcription_completed"] == []
@@ -1465,8 +1486,8 @@ async def test_overlapping_delegations_let_only_the_newest_speak_once():
     dispatcher.result_gate.set()
     await _settle()
 
-    assert live.of("commentary", "d1") == []
-    assert live.of("commentary", "d2") == ["All tests pass. The build is green."]
+    assert live.speech("d1") == []
+    assert live.speech("d2") == ["All tests pass. The build is green."]
     assert dispatcher.claimed == ["turn-1"]
     await bridge.aclose()
 
@@ -1479,7 +1500,7 @@ async def test_result_for_a_superseded_route_is_dropped():
     router.transfer(other)
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary", "d1") == []
+    assert live.speech("d1") == []
     await bridge.aclose()
 
 
@@ -1492,11 +1513,11 @@ async def test_route_change_appends_thinking_and_a_spoken_handoff_naming_the_age
     thinking = live.of("thinking", None)
     assert thinking and "Lucy" in thinking[0]
     assert "Direct route guidance." in thinking[0]
-    assert live.of("commentary", None) == ["You are now talking to Lucy."]
+    assert live.speech(None) == ["You are now talking to Lucy."]
     assert bridge.active_agent_label == "Lucy"
 
     bridge.notify_route_changed(action="exit_to_dispatch", agent_label=None)
-    assert live.of("commentary", None)[-1] == BACK_TO_DISPATCH_COMMENTARY
+    assert live.speech(None)[-1] == BACK_TO_DISPATCH_COMMENTARY
     assert bridge.active_agent_label == live_delegation.DISPATCHER_AGENT_LABEL
     await bridge.aclose()
 
@@ -1508,7 +1529,7 @@ async def test_exit_to_dispatch_spoken_on_the_transcript_switches_route_without_
 
     bridge.on_user_transcript("Exit to dispatch.", is_final=True)
     assert router.is_dispatcher_active
-    assert live.of("commentary", None) == [BACK_TO_DISPATCH_COMMENTARY]
+    assert live.speech(None) == [BACK_TO_DISPATCH_COMMENTARY]
 
     # The model delegates the same utterance a moment later: it is answered
     # as a command receipt, never sent to the dispatcher as a prompt.
@@ -1516,7 +1537,7 @@ async def test_exit_to_dispatch_spoken_on_the_transcript_switches_route_without_
     await _settle()
     assert dispatcher.prompts == []
     assert other.prompts == []
-    assert live.of("commentary", "d1") == [BACK_TO_DISPATCH_COMMENTARY]
+    assert live.speech("d1") == [BACK_TO_DISPATCH_COMMENTARY]
     await bridge.aclose()
 
 
@@ -1527,7 +1548,7 @@ async def test_exit_to_dispatch_delegated_first_switches_route():
     live.delegate("d1", "to dispatch")
     await _settle()
     assert router.is_dispatcher_active
-    assert live.of("commentary", "d1") == [BACK_TO_DISPATCH_COMMENTARY]
+    assert live.speech("d1") == [BACK_TO_DISPATCH_COMMENTARY]
     assert other.prompts == [] and dispatcher.prompts == []
     await bridge.aclose()
 
@@ -1560,7 +1581,7 @@ async def test_turn_errors_become_immediate_commentary(busy, expected):
     await _settle()
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary", "d1") == [expected]
+    assert live.speech("d1") == [expected]
     record = next(r for r in ledger._records.values() if r.message_id == "live-d1")
     assert record.status == "cancelled"
     await bridge.aclose()
@@ -1575,7 +1596,7 @@ async def test_greeting_is_one_spoken_instruction_not_another_commentary_answer(
         bridge.greet("Hi, I'm Jacqueline.")
         assert len(live.of("instructions", None)) == 1
         assert live.of("instructions", None)[0].endswith('"Hi, I\'m Jacqueline."')
-        assert live.of("commentary") == []
+        assert live.speech() == []
         assert bridge.speech_gate.authorized
         bridge.on_user_state_changed("listening", "speaking")
         assert not bridge.speech_gate.authorized
@@ -1587,7 +1608,7 @@ async def test_user_say_announcements_become_session_wide_commentary():
     bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
     bridge.announce("Finished the report.", agent_name="Lucy")
     bridge.announce("Back to dispatch.")
-    assert live.of("commentary", None) == [
+    assert live.speech(None) == [
         "Lucy: Finished the report.",
         "Back to dispatch.",
     ]
@@ -1598,7 +1619,7 @@ async def test_orphaned_results_are_spoken_once():
     bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
     bridge.deliver_orphaned_result(dispatcher, "turn-9", "The deploy finished.")
     bridge.deliver_orphaned_result(dispatcher, "turn-9", "The deploy finished.")
-    assert live.of("commentary", None) == ["The deploy finished."]
+    assert live.speech(None) == ["The deploy finished."]
     await bridge.aclose()
 
 
@@ -1615,19 +1636,19 @@ async def test_orphaned_result_is_retained_until_the_conversation_session_return
     bridge.deliver_orphaned_result(dispatcher, "turn-9", "The deploy finished.")
     bridge.deliver_orphaned_result(dispatcher, "turn-9", "The deploy finished.")
     assert dispatcher.claimed == ["turn-9"]
-    assert live.of("commentary") == []
+    assert live.speech() == []
     clock["now"] += 120
     replacement = FakeGPTLiveSession()
     bridge.attach(replacement)
     bridge.on_session_reconnected()
-    assert replacement.of("commentary", None) == ["The deploy finished."]
+    assert replacement.speech(None) == ["The deploy finished."]
     clock["now"] += 1
     bridge.on_agent_state_changed("listening", "speaking")
     bridge.suspend_session()
     next_session = FakeGPTLiveSession()
     bridge.attach(next_session)
     bridge.on_session_reconnected()
-    assert next_session.of("commentary") == []
+    assert next_session.speech() == []
     await bridge.aclose()
 
 
@@ -1643,7 +1664,7 @@ async def test_held_orphaned_result_never_replays_after_route_changes(return_to_
     bridge.attach(replacement)
     bridge.on_session_reconnected()
     bridge.deliver_orphaned_result(dispatcher, "turn-9", "Old route answer.")
-    assert replacement.of("commentary") == []
+    assert replacement.speech() == []
     await bridge.aclose()
 
 
@@ -1662,8 +1683,10 @@ async def test_orphaned_result_does_not_take_over_a_callers_pending_delegation()
     assert current.delegation_id == "new-session-delegation"
     dispatcher.result_gate.set()
     await _settle()
-    assert replacement.of("commentary", None) == ["Prior work finished."]
-    assert replacement.of("commentary", "new-session-delegation") == ["All tests pass. The build is green."]
+    assert replacement.speech(None) == ["Prior work finished."]
+    assert replacement.speech("new-session-delegation") == [
+        "All tests pass. The build is green."
+    ]
     await bridge.aclose()
 
 
@@ -1674,14 +1697,16 @@ async def test_orphaned_result_reuses_its_matching_turn_delivery():
     dispatcher.progress("turn-1", {})
     entry = bridge._newest_entry_for(dispatcher)
     bridge.suspend_session()
-    bridge.deliver_orphaned_result(dispatcher, "turn-1", "All tests pass. The build is green.")
+    bridge.deliver_orphaned_result(
+        dispatcher, "turn-1", "All tests pass. The build is green."
+    )
     assert list(bridge._entries.values()) == [entry]
     dispatcher.result_gate.set()
     await _settle()
     replacement = FakeGPTLiveSession()
     bridge.attach(replacement)
     bridge.on_session_reconnected()
-    assert replacement.of("commentary", None) == ["All tests pass. The build is green."]
+    assert replacement.speech(None) == ["All tests pass. The build is green."]
     assert dispatcher.claimed == ["turn-1"]
     await bridge.aclose()
 
@@ -1969,7 +1994,7 @@ async def test_a_delegation_mid_request_binds_without_cutting_the_hold_short():
     )
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    assert live.speech("d1") == ["All tests pass. The build is green."]
     await bridge.aclose()
 
 
@@ -2019,8 +2044,8 @@ async def test_reconnect_unbinds_a_delegation_while_its_utterance_is_held():
     await _settle()
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary", "old-session") == []
-    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    assert live.speech("old-session") == []
+    assert live.speech(None) == ["All tests pass. The build is green."]
     await bridge.aclose()
 
 
@@ -2107,8 +2132,8 @@ async def test_split_request_after_a_silent_delegation_replaces_the_fragment_tur
     assert merged.replaces_turn and merged.delegation_id == "d1"
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary") == ["All tests pass. The build is green."]
-    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    assert live.speech() == ["All tests pass. The build is green."]
+    assert live.speech("d1") == ["All tests pass. The build is green."]
     first = next(r for r in ledger._records.values() if r.message_id == "live-d1")
     assert first.status == "cancelled"
     await bridge.aclose()
@@ -2203,7 +2228,7 @@ async def test_a_delegation_while_the_caller_is_silent_starts_the_turn_at_once()
     assert dispatcher.prompts[0][0].endswith(_voice("What files are on my desktop"))
     dispatcher.result_gate.set()
     await _settle()
-    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    assert live.speech("d1") == ["All tests pass. The build is green."]
     await bridge.aclose()
 
 
@@ -2247,7 +2272,7 @@ async def test_every_bridge_line_names_the_call(caplog):
     assert messages, "no bridge log lines"
     assert all(m.endswith(" call=room-abc%1") for m in messages), messages
     assert _lines(caplog, "live_forced_delegation")
-    assert _lines(caplog, "live_append_commentary")
+    assert _lines(caplog, "live_append_instructions")
     for stage in (
         "live_session_dropped",
         "live_commentary_held",
@@ -2334,7 +2359,7 @@ async def test_closing_the_bridge_logs_one_call_summary(caplog):
     assert "decision_started=1" in line
     assert "delegations_created=1" in line
     assert "turns_bound=1" in line
-    assert "append_commentary=1" in line
+    assert "append_instructions=1" in line
     assert "append_thinking=" in line
     assert "superseded=0" in line
     assert line.endswith(" call=room-1")
@@ -2367,3 +2392,23 @@ def test_call_tag_preserves_percent_with_and_without_format_args(caplog, args):
     adapter.debug("diagnostic %s" if args else "diagnostic", *args)
 
     assert caplog.records[-1].getMessage().endswith(" call=room-abc%1")
+
+
+async def test_complete_backend_answer_uses_one_explicit_speech_command():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    answer = "The tests passed. The build still needs a signing certificate."
+    _answer(dispatcher, answer)
+    live.delegate("d1", "Give me the test result and the build blocker")
+    await _settle()
+    dispatcher.progress("turn-1", _running_snapshot(lastUsefulMessage=answer))
+    dispatcher.result_gate.set()
+    await _settle()
+    commands = [
+        text for text in live.of("instructions", "d1") if "Text to read: " in text
+    ]
+    assert len(commands) == 1
+    assert "in full" in commands[0]
+    assert json.loads(commands[0].split("Text to read: ", 1)[1]) == answer
+    assert live.of("commentary", "d1") == []
+    assert ledger.record_for_turn("turn-1").status == "text_generated"
+    await bridge.aclose()
