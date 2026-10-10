@@ -671,8 +671,9 @@ async def test_real_gpt_live_session_delegation_flows_through_the_bridge(
                 == assistant.instructions
             )
             if agent_label:
-                assert f"Your name in this call is {agent_label}." in (
-                    server.session_start["session"]["instructions"]
+                assert (
+                    f"Your name in this call is {agent_label}."
+                    in (server.session_start["session"]["instructions"])
                 )
                 assert (
                     f"everything the caller says goes to {agent_label}"
