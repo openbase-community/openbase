@@ -54,15 +54,7 @@ transfer commands.
 
 ## Choose A Super Agent's Project
 
-When you name a project or folder, the dispatcher resolves it before starting the Super Agent and passes the result as its working directory:
-
-```bash
-openbase-coder project-dir "tic tac toe" --json
-```
-
-The command matches existing entries in the computer's project list and visible immediate subdirectories of `OPENBASE_CODER_PROJECTS_DIR`, the caller's current directory, and the user's home directory. Matching ignores case and treats spaces, dashes, and underscores alike. Folder aliases that resolve to the same directory count as one candidate. Unreadable roots are skipped; discovery does not search recursively. An existing absolute directory path (including a quoted `~/...` path) can also be supplied directly.
-
-JSON output contains `name`, `path`, `error`, and `candidates`. One match returns its absolute path with exit code 0. No match or multiple matches returns a null `path`, an explanation, and candidate paths with exit code 1. Without `--json`, success prints the path and failure prints an error. The dispatcher asks which folder to use on failure; it does not substitute its own directory for a named project.
+The dispatcher always runs in its own default directory; nothing you say moves it. When it starts a Super Agent, it chooses that agent's working directory itself by looking around: it lists the projects folder (`OPENBASE_CODER_PROJECTS_DIR` when set, `/data/workspace` on a Cloud workspace), your home directory, and any place you named, and matches what you meant to a real folder. Names do not have to match exactly, so a misheard "tick tack toe" still finds `tic-tac-toe`, and a partial name finds the folder it clearly refers to. The dispatcher asks only when two folders are genuinely plausible, and it never starts the agent in its own directory just because nothing matched exactly; for a new project it creates the folder first.
 
 ## Transfer Voice To A Super Agent
 
