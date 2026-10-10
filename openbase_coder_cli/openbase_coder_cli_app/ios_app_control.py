@@ -60,6 +60,18 @@ class LoopbackForwardSerializer(serializers.Serializer):
         min_value=1, max_value=FORWARD_MAX_TTL_SECONDS
     )
     token = serializers.RegexField(FORWARD_TOKEN_RE, max_length=128)
+    relay_port = serializers.IntegerField(
+        min_value=1024, max_value=65535, required=False
+    )
+    protocol = serializers.ChoiceField(choices=["OPENBASE-LOOPBACK/1"], required=False)
+    expires_at = serializers.IntegerField(min_value=1, required=False)
+
+    def validate(self, attrs):
+        if "relay_port" in attrs and not {"protocol", "expires_at"} <= attrs.keys():
+            raise serializers.ValidationError(
+                "relay protocol and deadline are required"
+            )
+        return attrs
 
     def validate_target(self, value):
         if not is_tailnet_forward_target(value):

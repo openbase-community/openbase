@@ -479,3 +479,21 @@ def test_forward_receipt_validation_survives_the_api_round_trip(
         for key in ("forward", "forward_error")
         if key in response.data
     } == expected
+
+
+def test_authenticated_callback_relay_fields_survive_serialization():
+    from openbase_coder_cli.openbase_coder_cli_app.ios_app_control import (
+        LoopbackForwardSerializer,
+    )
+
+    payload = {
+        **FORWARD,
+        "relay_port": 49152,
+        "protocol": "OPENBASE-LOOPBACK/1",
+        "expires_at": 2000000000,
+    }
+    serializer = LoopbackForwardSerializer(data=payload)
+    assert serializer.is_valid(), serializer.errors
+    assert serializer.validated_data == payload
+    payload.pop("protocol")
+    assert not LoopbackForwardSerializer(data=payload).is_valid()

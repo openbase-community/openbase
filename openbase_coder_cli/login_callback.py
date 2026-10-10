@@ -16,7 +16,7 @@ import secrets
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlsplit
 
-LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 REDIRECT_QUERY_KEYS = ("redirect_uri", "redirect_url")
 FORWARD_MIN_PORT = 1024
 FORWARD_MAX_PORT = 65535
@@ -43,6 +43,9 @@ def loopback_callback_port(login_url: str) -> int | None:
     explicit port, or the port is privileged (the phone cannot bind below
     1024 and neither can the workspace listener).
     """
+    direct = _loopback_port(login_url)
+    if direct is not None:
+        return direct
     try:
         query = parse_qs(urlsplit(login_url).query, keep_blank_values=False)
     except ValueError:
@@ -62,6 +65,8 @@ def _loopback_port(redirect: str) -> int | None:
         port = parts.port
     except ValueError:
         return None
+    if parts.username is not None or parts.password is not None:
+        return None
     if parts.scheme.lower() not in {"http", "https"}:
         return None
     if host is None or host.lower() not in LOOPBACK_HOSTS:
@@ -79,6 +84,8 @@ class LoopbackForward:
     target: str
     ttl_seconds: int = DEFAULT_FORWARD_TTL_SECONDS
     token: str = ""
+    relay_port: int | None = None
+    expires_at: int | None = None
 
     @classmethod
     def create(
@@ -93,18 +100,34 @@ class LoopbackForward:
 
     def as_app_control(self) -> dict[str, int | str]:
         """The ``loopback_forward`` object of an app-control ``open_url``."""
-        return {
+        payload = {
             "port": self.port,
             "target": self.target,
             "ttl_seconds": self.ttl_seconds,
             "token": self.token,
         }
 
+        if self.relay_port is not None:
+            payload.update(
+                relay_port=self.relay_port,
+                protocol="OPENBASE-LOOPBACK/1",
+                expires_at=self.expires_at,
+            )
+        return payload
+
     def as_push_user_info(self) -> dict[str, str]:
         """The flat string keys carried by an APNs/FCM ``open_url`` push."""
-        return {
+        payload = {
             "forward_port": str(self.port),
             "forward_target": self.target,
             "forward_ttl_seconds": str(self.ttl_seconds),
             "forward_token": self.token,
         }
+
+        if self.relay_port is not None:
+            payload.update(
+                forward_relay_port=str(self.relay_port),
+                forward_protocol="OPENBASE-LOOPBACK/1",
+                forward_expires_at=str(self.expires_at),
+            )
+        return payload
