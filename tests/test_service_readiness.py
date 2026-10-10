@@ -60,6 +60,40 @@ def test_failed_provider_stops_install_batch_before_consumers(monkeypatch):
     assert activated == ["provider"]
 
 
+def test_failed_provider_still_installs_services_that_do_not_need_it(monkeypatch):
+    # 2026-10-09: livekit-server not becoming ready stranded django-cli (the
+    # API sign-in and pairing need) because the whole batch stopped.
+    provider = definition("livekit-server", "livekit-agent")
+    consumer, independent = definition("livekit-agent"), definition("django-cli")
+    monkeypatch.setattr(
+        launchd, "default_services", lambda *_: [provider, consumer, independent]
+    )
+    monkeypatch.setattr(
+        launchd, "include_installed_optional_services", lambda services, _: services
+    )
+    monkeypatch.setattr(launchd, "_ensure_launchd_paths", lambda: None)
+    monkeypatch.setattr(launchd, "_selected_backend", lambda _: "codex")
+    monkeypatch.setattr(launchd.tp, "provider", lambda: "netmesh")
+    monkeypatch.setattr(launchd, "_resolve_binaries", lambda *a: {})
+    monkeypatch.setattr(launchd, "remove_service", lambda _: False)
+    monkeypatch.setattr(launchd, "_write_service_files", lambda *a: False)
+    activated = []
+    monkeypatch.setattr(
+        launchd,
+        "_activate_service",
+        lambda svc, _: activated.append(svc.name) or "Loaded",
+    )
+    monkeypatch.setattr(readiness, "provider_ready", lambda _: False)
+    monkeypatch.setattr(
+        launchd,
+        "wait_for_provider",
+        lambda svc: readiness.wait_for_provider(svc, timeout=0),
+    )
+    with pytest.raises(click.ClickException, match="livekit-server"):
+        launchd.install_all_services(InstallationConfig(standalone=True))
+    assert activated == ["livekit-server", "django-cli"]
+
+
 @pytest.mark.parametrize(
     "running,expected", [(None, False), ("1.0", False), ("2.0", True)]
 )

@@ -911,13 +911,37 @@ def install_all_services(config: InstallationConfig) -> None:
         if remove_service(retired_service_stub(name)):
             click.echo(f"  Removed retired service {name}.")
 
+    # A provider that does not become ready blocks only its own dependents
+    # (they would attach to a stale or missing endpoint). Everything else
+    # still installs — above all the API on 7999 that sign-in and pairing
+    # need (2026-10-09: livekit-server held back every later service on a
+    # fresh Openbase VPN setup).
+    not_ready: list[str] = []
+    blocked: set[str] = set()
     for svc in services:
+        if svc.name in blocked:
+            click.echo(f"  Skipping {svc.name} (a service it needs is not ready).")
+            blocked.update(svc.restart_dependents)
+            continue
         click.echo(f"  Installing {svc.name}...")
         reload_required = _write_service_files(svc, config, binaries)
         verb = _activate_service(svc, reload_required)
-        wait_for_provider(svc)
+        try:
+            wait_for_provider(svc)
+        except click.ClickException:
+            click.echo(
+                click.style(f"    WARN  {svc.name} did not become ready.", fg="yellow")
+            )
+            not_ready.append(svc.name)
+            blocked.update(svc.restart_dependents)
+            continue
         click.echo(f"    {verb} {_service_label(svc)}")
 
+    if not_ready:
+        raise click.ClickException(
+            f"Services did not become ready: {', '.join(not_ready)}; services "
+            f"that depend on them were not started. See {DEFAULT_LOG_DIR}/."
+        )
     click.echo()
     click.echo("All services installed and started.")
     click.echo(f"Logs: {DEFAULT_LOG_DIR}/")

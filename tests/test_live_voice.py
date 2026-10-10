@@ -554,7 +554,7 @@ class _FakeClient:
         self.started.set()
         await self.gate.wait()
         return {
-            "_livekit_speech_text": "The build passed.",
+            "_livekit_speech_text": "The build passed. The release is awaiting approval.",
             "_livekit_turn_id": "turn-1",
             "status": "completed",
             "progress": {},
@@ -584,39 +584,110 @@ class _FakeRouter:
         return True
 
 
-async def test_real_gpt_live_session_delegation_flows_through_the_bridge():
+async def test_real_gateway_rejection_fails_the_startup_readiness_wait():
+    import contextlib
+
+    from livekit.agents import APIConnectionError, APIConnectOptions
+    from livekit.plugins.openai.realtime import GPTLiveModel
+
+    from openbase_coder_cli.livekit_agent.live_preconnect import (
+        wait_live_session_started,
+    )
+
+    async with FakeGPTLiveServer(handshake_status=503) as server:
+        model = GPTLiveModel(
+            api_key="cloud-token",
+            base_url=server.base_url,
+            conn_options=APIConnectOptions(max_retry=0),
+        )
+        live = model.session()
+        try:
+            with pytest.raises(APIConnectionError):
+                await wait_live_session_started(live, timeout=5)
+            assert server.connections == 1
+            assert not live._session_started_fut.done()
+        finally:
+            with contextlib.suppress(APIConnectionError):
+                await live.aclose()
+            await model.aclose()
+
+
+@pytest.mark.parametrize("preconnect", [False, True])
+@pytest.mark.parametrize("agent_label", [None, "Linda"])
+async def test_real_gpt_live_session_delegation_flows_through_the_bridge(
+    preconnect, agent_label
+):
     from livekit.agents.llm import ChatContext
     from livekit.plugins.openai.realtime import GPTLiveModel
 
+    from openbase_coder_cli.livekit_agent.live_preconnect import (
+        _preconnecting_model_class,
+        wait_live_session_started,
+    )
+    from openbase_coder_cli.livekit_agent.livekit import LiveVoiceAssistant
+
     async with FakeGPTLiveServer() as server:
-        model = GPTLiveModel(
+        model_class = (
+            _preconnecting_model_class(GPTLiveModel) if preconnect else GPTLiveModel
+        )
+        model = model_class(
             model="gpt-live-1",
             voice="marin",
             delegation="client",
             api_key="cloud-token",
             base_url=server.base_url,
         )
+        pending = model.preconnect() if preconnect else None
+        if pending is not None:
+            async with asyncio.timeout(5):
+                while server._ws is None:
+                    await asyncio.sleep(0.01)
+            assert server.session_start is None
         live = model.session()
+        if pending is not None:
+            assert live is pending
         client = _FakeClient()
         bridge = LiveDelegationBridge(
             voice_router=_FakeRouter(client),
             developer_instructions=lambda: "guidance",
             progress_thinking_interval=3600,
+            initial_agent_label=agent_label,
         )
+        assistant = LiveVoiceAssistant(bridge)
         bridge.attach(live)
         try:
             await live._update_session(
-                instructions="You are the voice relay.",
+                instructions=assistant.instructions,
                 chat_ctx=ChatContext.empty(),
                 tools=[],
             )
             await asyncio.wait_for(server.started.wait(), 5)
+            await wait_live_session_started(live, timeout=5)
+            assert server.connections == 1
             assert server.session_start["session"]["delegation"] == {"type": "client"}
             assert server.session_start["session"]["model"] == "gpt-live-1"
             assert (
                 server.session_start["session"]["instructions"]
-                == "You are the voice relay."
+                == assistant.instructions
             )
+            if agent_label:
+                assert (
+                    f"Your name in this call is {agent_label}."
+                    in (server.session_start["session"]["instructions"])
+                )
+                assert (
+                    f"everything the caller says goes to {agent_label}"
+                    in (server.session_start["session"]["instructions"])
+                )
+
+            greeting = f"Hi, I'm {agent_label or 'Jacqueline'}."
+            bridge.greet(greeting)
+            greetings = await server.wait_for_append("instructions")
+            assert len(greetings) == 1
+            assert greetings[0]["delegation_id"] is None
+            assert "exactly once" in greetings[0]["content"]
+            assert greeting in greetings[0]["content"]
+            assert bridge.speech_gate.authorized
 
             await server.send(
                 {
@@ -645,17 +716,21 @@ async def test_real_gpt_live_session_delegation_flows_through_the_bridge():
             assert "Check whether the build passes" in thinking[0]["content"]
 
             client.gate.set()
-            commentary = await server.wait_for_append("commentary")
-            assert commentary[0]["delegation_id"] == "item_1"
-            assert commentary[0]["content"] == "The build passed."
+            answers = await server.wait_for_append("instructions", count=2)
+            answer = answers[1]
+            assert answer["delegation_id"] == "item_1"
+            assert json.loads(answer["content"].split("Text to read: ", 1)[1]) == (
+                "The build passed. The release is awaiting approval."
+            )
+            assert bridge.speech_gate.authorized
 
             bridge.announce("Report ready.", agent_name="Lucy")
-            announcements = await server.wait_for_append("commentary", count=2)
+            announcements = await server.wait_for_append("commentary")
             assert (
-                announcements[1]["delegation_id"] is None
-                or "delegation_id" not in announcements[1]
+                announcements[0]["delegation_id"] is None
+                or "delegation_id" not in announcements[0]
             )
-            assert announcements[1]["content"] == "Lucy: Report ready."
+            assert announcements[0]["content"] == "Lucy: Report ready."
         finally:
             await bridge.aclose()
             await live.aclose()
@@ -745,11 +820,241 @@ async def test_real_gpt_live_session_sends_every_closed_utterance_to_the_agent(
                 expected_delegation = "item_1"
 
             client.gate.set()
-            commentary = await server.wait_for_append("commentary")
+            answers = await server.wait_for_append("instructions")
             assert len(client.prompts) == 1, "exactly one agent turn"
-            assert commentary[0]["content"] == "The build passed."
-            assert commentary[0].get("delegation_id") == expected_delegation
+            assert json.loads(answers[0]["content"].split("Text to read: ", 1)[1]) == (
+                "The build passed. The release is awaiting approval."
+            )
+            assert answers[0].get("delegation_id") == expected_delegation
         finally:
             await bridge.aclose()
             await live.aclose()
             await model.aclose()
+
+
+# --- readiness cache (start-up latency) --------------------------------------------
+
+
+def _creds(token: str = "cloud-token") -> LiveVoiceCredentials:
+    return LiveVoiceCredentials(base_url="https://c.example/live/v1", api_key=token)
+
+
+def test_readiness_cache_returns_a_fresh_matching_entry_only():
+    cache = live_voice.LiveVoiceReadinessCache(ttl=100)
+    assert cache.get(_creds(), tts_provider_id="t", stt_provider_id="s") is None
+    cache.store(_creds(), tts_provider_id="t", stt_provider_id="s", now=1000.0)
+    hit = cache.get(_creds(), tts_provider_id="t", stt_provider_id="s", now=1050.0)
+    assert hit is not None and hit.checked_at == 1000.0
+    # A different token, gateway or provider never matches.
+    assert (
+        cache.get(_creds("other"), tts_provider_id="t", stt_provider_id="s", now=1050.0)
+        is None
+    )
+    assert (
+        cache.get(_creds(), tts_provider_id="x", stt_provider_id="s", now=1050.0)
+        is None
+    )
+    # Older than the TTL: gone.
+    assert (
+        cache.get(_creds(), tts_provider_id="t", stt_provider_id="s", now=1101.0)
+        is None
+    )
+    cache.clear()
+    assert (
+        cache.get(_creds(), tts_provider_id="t", stt_provider_id="s", now=1050.0)
+        is None
+    )
+
+
+async def test_decision_skips_the_probe_on_a_cached_readiness(monkeypatch):
+    monkeypatch.setattr(
+        live_voice, "OPENBASE_CLOUD_LIVE_BASE_URL", "https://c.example/live/v1"
+    )
+    cache = live_voice.LiveVoiceReadinessCache(ttl=100)
+    cache.store(_creds(), tts_provider_id="cartesia", stt_provider_id="assemblyai")
+
+    def no_entitlement(credentials, **_kw):
+        pytest.fail("entitlement must not run on a cached readiness")
+
+    async def no_preflight(credentials):
+        pytest.fail("preflight must not run on a cached readiness")
+
+    decision = await _decide(
+        check_entitlement=no_entitlement,
+        preflight=no_preflight,
+        readiness_cache=cache,
+    )
+    assert decision.is_live and decision.readiness == live_voice.READINESS_CACHED
+    assert decision.credentials == _creds()
+
+
+async def test_decision_probes_and_stores_when_nothing_is_cached(monkeypatch):
+    monkeypatch.setattr(
+        live_voice, "OPENBASE_CLOUD_LIVE_BASE_URL", "https://c.example/live/v1"
+    )
+    cache = live_voice.LiveVoiceReadinessCache(ttl=100)
+    probes: list[str] = []
+
+    async def ok_preflight(credentials):
+        probes.append("preflight")
+
+    decision = await _decide(preflight=ok_preflight, readiness_cache=cache)
+    assert decision.is_live and decision.readiness == live_voice.READINESS_PROBED
+    assert probes == ["preflight"]
+    assert cache.get(_creds(), tts_provider_id="cartesia", stt_provider_id="assemblyai")
+
+    # A stale token invalidates the entry: the next call probes again.
+    again = await _decide(
+        preflight=ok_preflight,
+        readiness_cache=cache,
+        cloud_token_provider=lambda: "rotated-token",
+    )
+    assert again.readiness == live_voice.READINESS_PROBED
+    assert probes == ["preflight", "preflight"]
+
+
+async def test_decision_never_caches_a_failure():
+    cache = live_voice.LiveVoiceReadinessCache(ttl=100)
+
+    async def failing_preflight(credentials):
+        raise LiveVoiceUnavailable("gateway_unreachable", "down")
+
+    decision = await _decide(preflight=failing_preflight, readiness_cache=cache)
+    assert decision.fallback_reason == "gateway_unreachable"
+    assert (
+        cache.get(_creds(), tts_provider_id="cartesia", stt_provider_id="assemblyai")
+        is None
+    )
+
+
+@pytest.mark.parametrize("unexpected", [False, True])
+async def test_failed_refresh_invalidates_previous_readiness(monkeypatch, unexpected):
+    monkeypatch.setattr(
+        live_voice, "OPENBASE_CLOUD_LIVE_BASE_URL", "https://c.example/live/v1"
+    )
+    cache = live_voice.LiveVoiceReadinessCache(ttl=100)
+    cache.store(_creds(), tts_provider_id="cartesia", stt_provider_id="assemblyai")
+
+    async def failing_preflight(credentials):
+        if unexpected:
+            raise RuntimeError("gateway down")
+        raise LiveVoiceUnavailable("gateway_unreachable", "down")
+
+    decision = await _decide(
+        preflight=failing_preflight,
+        readiness_cache=cache,
+        use_cached_readiness=False,
+    )
+    assert not decision.is_live
+    assert (
+        cache.get(_creds(), tts_provider_id="cartesia", stt_provider_id="assemblyai")
+        is None
+    )
+    recovered = await _decide(readiness_cache=cache)
+    assert recovered.is_live and recovered.readiness == live_voice.READINESS_PROBED
+
+
+async def test_decision_can_force_a_probe_despite_the_cache(monkeypatch):
+    monkeypatch.setattr(
+        live_voice, "OPENBASE_CLOUD_LIVE_BASE_URL", "https://c.example/live/v1"
+    )
+    cache = live_voice.LiveVoiceReadinessCache(ttl=100)
+    cache.store(_creds(), tts_provider_id="cartesia", stt_provider_id="assemblyai")
+    probes: list[str] = []
+
+    async def ok_preflight(credentials):
+        probes.append("preflight")
+
+    decision = await _decide(
+        preflight=ok_preflight, readiness_cache=cache, use_cached_readiness=False
+    )
+    assert decision.readiness == live_voice.READINESS_PROBED and probes == ["preflight"]
+
+
+def test_probe_live_voice_readiness_stores_a_live_result(monkeypatch):
+    monkeypatch.setattr(
+        live_voice, "OPENBASE_CLOUD_LIVE_BASE_URL", "https://c.example/live/v1"
+    )
+    monkeypatch.setattr(live_voice, "import_live_model", lambda: object)
+    monkeypatch.setattr(
+        live_voice, "check_live_voice_entitlement", lambda credentials, **_kw: None
+    )
+
+    async def ok_preflight(credentials, **_kw):
+        return None
+
+    monkeypatch.setattr(live_voice, "preflight_live_voice", ok_preflight)
+    cache = live_voice.LiveVoiceReadinessCache(ttl=100)
+    assert (
+        live_voice.probe_live_voice_readiness(
+            cache,
+            selected_engine="pipeline",
+            tts_provider_id="cartesia",
+            stt_provider_id="assemblyai",
+            cloud_token_provider=lambda: "cloud-token",
+        )
+        is False
+    )
+    assert (
+        cache.get(_creds(), tts_provider_id="cartesia", stt_provider_id="assemblyai")
+        is None
+    )
+    assert (
+        live_voice.probe_live_voice_readiness(
+            cache,
+            selected_engine="live",
+            tts_provider_id="cartesia",
+            stt_provider_id="assemblyai",
+            cloud_token_provider=lambda: "cloud-token",
+        )
+        is True
+    )
+    assert cache.get(_creds(), tts_provider_id="cartesia", stt_provider_id="assemblyai")
+
+
+def test_readiness_refresher_probes_until_stopped_and_retries_sooner_after_failure():
+    import threading
+
+    results = [False, True, True]
+    seen = threading.Event()
+    calls: list[int] = []
+
+    def probe() -> bool:
+        calls.append(len(calls))
+        if len(calls) >= 3:
+            seen.set()
+        return results[min(len(calls) - 1, len(results) - 1)]
+
+    refresher = live_voice.LiveVoiceReadinessRefresher(
+        probe, interval=0.02, retry_interval=0.001
+    )
+    refresher.start()
+    assert refresher.running
+    assert seen.wait(2.0)
+    refresher.stop(join_timeout=2.0)
+    assert not refresher.running
+    probes_after_stop = len(calls)
+    # Idempotent: a second stop is harmless, and nothing probes after it.
+    refresher.stop()
+    assert len(calls) == probes_after_stop >= 3
+
+
+def test_readiness_refresher_survives_a_crashing_probe():
+    import threading
+
+    seen = threading.Event()
+    calls: list[int] = []
+
+    def probe() -> bool:
+        calls.append(1)
+        if len(calls) >= 2:
+            seen.set()
+        raise RuntimeError("boom")
+
+    refresher = live_voice.LiveVoiceReadinessRefresher(
+        probe, interval=10, retry_interval=0.001
+    )
+    refresher.start()
+    assert seen.wait(2.0)
+    refresher.stop(join_timeout=2.0)
+    assert refresher.probes >= 2

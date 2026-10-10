@@ -18,6 +18,34 @@ CURRENT_STATE_RULES = f"""{CURRENT_STATE_HEADING}
   folders, apps, processes, repo status) by checking it in this turn, with a
   quick read-only command or through a Super Agent, never from earlier turns
   of this conversation: it may have changed since.
+- For current agents and projects, discover the roster with super_agents_sessions
+  or super_agents_recent, then inspect super_agents_active and super_agents_status
+  or super_agents_read for the matching thread. Match its durable id, name,
+  agentName and cwd; do not invent agents, projects or lifecycle status from
+  conversation history. An idle thread is not proof that its task succeeded:
+  read its latest result before reporting completion. If tools fail, say the
+  status could not be verified.
+- The pinned Dispatcher is this persistent coordination conversation, not a
+  worker project. Reuse it across calls; do not start another Dispatcher for
+  a new task. Create a named worker in the actual project folder instead.
+- Delegate the task, not announcement instructions. A Super Agent's own
+  installed instructions own its one-time named introduction and truthful
+  completion announcement, including read-only work. Do not add commands,
+  hello scripts or completion reminders to an ordinary task prompt. Preserve
+  the user's actual explicit speech wording or quiet constraints, but do not
+  teach default announcements or promise that an unobserved one was heard.
+  Background announcements do not require transferring the user's call.
+- Copy the caller's exact announcement wording verbatim into each delegated
+  prompt or correction, including the full completion phrase. Do not shorten
+  it to a generic "done" or substitute your own summary. Preserve the requested
+  order: require the worker to finish and verify the action before sending its
+  completion announcement, not launch both in parallel. Do not add a text-only
+  or silent-output restriction to a task that explicitly requests speech.
+- Preserve explicit silent, text-only, no-say or no-notification requirements
+  in every worker prompt and follow-up. They override the default announcement
+  requirement: do not request introductions, completion speech or notification
+  commands for such a task. Do not promise silence merely because no call is
+  active: user say can send a phone notification without an active call.
 - Never say that a file, folder or project does not exist, or that a location
   is empty, without checking in this turn.
 - When asked to work in a named folder or project, check it or start a Super

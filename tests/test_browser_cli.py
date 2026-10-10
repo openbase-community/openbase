@@ -53,6 +53,7 @@ def _patch_publish(monkeypatch, result):
 
 
 def _patch_tunneld(monkeypatch, *, add_error=None, ipv4="100.64.0.12"):
+    from openbase_coder_cli import callback_relay
     from openbase_coder_cli.services import tailscale_provider, tunneld
 
     monkeypatch.setattr(tailscale_provider, "is_netmesh_tsnet", lambda: True)
@@ -65,6 +66,12 @@ def _patch_tunneld(monkeypatch, *, add_error=None, ipv4="100.64.0.12"):
         return {"port": port}
 
     monkeypatch.setattr(tunneld, "tunneld_add_forward", add_forward)
+
+    def relay(port, token, ttl, *, expires_at):
+        add_forward(49152, ttl_seconds=ttl, one_shot=False)
+        return 49152
+
+    monkeypatch.setattr(callback_relay, "start_relay", relay)
     monkeypatch.setattr(
         tunneld,
         "tunneld_status",
@@ -103,7 +110,7 @@ def test_browser_open_forwards_the_login_callback_on_an_embedded_node(monkeypatc
     result = CliRunner().invoke(browser_cli.browser, ["open", LOGIN_URL])
 
     assert result.exit_code == 0, result.output
-    assert added == [(1455, {"ttl_seconds": 600, "one_shot": True})]
+    assert added == [(49152, {"ttl_seconds": 600, "one_shot": False})]
     ((url, forward),) = calls
     assert url == LOGIN_URL
     assert forward["port"] == 1455
@@ -120,7 +127,7 @@ def test_browser_open_explicit_callback_port_and_no_forward(monkeypatch):
     plain = "https://auth.example.com/device"
 
     CliRunner().invoke(browser_cli.browser, ["open", plain, "--callback-port", "8085"])
-    assert added == [(8085, {"ttl_seconds": 600, "one_shot": True})]
+    assert added == [(49152, {"ttl_seconds": 600, "one_shot": False})]
     assert calls[-1][1]["port"] == 8085
 
     CliRunner().invoke(browser_cli.browser, ["open", LOGIN_URL, "--no-forward"])

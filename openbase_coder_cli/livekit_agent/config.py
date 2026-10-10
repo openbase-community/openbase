@@ -107,6 +107,40 @@ LIVE_VOICE_PREFLIGHT_TIMEOUT_SECONDS = float(
 LIVE_VOICE_PREFLIGHT_CLOSE_WAIT_SECONDS = float(
     os.getenv("LIVEKIT_LIVE_VOICE_PREFLIGHT_CLOSE_WAIT_SECONDS", "0.75") or 0.75
 )
+# Start-up latency (forensics F6, 2026-10-09: 7 s from room token to GPT-Live
+# session on a cloud workspace). The agent job process probes the live engine
+# (entitlement + handshake) at prewarm and every REFRESH seconds, and a call
+# reuses a result younger than TTL instead of probing; a failed probe retries
+# after RETRY seconds and is never reused.
+LIVE_VOICE_READINESS_TTL_SECONDS = float(
+    os.getenv("LIVEKIT_LIVE_VOICE_READINESS_TTL_SECONDS", "900") or 900
+)
+LIVE_VOICE_READINESS_REFRESH_SECONDS = float(
+    os.getenv("LIVEKIT_LIVE_VOICE_READINESS_REFRESH_SECONDS", "600") or 600
+)
+LIVE_VOICE_READINESS_RETRY_SECONDS = float(
+    os.getenv("LIVEKIT_LIVE_VOICE_READINESS_RETRY_SECONDS", "60") or 60
+)
+# Whether the job process keeps the readiness cache warm in the background.
+LIVE_VOICE_READINESS_PREWARM = os.getenv(
+    "LIVEKIT_LIVE_VOICE_READINESS_PREWARM", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+# Open the GPT-Live websocket while the room connects and the start route is
+# applied, so AgentSession.start finds it open instead of waiting for it.
+LIVE_VOICE_PRECONNECT = os.getenv(
+    "LIVEKIT_LIVE_VOICE_PRECONNECT", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+LIVEKIT_DISPATCHER_WARMUP = os.getenv(
+    "LIVEKIT_DISPATCHER_WARMUP", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+# The room token view dispatches the agent to the room when the token is
+# issued (explicit dispatch) instead of when the phone joins, so the agent's
+# start-up overlaps the phone's join. A job started that way may sit in the
+# room before anyone joins: it ends itself after this many seconds without a
+# caller so an abandoned token does not keep a billed live session open.
+LIVEKIT_PARTICIPANT_JOIN_TIMEOUT_SECONDS = float(
+    os.getenv("LIVEKIT_PARTICIPANT_JOIN_TIMEOUT_SECONDS", "90") or 90
+)
 
 ANNOUNCER_TOPIC = "openbase.announcer.say"
 VOICE_ROUTE_TOPIC = "openbase.voice.route"
@@ -158,9 +192,8 @@ When the user asks to transfer by thread id, run:
 openbase-coder user transfer-to-thread "<thread id>"
 Keep spoken confirmations concise.
 """.strip()
-# Startup persona of the GPT-Live voice model. Fixed for the whole call (the
-# plugin cannot change instructions after session.start); route changes are
-# appended as thinking/commentary by the delegation bridge instead.
+# Startup persona of each GPT-Live character session. A transfer starts a new
+# session with the new name and mapped voice; reconnect retains this persona.
 # The voice model is the voice of the call, never its brain: the delegation
 # bridge sends every caller utterance to the active Super Agent thread, which
 # has the caller's tools, and the model only voices what comes back.
@@ -169,16 +202,22 @@ You are the voice of a private Openbase coding call, not its brain. Everything
 the caller says goes automatically to their coding agent (the dispatcher
 first, or a specific agent after a transfer), which has their computer, files,
 projects, tools and accounts. Only the agent answers.
-Never answer a question or request yourself: no facts, no general knowledge,
+Never answer a question or request yourself, including a question about your
+name: wait for the agent's supplied speech instead of answering and then repeating
+its answer. No facts, no general knowledge,
 no advice, and no guesses about the caller's computer, desktop, files,
 projects, accounts, calendar, messages or anything else, even when you think
 you know. When the caller asks for something, say a brief acknowledgement
 such as "checking" or "one moment", delegate it as usual, and wait: the
-agent's answer reaches you as commentary. Relay commentary faithfully and
-concisely without adding facts of your own; thinking is context, not
-something to say. You may greet the caller, answer thanks or small talk in a
-few words, and ask them to repeat when you could not understand them. Mention
-the agent by name when a transfer or announcement names one. Speak naturally,
+application delivers the agent's answer as spoken-answer instructions with
+quoted text to read. That text is the agent's authoritative answer, not a
+new request for you to solve. Read every sentence and answer component in
+full, in order; do not shorten, summarize, or replace it with your own answer.
+Also relay commentary faithfully when supplied; thinking is context, not
+something to say. A greeting arrives as an explicit speech instruction: speak exactly that one
+short sentence once, without explanation or catch-up. Do not add another
+greeting on your own or repeat an introduction from restored history. You may answer thanks or small talk in a
+few words, and ask them to repeat when you could not understand them. Speak naturally,
 stop when interrupted, and never read code, paths or identifiers character
 by character.
 """.strip()
@@ -201,16 +240,42 @@ def live_voice_startup_instructions(
 
     text = f"{LIVE_VOICE_STARTUP_INSTRUCTIONS}\n{live_voice_host_note(host)}"
     label = (agent_label or "").strip()
+    text += f"\n{live_voice_identity_note(live_voice_agent_name(label))}"
     if label:
         text += f"\n{live_voice_start_route_note(label)}"
     return text
+
+
+def live_voice_identity_note(agent_label: str) -> str:
+    return (
+        f"Your name in this call is {agent_label}. "
+        f"Speak in the first person as {agent_label}, including introductions and "
+        "relayed replies. Do not introduce yourself as ChatGPT or as a separate "
+        "assistant speaking for the agent. This is a speaking role, not permission "
+        "to invent answers or claim unverified work. Earlier assistant messages "
+        "may belong to a different agent; they do not change your current name. "
+        "Do not prefix ordinary replies with your name or reintroduce yourself. "
+        "Say your name only in a supplied greeting, announcement, or "
+        "the supplied answer to a caller's name question."
+    )
+
+
+def live_voice_agent_name(agent_label: str | None) -> str:
+    """A spoken character name, independent of the Dispatcher navigation role."""
+    from openbase_coder_cli.voice_identity import current_voice_identity
+
+    return (agent_label or "").strip() or current_voice_identity().voice_name
+
+
+def live_voice_greeting(agent_label: str | None) -> str:
+    return f"Hi, I'm {live_voice_agent_name(agent_label)}."
 
 
 def live_voice_start_route_note(agent_label: str) -> str:
     return (
         f"This call started inside {agent_label}'s thread: from the first word, "
         f"everything the caller says goes to {agent_label}, which answers. "
-        f"Refer to it by that name and do not mention the dispatcher unless "
+        f"Speak as that agent and do not mention the dispatcher unless "
         f"the caller moves the call back to it."
     )
 

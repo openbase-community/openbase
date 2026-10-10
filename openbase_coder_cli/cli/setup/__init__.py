@@ -240,6 +240,7 @@ class _SetupProgress:
                 "ok": False,
                 "cli_configured": False,
                 "tailscale_serve_healthy": False,
+                "error": detail,
             }
         )
 

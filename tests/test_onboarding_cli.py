@@ -172,6 +172,8 @@ def test_setup_progress_abort_reports_current_step() -> None:
     }
     assert events[2]["event"] == "result"
     assert events[2]["ok"] is False
+    # The desktop shows the real failure instead of guessing one.
+    assert events[2]["error"] == "boom"
 
 
 def test_setup_progress_disabled_is_noop() -> None:

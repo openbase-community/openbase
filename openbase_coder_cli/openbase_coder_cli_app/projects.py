@@ -123,6 +123,12 @@ def _cached_metadata(project_path: str) -> dict[str, Any] | None:
 
 def _project_payload(project: dict[str, Any]) -> dict[str, Any]:
     payload = dict(project)
+    # Check on the owning host, before fleet aggregation. Keep the registration
+    # and identity so a restored folder becomes selectable again.
+    path = project.get("path")
+    payload["available"] = (
+        isinstance(path, str) and bool(path) and Path(path).expanduser().is_dir()
+    )
     metadata = _cached_metadata(str(project.get("path", "")))
     if metadata is None:
         payload.setdefault("git_status", "unknown")

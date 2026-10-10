@@ -1550,8 +1550,8 @@ async def test_super_agents_livekit_client_resumes_codex_thread_by_id(
         {
             "thread_id": "canonical-dispatcher-thread",
             "label": "dispatcher",
-            "agent_name": None,
-            "developer_instructions": "Super Agent thread name: dispatcher",
+            "agent_name": "Jacqueline",
+            "developer_instructions": "Super Agent thread name: dispatcher\nYour name is Jacqueline.",
         }
     ]
     assert backend.started_threads == []
@@ -2310,3 +2310,305 @@ def test_failed_voice_turn_speaks_allowance_from_fresh_items(monkeypatch):
     assert "monthly Openbase model allowance is used up" in speech
     assert "https://app-staging.openbase.cloud" in speech
     assert "try again" not in speech
+
+
+# --- start-up latency: warm-up and the auth-check memo ------------------------------
+
+
+class FakeWarmableBackend(FakeSuperAgentsBackend):
+    backend = "claude_code"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.warm_calls: list[tuple[Any, dict[str, Any]]] = []
+
+    async def warm_session_by_label(self, input_data, turn_input):
+        self.warm_calls.append((input_data, turn_input))
+        return {"warmed": True, "threadId": input_data.thread_id, "connected": True}
+
+
+def _logged_in(monkeypatch, calls: list[int]):
+    def status():
+        calls.append(1)
+        return SimpleNamespace(
+            logged_in=True, raw_output='{"loggedIn": true}', returncode=0
+        )
+
+    monkeypatch.setattr(
+        super_agents_client_module, "verified_claude_auth_status", status
+    )
+
+
+@pytest.mark.asyncio
+async def test_warm_connects_the_dispatcher_session_with_the_turn_model(
+    monkeypatch, tmp_path: Path
+) -> None:
+    auth_calls: list[int] = []
+    _logged_in(monkeypatch, auth_calls)
+    backend = FakeWarmableBackend()
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "state.json"),
+        backend_client=backend,
+        model_name="claude-opus",
+    )
+    assert await client.warm() is True
+    ((query, turn_input),) = backend.warm_calls
+    assert query.thread_id == "dispatcher-thread"
+    assert turn_input["model"] == "claude-opus"
+    assert "serviceTier" not in turn_input  # Codex-only, never sent to Claude
+    assert "prompt" not in turn_input
+    # The warm-up's auth check is reused by the first turn.
+    assert auth_calls == [1]
+    result = await client.run_turn("hello dispatch")
+    assert result["_livekit_turn_id"] == "turn-1"
+    assert auth_calls == [1]
+    ((_, started),) = backend.started_turns
+    assert started["model"] == turn_input["model"]
+    assert started.get("reasoningEffort") == turn_input.get("reasoningEffort")
+
+
+@pytest.mark.asyncio
+async def test_warm_is_a_no_op_without_backend_support(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _logged_in(monkeypatch, [])
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "state.json"),
+        backend_client=FakeSuperAgentsBackend(),
+    )
+    assert await client.warm() is False
+    assert client._thread_id == "dispatcher-thread"
+
+
+@pytest.mark.asyncio
+async def test_warm_skips_codex_threads_which_prepare_already_loads(
+    tmp_path: Path,
+) -> None:
+    backend = FakeCodexSuperAgentsBackend()
+    backend.warm_session_by_label = None  # even if present, Codex is not warmed
+
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "state.json"),
+        backend_client=backend,
+    )
+    assert await client.warm() is False
+    assert client._thread_id == "dispatcher-thread"
+
+
+@pytest.mark.asyncio
+async def test_claude_auth_check_is_memoized_while_logged_in(
+    monkeypatch, tmp_path: Path
+) -> None:
+    auth_calls: list[int] = []
+    _logged_in(monkeypatch, auth_calls)
+    backend = FakeSuperAgentsBackend()
+    backend.backend = "claude_code"
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "state.json"),
+        backend_client=backend,
+    )
+    await client.run_turn("one")
+    await client.run_turn("two")
+    assert auth_calls == [1]
+    # Past the recheck window the CLI is asked again.
+    client._claude_auth_ok_at -= (
+        super_agents_client_module.CLAUDE_AUTH_RECHECK_SECONDS + 1
+    )
+    await client.run_turn("three")
+    assert auth_calls == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_claude_auth_check_never_memoizes_a_logged_out_answer(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[int] = []
+
+    def logged_out():
+        calls.append(1)
+        return SimpleNamespace(
+            logged_in=False,
+            raw_output="Not logged in · Please run /login",
+            returncode=0,
+        )
+
+    monkeypatch.setattr(
+        super_agents_client_module, "verified_claude_auth_status", logged_out
+    )
+    backend = FakeSuperAgentsBackend()
+    backend.backend = "claude_code"
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "state.json"),
+        backend_client=backend,
+    )
+    await client.run_turn("one")
+    await client.run_turn("two")
+    assert calls == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_discovery_reuses_casefolded_name_and_persists_exact_id(
+    tmp_path,
+):
+    backend = FakeCodexSuperAgentsBackend()
+
+    async def sessions():
+        return [
+            {
+                "threadId": "older",
+                "name": "dispatcher",
+                "cwd": "/tmp/project",
+                "updatedAt": "2026-01-01",
+            },
+            {
+                "threadId": "canonical",
+                "name": "Dispatcher",
+                "cwd": "/tmp/project",
+                "updatedAt": "2026-02-01",
+            },
+            {
+                "threadId": "other-project",
+                "name": "Dispatcher",
+                "cwd": "/tmp/other",
+                "updatedAt": "2026-03-01",
+            },
+        ]
+
+    backend.sessions = sessions
+    state = tmp_path / "route.json"
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project", state_path=str(state), backend_client=backend
+    )
+    assert await client.prepare() == "canonical"
+    assert not backend.started_threads
+    assert json.loads(state.read_text())["dispatcher_thread_id"] == "canonical"
+
+    # A later, differently cased name cannot replace the persisted exact ID.
+    async def changed_sessions():
+        raise AssertionError("Persisted canonical ID must avoid discovery")
+
+    backend.sessions = changed_sessions
+    restarted = SuperAgentsLiveKitClient(
+        cwd="/tmp/project", state_path=str(state), backend_client=backend
+    )
+    assert await restarted.prepare() == "canonical"
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_explicit_recreation_skips_discovery(tmp_path):
+    backend = FakeCodexSuperAgentsBackend()
+
+    async def sessions():
+        raise AssertionError("Fresh recreation must not reuse history")
+
+    backend.sessions = sessions
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "route.json"),
+        backend_client=backend,
+        fresh_thread=True,
+    )
+    assert await client.prepare() == "dispatcher-thread"
+    assert backend.started_threads[0]["fresh"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("persisted", [False, True])
+async def test_dispatcher_stale_discovery_does_not_prevent_recovery(
+    tmp_path, persisted
+):
+    backend = FakeCodexSuperAgentsBackend()
+
+    async def sessions():
+        return [{"threadId": "missing", "name": "Dispatcher", "cwd": "/tmp/project"}]
+
+    async def resume_thread(thread_id, **kwargs):
+        raise RuntimeError("thread not found")
+
+    backend.sessions = sessions
+    backend.resume_thread = resume_thread
+    state = tmp_path / "route.json"
+    if persisted:
+        state.write_text(json.dumps({"dispatcher_thread_id": "missing"}))
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project", state_path=str(state), backend_client=backend
+    )
+    assert await client.prepare() == "dispatcher-thread"
+    assert len(backend.started_threads) == 1
+    assert json.loads(state.read_text())["dispatcher_thread_id"] == "dispatcher-thread"
+
+
+@pytest.mark.asyncio
+async def test_default_dispatcher_state_uses_relocated_api_data_directory(
+    tmp_path, monkeypatch
+):
+    from openbase_coder_cli.livekit_voice_route import get_livekit_voice_route_state
+    from openbase_coder_cli.openbase_coder_cli_app.thread_metadata import (
+        annotate_thread_payload,
+    )
+
+    data_dir = tmp_path / "relocated"
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(data_dir))
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "unused-home"))
+    client = SuperAgentsLiveKitClient(
+        cwd=str(tmp_path), backend_client=FakeCodexSuperAgentsBackend()
+    )
+    assert client._state_path == data_dir / "livekit-voice-route.json"
+    thread_id = await client.prepare()
+    assert get_livekit_voice_route_state().dispatcher_thread_id == thread_id
+    payload = annotate_thread_payload({"thread_id": thread_id})
+    assert payload["conversation_role"] == "dispatcher"
+    assert payload["voice_route"]["role"] == "dispatcher"
+    assert not (
+        tmp_path / "unused-home" / ".openbase" / "livekit-voice-route.json"
+    ).exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("old_name", ["dispatcher", None, "Old character"])
+async def test_claude_dispatcher_resume_uses_configured_speaking_identity(
+    tmp_path, monkeypatch, old_name
+):
+    """Real SDK resume must not overwrite the call persona with the role label."""
+    from super_agents.agent_store import Store
+    from super_agents.claude_sdk import ClaudeAgentSdkClient
+
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    backend = ClaudeAgentSdkClient(store=Store(tmp_path / "sessions.sqlite3"))
+    started = await backend.start_thread(
+        {
+            "name": "Dispatcher",
+            "agentName": old_name,
+            "cwd": str(tmp_path),
+            "developerInstructions": "Retain the project context.",
+        }
+    )
+    thread_id = started["threadId"]
+    before = backend.store.get_session(thread_id)
+    client = SuperAgentsLiveKitClient(
+        cwd=str(tmp_path),
+        state_path=str(tmp_path / "route.json"),
+        backend_client=backend,
+        super_agent_agent_name="Jacqueline",
+        developer_instructions="Retain the project context.",
+    )
+    assert await client._resume_thread(thread_id) == thread_id
+    after = backend.store.get_session(thread_id)
+    assert after.agent_name == "Jacqueline"
+    assert after.name == before.name == "Dispatcher"
+    assert after.cwd == before.cwd
+    assert after.created_at == before.created_at
+    assert after.backend_session_id == before.backend_session_id
+    prompt = backend._prompt_for_session(
+        after, {"prompt": "Describe yourself and the project."}
+    )
+    assert "Your name is Jacqueline." in prompt
+    assert "Your name is dispatcher." not in prompt
+    assert "Retain the project context." in prompt
+    assert backend._session_view(after, None)["agentName"] == "Jacqueline"
+    await client.aclose()

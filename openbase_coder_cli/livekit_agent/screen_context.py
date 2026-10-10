@@ -75,7 +75,9 @@ def screen_context_note(focus: FocusedThread) -> str:
     return (
         "[Openbase system note: the caller has the thread "
         f"{label} open in the Openbase phone app (thread id {focus.thread_id}"
-        f'{where}) while speaking to you. When they say "this thread" or '
+        f"{where}) while speaking to you. This is viewed context, not the "
+        "previously spoken agent or the project's identity from call history. "
+        'When they say "this thread" or '
         "refer to what is on their screen, they mean that thread: continue "
         "it with super_agents_start_turn using that thread name (it steers a "
         "running turn or starts the next one); the thread id is for "

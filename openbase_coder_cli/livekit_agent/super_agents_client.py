@@ -69,6 +69,7 @@ from openbase_coder_cli.livekit_agent.super_agents_speech import (
     _text_content,
     _user_message_texts,
 )
+from openbase_coder_cli.livekit_voice_route import _route_state_path
 from openbase_coder_cli.paths import CODEX_DISPATCHER_CONFIG_PATH
 
 # The speech helpers moved to ``super_agents_speech`` and the Super Agents
@@ -100,6 +101,11 @@ TURN_POLL_INTERVAL_SECONDS = 0.5
 # loop instantly). Kept generous so a running turn produces ~2 progress reads
 # instead of one every 0.5s.
 TURN_PUSH_WAIT_FALLBACK_SECONDS = 5.0
+# How long a logged-in ``claude auth status`` answer is trusted before the
+# per-turn check runs the CLI again.
+CLAUDE_AUTH_RECHECK_SECONDS = float(
+    os.getenv("LIVEKIT_CLAUDE_AUTH_RECHECK_SECONDS", "600") or 600
+)
 # A busy app-server can miss individual progress polls (observed: thread/read
 # timing out after 30s while the backend churned on tool output). Keep polling
 # through transient failures instead of killing the voice generation that is
@@ -290,7 +296,7 @@ class SuperAgentsLiveKitClient(
     ) -> None:
         self._cwd = cwd
         self._state_path = (
-            Path(state_path or Path.home() / ".openbase" / "livekit-voice-route.json")
+            (Path(state_path) if state_path else _route_state_path())
             if persist_thread
             else None
         )
@@ -312,6 +318,19 @@ class SuperAgentsLiveKitClient(
             or os.getenv("LIVEKIT_DISPATCHER_CONFIG_PATH")
             or CODEX_DISPATCHER_CONFIG_PATH
         )
+        if (
+            persist_thread
+            and (self._super_agent_name or "").casefold()
+            == DEFAULT_DISPATCHER_LABEL.casefold()
+            and self._super_agent_agent_name is None
+        ):
+            from openbase_coder_cli.voice_identity import current_voice_identity
+
+            # Keep the canonical thread label/id. Only its speaking persona
+            # follows the existing configured voice, just like worker agents.
+            self._super_agent_agent_name = current_voice_identity(
+                self._dispatcher_config_path
+            ).voice_name
         self._model_name = model_name or _model_name_for_role(
             self._dispatcher_config_path,
             use_super_agent_model=self._use_super_agent_reasoning,
@@ -342,6 +361,7 @@ class SuperAgentsLiveKitClient(
         self._turn_spoken_at: dict[str, float] = {}
         self._state_lock = asyncio.Lock()
         self._turn_start_lock = asyncio.Lock()
+        self._claude_auth_ok_at: float | None = None
 
     async def run_turn(
         self,
@@ -843,6 +863,16 @@ class SuperAgentsLiveKitClient(
                 or ""
             ).lower()
             has_pending_requests = _progress_has_pending_requests(progress)
+            response_turn = progress.get("turn")
+            if (
+                status == "running"
+                and not has_pending_requests
+                and isinstance(response_turn, dict)
+                and response_turn.get("turnId") == turn_id
+                and response_turn.get("responseFinishedAt")
+                and _speech_text_from_progress(progress, turn_scoped=True, turn_id=turn_id)
+            ):
+                return progress
             if status == "waiting" and not has_pending_requests:
                 should_wait, empty_answer_started_at = _should_wait_for_speech_text(
                     progress,
@@ -899,9 +929,19 @@ class SuperAgentsLiveKitClient(
         """
         if getattr(self._backend_client, "backend", None) != CLAUDE_CODE_BACKEND:
             return
+        # ``claude auth status`` is a CLI subprocess on every turn's critical
+        # path; a login seen recently is trusted for a while. A logged-out
+        # answer is never cached, so recovery is checked on the next turn.
+        checked_at = self._claude_auth_ok_at
+        if (
+            checked_at is not None
+            and time.monotonic() - checked_at < CLAUDE_AUTH_RECHECK_SECONDS
+        ):
+            return
         try:
             status = await asyncio.to_thread(verified_claude_auth_status)
             if status.logged_in:
+                self._claude_auth_ok_at = time.monotonic()
                 return
             logger.warning(
                 "Claude Code login unavailable before thread start; run "

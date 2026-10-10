@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -287,12 +288,11 @@ def user_say(request):
             voice_entry.voice_name or "",
             voice_entry.source,
         )
-        # The agent's own voice assignment identifies the thread; the
-        # announcement itself speaks with the user's voice identity.
         result = async_to_sync(publish_announcer_message)(
             input_serializer.validated_data["text"],
             room_name=room_name,
             agent_name=agent_name,
+            voice_id=voice_entry.voice_id,
         )
     except UnknownAgentVoiceError as exc:
         catalog_voice = get_tts_provider(selected_tts_provider_id()).voice_for_name(
@@ -980,7 +980,17 @@ def livekit_room_token(request):
     if not display_name:
         display_name = identity
 
-    token = (
+    dispatch_metadata = json.dumps(metadata)
+    dispatched_at_token = (
+        False
+        if inbound_invitation_id
+        else dispatch_agent_before_join(
+            room_name=room_name,
+            agent_name=livekit_dispatch_agent_name,
+            metadata=dispatch_metadata,
+        )
+    )
+    access_token = (
         livekit_api.AccessToken(api_key=api_key, api_secret=api_secret)
         .with_identity(identity)
         .with_name(display_name)
@@ -998,23 +1008,27 @@ def livekit_room_token(request):
                 can_update_own_metadata=True,
             )
         )
-        .with_room_config(
-            livekit_api.RoomConfiguration(
-                agents=[
-                    livekit_api.RoomAgentDispatch(
-                        agent_name=livekit_dispatch_agent_name,
-                        metadata=json.dumps(metadata),
-                    )
-                ]
-            )
-        )
-        .with_ttl(timedelta(hours=1))
-        .to_jwt()
     )
+    access_token = access_token.with_room_config(
+        livekit_api.RoomConfiguration(
+            agents=[
+                livekit_api.RoomAgentDispatch(
+                    agent_name=livekit_dispatch_agent_name,
+                    metadata=dispatch_metadata,
+                )
+            ]
+        )
+    )
+    token = access_token.with_ttl(timedelta(hours=1)).to_jwt()
 
     from openbase_coder_cli.services.livekit_pool_activity import record_activity
 
     record_activity("token")
+    logger.info(
+        "dispatch_timing stage=room_token_issued room_name=%s dispatch=%s",
+        room_name,
+        "explicit" if dispatched_at_token else "room_config",
+    )
     payload: dict[str, Any] = {"token": token, "room_name": room_name}
     if inbound_invitation_id:
         payload.update(
@@ -1077,6 +1091,80 @@ def _prepare_call_start_route(thread_id: str, *, label: str | None = None) -> di
             )
         }
     return {"voice_route": transfer.command_payload()}
+
+
+EXPLICIT_AGENT_DISPATCH_TIMEOUT_SECONDS = 3.0
+
+
+def explicit_agent_dispatch_enabled() -> bool:
+    return os.environ.get(
+        "LIVEKIT_EXPLICIT_AGENT_DISPATCH", "1"
+    ).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def dispatch_agent_before_join(
+    *, room_name: str, agent_name: str, metadata: str
+) -> bool:
+    """Create the room and dispatch the agent into it now.
+
+    Room creation carries the initial agent configuration atomically, so
+    concurrent requests cannot append duplicate dispatches. An existing
+    room keeps its original configuration. The token also retains that
+    configuration in case the room expires before the caller joins.
+    Returns False on failure so token issuance can proceed normally.
+    """
+    if not explicit_agent_dispatch_enabled():
+        return False
+    started = time.monotonic()
+    try:
+        created = async_to_sync(_create_agent_dispatch)(
+            room_name=room_name, agent_name=agent_name, metadata=metadata
+        )
+    except Exception:
+        logger.warning(
+            "dispatch_timing stage=agent_dispatch_at_token_failed room_name=%s "
+            "elapsed_ms=%d",
+            room_name,
+            int((time.monotonic() - started) * 1000),
+            exc_info=True,
+        )
+        return False
+    logger.info(
+        "dispatch_timing stage=agent_dispatch_at_token room_name=%s dispatched=%s "
+        "elapsed_ms=%d",
+        room_name,
+        created,
+        int((time.monotonic() - started) * 1000),
+    )
+    return created
+
+
+async def _create_agent_dispatch(
+    *, room_name: str, agent_name: str, metadata: str
+) -> bool:
+    from openbase_coder_cli.livekit_announcer import _build_livekit_client
+
+    client = _build_livekit_client()
+    try:
+        async with asyncio.timeout(EXPLICIT_AGENT_DISPATCH_TIMEOUT_SECONDS):
+            await client.room.create_room(
+                livekit_api.CreateRoomRequest(
+                    name=room_name,
+                    agents=[
+                        livekit_api.RoomAgentDispatch(
+                            agent_name=agent_name, metadata=metadata
+                        )
+                    ],
+                )
+            )
+    finally:
+        await client.aclose()
+    return True
 
 
 @api_view(["GET"])

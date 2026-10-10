@@ -434,8 +434,7 @@ def test_user_say_api_returns_accepted(monkeypatch, tmp_path):
     async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name is None
-        # The announcer picks the user's voice identity, not the agent's voice.
-        assert voice_id is None
+        assert voice_id == "voice-dottie"
         assert agent_name == "Dottie"
         return SimpleNamespace(
             message_id="announcer-1",
@@ -476,8 +475,7 @@ def test_user_say_api_allows_authenticated_local_post_without_csrf_token(monkeyp
     async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name is None
-        # The announcer picks the user's voice identity, not the agent's voice.
-        assert voice_id is None
+        assert voice_id == "voice-dottie"
         assert agent_name == "Dottie"
         return SimpleNamespace(
             message_id="announcer-1",
@@ -510,7 +508,7 @@ def test_user_say_api_allows_authenticated_local_post_without_csrf_token(monkeyp
     }
 
 
-def test_user_say_api_resolves_agent_thread_and_speaks_identity_voice(monkeypatch, tmp_path):
+def test_user_say_api_resolves_agent_thread_and_speaks_agent_voice(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     record_voice_assignment(
         thread_id="thread-1",
@@ -525,7 +523,7 @@ def test_user_say_api_resolves_agent_thread_and_speaks_identity_voice(monkeypatc
     async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name == "room-1"
-        assert voice_id is None
+        assert voice_id == "super-agent-voice"
         return SimpleNamespace(
             message_id="announcer-1",
             room_name="room-1",
@@ -573,7 +571,7 @@ def test_user_say_api_backfills_agent_voice_from_super_agents_state(
     async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name is None
-        assert voice_id is None
+        assert voice_id
         return SimpleNamespace(
             message_id="announcer-1",
             room_name="room-1",
@@ -638,7 +636,7 @@ def test_user_say_api_backfills_agent_voice_from_claude_code_state(
     async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name is None
-        assert voice_id is None
+        assert voice_id
         return SimpleNamespace(
             message_id="announcer-1",
             room_name="room-1",
@@ -719,7 +717,7 @@ def test_user_say_api_selects_latest_matching_agent(tmp_path, monkeypatch, caplo
     async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name is None
-        assert voice_id is None
+        assert voice_id
         return SimpleNamespace(
             message_id="announcer-1",
             room_name="room-1",

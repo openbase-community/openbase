@@ -137,6 +137,14 @@ def _isolated_host_state(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _no_explicit_agent_dispatch(monkeypatch):
+    """The room-token view dispatches the agent through the LiveKit server
+    API; tests have no server (and must never reach a real one), so the
+    feature is switched off unless a test turns it on."""
+    monkeypatch.setenv("LIVEKIT_EXPLICIT_AGENT_DISPATCH", "0")
+
+
+@pytest.fixture(autouse=True)
 def _livekit_agent_worker_ready(monkeypatch):
     """The room-token view refuses rooms while the agent worker is down; tests
     have no worker, so treat it as ready unless a test says otherwise."""

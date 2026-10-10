@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from asgiref.sync import async_to_sync
@@ -383,7 +384,7 @@ def thread_list(request):
 
     if request.method == "POST":
         directory = request.data.get("directory")
-        if not directory:
+        if not isinstance(directory, str) or not directory.strip():
             return Response(
                 {"error": "directory is required"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -417,7 +418,29 @@ def thread_list(request):
                 create_kwargs["backend"] = model_backend
         else:
             model = None
-        thread = async_to_sync(manager.create_thread)(directory, **create_kwargs)
+        try:
+            thread = async_to_sync(manager.create_thread)(directory, **create_kwargs)
+        except ValueError as exc:
+            # Validation can race the recent-project listing (temporary folders
+            # may disappear). Return a recoverable contract before any origin
+            # or model override is stored; unexpected runtime failures still raise.
+            unavailable = not Path(directory).expanduser().is_dir()
+            detail = (
+                "This project folder is unavailable on this computer. "
+                "Choose another project or restore the folder, then resend."
+                if unavailable
+                else str(exc)
+            )
+            return Response(
+                {
+                    "code": "project_unavailable"
+                    if unavailable
+                    else "invalid_thread_request",
+                    "detail": detail,
+                    "error": detail,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if model:
             # The new-chat composer's model choice sticks to the thread like
             # the in-thread model dropdown does.

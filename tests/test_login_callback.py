@@ -33,8 +33,11 @@ from openbase_coder_cli.login_callback import (
         ("https://a.example/device", None),
         (
             "https://a.example/?redirect_uri=http://evil.example:1455@localhost:2000/",
-            2000,
+            None,
         ),
+        ("http://localhost:8085/start", 8085),
+        ("http://0.0.0.0:8085/start", None),
+        ("http://user@localhost:8085/start", None),
         ("not a url", None),
     ],
 )
@@ -86,3 +89,14 @@ def test_forward_target_accepts_only_vpn_literals(target):
 )
 def test_forward_target_rejects_dns_and_non_vpn_addresses(target):
     assert not is_tailnet_forward_target(target)
+
+
+def test_authenticated_relay_metadata_fits_existing_push_token_contract():
+    from openbase_coder_cli.login_callback import relay_capability
+
+    capability = relay_capability(49152, 2000000000, "x" * 32)
+    forward = LoopbackForward(
+        1455, "100.64.0.12", token=capability, relay_port=49152, expires_at=2000000000
+    )
+    assert set(forward.as_app_control()) == {"port", "target", "ttl_seconds", "token"}
+    assert forward.as_push_user_info()["forward_token"] == capability

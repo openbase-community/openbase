@@ -27,6 +27,7 @@ from openbase_coder_cli.livekit_agent.packets import voice_route_command_from_pa
 from tests.test_livekit_live_engine_wiring import (
     _fake_ctx,
     _FakeAgentSession,
+    _FakeGPTLiveModel,
     _live_decision,
     _run_entrypoint,
     wiring,  # noqa: F401  (pytest fixture)
@@ -44,7 +45,7 @@ def _start_route_payload(**overrides) -> dict:
         "label": "Hi are you there?",
         "agent_name": "Linda",
         "state": {
-            "active_target_voice_id": "voice-linda",
+            "active_target_voice_id": "829ccd10-f8b3-43cd-b8a0-4aeaa81f3b30",
             "active_target_voice_name": "Linda",
         },
     }
@@ -62,7 +63,7 @@ def test_voice_route_command_from_payload_reads_the_transfer():
     assert command.thread_id == THREAD_ID
     assert command.cwd == "/data/workspace"
     assert command.label == "Hi are you there?"
-    assert command.active_target_voice_id == "voice-linda"
+    assert command.active_target_voice_id == "829ccd10-f8b3-43cd-b8a0-4aeaa81f3b30"
     assert command.active_target_voice_name == "Linda"
 
 
@@ -101,6 +102,7 @@ def test_requested_start_route_is_none_for_dispatcher_calls(metadata):
 
 def test_requested_start_route_tolerates_a_context_without_a_job():
     ctx = _fake_ctx()
+    del ctx.job
     assert not hasattr(ctx, "job")
     assert livekit.requested_start_route(ctx) is None
 
@@ -139,6 +141,7 @@ class _RecordingClient:
     async def run_turn(
         self, prompt, *, developer_instructions=None, replaces_active_turn=False
     ):
+        assert replaces_active_turn is False
         self.prompts.append(prompt)
         return {
             "_livekit_speech_text": f"{self._thread_id} says hi",
@@ -249,7 +252,7 @@ async def test_pipeline_call_started_from_a_thread_talks_to_that_thread(
         "active_target_thread_id": THREAD_ID,
         "active_target_kind": "codex_thread",
         "active_target_label": "Hi are you there?",
-        "active_target_voice_id": "voice-linda",
+        "active_target_voice_id": "829ccd10-f8b3-43cd-b8a0-4aeaa81f3b30",
         "active_target_voice_name": "Linda",
         "route_owner_id": router._route_owner_id,
     }
@@ -289,10 +292,17 @@ async def test_live_call_started_from_a_thread_talks_to_that_thread(
     # GPT-Live is told from the start who is on the call.
     assert "Linda" in agent.instructions
     assert config.live_voice_start_route_note("Linda") in agent.instructions
+    assert "Your name in this call is Linda." in agent.instructions
+    assert "Speak in the first person as Linda" in agent.instructions
     assert agent._bridge.active_agent_label == "Linda"
     assert agent._bridge.starting_agent_label() == "Linda"
-    # No "You are now talking to" transfer chatter at call start.
-    assert wiring.live.appends == []
+    assert agent._bridge._call_id == thread_call.ctx.room.name
+    # Explicit greeting uses the actual starting character, without a transfer.
+    [(kind, command, delegation_id)] = wiring.live.appends
+    assert kind == "instructions"
+    assert delegation_id is None
+    assert "exactly once" in command
+    assert json.loads(command.split("Text to read: ", 1)[1]) == "Hi, I'm Linda."
 
     # Integration: the caller's first utterance goes to the thread.
     bridge = agent._bridge
@@ -306,6 +316,31 @@ async def test_live_call_started_from_a_thread_talks_to_that_thread(
     await asyncio.sleep(0.1)
     assert target.prompts and "Hey, can you hear me" in target.prompts[0]
     assert thread_call.dispatcher.prompts == []
+
+
+async def test_thread_start_discards_a_dispatcher_preconnection_with_another_voice(
+    thread_call, monkeypatch
+):
+    from openbase_coder_cli import voice_identity
+
+    monkeypatch.setattr(
+        voice_identity,
+        "current_voice_identity",
+        lambda: SimpleNamespace(gpt_live_voice="beacon"),
+    )
+    await _run_entrypoint(thread_call.ctx, _live_decision(), monkeypatch)
+    early, routed = _FakeGPTLiveModel.instances
+    assert early.kwargs["voice"] == "beacon"
+    assert early.closed
+    assert early.sessions[0].closed
+    expected = voice_identity.agent_voice_identity(
+        _start_route_payload()["state"]["active_target_voice_id"]
+    )
+    assert routed.kwargs["voice"] == expected.gpt_live_voice
+    assert routed.kwargs["voice"] != "beacon"
+    for callback in thread_call.ctx.shutdown_callbacks:
+        await callback()
+    assert routed.closed
 
 
 async def test_ending_a_thread_call_resets_the_persisted_route(
@@ -400,11 +435,23 @@ async def test_pipeline_fallback_speaks_through_the_session(thread_call, monkeyp
 # --- live persona --------------------------------------------------------------
 
 
-def test_live_startup_instructions_name_the_thread_agent_only_for_thread_calls():
+def test_live_startup_instructions_use_the_dispatcher_or_thread_character(monkeypatch):
+    from openbase_coder_cli import voice_identity
+
+    monkeypatch.setattr(
+        voice_identity,
+        "current_voice_identity",
+        lambda: SimpleNamespace(voice_name="Jacqueline"),
+    )
     plain = config.live_voice_startup_instructions("mac")
     assert "This call started inside" not in plain
     routed = config.live_voice_startup_instructions("mac", agent_label="Linda")
-    assert routed.startswith(plain)
+    assert routed.startswith(config.LIVE_VOICE_STARTUP_INSTRUCTIONS)
+    assert "Your name in this call is Jacqueline." in plain
+    assert "Your name in this call is Dispatcher." not in plain
+    assert "Your name in this call is Linda." in routed
+    assert "Your name in this call is Dispatcher." not in routed
+    assert "Your name in this call is Jacqueline." not in routed
     assert "everything the caller says goes to Linda" in routed
     assert "do not mention the dispatcher" in routed
     # Still the voice, never the brain.
@@ -412,7 +459,15 @@ def test_live_startup_instructions_name_the_thread_agent_only_for_thread_calls()
 
 
 def test_bridge_initial_label_defaults_to_the_dispatcher():
-    router = SimpleNamespace(active_client=None, is_dispatcher_active=True)
+    from openbase_coder_cli.livekit_agent.voice_delivery import VoiceRouteSnapshot
+
+    router = SimpleNamespace(
+        active_client=None,
+        is_dispatcher_active=True,
+        route_snapshot=lambda: VoiceRouteSnapshot(
+            0, "dispatcher", None, None, "dispatcher"
+        ),
+    )
     bridge = live_delegation.LiveDelegationBridge(voice_router=router)
     assert bridge.active_agent_label == live_delegation.DISPATCHER_AGENT_LABEL
     assert bridge.starting_agent_label() is None

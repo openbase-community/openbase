@@ -39,6 +39,10 @@ def test_voice_worker_and_warmup_receive_the_same_canonical_procedure(tmp_path, 
     assert config._load_dispatcher_developer_instructions() == expected
     assert livekit_voice_route._dispatcher_developer_instructions() == expected
     assert instructions.CURRENT_STATE_HEADING in expected
+    assert "Copy the caller's exact announcement wording verbatim" in expected
+    assert "full completion phrase" in expected
+    assert "finish and verify the action before sending" in expected
+    assert "Do not add a text-only" in expected
     assert expected.endswith('Canonical task ownership.')
 
 

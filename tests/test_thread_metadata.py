@@ -376,3 +376,25 @@ def test_display_name_falls_back_to_project_then_a_label_never_the_id(
 
     assert in_project["display_name"] == "tic-tac-toe"
     assert bare["display_name"] == "Conversation"
+
+
+def test_conversation_role_survives_transfer_without_collapsing_title(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    (tmp_path / "livekit-voice-route.json").write_text(
+        json.dumps(
+            {
+                "dispatcher_thread_id": "canonical",
+                "active_target_thread_id": "agent",
+            }
+        )
+    )
+    canonical = annotate_thread_payload(
+        {"thread_id": "canonical", "name": "Dispatcher"}
+    )
+    old = annotate_thread_payload({"thread_id": "historical", "name": "dispatcher"})
+    assert canonical["conversation_role"] == "dispatcher"
+    assert canonical["voice_route"]["active"] is False
+    assert old["conversation_role"] == "agent"
+    assert old["thread_id"] == "historical"

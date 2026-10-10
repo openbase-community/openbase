@@ -31,10 +31,6 @@ NETMESH_ALLOWED_SUFFIXES = (".net.obs.so", ".net-staging.obs.so")
 # openbase-tunneld service, cleaned up on any provider switch.
 LEGACY_TUNNELD_AGENT = "cloud.openbase.tunneld"
 
-# Services whose behaviour depends on the transport (LiveKit's rtc candidate
-# mode, the backend's serve/status probing, the agent's LiveKit connection).
-_RESTART_SERVICE_NAMES = ("livekit-server", "livekit-agent", "django-cli")
-
 
 def _env_path():
     return get_data_dir() / ".env"
@@ -169,8 +165,9 @@ def _apply_provider(name: str, *, push_cloud: bool) -> None:
         # name, so the new node never gets a "-1" suffix (which would orphan
         # the DNS name every peer's sync config points at).
         _revoke_old_node(previous, old_node)
-    _bring_up_transport(name)
-    _restart_transport_services()
+    with _transport_lease():
+        _bring_up_transport(name)
+        _restart_transport_services()
     _reregister_device()
 
     if name == tp.PROVIDER_NETMESH:
@@ -433,8 +430,9 @@ def reconcile_after_login() -> None:
         return
     label = "Openbase VPN" if provider == tp.PROVIDER_NETMESH else "Openbase Direct"
     click.echo(f"Connecting {label}...")
-    _bring_up_transport(provider)
-    _restart_transport_services()
+    with _transport_lease():
+        _bring_up_transport(provider)
+        _restart_transport_services()
 
 
 def record_account_provider(name: str) -> bool:
@@ -668,18 +666,20 @@ def _apply_serve_best_effort() -> None:
             click.echo(f"Note: serve rules not applied yet ({reset_exc}).")
 
 
-def _restart_transport_services() -> None:
-    from openbase_coder_cli.services.definitions import SERVICES
-    from openbase_coder_cli.services.launchd import launchctl_kickstart
+def _transport_lease():
+    """The transition job stands back while this command brings the VPN up
+    and restarts the transport services itself."""
+    from openbase_coder_cli.services.tailnet_transition import transport_lease
 
-    for service_name in _RESTART_SERVICE_NAMES:
-        service = next((s for s in SERVICES if s.name == service_name), None)
-        if service is None:
-            continue
-        try:
-            launchctl_kickstart(service)
-        except Exception:  # noqa: BLE001 - service may not be installed
-            pass
+    return transport_lease()
+
+
+def _restart_transport_services() -> None:
+    from openbase_coder_cli.services.tailnet_transition import (
+        kickstart_transport_services,
+    )
+
+    kickstart_transport_services()
     click.echo("Restarted transport-dependent services.")
 
 

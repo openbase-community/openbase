@@ -216,7 +216,13 @@ class FakeSuperAgentsClient:
         self.calls.append(("get_session", {"thread_id": thread_id}))
         if "get_session" not in self.responses:
             return None
-        return self._pop("get_session")
+        if self.responses["get_session"]:
+            self.last_session = self._pop("get_session")
+            if self.last_session is not None and not hasattr(
+                self.last_session, "agent_name"
+            ):
+                self.last_session.agent_name = None
+        return self.last_session
 
     async def start_thread(self, input_data: dict[str, Any]) -> dict[str, Any]:
         self.calls.append(("start_thread", input_data))
@@ -1778,7 +1784,10 @@ def test_create_session_reuses_existing_thread_for_directory(tmp_path: Path) -> 
     thread = asyncio.run(_manager(client).create_session(str(project_dir)))
 
     assert thread.session_id == "thr-existing"
-    assert client.calls == [
+    assert thread.agent_name
+    assert client.calls[-1][0] == "merge_session"
+    assert client.calls[-1][1]["patch"]["agentName"] == thread.agent_name
+    assert client.calls[:1] == [
         (
             "list_threads",
             {
@@ -1812,7 +1821,10 @@ def test_create_thread_starts_new_thread_even_when_directory_has_existing_thread
     thread = asyncio.run(_manager(client).create_thread(str(project_dir)))
 
     assert thread.session_id == "thr-new"
-    assert client.calls == [
+    assert thread.agent_name
+    assert client.calls[-1][0] == "merge_session"
+    assert client.calls[-1][1]["patch"]["agentName"] == thread.agent_name
+    assert client.calls[:1] == [
         (
             "start_thread",
             {
@@ -1843,7 +1855,10 @@ def test_create_thread_starts_new_thread_when_none_exist(
     thread = asyncio.run(_manager(client).create_thread(str(project_dir)))
 
     assert thread.session_id == "thr-new"
-    assert client.calls == [
+    assert thread.agent_name
+    assert client.calls[-1][0] == "merge_session"
+    assert client.calls[-1][1]["patch"]["agentName"] == thread.agent_name
+    assert client.calls[:1] == [
         (
             "start_thread",
             {
@@ -1873,7 +1888,10 @@ def test_create_thread_includes_super_agent_instructions(
     thread = asyncio.run(_manager(client).create_thread(str(project_dir)))
 
     assert thread.session_id == "thr-new"
-    assert client.calls == [
+    assert thread.agent_name
+    assert client.calls[-1][0] == "merge_session"
+    assert client.calls[-1][1]["patch"]["agentName"] == thread.agent_name
+    assert client.calls[:1] == [
         (
             "start_thread",
             {

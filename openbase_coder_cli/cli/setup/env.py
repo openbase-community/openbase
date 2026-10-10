@@ -171,7 +171,7 @@ def _ensure_env_file(
         "SUPER_AGENTS_CODEX_APPROVAL_POLICY=never",
         "SUPER_AGENTS_CODEX_SANDBOX_POLICY=danger-full-access",
         f"SUPER_AGENTS_BASE_INSTRUCTIONS_PATH={OPENBASE_AGENTS_MD_PATH}",
-        "# Named Super Agent threads greet the user on their first turn via this command.",
+        "# Worker instructions own announcements; disable the separate pre-prompt greeting.",
         f"{SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV}={format_env_value(OPENBASE_THREAD_INTRO_COMMAND)}",
         "CLAUDE_CODE_ENABLE_TELEMETRY=0",
         "# Profiles apply only to Openbase conversations, never to the shared daemon.",
@@ -322,7 +322,10 @@ def _missing_livekit_client_credential_values(path: Path) -> dict[str, str]:
         updates["SUPER_AGENTS_CODEX_SANDBOX_POLICY"] = "danger-full-access"
     if not existing.get("SUPER_AGENTS_BASE_INSTRUCTIONS_PATH"):
         updates["SUPER_AGENTS_BASE_INSTRUCTIONS_PATH"] = str(OPENBASE_AGENTS_MD_PATH)
-    if not existing.get(SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV):
+    if (
+        existing.get(SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV)
+        != OPENBASE_THREAD_INTRO_COMMAND
+    ):
         updates[SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV] = OPENBASE_THREAD_INTRO_COMMAND
     if not existing.get("SUPER_AGENTS_DEFAULT_CONFIG_PATH"):
         updates["SUPER_AGENTS_DEFAULT_CONFIG_PATH"] = str(CODEX_DISPATCHER_CONFIG_PATH)

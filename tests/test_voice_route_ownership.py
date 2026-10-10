@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,89 @@ class TargetClient:
 
     async def aclose(self):
         pass
+
+
+@pytest.mark.parametrize("already_dispatcher", [True, False])
+@pytest.mark.parametrize("prepare_fails", [True, False])
+async def test_return_cancels_pending_transfer_without_late_route_theft(
+    monkeypatch, tmp_path, already_dispatcher, prepare_fails
+):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    started, finish = asyncio.Event(), asyncio.Event()
+
+    class PendingTarget(TargetClient):
+        async def prepare(self):
+            if self._thread_id == "pending":
+                started.set()
+                await finish.wait()
+                if prepare_fails:
+                    raise RuntimeError("obsolete preparation failed")
+
+    monkeypatch.setattr(voice_routing, "SuperAgentsLiveKitClient", PendingTarget)
+    path = tmp_path / "livekit-voice-route.json"
+    router = voice_routing.LiveKitVoiceRouter(DispatcherClient(path))
+    if not already_dispatcher:
+        await router.transfer_to_thread(thread_id="current", cwd=".", label="Current")
+    pending = asyncio.create_task(
+        router.transfer_to_thread(thread_id="pending", cwd=".", label="Pending")
+    )
+    await started.wait()
+    assert router.has_pending_transfer
+    router.exit_to_dispatch()
+    expected = router.route_snapshot()
+    finish.set()
+    assert await pending is False
+    assert router.is_dispatcher_active
+    assert router.route_snapshot() == expected
+    assert not router.has_pending_transfer
+    assert livekit_voice_route.get_livekit_voice_route_state().active_target_thread_id is None
+    await router.close()
+
+
+async def test_newer_transfer_wins_when_old_preparation_finishes_last(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    started, finish = asyncio.Event(), asyncio.Event()
+
+    class PendingTarget(TargetClient):
+        async def prepare(self):
+            if self._thread_id == "older":
+                started.set()
+                await finish.wait()
+
+    monkeypatch.setattr(voice_routing, "SuperAgentsLiveKitClient", PendingTarget)
+    router = voice_routing.LiveKitVoiceRouter(
+        DispatcherClient(tmp_path / "livekit-voice-route.json")
+    )
+    older = asyncio.create_task(
+        router.transfer_to_thread(thread_id="older", cwd=".", label="Older")
+    )
+    await started.wait()
+    assert await router.transfer_to_thread(thread_id="newer", cwd=".", label="Newer")
+    finish.set()
+    assert await older is False
+    assert router.route_snapshot().active_thread_id == "newer"
+    assert livekit_voice_route.get_livekit_voice_route_state().active_target_thread_id == "newer"
+    await router.close()
+
+
+@pytest.mark.parametrize("live", [True, False])
+async def test_superseded_transfer_does_not_announce_or_replace_character(live):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    from openbase_coder_cli.livekit_agent.livekit import _transfer_live_voice_route
+    from openbase_coder_cli.livekit_agent.packets import VoiceRouteCommand
+
+    router = SimpleNamespace(transfer_to_thread=AsyncMock(return_value=False))
+    sink = Mock()
+    command = VoiceRouteCommand(action="transfer_to_thread", thread_id="old", cwd=".")
+    if live:
+        await _transfer_live_voice_route(router, command, sink)
+        sink.notify_route_changed.assert_not_called()
+        sink.announce.assert_not_called()
+    else:
+        await voice_routing._transfer_voice_route(router, command, sink)
+        sink.enqueue.assert_not_called()
 
 
 @pytest.mark.parametrize("next_thread", ["first-thread", "second-thread"])

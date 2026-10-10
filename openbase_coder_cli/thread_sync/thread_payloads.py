@@ -33,7 +33,12 @@ DEFAULT_THREAD_HISTORY_LIMIT = 25
 
 RUNNING_STATUSES = {"active", "inProgress", "in_progress", "running", "pending"}
 COMPLETED_STATUSES = {"completed", "success"}
-ERROR_STATUSES = {"failed", "error", "cancelled", "canceled", "interrupted"}
+ERROR_STATUSES = {"failed", "error"}
+STOPPED_STATUSES = {
+    "cancelled": SessionStatus.cancelled,
+    "canceled": SessionStatus.cancelled,
+    "interrupted": SessionStatus.interrupted,
+}
 THREAD_IDLE_STATUSES = {"notLoaded", "not_loaded", "idle", "unknown"}
 WAITING_FLAGS = {"waitingOnUserInput", "waiting_on_user_input"}
 WAITING_STATUSES = {"waiting", "waitingOnUserInput", "waiting_on_user_input"}
@@ -93,9 +98,11 @@ def _is_waiting_status(status: Any) -> bool:
 
 
 def _thread_status(status: Any) -> SessionStatus:
+    status_type = _status_type(status)
+    if status_type in STOPPED_STATUSES:
+        return STOPPED_STATUSES[status_type]
     if _is_waiting_status(status):
         return SessionStatus.waiting
-    status_type = _status_type(status)
     if status_type in ERROR_STATUSES:
         return SessionStatus.error
     if status_type in RUNNING_STATUSES:
@@ -110,9 +117,11 @@ def _thread_status(status: Any) -> SessionStatus:
 def _turn_status(status: Any, error: Any) -> SessionStatus:
     if error not in (None, ""):
         return SessionStatus.error
+    status_type = _status_type(status)
+    if status_type in STOPPED_STATUSES:
+        return STOPPED_STATUSES[status_type]
     if _is_waiting_status(status):
         return SessionStatus.waiting
-    status_type = _status_type(status)
     if status_type in COMPLETED_STATUSES:
         return SessionStatus.completed
     if status_type in RUNNING_STATUSES:
@@ -123,10 +132,10 @@ def _turn_status(status: Any, error: Any) -> SessionStatus:
 
 
 def _turn_sort_key(turn: dict[str, Any]) -> int:
-    for key in ("completedAt", "finishedAt", "updatedAt", "startedAt", "createdAt"):
+    for key in ("startedAt", "createdAt", "completedAt", "finishedAt", "updatedAt"):
         value = turn.get(key)
         if isinstance(value, (int, float)):
-            return int(value)
+            return int(value * 1000)
         if isinstance(value, str) and value:
             try:
                 return int(
@@ -322,6 +331,11 @@ def _run_from_turn(
         completed_at=completed_at,
         status=status,
         accumulated_output=_extract_agent_output(turn),
+        response_finished_at=(
+            _timestamp_to_datetime(turn["responseFinishedAt"])
+            if turn.get("responseFinishedAt")
+            else None
+        ),
         accumulated_stderr=stderr,
         return_code={SessionStatus.completed: 0, SessionStatus.error: -1}.get(status),
         message=message,
@@ -435,6 +449,8 @@ def _session_from_thread(
     active_turn_id = _optional_thread_string(thread, "activeTurnId", "active_turn_id")
     turns = sorted(thread.get("turns", []), key=_turn_sort_key)
     for turn in turns:
+        if _status_type(turn.get("status")) == "queued":
+            continue
         turn_id = extract_turn_id(turn)
         if not isinstance(turn, dict) or not turn_id:
             continue

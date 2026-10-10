@@ -37,6 +37,7 @@ DEFAULT_STABILITY_DELAY_SECONDS = 0.2
 CLOUD_REGISTER_INTERVAL_SECONDS = 3600.0
 CLOUD_WEBHOOK_POLL_INTERVAL_SECONDS = 30.0
 LIVEKIT_POOL_WATCHDOG_TICK_SECONDS = 30.0
+TAILNET_TRANSITION_TICK_SECONDS = 15.0
 SUPER_AGENTS_STATE_PRUNE_INTERVAL_SECONDS = 21600.0
 CODEX_VERSION_SKEW_TICK_SECONDS = 300.0
 
@@ -213,6 +214,14 @@ def _livekit_pool_watchdog_tick() -> None:
     run_tick()
 
 
+def _tailnet_transition_tick() -> None:
+    # A fresh Openbase VPN install starts LiveKit loopback-only until pairing
+    # assigns a tailnet address; restart the transport services once it does.
+    from openbase_coder_cli.services.tailnet_transition import run_tick
+
+    run_tick()
+
+
 def _cloud_webhook_events_tick() -> None:
     from openbase_coder_cli.config.token_manager import (
         DEFAULT_WEB_BACKEND_URL,
@@ -353,6 +362,13 @@ def build_jobs() -> list[SyncJob]:
                 LIVEKIT_POOL_WATCHDOG_TICK_SECONDS,
             ),
             tick=_livekit_pool_watchdog_tick,
+        ),
+        SyncJob(
+            name="tailnet_transition",
+            interval=_env_float(
+                "TAILNET_TRANSITION_TICK_SECONDS", TAILNET_TRANSITION_TICK_SECONDS
+            ),
+            tick=_tailnet_transition_tick,
         ),
         SyncJob(
             name="super_agents_state_prune",

@@ -7,6 +7,12 @@ warning banner when the local runtime is unreachable and can upload logs from
 **Settings → Diagnostics**. The checks below are the CLI-side diagnosis for
 the most common failures.
 
+## Setup Before Openbase VPN Connects
+
+Openbase VPN enrolls during sign-in and pairing, after setup installs the local services. Until a VPN address and interface are available, LiveKit starts on loopback so setup can finish. Signing in connects the VPN and restarts LiveKit, its voice agent, and the local API. If that does not complete, or the VPN connects later or on its own, a background worker checks for the address every 15 seconds and restarts them once the VPN is ready, deferring while a voice call is active. If that transition fails, it retries no sooner than 10 minutes later; the pending transition remains until every service restart completes. This also handles a VPN that was unavailable when an already-paired computer started.
+
+If desktop setup fails, its error identifies the failed step. Finish resolving that error before continuing to sign-in; a service startup failure is not a request to sign in. Check local services with `openbase-coder services status`.
+
 ## iPhone Stays On Connecting
 
 The iOS app reaches the Mac through Tailscale Serve, not directly through the

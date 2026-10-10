@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from types import SimpleNamespace
 
+import pytest
+
 os.environ.setdefault("OPENBASE_CODER_CLI_SECRET_KEY", "test-secret")
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "openbase_coder_cli.config.settings")
 
@@ -119,3 +121,55 @@ def test_blank_model_is_rejected(monkeypatch) -> None:
     response, _ = _post(monkeypatch, manager, {"directory": "/w/app", "model": "  "})
     assert response.status_code == 400
     assert manager.created == []
+
+
+@pytest.mark.parametrize("directory", [[], 3, True, "   "])
+def test_create_rejects_invalid_directory_types(monkeypatch, directory):
+    manager = FakeManager()
+    response, _ = _post(monkeypatch, manager, {"directory": directory})
+    assert response.status_code == 400
+    assert manager.created == []
+
+
+def test_missing_project_returns_recoverable_json_without_creating_thread(
+    monkeypatch, tmp_path
+):
+    missing = tmp_path / "removed-project"
+
+    class MissingProjectManager(FakeManager):
+        async def create_thread(self, directory, **kwargs):
+            assert not missing.is_dir()
+            raise ValueError(f"Directory does not exist: {directory}")
+
+    manager = MissingProjectManager()
+    response, overrides = _post(
+        monkeypatch, manager, {"directory": str(missing), "model": "fable"}
+    )
+    response.render()
+    assert response.status_code == 400
+    assert response.data["code"] == "project_unavailable"
+    assert response["Content-Type"].startswith("application/json")
+    assert b"Choose another project" in response.content
+    assert manager.created == []
+    assert overrides == {}
+    assert not missing.exists()
+
+
+def test_other_create_validation_and_runtime_failures_remain_distinct(
+    monkeypatch, tmp_path
+):
+    class RefusingManager(FakeManager):
+        failure = ValueError("Invalid thread option")
+
+        async def create_thread(self, directory, **kwargs):
+            raise self.failure
+
+    manager = RefusingManager()
+    response, overrides = _post(monkeypatch, manager, {"directory": str(tmp_path)})
+    assert response.status_code == 400
+    assert response.data["code"] == "invalid_thread_request"
+    assert response.data["detail"] == "Invalid thread option"
+    assert overrides == {}
+    manager.failure = RuntimeError("Backend unavailable")
+    with pytest.raises(RuntimeError, match="Backend unavailable"):
+        _post(monkeypatch, manager, {"directory": str(tmp_path)})

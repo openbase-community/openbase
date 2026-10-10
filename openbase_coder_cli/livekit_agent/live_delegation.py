@@ -25,9 +25,9 @@ replaces_active_turn=True)``: a mid-turn steer where the backend supports it,
 interrupt-and-rerun where it does not), avoiding a full queued replay.
 A delegation the model does emit is bound to the turn already running
 for the same utterance instead of starting a second one, and spoken results
-then go out as ``append_commentary`` bound to that delegation; without one
+then go out as explicit spoken ``append_instructions`` bound to that delegation; without one
 they go out with ``delegation_id=None``. Progress-only output is ``append_thinking``.
-Commentary is sentence-bounded, in chunks of at most 500 tokens. Pure small
+Answer commands preserve each segment and fit the 500-token context-event cap. Pure small
 talk and noise (``is_trivial_utterance``) is the one thing kept off the agent.
 See ``dev-docs/live-voice.md``.
 
@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import math
 import re
@@ -69,6 +70,9 @@ from typing import Any
 from openbase_coder_cli.livekit_agent.config import (
     load_direct_livekit_developer_instructions,
 )
+from openbase_coder_cli.livekit_agent.live_call_context import LiveCallContext
+from openbase_coder_cli.livekit_agent.live_speech_gate import LiveSpeechGate
+from openbase_coder_cli.livekit_agent.live_spoken_output import answer_commands
 from openbase_coder_cli.livekit_agent.screen_context import apply_screen_context
 from openbase_coder_cli.livekit_agent.speech_formatter import (
     format_for_speech_segments,
@@ -117,7 +121,9 @@ MAX_TRACKED_ENTRIES = 32
 # then "desktop" about a second later), and a pause mid-sentence does the
 # same. A closed utterance is held this long for a continuation before it goes
 # to the agent; a fragment that opens during the hold extends it (bounded by
-# the max). A delegation flushes the hold at once while the caller is silent
+# the max while silent). Active caller speech and its trailing transcript lag
+# must finish before that cap can dispatch anything. A delegation flushes the
+# hold at once while the caller is silent
 # (the model judged the request complete); while they are still speaking it
 # binds to the held words until they settle.
 UTTERANCE_SETTLE_SECONDS = 0.7
@@ -184,6 +190,10 @@ LIVE_RECONNECTED_REDELIVERY = (
     "The connection dropped before the caller heard the following from "
     "{label}. Relay it now; {disposition}. Do not repeat any of it the "
     "conversation shows you already said."
+)
+LIVE_CHARACTER_REDELIVERY = (
+    "The following from {label} has not yet been spoken. Relay it now; "
+    "{disposition}. Do not repeat anything already spoken."
 )
 LIVE_REDELIVERY_ANSWER = (
     "it is the answer to the caller's last request, so present it as the "
@@ -509,7 +519,7 @@ class LiveSpeechCursor:
 
 @dataclass
 class LiveDelegationEntry:
-    """One caller utterance handed to a Super Agent turn.
+    """One caller utterance or an owned orphaned Super Agent result.
 
     ``key`` names the entry: the delegation id when GPT-Live's delegation
     started it, otherwise ``utt-<n>``. ``delegation_id`` is the GPT-Live
@@ -523,6 +533,7 @@ class LiveDelegationEntry:
     prompt: str
     route: Any
     client: Any
+    agent_label: str = ""
     delegation_id: str | None = None
     source: str = "transcript"
     open_utterance: str = ""
@@ -612,9 +623,18 @@ class LiveDelegationBridge:
         self._active_agent_label = (
             initial_agent_label or ""
         ).strip() or DISPATCHER_AGENT_LABEL
+        self._call_context = LiveCallContext()
+        self._call_context.observe_route(
+            self._voice_router.route_snapshot(), self._active_agent_label
+        )
         # When the plugin reported the gateway socket gone; None while it is up.
         self._session_down_at: float | None = None
         self._closed = False
+        self.character_route_changed = None
+        self._suspended_input_session = None
+        self._suspended_input_handler = None
+        self._input_route = None
+        self.speech_gate = LiveSpeechGate()
 
     # wiring
 
@@ -638,13 +658,21 @@ class LiveDelegationBridge:
 
     def attach(self, live_session) -> None:
         """Subscribe to the plugin session: closed caller utterances and delegations."""
+        self.detach()
         self._live_session = live_session
+        self._input_route = self._voice_router.route_snapshot()
         if self._attached_at is None:
             self._attached_at = self._clock()
         for event_name, handler in self._session_handlers():
             live_session.on(event_name, handler)
 
     def detach(self) -> None:
+        if self._suspended_input_session is not None:
+            self._suspended_input_session.off(
+                "input_audio_transcription_completed", self._suspended_input_handler
+            )
+            self._suspended_input_session = None
+            self._suspended_input_handler = None
         if self._live_session is not None:
             for event_name, handler in self._session_handlers():
                 try:
@@ -652,6 +680,36 @@ class LiveDelegationBridge:
                 except Exception:
                     self._log.debug("live session off() failed", exc_info=True)
         self._live_session = None
+
+    def suspend_session(self) -> None:
+        """Hold backend deliveries while the immutable character is replaced."""
+        self.speech_gate.revoke()
+        if self._session_down_at is None:
+            self._session_down_at = self._clock()
+        old = self._live_session
+        if self._speaking_record is not None:
+            record, self._speaking_record = self._speaking_record, None
+            if self._ledger is not None:
+                self._ledger.mark_live_audio_finished(record, interrupted=True)
+        if old is not None:
+            route = self._input_route
+            self.detach()
+
+            def caller_input(event):
+                # The old model can finish transcribing "return to Dispatcher"
+                # while its replacement connects. This global call command
+                # must survive the handoff; ordinary old-route text must not.
+                returning = bool(getattr(event, "is_final", False)) and (
+                    _is_exit_to_dispatch_command(
+                        str(getattr(event, "transcript", "") or "")
+                    )
+                )
+                if self._voice_router.can_deliver_for_snapshot(route) or returning:
+                    self._on_input_transcription(event)
+
+            old.on("input_audio_transcription_completed", caller_input)
+            self._suspended_input_session = old
+            self._suspended_input_handler = caller_input
 
     async def aclose(self) -> None:
         if self._closed:
@@ -670,6 +728,7 @@ class LiveDelegationBridge:
             if callable(remove):
                 remove(self._on_turn_progress)
         self._listening_clients.clear()
+        self._call_context.clear()
 
     # model-facing appends
 
@@ -679,20 +738,46 @@ class LiveDelegationBridge:
     def _append_commentary(self, text: str, delegation_id: str | None) -> None:
         self._append("append_commentary", text, delegation_id)
 
+    def _append_answer(self, text: str, delegation_id: str | None) -> None:
+        # Commentary is paraphrasable. Backend answers require every part to
+        # survive, including multiple questions answered in the same turn.
+        for command in answer_commands(
+            text, max_chars=int(COMMENTARY_MAX_TOKENS * CHARS_PER_TOKEN_ESTIMATE)
+        ):
+            self._append(
+                "append_instructions",
+                command,
+                delegation_id,
+                spoken=True,
+                atomic=True,
+            )
+
     def _append_instructions(self, text: str, delegation_id: str | None) -> None:
         self._append("append_instructions", text, delegation_id)
 
-    def _append(self, method: str, text: str, delegation_id: str | None) -> None:
+    def _append(
+        self,
+        method: str,
+        text: str,
+        delegation_id: str | None,
+        *,
+        spoken=False,
+        atomic=False,
+    ) -> None:
         if self._live_session is None or not text:
             return
         if self._session_down_at is not None:
             # The plugin queues this for the next session, whose delegations
             # are new: a bound append would only be rejected there.
             delegation_id = None
-        chunks = chunk_commentary(
-            text,
-            max_tokens=self._max_tokens,
-            speech_format=method == "append_commentary",
+        chunks = (
+            [text]
+            if atomic
+            else chunk_commentary(
+                text,
+                max_tokens=self._max_tokens,
+                speech_format=method == "append_commentary",
+            )
         )
         for chunk in chunks or [text]:
             try:
@@ -706,6 +791,8 @@ class LiveDelegationBridge:
                     exc_info=True,
                 )
                 return
+            if method == "append_commentary" or spoken:
+                self.speech_gate.authorize()
             self._stats[method] += 1
             self._log.info(
                 "%s stage=live_%s delegation_id=%s text_len=%d text_hash=%s",
@@ -753,7 +840,7 @@ class LiveDelegationBridge:
                 # The model delegated this command first; it is handled.
                 self._log_forced(text, decision="exit_command_already_handled")
                 return
-            if not self._voice_router.is_dispatcher_active:
+            if self._can_return_to_dispatch():
                 self._last_exit_command_at = self._clock()
                 self._log_forced(text, decision="exit_to_dispatch")
                 self._exit_to_dispatch(delegation_id=None)
@@ -790,13 +877,16 @@ class LiveDelegationBridge:
             if self._take_recent_exit_command():
                 self._log_forced(text, decision="exit_command_already_handled")
                 return
-            if not self._voice_router.is_dispatcher_active:
+            if self._can_return_to_dispatch():
                 self._last_exit_command_at = self._clock()
                 self._log_forced(text, decision="exit_to_dispatch")
                 self._exit_to_dispatch(delegation_id=None)
                 return
         if is_trivial_utterance(text):
             self._skipped = _SkippedUtterance(text=text, at=self._clock())
+            # Only settled social speech may be answered without a backend.
+            # Substantive input remains muted until current commentary arrives.
+            self.speech_gate.authorize()
             self._log_forced(text, decision="skipped_trivial")
             return
         self._skipped = None
@@ -826,10 +916,6 @@ class LiveDelegationBridge:
         self._schedule_flush(self._settle_deadline(now))
 
     def _settle_deadline(self, now: float) -> float:
-        held = self._held
-        if held is not None and self._user_speaking:
-            # The caller is still talking: wait for their words, bounded.
-            return held.first_at + self._hold_max_seconds
         deadline = now + self._settle_seconds
         if self._last_speech_end is not None:
             deadline = max(
@@ -854,6 +940,7 @@ class LiveDelegationBridge:
 
     def on_user_state_changed(self, old_state: str, new_state: str) -> None:
         """The session VAD's view of the caller's voice (``user_state_changed``)."""
+        self.speech_gate.user_state_changed(new_state)
         if new_state == "speaking" and old_state != "speaking":
             self._user_speaking = True
             if self._held is not None:
@@ -879,9 +966,19 @@ class LiveDelegationBridge:
         held = self._held
         if held is None:
             return
-        deadline = min(at, held.first_at + self._hold_max_seconds)
         if held.timer is not None:
             held.timer.cancel()
+            held.timer = None
+        # A time cap bounds a stalled transcript, not the length of a spoken
+        # request. Dispatching during speech executes a prefix before later
+        # constraints arrive. The VAD's stop event will schedule the flush.
+        if self._user_speaking:
+            return
+        deadline = min(at, held.first_at + self._hold_max_seconds)
+        if self._last_speech_end is not None:
+            deadline = max(
+                deadline, self._last_speech_end + self._transcript_lag_seconds
+            )
         delay = max(0.0, deadline - self._clock())
         try:
             loop = asyncio.get_running_loop()
@@ -891,6 +988,8 @@ class LiveDelegationBridge:
         held.timer = loop.call_later(delay, self._flush_held)
 
     def _flush_held(self) -> None:
+        if self._user_speaking:
+            return
         held = self._take_held()
         if held is None or self._closed:
             return
@@ -973,7 +1072,7 @@ class LiveDelegationBridge:
             if self._take_recent_exit_command():
                 self._append_commentary(BACK_TO_DISPATCH_COMMENTARY, delegation_id)
                 return
-            if not self._voice_router.is_dispatcher_active:
+            if self._can_return_to_dispatch():
                 self._last_exit_command_at = self._clock()
                 self._exit_to_dispatch(delegation_id=delegation_id)
                 return
@@ -1043,7 +1142,7 @@ class LiveDelegationBridge:
             if self._take_recent_exit_command():
                 self._append_commentary(BACK_TO_DISPATCH_COMMENTARY, delegation_id)
                 return
-            if not self._voice_router.is_dispatcher_active:
+            if self._can_return_to_dispatch():
                 self._last_exit_command_at = self._clock()
                 self._exit_to_dispatch(delegation_id=delegation_id)
                 return
@@ -1071,6 +1170,17 @@ class LiveDelegationBridge:
         session that the model never started speaking after. Both go out
         session-wide, once, before the held utterance can start a new turn.
         """
+        self._resume_session(connection_lost=True)
+
+    def on_character_session_started(self) -> None:
+        """Resume held work after an intentional handoff or announcement.
+
+        This replaces immutable voice state, not a dropped connection. Do
+        not inject reconnect narration or a competing no-greeting briefing.
+        """
+        self._resume_session(connection_lost=False)
+
+    def _resume_session(self, *, connection_lost: bool) -> None:
         if self._closed:
             return
         drop_at, self._session_down_at = self._session_down_at, None
@@ -1089,9 +1199,9 @@ class LiveDelegationBridge:
                 running += 1
         self._last_exit_command_at = None
         self._log.info(
-            "%s stage=live_session_reconnected unbound=%d running=%d held=%d "
-            "drop_seen=%s",
+            "%s stage=%s unbound=%d running=%d held=%d drop_seen=%s",
             DISPATCH_TIMING_LOG,
+            "live_session_reconnected" if connection_lost else "live_character_resumed",
             unbound,
             running,
             1 if self._held is not None else 0,
@@ -1102,10 +1212,13 @@ class LiveDelegationBridge:
             if running
             else ""
         )
-        self._append_thinking(
-            LIVE_RECONNECTED_THINKING.format(pending=pending).strip(), None
-        )
-        self._redeliver_after_reconnect(drop_at)
+        if connection_lost:
+            self._append_thinking(
+                LIVE_RECONNECTED_THINKING.format(pending=pending).strip(), None
+            )
+        elif pending:
+            self._append_thinking(pending, None)
+        self._redeliver_after_reconnect(drop_at, connection_lost=connection_lost)
 
     def _on_session_error(self, event) -> None:
         """The plugin lost the gateway socket (a recoverable connection error).
@@ -1123,6 +1236,7 @@ class LiveDelegationBridge:
         if self._session_down_at is not None:
             return
         self._session_down_at = self._clock()
+        self.speech_gate.revoke()
         self._log.info(
             "%s stage=live_session_dropped running=%d",
             DISPATCH_TIMING_LOG,
@@ -1147,9 +1261,7 @@ class LiveDelegationBridge:
             held=self._session_down_at is not None,
         )
         cutoff = (
-            self._session_down_at
-            if self._session_down_at is not None
-            else delivery.at
+            self._session_down_at if self._session_down_at is not None else delivery.at
         ) - REDELIVERY_MAX_AGE_SECONDS
         entry.deliveries = [
             pending
@@ -1169,7 +1281,7 @@ class LiveDelegationBridge:
             )
             return
         for chunk in chunks:
-            self._append_commentary(chunk, entry.delegation_id)
+            self._append_answer(chunk, entry.delegation_id)
 
     def _confirm_deliveries(self) -> None:
         """The model started speaking: bound commentary before that was spoken."""
@@ -1182,7 +1294,9 @@ class LiveDelegationBridge:
                     d for d in entry.deliveries if d.held or d.at > cutoff
                 ]
 
-    def _redeliver_after_reconnect(self, drop_at: float | None) -> None:
+    def _redeliver_after_reconnect(
+        self, drop_at: float | None, *, connection_lost: bool = True
+    ) -> None:
         """Re-append, session-wide, what the caller did not hear before the drop.
 
         Held deliveries always qualify. A delivery that went out does when
@@ -1229,9 +1343,11 @@ class LiveDelegationBridge:
                 entry.completed,
             )
             self._append_thinking(
-                LIVE_RECONNECTED_REDELIVERY.format(
-                    label=label, disposition=disposition
-                ),
+                (
+                    LIVE_RECONNECTED_REDELIVERY
+                    if connection_lost
+                    else LIVE_CHARACTER_REDELIVERY
+                ).format(label=label, disposition=disposition),
                 None,
             )
             # Tracked again: a second drop before the model speaks it loses it
@@ -1245,7 +1361,7 @@ class LiveDelegationBridge:
                 )
             )
             for chunk in chunks:
-                self._append_commentary(chunk, None)
+                self._append_answer(chunk, None)
 
     def _on_delegation_after_utterance(self, delegation_id: str) -> None:
         """A delegation with no open utterance: the caller's words already closed."""
@@ -1297,6 +1413,7 @@ class LiveDelegationBridge:
         client = self._voice_router.active_client
         route = self._voice_router.route_snapshot()
         inherited: LiveDelegationEntry | None = None
+        self._call_context.observe_route(route, self._active_agent_label)
         pending_deliveries: list[_CommentaryDelivery] = []
         for other in self._entries.values():
             if other.client is not client or other.superseded:
@@ -1330,6 +1447,7 @@ class LiveDelegationBridge:
             prompt=text,
             route=route,
             client=client,
+            agent_label=self._active_agent_label,
             delegation_id=delegation_id
             or (inherited.delegation_id if inherited is not None else None),
             source=source,
@@ -1436,6 +1554,18 @@ class LiveDelegationBridge:
             if record is not None:
                 self._ledger.mark_live_audio_finished(record)
 
+    def greet(self, text: str) -> None:
+        """Request one exact greeting, rather than paraphrasable commentary."""
+        self._append(
+            "append_instructions",
+            "Immediately say the following greeting exactly once, in full. "
+            "Do not add words or repeat it. Any transfer request in history "
+            "is already handled; do not answer it separately. "
+            "Then pause and listen. Text to read: " + json.dumps(text),
+            None,
+            spoken=True,
+        )
+
     def announce(self, text: str, *, agent_name: str | None = None) -> None:
         """A ``user say`` announcement, woven into the conversation."""
         message = text.strip()
@@ -1446,12 +1576,19 @@ class LiveDelegationBridge:
         self._append_commentary(message, None)
 
     def notify_route_changed(self, *, action: str, agent_label: str | None) -> None:
-        """Tell the one voice who is on the call now (one voice per call)."""
+        """Invalidate old speech and hand the new route to the character owner."""
         label = (agent_label or "").strip() or DISPATCHER_AGENT_LABEL
         if action == "exit_to_dispatch":
             label = DISPATCHER_AGENT_LABEL
         self._active_agent_label = label
+        self._call_context.observe_route(self._voice_router.route_snapshot(), label)
         self._reset_utterance_state()
+        if self.character_route_changed is not None:
+            for entry in self._entries.values():
+                if not self._voice_router.can_deliver_for_snapshot(entry.route):
+                    entry.superseded = True
+            self.character_route_changed()
+            return
         instructions = ""
         try:
             instructions = self._developer_instructions() or ""
@@ -1471,15 +1608,44 @@ class LiveDelegationBridge:
 
     def deliver_orphaned_result(self, client, turn_id: str, speech_text: str) -> None:
         """Speak a completed turn answer no delegation consumed."""
-        if not speech_text or not turn_id:
+        if self._closed or not speech_text or not turn_id:
+            return
+        matching = [
+            entry
+            for entry in self._entries.values()
+            if entry.client is client and entry.turn_id == turn_id
+        ]
+        current = [
+            entry
+            for entry in matching
+            if not entry.superseded
+            and self._voice_router.can_deliver_for_snapshot(entry.route)
+        ]
+        if matching and not current:
             return
         if not self._voice_router.claim_speech(client, turn_id):
             return
         cursor = self._cursor(turn_id)
         chunks = cursor.advance(speech_text, final=True)
-        delegation_id = self._newest_delegation_id_for(client)
-        for chunk in chunks:
-            self._append_commentary(chunk, delegation_id)
+        if not chunks:
+            return
+        if current:
+            entry = max(current, key=lambda item: item.created_at)
+        else:
+            self._utterance_seq += 1
+            entry = LiveDelegationEntry(
+                key=f"orphan-{self._utterance_seq}",
+                prompt="",
+                route=self._voice_router.route_snapshot(),
+                client=client,
+                source="orphaned_result",
+                turn_id=turn_id,
+                completed=True,
+                created_at=self._clock(),
+            )
+            self._entries[entry.key] = entry
+            self._prune_entries()
+        self._deliver(entry, chunks, final=True)
 
     # delegation execution
 
@@ -1488,6 +1654,7 @@ class LiveDelegationBridge:
         if self._voice_router.is_dispatcher_active:
             prompt = append_onboarding_reminder(prompt)
         prompt = apply_screen_context(self._voice_router, prompt)
+        prompt = self._call_context.apply(prompt)
         entry.heartbeat = asyncio.create_task(
             self._progress_heartbeat(entry),
             name=f"openbase-live-heartbeat-{entry.key}",
@@ -1591,6 +1758,9 @@ class LiveDelegationBridge:
                     entry.record, reason="route_changed_before_commentary"
                 )
             return
+        self._call_context.completed_exchange(
+            entry.route, entry.agent_label, entry.prompt, speech_text
+        )
         cursor = self._cursor(turn_id or entry.key)
         chunks = cursor.advance(speech_text, final=True) if speech_text else []
         if ledger is not None and entry.record is not None and speech_text:
@@ -1607,8 +1777,8 @@ class LiveDelegationBridge:
             # commentary: add nothing. A thinking note here ("already
             # answered") arrived a moment after that commentary and GPT-Live
             # spoke the note instead of the answer (staging, 2026-10-08).
-            if ledger is not None and entry.record is not None:
-                ledger.mark_cancelled(entry.record, reason="live_answer_already_spoken")
+            # The cursor deduplicates submitted text, not heard audio. Keep
+            # this delivery pending so actual speech binds to the same turn.
             return
         self._deliver(entry, [LIVE_EMPTY_ANSWER_COMMENTARY], final=True)
         if ledger is not None and entry.record is not None and not speech_text:
@@ -1691,6 +1861,11 @@ class LiveDelegationBridge:
 
     # helpers
 
+    def _can_return_to_dispatch(self) -> bool:
+        return not self._voice_router.is_dispatcher_active or bool(
+            getattr(self._voice_router, "has_pending_transfer", False)
+        )
+
     def _exit_to_dispatch(self, *, delegation_id: str | None) -> None:
         changed = self._voice_router.exit_to_dispatch()
         for entry in self._entries.values():
@@ -1698,8 +1873,13 @@ class LiveDelegationBridge:
                 entry.superseded = True
                 self._stats["superseded"] += 1
         self._active_agent_label = DISPATCHER_AGENT_LABEL
+        self._call_context.observe_route(
+            self._voice_router.route_snapshot(), self._active_agent_label
+        )
         self._reset_utterance_state()
-        if changed or delegation_id is not None:
+        if changed and self.character_route_changed is not None:
+            self.character_route_changed()
+        elif changed or delegation_id is not None:
             self._append_commentary(BACK_TO_DISPATCH_COMMENTARY, delegation_id)
 
     def _cursor(self, key: str) -> LiveSpeechCursor:
@@ -1713,14 +1893,14 @@ class LiveDelegationBridge:
     def _newest_entry_for(self, client) -> LiveDelegationEntry | None:
         newest: LiveDelegationEntry | None = None
         for entry in self._entries.values():
-            if entry.client is client and not entry.superseded:
+            if (
+                entry.client is client
+                and not entry.superseded
+                and entry.source != "orphaned_result"
+            ):
                 if newest is None or entry.created_at >= newest.created_at:
                     newest = entry
         return newest
-
-    def _newest_delegation_id_for(self, client) -> str | None:
-        entry = self._newest_entry_for(client)
-        return entry.delegation_id if entry is not None else None
 
     def _open_utterance_entry(self) -> LiveDelegationEntry | None:
         """The newest turn a delegation started on a still-open utterance."""
@@ -1737,7 +1917,12 @@ class LiveDelegationBridge:
         cutoff = self._clock() - DELEGATION_BIND_WINDOW_SECONDS
         newest: LiveDelegationEntry | None = None
         for entry in self._entries.values():
-            if entry.superseded or entry.delegation_id or entry.created_at < cutoff:
+            if (
+                entry.superseded
+                or entry.delegation_id
+                or entry.created_at < cutoff
+                or entry.source == "orphaned_result"
+            ):
                 continue
             if newest is None or entry.created_at >= newest.created_at:
                 newest = entry

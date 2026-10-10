@@ -46,6 +46,7 @@ def test_ensure_codex_config_adds_openbase_profile_without_changing_default(
     assert 'model_reasoning_effort = "high"' in content
     assert 'SUPER_AGENTS_CODEX_APPROVAL_POLICY = "never"' in content
     assert 'SUPER_AGENTS_CODEX_SANDBOX_POLICY = "danger-full-access"' in content
+    assert 'SUPER_AGENTS_THREAD_INTRO_COMMAND = ""' in content
     assert 'sandbox_mode = "danger-full-access"' in content
     assert 'approval_policy = "never"' in content
     assert default_config_path.read_text(encoding="utf-8") == default_config
@@ -105,9 +106,7 @@ def test_ensure_claude_mcp_adds_entry_and_preserves_state(
     assert entry["command"] == str(command)
     assert entry["env"]["SUPER_AGENTS_DEFAULT_BACKEND"] == "claude_code"
     assert "SUPER_AGENTS_BASE_INSTRUCTIONS_PATH" in entry["env"]
-    assert entry["env"]["SUPER_AGENTS_THREAD_INTRO_COMMAND"].startswith(
-        "openbase-coder user say {agent_name} "
-    )
+    assert entry["env"]["SUPER_AGENTS_THREAD_INTRO_COMMAND"] == ""
     # Sessions run against the shared ~/.claude; never redirect the config dir.
     assert "CLAUDE_CONFIG_DIR" not in entry["env"]
 
@@ -124,3 +123,47 @@ def test_ensure_claude_mcp_is_idempotent(tmp_path, monkeypatch) -> None:
     claude_phase._ensure_claude_mcp("")
 
     assert profile_path.read_text(encoding="utf-8") == first
+
+
+def test_managed_claude_profile_replaces_legacy_hook_in_actual_sdk_options(
+    tmp_path, monkeypatch
+) -> None:
+    from super_agents.claude_options import managed_claude_config_options
+
+    legacy = {
+        "command": "super-agents-mcp",
+        "env": {
+            "SUPER_AGENTS_THREAD_INTRO_COMMAND": "legacy hello",
+        },
+    }
+    state_path = tmp_path / ".claude.json"
+    state_path.write_text(json.dumps({"mcpServers": {"super-agents": legacy}}))
+    profile_path = tmp_path / "mcp.json"
+    profile_path.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "super-agents": legacy,
+                    "unrelated": {"command": "keep-me"},
+                }
+            }
+        )
+    )
+    monkeypatch.setattr(claude_phase, "CLAUDE_PROFILE_MCP_PATH", profile_path)
+    _stub_super_agents_command(monkeypatch, claude_phase)
+    claude_phase._ensure_claude_mcp("")
+    monkeypatch.setattr(
+        "super_agents.claude_options.claude_state_path", lambda: state_path
+    )
+    monkeypatch.setenv("SUPER_AGENTS_CLAUDE_MCP_CONFIG_PATH", str(profile_path))
+    monkeypatch.delenv("SUPER_AGENTS_CLAUDE_SETTINGS_PATH", raising=False)
+    monkeypatch.delenv("SUPER_AGENTS_BASE_INSTRUCTIONS_PATH", raising=False)
+    options = managed_claude_config_options()
+    assert (
+        options["mcp_servers"]["super-agents"]["env"][
+            "SUPER_AGENTS_THREAD_INTRO_COMMAND"
+        ]
+        == ""
+    )
+    assert options["mcp_servers"]["unrelated"] == {"command": "keep-me"}
+    assert json.loads(state_path.read_text())["mcpServers"]["super-agents"] == legacy

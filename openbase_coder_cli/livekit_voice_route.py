@@ -227,10 +227,28 @@ def super_agent_voice_for_context(
             name=voice["name"],
             provider=voice.get("provider", CARTESIA_PROVIDER_ID),
         )
-    return super_agent_voice_for_agent_name(agent_name) or stable_super_agent_voice(
-        thread_id,
-        label,
+    return (
+        _recorded_super_agent_voice(thread_id)
+        or super_agent_voice_for_agent_name(agent_name)
+        or stable_super_agent_voice(thread_id, label)
     )
+
+
+def _recorded_super_agent_voice(thread_id: str | None) -> CartesiaVoice | None:
+    history = get_voice_history_entry(thread_id)
+    if history is None:
+        return None
+    named = super_agent_voice_for_agent_name(history.voice_name or history.agent_name)
+    if named:
+        return named
+    catalog_voice = _current_super_agent_voice_for_id(history.voice_id)
+    if catalog_voice:
+        return CartesiaVoice(
+            voice_id=catalog_voice.voice_id,
+            name=history.voice_name or history.agent_name or catalog_voice.name,
+            provider=catalog_voice.provider,
+        )
+    return None
 
 
 def super_agent_voice_id_for_context(
@@ -580,25 +598,7 @@ async def prepare_voice_route_transfer(
         or (history_entry.agent_name if history_entry else None)
         or (history_entry.voice_name if history_entry else None)
     )
-    history_named_voice = (
-        super_agent_voice_for_agent_name(
-            history_entry.voice_name or history_entry.agent_name
-        )
-        if history_entry
-        else None
-    )
-    if history_named_voice:
-        voice = history_named_voice
-    elif history_entry and _current_super_agent_voice_for_id(history_entry.voice_id):
-        voice = CartesiaVoice(
-            voice_id=history_entry.voice_id,
-            name=history_entry.voice_name
-            or history_entry.agent_name
-            or resolved_agent_name
-            or "voice",
-        )
-    else:
-        voice = super_agent_voice_for_context(thread_id, label, resolved_agent_name)
+    voice = super_agent_voice_for_context(thread_id, label, resolved_agent_name)
     active_target_voice_name = resolved_agent_name if resolved_agent_name else None
     state = VoiceRouteState(
         dispatcher_thread_id=route_state.dispatcher_thread_id,

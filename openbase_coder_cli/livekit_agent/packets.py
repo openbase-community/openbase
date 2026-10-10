@@ -197,8 +197,7 @@ class AnnouncerMessage:
     text: str
     voice_id: str | None = None
     # Speaking agent name (``user say AGENT MESSAGE``). The pipeline picks a
-    # voice from ``voice_id``; the live engine has one voice per call and
-    # names the agent in the commentary instead.
+    # voice from ``voice_id``; live maps it to a bounded character session.
     agent_name: str | None = None
 
 

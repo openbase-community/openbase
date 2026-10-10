@@ -75,6 +75,23 @@ class SuperAgentsClientThreadsMixin:
     async def prepare(self) -> str:
         return await self._ensure_thread()
 
+    async def warm(self) -> bool:
+        """Get the thread's backend session ready for its first turn.
+
+        Runs the Claude auth check (its result is reused by the first turn)
+        and asks a backend that supports it to connect the session's client
+        now; Codex threads are already loaded by ``prepare``. Returns whether
+        a backend session was warmed. Meant to run concurrently with the call
+        start-up, never on a turn's critical path.
+        """
+        thread_id = await self._ensure_thread()
+        await self._ensure_claude_auth_ready()
+        warm = getattr(self._backend_client, "warm_session_by_label", None)
+        if warm is None or self._backend_is_codex():
+            return False
+        result = await warm(self._query(thread_id=thread_id), self._turn_model_fields())
+        return bool(result.get("warmed")) if isinstance(result, dict) else False
+
     async def _ensure_thread(self) -> str:
         async with self._state_lock:
             if self._state_path is not None:
@@ -105,6 +122,20 @@ class SuperAgentsClientThreadsMixin:
                             self._thread_id = None
                             self._thread_loaded = False
 
+                    if not self._fresh_thread:
+                        existing = await self._find_existing_dispatcher()
+                        if existing:
+                            try:
+                                return await self._resume_thread(existing)
+                            except Exception:
+                                logger.warning(
+                                    "Failed to resume discovered Dispatcher thread %s; "
+                                    "creating a new one",
+                                    existing,
+                                    exc_info=True,
+                                )
+                                self._thread_id = None
+                                self._thread_loaded = False
                     return await self._start_thread()
 
             if self._thread_loaded and self._thread_id:
@@ -121,6 +152,32 @@ class SuperAgentsClientThreadsMixin:
                     self._thread_id = None
                     self._thread_loaded = False
             return await self._start_thread()
+
+    async def _find_existing_dispatcher(self) -> str | None:
+        """Adopt an existing Dispatcher after route-state loss, without deleting history.
+
+        Persisted exact IDs always win. Only discovery is case insensitive;
+        distinct historical conversations remain distinct backend records.
+        """
+        sessions = getattr(self._backend_client, "sessions", None)
+        if not callable(sessions):
+            return None
+        candidates = []
+        for item in await sessions():
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name") or item.get("label")
+            thread_id = item.get("threadId") or item.get("id")
+            if (
+                isinstance(name, str)
+                and name.strip().casefold() == DEFAULT_DISPATCHER_LABEL.casefold()
+                and isinstance(thread_id, str)
+                and thread_id
+                and not item.get("archived")
+                and item.get("cwd") == self._cwd
+            ):
+                candidates.append((str(item.get("updatedAt") or ""), thread_id))
+        return max(candidates)[1] if candidates else None
 
     async def _start_thread(self) -> str:
         params: dict[str, Any] = {
@@ -162,6 +219,18 @@ class SuperAgentsClientThreadsMixin:
                 developer_instructions=self._thread_developer_instructions(),
             )
         else:
+            # Claude rebuilds identity instructions from its stored agent_name
+            # on resume and on every turn. A role label left by an older
+            # runtime must not override the call's resolved speaking persona.
+            store = getattr(self._backend_client, "store", None)
+            if store is not None and self._super_agent_agent_name:
+                record = store.get_session(thread_id)
+                if record.agent_name != self._super_agent_agent_name:
+                    store.update_session(
+                        thread_id,
+                        agent_name=self._super_agent_agent_name,
+                        updated_at=record.updated_at,
+                    )
             resume_kwargs: dict[str, Any] = {}
             if developer_instructions := self._thread_developer_instructions():
                 # The dispatcher instruction file is the single source of

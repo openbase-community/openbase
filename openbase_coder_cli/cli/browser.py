@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
+from dataclasses import replace
 from urllib.parse import urlsplit
 
 import click
@@ -33,6 +35,7 @@ from openbase_coder_cli.login_callback import (
     LoopbackForward,
     is_tailnet_forward_target,
     loopback_callback_port,
+    relay_capability,
 )
 from openbase_coder_cli.open_url_policy import open_url_error
 
@@ -131,19 +134,26 @@ def _try_arrange_forward(port: int) -> LoopbackForward | None:
     the printed paste-back guidance is the fallback. Any failure is reported
     on stdout and never aborts the calling CLI.
     """
+    from openbase_coder_cli.callback_relay import start_relay
     from openbase_coder_cli.services import tailscale_provider
-    from openbase_coder_cli.services.tunneld import (
-        tunneld_add_forward,
-        tunneld_status,
-    )
+    from openbase_coder_cli.services.tunneld import tunneld_status
 
     if not tailscale_provider.is_netmesh_tsnet():
         return None
     target = _self_tailnet_target(tunneld_status)
     if target is None:
         return None
-    tunneld_add_forward(port, ttl_seconds=DEFAULT_FORWARD_TTL_SECONDS, one_shot=True)
-    return LoopbackForward.create(port, target)
+    forward = LoopbackForward.create(port, target)
+    expires_at = int(time.time()) + DEFAULT_FORWARD_TTL_SECONDS
+    relay_port = start_relay(
+        port, forward.token, DEFAULT_FORWARD_TTL_SECONDS, expires_at=expires_at
+    )
+    return replace(
+        forward,
+        relay_port=relay_port,
+        expires_at=expires_at,
+        token=relay_capability(relay_port, expires_at, forward.token),
+    )
 
 
 def _self_tailnet_target(status_fn) -> str | None:
@@ -194,7 +204,9 @@ def _bounded_attempt[Result](
         try:
             results.append(operation())
         except Exception as exc:
-            logger.info("browser open: delivery step unavailable: %s", exc)
+            logger.info(
+                "browser open: delivery step unavailable (%s)", type(exc).__name__
+            )
 
     worker = threading.Thread(target=attempt, daemon=True)
     worker.start()
