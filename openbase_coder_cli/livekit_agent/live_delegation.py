@@ -40,6 +40,12 @@ entry instead of appending them (``_deliver``); it also keeps every bound
 append the model did not start speaking after (``_confirm_deliveries``).
 ``on_session_reconnected`` briefs the new session and re-appends all of that
 session-wide, once, flagged as the answer when the turn is complete.
+Held chunks are retained for the whole outage; sent chunks remain eligible
+for 30 seconds before the drop. Steering a running turn transfers its unheard
+chunks to the newer entry because both entries share the turn's speech cursor.
+Speaking events during the outage cannot confirm deliveries. Outside it,
+speaking-start confirmation is a timing heuristic, not a per-chunk playback
+acknowledgement; live field testing must check for partial losses and repeats.
 
 The bridge also keeps the voice lifecycle contract alive without a TTS path:
 ``utterance_accepted`` when a turn is accepted, ``agent_audio_started`` /
@@ -192,7 +198,6 @@ DELIVERY_CONFIRM_MIN_SECONDS = 0.3
 # Commentary older than this at the drop was spoken long ago, whatever the
 # speaking state said; the model does not sit on commentary for half a minute.
 REDELIVERY_MAX_AGE_SECONDS = 30.0
-MAX_PENDING_DELIVERIES = 8
 
 _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+")
 
@@ -1141,8 +1146,17 @@ class LiveDelegationBridge:
             at=self._clock(),
             held=self._session_down_at is not None,
         )
+        cutoff = (
+            self._session_down_at
+            if self._session_down_at is not None
+            else delivery.at
+        ) - REDELIVERY_MAX_AGE_SECONDS
+        entry.deliveries = [
+            pending
+            for pending in entry.deliveries
+            if pending.held or pending.at >= cutoff
+        ]
         entry.deliveries.append(delivery)
-        del entry.deliveries[:-MAX_PENDING_DELIVERIES]
         if delivery.held:
             logger.info(
                 "%s stage=live_commentary_held key=%s delegation_id=%s final=%s "
@@ -1159,6 +1173,8 @@ class LiveDelegationBridge:
 
     def _confirm_deliveries(self) -> None:
         """The model started speaking: bound commentary before that was spoken."""
+        if self._session_down_at is not None:
+            return
         cutoff = self._clock() - DELIVERY_CONFIRM_MIN_SECONDS
         for entry in self._entries.values():
             if entry.deliveries:
@@ -1281,11 +1297,15 @@ class LiveDelegationBridge:
         client = self._voice_router.active_client
         route = self._voice_router.route_snapshot()
         inherited: LiveDelegationEntry | None = None
+        pending_deliveries: list[_CommentaryDelivery] = []
         for other in self._entries.values():
             if other.client is not client or other.superseded:
                 continue
             other.superseded = True
             self._stats["superseded"] += 1
+            if not other.completed and other.route.same_route(route):
+                pending_deliveries.extend(other.deliveries)
+                other.deliveries = []
             # run_turn steers the running turn, so its merged answer also
             # answers the delegation the superseded utterance was bound to.
             if (
@@ -1316,6 +1336,7 @@ class LiveDelegationBridge:
             open_utterance=open_utterance,
             replaces_turn=replaces_turn,
             created_at=self._clock(),
+            deliveries=pending_deliveries,
         )
         self._entries[key] = entry
         self._prune_entries()
