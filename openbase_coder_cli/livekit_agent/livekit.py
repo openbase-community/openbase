@@ -1060,7 +1060,9 @@ async def _start_live_voice_session(
     ``live_model`` is the model prepared by ``_prepare_live_voice_model``
     (its gateway connection already opening); None builds one here.
     """
-    from openbase_coder_cli.livekit_agent.live_call_lifecycle import bind_live_call_lifecycle
+    from openbase_coder_cli.livekit_agent.live_call_lifecycle import (
+        bind_live_call_lifecycle,
+    )
     from openbase_coder_cli.livekit_agent.live_characters import (
         LiveCharacterController,
         log_character_started,
