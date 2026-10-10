@@ -317,12 +317,14 @@ def test_recent_projects_get_returns_paginated_lazy_metadata(monkeypatch) -> Non
     assert response.data["projects"] == [
         {
             "path": "/tmp/project-1",
+            "available": False,
             "git_status": "unknown",
             "stack": None,
             "worktrees": [],
         },
         {
             "path": "/tmp/project-2",
+            "available": False,
             "git_status": "unknown",
             "stack": None,
             "worktrees": [],
@@ -378,6 +380,7 @@ def test_recent_projects_get_derives_multi_worktree_children(
     assert response.data["projects"] == [
         {
             "path": str(workspace),
+            "available": True,
             "git_status": "unknown",
             "stack": None,
             "worktrees": [
@@ -534,3 +537,27 @@ def test_load_projects_tolerates_read_failure(tmp_path: Path, monkeypatch) -> No
 
     monkeypatch.setattr(Path, "read_text", unreadable)
     assert projects._load_projects() == []
+
+
+def test_recent_project_availability_is_fresh_without_removing_registration(
+    tmp_path, monkeypatch
+):
+    os.environ.setdefault("OPENBASE_CODER_CLI_SECRET_KEY", "test-secret")
+    os.environ.setdefault(
+        "DJANGO_SETTINGS_MODULE", "openbase_coder_cli.config.settings"
+    )
+    import django
+
+    django.setup()
+    from openbase_coder_cli.openbase_coder_cli_app import projects as views
+
+    monkeypatch.setattr(views, "_cached_metadata", lambda _: None)
+    monkeypatch.setattr(views, "_worktree_children", lambda _: [])
+    folder = tmp_path / "restorable"
+    registration = {"path": str(folder)}
+    assert views._project_payload(registration)["available"] is False
+    folder.mkdir()
+    assert views._project_payload(registration)["available"] is True
+    folder.rmdir()
+    assert views._project_payload(registration)["available"] is False
+    assert registration == {"path": str(folder)}
