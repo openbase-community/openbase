@@ -557,12 +557,17 @@ async def _refine_cloud_audio_error(exc: Exception) -> Exception:
     The audio proxy closes a refused websocket before the handshake completes,
     so an exhausted allowance and a rejected token both reach the agent as an
     HTTP 403 with no body (an over-cap stream closed mid-call is just as
-    mute). Ask Openbase Cloud for the audio usage summary: when it reports the
+    mute, and so is a live session the gateway ended for billing). Ask
+    Openbase Cloud for the audio usage summary: when it reports the
     credits used up (or a sign-in problem), return that exception so the
     status packet carries the plain reason instead of "authorization failed".
     Any other outcome keeps the original error.
     """
-    if not _is_openbase_cloud_audio_provider_error(exc):
+    # A live session that died carries no reason either: the GPT-Live plugin
+    # raises a bare "GPT-Live returned an error" for the gateway's fatal
+    # billing_hard_limit_reached close, so check the live voice credits too.
+    is_live = isinstance(exc, LiveVoiceSessionError)
+    if not is_live and not _is_openbase_cloud_audio_provider_error(exc):
         return exc
     try:
         await asyncio.to_thread(
@@ -570,6 +575,7 @@ async def _refine_cloud_audio_error(exc: Exception) -> Exception:
             tts_provider_id=selected_tts_provider_id(),
             stt_provider_id=selected_stt_provider_id(),
             web_backend_url=WEB_BACKEND_URL,
+            live_voice=is_live,
         )
     except (OpenbaseCloudAudioSubscriptionError, AuthLoginRequiredError) as reason:
         logger.info(
