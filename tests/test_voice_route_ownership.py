@@ -231,3 +231,29 @@ async def test_agent_requested_transfer_is_not_announced_twice():
     message = sink.enqueue.call_args.args[0]
     assert message.text == "You're now talking with Cooper."
     assert message.voice_id == "voice-cooper"
+
+
+async def test_transfer_and_return_leave_events_in_both_transcripts(
+    monkeypatch, tmp_path
+):
+    from openbase_coder_cli.thread_events import list_thread_events
+
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(voice_routing, "SuperAgentsLiveKitClient", TargetClient)
+    path = tmp_path / "livekit-voice-route.json"
+    dispatcher = DispatcherClient(path)
+    router = voice_routing.LiveKitVoiceRouter(dispatcher)
+    dispatcher_id = getattr(dispatcher, "_thread_id", "") or ""
+    await router.transfer_to_thread(
+        thread_id="s_cooper", cwd=str(tmp_path), label="Cooper", voice_name="Cooper"
+    )
+    assert router.exit_to_dispatch() is True
+    assert [e["text"] for e in list_thread_events("s_cooper")] == [
+        "Call transferred here from the Dispatcher.",
+        "Call returned to the Dispatcher.",
+    ]
+    if dispatcher_id:
+        assert [e["text"] for e in list_thread_events(dispatcher_id)] == [
+            "Call transferred to Cooper.",
+            "Back with the Dispatcher, from Cooper.",
+        ]

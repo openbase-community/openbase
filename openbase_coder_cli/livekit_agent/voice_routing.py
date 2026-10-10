@@ -94,6 +94,23 @@ class LiveKitVoiceRouter:
             active_route=active_route,
         )
 
+    def _record_route_events(
+        self, *, action: str, target_thread_id: str, target_label: str | None
+    ) -> None:
+        """Leave the move in both transcripts; never let it break the route."""
+        from openbase_coder_cli.thread_events import record_voice_route_events
+
+        try:
+            record_voice_route_events(
+                action=action,
+                dispatcher_thread_id=getattr(self._dispatcher_client, "_thread_id", "")
+                or "",
+                target_thread_id=target_thread_id,
+                target_label=target_label,
+            )
+        except Exception:  # noqa: BLE001 - a transcript note must not break routing
+            logger.warning("voice route events not recorded", exc_info=True)
+
     def exit_to_dispatch(self) -> bool:
         # A return also cancels a target still preparing, even when the
         # dispatcher remains the currently connected route.
@@ -105,11 +122,20 @@ class LiveKitVoiceRouter:
                 "action=exit_to_dispatch reason=dispatcher_already_active"
             )
             return False
+        previous = self._active_client
+        previous_label = self._active_target_voice_name or getattr(
+            previous, "_super_agent_name", None
+        )
         self._active_client = self._dispatcher_client
         self._active_target_voice_id = None
         self._active_target_voice_name = None
         self._route_version += 1
         self._dispatcher_client.reset_voice_route_to_dispatcher()
+        self._record_route_events(
+            action="exit_to_dispatch",
+            target_thread_id=getattr(previous, "_thread_id", "") or "",
+            target_label=previous_label,
+        )
         logger.info(
             "dispatch_timing stage=voice_route_changed action=exit_to_dispatch "
             "route_version=%d active_thread_id=%s",
@@ -177,6 +203,11 @@ class LiveKitVoiceRouter:
             active_target_voice_id=target_voice_id,
             active_target_voice_name=target_voice_name,
             route_owner_id=self._route_owner_id,
+        )
+        self._record_route_events(
+            action="transfer_to_thread",
+            target_thread_id=thread_id,
+            target_label=target_voice_name or label,
         )
         logger.info(
             "dispatch_timing stage=voice_route_changed action=transfer_to_thread "

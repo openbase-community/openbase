@@ -35,10 +35,17 @@ def annotate_thread_payload(
     payload: dict[str, Any],
     *,
     thread_id: str | None = None,
+    with_events: bool = False,
 ) -> dict[str, Any]:
+    """Add voice-route roles and names; ``with_events`` adds the transcript's
+    recorded non-turn events (one thread's detail, not a list page)."""
     resolved_thread_id = thread_id or str(
         payload.get("thread_id") or payload.get("session_id") or ""
     )
+    if with_events:
+        from openbase_coder_cli.thread_events import list_thread_events
+
+        payload["events"] = list_thread_events(resolved_thread_id)
     route_state = get_livekit_voice_route_state()
     is_dispatcher = bool(
         resolved_thread_id

@@ -647,7 +647,9 @@ def thread_dispatcher(request):
             {"error": error or "Unable to create LiveKit dispatcher thread"},
             status=status.HTTP_502_BAD_GATEWAY,
         )
-    return Response(annotate_thread_payload(thread.model_dump(mode="json")))
+    return Response(
+        annotate_thread_payload(thread.model_dump(mode="json"), with_events=True)
+    )
 
 
 @api_view(["GET"])
@@ -662,7 +664,9 @@ def thread_active_voice(request):
             {"error": "Unable to create LiveKit dispatcher thread"},
             status=status.HTTP_502_BAD_GATEWAY,
         )
-    return Response(annotate_thread_payload(thread.model_dump(mode="json")))
+    return Response(
+        annotate_thread_payload(thread.model_dump(mode="json"), with_events=True)
+    )
 
 
 @api_view(["GET", "DELETE"])
@@ -736,7 +740,9 @@ def thread_detail(request, thread_id):
             status=status.HTTP_404_NOT_FOUND,
         )
     return Response(
-        annotate_thread_payload(thread.model_dump(mode="json"), thread_id=thread_id)
+        annotate_thread_payload(
+            thread.model_dump(mode="json"), thread_id=thread_id, with_events=True
+        )
     )
 
 
@@ -791,7 +797,9 @@ def thread_name(request, thread_id):
             status=status.HTTP_404_NOT_FOUND,
         )
     return Response(
-        annotate_thread_payload(thread.model_dump(mode="json"), thread_id=thread_id)
+        annotate_thread_payload(
+            thread.model_dump(mode="json"), thread_id=thread_id, with_events=True
+        )
     )
 
 
