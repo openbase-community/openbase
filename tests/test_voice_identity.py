@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from openbase_coder_cli import dispatcher_config
@@ -33,8 +35,20 @@ JACQUELINE = "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"
 DANIEL = "47c38ca4-5f35-497b-b1a3-415245fb35e1"
 BLAKE = "a167e0f3-df7e-4d52-a9c3-f949145efdab"
 ACCEPTED_GPT_LIVE_VOICES = {
-    "alloy", "ash", "ballad", "beacon", "cedar", "cinder", "coral",
-    "echo", "marin", "sage", "shimmer", "stone", "verse", "vesper",
+    "alloy",
+    "ash",
+    "ballad",
+    "beacon",
+    "cedar",
+    "cinder",
+    "coral",
+    "echo",
+    "marin",
+    "sage",
+    "shimmer",
+    "stone",
+    "verse",
+    "vesper",
 }
 
 
@@ -140,7 +154,9 @@ def test_pinned_live_voice_equal_to_the_pair_keeps_the_chosen_voice(
     assert identity.source == IDENTITY_SOURCE_DISPATCHER_VOICE
 
 
-def test_pinned_live_voice_is_ignored_on_the_pipeline_engine(monkeypatch, isolated_config):
+def test_pinned_live_voice_is_ignored_on_the_pipeline_engine(
+    monkeypatch, isolated_config
+):
     dispatcher_config.set_voice_model("pipeline", isolated_config)
     monkeypatch.setenv("LIVEKIT_LIVE_VOICE_VOICE", "cedar")
     identity = current_voice_identity()
@@ -159,7 +175,11 @@ def test_local_voice_without_a_pair_keeps_gender(monkeypatch):
     monkeypatch.setattr(
         dispatcher_config,
         "dispatcher_voice",
-        lambda path=None: {"id": "am_adam", "name": "Adam", "provider": KOKORO_PROVIDER_ID},
+        lambda path=None: {
+            "id": "am_adam",
+            "name": "Adam",
+            "provider": KOKORO_PROVIDER_ID,
+        },
     )
     monkeypatch.setattr(
         "openbase_coder_cli.voice_identity.dispatcher_voice",
@@ -169,3 +189,38 @@ def test_local_voice_without_a_pair_keeps_gender(monkeypatch):
     assert identity.voice_id == "am_adam"
     assert identity.gpt_live_voice == "cedar"
     assert gpt_live_voice_for_id(identity.gpt_live_voice).gender == MASCULINE
+
+
+@pytest.mark.parametrize("voice_model", ["gpt-live-1", "pipeline"])
+def test_local_voice_preserves_provider_and_respects_live_override(
+    monkeypatch, isolated_config, voice_model
+):
+    monkeypatch.setattr(
+        dispatcher_config,
+        "selected_tts_provider_id",
+        lambda path=None: KOKORO_PROVIDER_ID,
+    )
+    isolated_config.write_text(
+        json.dumps(
+            {
+                "tts_provider": KOKORO_PROVIDER_ID,
+                "dispatcher_voice_id": "am_adam",
+                "voice_model": voice_model,
+            }
+        )
+    )
+    monkeypatch.setenv("LIVEKIT_LIVE_VOICE_VOICE", "echo")
+
+    identity = current_voice_identity(isolated_config)
+
+    assert identity.provider == KOKORO_PROVIDER_ID
+    assert identity.voice_id == "am_adam"
+    assert identity.voice_name == "Adam"
+    assert identity.gpt_live_voice == (
+        "echo" if voice_model == "gpt-live-1" else "cedar"
+    )
+    assert identity.source == (
+        IDENTITY_SOURCE_LIVE_VOICE_OVERRIDE
+        if voice_model == "gpt-live-1"
+        else IDENTITY_SOURCE_DISPATCHER_VOICE
+    )

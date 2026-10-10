@@ -5,9 +5,9 @@ identity. The classic pipeline and background announcements speak with it
 directly; a GPT-Live call speaks with the same-gender GPT-Live voice paired to
 it in ``cartesia_voice_catalog.py``. The pairing runs the other way when an
 operator pins the live engine's voice with ``LIVEKIT_LIVE_VOICE_VOICE``: the
-call keeps that voice and announcements speak with its best Cartesia match,
-so the call still sounds like one person. The default pair, Jacqueline and
-marin, leaves existing installs unchanged.
+call keeps that voice and Cartesia announcements speak with its best match.
+Kokoro announcements retain the selected local voice while the GPT-Live
+identity honors the pin. The default pair is Jacqueline and marin.
 """
 
 from __future__ import annotations
@@ -74,14 +74,21 @@ def current_voice_identity(config_path: Path | None = None) -> VoiceIdentity:
     if (
         override is not None
         and override.id != paired_live_voice
-        and provider.provider_id in {CARTESIA_PROVIDER_ID, OPENBASE_CLOUD_TTS_PROVIDER_ID}
         and selected_voice_engine(config_path) == VOICE_ENGINE_LIVE
     ):
-        match = cartesia_voice_for_gpt_live_voice(override.id)
+        voice_id = configured["id"]
+        voice_name = configured["name"]
+        if provider.provider_id in {
+            CARTESIA_PROVIDER_ID,
+            OPENBASE_CLOUD_TTS_PROVIDER_ID,
+        }:
+            match = cartesia_voice_for_gpt_live_voice(override.id)
+            voice_id = match.id
+            voice_name = match.name
         return VoiceIdentity(
             provider=provider.provider_id,
-            voice_id=match.id,
-            voice_name=match.name,
+            voice_id=voice_id,
+            voice_name=voice_name,
             gpt_live_voice=override.id,
             source=IDENTITY_SOURCE_LIVE_VOICE_OVERRIDE,
         )
