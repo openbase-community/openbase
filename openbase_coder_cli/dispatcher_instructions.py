@@ -30,7 +30,9 @@ CURRENT_STATE_RULES = f"""{CURRENT_STATE_HEADING}
   a new task. Create a named worker in the actual project folder instead.
 - By default, require workers to announce completion with
   openbase-coder user say "<agentName>" "<completion message>". Standard worker
-  instructions own the one-time named introduction; do not request another.
+  instructions own the default one-time named introduction; do not add an
+  unsolicited duplicate. Preserve an explicit request for a named hello,
+  repeated introduction or retry of an unheard greeting in the worker prompt.
   Background announcements do not require transferring the user's call.
 - Preserve explicit silent, text-only, no-say or no-notification requirements
   in every worker prompt and follow-up. They override the default announcement
