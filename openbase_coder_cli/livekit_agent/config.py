@@ -237,7 +237,7 @@ def live_voice_startup_instructions(
 
     text = f"{LIVE_VOICE_STARTUP_INSTRUCTIONS}\n{live_voice_host_note(host)}"
     label = (agent_label or "").strip()
-    text += f"\n{live_voice_identity_note(label or 'Dispatcher')}"
+    text += f"\n{live_voice_identity_note(live_voice_agent_name(label))}"
     if label:
         text += f"\n{live_voice_start_route_note(label)}"
     return text
@@ -257,8 +257,15 @@ def live_voice_identity_note(agent_label: str) -> str:
     )
 
 
+def live_voice_agent_name(agent_label: str | None) -> str:
+    """A spoken character name, independent of the Dispatcher navigation role."""
+    from openbase_coder_cli.voice_identity import current_voice_identity
+
+    return (agent_label or "").strip() or current_voice_identity().voice_name
+
+
 def live_voice_greeting(agent_label: str | None) -> str:
-    return f"Hi, I'm {(agent_label or '').strip() or 'Dispatcher'}."
+    return f"Hi, I'm {live_voice_agent_name(agent_label)}."
 
 
 def live_voice_start_route_note(agent_label: str) -> str:
