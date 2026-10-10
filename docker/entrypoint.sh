@@ -506,6 +506,26 @@ sys.exit(1)
     ) 2>&1 | sed -u "s/^/[netmesh-enroll] /" &
 fi
 
+# Published services (`service publish --persist`) have no launchd here:
+# once the embedded node forwards, restore their gateways and the node's
+# :443/:80 service forwards. One pass; the command is idempotent.
+if [ "$NETWORK_MODE" = "netmesh-tsnet" ]; then
+    (
+        while :; do
+            if python -c "
+import sys
+from openbase_coder_cli.services.tunneld import tunneld_health
+h = tunneld_health()
+sys.exit(0 if h.get('backend_state') == 'Running' and h.get('forwards_up') else 1)
+" 2>/dev/null; then
+                openbase-coder service restore 2>&1 || echo "WARN: published services were not fully restored"
+                break
+            fi
+            sleep 15
+        done
+    ) 2>&1 | sed -u "s/^/[service-restore] /" &
+fi
+
 echo "[entrypoint] Supervising services: $services"
 echo "[entrypoint] Local API: http://localhost:7999/api/health/"
 if [ "$NETWORK_MODE" = "tailscale" ]; then

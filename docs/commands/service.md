@@ -13,7 +13,7 @@ Publication has one supported shape: a dedicated hostname serving the applicatio
 
 ## Expose a port from a cloud workspace
 
-Cloud workspaces and other hosts that run the embedded tailnet node (Openbase Direct) cannot publish hostnames, but they can expose a loopback port directly on the node's tailnet address for a limited time:
+Cloud workspaces publish the same way: the workspace's bootstrap credential carries the `netmesh_publish` scope, so `service publish` allocates the hostname for the workspace's own mesh node and the embedded node routes `:443` and `:80` itself. `--persist` restores the publication when the workspace starts again (the container entrypoint runs `openbase-coder service restore` once the node is up); without it the publication ends with the workspace. Other hosts that run the embedded tailnet node without a cloud credential (Openbase Direct on a Mac) cannot publish hostnames. Any embedded-node host can also expose a loopback port directly on the node's tailnet address for a limited time:
 
 ```bash
 openbase-coder service expose 3000             # http://<workspace-name>.net.obs.so:3000/ for 10 minutes
@@ -61,7 +61,7 @@ The upstream app needs its own lifecycle management. Persisting the gateway does
 
 ## Provider boundary
 
-This feature requires Openbase VPN and its authenticated Cloud allocator. Openbase Direct carries only Openbase app traffic and cannot publish arbitrary host services. Official Tailscale and unknown providers cannot allocate Openbase private service names. `.local` is reserved for multicast DNS.
+This feature requires Openbase VPN (or a cloud workspace's embedded node) and its authenticated Cloud allocator. Openbase Direct on a Mac carries only Openbase app traffic and cannot publish arbitrary host services. Official Tailscale and unknown providers cannot allocate Openbase private service names. `.local` is reserved for multicast DNS.
 
 The helper uses typed, atomic Serve rules, preserves the built-in console and LiveKit routes, and refuses to overwrite unexpected configuration. It accepts only root-mounted account hostnames resolving to this node and loopback proxy ports; callers cannot supply arbitrary targets, paths, or Funnel settings.
 

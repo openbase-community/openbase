@@ -148,6 +148,14 @@ def test_add_forward_sends_service_forward_fields(monkeypatch) -> None:
     tunneld.tunneld_add_forward(3000, ttl_seconds=60)
     assert posted["json"] == {"port": 3000, "one_shot": False, "ttl_seconds": 60}
 
+    tunneld.tunneld_add_forward(80, redirect_https=True, persistent=True)
+    assert posted["json"] == {
+        "port": 80,
+        "one_shot": False,
+        "persistent": True,
+        "redirect_https": True,
+    }
+
 
 def test_resolve_returns_the_daemon_resolvers_addresses(monkeypatch) -> None:
     import httpx

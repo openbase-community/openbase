@@ -310,6 +310,7 @@ def tunneld_add_forward(
     peer: str | None = None,
     local_port: int | None = None,
     persistent: bool = False,
+    redirect_https: bool = False,
 ) -> dict[str, Any]:
     """Expose loopback ``port`` on the tailnet until it expires or is removed.
 
@@ -318,8 +319,9 @@ def tunneld_add_forward(
     which is what an OAuth callback needs. ``local_port`` pipes the tailnet
     port to a different loopback port and ``persistent`` drops the TTL: the
     service forward behind ``service publish`` (tailnet :443 to the private
-    HTTPS ingress). Raises ``TunneldForwardError`` with the daemon's reason
-    when the request is refused.
+    HTTPS ingress); ``redirect_https`` makes tailnet :80 answer with a
+    redirect to HTTPS instead of forwarding. Raises ``TunneldForwardError``
+    with the daemon's reason when the request is refused.
     """
     body: dict[str, Any] = {"port": int(port), "one_shot": bool(one_shot)}
     if ttl_seconds is not None:
@@ -330,6 +332,8 @@ def tunneld_add_forward(
         body["local_port"] = int(local_port)
     if persistent:
         body["persistent"] = True
+    if redirect_https:
+        body["redirect_https"] = True
     try:
         response = httpx.post(
             f"{TUNNELD_LOCAL_API}/forwards",
