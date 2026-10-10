@@ -54,7 +54,7 @@ transfer commands.
 
 ## Choose A Super Agent's Project
 
-The dispatcher always runs in its own default directory; nothing you say moves it. When it starts a Super Agent, it chooses that agent's working directory itself by looking around: it lists the projects folder (`OPENBASE_CODER_PROJECTS_DIR` when set, `/data/workspace` on a Cloud workspace), your home directory, and any place you named, and matches what you meant to a real folder. Names do not have to match exactly, so a misheard "tick tack toe" still finds `tic-tac-toe`, and a partial name finds the folder it clearly refers to. The dispatcher asks only when two folders are genuinely plausible, and it never starts the agent in its own directory just because nothing matched exactly; for a new project it creates the folder first.
+The dispatcher always runs in its own directory (the projects folder on a Cloud workspace, your home directory on a Mac); nothing you say moves it. When it starts a Super Agent, it chooses that agent's working directory itself by looking around: it lists its own directory, the folders where you keep projects, any place you named, and your [recent projects](files-and-paths.md), and matches what you meant to a real folder. Names do not have to match exactly, so a misheard "tick tack toe" still finds `tic-tac-toe`, and a partial name finds the folder it clearly refers to. The dispatcher asks only when two folders are genuinely plausible, and it never starts the agent in its own directory just because nothing matched exactly; for a new project it creates the folder first.
 
 ## Transfer Voice To A Super Agent
 

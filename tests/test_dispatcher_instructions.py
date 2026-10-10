@@ -162,9 +162,12 @@ def test_start_rules_have_the_dispatcher_choose_a_super_agent_cwd_by_looking():
     # listing folders, never an exact match of a spoken name (speech
     # recognition mangles names); the dispatcher's own directory never moves.
     rules = ' '.join(instructions.START_RULES.split())
-    assert 'You always run in your own default directory' in rules
-    assert "choose its `cwd` yourself by looking: `ls`" in rules
+    assert 'Your own working directory never changes' in rules
+    assert "choose its `cwd` yourself by looking: `ls` your own directory" in rules
+    assert 'coder-projects.json' in rules
+    assert 'never require an exact match' in rules
     assert 'Ask only when two folders are genuinely plausible' in rules
     assert 'Never start an agent in your own directory just because nothing matched exactly' in rules
     assert 'project-dir' not in rules
+    assert 'OPENBASE_CODER_PROJECTS_DIR' not in rules
     assert 'MUST' not in rules

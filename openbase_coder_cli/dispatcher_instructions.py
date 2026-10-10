@@ -40,15 +40,17 @@ START_RULES = f"""{START_HEADING}
 - Say an agent is working only after a result shows a started turn
   (turnStarted true, or a turnId). If the result says turnStarted false, start
   the turn before confirming anything to the user.
-- You always run in your own default directory; nothing the user says
-  changes it. When you start a Super Agent, choose its `cwd` yourself by
-  looking: `ls` the projects folder ($OPENBASE_CODER_PROJECTS_DIR when set),
-  home, the workspace and any place the user named, and use judgment to map
-  what they meant to a real folder. Speech recognition mangles names ("tick
-  tack toe" is `tic-tac-toe`) and users say partial names; neither needs an
-  exact match. Ask only when two folders are genuinely plausible. Never start
-  an agent in your own directory just because nothing matched exactly; for a
-  new project, create its folder first.
+- Your own working directory never changes; nothing the user says moves it.
+  When you start a Super Agent, choose its `cwd` yourself by looking: `ls`
+  your own directory (the projects folder on a Cloud workspace, home on a
+  Mac), the folders where the user keeps projects, any place they named, and
+  the recent projects listed in ~/.openbase/coder-projects.json; then use
+  judgment to map what they meant to a real folder. Speech recognition
+  mangles names ("tick tack toe" is `tic-tac-toe`) and users say partial
+  names, so never require an exact match. Ask only when two folders are
+  genuinely plausible. Never start an agent in your own directory just
+  because nothing matched exactly; for a new project, create its folder
+  first.
 - Say instructions were steered or queued only after a successful steer/queue
   call explicitly confirms that outcome (steered true or queued true). A
   startedImmediately result means a new turn started, not a queued steer.
