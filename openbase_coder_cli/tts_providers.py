@@ -58,6 +58,10 @@ class TTSVoice:
     language: str
     country: str | None = None
     gender: str | None = None
+    # The same-gender GPT-Live voice paired with this voice (Cartesia catalog
+    # voices only; see cartesia_voice_catalog.py). Local providers leave it
+    # unset and voice_identity.py falls back by gender.
+    gpt_live_voice: str | None = None
 
     def payload(self) -> dict[str, str | None]:
         return asdict(self)
@@ -178,6 +182,7 @@ class CartesiaTTSProvider(BaseTTSProvider):
                     language=voice.language,
                     country=voice.country,
                     gender=voice.gender,
+                    gpt_live_voice=voice.gpt_live_voice,
                 )
                 for voice in CARTESIA_VOICE_CATALOG
             )

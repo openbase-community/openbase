@@ -123,7 +123,10 @@ openbase-coder user say "Lucy" "I finished the documentation update."
 ```
 
 The first argument is the speaking agent name. The remaining words are the
-message to speak. This is useful for Super Agent introductions, plan-mode
+message to speak. Announcements always speak with your dispatcher voice, so
+every background notice sounds like the same assistant; the agent is named in
+the words, not the voice. On a GPT-Live call the voice model speaks the
+announcement itself, in the call's voice. This is useful for Super Agent introductions, plan-mode
 questions, completion notices, and brief requests for user attention. If no
 voice room is active, the command sends the same message as a phone alert
 that opens the speaking agent's thread. This fallback requires an Openbase
