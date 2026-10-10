@@ -630,8 +630,13 @@ async def publish_transfer_to_thread(
     agent_name: str | None = None,
     room_name: str | None = None,
     livekit_client: livekit_api.LiveKitAPI | None = None,
+    announce: bool = True,
 ) -> VoiceRoutePublishResult:
-    """Move a running call's voice route into ``thread_id``."""
+    """Move a running call's voice route into ``thread_id``.
+
+    ``announce`` False skips the agent's generic spoken confirmation: the
+    agent that requested the transfer already confirms it in its own words.
+    """
     transfer = await prepare_voice_route_transfer(
         thread_id,
         directory=directory,
@@ -639,7 +644,7 @@ async def publish_transfer_to_thread(
         agent_name=agent_name,
     )
     result = await _publish_route_command(
-        transfer.command_payload(),
+        {**transfer.command_payload(), "announce": announce},
         state=transfer.state,
         room_name=room_name,
         livekit_client=livekit_client,

@@ -279,13 +279,18 @@ async def _transfer_voice_route(
         )
         return
 
-    if transferred is False:
+    if transferred is False or not route_command.announce:
         return
 
+    name = (
+        route_command.active_target_voice_name
+        or voice_router.active_target_voice_name
+        or route_command.label
+    )
     announcer_queue.enqueue(
         AnnouncerMessage(
             message_id=f"voice-route-{uuid.uuid4().hex}",
-            text="Voice route transferred.",
+            text=f"You're now talking with {name}." if name else "Transferred.",
             voice_id=voice_router.active_target_voice_id,
         )
     )

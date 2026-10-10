@@ -224,6 +224,9 @@ class VoiceRouteCommand:
     label: str | None = None
     active_target_voice_id: str | None = None
     active_target_voice_name: str | None = None
+    # False when the agent that asked for the transfer confirms it in its own
+    # words; the generic spoken confirmation is then redundant.
+    announce: bool = True
 
 
 def _packet_json_payload(
@@ -369,6 +372,7 @@ def voice_route_command_from_payload(payload) -> VoiceRouteCommand | None:
             state.get("active_target_voice_name")
         )
         or _optional_packet_str(payload.get("agent_name")),
+        announce=payload.get("announce", True) is not False,
     )
 
 

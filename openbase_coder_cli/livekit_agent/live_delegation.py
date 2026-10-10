@@ -195,6 +195,15 @@ LIVE_CHARACTER_REDELIVERY = (
     "The following from {label} has not yet been spoken. Relay it now; "
     "{disposition}. Do not repeat anything already spoken."
 )
+# A thread can hold an earlier request that never got its answer (a text
+# turn that failed on allowance, for instance). A spoken turn answers what
+# was just said, not that backlog (2026-10-10: a voice question was answered
+# with an eight-item roster from a failed text turn first).
+LIVE_TURN_SCOPE_NOTE = (
+    "[Openbase system note: answer only what the caller just said in this "
+    "spoken request. Do not resume, retry or restate earlier requests in this "
+    "thread that were not spoken during this call.]"
+)
 LIVE_STARVED_REDELIVERY = (
     "The caller could not hear what you just said. Say the following from "
     "{label} now, in full; {disposition}."
@@ -1752,6 +1761,7 @@ class LiveDelegationBridge:
         prompt = wrap_voice_prompt(entry.prompt)
         if self._voice_router.is_dispatcher_active:
             prompt = append_onboarding_reminder(prompt)
+        prompt = f"{LIVE_TURN_SCOPE_NOTE}\n\n{prompt}"
         prompt = apply_screen_context(self._voice_router, prompt)
         prompt = self._call_context.apply(prompt)
         entry.heartbeat = asyncio.create_task(

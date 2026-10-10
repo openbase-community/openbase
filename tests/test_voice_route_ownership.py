@@ -64,11 +64,16 @@ async def test_return_cancels_pending_transfer_without_late_route_theft(
     assert router.is_dispatcher_active
     assert router.route_snapshot() == expected
     assert not router.has_pending_transfer
-    assert livekit_voice_route.get_livekit_voice_route_state().active_target_thread_id is None
+    assert (
+        livekit_voice_route.get_livekit_voice_route_state().active_target_thread_id
+        is None
+    )
     await router.close()
 
 
-async def test_newer_transfer_wins_when_old_preparation_finishes_last(monkeypatch, tmp_path):
+async def test_newer_transfer_wins_when_old_preparation_finishes_last(
+    monkeypatch, tmp_path
+):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     started, finish = asyncio.Event(), asyncio.Event()
 
@@ -90,7 +95,10 @@ async def test_newer_transfer_wins_when_old_preparation_finishes_last(monkeypatc
     finish.set()
     assert await older is False
     assert router.route_snapshot().active_thread_id == "newer"
-    assert livekit_voice_route.get_livekit_voice_route_state().active_target_thread_id == "newer"
+    assert (
+        livekit_voice_route.get_livekit_voice_route_state().active_target_thread_id
+        == "newer"
+    )
     await router.close()
 
 
@@ -185,3 +193,41 @@ async def test_old_call_shutdown_does_not_restore_a_recreated_dispatcher(
     assert (
         livekit_voice_route.get_livekit_voice_route_state().dispatcher_thread_id is None
     )
+
+
+async def test_agent_requested_transfer_is_not_announced_twice():
+    """2026-10-10: Cooper said "Connected to Cooper." and the announcer then
+    added "Voice route transferred." The agent's own words are enough; a
+    transfer from a thread menu still gets one natural confirmation."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    from openbase_coder_cli.livekit_agent.packets import (
+        VoiceRouteCommand,
+        voice_route_command_from_payload,
+    )
+
+    router = SimpleNamespace(
+        transfer_to_thread=AsyncMock(return_value=True),
+        active_target_voice_id="voice-cooper",
+        active_target_voice_name="Cooper",
+    )
+    quiet = voice_route_command_from_payload(
+        {
+            "action": "transfer_to_thread",
+            "thread_id": "t",
+            "cwd": ".",
+            "announce": False,
+        }
+    )
+    assert quiet is not None and quiet.announce is False
+    sink = Mock()
+    await voice_routing._transfer_voice_route(router, quiet, sink)
+    sink.enqueue.assert_not_called()
+
+    spoken = VoiceRouteCommand(action="transfer_to_thread", thread_id="t", cwd=".")
+    assert spoken.announce
+    await voice_routing._transfer_voice_route(router, spoken, sink)
+    message = sink.enqueue.call_args.args[0]
+    assert message.text == "You're now talking with Cooper."
+    assert message.voice_id == "voice-cooper"
