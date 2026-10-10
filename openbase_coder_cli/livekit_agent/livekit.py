@@ -1222,7 +1222,7 @@ async def _transfer_live_voice_route(
     assert route_command.thread_id is not None
     assert route_command.cwd is not None
     try:
-        await voice_router.transfer_to_thread(
+        transferred = await voice_router.transfer_to_thread(
             thread_id=route_command.thread_id,
             cwd=route_command.cwd,
             label=route_command.label,
@@ -1234,6 +1234,8 @@ async def _transfer_live_voice_route(
         voice_router.exit_to_dispatch()
         bridge.notify_route_changed(action="exit_to_dispatch", agent_label=None)
         bridge.announce("Unable to transfer voice route.")
+        return
+    if transferred is False:
         return
     bridge.notify_route_changed(
         action="transfer_to_thread",

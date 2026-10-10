@@ -683,7 +683,15 @@ class LiveDelegationBridge:
             self.detach()
 
             def caller_input(event):
-                if self._voice_router.can_deliver_for_snapshot(route):
+                # The old model can finish transcribing "return to Dispatcher"
+                # while its replacement connects. This global call command
+                # must survive the handoff; ordinary old-route text must not.
+                returning = bool(getattr(event, "is_final", False)) and (
+                    _is_exit_to_dispatch_command(
+                        str(getattr(event, "transcript", "") or "")
+                    )
+                )
+                if self._voice_router.can_deliver_for_snapshot(route) or returning:
                     self._on_input_transcription(event)
 
             old.on("input_audio_transcription_completed", caller_input)
@@ -790,7 +798,7 @@ class LiveDelegationBridge:
                 # The model delegated this command first; it is handled.
                 self._log_forced(text, decision="exit_command_already_handled")
                 return
-            if not self._voice_router.is_dispatcher_active:
+            if self._can_return_to_dispatch():
                 self._last_exit_command_at = self._clock()
                 self._log_forced(text, decision="exit_to_dispatch")
                 self._exit_to_dispatch(delegation_id=None)
@@ -827,7 +835,7 @@ class LiveDelegationBridge:
             if self._take_recent_exit_command():
                 self._log_forced(text, decision="exit_command_already_handled")
                 return
-            if not self._voice_router.is_dispatcher_active:
+            if self._can_return_to_dispatch():
                 self._last_exit_command_at = self._clock()
                 self._log_forced(text, decision="exit_to_dispatch")
                 self._exit_to_dispatch(delegation_id=None)
@@ -1010,7 +1018,7 @@ class LiveDelegationBridge:
             if self._take_recent_exit_command():
                 self._append_commentary(BACK_TO_DISPATCH_COMMENTARY, delegation_id)
                 return
-            if not self._voice_router.is_dispatcher_active:
+            if self._can_return_to_dispatch():
                 self._last_exit_command_at = self._clock()
                 self._exit_to_dispatch(delegation_id=delegation_id)
                 return
@@ -1080,7 +1088,7 @@ class LiveDelegationBridge:
             if self._take_recent_exit_command():
                 self._append_commentary(BACK_TO_DISPATCH_COMMENTARY, delegation_id)
                 return
-            if not self._voice_router.is_dispatcher_active:
+            if self._can_return_to_dispatch():
                 self._last_exit_command_at = self._clock()
                 self._exit_to_dispatch(delegation_id=delegation_id)
                 return
@@ -1780,6 +1788,11 @@ class LiveDelegationBridge:
         )
 
     # helpers
+
+    def _can_return_to_dispatch(self) -> bool:
+        return not self._voice_router.is_dispatcher_active or bool(
+            getattr(self._voice_router, "has_pending_transfer", False)
+        )
 
     def _exit_to_dispatch(self, *, delegation_id: str | None) -> None:
         changed = self._voice_router.exit_to_dispatch()
