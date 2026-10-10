@@ -196,6 +196,9 @@ LIVE_RECONNECTED_PENDING = (
     "that sounded cut off; its answer arrives as commentary. Wait for it; do "
     "not ask the caller to repeat."
 )
+# The gateway's error code for a planned restart (api 6a5eccb): it drains the
+# model's speech, closes the upstream session and the plugin reconnects.
+GATEWAY_RESTARTING_CODE = "gateway_restarting"
 LIVE_RECONNECTED_IDLE = (
     "If the caller's next words sound like the rest of a cut-off sentence, "
     "ask them to continue from where they were."
@@ -649,6 +652,9 @@ class LiveDelegationBridge:
         self._thread_exchange_fetcher = thread_exchange_fetcher
         self._brief_task: Any = None
         self._output_transcript = OutputTranscriptLog(self._log)
+        # The gateway's last error code before a reconnect: a planned restart
+        # ("gateway_restarting") cuts nothing, so the model resumes silently.
+        self._last_gateway_error_code: str | None = None
         self._heartbeat_interval = progress_thinking_interval
         self._settle_seconds = utterance_settle_seconds
         self._hold_max_seconds = utterance_hold_max_seconds
@@ -710,6 +716,9 @@ class LiveDelegationBridge:
         )
 
     def _on_gateway_event(self, event) -> None:
+        if isinstance(event, dict) and event.get("type") == "error":
+            error = event.get("error") if isinstance(event.get("error"), dict) else {}
+            self._last_gateway_error_code = str(error.get("code") or "") or None
         log_gateway_event(self._log, event, self._output_transcript)
 
     def attach(self, live_session) -> None:
@@ -1321,7 +1330,16 @@ class LiveDelegationBridge:
             if running
             else ""
         )
-        if connection_lost:
+        planned_restart = self._last_gateway_error_code == GATEWAY_RESTARTING_CODE
+        self._last_gateway_error_code = None
+        if connection_lost and planned_restart and not running:
+            # Openbase Cloud audio restarted for an update and drained first:
+            # nothing was cut, so there is nothing to brief or narrate.
+            self._log.info(
+                "%s stage=live_reconnect_after_gateway_restart briefing=skipped",
+                DISPATCH_TIMING_LOG,
+            )
+        elif connection_lost:
             self._append_thinking(
                 LIVE_RECONNECTED_THINKING.format(
                     pending=pending or LIVE_RECONNECTED_IDLE

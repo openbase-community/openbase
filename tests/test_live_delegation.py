@@ -2613,3 +2613,26 @@ async def test_output_transcript_deltas_are_logged_per_burst(caplog):
         assert "chars=32" in lines[0] and "I'm not in a dispatcher session." in lines[0]
     finally:
         await bridge.aclose()
+
+
+async def test_a_reconnect_after_a_planned_gateway_restart_resumes_silently():
+    """cloud-audio-403 (2026-10-10): the staging gateway now drains and sends
+    code gateway_restarting before closing 1012; nothing was cut, so no briefing."""
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    try:
+        live.emit(
+            "openai_server_event_received",
+            {
+                "type": "error",
+                "error": {"code": "gateway_restarting", "type": "server_error"},
+            },
+        )
+        live.drop()
+        live.emit("session_reconnected")
+        assert live.of("thinking", None) == []
+        # An unexplained drop still briefs.
+        live.drop()
+        live.emit("session_reconnected")
+        assert any("re-established" in note for note in live.of("thinking", None))
+    finally:
+        await bridge.aclose()
