@@ -292,11 +292,13 @@ async def test_live_call_started_from_a_thread_talks_to_that_thread(
     # GPT-Live is told from the start who is on the call.
     assert "Linda" in agent.instructions
     assert config.live_voice_start_route_note("Linda") in agent.instructions
+    assert "Your name in this call is Linda." in agent.instructions
+    assert "Speak in the first person as Linda" in agent.instructions
     assert agent._bridge.active_agent_label == "Linda"
     assert agent._bridge.starting_agent_label() == "Linda"
     assert agent._bridge._call_id == thread_call.ctx.room.name
-    # No "You are now talking to" transfer chatter at call start.
-    assert wiring.live.appends == []
+    # Explicit greeting uses the actual starting character, without a transfer.
+    assert wiring.live.appends == [("commentary", "Hi, I'm Linda.", None)]
 
     # Integration: the caller's first utterance goes to the thread.
     bridge = agent._bridge
@@ -430,7 +432,10 @@ def test_live_startup_instructions_name_the_thread_agent_only_for_thread_calls()
     plain = config.live_voice_startup_instructions("mac")
     assert "This call started inside" not in plain
     routed = config.live_voice_startup_instructions("mac", agent_label="Linda")
-    assert routed.startswith(plain)
+    assert routed.startswith(config.LIVE_VOICE_STARTUP_INSTRUCTIONS)
+    assert "Your name in this call is Dispatcher." in plain
+    assert "Your name in this call is Linda." in routed
+    assert "Your name in this call is Dispatcher." not in routed
     assert "everything the caller says goes to Linda" in routed
     assert "do not mention the dispatcher" in routed
     # Still the voice, never the brain.

@@ -15,10 +15,23 @@ from livekit.agents import Agent, llm
 
 from openbase_coder_cli.voice_identity import agent_voice_identity, route_voice_identity
 
+from .config import live_voice_greeting, live_voice_identity_note
 from .live_delegation import chunk_commentary
 from .live_preconnect import wait_live_session_started
 
 logger = logging.getLogger(__name__)
+
+
+def log_character_started(identity, live, router, *, announcement=False):
+    logger.info(
+        "dispatch_timing stage=live_character_started voice_id=%s "
+        "gpt_live_voice=%s session_id=%s route_thread=%s announcement=%s",
+        identity.voice_id,
+        identity.gpt_live_voice,
+        getattr(live, "session_id", ""),
+        router.route_snapshot().active_thread_id,
+        announcement,
+    )
 
 
 def bounded_history(context):
@@ -184,14 +197,11 @@ class LiveCharacterController:
         finally:
             if previous is not None:
                 await previous.aclose()
-        logger.info(
-            "dispatch_timing stage=live_character_started voice_id=%s "
-            "gpt_live_voice=%s session_id=%s route_thread=%s announcement=%s",
-            identity.voice_id,
-            identity.gpt_live_voice,
-            assistant.duplex_session.session_id,
-            self.router.route_snapshot().active_thread_id,
-            self._announcing,
+        log_character_started(
+            identity,
+            assistant.duplex_session,
+            self.router,
+            announcement=self._announcing,
         )
         return assistant
 
@@ -221,7 +231,9 @@ class LiveCharacterController:
                     await self._conversation(
                         bounded_history(self.session.current_agent.chat_ctx)
                     )
-                    self.bridge.announce(f"Hi, I'm {self.bridge.active_agent_label}.")
+                    self.bridge.announce(
+                        live_voice_greeting(self.bridge.starting_agent_label())
+                    )
                     if not self._queue.empty():
                         self._wake.set()
                     continue
@@ -298,7 +310,8 @@ class LiveCharacterController:
                 identity=identity,
                 history=llm.ChatContext(),
                 instructions=(
-                    f"You are {message.agent_name or identity.voice_name}, delivering one background announcement. "
+                    live_voice_identity_note(message.agent_name or identity.voice_name)
+                    + " You are delivering one background announcement. "
                     "Speak only the supplied commentary, introduce yourself by name, then remain silent. "
                     "Do not answer the caller, improvise, repeat prior speech, or claim the call transferred."
                 ),

@@ -192,9 +192,8 @@ When the user asks to transfer by thread id, run:
 openbase-coder user transfer-to-thread "<thread id>"
 Keep spoken confirmations concise.
 """.strip()
-# Startup persona of the GPT-Live voice model. Fixed for the whole call (the
-# plugin cannot change instructions after session.start); route changes are
-# appended as thinking/commentary by the delegation bridge instead.
+# Startup persona of each GPT-Live character session. A transfer starts a new
+# session with the new name and mapped voice; reconnect retains this persona.
 # The voice model is the voice of the call, never its brain: the delegation
 # bridge sends every caller utterance to the active Super Agent thread, which
 # has the caller's tools, and the model only voices what comes back.
@@ -210,9 +209,9 @@ you know. When the caller asks for something, say a brief acknowledgement
 such as "checking" or "one moment", delegate it as usual, and wait: the
 agent's answer reaches you as commentary. Relay commentary faithfully and
 concisely without adding facts of your own; thinking is context, not
-something to say. You may greet the caller, answer thanks or small talk in a
-few words, and ask them to repeat when you could not understand them. Mention
-the agent by name when a transfer or announcement names one. Speak naturally,
+something to say. A greeting arrives as commentary: speak it once, and do not
+add another greeting on your own. You may answer thanks or small talk in a
+few words, and ask them to repeat when you could not understand them. Speak naturally,
 stop when interrupted, and never read code, paths or identifiers character
 by character.
 """.strip()
@@ -235,16 +234,32 @@ def live_voice_startup_instructions(
 
     text = f"{LIVE_VOICE_STARTUP_INSTRUCTIONS}\n{live_voice_host_note(host)}"
     label = (agent_label or "").strip()
+    text += f"\n{live_voice_identity_note(label or 'Dispatcher')}"
     if label:
         text += f"\n{live_voice_start_route_note(label)}"
     return text
+
+
+def live_voice_identity_note(agent_label: str) -> str:
+    return (
+        f"Your name in this call is {agent_label}. "
+        f"Speak in the first person as {agent_label}, including introductions and "
+        "relayed replies. Do not introduce yourself as ChatGPT or as a separate "
+        "assistant speaking for the agent. This is a speaking role, not permission "
+        "to invent answers or claim unverified work. Earlier assistant messages "
+        "may belong to a different agent; they do not change your current name."
+    )
+
+
+def live_voice_greeting(agent_label: str | None) -> str:
+    return f"Hi, I'm {(agent_label or '').strip() or 'Dispatcher'}."
 
 
 def live_voice_start_route_note(agent_label: str) -> str:
     return (
         f"This call started inside {agent_label}'s thread: from the first word, "
         f"everything the caller says goes to {agent_label}, which answers. "
-        f"Refer to it by that name and do not mention the dispatcher unless "
+        f"Speak as that agent and do not mention the dispatcher unless "
         f"the caller moves the call back to it."
     )
 

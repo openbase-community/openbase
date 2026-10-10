@@ -140,6 +140,7 @@ from openbase_coder_cli.livekit_agent.config import (  # noqa: F401
     _optional_float_env,
     _optional_int_env,
     _read_instruction_file,
+    live_voice_greeting,
     live_voice_startup_instructions,
     load_direct_livekit_developer_instructions,
 )
@@ -1059,7 +1060,10 @@ async def _start_live_voice_session(
     ``live_model`` is the model prepared by ``_prepare_live_voice_model``
     (its gateway connection already opening); None builds one here.
     """
-    from openbase_coder_cli.livekit_agent.live_characters import LiveCharacterController
+    from openbase_coder_cli.livekit_agent.live_characters import (
+        LiveCharacterController,
+        log_character_started,
+    )
     from openbase_coder_cli.voice_identity import route_voice_identity
 
     identity = route_voice_identity(voice_router)
@@ -1111,6 +1115,8 @@ async def _start_live_voice_session(
         await wait_live_session_started(
             assistant.duplex_session, timeout=LIVE_VOICE_PREFLIGHT_TIMEOUT_SECONDS
         )
+        log_character_started(identity, assistant.duplex_session, voice_router)
+        bridge.announce(live_voice_greeting(bridge.starting_agent_label()))
         live_ready = True
         characters = LiveCharacterController(
             session=session, bridge=bridge, router=voice_router,

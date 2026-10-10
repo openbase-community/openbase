@@ -9,6 +9,7 @@ from livekit.agents import AgentSession, llm
 from livekit.plugins.openai.realtime import GPTLiveModel
 from test_live_voice import FakeGPTLiveServer, _close_caller_utterance
 
+from openbase_coder_cli.livekit_agent.config import live_voice_startup_instructions
 from openbase_coder_cli.livekit_agent.live_characters import (
     CharacterAssistant,
     LiveCharacterController,
@@ -57,7 +58,9 @@ async def test_real_sdk_handoff_changes_immutable_voice_and_preserves_history():
         history = llm.ChatContext()
         history.add_message(role="user", content="Remember the blue counter.")
         first = CharacterAssistant(
-            model=model("marin"), instructions="Dispatcher", history=history
+            model=model("marin"),
+            instructions=live_voice_startup_instructions(),
+            history=history,
         )
         session = AgentSession()
         try:
@@ -80,7 +83,7 @@ async def test_real_sdk_handoff_changes_immutable_voice_and_preserves_history():
             second = await controller._replace(
                 identity=identity,
                 history=bounded_history(first.chat_ctx),
-                instructions="Oliver",
+                instructions=live_voice_startup_instructions(agent_label="Blake"),
             )
             assert old._closing
             assert second.duplex_session is not old
@@ -88,7 +91,14 @@ async def test_real_sdk_handoff_changes_immutable_voice_and_preserves_history():
                 server.session_start["session"]["audio"]["output"]["voice"] == "cedar"
             )
             assert "blue counter" in str(server.session_start["session"]["input"])
-            assert server.session_start["session"]["instructions"] == "Oliver"
+            assert (
+                "Your name in this call is Blake."
+                in server.session_start["session"]["instructions"]
+            )
+            assert (
+                "Your name in this call is Dispatcher."
+                not in server.session_start["session"]["instructions"]
+            )
         finally:
             await session.aclose()
             for value in models:
@@ -126,6 +136,7 @@ async def test_announcement_restores_route_and_holds_backend_speech(monkeypatch)
     async def replace(**kwargs):
         assert controller.announcing
         assert kwargs["history"].items == []
+        assert "Your name in this call is Oliver." in kwargs["instructions"]
         kwargs["on_enter"](live)
         return SimpleNamespace(duplex_session=live)
 
