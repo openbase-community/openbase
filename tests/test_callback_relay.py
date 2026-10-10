@@ -22,15 +22,7 @@ async def fixture(ttl=2, *, monitor=True):
 
     server = await asyncio.start_server(callback, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
-    # On macOS global net_connections requires root. Process-local inspection
-    # is sufficient to identify this test-owned listener without privileges.
-    import os
-
-    import psutil
-
-    proc = psutil.Process(os.getpid())
-    conn = next(c for c in proc.net_connections(kind="tcp") if c.laddr.port == port)
-    owner = ListenerOwner(proc.pid, proc.create_time(), conn.fd, "127.0.0.1", port)
+    owner = ListenerOwner.find(port)
     token = secrets.token_urlsafe(24)
     relay = CallbackRelay(owner, token, ttl)
     relay_port = await relay.start()
@@ -110,6 +102,7 @@ def test_find_refuses_wildcard_and_foreign_owner(monkeypatch):
 
     import psutil
 
+    monkeypatch.setattr("openbase_coder_cli.callback_relay.sys.platform", "linux")
     monkeypatch.setattr(
         psutil,
         "net_connections",

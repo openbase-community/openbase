@@ -25,6 +25,32 @@ import psutil
 PROTOCOL = "OPENBASE-LOOPBACK/1"
 
 
+def _listener_connections(port: int):
+    if sys.platform != "darwin":
+        return [
+            (c.pid, c)
+            for c in psutil.net_connections(kind="tcp")
+            if c.status == psutil.CONN_LISTEN and c.laddr.port == port
+        ]
+    # macOS denies system-wide socket enumeration to ordinary users. Inspect
+    # only this user's processes; inaccessible processes cannot be authorized
+    # as callback owners. The selected endpoint is rechecked by PID/fd below
+    # and before every connection, rather than trusting a port alone.
+    matches = []
+    for process in psutil.process_iter():
+        try:
+            if process.uids().real != os.getuid():
+                continue
+            matches.extend(
+                (process.pid, c)
+                for c in process.net_connections(kind="tcp")
+                if c.status == psutil.CONN_LISTEN and c.laddr.port == port
+            )
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            continue
+    return matches
+
+
 @dataclass(frozen=True)
 class ListenerOwner:
     pid: int
@@ -37,19 +63,21 @@ class ListenerOwner:
     @classmethod
     def find(cls, port: int) -> ListenerOwner:
         """Fail closed for ambiguous, wildcard, foreign-user or missing listeners."""
-        matches = [
-            c
-            for c in psutil.net_connections(kind="tcp")
-            if c.status == psutil.CONN_LISTEN and c.laddr.port == port
-        ]
-        if not matches or any(c.laddr.ip not in {"127.0.0.1", "::1"} for c in matches):
+        matches = _listener_connections(port)
+        if not matches or any(
+            c.laddr.ip not in {"127.0.0.1", "::1"} for _, c in matches
+        ):
             raise ValueError("callback needs a loopback-only listener")
-        if len({c.pid for c in matches}) != 1 or matches[0].pid is None:
+        if len({pid for pid, _ in matches}) != 1 or matches[0][0] is None:
             raise ValueError("callback listener owner is ambiguous")
-        conn = next((c for c in matches if c.laddr.ip == "127.0.0.1"), matches[0])
-        process = psutil.Process(conn.pid)
+        pid, conn = next(
+            (m for m in matches if m[1].laddr.ip == "127.0.0.1"), matches[0]
+        )
+        process = psutil.Process(pid)
         if process.uids().real != os.getuid():
             raise ValueError("callback listener belongs to another user")
+        if conn.fd < 0:
+            raise ValueError("callback listener socket identity unavailable")
         identity = cls.identity(process.pid, conn.fd)
         return cls(
             process.pid, process.create_time(), conn.fd, conn.laddr.ip, port, identity
