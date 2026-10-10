@@ -34,6 +34,12 @@ CURRENT_STATE_RULES = f"""{CURRENT_STATE_HEADING}
   unsolicited duplicate. Preserve an explicit request for a named hello,
   repeated introduction or retry of an unheard greeting in the worker prompt.
   Background announcements do not require transferring the user's call.
+- Copy the caller's exact announcement wording verbatim into each delegated
+  prompt or correction, including the full completion phrase. Do not shorten
+  it to a generic "done" or substitute your own summary. Preserve the requested
+  order: require the worker to finish and verify the action before sending its
+  completion announcement, not launch both in parallel. Do not add a text-only
+  or silent-output restriction to a task that explicitly requests speech.
 - Preserve explicit silent, text-only, no-say or no-notification requirements
   in every worker prompt and follow-up. They override the default announcement
   requirement: do not request introductions, completion speech or notification
