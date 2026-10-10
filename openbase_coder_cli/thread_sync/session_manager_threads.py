@@ -60,6 +60,25 @@ from .thread_payloads import (
 )
 
 
+def _default_developer_instructions(thread_id: str) -> str | None:
+    """What a resume without explicit instructions gives the thread.
+
+    The pinned Dispatcher keeps its own instructions. Resuming it with the
+    generic Super Agent instructions (a typed turn after the backend session
+    went away) replaced the Claude session's system prompt, and the next
+    voice turn answered "I'm not in a dispatcher session, so I can't transfer
+    you" (Maritime, 2026-10-10 22:16Z).
+    """
+    from openbase_coder_cli.livekit_voice_route import (
+        dispatcher_developer_instructions,
+        is_dispatcher_thread,
+    )
+
+    if is_dispatcher_thread(thread_id):
+        return dispatcher_developer_instructions()
+    return load_super_agent_developer_instructions()
+
+
 class SessionManagerThreadsMixin:
     """Thread lifecycle, listing, reading and resume."""
 
@@ -194,7 +213,9 @@ class SessionManagerThreadsMixin:
         developer_instructions: str | None | object = _USE_SUPER_AGENT_INSTRUCTIONS,
     ) -> None:
         if developer_instructions is _USE_SUPER_AGENT_INSTRUCTIONS:
-            effective_developer_instructions = load_super_agent_developer_instructions()
+            effective_developer_instructions = _default_developer_instructions(
+                thread_id
+            )
         elif isinstance(developer_instructions, str):
             effective_developer_instructions = developer_instructions
         else:
