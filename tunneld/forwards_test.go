@@ -463,3 +463,37 @@ func TestServiceForwardValidation(t *testing.T) {
 		t.Fatalf("http service forward: %v", err)
 	}
 }
+
+func TestRedirectForwardAnswersWithHTTPS(t *testing.T) {
+	tm := newTestForwardManager(t, 18080)
+	for _, bad := range []forwardRequest{
+		{Port: 8080, RedirectHTTPS: true, Persistent: true},
+		{Port: 80, RedirectHTTPS: true},
+		{Port: 80, RedirectHTTPS: true, Persistent: true, LocalPort: 3000},
+		{Port: 80, RedirectHTTPS: true, Persistent: true, Peer: "100.64.0.9"},
+	} {
+		_, err := tm.Add(bad)
+		var fe *forwardError
+		if !errors.As(err, &fe) || fe.status != 400 {
+			t.Fatalf("Add(%+v) err = %v, want 400", bad, err)
+		}
+	}
+	info, err := tm.Add(forwardRequest{Port: 80, RedirectHTTPS: true, Persistent: true})
+	if err != nil || !info.RedirectHTTPS || !info.Persistent {
+		t.Fatalf("redirect forward: %+v %v", info, err)
+	}
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	req, _ := http.NewRequest("GET", "http://"+tm.addr(80)+"/path?x=1", nil)
+	req.Host = "crm.abcdefghijkl.vpn.obs.so"
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusPermanentRedirect || resp.Header.Get("Location") != "https://crm.abcdefghijkl.vpn.obs.so/path?x=1" {
+		t.Fatalf("status %d location %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	if !tm.Remove(80) {
+		t.Fatal("remove redirect forward")
+	}
+}

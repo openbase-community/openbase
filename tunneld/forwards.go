@@ -23,7 +23,9 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"net/netip"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -56,19 +58,24 @@ type forwardRequest struct {
 	// Persistent disables the TTL; the forward lives until removed or the
 	// daemon exits. Only service forwards (LocalPort set) may ask for it.
 	Persistent bool `json:"persistent,omitempty"`
+	// RedirectHTTPS answers tailnet :80 itself with a redirect to the same
+	// host over HTTPS (what the Mac helper does for published hostnames);
+	// it is the only form a port-80 forward may take and it is persistent.
+	RedirectHTTPS bool `json:"redirect_https,omitempty"`
 }
 
 // forwardInfo is the public description of a live forward.
 type forwardInfo struct {
-	Port        int       `json:"port"`
-	LocalPort   int       `json:"local_port"`
-	Target      string    `json:"target"`
-	CreatedAt   time.Time `json:"created_at"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	OneShot     bool      `json:"one_shot"`
-	Persistent  bool      `json:"persistent"`
-	Peer        string    `json:"peer,omitempty"`
-	Connections int64     `json:"connections"`
+	Port          int       `json:"port"`
+	LocalPort     int       `json:"local_port"`
+	Target        string    `json:"target"`
+	CreatedAt     time.Time `json:"created_at"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	OneShot       bool      `json:"one_shot"`
+	Persistent    bool      `json:"persistent"`
+	RedirectHTTPS bool      `json:"redirect_https"`
+	Peer          string    `json:"peer,omitempty"`
+	Connections   int64     `json:"connections"`
 }
 
 // servicePorts are the tailnet ports a service forward may bind below the
@@ -150,6 +157,12 @@ func newForwardManager(srv *tsnet.Server, lc *local.Client, reserved ...int) *fo
 
 // Add validates the request, opens the tailnet listener and starts serving.
 func (m *forwardManager) Add(req forwardRequest) (forwardInfo, error) {
+	if req.RedirectHTTPS {
+		if req.Port != 80 || req.LocalPort != 0 || req.OneShot || !req.Persistent || req.TTLSeconds != 0 {
+			return forwardInfo{}, badForward("redirect_https is a persistent forward on port 80 with no target")
+		}
+		return m.addRedirect(req)
+	}
 	service := req.LocalPort != 0
 	if service {
 		if req.LocalPort < forwardMinPort || req.LocalPort > forwardMaxPort {
@@ -240,6 +253,67 @@ func (m *forwardManager) Add(req forwardRequest) (forwardInfo, error) {
 
 	go m.serve(entry)
 	return entry.snapshot(), nil
+}
+
+// addRedirect binds tailnet :80 and answers every request with a permanent
+// redirect to https://<host><uri>, so a published hostname typed without a
+// scheme still lands on the TLS ingress. Only the request line and Host
+// header are read; nothing is forwarded.
+func (m *forwardManager) addRedirect(req forwardRequest) (forwardInfo, error) {
+	peer := strings.TrimSpace(req.Peer)
+	if peer != "" {
+		return forwardInfo{}, badForward("redirect_https cannot be pinned to a peer")
+	}
+	m.mu.Lock()
+	if m.reserved[req.Port] {
+		m.mu.Unlock()
+		return forwardInfo{}, conflictForward("port %d is reserved by a fixed forward", req.Port)
+	}
+	if _, exists := m.entries[req.Port]; exists {
+		m.mu.Unlock()
+		return forwardInfo{}, conflictForward("port %d is already forwarded", req.Port)
+	}
+	if len(m.entries) >= forwardMaxCount {
+		m.mu.Unlock()
+		return forwardInfo{}, conflictForward("at most %d dynamic forwards may be active", forwardMaxCount)
+	}
+	ln, err := m.listen(req.Port)
+	if err != nil {
+		m.mu.Unlock()
+		return forwardInfo{}, conflictForward("listen tailnet :%d: %v", req.Port, err)
+	}
+	entry := &forwardEntry{
+		ln:     ln,
+		active: map[net.Conn]struct{}{},
+		info: forwardInfo{
+			Port:          req.Port,
+			Target:        "https redirect",
+			CreatedAt:     m.now(),
+			Persistent:    true,
+			RedirectHTTPS: true,
+		},
+	}
+	m.entries[req.Port] = entry
+	m.mu.Unlock()
+	go m.serveRedirect(entry)
+	log.Printf("service forward tailnet :%d -> https redirect (persistent)", req.Port)
+	return entry.snapshot(), nil
+}
+
+func (m *forwardManager) serveRedirect(entry *forwardEntry) {
+	server := &http.Server{
+		ReadHeaderTimeout: 10 * time.Second,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			entry.connections.Add(1)
+			host := r.Host
+			if h, _, err := net.SplitHostPort(host); err == nil {
+				host = h
+			}
+			target := &url.URL{Scheme: "https", Host: host, Path: r.URL.Path, RawQuery: r.URL.RawQuery}
+			http.Redirect(w, r, target.String(), http.StatusPermanentRedirect)
+		}),
+	}
+	_ = server.Serve(entry.ln) // returns when the listener closes (remove, shutdown)
 }
 
 // Remove closes the forward on port; it reports whether one existed.
