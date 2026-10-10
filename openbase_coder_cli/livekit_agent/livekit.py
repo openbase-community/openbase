@@ -154,6 +154,7 @@ from openbase_coder_cli.livekit_agent.live_voice import (
     LiveVoiceReadinessCache,
     LiveVoiceReadinessRefresher,
     LiveVoiceSessionError,
+    LiveVoiceUnavailable,
     VoiceEngineDecision,
     decide_voice_engine,
     import_live_model,
@@ -358,6 +359,16 @@ def prewarm(proc: JobProcess):
         LoggingVAD(vad_model) if LIVEKIT_VERBOSE_LOGGING else vad_model
     )
     if LIVE_VOICE_READINESS_PREWARM:
+        # LiveKit plugins register on import and require the process main
+        # thread. Prime the lazy OpenAI import before the readiness thread
+        # runs; otherwise every idle probe fails before checking the gateway.
+        try:
+            import_live_model()
+        except LiveVoiceUnavailable as exc:
+            # Keep the classic pipeline usable when the optional live path
+            # cannot load. The per-call decision still reports the failure.
+            logger.info("Live voice prewarm unavailable: %s", exc)
+            return
         _live_voice_readiness_refresher.start()
 
 

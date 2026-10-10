@@ -2541,3 +2541,29 @@ async def test_dispatcher_stale_discovery_does_not_prevent_recovery(
     assert await client.prepare() == "dispatcher-thread"
     assert len(backend.started_threads) == 1
     assert json.loads(state.read_text())["dispatcher_thread_id"] == "dispatcher-thread"
+
+
+@pytest.mark.asyncio
+async def test_default_dispatcher_state_uses_relocated_api_data_directory(
+    tmp_path, monkeypatch
+):
+    from openbase_coder_cli.livekit_voice_route import get_livekit_voice_route_state
+    from openbase_coder_cli.openbase_coder_cli_app.thread_metadata import (
+        annotate_thread_payload,
+    )
+
+    data_dir = tmp_path / "relocated"
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(data_dir))
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "unused-home"))
+    client = SuperAgentsLiveKitClient(
+        cwd=str(tmp_path), backend_client=FakeCodexSuperAgentsBackend()
+    )
+    assert client._state_path == data_dir / "livekit-voice-route.json"
+    thread_id = await client.prepare()
+    assert get_livekit_voice_route_state().dispatcher_thread_id == thread_id
+    payload = annotate_thread_payload({"thread_id": thread_id})
+    assert payload["conversation_role"] == "dispatcher"
+    assert payload["voice_route"]["role"] == "dispatcher"
+    assert not (
+        tmp_path / "unused-home" / ".openbase" / "livekit-voice-route.json"
+    ).exists()

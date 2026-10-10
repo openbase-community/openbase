@@ -69,6 +69,7 @@ from openbase_coder_cli.livekit_agent.super_agents_speech import (
     _text_content,
     _user_message_texts,
 )
+from openbase_coder_cli.livekit_voice_route import _route_state_path
 from openbase_coder_cli.paths import CODEX_DISPATCHER_CONFIG_PATH
 
 # The speech helpers moved to ``super_agents_speech`` and the Super Agents
@@ -295,7 +296,7 @@ class SuperAgentsLiveKitClient(
     ) -> None:
         self._cwd = cwd
         self._state_path = (
-            Path(state_path or Path.home() / ".openbase" / "livekit-voice-route.json")
+            (Path(state_path) if state_path else _route_state_path())
             if persist_thread
             else None
         )

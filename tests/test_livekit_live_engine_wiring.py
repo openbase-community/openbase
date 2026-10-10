@@ -739,6 +739,30 @@ def test_prewarm_starts_the_readiness_refresher(monkeypatch):
     assert started == [True]
 
 
+def test_unavailable_live_plugin_keeps_pipeline_vad_without_background_probe(
+    monkeypatch,
+):
+    monkeypatch.setattr(livekit, "install_vad_backlog_patch", lambda: None)
+    monkeypatch.setattr(livekit.silero.VAD, "load", staticmethod(lambda: "vad"))
+    monkeypatch.setattr(livekit, "LIVE_VOICE_READINESS_PREWARM", True)
+
+    def unavailable():
+        raise livekit.LiveVoiceUnavailable("plugin_import_failed", "unavailable")
+
+    def unexpected_probe():
+        raise AssertionError("No background import retry after missing plugin")
+
+    monkeypatch.setattr(livekit, "import_live_model", unavailable)
+    monkeypatch.setattr(
+        livekit,
+        "_live_voice_readiness_refresher",
+        SimpleNamespace(start=unexpected_probe),
+    )
+    proc = SimpleNamespace(userdata={})
+    livekit.prewarm(proc)
+    assert proc.userdata["vad"] is not None
+
+
 def test_job_received_logs_the_dispatch_latency(caplog):
     import logging
     import time
@@ -758,7 +782,15 @@ def test_job_received_logs_the_dispatch_latency(caplog):
 
 def test_live_model_uses_dispatcher_mapping_and_explicit_agent_voice(monkeypatch):
     from openbase_coder_cli import voice_identity
+
     monkeypatch.setattr(livekit, "import_live_model", lambda: _FakeGPTLiveModel)
-    monkeypatch.setattr(voice_identity, "current_voice_identity", lambda: SimpleNamespace(gpt_live_voice="beacon"))
+    monkeypatch.setattr(
+        voice_identity,
+        "current_voice_identity",
+        lambda: SimpleNamespace(gpt_live_voice="beacon"),
+    )
     assert livekit._build_live_voice_model(_live_decision()).kwargs["voice"] == "beacon"
-    assert livekit._build_live_voice_model(_live_decision(), voice="cedar").kwargs["voice"] == "cedar"
+    assert (
+        livekit._build_live_voice_model(_live_decision(), voice="cedar").kwargs["voice"]
+        == "cedar"
+    )
