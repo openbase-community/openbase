@@ -207,6 +207,41 @@ def test_launcher_forwards_sigterm_and_dies_the_same_way(
 
 
 @needs_clang
+def test_launcher_forwards_sigterm_received_during_spawn(tmp_path: Path) -> None:
+    source = tmp_path / "spawn_signal.c"
+    source.write_text(
+        '#include <spawn.h>\n'
+        'int spawn_with_signal(pid_t *, const char *, '
+        'const posix_spawn_file_actions_t *, const posix_spawnattr_t *, '
+        'char *const [], char *const []);\n'
+        '#define posix_spawnp spawn_with_signal\n'
+        '#include "openbase-services.c"\n'
+        '#undef posix_spawnp\n'
+        'int spawn_with_signal(pid_t *pid, const char *path, '
+        'const posix_spawn_file_actions_t *actions, const posix_spawnattr_t *attributes, '
+        'char *const argv[], char *const envp[]) {\n'
+        '    int result = posix_spawnp(pid, path, actions, attributes, argv, envp);\n'
+        '    if (result == 0) kill(getpid(), SIGTERM);\n'
+        '    return result;\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    executable = tmp_path / "launcher"
+    subprocess.run(
+        [
+            "xcrun", "clang", "-Wall", "-Wextra", "-Werror",
+            "-I", str(build_service_launcher.SOURCE_DIR),
+            str(source), "-o", str(executable),
+        ],
+        check=True,
+    )
+
+    result = subprocess.run([str(executable), "/bin/sleep", "1"], timeout=10)
+
+    assert result.returncode == -signal.SIGTERM
+
+
+@needs_clang
 def test_launcher_keeps_the_child_in_its_process_group(launcher: Path) -> None:
     # launchd reaps a job's whole process group when the job ends, which is
     # what cleans up the service if the launcher itself is SIGKILLed. With

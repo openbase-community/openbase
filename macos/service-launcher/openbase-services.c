@@ -45,10 +45,12 @@ static const int forwarded_signals[] = {
 };
 
 static void forward_signal(int signo) {
+    int saved_errno = errno;
     pid_t pid = child_pid;
     if (pid > 0) {
         kill(pid, signo);
     }
+    errno = saved_errno;
 }
 
 static int install_forwarders(void) {
@@ -77,6 +79,16 @@ int main(int argc, char *argv[]) {
         return 64;
     }
 
+    sigset_t startup_signals;
+    sigset_t previous_mask;
+    sigemptyset(&startup_signals);
+    for (size_t index = 0; index < sizeof(forwarded_signals) / sizeof(forwarded_signals[0]); index++) {
+        sigaddset(&startup_signals, forwarded_signals[index]);
+    }
+    if (sigprocmask(SIG_BLOCK, &startup_signals, &previous_mask) != 0) {
+        perror("openbase-services: sigprocmask");
+        return 70;
+    }
     if (install_forwarders() != 0) {
         perror("openbase-services: sigaction");
         return 70;
@@ -102,6 +114,11 @@ int main(int argc, char *argv[]) {
         return 127;
     }
     child_pid = pid;
+    if (sigprocmask(SIG_SETMASK, &previous_mask, NULL) != 0) {
+        perror("openbase-services: sigprocmask");
+        kill(pid, SIGKILL);
+        return 70;
+    }
 
     int status = 0;
     for (;;) {
