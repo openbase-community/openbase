@@ -239,15 +239,23 @@ async def test_callback_can_close_listener_on_accept_and_finish_response():
     relay_port = await relay.start()
     run = asyncio.create_task(relay.run())
     reader, writer = await asyncio.open_connection("127.0.0.1", relay_port)
+    health_reader, health_writer = await asyncio.open_connection(
+        "127.0.0.1", relay_port
+    )
     try:
+        health_writer.write(f"{PROTOCOL} {relay.token}\n".encode())
+        await health_writer.drain()
+        assert await health_reader.readline() == b"OK\n"
         writer.write(f"{PROTOCOL} {relay.token}\n".encode())
         await writer.drain()
         assert await reader.readline() == b"OK\n"
         writer.write(b"GET /callback HTTP/1.1\r\n\r\n")
         await writer.drain()
+        assert await asyncio.wait_for(health_reader.read(), 1) == b""
         assert (await asyncio.wait_for(reader.read(), 2)).endswith(b"\r\n\r\nOK")
         assert received == [b"GET /callback HTTP/1.1\r\n\r\n"]
     finally:
+        health_writer.close()
         writer.close()
         relay.done.set()
         await run
