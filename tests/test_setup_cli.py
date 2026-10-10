@@ -2004,6 +2004,24 @@ def test_require_backend_choice_keeps_existing_env(tmp_path, monkeypatch) -> Non
     )
 
 
+@pytest.mark.parametrize("tailscale_binary", [None, "/usr/local/bin/tailscale"])
+def test_require_tailnet_provider_choice_enter_uses_vpn_default(
+    tmp_path, monkeypatch, capsys, tailscale_binary
+) -> None:
+    from openbase_coder_cli.services import tailscale_provider as tp
+
+    monkeypatch.setattr(tp, "tailscale_bin", lambda: tailscale_binary)
+    _fake_tty_stdin(monkeypatch, "\n")
+
+    assert (
+        setup_cli._require_tailnet_provider_choice(
+            str(tmp_path / ".env"), None, interactive=True
+        )
+        == tp.PROVIDER_NETMESH
+    )
+    assert "Choose an option [1]" in capsys.readouterr().out
+
+
 def test_require_tailnet_provider_choice_restores_existing_netmesh(
     tmp_path,
 ) -> None:

@@ -701,14 +701,10 @@ def _require_tailnet_provider_choice(
         )
         return configured if configured in PROVIDER_VALUES else PROVIDER_TAILSCALE
     if interactive:
-        from openbase_coder_cli.services.tailscale_provider import (
-            default_tailnet_provider,
-        )
-
         return _prompt_pick(
             "Tailnet transport:",
             _TAILNET_PROVIDER_PICKER_OPTIONS,
-            default=default_tailnet_provider(),
+            default=PROVIDER_NETMESH,
         )
     return None
 
