@@ -1123,7 +1123,7 @@ class LiveDelegationBridge:
         if self._session_down_at is not None:
             return
         self._session_down_at = self._clock()
-        logger.info(
+        self._log.info(
             "%s stage=live_session_dropped running=%d",
             DISPATCH_TIMING_LOG,
             sum(
@@ -1158,7 +1158,7 @@ class LiveDelegationBridge:
         ]
         entry.deliveries.append(delivery)
         if delivery.held:
-            logger.info(
+            self._log.info(
                 "%s stage=live_commentary_held key=%s delegation_id=%s final=%s "
                 "chunks=%d",
                 DISPATCH_TIMING_LOG,
@@ -1218,7 +1218,7 @@ class LiveDelegationBridge:
                 if entry.completed
                 else LIVE_REDELIVERY_PROGRESS.format(label=label)
             )
-            logger.info(
+            self._log.info(
                 "%s stage=live_commentary_redelivered key=%s chunks=%d held=%d "
                 "bound=%d answer=%s",
                 DISPATCH_TIMING_LOG,
