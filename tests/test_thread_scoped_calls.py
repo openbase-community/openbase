@@ -136,7 +136,9 @@ class _RecordingClient:
     def persist_voice_route(self, **kwargs):
         self.persisted_routes.append(kwargs)
 
-    async def run_turn(self, prompt, *, developer_instructions=None):
+    async def run_turn(
+        self, prompt, *, developer_instructions=None, replaces_active_turn=False
+    ):
         self.prompts.append(prompt)
         return {
             "_livekit_speech_text": f"{self._thread_id} says hi",
