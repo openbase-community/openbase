@@ -723,7 +723,8 @@ async def test_a_reconnect_unbinds_dead_delegations_and_answers_session_wide():
     assert live.speech(None) == ["All tests pass. The build is green."]
     (briefing,) = [t for t in live.of("thinking", None) if "re-established" in t]
     assert "Do not greet the caller again" in briefing
-    assert "the dispatcher is still working" in briefing
+    assert "the dispatcher is already answering" in briefing
+    assert "do not ask the caller to repeat" in briefing
     await bridge.aclose()
 
 
@@ -733,7 +734,8 @@ async def test_a_reconnect_with_nothing_running_briefs_without_a_pending_note():
     await _settle()
     (briefing,) = live.of("thinking", None)
     assert "re-established" in briefing
-    assert "still working" not in briefing
+    assert "already answering" not in briefing
+    assert "continue from where they were" in briefing
     assert dispatcher.prompts == []
     await bridge.aclose()
 

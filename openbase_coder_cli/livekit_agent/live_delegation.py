@@ -179,15 +179,23 @@ BACK_TO_DISPATCH_COMMENTARY = "Back to dispatch."
 # deploy replaces the relay task mid-call) and reseeds the new GPT-Live
 # session from its chat history; the delegations of the dropped session are
 # gone, so a result bound to one would answer nothing.
+# With a request in flight the model must wait for its answer, not narrate the
+# drop: on 2026-10-10 a question cut by a reconnect was already accepted and
+# being answered, and the model said "the connection dropped, your message cut
+# off, what did you want to ask?" instead (Maritime, iPhone 16 Pro).
 LIVE_RECONNECTED_THINKING = (
-    "The voice connection dropped and was re-established; the conversation "
-    "so far was restored. Do not greet the caller again or start over. If "
-    "the caller was mid-sentence when it dropped, ask them to repeat only "
-    "that. {pending}"
+    "The voice connection was briefly re-established; the conversation so far "
+    "was restored. Do not greet the caller again, start over, mention the drop "
+    "or apologize. {pending}"
 )
 LIVE_RECONNECTED_PENDING = (
-    "{label} is still working on the caller's last request; its answer "
-    "arrives as commentary."
+    "{label} is already answering the caller's last request, including one "
+    "that sounded cut off; its answer arrives as commentary. Wait for it; do "
+    "not ask the caller to repeat."
+)
+LIVE_RECONNECTED_IDLE = (
+    "If the caller's next words sound like the rest of a cut-off sentence, "
+    "ask them to continue from where they were."
 )
 # Commentary the caller has not heard yet is re-appended after the briefing:
 # what the turn produced while the socket was down, and what went out bound
@@ -1310,7 +1318,10 @@ class LiveDelegationBridge:
         )
         if connection_lost:
             self._append_thinking(
-                LIVE_RECONNECTED_THINKING.format(pending=pending).strip(), None
+                LIVE_RECONNECTED_THINKING.format(
+                    pending=pending or LIVE_RECONNECTED_IDLE
+                ).strip(),
+                None,
             )
         elif pending:
             self._append_thinking(pending, None)
