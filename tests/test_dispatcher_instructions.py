@@ -155,3 +155,16 @@ def test_dispatcher_requires_confirmed_steering_and_queue_outcomes(monkeypatch):
     assert 'super_agents_queue_turn' in rules
     assert 'nothing was delivered or queued' in rules
     assert 'queued fallback does not interrupt current work' in rules
+
+
+def test_start_rules_have_the_dispatcher_choose_a_super_agent_cwd_by_looking():
+    # Gabe, 2026-10-09: a Super Agent's cwd is the dispatcher's judgment after
+    # listing folders, never an exact match of a spoken name (speech
+    # recognition mangles names); the dispatcher's own directory never moves.
+    rules = ' '.join(instructions.START_RULES.split())
+    assert 'You always run in your own default directory' in rules
+    assert "choose its `cwd` yourself by looking: `ls`" in rules
+    assert 'Ask only when two folders are genuinely plausible' in rules
+    assert 'Never start an agent in your own directory just because nothing matched exactly' in rules
+    assert 'project-dir' not in rules
+    assert 'MUST' not in rules
