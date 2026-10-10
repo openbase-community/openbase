@@ -210,6 +210,20 @@ def test_push_sends_open_url_user_info(monkeypatch):
     assert browser_cli._push(LOGIN_URL, None) is False
 
 
+def test_push_fails_when_no_phone_is_registered(monkeypatch):
+    from openbase_coder_cli.config import cloud_notifications
+
+    monkeypatch.setattr(
+        cloud_notifications, "send_notification_push", lambda **kwargs: 0
+    )
+    assert browser_cli._push(LOGIN_URL, None) is False
+
+    monkeypatch.setattr(
+        cloud_notifications, "send_notification_push", lambda **kwargs: 1
+    )
+    assert browser_cli._push(LOGIN_URL, None) is True
+
+
 def test_browser_open_succeeds_when_local_server_is_unreachable(monkeypatch):
     def refuse(method, url, **kwargs):
         raise httpx.ConnectError("connection refused")

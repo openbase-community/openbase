@@ -234,7 +234,8 @@ def _try_deliver(url: str, forward: LoopbackForward | None) -> dict | None:
 
 
 def _push(url: str, forward: LoopbackForward | None) -> bool:
-    """Ask Openbase Cloud to notify the phone; False on any failure."""
+    """Ask Openbase Cloud to notify the phone; False on any failure or when
+    the user has no phone registered for notifications."""
     user_info = {"openbase_destination": "open_url", "url": url}
     if forward is not None:
         user_info.update(forward.as_push_user_info())
@@ -243,10 +244,12 @@ def _push(url: str, forward: LoopbackForward | None) -> bool:
     def attempt() -> bool:
         from openbase_coder_cli.config.cloud_notifications import send_notification_push
 
-        send_notification_push(
+        device_count = send_notification_push(
             title=PUSH_TITLE, body=f"Tap to open {host}", user_info=user_info
         )
-        return True
+        # No registered phone means nothing will arrive; an older cloud
+        # (None) does not say, so its acceptance still counts.
+        return device_count != 0
 
     return bool(_bounded_attempt(attempt, timeout=BROWSER_DELIVERY_TIMEOUT_SECONDS * 3))
 
