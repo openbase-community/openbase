@@ -22,9 +22,14 @@ In addition to the shared [prerequisites](index.md#prerequisites),
 development installs need:
 
 - Git
-- [`uv`](https://docs.astral.sh/uv/)
-- Node 20+ and pnpm for building the console from source (the setup script
-  checks both and fails fast with install instructions)
+- [`uv`](https://docs.astral.sh/uv/): `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- [`multi`](https://pypi.org/project/multi-workspace/) 3.2.21 or newer, which setup uses to sync the sub-repos: `uv tool install multi-workspace` (or `uv tool upgrade multi-workspace`)
+- The current Go toolchain from [go.dev/dl](https://go.dev/dl/). Setup builds the Openbase Direct transport from source, so Go is required whichever transport you pick.
+- Node 20+ (`brew install node`, or `pnpm env use --global 22`) and pnpm (`curl -fsSL https://get.pnpm.io/install.sh | sh -`) for building the console from source
+
+`./scripts/setup` checks for all of these before it does anything else and exits with the install command for each one that is missing.
+
+Contributors who commit to the repos also need [`gitleaks`](https://github.com/gitleaks/gitleaks) (`brew install gitleaks`). Setup does not need it, but the git hooks that `multi sync` installs refuse commits and pushes without it.
 
 Optional developer backends:
 
