@@ -140,7 +140,7 @@ async def _publish_announcer_message_with(
         # call); the pipeline ignores this and keeps choosing by voice_id.
         payload["agent_name"] = normalized_agent_name
     target_voice_id = _safe_announcer_voice_id(
-        (voice_id or "").strip() or _active_target_voice_id()
+        (voice_id or "").strip() or _identity_voice_id()
     )
     if target_voice_id:
         payload["voice_id"] = target_voice_id
@@ -229,11 +229,23 @@ async def _publish_announcer_audio_file_with(
     )
 
 
-def _active_target_voice_id() -> str | None:
-    from openbase_coder_cli.livekit_voice_route import get_livekit_voice_route_state
+def _identity_voice_id() -> str:
+    """Announcements speak with the user's one voice identity, whichever
+    agent announces: the chosen voice, or the Cartesia match of a pinned
+    live voice (voice_identity.py)."""
+    from openbase_coder_cli.voice_identity import current_voice_identity
 
-    state = get_livekit_voice_route_state()
-    return state.active_target_voice_id if state.active_target_thread_id else None
+    identity = current_voice_identity()
+    logger.info(
+        "dispatch_timing stage=announcer_identity_voice provider=%s voice_id=%s "
+        "voice_name=%s gpt_live_voice=%s source=%s",
+        identity.provider,
+        identity.voice_id,
+        identity.voice_name,
+        identity.gpt_live_voice,
+        identity.source,
+    )
+    return identity.voice_id
 
 
 def _safe_announcer_voice_id(voice_id: str | None) -> str | None:

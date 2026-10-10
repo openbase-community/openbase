@@ -275,10 +275,11 @@ def user_say(request):
             voice_entry.voice_name or "",
             voice_entry.source,
         )
+        # The agent's own voice assignment identifies the thread; the
+        # announcement itself speaks with the user's voice identity.
         result = async_to_sync(publish_announcer_message)(
             input_serializer.validated_data["text"],
             room_name=room_name,
-            voice_id=voice_entry.voice_id,
             agent_name=agent_name,
         )
     except UnknownAgentVoiceError as exc:

@@ -49,6 +49,13 @@ def isolate_voice_config(monkeypatch, tmp_path):
         "selected_tts_provider_id",
         lambda path=None: "cartesia",
     )
+    monkeypatch.setattr(
+        dispatcher_config,
+        "CODEX_DISPATCHER_CONFIG_PATH",
+        tmp_path / "dispatcher-config.json",
+    )
+    monkeypatch.delenv("LIVEKIT_LIVE_VOICE_VOICE", raising=False)
+    monkeypatch.delenv("CARTESIA_VOICE_ID", raising=False)
 
 
 class FakeRoomService:
@@ -193,7 +200,9 @@ def test_publish_announcer_message_selects_latest_active_room(tmp_path, monkeypa
     assert any("stage=announcer_send_data_end" in message for message in messages)
 
 
-def test_publish_announcer_message_uses_active_target_voice(tmp_path, monkeypatch):
+def test_publish_announcer_message_uses_voice_identity_not_active_target(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     (tmp_path / "livekit-voice-route.json").write_text(
         json.dumps(
@@ -221,7 +230,49 @@ def test_publish_announcer_message_uses_active_target_voice(tmp_path, monkeypatc
     asyncio.run(publish_announcer_message("hello", livekit_client=client))
 
     payload = json.loads(client.room.sent[0].data.decode("utf-8"))
-    assert payload["voice_id"] == "voice-1"
+    # Default identity: Jacqueline, whatever agent the call is routed to.
+    assert payload["voice_id"] == "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"
+
+
+def test_publish_announcer_message_speaks_chosen_dispatcher_voice(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    dispatcher_config.set_dispatcher_voice("47c38ca4-5f35-497b-b1a3-415245fb35e1")
+    client = FakeLiveKitClient(
+        [_room("room-1", 100)],
+        {
+            "room-1": [
+                _participant("agent-1", kind=livekit_api.ParticipantInfo.Kind.AGENT),
+                _participant("user-1", kind=livekit_api.ParticipantInfo.Kind.STANDARD),
+            ],
+        },
+    )
+
+    asyncio.run(
+        publish_announcer_message("hello", agent_name="Dottie", livekit_client=client)
+    )
+
+    payload = json.loads(client.room.sent[0].data.decode("utf-8"))
+    assert payload["voice_id"] == "47c38ca4-5f35-497b-b1a3-415245fb35e1"  # Daniel
+    assert payload["agent_name"] == "Dottie"
+
+
+def test_publish_announcer_message_follows_pinned_live_voice(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("LIVEKIT_LIVE_VOICE_VOICE", "cedar")
+    client = FakeLiveKitClient(
+        [_room("room-1", 100)],
+        {
+            "room-1": [
+                _participant("agent-1", kind=livekit_api.ParticipantInfo.Kind.AGENT),
+                _participant("user-1", kind=livekit_api.ParticipantInfo.Kind.STANDARD),
+            ],
+        },
+    )
+
+    asyncio.run(publish_announcer_message("hello", livekit_client=client))
+
+    payload = json.loads(client.room.sent[0].data.decode("utf-8"))
+    assert payload["voice_id"] == "a167e0f3-df7e-4d52-a9c3-f949145efdab"  # Blake
 
 
 def test_publish_announcer_message_prefers_explicit_voice_over_active_target(tmp_path, monkeypatch):
@@ -383,7 +434,9 @@ def test_user_say_api_returns_accepted(monkeypatch, tmp_path):
     async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name is None
-        assert voice_id == "voice-dottie"
+        # The announcer picks the user's voice identity, not the agent's voice.
+        assert voice_id is None
+        assert agent_name == "Dottie"
         return SimpleNamespace(
             message_id="announcer-1",
             room_name="room-1",
@@ -423,7 +476,9 @@ def test_user_say_api_allows_authenticated_local_post_without_csrf_token(monkeyp
     async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name is None
-        assert voice_id == "voice-dottie"
+        # The announcer picks the user's voice identity, not the agent's voice.
+        assert voice_id is None
+        assert agent_name == "Dottie"
         return SimpleNamespace(
             message_id="announcer-1",
             room_name="room-1",
@@ -455,7 +510,7 @@ def test_user_say_api_allows_authenticated_local_post_without_csrf_token(monkeyp
     }
 
 
-def test_user_say_api_resolves_agent_voice(monkeypatch, tmp_path):
+def test_user_say_api_resolves_agent_thread_and_speaks_identity_voice(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     record_voice_assignment(
         thread_id="thread-1",
@@ -470,7 +525,7 @@ def test_user_say_api_resolves_agent_voice(monkeypatch, tmp_path):
     async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name == "room-1"
-        assert voice_id == "super-agent-voice"
+        assert voice_id is None
         return SimpleNamespace(
             message_id="announcer-1",
             room_name="room-1",
@@ -518,7 +573,7 @@ def test_user_say_api_backfills_agent_voice_from_super_agents_state(
     async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name is None
-        assert voice_id
+        assert voice_id is None
         return SimpleNamespace(
             message_id="announcer-1",
             room_name="room-1",
@@ -583,7 +638,7 @@ def test_user_say_api_backfills_agent_voice_from_claude_code_state(
     async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name is None
-        assert voice_id
+        assert voice_id is None
         return SimpleNamespace(
             message_id="announcer-1",
             room_name="room-1",
@@ -643,8 +698,9 @@ def test_user_say_api_logs_unknown_agent_lookup_diagnostics(tmp_path, monkeypatc
     assert "normalized_agent_name': 'evie'" in messages
 
 
-def test_user_say_api_selects_latest_matching_agent(tmp_path, monkeypatch):
+def test_user_say_api_selects_latest_matching_agent(tmp_path, monkeypatch, caplog):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    caplog.set_level(logging.INFO)
     for thread_id, voice_id, seen_at in (
         ("thread-1", "voice-1", 10),
         ("thread-2", "voice-2", 20),
@@ -663,7 +719,7 @@ def test_user_say_api_selects_latest_matching_agent(tmp_path, monkeypatch):
     async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name is None
-        assert voice_id == "voice-2"
+        assert voice_id is None
         return SimpleNamespace(
             message_id="announcer-1",
             room_name="room-1",
@@ -682,6 +738,9 @@ def test_user_say_api_selects_latest_matching_agent(tmp_path, monkeypatch):
 
     assert response.status_code == 202
     assert response.data["message_id"] == "announcer-1"
+    assert "stage=user_say_voice_resolved agent_name=Dottie thread_id=thread-2" in (
+        "\n".join(record.message for record in caplog.records)
+    )
 
 
 def test_user_say_api_returns_thread_for_no_active_room(tmp_path, monkeypatch):
