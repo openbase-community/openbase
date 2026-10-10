@@ -1329,7 +1329,14 @@ def test_mute_keepalive_holds_client_watchdog_during_long_turn(monkeypatch):
 
         record = ledger.accept_utterance(message_id="m1", prompt="launch an agent")
         ledger.mark_user_turn_closed(record, decision=_immediate_closure_decision())
-        await asyncio.sleep(0.07)
+        # Wait for the keepalives rather than a fixed 70 ms: on a loaded
+        # machine the event loop runs the 20 ms timer fewer times in that
+        # window (one keepalive instead of three in a full-suite run on
+        # 2026-10-09 that passed alone and on rerun).
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 2.0
+        while events.count("mute_keepalive") < 3 and loop.time() < deadline:
+            await asyncio.sleep(0.01)
         keepalives_while_held = events.count("mute_keepalive")
         # The real mute is emitted exactly once; keepalives never repeat it.
         assert events.count("safe_to_mute_user") == 1
