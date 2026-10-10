@@ -1421,6 +1421,32 @@ async def test_character_suspension_discards_input_from_the_previous_route():
     await bridge.aclose()
 
 
+async def test_return_command_survives_character_handoff_once():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    other = FakeVoiceClient(thread_id="other")
+    router.transfer(other)
+    bridge.suspend_session()
+    # The previous model finishes this newer caller command while the
+    # target's immutable voice session is still connecting.
+    live.final("Return to Dispatcher.", item_id="return-during-handoff")
+    live.final("Return to Dispatcher.", item_id="return-during-handoff")
+    await _settle()
+    assert router.is_dispatcher_active
+    assert router.exits == 1
+    assert dispatcher.prompts == [] and other.prompts == []
+    await bridge.aclose()
+
+
+async def test_return_while_dispatcher_active_cancels_pending_transfer_without_turn():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    router.has_pending_transfer = True
+    live.final("Return to Dispatcher.")
+    await _settle()
+    assert router.exits == 1
+    assert dispatcher.prompts == []
+    await bridge.aclose()
+
+
 # --- overlapping delegations / steering ----------------------------------------
 
 

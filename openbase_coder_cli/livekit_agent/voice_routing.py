@@ -46,6 +46,8 @@ class LiveKitVoiceRouter:
         self._proactive_steer_prompt_hashes: dict[str, float] = {}
         self._orphaned_result_handler = None
         self._route_version = 0
+        self._route_request = 0
+        self._pending_route_request: int | None = None
         self._route_owner_id = uuid.uuid4().hex
         self.delivery_ledger = delivery_ledger
         self.input_buffer = VoiceInputBuffer()
@@ -77,6 +79,10 @@ class LiveKitVoiceRouter:
     def active_target_voice_name(self) -> str | None:
         return self._active_target_voice_name
 
+    @property
+    def has_pending_transfer(self) -> bool:
+        return self._pending_route_request is not None
+
     def route_snapshot(self) -> VoiceRouteSnapshot:
         thread_id = getattr(self._active_client, "_thread_id", "") or ""
         active_route = "dispatcher" if self.is_dispatcher_active else "codex_thread"
@@ -89,6 +95,10 @@ class LiveKitVoiceRouter:
         )
 
     def exit_to_dispatch(self) -> bool:
+        # A return also cancels a target still preparing, even when the
+        # dispatcher remains the currently connected route.
+        self._route_request += 1
+        self._pending_route_request = None
         if self.is_dispatcher_active:
             logger.info(
                 "dispatch_timing stage=voice_route_unchanged "
@@ -116,7 +126,9 @@ class LiveKitVoiceRouter:
         label: str | None,
         voice_id: str | None = None,
         voice_name: str | None = None,
-    ) -> None:
+    ) -> bool:
+        self._route_request += 1
+        request = self._route_request
         target_voice = stable_super_agent_voice(thread_id, label)
         target_voice_id = voice_id or (target_voice.voice_id if target_voice else None)
         target_voice_name = voice_name or (target_voice.name if target_voice else None)
@@ -142,7 +154,18 @@ class LiveKitVoiceRouter:
         else:
             target_client.set_super_agent_name(label)
             target_client.set_super_agent_agent_name(target_voice_name)
-        await target_client.prepare()
+        self._pending_route_request = request
+        try:
+            await target_client.prepare()
+        except Exception:
+            if request != self._route_request:
+                return False
+            raise
+        finally:
+            if self._pending_route_request == request:
+                self._pending_route_request = None
+        if request != self._route_request:
+            return False
         self._active_client = target_client
         self._active_target_voice_id = target_voice_id
         self._active_target_voice_name = target_voice_name
@@ -164,6 +187,7 @@ class LiveKitVoiceRouter:
             target_voice_id or "",
             target_voice_name or "",
         )
+        return True
 
     def claim_speech(self, client, turn_id: str) -> bool:
         return self._active_client is client and client.claim_speech(turn_id)
@@ -203,6 +227,8 @@ class LiveKitVoiceRouter:
             self._proactive_steer_prompt_hashes.pop(prompt_hash, None)
 
     async def close(self) -> None:
+        self._route_request += 1
+        self._pending_route_request = None
         # The call is over: the next one starts on its own route, so a target
         # left in the route file (a call started from a thread, or a
         # transfer) must not outlive the call. Otherwise the call page, the
@@ -235,7 +261,7 @@ async def _transfer_voice_route(
     assert route_command.thread_id is not None
     assert route_command.cwd is not None
     try:
-        await voice_router.transfer_to_thread(
+        transferred = await voice_router.transfer_to_thread(
             thread_id=route_command.thread_id,
             cwd=route_command.cwd,
             label=route_command.label,
@@ -251,6 +277,9 @@ async def _transfer_voice_route(
                 text="Unable to transfer voice route.",
             )
         )
+        return
+
+    if transferred is False:
         return
 
     announcer_queue.enqueue(
