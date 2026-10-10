@@ -68,6 +68,24 @@ def test_exchange_persists_only_scoped_install_credentials(bootstrap_paths):
     assert not (machine_token.parent / "auth.json").exists()
 
 
+def test_exchange_requests_and_accepts_the_notify_scope(bootstrap_paths):
+    machine_token, _owner_identity, _netmesh_key = bootstrap_paths
+
+    with mock.patch.object(
+        httpx,
+        "post",
+        return_value=bootstrap_response(scopes=["llm_proxy", "audio_proxy", "notify"]),
+    ) as post:
+        provision_module._exchange_bootstrap(
+            "obmb_one-time", "https://backend.example.com"
+        )
+
+    # The exchange opts in to notify; an older Cloud ignores the body.
+    assert post.call_args.kwargs["json"] == {"scopes": ["notify"]}
+    saved = json.loads(machine_token.read_text())
+    assert saved["scopes"] == ["llm_proxy", "audio_proxy", "notify"]
+
+
 def test_exchange_rejects_broader_scopes_before_writing(bootstrap_paths):
     machine_token, owner_identity, netmesh_key = bootstrap_paths
 

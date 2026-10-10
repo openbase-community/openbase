@@ -412,7 +412,16 @@ class SuperAgentsClientTurnsMixin:
         prompt: str,
         *,
         start_when_inactive: bool = True,
+        interrupt_current_work: bool = False,
     ) -> str | None:
+        """Steer the active turn with ``prompt``.
+
+        ``interrupt_current_work`` asks a Claude-compatible backend to stop
+        the turn's running work before applying the prompt, which then
+        replaces that work rather than following it (``run_turn``'s
+        ``replaces_active_turn``). Codex steers mid-turn natively and ignores
+        the flag.
+        """
         assert self._active_turn_id is not None
         _ensure_not_moved(thread_id)
         await self._ensure_claude_auth_ready()
@@ -422,12 +431,14 @@ class SuperAgentsClientTurnsMixin:
             for key, value in {
                 "model": self._model_name,
                 "reasoningEffort": self._configured_reasoning_effort(),
+                "interruptCurrentWork": True if interrupt_current_work else None,
             }.items()
             if value is not None
         }
+        active_turn_id = self._active_turn_id
         try:
             result = await self._backend_client.steer_by_label(
-                self._query(thread_id=thread_id, turn_id=self._active_turn_id),
+                self._query(thread_id=thread_id, turn_id=active_turn_id),
                 prompt,
                 turn_input,
             )
@@ -437,7 +448,11 @@ class SuperAgentsClientTurnsMixin:
             # and the transcripts were silently dropped). Capture the input
             # in the local follow-up queue instead of losing it; the queue
             # drains as soon as the active turn finishes.
-            active_turn_id = self._active_turn_id
+            if interrupt_current_work and active_turn_id:
+                await self._cancel_turn_before_queueing(thread_id, active_turn_id)
+                return await self._queue_rejected_steer(
+                    thread_id, prompt, blocked_by_turn_id=active_turn_id
+                )
             try:
                 _ensure_not_moved(thread_id)
                 queued = await self._backend_client.queue_turn_by_label(
@@ -484,6 +499,7 @@ class SuperAgentsClientTurnsMixin:
                     prompt_debug["hash"],
                 )
                 self._active_turn_id = actual_turn_id
+                active_turn_id = actual_turn_id
                 result = await self._backend_client.steer_by_label(
                     self._query(thread_id=thread_id, turn_id=actual_turn_id),
                     prompt,
@@ -498,10 +514,12 @@ class SuperAgentsClientTurnsMixin:
                 )
                 if not start_when_inactive:
                     return None
+                if interrupt_current_work:
+                    await self._cancel_turn_before_queueing(thread_id, active_turn_id)
                 return await self._queue_rejected_steer(
                     thread_id,
                     prompt,
-                    blocked_by_turn_id=self._active_turn_id,
+                    blocked_by_turn_id=active_turn_id,
                 )
             elif _is_no_active_turn_error(exc):
                 logger.info(
@@ -526,6 +544,14 @@ class SuperAgentsClientTurnsMixin:
                 return turn_id
             else:
                 raise
+        if interrupt_current_work and _response_is_queued(result):
+            await self._cancel_turn_before_queueing(thread_id, active_turn_id)
+            return await self._wait_for_queued_turn_to_start(
+                thread_id,
+                queued_id=_extract_queued_id(result),
+                blocked_by_turn_id=active_turn_id,
+                dispatch_id=f"voice-{uuid.uuid4().hex[:12]}",
+            )
         turn_id = _extract_turn_id(result) or self._active_turn_id
         self._active_turn_id = turn_id
         self._active_turn_prompt_hash = prompt_debug["hash"]
@@ -537,6 +563,18 @@ class SuperAgentsClientTurnsMixin:
             prompt_debug["length"],
         )
         return turn_id
+
+    async def _cancel_turn_before_queueing(self, thread_id: str, turn_id: str) -> None:
+        """Stop a fragment turn before waiting for its queued replacement."""
+        await self._backend_client.cancel_by_label(
+            self._query(thread_id=thread_id, turn_id=turn_id)
+        )
+        logger.info(
+            "%s stage=steer_timeout_cancelled_replaced_turn thread_id=%s turn_id=%s",
+            DISPATCH_TIMING_LOG,
+            thread_id,
+            turn_id,
+        )
 
     async def _wait_for_turn(self, thread_id: str, turn_id: str) -> dict[str, Any]:
         wait_task = self._active_turn_wait_task

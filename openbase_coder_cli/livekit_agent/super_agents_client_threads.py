@@ -415,6 +415,8 @@ class SuperAgentsClientThreadsMixin:
         active_target_label: str | None,
         active_target_voice_id: str | None,
         active_target_voice_name: str | None,
+        route_owner_id: str | None = None,
+        expected_route_owner_id: str | None = None,
     ) -> None:
         persist_voice_route_state(
             self._state_path,
@@ -425,15 +427,20 @@ class SuperAgentsClientThreadsMixin:
             active_target_label=active_target_label,
             active_target_voice_id=active_target_voice_id,
             active_target_voice_name=active_target_voice_name,
+            route_owner_id=route_owner_id,
+            expected_route_owner_id=expected_route_owner_id,
         )
 
-    def reset_voice_route_to_dispatcher(self) -> None:
+    def reset_voice_route_to_dispatcher(
+        self, *, expected_route_owner_id: str | None = None
+    ) -> None:
         self.persist_voice_route(
             active_target_thread_id=None,
             active_target_kind=None,
             active_target_label=None,
             active_target_voice_id=None,
             active_target_voice_name=None,
+            expected_route_owner_id=expected_route_owner_id,
         )
 
     def persist_voice_route(
@@ -444,6 +451,8 @@ class SuperAgentsClientThreadsMixin:
         active_target_label: str | None,
         active_target_voice_id: str | None,
         active_target_voice_name: str | None,
+        route_owner_id: str | None = None,
+        expected_route_owner_id: str | None = None,
     ) -> None:
         self._persist_voice_route_state(
             active_target_thread_id=active_target_thread_id,
@@ -451,4 +460,6 @@ class SuperAgentsClientThreadsMixin:
             active_target_label=active_target_label,
             active_target_voice_id=active_target_voice_id,
             active_target_voice_name=active_target_voice_name,
+            route_owner_id=route_owner_id,
+            expected_route_owner_id=expected_route_owner_id,
         )

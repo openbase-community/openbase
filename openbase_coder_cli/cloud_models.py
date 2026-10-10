@@ -34,7 +34,11 @@ def cloud_model_availability() -> dict[str, str | None]:
         OpenbaseCloudAudioSubscriptionError,
     ):
         return dict.fromkeys(
-            OPENBASE_CLOUD_CLAUDE_MODEL_MAP, CATALOG_UNAVAILABLE_REASON
+            (
+                *OPENBASE_CLOUD_CLAUDE_MODEL_MAP,
+                *OPENBASE_CLOUD_CLAUDE_MODEL_MAP.values(),
+            ),
+            CATALOG_UNAVAILABLE_REASON,
         )
     entries = payload.get("data")
     models = (
@@ -50,7 +54,7 @@ def cloud_model_availability() -> dict[str, str | None]:
     for alias, model_id in OPENBASE_CLOUD_CLAUDE_MODEL_MAP.items():
         entry = models.get(model_id, {})
         reason = entry.get("unavailable_reason")
-        result[alias] = (
+        result[alias] = result[model_id] = (
             None
             if entry.get("available") is True
             else (

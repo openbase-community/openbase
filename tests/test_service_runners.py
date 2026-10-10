@@ -217,7 +217,19 @@ def test_livekit_agent_tailscale_mode_sets_livekit_url(monkeypatch):
     ]
     assert out_env["LIVEKIT_URL"] == "ws://localhost:7880"
     assert out_env["LIVEKIT_NODE_IP"] == "100.64.1.2"
-    assert out_env["LIVEKIT_AGENT_LOAD_THRESHOLD"] == "2.0"
+    assert "LIVEKIT_AGENT_LOAD_THRESHOLD" not in out_env
+
+
+def test_livekit_agent_preserves_explicit_load_threshold(monkeypatch):
+    monkeypatch.setattr(runners.network, "tailscale_ip", lambda family: None)
+    env = {
+        "LIVEKIT_NETWORK_MODE": "local",
+        "LIVEKIT_AGENT_LOAD_THRESHOLD": "0.9",
+    }
+
+    _, out_env = runners.build_livekit_agent(env, {"python": "/opt/openbase/python"})
+
+    assert out_env["LIVEKIT_AGENT_LOAD_THRESHOLD"] == "0.9"
 
 
 def test_livekit_agent_unsupported_mode_exits(monkeypatch):

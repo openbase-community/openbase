@@ -17,6 +17,12 @@ class RuntimePackage:
     version: str = ""
     target: str = ""
     channel: str = "stable"
+    # Package-relative path of the Openbase Services launcher executable
+    # (``serviceLauncher`` in the package metadata), empty when the package
+    # ships none. On macOS the launchd jobs run through it so TCC grants are
+    # keyed on its stable signed bundle identity instead of the per-release
+    # Python binary (dev-docs/MACOS_SERVICE_IDENTITY.md).
+    service_launcher: str = ""
 
     @property
     def bin_dir(self) -> Path:
@@ -37,6 +43,12 @@ class RuntimePackage:
     def livekit_server_path(self) -> Path:
         name = "livekit-server.exe" if os.name == "nt" else "livekit-server"
         return self.bin_dir / name
+
+    @property
+    def service_launcher_path(self) -> Path | None:
+        if not self.service_launcher:
+            return None
+        return self.root / self.service_launcher
 
     @property
     def console_build_dir(self) -> Path:
@@ -112,6 +124,7 @@ def stable_runtime_package() -> RuntimePackage | None:
         version=package.version,
         target=package.target,
         channel=package.channel,
+        service_launcher=package.service_launcher,
     )
 
 
@@ -164,4 +177,5 @@ def _package_from_root(root: Path) -> RuntimePackage | None:
         version=str(metadata.get("version", "")),
         target=str(metadata.get("target", "")),
         channel=str(metadata.get("channel", "")).strip() or "stable",
+        service_launcher=str(metadata.get("serviceLauncher", "") or "").strip(),
     )

@@ -348,7 +348,19 @@ class SuperAgentsLiveKitClient(
         prompt: str,
         *,
         developer_instructions: str | None = None,
+        replaces_active_turn: bool = False,
     ) -> dict[str, Any]:
+        """Run the caller's utterance as the thread's turn, or join the running one.
+
+        ``replaces_active_turn`` says ``prompt`` is the complete form of the
+        request the active turn started on (the voice bridge merged a split
+        utterance). A backend that steers mid-turn (Codex) absorbs the rest of
+        the request into the running turn as usual. Claude Code cannot: its
+        steer becomes a queued follow-up that re-runs the whole request after
+        the fragment turn finishes, so there the fragment turn is interrupted
+        and the merged request runs in its place. Interruption does not undo
+        actions the fragment turn already performed.
+        """
         dispatch_id = f"voice-{uuid.uuid4().hex[:12]}"
         dispatch_started = time.monotonic()
         prompt_debug = _prompt_debug_fields(prompt)
@@ -425,10 +437,38 @@ class SuperAgentsLiveKitClient(
                         turn_id,
                         prompt_debug["hash"],
                     )
+                elif replaces_active_turn and not self._backend_is_codex():
+                    # The fragment turn must not finish its half of the
+                    # request: interrupt it and send the whole request (no
+                    # remainder trimming; completed actions are not rolled back).
+                    logger.info(
+                        "%s stage=voice_request_replaced_active_turn dispatch_id=%s "
+                        "thread_id=%s turn_id=%s prompt_hash=%s",
+                        DISPATCH_TIMING_LOG,
+                        dispatch_id,
+                        thread_id,
+                        self._active_turn_id,
+                        prompt_debug["hash"],
+                    )
+                    turn_id = await self._steer_turn(
+                        thread_id, prompt, interrupt_current_work=True
+                    )
                 else:
                     remainder = self._unsubmitted_transcript_remainder(
                         self._active_turn_id, prompt
                     )
+                    if replaces_active_turn:
+                        logger.info(
+                            "%s stage=voice_request_merged_into_active_turn "
+                            "dispatch_id=%s thread_id=%s turn_id=%s prompt_hash=%s "
+                            "remainder_len=%d",
+                            DISPATCH_TIMING_LOG,
+                            dispatch_id,
+                            thread_id,
+                            self._active_turn_id,
+                            prompt_debug["hash"],
+                            len(remainder or ""),
+                        )
                     if remainder == "":
                         # A merged utterance whose fragments already reached
                         # the active turn (start prompt + proactive steers);

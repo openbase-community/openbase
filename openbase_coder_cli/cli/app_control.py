@@ -15,6 +15,16 @@ def publish_app_control(payload: dict[str, object], *, timeout: float = 10) -> d
     return response.json()
 
 
-def publish_open_url(url: str) -> dict:
-    """Ask the connected Openbase phone app to open ``url``."""
-    return publish_app_control({"action": "open_url", "url": url})
+def publish_open_url(
+    url: str, *, loopback_forward: dict[str, object] | None = None
+) -> dict:
+    """Ask the connected Openbase phone app to open ``url``.
+
+    ``loopback_forward`` (``{port, target, ttl_seconds, token}``) asks the
+    phone to forward its own loopback ``port`` to ``target`` for a login
+    whose redirect points at localhost (see ``login_callback``).
+    """
+    payload: dict[str, object] = {"action": "open_url", "url": url}
+    if loopback_forward:
+        payload["loopback_forward"] = loopback_forward
+    return publish_app_control(payload)

@@ -62,7 +62,10 @@ from openbase_coder_cli.services.fleet_aggregation import (
     thread_payload_sort_key,
 )
 from openbase_coder_cli.services.thread_push import moved_thread_detail
-from openbase_coder_cli.thread_model_overrides import set_thread_model_override
+from openbase_coder_cli.thread_model_overrides import (
+    get_thread_model_override,
+    set_thread_model_override,
+)
 from openbase_coder_cli.thread_sync.models import ThreadStatus
 from openbase_coder_cli.thread_sync.projects import (
     refresh_projects_from_thread_directories as _refresh_projects_from_threads,
@@ -820,7 +823,11 @@ def _requested_turn_model(request, manager, thread_id) -> str | None:
     thread = async_to_sync(manager.get_thread_state)(thread_id)
     if thread is None:
         raise ValueError(f"Thread {thread_id} not found")
-    model = validate_model_for_thread(thread.backend, model)
+    model = validate_model_for_thread(
+        thread.backend,
+        model,
+        current_model=get_thread_model_override(thread_id) or thread.model,
+    )
     set_thread_model_override(thread_id, model)
     return model
 

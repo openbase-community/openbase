@@ -52,7 +52,10 @@ from openbase_coder_cli.openbase_coder_cli_app.thread_terminal import (
     resolve_terminal_launch,
     terminal_supported,
 )
-from openbase_coder_cli.thread_model_overrides import set_thread_model_override
+from openbase_coder_cli.thread_model_overrides import (
+    get_thread_model_override,
+    set_thread_model_override,
+)
 from openbase_coder_cli.thread_sync.session_manager import get_session_manager
 
 logger = logging.getLogger(__name__)
@@ -76,7 +79,11 @@ async def _apply_turn_model(manager, thread_id: str, content: dict) -> str | Non
     thread = await manager.get_thread_state(thread_id)
     if thread is None:
         raise ValueError(f"Thread {thread_id} not found")
-    model = validate_model_for_thread(thread.backend, model)
+    model = validate_model_for_thread(
+        thread.backend,
+        model,
+        current_model=get_thread_model_override(thread_id) or thread.model,
+    )
     set_thread_model_override(thread_id, model)
     return model
 
@@ -816,6 +823,13 @@ class IOSAppControlConsumer(AsyncJsonWebsocketConsumer):
             time.time() * 1000,
         )
         ack = {"type": "ios_app_control_ack", "command_id": command_id}
+        if type(content.get("opened")) is bool:
+            # open_url acks report whether the URL actually opened.
+            ack["opened"] = content["opened"]
+            if type(content.get("notified")) is bool:
+                ack["notified"] = content["notified"]
+            if isinstance(content.get("error"), str):
+                ack["error"] = content["error"][:1024]
         state = content.get("call_state")
         if isinstance(state, dict) and all(
             type(state.get(key)) is bool for key in ("connected", "muted", "speaker", "active")

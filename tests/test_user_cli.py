@@ -289,7 +289,7 @@ def test_user_ios_open_url_posts_control_command(monkeypatch):
     )
 
     assert result.exit_code == 0
-    assert "delivered: ios-app-control-1" in result.output
+    assert "Sent to the Openbase app on your phone." in result.output
     assert calls == [
         (
             "http://127.0.0.1:7999/api/user/ios-app-control/",
@@ -298,7 +298,11 @@ def test_user_ios_open_url_posts_control_command(monkeypatch):
     ]
 
 
-def test_user_ios_open_url_fails_when_no_app_confirms_receipt(monkeypatch):
+def test_user_ios_open_url_pushes_when_no_app_confirms_receipt(monkeypatch):
+    from openbase_coder_cli.config import cloud_notifications
+
+    pushes = []
+    monkeypatch.setattr(cloud_notifications, "send_notification_push", lambda **kwargs: pushes.append(kwargs))
     def fake_request(method, url, **kwargs):
         return httpx.Response(
             202,
@@ -316,9 +320,9 @@ def test_user_ios_open_url_fails_when_no_app_confirms_receipt(monkeypatch):
         ["ios", "open-url", "openbase://threads/123"],
     )
 
-    assert result.exit_code != 0
-    assert "published (unconfirmed): ios-app-control-1" in result.output
-    assert "No iOS app confirmed receipt" in result.output
+    assert result.exit_code == 0
+    assert "Sent a notification to your phone" in result.output
+    assert pushes[0]["user_info"] == {"openbase_destination": "open_url", "url": "openbase://threads/123"}
 
 
 def test_user_ios_mute_and_unmute_post_control_commands(monkeypatch):

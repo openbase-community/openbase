@@ -227,6 +227,18 @@ jobs:
           file "$tunneld_bin"
           echo "OPENBASE_TUNNELD_BIN=${tunneld_bin}" >> "$GITHUB_ENV"
 
+      # The launchd job process for every macOS service. Its Developer ID
+      # signature + fixed bundle identifier are what keep TCC grants stable
+      # across self-updates (dev-docs/MACOS_SERVICE_IDENTITY.md).
+      - name: Build Openbase Services launcher
+        run: |
+          launcher_app="$RUNNER_TEMP/Openbase Services.app"
+          python3 cli/scripts/build_service_launcher.py \
+            --version "${{ steps.release.outputs.version }}" \
+            --target "${{ steps.release.outputs.target }}" \
+            --output "$launcher_app"
+          echo "OPENBASE_SERVICE_LAUNCHER_APP=${launcher_app}" >> "$GITHUB_ENV"
+
       - name: Fetch the sync engine
         run: |
           python3 cli/scripts/fetch_sync_engine.py --target "${{ steps.release.outputs.target }}" --out "$RUNNER_TEMP/sync-engine"
@@ -249,9 +261,20 @@ jobs:
             --livekit-server-bin "$LIVEKIT_SERVER_BIN" \
             --tunneld-bin "$OPENBASE_TUNNELD_BIN" \
             --sync-engine-dir "$RUNNER_TEMP/sync-engine" \
+            --service-launcher-app "$OPENBASE_SERVICE_LAUNCHER_APP" \
             --package-dir "$package_dir" \
             --force
           echo "PACKAGE_DIR=${package_dir}" >> "$GITHUB_ENV"
+
+      # Without the Developer ID secrets the package ships ad-hoc signed: it
+      # runs, but every release is a new code identity to macOS, so TCC asks
+      # for Desktop/Documents/Local Network access again after each
+      # self-update. The secrets mirror the desktop repo's
+      # (dev-docs/MACOS_SERVICE_IDENTITY.md lists them).
+      - name: Check code-signing credentials
+        if: ${{ env.APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64 == '' }}
+        run: |
+          echo "::warning title=Unsigned runtime package::APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64 is not set; the runtime package will be ad-hoc signed and macOS TCC grants will not survive self-updates."
 
       - name: Import Developer ID certificate
         if: ${{ env.APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64 != '' }}
@@ -282,6 +305,17 @@ jobs:
           codesign --verify --deep --strict "$PACKAGE_DIR/bin/openbase-sync"
           codesign --verify --deep --strict "$PACKAGE_DIR/bin/edge"
           codesign --verify --deep --strict "$PACKAGE_DIR/python/bin/python$pyver"
+          launcher_app="$PACKAGE_DIR/libexec/Openbase Services.app"
+          codesign --verify --deep --strict "$launcher_app"
+          # The designated requirement must be identifier + Team ID (stable
+          # across releases), never a cdhash (ad-hoc, new every build).
+          codesign -d -r- "$launcher_app" 2>&1 | tee /dev/stderr \
+            | grep -q 'designated => identifier "cloud.openbase.coder.services" and anchor apple generic'
+          codesign -dvv "$launcher_app" 2>&1 | grep -q '^TeamIdentifier=[A-Z0-9]'
+          # The interpreter keeps its hardened-runtime entitlements (plugin
+          # extension modules are not signed by us).
+          codesign -d --entitlements - --xml "$PACKAGE_DIR/python/bin/python$pyver" \
+            | grep -q 'com.apple.security.cs.disable-library-validation'
 
       - name: Archive release assets
         run: |

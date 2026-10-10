@@ -47,9 +47,11 @@ routine, developer machine, or one-off deployment.
 - Bootstrap grants are random, short-lived, single-use values. Cloud stores
   only their SHA-256 hashes. Issuing a replacement revokes any outstanding
   grant for that Workspace.
-- Bootstrap mints one machine identity whose exact scopes are `llm_proxy` and
-  `audio_proxy`, plus a non-reusable, expiring Netmesh enrollment key. The CLI
-  rejects any broader or differently ordered scope set.
+- Bootstrap mints one machine identity whose scopes are `llm_proxy` and
+  `audio_proxy`, optionally followed by `notify` when the CLI requests it in
+  the exchange body (it lets the Workspace push "open this link" notifications
+  to the owner's own phones), plus a non-reusable, expiring Netmesh enrollment
+  key. The CLI rejects any other scope set or order.
 - Owner identity pinning stores only the Openbase subject and normalized email;
   it is not an authentication credential. Inbound user JWTs still require
   signature validation and a matching subject.
@@ -78,7 +80,7 @@ POST /api/openbase/devspaces/bootstrap/exchange/
 The successful response contains:
 
 - one Openbase machine token, display prefix, deterministic Workspace install
-  ID, and the exact two proxy scopes;
+  ID, and the two proxy scopes (plus `notify` when requested);
 - non-secret owner subject/email data for local owner pinning;
 - one non-reusable Netmesh enrollment key and its control-plane metadata.
 

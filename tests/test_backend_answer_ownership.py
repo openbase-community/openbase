@@ -1,6 +1,12 @@
 from types import SimpleNamespace
-from openbase_coder_cli.livekit_agent.backend_answer_ownership import preserve_backend_answer_on_cancel
-from openbase_coder_cli.livekit_agent.voice_delivery import VoiceDeliveryLedger, VoiceRouteSnapshot
+
+from openbase_coder_cli.livekit_agent.backend_answer_ownership import (
+    preserve_backend_answer_on_cancel,
+)
+from openbase_coder_cli.livekit_agent.voice_delivery import (
+    VoiceDeliveryLedger,
+    VoiceRouteSnapshot,
+)
 
 
 def test_cancelled_consumer_preserves_backend_answer_and_cannot_unmute():

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -100,6 +101,8 @@ class FakeVoiceClient:
     def __init__(self, *, thread_id="thread-1") -> None:
         self._thread_id = thread_id
         self.prompts: list[tuple[str, str | None]] = []
+        # Parallel to ``prompts``: whether each run replaced the running turn.
+        self.replaces: list[bool] = []
         self.listeners: list = []
         self.claimed: list[str] = []
         self.result_gate = asyncio.Event()
@@ -111,8 +114,11 @@ class FakeVoiceClient:
         }
         self.busy = False
 
-    async def run_turn(self, prompt, *, developer_instructions=None):
+    async def run_turn(
+        self, prompt, *, developer_instructions=None, replaces_active_turn=False
+    ):
         self.prompts.append((prompt, developer_instructions))
+        self.replaces.append(replaces_active_turn)
         await self.result_gate.wait()
         if isinstance(self.result, Exception):
             raise self.result
@@ -185,6 +191,7 @@ def _make_bridge(
     settle=0.0,
     hold_max=3.0,
     lag=0.0,
+    call_id="",
 ):
     dispatcher = FakeVoiceClient(thread_id="dispatcher-thread")
     router = FakeVoiceRouter(dispatcher)
@@ -206,6 +213,7 @@ def _make_bridge(
         utterance_settle_seconds=settle,
         utterance_hold_max_seconds=hold_max,
         utterance_transcript_lag_seconds=lag,
+        call_id=call_id,
         **({"clock": clock} if clock is not None else {}),
     )
     bridge.attach(live)
@@ -852,12 +860,12 @@ async def test_two_utterances_in_a_row_steer_and_only_the_newest_speaks():
     await _settle()
     live.final("And also run the linter")
     await _settle()
-    # Both reach the thread; run_turn steers the running turn with the second.
     assert len(dispatcher.prompts) == 2
     assert dispatcher.prompts[0][0].endswith(wrap_voice_prompt("Check the build"))
     assert dispatcher.prompts[1][0].endswith(
         wrap_voice_prompt("And also run the linter")
     )
+    assert dispatcher.replaces == [False, False]
     # A late delegation binds to the newest utterance.
     live.delegate("d1", "")
     await _settle()
@@ -1201,7 +1209,6 @@ def test_pipeline_ledger_is_unchanged_by_the_live_mode_flag():
     ledger._cancel_mute_keepalive_task()
 
 
-
 # --- BUG 18: screen context and fragment settling ----------------------------
 
 
@@ -1380,8 +1387,20 @@ async def test_reconnect_unbinds_a_delegation_while_its_utterance_is_held():
     await bridge.aclose()
 
 
-@pytest.mark.parametrize("followup", ["Run the linter", "Thanks"])
-async def test_a_separate_quick_utterance_does_not_repeat_the_previous_command(followup):
+@pytest.mark.parametrize(
+    "followup",
+    [
+        "Run the linter",
+        "run the linter",
+        "what time is it",
+        "and also run the linter",
+        "And then run the tests",
+        "Thanks",
+    ],
+)
+async def test_a_separate_quick_utterance_does_not_repeat_the_previous_command(
+    followup,
+):
     bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
     live.final("Increment the counter")
     await _settle()
@@ -1392,6 +1411,128 @@ async def test_a_separate_quick_utterance_does_not_repeat_the_previous_command(f
     else:
         assert len(dispatcher.prompts) == 2
         assert dispatcher.prompts[1][0].endswith(_voice(followup))
+        # A separate request never replaces the running turn: on a backend
+        # that cannot steer, replacing would interrupt the counter increment.
+        assert dispatcher.replaces == [False, False]
+    await bridge.aclose()
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (". Answer just the number", True),
+        (", the one from yesterday", True),
+        ("and answer just the number", True),
+        ("And answer just the number", True),
+        ("And also run the linter", False),
+        ("and then run the tests", False),
+        ("but only the first ten lines", True),
+        ("or the staging one", True),
+        ("answer just the number", False),
+        ("run the linter", False),
+        ("what time is it", False),
+        ("Run the linter", False),
+        ("Then run the tests", False),
+        ("Also run the linter", False),
+        ("What time is it", False),
+        ("", False),
+    ],
+)
+def test_looks_like_continuation(text, expected):
+    from openbase_coder_cli.livekit_agent.live_delegation import looks_like_continuation
+
+    assert looks_like_continuation(text) is expected
+
+
+async def test_split_request_after_a_silent_delegation_replaces_the_fragment_turn():
+    """The caller pauses mid-request while silent, the model delegates on the
+    first half (which starts a turn at once), and the rest arrives a moment
+    later: the merged request replaces that turn, inherits its delegation and
+    speaks once. Without the replace flag a backend that cannot steer queued
+    the whole request as a second turn (duplicate work, duplicate answer)."""
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=0.05)
+    bridge.on_user_state_changed("listening", "speaking")
+    bridge.on_user_state_changed("speaking", "listening")
+    live.final("Subtract 38 from the result in this thread")
+    live.delegate("d1", "")
+    await _settle()
+    assert len(dispatcher.prompts) == 1
+    assert dispatcher.replaces == [False]
+    live.final("and answer just the number")
+    await _settle()
+    await asyncio.sleep(0.12)
+    assert len(dispatcher.prompts) == 2
+    assert dispatcher.prompts[1][0].endswith(
+        _voice("Subtract 38 from the result in this thread and answer just the number")
+    )
+    assert dispatcher.replaces == [False, True]
+    merged = bridge._newest_entry_for(dispatcher)
+    assert merged.replaces_turn and merged.delegation_id == "d1"
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.of("commentary") == ["All tests pass. The build is green."]
+    assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
+    first = next(r for r in ledger._records.values() if r.message_id == "live-d1")
+    assert first.status == "cancelled"
+    await bridge.aclose()
+
+
+async def test_split_request_merged_by_the_hold_does_not_replace_anything():
+    """Fragments merged before any turn starts are one plain turn."""
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=0.08)
+    live.final("Subtract 38 from the result in this thread")
+    await asyncio.sleep(0.03)
+    live.final("and answer just the number")
+    await asyncio.sleep(0.15)
+    assert len(dispatcher.prompts) == 1
+    assert dispatcher.replaces == [False]
+    await bridge.aclose()
+
+
+async def test_the_rest_of_a_delegated_open_utterance_replaces_its_turn():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=0.05)
+    live.final("What's in the grocery list file on my", item_id="speech_1")
+    live.delegate("d1", "desktop")
+    await _settle()
+    await asyncio.sleep(0.12)
+    live.final("desktop, the one from yesterday", item_id="speech_2")
+    await _settle()
+    assert len(dispatcher.prompts) == 2
+    assert dispatcher.replaces == [False, True]
+    await bridge.aclose()
+
+
+async def test_repeated_open_delegations_preserve_the_held_request():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(settle=0.05)
+    live.final("What's in the grocery list file on my", item_id="speech_1")
+    live.delegate("d1", "desktop")
+    await _settle()
+    live.delegate("d2", "desktop, the one from yesterday")
+    await _settle()
+    live.final("desktop, the one from yesterday, read it aloud", item_id="speech_2")
+    await _settle()
+    assert dispatcher.replaces == [False, True, True]
+    assert dispatcher.prompts[1][0].endswith(
+        _voice("What's in the grocery list file on my desktop, the one from yesterday")
+    )
+    assert dispatcher.prompts[2][0].endswith(
+        _voice(
+            "What's in the grocery list file on my desktop, the one from yesterday, read it aloud"
+        )
+    )
+    await bridge.aclose()
+
+
+async def test_a_continuation_after_the_turn_spoke_is_a_new_request():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.final("Subtract 38 from the result in this thread")
+    await _settle()
+    dispatcher.progress("turn-1", _running_snapshot(lastUsefulMessage="It is 4."))
+    live.final("and answer just the number")
+    await _settle()
+    assert len(dispatcher.prompts) == 2
+    assert dispatcher.prompts[1][0].endswith(_voice("and answer just the number"))
+    assert dispatcher.replaces == [False, False]
     await bridge.aclose()
 
 
@@ -1427,3 +1568,155 @@ async def test_a_delegation_while_the_caller_is_silent_starts_the_turn_at_once()
     await _settle()
     assert live.of("commentary", "d1") == ["All tests pass. The build is green."]
     await bridge.aclose()
+
+
+# --- log correlation ----------------------------------------------------------
+
+BRIDGE_LOGGER = "openbase_coder_cli.livekit_agent.live_delegation"
+
+
+def _lines(caplog, stage: str) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if f"stage={stage}" in record.getMessage()
+    ]
+
+
+async def test_every_bridge_line_names_the_call(caplog):
+    """Service logs interleave calls; ``call=<room>`` picks one call's lines
+    out and joins them with the gateway session and the turn store."""
+    caplog.set_level(logging.INFO, logger=BRIDGE_LOGGER)
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        call_id="room-abc%1"
+    )
+
+    live.final("What is on my desktop?")
+    await _settle()
+    dispatcher.result_gate.set()
+    await _settle()
+    await bridge.aclose()
+
+    # Only the bridge's own lines: the delivery ledger logs dispatch_timing
+    # lines too, and they reach caplog once any earlier test configured
+    # Django logging (root at INFO).
+    messages = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == BRIDGE_LOGGER and "dispatch_timing" in r.getMessage()
+    ]
+    assert messages, "no bridge log lines"
+    assert all(m.endswith(" call=room-abc%1") for m in messages), messages
+    assert _lines(caplog, "live_forced_delegation")
+    assert _lines(caplog, "live_append_commentary")
+
+
+async def test_bridge_lines_carry_no_call_tag_without_a_call_id(caplog):
+    caplog.set_level(logging.INFO, logger=BRIDGE_LOGGER)
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+
+    live.final("What is on my desktop?")
+    await _settle()
+    await bridge.aclose()
+
+    messages = [
+        r.getMessage() for r in caplog.records if "dispatch_timing" in r.getMessage()
+    ]
+    assert messages and not any(" call=" in m for m in messages)
+
+
+async def test_turn_binding_is_logged_once_per_utterance(caplog):
+    """The line that joins a spoken request (``key``) to the Super Agents turn
+    row (``turn_id``): emitted when the turn id first becomes known, from a
+    progress snapshot or from the result, never twice for the same turn."""
+    caplog.set_level(logging.INFO, logger=BRIDGE_LOGGER)
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(call_id="room-1")
+
+    live.delegate("d1", "Check whether the build passes")
+    await _settle()
+    dispatcher.progress("turn-1", {"status": "running"})
+    dispatcher.result_gate.set()
+    await _settle()
+
+    bound = _lines(caplog, "live_delegation_turn_bound")
+    assert len(bound) == 1, bound
+    assert "key=d1" in bound[0]
+    assert "turn_id=turn-1" in bound[0]
+    assert "delegation_id=d1" in bound[0]
+    assert "source=progress" in bound[0]
+    assert "active_thread_id=dispatcher-thread" in bound[0]
+    await bridge.aclose()
+
+
+async def test_turn_binding_from_the_result_when_no_progress_arrived(caplog):
+    caplog.set_level(logging.INFO, logger=BRIDGE_LOGGER)
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+
+    live.final("Run the tests")
+    await _settle()
+    dispatcher.result_gate.set()
+    await _settle()
+
+    bound = _lines(caplog, "live_delegation_turn_bound")
+    assert len(bound) == 1, bound
+    assert "key=utt-1" in bound[0] and "turn_id=turn-1" in bound[0]
+    assert "source=result" in bound[0]
+    await bridge.aclose()
+
+
+async def test_closing_the_bridge_logs_one_call_summary(caplog):
+    caplog.set_level(logging.INFO, logger=BRIDGE_LOGGER)
+    now = [100.0]
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        call_id="room-1", clock=lambda: now[0]
+    )
+
+    live.delegate("d1", "Check whether the build passes")
+    await _settle()
+    dispatcher.result_gate.set()
+    await _settle()
+    now[0] = 142.25
+    await bridge.aclose()
+    await bridge.aclose()
+
+    summary = _lines(caplog, "live_call_summary")
+    assert len(summary) == 1, summary
+    line = summary[0]
+    assert "duration_s=42.2" in line, line
+    assert "utterances=1" in line
+    assert "decision_started=1" in line
+    assert "delegations_created=1" in line
+    assert "turns_bound=1" in line
+    assert "append_commentary=1" in line
+    assert "append_thinking=" in line
+    assert "superseded=0" in line
+    assert line.endswith(" call=room-1")
+
+
+async def test_call_summary_keeps_totals_after_entries_are_pruned(caplog, monkeypatch):
+    caplog.set_level(logging.INFO, logger=BRIDGE_LOGGER)
+    monkeypatch.setattr(live_delegation, "MAX_TRACKED_ENTRIES", 1)
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    dispatcher.result_gate.set()
+
+    for index in range(3):
+        live.final(f"Run the tests for package {index}")
+        await _settle()
+    await bridge.aclose()
+
+    assert len(bridge._entries) == 1
+    summary = _lines(caplog, "live_call_summary")[0]
+    assert "utterances=3" in summary
+    assert "superseded=2" in summary
+
+
+@pytest.mark.parametrize("args", [(), ("value",)])
+def test_call_tag_preserves_percent_with_and_without_format_args(caplog, args):
+    caplog.set_level(logging.DEBUG, logger=BRIDGE_LOGGER)
+    adapter = live_delegation._CallLogAdapter(
+        logging.getLogger(BRIDGE_LOGGER), "room-abc%1"
+    )
+
+    adapter.debug("diagnostic %s" if args else "diagnostic", *args)
+
+    assert caplog.records[-1].getMessage().endswith(" call=room-abc%1")

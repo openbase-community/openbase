@@ -19,7 +19,11 @@ exactly what ``AgentSession`` re-emits as a final ``user_input_transcribed``.
 That boundary is timed on audio, not on the transcript, so a closed
 utterance is first held for ``UTTERANCE_SETTLE_SECONDS`` and merged with a
 fragment that closes (or opens) meanwhile; a delegation flushes the hold at
-once. A delegation the model does emit is bound to the turn already running
+once. When the rest of a request arrives after its first half already started
+a turn, the merged request replaces that turn (``run_turn(...,
+replaces_active_turn=True)``: a mid-turn steer where the backend supports it,
+interrupt-and-rerun where it does not), avoiding a full queued replay.
+A delegation the model does emit is bound to the turn already running
 for the same utterance instead of starting a second one, and spoken results
 then go out as ``append_commentary`` bound to that delegation; without one
 they go out with ``delegation_id=None``. Progress-only output is ``append_thinking``.
@@ -41,7 +45,7 @@ import logging
 import math
 import re
 import time
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -110,13 +114,19 @@ UTTERANCE_HOLD_MAX_SECONDS = 6.0
 # A normal one-sentence utterance closes 0.8 s after its last transcript
 # fragment, which is already past this point, so it pays nothing extra.
 UTTERANCE_TRANSCRIPT_LAG_SECONDS = 1.5
-# Punctuation-led fragments that arrive after a turn already started on the
-# caller's previous words, before that turn said anything, continue that request:
-# the follow-up carries the whole request so a backend that queues it as a
-# separate turn (Claude Code cannot steer) still gets something
-# self-contained.
+# A fragment that arrives after a turn already started on the caller's
+# previous words, before that turn said anything, continues that request when
+# it reads as the rest of a sentence: punctuation-led (". Answer just the
+# number") or opened by a coordinating conjunction ("and
+# answer just the number"). The merged request then *replaces* the fragment
+# turn (``LiveDelegationEntry.replaces_turn`` -> ``run_turn(...,
+# replaces_active_turn=True)``): a backend that steers mid-turn absorbs the
+# rest, and one that cannot (Claude Code queues a steer as a separate turn)
+# interrupts the fragment turn first. Lowercase alone is not evidence of a
+# continuation: "run the linter" must not replay the previous command.
 CONTINUATION_SECONDS = 8.0
 _LEADING_PUNCTUATION = ".,;:!?"
+_CONTINUATION_LEAD_WORDS = frozenset({"and", "or", "but", "nor"})
 
 DISPATCHER_AGENT_LABEL = "the dispatcher"
 LIVE_EMPTY_ANSWER_COMMENTARY = "Done, nothing else to report."
@@ -341,10 +351,25 @@ def join_fragments(first: str, second: str) -> str:
     return f"{first} {second}"
 
 
+def looks_like_continuation(text: str) -> bool:
+    """Whether ``text`` reads as the rest of a sentence rather than a new one."""
+    text = (text or "").strip()
+    if not text:
+        return False
+    if text[0] in _LEADING_PUNCTUATION:
+        return True
+    words = _normalize_spoken_command(text).split()
+    return (
+        bool(words)
+        and words[0] in _CONTINUATION_LEAD_WORDS
+        and words[1:2] not in (["also"], ["then"])
+    )
+
+
 def _ends_with_words(text: str, tail: str) -> bool:
     words = _normalize_spoken_command(text or "").split()
     tail_words = _normalize_spoken_command(tail or "").split()
-    return bool(tail_words) and words[-len(tail_words):] == tail_words
+    return bool(tail_words) and words[-len(tail_words) :] == tail_words
 
 
 def remainder_after(prefix: str, text: str) -> str | None:
@@ -450,6 +475,10 @@ class LiveDelegationEntry:
     # Held fragments that preceded ``open_utterance`` in the same request, so
     # a steer with the utterance's final words keeps the whole request.
     lead_in: str = ""
+    # This prompt is the complete form of the request the client's running
+    # turn started on (a split utterance, merged): ``run_turn`` replaces that
+    # turn instead of queueing the request behind it.
+    replaces_turn: bool = False
     record: Any = None
     turn_id: str | None = None
     superseded: bool = False
@@ -458,6 +487,23 @@ class LiveDelegationEntry:
     created_at: float = field(default_factory=time.monotonic)
     task: asyncio.Task[None] | None = None
     heartbeat: asyncio.Task[None] | None = None
+
+
+class _CallLogAdapter(logging.LoggerAdapter):
+    """Append ``call=<room>`` to every bridge log line so one call's lines can
+    be pulled out of a service log that interleaves calls, and joined with the
+    gateway's session lines and the Super Agents turn store."""
+
+    def __init__(self, base: logging.Logger, call_id: str) -> None:
+        super().__init__(base, {"call": call_id})
+        self._suffix = f" call={call_id}" if call_id else ""
+
+    def log(self, level, msg, *args, **kwargs):
+        if self.isEnabledFor(level):
+            msg, kwargs = self.process(msg, kwargs)
+            suffix = self._suffix.replace("%", "%%") if args else self._suffix
+            kwargs["stacklevel"] = kwargs.get("stacklevel", 1) + 1
+            self.logger.log(level, f"{msg}{suffix}", *args, **kwargs)
 
 
 class LiveDelegationBridge:
@@ -477,8 +523,14 @@ class LiveDelegationBridge:
         utterance_hold_max_seconds: float = UTTERANCE_HOLD_MAX_SECONDS,
         utterance_transcript_lag_seconds: float = UTTERANCE_TRANSCRIPT_LAG_SECONDS,
         clock: Callable[[], float] = time.monotonic,
+        call_id: str = "",
+        initial_agent_label: str | None = None,
     ) -> None:
         self._voice_router = voice_router
+        self._call_id = call_id
+        self._log = _CallLogAdapter(logger, call_id)
+        self._stats: Counter[str] = Counter(superseded=0)
+        self._attached_at: float | None = None
         self._ledger = delivery_ledger
         self._developer_instructions = developer_instructions
         self._max_tokens = max_commentary_tokens
@@ -499,13 +551,23 @@ class LiveDelegationBridge:
         self._skipped: _SkippedUtterance | None = None
         self._utterance_seq = 0
         self._speaking_record: Any = None
-        self._active_agent_label = DISPATCHER_AGENT_LABEL
+        # A call started from a project thread is already routed there when
+        # the bridge is built; the dispatcher otherwise.
+        self._active_agent_label = (
+            initial_agent_label or ""
+        ).strip() or DISPATCHER_AGENT_LABEL
         self._closed = False
 
     # wiring
 
     @property
     def active_agent_label(self) -> str:
+        return self._active_agent_label
+
+    def starting_agent_label(self) -> str | None:
+        """The agent on the call from the start, None when it is the dispatcher."""
+        if self._active_agent_label == DISPATCHER_AGENT_LABEL:
+            return None
         return self._active_agent_label
 
     def _session_handlers(self) -> tuple[tuple[str, Callable[..., None]], ...]:
@@ -518,6 +580,8 @@ class LiveDelegationBridge:
     def attach(self, live_session) -> None:
         """Subscribe to the plugin session: closed caller utterances and delegations."""
         self._live_session = live_session
+        if self._attached_at is None:
+            self._attached_at = self._clock()
         for event_name, handler in self._session_handlers():
             live_session.on(event_name, handler)
 
@@ -527,11 +591,14 @@ class LiveDelegationBridge:
                 try:
                     self._live_session.off(event_name, handler)
                 except Exception:
-                    logger.debug("live session off() failed", exc_info=True)
+                    self._log.debug("live session off() failed", exc_info=True)
         self._live_session = None
 
     async def aclose(self) -> None:
+        if self._closed:
+            return
         self._closed = True
+        self._log_call_summary()
         self.detach()
         self._take_held()
         for entry in list(self._entries.values()):
@@ -568,7 +635,7 @@ class LiveDelegationBridge:
             try:
                 getattr(self._live_session, method)(chunk, delegation_id=delegation_id)
             except Exception:
-                logger.warning(
+                self._log.warning(
                     "%s stage=live_append_failed method=%s delegation_id=%s",
                     DISPATCH_TIMING_LOG,
                     method,
@@ -576,7 +643,8 @@ class LiveDelegationBridge:
                     exc_info=True,
                 )
                 return
-            logger.info(
+            self._stats[method] += 1
+            self._log.info(
                 "%s stage=live_%s delegation_id=%s text_len=%d text_hash=%s",
                 DISPATCH_TIMING_LOG,
                 method,
@@ -649,11 +717,11 @@ class LiveDelegationBridge:
             # that led into it.
             if open_entry.lead_in:
                 text = join_fragments(open_entry.lead_in, text)
-            self._dispatch_utterance(text)
+            self._dispatch_utterance(text, replaces_turn=True)
             return
         self._hold_utterance(text, item_id)
 
-    def _dispatch_utterance(self, text: str) -> None:
+    def _dispatch_utterance(self, text: str, *, replaces_turn: bool = False) -> None:
         """A whole caller utterance, settled: to the agent unless trivial."""
         if _is_exit_to_dispatch_command(text):
             if self._take_recent_exit_command():
@@ -669,7 +737,7 @@ class LiveDelegationBridge:
             self._log_forced(text, decision="skipped_trivial")
             return
         self._skipped = None
-        self._start_turn(text, source="transcript")
+        self._start_turn(text, source="transcript", replaces_turn=replaces_turn)
 
     # fragment settling
 
@@ -701,12 +769,14 @@ class LiveDelegationBridge:
             return held.first_at + self._hold_max_seconds
         deadline = now + self._settle_seconds
         if self._last_speech_end is not None:
-            deadline = max(deadline, self._last_speech_end + self._transcript_lag_seconds)
+            deadline = max(
+                deadline, self._last_speech_end + self._transcript_lag_seconds
+            )
         return deadline
 
     def _continuable_entry(self, text: str) -> LiveDelegationEntry | None:
         """A silent turn, just started on the caller's words, that these continue."""
-        if not text or text[0] not in _LEADING_PUNCTUATION or is_trivial_utterance(text):
+        if not looks_like_continuation(text) or is_trivial_utterance(text):
             return None
         client = self._voice_router.active_client
         entry = self._newest_entry_for(client)
@@ -729,7 +799,9 @@ class LiveDelegationBridge:
             self._user_speaking = False
             self._last_speech_end = self._clock()
             if self._held is not None:
-                self._schedule_flush(self._last_speech_end + self._transcript_lag_seconds)
+                self._schedule_flush(
+                    self._last_speech_end + self._transcript_lag_seconds
+                )
 
     def _note_open_fragment(self, item_id: str | None) -> None:
         """A new transcript fragment opened while an utterance is held: wait for it."""
@@ -759,13 +831,16 @@ class LiveDelegationBridge:
         held = self._take_held()
         if held is None or self._closed:
             return
+        replaces_turn = bool(held.lead_in)
         if held.lead_in:
             held.text = join_fragments(held.lead_in, held.text)
         if held.delegation_id:
-            self._start_turn_from_held(held, held.pending, held.delegation_id)
+            self._start_turn_from_held(
+                held, held.pending, held.delegation_id, replaces_turn=replaces_turn
+            )
             return
         self._log_forced(held.text, decision="settled", key="")
-        self._dispatch_utterance(held.text)
+        self._dispatch_utterance(held.text, replaces_turn=replaces_turn)
 
     def _take_held(self) -> _HeldUtterance | None:
         held, self._held = self._held, None
@@ -791,7 +866,8 @@ class LiveDelegationBridge:
         pending = " ".join(
             str(getattr(delegation, "pending_transcript", "") or "").split()
         )
-        logger.info(
+        self._stats["delegations_created"] += 1
+        self._log.info(
             "%s stage=live_delegation_created delegation_id=%s pending_len=%d "
             "pending_hash=%s active_thread_id=%s",
             DISPATCH_TIMING_LOG,
@@ -820,9 +896,12 @@ class LiveDelegationBridge:
             # its delegation is a better end-of-request signal than our timer,
             # so the agent hears the request now (no added latency).
             held = self._take_held()
+            replaces_turn = bool(held.lead_in)
             if held.lead_in:
                 held.text = join_fragments(held.lead_in, held.text)
-            self._start_turn_from_held(held, pending, delegation_id)
+            self._start_turn_from_held(
+                held, pending, delegation_id, replaces_turn=replaces_turn
+            )
             return
         if not pending:
             self._on_delegation_after_utterance(delegation_id)
@@ -847,13 +926,20 @@ class LiveDelegationBridge:
                     self._bind(open_entry, delegation_id)
                     return
                 open_entry.open_utterance = ""
-                self._start_turn(
-                    pending,
+                text = (
+                    join_fragments(open_entry.lead_in, pending)
+                    if open_entry.lead_in
+                    else pending
+                )
+                entry = self._start_turn(
+                    text,
                     source="delegation",
                     delegation_id=delegation_id,
                     key=delegation_id,
                     open_utterance=pending,
+                    replaces_turn=True,
                 )
+                entry.lead_in = open_entry.lead_in
                 return
             open_entry.open_utterance = ""
         if is_trivial_utterance(pending):
@@ -872,7 +958,12 @@ class LiveDelegationBridge:
         )
 
     def _start_turn_from_held(
-        self, held: _HeldUtterance, pending: str, delegation_id: str
+        self,
+        held: _HeldUtterance,
+        pending: str,
+        delegation_id: str,
+        *,
+        replaces_turn: bool = False,
     ) -> None:
         """The model delegated while fragments were held: one request, now."""
         if not pending or _ends_with_words(held.text, pending):
@@ -901,6 +992,7 @@ class LiveDelegationBridge:
             delegation_id=delegation_id,
             key=delegation_id,
             open_utterance=open_utterance,
+            replaces_turn=replaces_turn,
         )
         entry.lead_in = lead_in
 
@@ -929,7 +1021,7 @@ class LiveDelegationBridge:
             if not entry.completed and not entry.superseded:
                 running += 1
         self._last_exit_command_at = None
-        logger.info(
+        self._log.info(
             "%s stage=live_session_reconnected unbound=%d running=%d held=%d",
             DISPATCH_TIMING_LOG,
             unbound,
@@ -963,7 +1055,7 @@ class LiveDelegationBridge:
                 key=delegation_id,
             )
             return
-        logger.info(
+        self._log.info(
             "%s stage=live_delegation_without_new_speech delegation_id=%s",
             DISPATCH_TIMING_LOG,
             delegation_id,
@@ -984,8 +1076,14 @@ class LiveDelegationBridge:
         delegation_id: str | None = None,
         key: str | None = None,
         open_utterance: str = "",
+        replaces_turn: bool = False,
     ) -> LiveDelegationEntry:
-        """Run (or steer) the active agent's turn on one caller utterance."""
+        """Run (or steer) the active agent's turn on one caller utterance.
+
+        With ``replaces_turn`` the text is the complete request the client's
+        running turn began on; ``run_turn`` merges into or replaces that turn
+        rather than queueing a second execution behind it.
+        """
         client = self._voice_router.active_client
         route = self._voice_router.route_snapshot()
         inherited: LiveDelegationEntry | None = None
@@ -993,6 +1091,7 @@ class LiveDelegationBridge:
             if other.client is not client or other.superseded:
                 continue
             other.superseded = True
+            self._stats["superseded"] += 1
             # run_turn steers the running turn, so its merged answer also
             # answers the delegation the superseded utterance was bound to.
             if (
@@ -1001,11 +1100,13 @@ class LiveDelegationBridge:
                 and (inherited is None or other.created_at >= inherited.created_at)
             ):
                 inherited = other
-            logger.info(
-                "%s stage=live_delegation_superseded key=%s delegation_id=%s",
+            self._log.info(
+                "%s stage=live_delegation_superseded key=%s delegation_id=%s "
+                "replaced=%s",
                 DISPATCH_TIMING_LOG,
                 other.key,
                 other.delegation_id or "",
+                replaces_turn and not other.completed,
             )
         if key is None:
             self._utterance_seq += 1
@@ -1019,6 +1120,7 @@ class LiveDelegationBridge:
             or (inherited.delegation_id if inherited is not None else None),
             source=source,
             open_utterance=open_utterance,
+            replaces_turn=replaces_turn,
             created_at=self._clock(),
         )
         self._entries[key] = entry
@@ -1045,7 +1147,7 @@ class LiveDelegationBridge:
     def _bind(self, entry: LiveDelegationEntry, delegation_id: str) -> None:
         previous = entry.delegation_id
         entry.delegation_id = delegation_id
-        logger.info(
+        self._log.info(
             "%s stage=live_delegation_bound key=%s delegation_id=%s previous=%s "
             "completed=%s",
             DISPATCH_TIMING_LOG,
@@ -1088,7 +1190,8 @@ class LiveDelegationBridge:
         delegation_id: str | None = None,
         source: str = "transcript",
     ) -> None:
-        logger.info(
+        self._stats[f"decision_{decision}"] += 1
+        self._log.info(
             "%s stage=live_forced_delegation decision=%s key=%s source=%s "
             "delegation_id=%s text_len=%d text_hash=%s active_thread_id=%s",
             DISPATCH_TIMING_LOG,
@@ -1136,7 +1239,7 @@ class LiveDelegationBridge:
         try:
             instructions = self._developer_instructions() or ""
         except Exception:
-            logger.debug("live route instructions unavailable", exc_info=True)
+            self._log.debug("live route instructions unavailable", exc_info=True)
         summary = " ".join(instructions.split())[:400]
         self._append_thinking(
             f"The call is now routed to {label}. Everything the caller says goes "
@@ -1174,7 +1277,9 @@ class LiveDelegationBridge:
         )
         try:
             result = await entry.client.run_turn(
-                prompt, developer_instructions=self._developer_instructions()
+                prompt,
+                developer_instructions=self._developer_instructions(),
+                replaces_active_turn=entry.replaces_turn,
             )
         except asyncio.CancelledError:
             raise
@@ -1206,7 +1311,8 @@ class LiveDelegationBridge:
                 busy = bool(appears_busy())
             except Exception:
                 busy = False
-        logger.exception(
+        self._stats["turns_failed"] += 1
+        self._log.exception(
             "%s stage=live_delegation_turn_failed key=%s delegation_id=%s "
             "backend_busy=%s",
             DISPATCH_TIMING_LOG,
@@ -1229,12 +1335,14 @@ class LiveDelegationBridge:
         entry.completed = True
         turn_id = str(result.get("_livekit_turn_id") or "")
         speech_text = str(result.get("_livekit_speech_text") or "")
+        if turn_id and entry.turn_id != turn_id:
+            self._log_turn_bound(entry, turn_id, source="result")
         entry.turn_id = turn_id or None
         ledger = self._ledger
         if ledger is not None and entry.record is not None and turn_id:
             ledger.mark_answer_owed(entry.record, turn_id=turn_id, client=entry.client)
         if entry.superseded:
-            logger.info(
+            self._log.info(
                 "%s stage=live_delegation_result_dropped key=%s delegation_id=%s "
                 "turn_id=%s reason=superseded",
                 DISPATCH_TIMING_LOG,
@@ -1248,7 +1356,7 @@ class LiveDelegationBridge:
                 )
             return
         if not self._voice_router.can_deliver_for_snapshot(entry.route):
-            logger.info(
+            self._log.info(
                 "%s stage=live_delegation_result_dropped key=%s delegation_id=%s "
                 "turn_id=%s reason=route_changed",
                 DISPATCH_TIMING_LOG,
@@ -1306,6 +1414,7 @@ class LiveDelegationBridge:
             return
         if entry.turn_id is None:
             entry.turn_id = turn_id
+            self._log_turn_bound(entry, turn_id, source="progress")
         if not self._voice_router.can_deliver_for_snapshot(entry.route):
             return
         if _progress_has_pending_requests(progress) and not entry.approval_notified:
@@ -1325,6 +1434,41 @@ class LiveDelegationBridge:
         for chunk in self._cursor(turn_id).advance(text, final=False):
             self._append_commentary(chunk, entry.delegation_id)
 
+    # correlation
+
+    def _log_turn_bound(
+        self, entry: LiveDelegationEntry, turn_id: str, *, source: str
+    ) -> None:
+        """One line per utterance → Super Agents turn, so a turn row in the
+        store can be traced back to the spoken request that started it."""
+        self._stats["turns_bound"] += 1
+        self._log.info(
+            "%s stage=live_delegation_turn_bound key=%s turn_id=%s delegation_id=%s "
+            "source=%s active_thread_id=%s",
+            DISPATCH_TIMING_LOG,
+            entry.key,
+            turn_id,
+            entry.delegation_id or "",
+            source,
+            getattr(entry.client, "_thread_id", "") or "",
+        )
+
+    def _log_call_summary(self) -> None:
+        """Counts for the whole call, logged once when the bridge closes."""
+        duration = (
+            self._clock() - self._attached_at if self._attached_at is not None else 0.0
+        )
+        self._stats["utterances"] = self._stats["decision_started"]
+        counts = " ".join(
+            f"{name}={count}" for name, count in sorted(self._stats.items())
+        )
+        self._log.info(
+            "%s stage=live_call_summary duration_s=%.1f %s",
+            DISPATCH_TIMING_LOG,
+            max(duration, 0.0),
+            counts,
+        )
+
     # helpers
 
     def _exit_to_dispatch(self, *, delegation_id: str | None) -> None:
@@ -1332,6 +1476,7 @@ class LiveDelegationBridge:
         for entry in self._entries.values():
             if not entry.superseded:
                 entry.superseded = True
+                self._stats["superseded"] += 1
         self._active_agent_label = DISPATCHER_AGENT_LABEL
         self._reset_utterance_state()
         if changed or delegation_id is not None:

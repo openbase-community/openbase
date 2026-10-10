@@ -40,6 +40,11 @@ from .setup import setup
 WEB_BACKEND_ENV_KEY = "OPENBASE_CODER_CLI_WEB_BACKEND_URL"
 BOOTSTRAP_TOKEN_ENV_KEY = "OPENBASE_CODER_BOOTSTRAP_TOKEN"
 BOOTSTRAP_EXCHANGE_PATH = "/api/openbase/devspaces/bootstrap/exchange/"
+REQUESTED_OPTIONAL_SCOPES = ("notify",)
+ACCEPTED_BOOTSTRAP_SCOPES = (
+    ["llm_proxy", "audio_proxy"],
+    ["llm_proxy", "audio_proxy", "notify"],
+)
 NETMESH_AUTHKEY_FILE = DEFAULT_ENV_FILE_PATH.parent / "bootstrap-netmesh-authkey"
 
 
@@ -123,6 +128,10 @@ def _exchange_bootstrap(bootstrap_token: str, web_backend_url: str) -> dict:
         response = httpx.post(
             f"{web_backend_url.rstrip('/')}{BOOTSTRAP_EXCHANGE_PATH}",
             headers={"Authorization": f"Openbase-Bootstrap {bootstrap_token}"},
+            # Opt in to the notify scope so the workspace can push "open this
+            # URL" notifications to the owner's phones; older Cloud versions
+            # ignore the body and grant the base pair.
+            json={"scopes": list(REQUESTED_OPTIONAL_SCOPES)},
             timeout=30,
         )
     except httpx.HTTPError as exc:
@@ -149,7 +158,7 @@ def _exchange_bootstrap(bootstrap_token: str, web_backend_url: str) -> dict:
     if not isinstance(payload, dict):
         raise click.ClickException("Workspace bootstrap returned an invalid response.")
     scopes = payload.get("machine_token_scopes")
-    if scopes != ["llm_proxy", "audio_proxy"]:
+    if scopes not in ACCEPTED_BOOTSTRAP_SCOPES:
         raise click.ClickException("Bootstrap returned invalid machine token scopes.")
     owner = payload.get("owner")
     netmesh = payload.get("netmesh")

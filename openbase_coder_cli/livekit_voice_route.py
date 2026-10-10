@@ -418,7 +418,7 @@ def prepare_livekit_dispatcher_recreation() -> dict:
             updated_at=time.time(),
             instruction_override_supported=instruction_override_supported(),
         )
-        _write_state(preserved_state)
+        _write_state(preserved_state, already_locked=True)
 
     return {
         "previous_dispatcher_thread_id": previous_state.dispatcher_thread_id,
@@ -503,15 +503,60 @@ async def publish_exit_to_dispatch(
     return result
 
 
-async def publish_transfer_to_thread(
+@dataclass(frozen=True)
+class VoiceRouteTransfer:
+    """A thread prepared to take the live voice route.
+
+    Built by :func:`prepare_voice_route_transfer`, which resumes the thread
+    with the direct-LiveKit developer instructions and resolves its voice. The
+    same plan is either published into a running call as a
+    ``transfer_to_thread`` data packet ("Transfer call here") or handed to the
+    agent in the room-token dispatch metadata (a call started from that
+    thread), so both paths carry one command shape.
+    """
+
+    thread_id: str
+    directory: str
+    label: str | None
+    agent_name: str | None
+    voice: CartesiaVoice | None
+    state: VoiceRouteState
+
+    def command_payload(self) -> dict:
+        return {
+            "action": "transfer_to_thread",
+            "thread_id": self.thread_id,
+            "cwd": self.directory,
+            "label": self.label,
+            "agent_name": self.agent_name,
+            "state": asdict(self.state),
+        }
+
+    def commit(self) -> None:
+        """Persist the route state and the thread's voice assignment."""
+        _write_state(self.state)
+        record_voice_assignment(
+            thread_id=self.thread_id,
+            agent_name=self.agent_name,
+            cwd=self.directory,
+            voice_id=self.state.active_target_voice_id,
+            voice_name=self.voice.name
+            if self.voice
+            else self.state.active_target_voice_name,
+            kind="codex_thread",
+            source="route_transfer",
+            seen_at=self.state.updated_at,
+        )
+
+
+async def prepare_voice_route_transfer(
     thread_id: str,
     *,
     directory: str,
     label: str | None = None,
     agent_name: str | None = None,
-    room_name: str | None = None,
-    livekit_client: livekit_api.LiveKitAPI | None = None,
-) -> VoiceRoutePublishResult:
+) -> VoiceRouteTransfer:
+    """Resume ``thread_id`` for direct voice and resolve the voice it speaks with."""
     if not instruction_override_supported():
         raise VoiceRouteBlockedError(
             "Live voice transfer to target threads is blocked because this client "
@@ -567,30 +612,39 @@ async def publish_transfer_to_thread(
         updated_at=time.time(),
         instruction_override_supported=True,
     )
-    result = await _publish_route_command(
-        {
-            "action": "transfer_to_thread",
-            "thread_id": thread_id,
-            "cwd": directory,
-            "label": label,
-            "agent_name": resolved_agent_name,
-            "state": asdict(state),
-        },
+    return VoiceRouteTransfer(
+        thread_id=thread_id,
+        directory=directory,
+        label=label,
+        agent_name=resolved_agent_name,
+        voice=voice,
         state=state,
+    )
+
+
+async def publish_transfer_to_thread(
+    thread_id: str,
+    *,
+    directory: str,
+    label: str | None = None,
+    agent_name: str | None = None,
+    room_name: str | None = None,
+    livekit_client: livekit_api.LiveKitAPI | None = None,
+) -> VoiceRoutePublishResult:
+    """Move a running call's voice route into ``thread_id``."""
+    transfer = await prepare_voice_route_transfer(
+        thread_id,
+        directory=directory,
+        label=label,
+        agent_name=agent_name,
+    )
+    result = await _publish_route_command(
+        transfer.command_payload(),
+        state=transfer.state,
         room_name=room_name,
         livekit_client=livekit_client,
     )
-    _write_state(state)
-    record_voice_assignment(
-        thread_id=thread_id,
-        agent_name=resolved_agent_name,
-        cwd=directory,
-        voice_id=state.active_target_voice_id,
-        voice_name=voice.name if voice else state.active_target_voice_name,
-        kind="codex_thread",
-        source="route_transfer",
-        seen_at=state.updated_at,
-    )
+    transfer.commit()
     return result
 
 
@@ -707,7 +761,15 @@ def _read_instruction_file(path: Path) -> str | None:
     return content or None
 
 
-def _write_state(state: VoiceRouteState) -> None:
+def _write_state(state: VoiceRouteState, *, already_locked: bool = False) -> None:
     path = _route_state_path()
+    if not already_locked:
+        with thread_state_file_lock(path):
+            _write_state(state, already_locked=True)
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(asdict(state), indent=2) + "\n", encoding="utf-8")
+    payload = asdict(state)
+    owner_id = (_read_json(path) or {}).get("route_owner_id")
+    if owner_id and state.active_target_thread_id:
+        payload["route_owner_id"] = owner_id
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")

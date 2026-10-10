@@ -734,3 +734,111 @@ def test_failed_forced_restart_does_not_claim_a_new_provider(monkeypatch):
 
     with pytest.raises(click.ClickException, match="Failed to replace the old process"):
         launchd.launchctl_restart(_sample_service())
+
+
+def _package_with_launcher(
+    tmp_path, *, launcher_present: bool = True
+) -> RuntimePackage:
+    package_dir = tmp_path / "current"
+    relative = "libexec/Openbase Services.app/Contents/MacOS/openbase-services"
+    launcher = package_dir / relative
+    launcher.parent.mkdir(parents=True)
+    if launcher_present:
+        launcher.write_bytes(b"\xcf\xfa\xed\xfe")
+        launcher.chmod(0o755)
+    return RuntimePackage(root=package_dir, service_launcher=relative)
+
+
+def test_standalone_plist_runs_the_wrapper_through_the_service_launcher(
+    tmp_path, monkeypatch
+):
+    # macOS keys TCC grants on the launchd job's executable. Running the
+    # wrapper through the signed launcher bundle gives every service (and
+    # the agents it spawns) one stable identity across self-updates.
+    _patch_launchd_dirs(tmp_path, monkeypatch)
+    monkeypatch.setattr(launchd, "_is_macos", lambda: True)
+    monkeypatch.setattr(launchd, "_installed_desktop_bundle_id", lambda: None)
+    package = _package_with_launcher(tmp_path)
+    monkeypatch.setattr(launchd, "stable_runtime_package", lambda: package)
+    config = InstallationConfig(env_file=str(tmp_path / ".env"), standalone=True)
+
+    payload = plistlib.loads(
+        launchd.generate_plist(_sample_service(), config).read_bytes()
+    )
+
+    assert payload["ProgramArguments"] == [
+        str(package.service_launcher_path),
+        str(tmp_path / "launchd" / "sample.sh"),
+    ]
+    assert payload["WorkingDirectory"] == str(package.root)
+
+
+def test_plist_runs_the_wrapper_directly_when_the_package_has_no_launcher(
+    tmp_path, monkeypatch
+):
+    _patch_launchd_dirs(tmp_path, monkeypatch)
+    monkeypatch.setattr(launchd, "_is_macos", lambda: True)
+    monkeypatch.setattr(launchd, "_installed_desktop_bundle_id", lambda: None)
+    config = InstallationConfig(env_file=str(tmp_path / ".env"), standalone=True)
+    wrapper = str(tmp_path / "launchd" / "sample.sh")
+
+    # An older release that declares no launcher.
+    monkeypatch.setattr(
+        launchd, "stable_runtime_package", lambda: RuntimePackage(root=tmp_path / "pkg")
+    )
+    payload = plistlib.loads(
+        launchd.generate_plist(_sample_service(), config).read_bytes()
+    )
+    assert payload["ProgramArguments"] == [wrapper]
+
+    # A release whose declared launcher is missing on disk never produces a
+    # plist launchd cannot start.
+    package = _package_with_launcher(tmp_path, launcher_present=False)
+    monkeypatch.setattr(launchd, "stable_runtime_package", lambda: package)
+    payload = plistlib.loads(
+        launchd.generate_plist(_sample_service(), config).read_bytes()
+    )
+    assert payload["ProgramArguments"] == [wrapper]
+
+
+def test_developer_install_plist_ignores_the_launcher_off_macos(tmp_path, monkeypatch):
+    _patch_launchd_dirs(tmp_path, monkeypatch)
+    monkeypatch.setattr(launchd, "_is_macos", lambda: False)
+    monkeypatch.setattr(launchd, "_installed_desktop_bundle_id", lambda: None)
+    package = _package_with_launcher(tmp_path)
+    monkeypatch.setattr(launchd, "stable_runtime_package", lambda: package)
+    config = InstallationConfig(env_file=str(tmp_path / ".env"), standalone=True)
+
+    payload = plistlib.loads(
+        launchd.generate_plist(_sample_service(), config).read_bytes()
+    )
+
+    assert payload["ProgramArguments"] == [str(tmp_path / "launchd" / "sample.sh")]
+
+
+def test_adding_the_launcher_changes_the_plist_once_then_stays_stable(
+    tmp_path, monkeypatch
+):
+    # The first install that gains the launcher re-registers the job (one
+    # Background Items notification); later installs on the same layout
+    # restart in place.
+    _patch_launchd_dirs(tmp_path, monkeypatch)
+    monkeypatch.setattr(launchd, "_is_macos", lambda: True)
+    monkeypatch.setattr(launchd, "_installed_desktop_bundle_id", lambda: None)
+    config = InstallationConfig(env_file=str(tmp_path / ".env"), standalone=True)
+    binaries = {
+        "python": str(tmp_path / "current" / "python" / "bin" / "python"),
+        "runtime_workdir": str(tmp_path / "current"),
+    }
+    monkeypatch.setattr(
+        launchd,
+        "stable_runtime_package",
+        lambda: RuntimePackage(root=tmp_path / "current"),
+    )
+    assert launchd._write_service_files(_sample_service(), config, binaries) is True
+    assert launchd._write_service_files(_sample_service(), config, binaries) is False
+
+    package = _package_with_launcher(tmp_path)
+    monkeypatch.setattr(launchd, "stable_runtime_package", lambda: package)
+    assert launchd._write_service_files(_sample_service(), config, binaries) is True
+    assert launchd._write_service_files(_sample_service(), config, binaries) is False

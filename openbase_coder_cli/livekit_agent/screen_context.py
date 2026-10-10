@@ -1,11 +1,14 @@
 """What the caller has on screen in the phone app, for the dispatcher.
 
-A call always starts on the dispatcher, even from a project thread's chat
-screen; routing the call into that thread is the explicit "Transfer call here"
-action. So when the caller, looking at a project thread, says "subtract 38
-from the result in this thread", the dispatcher must know which thread "this"
-is (BUG 18, overnight iPhone QA 2026-10-09: the request reached the dispatcher
-with no hint of the open thread and could not be forwarded).
+A call started from a project thread is routed to that thread from its first
+word (the room-token request names it; see ``livekit.requested_start_route``),
+so this note is for calls that are on the dispatcher: one started from the
+dispatcher, or moved back with "Back to dispatch", while the caller browses a
+project thread. When they then say "subtract 38 from the result in this
+thread", the dispatcher must know which thread "this" is (BUG 18, overnight
+iPhone QA 2026-10-09: the request reached the dispatcher with no hint of the
+open thread and could not be forwarded). Opening a thread during a call does
+not move the call; "Transfer call here" does.
 
 The phone publishes the open conversation as the local participant attribute
 ``openbase.ui.focused_thread``: a JSON object ``{"thread_id", "name",

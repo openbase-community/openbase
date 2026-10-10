@@ -124,6 +124,10 @@ DATA_DIR="${OPENBASE_CODER_CLI_DATA_DIR:-$HOME/.openbase}"
 ENV_FILE="$DATA_DIR/.env"
 WRAPPER_DIR="$DATA_DIR/launchd"
 RUN_DIR="$DATA_DIR/run"
+# Service logs: the same <logs>/<service>.log the launchd and systemd installs
+# keep. PID 1's stdout is the VM serial console under Maritime, which nothing
+# retains (2026-10-09: no LiveKit agent log survived a buggy staging call).
+LOG_DIR="$DATA_DIR/logs"
 NETWORK_MODE="${OPENBASE_CODER_NETWORK_MODE:-tailscale}"
 MARITIME_MODE=0
 if [ "${OPENBASE_CODER_RUNTIME:-}" = "maritime" ]; then
@@ -213,6 +217,19 @@ fi
 # Agent names survive an image upgrade, not just a container restart.
 /usr/local/bin/openbase-coder-persist-home-state "$HOME" "$DATA_DIR"
 
+# Mirror a service's output stream into $LOG_DIR/<name>.log (size-capped, see
+# services/container_log_sink.py) while passing every line through. Without a
+# LOG_DIR, or if the sink cannot start, the stream passes through untouched:
+# the log file is a convenience, the service's stdout pipe must never break.
+service_log_sink() {
+    trap '' TERM
+    if [ -z "${LOG_DIR:-}" ] || ! mkdir -p "$LOG_DIR" 2>/dev/null; then
+        exec cat
+    fi
+    python -m openbase_coder_cli.services.container_log_sink "$LOG_DIR/$1.log" \
+        || exec cat
+}
+
 # Run a command under a restart-on-exit loop, prefixing its output and
 # maintaining the service pidfile the runtime's status checks read.
 start_supervised() {
@@ -230,7 +247,7 @@ start_supervised() {
             echo "[supervisor] exited with status $rc; restarting in 5s"
             sleep 5
         done
-    ) 2>&1 | (trap '' TERM; exec sed -u "s/^/[$name] /") &
+    ) 2>&1 | service_log_sink "$name" | (trap '' TERM; exec sed -u "s/^/[$name] /") &
 }
 
 # Stop every service, then flush the page cache so a VM halted right after

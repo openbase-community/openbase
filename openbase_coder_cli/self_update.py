@@ -690,6 +690,7 @@ def _validate_release_dir(release_dir: Path) -> None:
     for path in required:
         if not path.is_file():
             raise SelfUpdateError(f"Downloaded package is missing {path.name}.")
+    _validate_service_launcher(release_dir)
     smoke = subprocess.run(
         [str(launcher), "--version"],
         check=False,
@@ -700,6 +701,33 @@ def _validate_release_dir(release_dir: Path) -> None:
     if smoke.returncode != 0:
         raise SelfUpdateError(
             f"Downloaded package failed to run: {smoke.stderr.strip()[:500]}"
+        )
+
+
+def _validate_service_launcher(release_dir: Path) -> None:
+    """macOS packages must ship the Openbase Services launcher they declare.
+
+    The launchd jobs run through it so TCC keeps one stable identity across
+    updates (dev-docs/MACOS_SERVICE_IDENTITY.md); a macOS release without it
+    would silently fall back to the per-release Python identity and re-prompt
+    for Desktop access again, so refuse to activate such a package.
+    """
+    metadata = _read_package_metadata(release_dir)
+    relative = str(metadata.get("serviceLauncher", "") or "").strip()
+    if not str(metadata.get("target", "")).endswith("-apple-darwin"):
+        return
+    if not relative:
+        raise SelfUpdateError(
+            "Downloaded package declares no service launcher (serviceLauncher)."
+        )
+    launcher = release_dir / relative
+    if not launcher.is_file():
+        raise SelfUpdateError(
+            f"Downloaded package is missing its service launcher {relative}."
+        )
+    if not os.access(launcher, os.X_OK):
+        raise SelfUpdateError(
+            f"Downloaded package service launcher is not executable: {relative}."
         )
 
 

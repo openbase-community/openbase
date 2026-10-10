@@ -184,16 +184,35 @@ by character.
 """.strip()
 
 
-def live_voice_startup_instructions(host: str | None = None) -> str:
+def live_voice_startup_instructions(
+    host: str | None = None, *, agent_label: str | None = None
+) -> str:
     """The GPT-Live persona plus one line on where the caller's agent runs.
 
     ``host`` is a ``host_kind`` value; None detects this install's. On a cloud
     workspace the model otherwise acknowledges "checking your desktop" for a
     computer that has none (staging demo, 2026-10-08).
+
+    ``agent_label`` names the agent a call started from a project thread is
+    routed to from its first word, so the voice never presents itself as the
+    dispatcher on such a call.
     """
     from openbase_coder_cli.host_kind import live_voice_host_note
 
-    return f"{LIVE_VOICE_STARTUP_INSTRUCTIONS}\n{live_voice_host_note(host)}"
+    text = f"{LIVE_VOICE_STARTUP_INSTRUCTIONS}\n{live_voice_host_note(host)}"
+    label = (agent_label or "").strip()
+    if label:
+        text += f"\n{live_voice_start_route_note(label)}"
+    return text
+
+
+def live_voice_start_route_note(agent_label: str) -> str:
+    return (
+        f"This call started inside {agent_label}'s thread: from the first word, "
+        f"everything the caller says goes to {agent_label}, which answers. "
+        f"Refer to it by that name and do not mention the dispatcher unless "
+        f"the caller moves the call back to it."
+    )
 
 
 LIVEKIT_CODEX_THREAD_STATE_PATH = os.getenv("LIVEKIT_CODEX_THREAD_STATE_PATH")

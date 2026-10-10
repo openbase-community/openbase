@@ -547,7 +547,9 @@ class _FakeClient:
         self.started = asyncio.Event()
         self.gate = asyncio.Event()
 
-    async def run_turn(self, prompt, *, developer_instructions=None):
+    async def run_turn(
+        self, prompt, *, developer_instructions=None, replaces_active_turn=False
+    ):
         self.prompts.append(prompt)
         self.started.set()
         await self.gate.wait()

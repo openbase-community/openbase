@@ -86,7 +86,7 @@ The bridge is for finishing a login in a desktop browser. To sign in from your p
 
 ### Sign in from your phone
 
-Agents in the container follow the bundled `openbase-cloud-workspace-logins` skill: they prefer device-code and paste-code logins (`gh auth login`, `codex login --device-auth`, `openbase-coder claude login`, `gcloud auth login --no-launch-browser`), which need no bridge at all, and use `openbase-coder browser open <url>` to put any other login page on your phone. When a login ends on a `http://localhost:<port>/...` page that fails to load on the phone, copy that full address and paste it back to the agent in the same thread; the agent replays it inside the container. The address holds a single-use code that expires within minutes, so paste it only there.
+Agents in the container follow the bundled `openbase-cloud-workspace-logins` skill: they prefer device-code and paste-code logins (`gh auth login`, `codex login --device-auth`, `openbase-coder claude login`, `gcloud auth login --no-launch-browser`), which need no bridge at all, and use `openbase-coder browser open <url>` to put any other login page on your phone. On a cloud workspace, `browser open` also exposes the login's `localhost:<port>` callback on the workspace's VPN address for ten minutes and asks the phone to forward its own loopback port there, so a login that redirects to `localhost` completes without any bridge once your phone app supports forwarding. When a login still ends on a `http://localhost:<port>/...` page that fails to load on the phone, copy that full address and paste it back to the agent in the same thread; the agent replays it inside the container. The address holds a single-use code that expires within minutes, so paste it only there.
 
 ## Use it
 
