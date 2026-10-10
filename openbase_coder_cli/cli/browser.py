@@ -180,7 +180,7 @@ def _forward_note(receipt: dict) -> str:
             "final localhost address back here instead."
         )
     return (
-        "Your phone app predates callback forwarding; paste the final localhost "
+        "Your phone did not confirm callback forwarding; paste the final localhost "
         "address back here if the login ends on a localhost page."
     )
 
