@@ -13,13 +13,14 @@ import logging
 import re
 from collections import deque
 
-from livekit.agents import Agent, llm
+from livekit.agents import llm
 
 from openbase_coder_cli.voice_identity import agent_voice_identity, route_voice_identity
 
 from .config import live_voice_greeting, live_voice_identity_note
 from .live_delegation import chunk_commentary
 from .live_preconnect import wait_live_session_started
+from .live_speech_gate import SpeechGatedAgent
 
 logger = logging.getLogger(__name__)
 
@@ -75,11 +76,12 @@ def bounded_history(context):
     return result
 
 
-class CharacterAssistant(Agent):
-    def __init__(self, *, model, instructions, history, on_enter=None):
+class CharacterAssistant(SpeechGatedAgent):
+    def __init__(self, *, model, instructions, history, on_enter=None, speech_gate=None):
         super().__init__(llm=model, instructions=instructions, chat_ctx=history)
         self.entered = asyncio.Event()
         self._entered_callback = on_enter
+        self._speech_gate = speech_gate
 
     async def on_enter(self):
         if self._entered_callback is not None:
@@ -103,6 +105,7 @@ class LiveCharacterController:
         caller_drain_timeout=12.0,
         ledger=None,
         initial_model=None,
+        speech_gate=None,
     ):
         self.session = session
         self.bridge = bridge
@@ -127,11 +130,14 @@ class LiveCharacterController:
         self._announcing = False
         self._model = initial_model
         self._muted_output = None
+        self._speech_gate = speech_gate
         # The initial session already received its greeting. A return to a
         # known route is continuity, not another first introduction.
         self._introduced_routes = {router.route_snapshot().active_thread_id}
 
     def _silence(self):
+        if self._speech_gate is not None:
+            self._speech_gate.revoke()
         if self._muted_output is None:
             self._muted_output = self.session.output.audio_enabled
         self.session.output.set_audio_enabled(False)
@@ -205,7 +211,8 @@ class LiveCharacterController:
         await self.session.interrupt()
         model = self.model_factory(identity.gpt_live_voice)
         assistant = CharacterAssistant(
-            model=model, instructions=instructions, history=history, on_enter=on_enter
+            model=model, instructions=instructions, history=history, on_enter=on_enter,
+            speech_gate=self._speech_gate,
         )
         previous = self._model
         self._model = model
@@ -342,6 +349,8 @@ class LiveCharacterController:
                 # GPT-Live commentary intentionally paraphrases. The supported
                 # exact-wording path uses instructions, with the full script
                 # already in startup context so the append stays under 500 tokens.
+                if self._speech_gate is not None:
+                    self._speech_gate.authorize()
                 assistant.duplex_session.append_instructions(
                     "Read the supplied announcement script now, exactly and in full, once. "
                     "Do not add an introduction or change its completed/pending status.",

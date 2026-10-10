@@ -494,7 +494,7 @@ def test_live_start_passes_proactive_steering_off(monkeypatch):
     session, bridge, handlers = asyncio.run(run())
     assert captured["proactive_steering"] is False
     assert captured["enable_logging"] is config.LIVEKIT_VERBOSE_LOGGING
-    assert handlers == ()
+    assert [name for name, _ in handlers] == ["user_state_changed"]
     assert len(fake_live.handlers["input_audio_transcription_completed"]) == 1
 
 
