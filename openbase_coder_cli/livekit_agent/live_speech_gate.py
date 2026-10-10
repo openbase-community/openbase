@@ -1,8 +1,10 @@
 """Application speech ownership for a provider that cannot cancel generation."""
 
 import logging
+import math
 from contextvars import ContextVar
 
+from livekit import rtc
 from livekit.agents import Agent
 
 logger = logging.getLogger(__name__)
@@ -22,6 +24,7 @@ class LiveSpeechGate:
         self.epoch = 0
         self.speaking = False
         self.authorized = False
+        self._next_burst = 0
 
     def revoke(self):
         self.epoch += 1
@@ -37,7 +40,7 @@ class LiveSpeechGate:
         self.authorized = True
 
     async def filter_audio(self, audio):
-        async for frame in _SpeechBurst(self).filter(audio):
+        async for frame in _SpeechBurst(self).filter_audio(audio):
             yield frame
 
 
@@ -47,6 +50,45 @@ class _SpeechBurst:
         self.epoch = gate.epoch
         self.permitted = gate.authorized and not gate.speaking
         self.reported = False
+        gate._next_burst += 1
+        self.sequence = gate._next_burst
+
+    async def filter_audio(self, stream):
+        frames = 0
+        duration = 0.0
+        try:
+            async for frame in self.filter(stream):
+                if isinstance(frame, rtc.AudioFrame):
+                    if frames == 0:
+                        samples = frame.data
+                        rms = math.sqrt(
+                            sum(v * v for v in samples) / max(1, len(samples))
+                        )
+                        logger.info(
+                            "dispatch_timing stage=live_pcm_forwarded burst=%d epoch=%d "
+                            "sample_rate=%d channels=%d first_frame_rms_dbfs=%.2f peak=%d",
+                            self.sequence,
+                            self.epoch,
+                            frame.sample_rate,
+                            frame.num_channels,
+                            20 * math.log10(max(rms / 32768, 1e-6)),
+                            max((abs(v) for v in samples), default=0),
+                        )
+                    frames += 1
+                    duration += frame.samples_per_channel / frame.sample_rate
+                yield frame
+        finally:
+            # This proves frames reached the SDK output node, not phone playback.
+            # Text-only speech events must not be mistaken for emitted PCM.
+            logger.info(
+                "dispatch_timing stage=live_pcm_segment_end burst=%d epoch=%d "
+                "frames=%d audio_ms=%d permitted=%s",
+                self.sequence,
+                self.epoch,
+                frames,
+                round(duration * 1000),
+                self.permitted,
+            )
 
     async def filter(self, stream):
         # Never release the tail of a burst that began before authorization,
@@ -86,7 +128,7 @@ class SpeechGatedAgent(Agent):
             return super().realtime_audio_output_node(audio, model_settings)
         permit = _SpeechBurst(self._speech_gate)
         _burst.set(permit)
-        return permit.filter(audio)
+        return permit.filter_audio(audio)
 
     def transcription_node(self, text, model_settings):
         permit = _burst.get()

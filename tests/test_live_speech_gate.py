@@ -89,10 +89,13 @@ class RecordingOutput(io.AudioOutput):
         self.on_playback_finished(playback_position=0, interrupted=True)
 
 
-async def test_real_sdk_output_node_blocks_early_audio_and_passes_authorized_reply():
+async def test_real_sdk_output_node_blocks_early_audio_and_passes_authorized_reply(
+    caplog,
+):
     # Real plugin, adapter and AgentSession; PCM stays in memory, no speakers,
     # room, external provider, paid synthesis or mocked SDK internals.
     gate = LiveSpeechGate()
+    caplog.set_level("INFO", logger="openbase_coder_cli.livekit_agent.live_speech_gate")
     sink = RecordingOutput()
     async with FakeGPTLiveServer() as server:
         model = GPTLiveModel(
@@ -152,6 +155,17 @@ async def test_real_sdk_output_node_blocks_early_audio_and_passes_authorized_rep
                 while not sink.frames:
                     await asyncio.sleep(0.01)
             assert any(7000 in frame.data for frame in sink.frames)
+            pcm_events = [
+                r.message
+                for r in caplog.records
+                if "stage=live_pcm_forwarded " in r.message
+            ]
+            assert len(pcm_events) == 1
+            assert "peak=7000" in pcm_events[0]
+            assert any(
+                "frames=0" in r.message and "live_pcm_segment_end" in r.message
+                for r in caplog.records
+            )
             gate.user_state_changed("speaking")
             await session.interrupt(force=True)
             count = len(sink.frames)
