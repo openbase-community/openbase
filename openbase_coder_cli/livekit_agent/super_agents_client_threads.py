@@ -125,7 +125,17 @@ class SuperAgentsClientThreadsMixin:
                     if not self._fresh_thread:
                         existing = await self._find_existing_dispatcher()
                         if existing:
-                            return await self._resume_thread(existing)
+                            try:
+                                return await self._resume_thread(existing)
+                            except Exception:
+                                logger.warning(
+                                    "Failed to resume discovered Dispatcher thread %s; "
+                                    "creating a new one",
+                                    existing,
+                                    exc_info=True,
+                                )
+                                self._thread_id = None
+                                self._thread_loaded = False
                     return await self._start_thread()
 
             if self._thread_loaded and self._thread_id:

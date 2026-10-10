@@ -2515,3 +2515,29 @@ async def test_dispatcher_explicit_recreation_skips_discovery(tmp_path):
     )
     assert await client.prepare() == "dispatcher-thread"
     assert backend.started_threads[0]["fresh"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("persisted", [False, True])
+async def test_dispatcher_stale_discovery_does_not_prevent_recovery(
+    tmp_path, persisted
+):
+    backend = FakeCodexSuperAgentsBackend()
+
+    async def sessions():
+        return [{"threadId": "missing", "name": "Dispatcher", "cwd": "/tmp/project"}]
+
+    async def resume_thread(thread_id, **kwargs):
+        raise RuntimeError("thread not found")
+
+    backend.sessions = sessions
+    backend.resume_thread = resume_thread
+    state = tmp_path / "route.json"
+    if persisted:
+        state.write_text(json.dumps({"dispatcher_thread_id": "missing"}))
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project", state_path=str(state), backend_client=backend
+    )
+    assert await client.prepare() == "dispatcher-thread"
+    assert len(backend.started_threads) == 1
+    assert json.loads(state.read_text())["dispatcher_thread_id"] == "dispatcher-thread"

@@ -40,6 +40,7 @@ async def ensure_speaking_identity(client: Any, thread: ThreadInfo) -> ThreadInf
             store.update_session(
                 thread.session_id,
                 agent_name=name,
+                updated_at=record.updated_at,
                 developer_instructions=_with_super_agent_identity_instructions(
                     record.developer_instructions, record.name, name
                 ),

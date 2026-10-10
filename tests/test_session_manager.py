@@ -1784,7 +1784,10 @@ def test_create_session_reuses_existing_thread_for_directory(tmp_path: Path) -> 
     thread = asyncio.run(_manager(client).create_session(str(project_dir)))
 
     assert thread.session_id == "thr-existing"
-    assert client.calls == [
+    assert thread.agent_name
+    assert client.calls[-1][0] == "merge_session"
+    assert client.calls[-1][1]["patch"]["agentName"] == thread.agent_name
+    assert client.calls[:1] == [
         (
             "list_threads",
             {

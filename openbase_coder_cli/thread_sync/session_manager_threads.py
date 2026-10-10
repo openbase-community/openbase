@@ -453,7 +453,10 @@ class SessionManagerThreadsMixin:
             )
             existing = extract_threads(result)
             if existing:
-                return _session_from_thread(existing[0], include_turns=False)
+                return await ensure_speaking_identity(
+                    self._client,
+                    _session_from_thread(existing[0], include_turns=False),
+                )
 
         thread_input = {"cwd": expanded_dir, **self._codex_permission_defaults()}
         if model := self._model_for_role(SUPER_AGENTS_MODEL_ROLE):
