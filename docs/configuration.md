@@ -62,7 +62,7 @@ Useful keys:
 
 Fresh Openbase Cloud installs write `haiku` for both roles, so the stored configuration, Settings UI, and model actually requested by the runtime agree. The catalog disables models that a free or trial account cannot run as named, including Sonnet, with the reason “Requires a paid plan.” The Cloud proxy continues to route older trial configurations that explicitly contain `sonnet` to Haiku for compatibility.
 
-The voice model is picked like the agent model: one selectable id whose engine follows from it. `openbase-coder defaults voice-model [MODEL]` shows or sets this key (see [defaults](commands/defaults.md)), as does **Settings → Voice** in the desktop app and console. A change applies to the next voice call; no restart is needed. `LIVEKIT_VOICE_MODEL` in the environment acts as a fallback when the key is absent.
+The voice model is picked like the agent model: one selectable id whose engine follows from it. `openbase-coder defaults voice-model [MODEL]` shows or sets this key (see [defaults](commands/defaults.md)), as does the **Voice Model** setting in the desktop app, console, and the iOS and Android apps. A change applies to the next voice call; no restart is needed. `LIVEKIT_VOICE_MODEL` in the environment acts as a fallback when the key is absent.
 
 ## Agent/Voice Variables
 
