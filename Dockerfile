@@ -83,6 +83,7 @@ RUN apt-get update \
         ca-certificates \
         curl \
         git \
+        gh \
         iproute2 \
         openssh-client \
         procps \

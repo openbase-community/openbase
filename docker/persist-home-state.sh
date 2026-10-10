@@ -105,6 +105,9 @@ persist_dir() {
 persist_dir "$home/.super-agents" "$data_dir/super-agents"
 persist_dir "$home/.local/share/super-agents-claude-code" "$data_dir/super-agents-claude-code"
 
+# GitHub CLI credentials must survive image replacement just like agent logins.
+persist_dir "$home/.config/gh" "$data_dir/github-cli"
+
 # The projects cache now lives in the data dir; adopt one left in $HOME.
 legacy_projects="$home/.openbase/coder-projects.json"
 if [ "$home/.openbase" != "$data_dir" ] && [ -f "$legacy_projects" ] && [ ! -L "$legacy_projects" ]; then

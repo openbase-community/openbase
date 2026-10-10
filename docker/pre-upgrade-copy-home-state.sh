@@ -151,6 +151,7 @@ dst.close(); src.close()' "$db" "$copying/$(basename "$db").backup"
 
 copy_dir "$home/.super-agents" "$data_dir/super-agents"
 copy_dir "$home/.local/share/super-agents-claude-code" "$data_dir/super-agents-claude-code"
+copy_dir "$home/.config/gh" "$data_dir/github-cli"
 legacy_projects="$home/.openbase/coder-projects.json"
 durable_projects="$data_dir/coder-projects.json"
 if [ -f "$legacy_projects" ] && [ ! "$legacy_projects" -ef "$durable_projects" ]; then

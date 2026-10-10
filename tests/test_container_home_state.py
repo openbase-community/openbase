@@ -418,3 +418,30 @@ def test_pre_upgrade_copy_refresh_sets_the_previous_copy_aside(
         sunny.id,
     }
     assert upgraded.get_session(sunny.id).agent_name == "Sunny"
+
+
+@pytest.mark.parametrize("pre_upgrade", [False, True])
+def test_github_login_survives_image_replacement(tmp_path, volume, pre_upgrade):
+    old_home = tmp_path / "old-home"
+    config = old_home / ".config" / "gh"
+    config.mkdir(parents=True)
+    hosts = config / "hosts.yml"
+    # Deliberately contains no credential; preservation is byte-for-byte.
+    hosts.write_text("github.com:\n    user: example-user\n    git_protocol: https\n")
+    hosts.chmod(0o600)
+    expected = hosts.read_bytes()
+    if pre_upgrade:
+        subprocess.run(["bash", str(PRE_UPGRADE), str(old_home), str(volume)], check=True, capture_output=True)
+        assert not config.is_symlink()
+    else:
+        _boot(old_home, volume)
+        assert config.resolve() == volume / "github-cli"
+        assert _boot(old_home, volume) == ""
+    shutil.rmtree(old_home)
+    new_home = tmp_path / "new-home"
+    new_home.mkdir()
+    _boot(new_home, volume)
+    restored = new_home / ".config" / "gh" / "hosts.yml"
+    assert restored.read_bytes() == expected
+    assert restored.stat().st_mode & 0o777 == 0o600
+    assert restored.parent.stat().st_mode & 0o777 == 0o700
