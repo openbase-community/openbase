@@ -10,6 +10,7 @@ entrypoint helper with a real Super Agents store.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -36,14 +37,6 @@ def _store(monkeypatch, home: Path) -> AgentStore:
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("SUPER_AGENTS_CLAUDE_CODE_HOME", raising=False)
     return AgentStore()
-
-
-@pytest.fixture
-def volume(tmp_path, monkeypatch):
-    monkeypatch.delenv("SUPER_AGENTS_CLAUDE_CODE_HOME", raising=False)
-    data_dir = tmp_path / "data" / "openbase"
-    data_dir.mkdir(parents=True)
-    return data_dir
 
 
 def test_image_upgrade_keeps_thread_ids_dispatcher_and_agent_names(tmp_path, volume, monkeypatch) -> None:
@@ -95,8 +88,6 @@ def test_pre_upgrade_refresh_preserves_each_project_snapshot(tmp_path, volume) -
     shims.mkdir()
     (shims / "date").write_text("#!/bin/sh\nprintf '20261009T000000Z\\n'\n")
     (shims / "date").chmod(0o755)
-    import os
-
     env = {"PATH": f"{shims}:{os.environ['PATH']}"}
     for version in range(3):
         source.write_text(json.dumps([{"version": version}]))
@@ -132,13 +123,14 @@ def test_boot_is_idempotent_and_never_deletes_a_volume_copy(tmp_path, volume, mo
     assert not list(volume.glob("*.replaced-*"))
     assert _store(monkeypatch, home).get_by_name("dispatcher").id == kept.id
 
-    # A live directory in $HOME wins over an older copy on the volume, which
-    # is set aside rather than deleted.
+    # A newer live directory in $HOME wins over an older copy on the volume,
+    # which is set aside rather than deleted.
+    os.utime(volume / "super-agents", (1, 1))
     other = tmp_path / "other-home"
     (other / ".super-agents").mkdir(parents=True)
     (other / ".super-agents" / "state.json").write_text("{}", encoding="utf-8")
     output = _boot(other, volume)
-    assert "kept the previous" in output
+    assert "adopted" in output and "kept as" in output
     assert len(list(volume.glob("super-agents.replaced-*"))) == 1
     assert (volume / "super-agents" / "state.json").read_text(encoding="utf-8") == "{}"
 
@@ -174,7 +166,7 @@ def test_pre_upgrade_copy_lets_a_pre_fix_workspace_keep_its_registry(tmp_path, v
     again = subprocess.run(
         ["bash", str(PRE_UPGRADE), str(old_layer), str(volume)], check=True, capture_output=True, text=True
     ).stdout
-    assert "already exists" in again
+    assert "kept" in again and "copied" not in again
 
     shutil.rmtree(tmp_path / "layer-old")
     new_layer = tmp_path / "layer-new" / "home"
@@ -276,10 +268,21 @@ def test_pre_upgrade_backs_up_committed_wal_with_an_open_connection(tmp_path, vo
         connection.close()
 
 
+def newest_mtime_ns(root: Path) -> int:
+    """The scripts' freshness measure: the newest mtime anywhere in the tree."""
+    entries = [root, *root.rglob("*")] if root.is_dir() and not root.is_symlink() else [root]
+    return max(entry.lstat().st_mtime_ns for entry in entries)
+
+
+def _touch_newer_than(reference: Path, path: Path) -> None:
+    """Give one source file an mtime an hour past everything under reference."""
+    stamp = newest_mtime_ns(reference) + 3_600 * 1_000_000_000
+    os.utime(path, ns=(stamp, stamp))
+
+
 def _copy(
     *args: str, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
-    import os
 
     return subprocess.run(
         ["bash", str(PRE_UPGRADE), *args],
@@ -333,8 +336,6 @@ def test_pre_upgrade_copy_gives_everything_to_the_home_owner(
         f'#!/bin/bash\necho "$*" >> {calls}\n', encoding="utf-8"
     )
     (shims / "chown").chmod(0o755)
-    import os
-
     result = _copy(
         str(home), str(volume), env={"PATH": f"{shims}:{os.environ['PATH']}"}
     )
@@ -353,6 +354,9 @@ def test_pre_upgrade_copy_gives_everything_to_the_home_owner(
     )
     assert f"-R {owner} {volume}/coder-projects.json" in recorded
 
+    _touch_newer_than(volume, home / ".super-agents" / "state.json")
+    _touch_newer_than(volume, home / ".local" / "share" / "super-agents-claude-code" / "state.sqlite3")
+    _touch_newer_than(volume, home / ".openbase" / "coder-projects.json")
     refreshed = _copy(
         "--refresh", str(home), str(volume), env={"PATH": f"{shims}:{os.environ['PATH']}"}
     )
@@ -391,8 +395,12 @@ def test_pre_upgrade_copy_refresh_sets_the_previous_copy_aside(
 
     refreshed = _copy("--refresh", str(home), str(volume))
     assert refreshed.returncode == 0, refreshed.stderr
-    assert refreshed.stdout.count("set aside") == 3
-    assert refreshed.stdout.count("copied") == 3
+    # The Claude Code store and the projects file changed since the copy;
+    # .super-agents did not, so its volume copy (as new as the source) stays.
+    assert refreshed.stdout.count("set aside") == 2
+    assert refreshed.stdout.count("copied") == 2
+    assert f"kept {volume / 'super-agents'}" in refreshed.stdout
+    assert not list(volume.glob("super-agents.replaced-*"))
     parked = sorted(volume.glob("super-agents-claude-code.replaced-*"))
     assert len(parked) == 1 and (parked[0] / "state" / "state.sqlite3").is_file()
     assert sorted(volume.glob("coder-projects.json.replaced-*"))

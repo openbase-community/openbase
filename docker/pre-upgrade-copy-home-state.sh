@@ -7,34 +7,76 @@
 # Safe while services run: the SQLite store is copied with the online backup
 # API. Read-only for the home directory.
 #
+# Invariant: a volume copy is never replaced by an older store. A workspace
+# that woke on an older image than the one last deployed brings back that
+# image layer's $HOME stores (2026-10-10, staging workspace 374): copying
+# such a store over the volume parked the newer registry and lost threads.
+# An existing volume copy is therefore compared with the $HOME store by the
+# newest modification time anywhere in each tree, and kept when it is at
+# least as new; only --force overrides that.
+#
 # The Maritime exec API runs commands as root, so the paths are explicit and
 # never taken from $HOME (root's is /root), and everything written is given to
 # the home directory's owner: a root-owned copy of the store is read-only for
 # the workspace user after the redeploy (the Django API and the LiveKit agent
 # then fail with "attempt to write a readonly database").
 #
-# Usage: pre-upgrade-copy-home-state.sh [--refresh] [home] [data-dir]
+# Usage: pre-upgrade-copy-home-state.sh [--refresh] [--force] [home] [data-dir]
 #   home      the workspace user's home (default /home/openbase)
 #   data-dir  the durable data dir (default $OPENBASE_CODER_CLI_DATA_DIR or
 #             /data/openbase)
-#   --refresh an existing volume copy is set aside as <dest>.replaced-<stamp>
-#             (never deleted) and copied again, so the copy can be made in the
-#             same breath as the redeploy; without it an existing copy is kept.
+#   --refresh an existing volume copy that is older than the $HOME store is
+#             set aside as <dest>.replaced-<stamp> (never deleted) and copied
+#             again, so the copy can be made in the same breath as the
+#             redeploy; without it an existing copy is always kept.
+#   --force   replace an existing volume copy even when it is newer than the
+#             $HOME store (still set aside, never deleted). Only for a
+#             deliberate operator override; implies --refresh.
 set -euo pipefail
 
 refresh=0
-if [ "${1:-}" = "--refresh" ]; then refresh=1; shift; fi
+force=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --refresh) refresh=1 ;;
+        --force) force=1; refresh=1 ;;
+        --) shift; break ;;
+        -*) echo "unknown option $1" >&2; exit 2 ;;
+        *) break ;;
+    esac
+    shift
+done
 home="${1:-/home/openbase}"
 data_dir="${2:-${OPENBASE_CODER_CLI_DATA_DIR:-/data/openbase}}"
 if [ ! -d "$home" ]; then echo "home $home is not a directory" >&2; exit 2; fi
 mkdir -p "$data_dir"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+if [ "$force" = 1 ]; then
+    echo "WARNING: --force replaces every existing volume copy under $data_dir with the $home store even where the volume copy is newer; the replaced copies are set aside, not deleted" >&2
+fi
 
 # GNU stat (the image) and BSD stat (the test host) spell these differently.
 owner_of() { stat -c '%u:%g' "$1" 2>/dev/null || stat -f '%u:%g' "$1"; }
 mode_of() { stat -c '%a' "$1" 2>/dev/null || stat -f '%OLp' "$1"; }
+if stat -c '%.9Y' "$home" >/dev/null 2>&1; then mtime_format=(-c '%.9Y'); else mtime_format=(-f '%Fm'); fi
 owner="$(owner_of "$home")"
 chown "$owner" "$data_dir"
+
+# Newest modification time in a tree (the root entry included; symlinks are
+# not followed), as integer nanoseconds since the epoch so that copies made
+# within the same second still compare correctly.
+newest_mtime() {
+    local newest=0 line seconds fraction
+    while IFS= read -r line; do
+        seconds="${line%%.*}"
+        fraction="${line#*.}"
+        if [ "$fraction" = "$line" ]; then fraction=""; fi
+        fraction="$(printf '%-9.9s' "$fraction" | tr ' ' 0)"
+        line=$((seconds * 1000000000 + 10#$fraction))
+        if [ "$line" -gt "$newest" ]; then newest="$line"; fi
+    done < <(find "$1" -exec stat "${mtime_format[@]}" {} +)
+    echo "$newest"
+}
 
 give_to_owner() {
     chown -R "$owner" "$@"
@@ -48,11 +90,37 @@ set_aside() {
     echo "set aside $dest as $parked/state"
 }
 
+# Decide what to do about an existing destination: 0 = replace it (already set
+# aside), 1 = keep it (a line has been printed). Never replaces a destination
+# that is at least as new as the source unless --force was given.
+replace_existing() {
+    local src="$1" dest="$2" src_mtime dest_mtime
+    if [ "$force" = 1 ]; then
+        echo "replacing $dest with $src under --force (freshness not compared)"
+        set_aside "$dest"
+        return 0
+    fi
+    src_mtime="$(newest_mtime "$src")"
+    dest_mtime="$(newest_mtime "$dest")"
+    if [ "$dest_mtime" -gt "$src_mtime" ]; then
+        echo "kept $dest (volume copy is newer than $src)"
+        return 1
+    elif [ "$dest_mtime" -eq "$src_mtime" ]; then
+        echo "kept $dest (volume copy is as new as $src)"
+        return 1
+    elif [ "$refresh" = 1 ]; then
+        set_aside "$dest"
+        return 0
+    fi
+    echo "skip $src ($dest already exists; it is older than $src, rerun with --refresh to replace it)"
+    return 1
+}
+
 copy_dir() {
     local src="$1" dest="$2"
     if [ -L "$src" ] || [ ! -d "$src" ]; then echo "skip $src (not a real directory)"; return 0; fi
     if [ -e "$dest" ] || [ -L "$dest" ]; then
-        if [ "$refresh" = 1 ]; then set_aside "$dest"; else echo "skip $src ($dest already exists)"; return 0; fi
+        replace_existing "$src" "$dest" || return 0
     fi
     local copying
     copying="$(mktemp -d "$dest.copying-XXXXXX")"
@@ -79,13 +147,15 @@ dst.close(); src.close()' "$db" "$copying/$(basename "$db").backup"
 copy_dir "$home/.super-agents" "$data_dir/super-agents"
 copy_dir "$home/.local/share/super-agents-claude-code" "$data_dir/super-agents-claude-code"
 legacy_projects="$home/.openbase/coder-projects.json"
-if [ -f "$legacy_projects" ] && [ ! "$legacy_projects" -ef "$data_dir/coder-projects.json" ]; then
-    if { [ -e "$data_dir/coder-projects.json" ] || [ -L "$data_dir/coder-projects.json" ]; } && [ "$refresh" = 1 ]; then
-        set_aside "$data_dir/coder-projects.json"
+durable_projects="$data_dir/coder-projects.json"
+if [ -f "$legacy_projects" ] && [ ! "$legacy_projects" -ef "$durable_projects" ]; then
+    copy_projects=1
+    if [ -e "$durable_projects" ] || [ -L "$durable_projects" ]; then
+        replace_existing "$legacy_projects" "$durable_projects" || copy_projects=0
     fi
-    if [ ! -e "$data_dir/coder-projects.json" ] && [ ! -L "$data_dir/coder-projects.json" ]; then
-        cp -p "$legacy_projects" "$data_dir/coder-projects.json"
-        give_to_owner "$data_dir/coder-projects.json"
+    if [ "$copy_projects" = 1 ]; then
+        cp -p "$legacy_projects" "$durable_projects"
+        give_to_owner "$durable_projects"
         echo "copied coder-projects.json"
     fi
 fi
