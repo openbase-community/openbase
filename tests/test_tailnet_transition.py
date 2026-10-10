@@ -176,3 +176,119 @@ def test_non_tailscale_mode_never_restarts(vpn, monkeypatch):
     )
     assert tailnet_transition.run_tick() is False
     assert vpn.restarts == []
+
+
+class LoginKicks:
+    """Login's in-place kicks, with the livekit-server runner behind its kick."""
+
+    def __init__(self) -> None:
+        self.kicked: list[str] = []
+        self.failing: set[str] = set()
+
+    def kickstart(self, service) -> bool:
+        self.kicked.append(service.name)
+        if service.name in self.failing:
+            return False
+        if service.name == "livekit-server":
+            runners.run("livekit-server")
+        return True
+
+
+@pytest.fixture
+def login_kickstart(vpn, monkeypatch):
+    from openbase_coder_cli.services import launchd
+
+    kicks = LoginKicks()
+    monkeypatch.setattr(launchd, "launchctl_kickstart", kicks.kickstart)
+    return kicks
+
+
+def test_login_restart_with_address_settles_transition(vpn, login_kickstart):
+    # Setup left LiveKit loopback-only; sign-in connects the VPN and kicks
+    # the transport services itself.
+    runners.run("livekit-server")
+    vpn.ipv4 = "100.64.1.2"
+
+    assert tailnet_transition.kickstart_transport_services() is True
+
+    assert login_kickstart.kicked == ["livekit-server", "livekit-agent", "django-cli"]
+    assert _node_ip(vpn.execs[-1]) == "100.64.1.2"
+    assert not tailnet_transition.AWAITING_TAILNET_MARKER.exists()
+    # The job must not restart everything a second time as pairing begins.
+    assert tailnet_transition.run_tick() is False
+    assert vpn.restarts == []
+
+
+def test_login_restart_without_address_keeps_transition_pending(vpn, login_kickstart):
+    runners.run("livekit-server")
+
+    assert tailnet_transition.kickstart_transport_services() is True
+
+    assert _node_ip(vpn.execs[-1]) == "127.0.0.1"
+    assert tailnet_transition.AWAITING_TAILNET_MARKER.exists()
+    vpn.ipv4 = "100.64.1.2"
+    assert tailnet_transition.run_tick() is True
+    assert vpn.restarts == [tailnet_transition.TRANSPORT_SERVICES]
+
+
+def test_login_restart_that_fails_leaves_transition_to_the_job(vpn, login_kickstart):
+    runners.run("livekit-server")
+    vpn.ipv4 = "100.64.1.2"
+    login_kickstart.failing.add("django-cli")
+
+    assert tailnet_transition.kickstart_transport_services() is False
+
+    assert tailnet_transition.AWAITING_TAILNET_MARKER.exists()
+    assert tailnet_transition.run_tick() is True
+    assert vpn.restarts == [tailnet_transition.TRANSPORT_SERVICES]
+    assert not tailnet_transition.AWAITING_TAILNET_MARKER.exists()
+
+
+def test_tailnet_cli_restart_delegates_to_the_transition_kick(monkeypatch):
+    import importlib
+
+    tailnet_cli = importlib.import_module("openbase_coder_cli.cli.tailnet")
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        tailnet_transition,
+        "kickstart_transport_services",
+        lambda: calls.append("kick") or True,
+    )
+    tailnet_cli._restart_transport_services()
+    assert calls == ["kick"]
+
+
+def test_job_stands_back_while_login_holds_the_transport_lease(
+    vpn, login_kickstart, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(tailnet_transition, "LEASE_PATH", tmp_path / "lease")
+    runners.run("livekit-server")
+
+    with tailnet_transition.transport_lease():
+        # Login connected the VPN but has not kicked the services yet (serve
+        # rules in between): the job must not start its own restart batch.
+        vpn.ipv4 = "100.64.1.2"
+        assert tailnet_transition.run_tick() is False
+        assert tailnet_transition.kickstart_transport_services() is True
+
+    assert not tailnet_transition.LEASE_PATH.exists()
+    assert vpn.restarts == []
+    assert tailnet_transition.run_tick() is False
+
+
+def test_stale_lease_from_a_dead_login_expires(vpn, monkeypatch, tmp_path):
+    monkeypatch.setattr(tailnet_transition, "LEASE_PATH", tmp_path / "lease")
+    runners.run("livekit-server")
+    vpn.ipv4 = "100.64.1.2"
+    tailnet_transition.LEASE_PATH.touch()
+    assert tailnet_transition.run_tick() is False
+
+    monkeypatch.setattr(
+        tailnet_transition.time,
+        "time",
+        lambda: tailnet_transition.LEASE_PATH.stat().st_mtime
+        + tailnet_transition.LEASE_SECONDS,
+    )
+    assert tailnet_transition.run_tick() is True
+    assert vpn.restarts == [tailnet_transition.TRANSPORT_SERVICES]

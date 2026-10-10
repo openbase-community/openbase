@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from openbase_coder_cli.paths import OPENBASE_BASE_DIR
 
@@ -34,7 +36,33 @@ AWAITING_TAILNET_MARKER = OPENBASE_BASE_DIR / "livekit-awaiting-tailnet"
 # mid-restart), retry no sooner than this.
 RETRY_SECONDS = 600.0
 
+# Held by login / a transport switch from VPN bring-up through its own kicks:
+# the address appears at connect, but the serve rules (hostname resolution
+# can take tens of seconds) run before the kicks, and a tick landing in that
+# window would restart everything twice. A caller that died leaves a stale
+# lease, which expires so the job still recovers.
+LEASE_PATH = OPENBASE_BASE_DIR / "livekit-awaiting-tailnet.lease"
+LEASE_SECONDS = 300.0
+
 _last_restart_monotonic: float | None = None
+
+
+@contextmanager
+def transport_lease() -> Iterator[None]:
+    """Keep the transition job out of the way while the caller handles it."""
+    LEASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LEASE_PATH.touch()
+    try:
+        yield
+    finally:
+        LEASE_PATH.unlink(missing_ok=True)
+
+
+def _lease_held() -> bool:
+    try:
+        return time.time() - LEASE_PATH.stat().st_mtime < LEASE_SECONDS
+    except FileNotFoundError:
+        return False
 
 
 def record_livekit_start(*, awaiting_tailnet: bool) -> None:
@@ -42,6 +70,53 @@ def record_livekit_start(*, awaiting_tailnet: bool) -> None:
     if awaiting_tailnet:
         AWAITING_TAILNET_MARKER.parent.mkdir(parents=True, exist_ok=True)
         AWAITING_TAILNET_MARKER.touch()
+
+
+def pending_generation() -> int | None:
+    """Identity of the pending transition, or None when nothing is pending."""
+    try:
+        return AWAITING_TAILNET_MARKER.stat().st_mtime_ns
+    except FileNotFoundError:
+        return None
+
+
+def finish_transition(generation: int | None) -> None:
+    """Settle the transition ``generation`` identified, once every transport
+    service restarted. A loopback start during those restarts re-marks the
+    file with a newer generation, and that newer pending transition survives.
+    """
+    if generation is None:
+        return
+    try:
+        if AWAITING_TAILNET_MARKER.stat().st_mtime_ns == generation:
+            AWAITING_TAILNET_MARKER.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def kickstart_transport_services() -> bool:
+    """Kick the transport services in place after login or a transport switch.
+
+    Login connects the VPN itself and then kicks these services, so when every
+    kick succeeds the transition is settled here: otherwise the sync-workers
+    job would restart all three again seconds later, as the desktop reaches
+    the pairing page. A kick that fails leaves the transition pending for the
+    job to complete. True when every service was kicked.
+    """
+    from openbase_coder_cli.services.launchd import launchctl_kickstart
+    from openbase_coder_cli.services.registry import find_service
+
+    generation = pending_generation()
+    kicked_all = True
+    for name in TRANSPORT_SERVICES:
+        try:
+            kicked = launchctl_kickstart(find_service(name))
+        except Exception:  # noqa: BLE001 - service may not be installed
+            kicked = False
+        kicked_all = kicked_all and bool(kicked)
+    if kicked_all:
+        finish_transition(generation)
+    return kicked_all
 
 
 def _livekit_server_running() -> bool:
@@ -86,7 +161,8 @@ def run_tick() -> bool:
     """One pass; True when it restarted the transport services."""
     global _last_restart_monotonic
 
-    if not AWAITING_TAILNET_MARKER.exists():
+    generation = pending_generation()
+    if generation is None or _lease_held():
         return False
     now = time.monotonic()
     if (
@@ -110,11 +186,6 @@ def run_tick() -> bool:
         list(TRANSPORT_SERVICES),
     )
     _last_restart_monotonic = now
-    marker_generation = AWAITING_TAILNET_MARKER.stat().st_mtime_ns
     _restart_transport_services()
-    if (
-        AWAITING_TAILNET_MARKER.exists()
-        and AWAITING_TAILNET_MARKER.stat().st_mtime_ns == marker_generation
-    ):
-        AWAITING_TAILNET_MARKER.unlink()
+    finish_transition(generation)
     return True

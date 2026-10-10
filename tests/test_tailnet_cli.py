@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import urllib.error
+from contextlib import nullcontext
 from pathlib import Path
 
 import click
@@ -45,6 +46,7 @@ def quiet_orchestration(monkeypatch):
         "_restart_transport_services",
         lambda: calls.__setitem__("restart", calls["restart"] + 1),
     )
+    monkeypatch.setattr(tailnet_cli, "_transport_lease", nullcontext)
     monkeypatch.setattr(
         tailnet_cli,
         "_reregister_device",
