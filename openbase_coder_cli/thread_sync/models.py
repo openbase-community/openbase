@@ -40,6 +40,14 @@ class QueuedTurnInfo(BaseModel):
     queued_at: datetime | None = None
 
 
+class TurnMessageInfo(BaseModel):
+    """Ordered conversation text within a single backend turn."""
+
+    id: str
+    role: Literal["user", "assistant"]
+    text: str
+
+
 class TurnInfo(BaseModel):
     """Information about a single turn within a thread."""
 
@@ -60,6 +68,7 @@ class TurnInfo(BaseModel):
     # Absolute paths of files the agent edited during the turn, in first-seen
     # order. The console groups these by repo and links to the git diff view.
     file_edits: list[str] = Field(default_factory=list)
+    messages: list[TurnMessageInfo] = Field(default_factory=list)
 
 
 class ThreadInfo(BaseModel):
