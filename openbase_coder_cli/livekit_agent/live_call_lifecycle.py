@@ -1,4 +1,4 @@
-"""End the room job when the caller explicitly closes a live session."""
+"""End the room job on explicit caller hangup in either voice engine."""
 
 import asyncio
 import logging

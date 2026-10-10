@@ -207,6 +207,7 @@ def wiring(monkeypatch):
     fake_live = _FakeLiveSession()
     pipeline_calls: list = []
     pipeline_wiring: list = []
+    real_start_pipeline = livekit._start_voice_session
 
     async def fake_start_pipeline(ctx, voice_router, delivery_ledger):
         pipeline_calls.append(delivery_ledger)
@@ -242,6 +243,7 @@ def wiring(monkeypatch):
         pipeline_calls=pipeline_calls,
         pipeline_wiring=pipeline_wiring,
         backend=backend,
+        real_start_pipeline=real_start_pipeline,
     )
 
 
@@ -339,6 +341,36 @@ async def test_live_hangup_ends_job_and_closes_character_resources(wiring, monke
     assert _FakeGPTLiveModel.instances[0].closed
     assert not ctx.room.handlers["data_received"]
     assert not wiring.live.handlers["input_audio_transcription_completed"]
+
+
+async def test_pipeline_hangup_ends_job_after_real_pipeline_construction(wiring, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from livekit.agents.voice.events import CloseEvent, CloseReason
+
+    # Exercise the production builder: mocking _start_voice_session would
+    # miss a cleanup hook installed only on the GPT-Live path.
+    voice = SimpleNamespace(id="voice", name="Voice")
+    provider = SimpleNamespace(provider_id="test", default_announcer_voice=lambda: voice)
+    monkeypatch.setattr(livekit, "get_tts_provider", lambda _: provider)
+    monkeypatch.setattr(livekit, "VoiceSelectingTTS", lambda **_: object())
+    monkeypatch.setattr(livekit, "_build_stt", lambda _: object())
+    monkeypatch.setattr(livekit, "CodexLiveKitLLM", lambda *args, **kwargs: object())
+    monkeypatch.setattr(livekit, "SafeMultilingualModel", lambda **_: object())
+    monkeypatch.setattr(livekit, "_register_session_diagnostics", lambda *args, **kwargs: ())
+    delete = AsyncMock()
+    monkeypatch.setattr(livekit, "_delete_room", delete)
+    ctx = _fake_ctx()
+    session, _, _ = await wiring.real_start_pipeline(ctx, SimpleNamespace(), None)
+    assert session.started_with[1] is ctx.room
+    for handler in tuple(session.handlers["close"]):
+        handler(CloseEvent(reason=CloseReason.PARTICIPANT_DISCONNECTED))
+    await asyncio.sleep(0)
+    delete.assert_awaited_once_with("room-1")
+    assert ctx.shutdowns == ["caller-disconnected"]
+    for callback in ctx.shutdown_callbacks:
+        await callback()
+    assert not session.handlers["close"]
 
 
 async def test_pipeline_engine_is_untouched_and_publishes_pipeline(wiring, monkeypatch):

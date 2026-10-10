@@ -855,6 +855,10 @@ async def _start_voice_session(
     delivery_ledger: VoiceDeliveryLedger,
 ) -> tuple[AgentSession, "VoiceSelectingTTS", tuple]:
     """Build the STT/TTS pipeline and start the agent session in the room."""
+    from openbase_coder_cli.livekit_agent.live_call_lifecycle import (
+        bind_live_call_lifecycle,
+    )
+
     dispatcher_voice = dispatcher_voice_config()
     tts_provider = get_tts_provider(dispatcher_voice.provider)
     announcer_voice = (
@@ -929,6 +933,7 @@ async def _start_voice_session(
         },
         vad=session_vad,
     )
+    bind_live_call_lifecycle(ctx, session, delete_room=_delete_room)
     session_diagnostic_handlers = _register_session_diagnostics(
         session,
         voice_router,
