@@ -219,6 +219,18 @@ class SuperAgentsClientThreadsMixin:
                 developer_instructions=self._thread_developer_instructions(),
             )
         else:
+            # Claude rebuilds identity instructions from its stored agent_name
+            # on resume and on every turn. A role label left by an older
+            # runtime must not override the call's resolved speaking persona.
+            store = getattr(self._backend_client, "store", None)
+            if store is not None and self._super_agent_agent_name:
+                record = store.get_session(thread_id)
+                if record.agent_name != self._super_agent_agent_name:
+                    store.update_session(
+                        thread_id,
+                        agent_name=self._super_agent_agent_name,
+                        updated_at=record.updated_at,
+                    )
             resume_kwargs: dict[str, Any] = {}
             if developer_instructions := self._thread_developer_instructions():
                 # The dispatcher instruction file is the single source of

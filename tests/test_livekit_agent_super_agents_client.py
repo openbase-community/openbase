@@ -2567,3 +2567,48 @@ async def test_default_dispatcher_state_uses_relocated_api_data_directory(
     assert not (
         tmp_path / "unused-home" / ".openbase" / "livekit-voice-route.json"
     ).exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("old_name", ["dispatcher", None, "Old character"])
+async def test_claude_dispatcher_resume_uses_configured_speaking_identity(
+    tmp_path, monkeypatch, old_name
+):
+    """Real SDK resume must not overwrite the call persona with the role label."""
+    from super_agents.agent_store import Store
+    from super_agents.claude_sdk import ClaudeAgentSdkClient
+
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    backend = ClaudeAgentSdkClient(store=Store(tmp_path / "sessions.sqlite3"))
+    started = await backend.start_thread(
+        {
+            "name": "Dispatcher",
+            "agentName": old_name,
+            "cwd": str(tmp_path),
+            "developerInstructions": "Retain the project context.",
+        }
+    )
+    thread_id = started["threadId"]
+    before = backend.store.get_session(thread_id)
+    client = SuperAgentsLiveKitClient(
+        cwd=str(tmp_path),
+        state_path=str(tmp_path / "route.json"),
+        backend_client=backend,
+        super_agent_agent_name="Jacqueline",
+        developer_instructions="Retain the project context.",
+    )
+    assert await client._resume_thread(thread_id) == thread_id
+    after = backend.store.get_session(thread_id)
+    assert after.agent_name == "Jacqueline"
+    assert after.name == before.name == "Dispatcher"
+    assert after.cwd == before.cwd
+    assert after.created_at == before.created_at
+    assert after.backend_session_id == before.backend_session_id
+    prompt = backend._prompt_for_session(
+        after, {"prompt": "Describe yourself and the project."}
+    )
+    assert "Your name is Jacqueline." in prompt
+    assert "Your name is dispatcher." not in prompt
+    assert "Retain the project context." in prompt
+    assert backend._session_view(after, None)["agentName"] == "Jacqueline"
+    await client.aclose()
