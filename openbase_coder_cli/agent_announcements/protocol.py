@@ -20,7 +20,8 @@ TOOL_NAME = "mcp__openbase_agent__task_announcement"
 MAX_CORRECTIONS = 3
 PROTOCOL_INSTRUCTIONS = (
     "Only turns started or steered through the delegation tools use this managed "
-    "task_announcement protocol. Direct conversation is exempt; the tool reports "
+    "task_announcement protocol. This replaces older default user.say instructions "
+    "for delegated tasks. Direct conversation is exempt; the tool reports "
     "direct_reply for those turns. For delegated work: "
     "Before work, call it with phase=begin and delivery=audible. If the user "
     "explicitly requests silence, text only, or no notifications, use delivery=quiet "
@@ -121,7 +122,7 @@ class AnnouncementProtocol:
             if context.direct:
                 return {
                     "status": "direct_reply",
-                    "detail": "Use your normal voice response.",
+                    "detail": "Use your normal response.",
                 }
             phase = arguments.get("phase")
             if phase == "begin":
