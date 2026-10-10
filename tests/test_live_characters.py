@@ -202,7 +202,50 @@ async def test_route_race_during_handoff_attaches_only_latest_character(monkeypa
     await controller._conversation(llm.ChatContext())
     assert controller._replace.await_count == 2
     bridge.attach.assert_called_once_with(second.duplex_session)
-    bridge.on_session_reconnected.assert_called_once()
+    bridge.on_character_session_started.assert_called_once()
+    bridge.on_session_reconnected.assert_not_called()
+
+
+async def test_each_route_introduces_once_across_returns_and_announcement_restore(
+    monkeypatch,
+):
+    import openbase_coder_cli.livekit_agent.live_characters as module
+
+    current = {"id": "dispatcher"}
+    labels = {"dispatcher": None, "blake": "Blake", "lucy": "Lucy"}
+    router = Mock()
+    router.route_snapshot.side_effect = lambda: SimpleNamespace(
+        active_thread_id=current["id"]
+    )
+    router.can_deliver_for_snapshot.return_value = True
+    bridge = Mock()
+    bridge.starting_agent_label.side_effect = lambda: labels[current["id"]]
+    monkeypatch.setattr(module, "route_voice_identity", lambda _: Mock())
+    controller = LiveCharacterController(
+        session=Mock(),
+        bridge=bridge,
+        router=router,
+        model_factory=Mock(),
+        instructions=Mock(),
+        on_error=AsyncMock(),
+    )
+    controller._replace = AsyncMock(return_value=SimpleNamespace(duplex_session=Mock()))
+    history = llm.ChatContext()
+    history.add_message(role="user", content="Keep the blue counter.")
+    # First contact, duplicate route event, temporary announcement restore,
+    # return to Dispatcher, return to Blake, first contact with another agent.
+    for route in ["blake", "blake", "blake", "dispatcher", "blake", "lucy"]:
+        current["id"] = route
+        await controller._conversation(history)
+    assert [call.args[0] for call in bridge.announce.call_args_list] == [
+        "Hi, I'm Blake.",
+        "Hi, I'm Lucy.",
+    ]
+    assert controller._replace.await_count == 6
+    assert all(
+        call.kwargs["history"] is history for call in controller._replace.call_args_list
+    )
+    bridge.on_session_reconnected.assert_not_called()
 
 
 async def test_transfer_or_talkover_wakes_and_cancels_announcement():

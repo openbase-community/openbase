@@ -185,6 +185,10 @@ LIVE_RECONNECTED_REDELIVERY = (
     "{label}. Relay it now; {disposition}. Do not repeat any of it the "
     "conversation shows you already said."
 )
+LIVE_CHARACTER_REDELIVERY = (
+    "The following from {label} has not yet been spoken. Relay it now; "
+    "{disposition}. Do not repeat anything already spoken."
+)
 LIVE_REDELIVERY_ANSWER = (
     "it is the answer to the caller's last request, so present it as the "
     "answer, not as an update"
@@ -1104,6 +1108,17 @@ class LiveDelegationBridge:
         session that the model never started speaking after. Both go out
         session-wide, once, before the held utterance can start a new turn.
         """
+        self._resume_session(connection_lost=True)
+
+    def on_character_session_started(self) -> None:
+        """Resume held work after an intentional handoff or announcement.
+
+        This replaces immutable voice state, not a dropped connection. Do
+        not inject reconnect narration or a competing no-greeting briefing.
+        """
+        self._resume_session(connection_lost=False)
+
+    def _resume_session(self, *, connection_lost: bool) -> None:
         if self._closed:
             return
         drop_at, self._session_down_at = self._session_down_at, None
@@ -1122,9 +1137,9 @@ class LiveDelegationBridge:
                 running += 1
         self._last_exit_command_at = None
         self._log.info(
-            "%s stage=live_session_reconnected unbound=%d running=%d held=%d "
-            "drop_seen=%s",
+            "%s stage=%s unbound=%d running=%d held=%d drop_seen=%s",
             DISPATCH_TIMING_LOG,
+            "live_session_reconnected" if connection_lost else "live_character_resumed",
             unbound,
             running,
             1 if self._held is not None else 0,
@@ -1135,10 +1150,13 @@ class LiveDelegationBridge:
             if running
             else ""
         )
-        self._append_thinking(
-            LIVE_RECONNECTED_THINKING.format(pending=pending).strip(), None
-        )
-        self._redeliver_after_reconnect(drop_at)
+        if connection_lost:
+            self._append_thinking(
+                LIVE_RECONNECTED_THINKING.format(pending=pending).strip(), None
+            )
+        elif pending:
+            self._append_thinking(pending, None)
+        self._redeliver_after_reconnect(drop_at, connection_lost=connection_lost)
 
     def _on_session_error(self, event) -> None:
         """The plugin lost the gateway socket (a recoverable connection error).
@@ -1215,7 +1233,9 @@ class LiveDelegationBridge:
                     d for d in entry.deliveries if d.held or d.at > cutoff
                 ]
 
-    def _redeliver_after_reconnect(self, drop_at: float | None) -> None:
+    def _redeliver_after_reconnect(
+        self, drop_at: float | None, *, connection_lost: bool = True
+    ) -> None:
         """Re-append, session-wide, what the caller did not hear before the drop.
 
         Held deliveries always qualify. A delivery that went out does when
@@ -1262,9 +1282,11 @@ class LiveDelegationBridge:
                 entry.completed,
             )
             self._append_thinking(
-                LIVE_RECONNECTED_REDELIVERY.format(
-                    label=label, disposition=disposition
-                ),
+                (
+                    LIVE_RECONNECTED_REDELIVERY
+                    if connection_lost
+                    else LIVE_CHARACTER_REDELIVERY
+                ).format(label=label, disposition=disposition),
                 None,
             )
             # Tracked again: a second drop before the model speaks it loses it

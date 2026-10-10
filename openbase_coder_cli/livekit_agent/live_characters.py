@@ -108,6 +108,9 @@ class LiveCharacterController:
         self._announcing = False
         self._model = initial_model
         self._muted_output = None
+        # The initial session already received its greeting. A return to a
+        # known route is continuity, not another first introduction.
+        self._introduced_routes = {router.route_snapshot().active_thread_id}
 
     def _silence(self):
         if self._muted_output is None:
@@ -217,8 +220,13 @@ class LiveCharacterController:
                 continue
             self._route_pending = False
             self.bridge.attach(assistant.duplex_session)
-            self.bridge.on_session_reconnected()
+            self.bridge.on_character_session_started()
             self._resume_output()
+            if snapshot.active_thread_id not in self._introduced_routes:
+                self._introduced_routes.add(snapshot.active_thread_id)
+                self.bridge.announce(
+                    live_voice_greeting(self.bridge.starting_agent_label())
+                )
             return assistant
 
     async def _run(self):
@@ -230,9 +238,6 @@ class LiveCharacterController:
                     self._route_pending = False
                     await self._conversation(
                         bounded_history(self.session.current_agent.chat_ctx)
-                    )
-                    self.bridge.announce(
-                        live_voice_greeting(self.bridge.starting_agent_label())
                     )
                     if not self._queue.empty():
                         self._wake.set()

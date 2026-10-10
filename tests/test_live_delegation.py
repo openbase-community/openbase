@@ -1387,9 +1387,25 @@ async def test_character_suspension_preserves_input_and_holds_results_until_rest
     assert live.of("commentary") == []
     replacement = FakeGPTLiveSession()
     bridge.attach(replacement)
-    bridge.on_session_reconnected()
+    bridge.on_character_session_started()
     assert replacement.of("commentary", None) == ["All tests pass. The build is green."]
+    assert all("connection dropped" not in text for text in replacement.of("thinking"))
+    assert all("Do not greet" not in text for text in replacement.of("thinking"))
     assert live._handlers["input_audio_transcription_completed"] == []
+    await bridge.aclose()
+
+
+async def test_planned_handoff_without_work_supplies_no_reconnect_or_greeting():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    bridge.suspend_session()
+    replacement = FakeGPTLiveSession()
+    bridge.attach(replacement)
+    bridge.on_character_session_started()
+    assert replacement.appends == []
+    # A later real socket loss still uses the recovery briefing.
+    replacement.drop()
+    replacement.emit("session_reconnected")
+    assert any("re-established" in text for text in replacement.of("thinking"))
     await bridge.aclose()
 
 
