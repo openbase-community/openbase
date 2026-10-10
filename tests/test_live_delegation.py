@@ -1375,6 +1375,36 @@ async def test_bridge_subscribes_to_closed_utterances_and_delegations():
     assert live._handlers["error"] == []
 
 
+async def test_character_suspension_preserves_input_and_holds_results_until_restore():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    bridge.suspend_session()
+    bridge.suspend_session()
+    live.final("Check the build", item_id="caller")
+    await _settle()
+    assert len(dispatcher.prompts) == 1
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.of("commentary") == []
+    replacement = FakeGPTLiveSession()
+    bridge.attach(replacement)
+    bridge.on_session_reconnected()
+    assert replacement.of("commentary", None) == ["All tests pass. The build is green."]
+    assert live._handlers["input_audio_transcription_completed"] == []
+    await bridge.aclose()
+
+
+async def test_character_suspension_discards_input_from_the_previous_route():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    other = FakeVoiceClient(thread_id="other")
+    router.transfer(other)
+    bridge.suspend_session()
+    live.final("Words from the previous route", item_id="caller")
+    await _settle()
+    assert dispatcher.prompts == []
+    assert other.prompts == []
+    await bridge.aclose()
+
+
 # --- overlapping delegations / steering ----------------------------------------
 
 

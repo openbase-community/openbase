@@ -1,11 +1,13 @@
 """Character handoff against the installed SDK and a loopback GPT-Live gateway."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
+import pytest
 from livekit.agents import AgentSession, llm
 from livekit.plugins.openai.realtime import GPTLiveModel
-from test_live_voice import FakeGPTLiveServer
+from test_live_voice import FakeGPTLiveServer, _close_caller_utterance
 
 from openbase_coder_cli.livekit_agent.live_characters import (
     CharacterAssistant,
@@ -99,6 +101,9 @@ async def test_announcement_restores_route_and_holds_backend_speech(monkeypatch)
     session = SimpleNamespace(
         current_agent=SimpleNamespace(chat_ctx=llm.ChatContext()),
         agent_state="listening",
+        user_state="listening",
+        output=Mock(audio_enabled=True),
+        interrupt=Mock(side_effect=lambda **_: asyncio.sleep(0)),
     )
     session.current_agent.chat_ctx.add_message(role="user", content="Continue my task")
     bridge = Mock()
@@ -121,6 +126,7 @@ async def test_announcement_restores_route_and_holds_backend_speech(monkeypatch)
     async def replace(**kwargs):
         assert controller.announcing
         assert kwargs["history"].items == []
+        kwargs["on_enter"](live)
         return SimpleNamespace(duplex_session=live)
 
     controller._replace = replace
@@ -207,3 +213,202 @@ async def test_transfer_or_talkover_wakes_and_cancels_announcement():
     controller._announcement_stop.clear()
     controller.user_state_changed(SimpleNamespace(new_state="speaking"))
     assert controller._announcement_stop.is_set()
+
+
+@pytest.mark.parametrize("ending", ["complete", "transfer", "timeout"])
+async def test_real_announcement_talkover_preserves_final_once_and_rejects_old_route(
+    monkeypatch, ending
+):
+    from test_live_delegation import FakeVoiceClient, _make_bridge, _settle
+
+    import openbase_coder_cli.livekit_agent.live_characters as module
+
+    bridge, original, router, dispatcher, ledger, lifecycle = _make_bridge()
+    identity = SimpleNamespace(
+        gpt_live_voice="cedar", voice_id="voice", voice_name="Oliver"
+    )
+    monkeypatch.setattr(module, "agent_voice_identity", lambda _: identity)
+    monkeypatch.setattr(module, "route_voice_identity", lambda _: identity)
+    async with FakeGPTLiveServer() as server:
+        models = []
+
+        def model(voice):
+            value = GPTLiveModel(
+                voice=voice,
+                delegation="client",
+                api_key="cloud-token",
+                base_url=server.base_url,
+            )
+            models.append(value)
+            return value
+
+        first = CharacterAssistant(
+            model=model("marin"), instructions="Dispatcher", history=llm.ChatContext()
+        )
+        session = AgentSession()
+        controller = LiveCharacterController(
+            session=session,
+            bridge=bridge,
+            router=router,
+            model_factory=model,
+            instructions=lambda label: "Conversation",
+            on_error=AsyncMock(),
+            initial_model=models[0],
+            caller_drain_timeout=0.1 if ending == "timeout" else 12.0,
+        )
+        session.on("user_state_changed", controller.user_state_changed)
+        bridge.character_route_changed = controller.route_changed
+        try:
+            await session.start(agent=first)
+            await wait_live_session_started(first.duplex_session, timeout=5)
+            bridge.attach(first.duplex_session)
+            controller._task = task = asyncio.create_task(
+                controller._announcement(
+                    AnnouncerMessage("id", "The work is ready.", "voice", "Oliver")
+                )
+            )
+            await server.wait_for_append("commentary")
+            announcement = session.current_agent.duplex_session
+            await server.send(
+                {
+                    "type": "session.input_transcript.delta",
+                    "delta": "Please check",
+                    "start_ms": 0,
+                    "end_ms": 300,
+                }
+            )
+            async with asyncio.timeout(5):
+                while not controller._announcement_stop.is_set():
+                    await asyncio.sleep(0.01)
+            await asyncio.sleep(0.02)
+            assert not task.done()
+            assert not announcement._closing
+            assert not session.output.audio_enabled
+            assert dispatcher.prompts == []
+            if ending == "transfer":
+                other = FakeVoiceClient(thread_id="other")
+                router.transfer(other)
+                controller.route_changed()
+                announcement._end_speech("user")
+            elif ending == "complete":
+                await server.send(
+                    {
+                        "type": "session.input_transcript.delta",
+                        "delta": " the entire change.",
+                        "start_ms": 300,
+                        "end_ms": 700,
+                    }
+                )
+                await asyncio.sleep(0.02)
+                await _close_caller_utterance(announcement)
+            await asyncio.wait_for(task, 5)
+            await _settle()
+            texts = [
+                item.text_content
+                for item in session.current_agent.chat_ctx.items
+                if isinstance(item, llm.ChatMessage) and item.role == "user"
+            ]
+            if ending == "transfer":
+                assert dispatcher.prompts == []
+                assert other.prompts == []
+                assert texts == []
+            else:
+                assert len(dispatcher.prompts) == 1
+                expected = (
+                    "Please check the entire change."
+                    if ending == "complete"
+                    else "Please check"
+                )
+                assert expected in dispatcher.prompts[0][0]
+                assert texts == [expected]
+            assert session.output.audio_enabled
+        finally:
+            await controller.close()
+            await bridge.aclose()
+            for value in models:
+                await value.aclose()
+
+
+async def test_failed_handoff_closes_both_owned_models():
+    previous, replacement = Mock(), Mock()
+    previous.aclose = AsyncMock()
+    replacement.aclose = AsyncMock()
+    session = Mock(interrupt=AsyncMock(), aclose=AsyncMock())
+    controller = LiveCharacterController(
+        session=session,
+        bridge=Mock(),
+        router=Mock(),
+        model_factory=lambda _: replacement,
+        instructions=Mock(),
+        on_error=AsyncMock(),
+        initial_model=previous,
+        timeout=0.01,
+    )
+    with pytest.raises(TimeoutError):
+        await controller._replace(
+            identity=SimpleNamespace(gpt_live_voice="cedar"),
+            history=llm.ChatContext(),
+            instructions="Agent",
+        )
+    previous.aclose.assert_awaited_once()
+    await controller.close()
+    replacement.aclose.assert_awaited_once()
+
+
+async def test_transfer_during_announcement_start_never_injects_old_commentary(
+    monkeypatch,
+):
+    import openbase_coder_cli.livekit_agent.live_characters as module
+
+    identity = SimpleNamespace(
+        gpt_live_voice="cedar", voice_id="voice", voice_name="Oliver"
+    )
+    monkeypatch.setattr(module, "agent_voice_identity", lambda _: identity)
+    session = SimpleNamespace(
+        current_agent=SimpleNamespace(chat_ctx=llm.ChatContext()),
+        agent_state="listening",
+        user_state="listening",
+        output=Mock(audio_enabled=True),
+    )
+
+    def interrupt(**kwargs):
+        future = asyncio.get_running_loop().create_future()
+        future.set_result(None)
+        return future
+
+    session.interrupt = interrupt
+    controller = LiveCharacterController(
+        session=session,
+        bridge=Mock(),
+        router=Mock(),
+        model_factory=Mock(),
+        instructions=Mock(),
+        on_error=AsyncMock(),
+    )
+    live = Mock()
+
+    async def replace(**kwargs):
+        kwargs["on_enter"](live)
+        controller.route_changed()
+        return SimpleNamespace(duplex_session=live)
+
+    controller._replace = replace
+    controller._conversation = AsyncMock()
+    await controller._announcement(
+        AnnouncerMessage("id", "Old route notice", "voice", "Oliver")
+    )
+    live.append_commentary.assert_not_called()
+    live.off.assert_called_once()
+    controller._conversation.assert_awaited_once()
+
+
+def test_bounded_history_drops_nontext_payloads():
+    history = llm.ChatContext()
+    history.add_message(
+        role="user",
+        content=[
+            "Look at this",
+            llm.ImageContent(image="https://example.com/image.png"),
+        ],
+    )
+    assert bounded_history(history).items[0].content == ["Look at this"]

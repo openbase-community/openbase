@@ -37,17 +37,21 @@ def bounded_history(context):
         if size > remaining or len(kept) >= 64:
             break
         remaining -= size
-        kept.append(item.model_copy(deep=True))
+        if text:
+            kept.append(item.model_copy(update={"content": [text]}, deep=True))
     result.items.extend(reversed(kept))
     return result
 
 
 class CharacterAssistant(Agent):
-    def __init__(self, *, model, instructions, history):
+    def __init__(self, *, model, instructions, history, on_enter=None):
         super().__init__(llm=model, instructions=instructions, chat_ctx=history)
         self.entered = asyncio.Event()
+        self._entered_callback = on_enter
 
     async def on_enter(self):
+        if self._entered_callback is not None:
+            self._entered_callback(self.duplex_session)
         self.entered.set()
 
 
@@ -64,6 +68,7 @@ class LiveCharacterController:
         instructions,
         on_error,
         timeout=15.0,
+        caller_drain_timeout=12.0,
         ledger=None,
         initial_model=None,
     ):
@@ -74,6 +79,7 @@ class LiveCharacterController:
         self.instructions = instructions
         self.on_error = on_error
         self.timeout = timeout
+        self.caller_drain_timeout = caller_drain_timeout
         self.ledger = ledger
         self._record = None
         self._identity = None
@@ -88,6 +94,18 @@ class LiveCharacterController:
         self._spoken = False
         self._announcing = False
         self._model = initial_model
+        self._muted_output = None
+
+    def _silence(self):
+        if self._muted_output is None:
+            self._muted_output = self.session.output.audio_enabled
+        self.session.output.set_audio_enabled(False)
+        return self.session.interrupt(force=True)
+
+    def _resume_output(self):
+        if self._muted_output is not None:
+            self.session.output.set_audio_enabled(self._muted_output)
+            self._muted_output = None
 
     def start(self):
         self._task = asyncio.create_task(self._run(), name="live-characters")
@@ -96,6 +114,7 @@ class LiveCharacterController:
         # Detach synchronously: no result can enter the old character while
         # the actor waits for the framework to finish its handoff.
         self.bridge.suspend_session()
+        self._silence()
         self._route_pending = True
         self._announcement_stop.set()
         self._speech_changed.set()
@@ -142,26 +161,29 @@ class LiveCharacterController:
 
     def user_state_changed(self, event):
         if self._announcing and event.new_state == "speaking":
+            self._silence()
             self._announcement_stop.set()
-            self._speech_changed.set()
+        self._speech_changed.set()
         self._wake.set()
 
-    async def _replace(self, *, identity, history, instructions):
+    async def _replace(self, *, identity, history, instructions, on_enter=None):
         await self.session.interrupt()
         model = self.model_factory(identity.gpt_live_voice)
         assistant = CharacterAssistant(
-            model=model, instructions=instructions, history=history
+            model=model, instructions=instructions, history=history, on_enter=on_enter
         )
         previous = self._model
         self._model = model
-        self.session.update_agent(assistant)
-        async with asyncio.timeout(self.timeout):
-            await assistant.entered.wait()
-            await wait_live_session_started(
-                assistant.duplex_session, timeout=self.timeout
-            )
-        if previous is not None:
-            await previous.aclose()
+        try:
+            self.session.update_agent(assistant)
+            async with asyncio.timeout(self.timeout):
+                await assistant.entered.wait()
+                await wait_live_session_started(
+                    assistant.duplex_session, timeout=self.timeout
+                )
+        finally:
+            if previous is not None:
+                await previous.aclose()
         logger.info(
             "dispatch_timing stage=live_character_started voice_id=%s "
             "gpt_live_voice=%s session_id=%s route_thread=%s announcement=%s",
@@ -186,6 +208,7 @@ class LiveCharacterController:
             self._route_pending = False
             self.bridge.attach(assistant.duplex_session)
             self.bridge.on_session_reconnected()
+            self._resume_output()
             return assistant
 
     async def _run(self):
@@ -199,6 +222,8 @@ class LiveCharacterController:
                         bounded_history(self.session.current_agent.chat_ctx)
                     )
                     self.bridge.announce(f"Hi, I'm {self.bridge.active_agent_label}.")
+                    if not self._queue.empty():
+                        self._wake.set()
                     continue
                 if self._queue.empty():
                     continue
@@ -237,6 +262,7 @@ class LiveCharacterController:
             else route_voice_identity(self.router)
         )
         history = bounded_history(self.session.current_agent.chat_ctx)
+        route = self.router.route_snapshot()
         self.bridge.suspend_session()
         self._announcement_stop.clear()
         self._spoken = False
@@ -246,14 +272,26 @@ class LiveCharacterController:
             self.ledger.track_announcement(text=message.text) if self.ledger else None
         )
         completed = False
-        received = []
+        received = {}
+        pending = {}
         assistant = None
+        input_session = None
 
         def caller_input(event):
-            # Caller still talks to the original route while a background
-            # character speaks. Results remain held until conversation resumes.
-            received.append(event)
+            if not self.router.can_deliver_for_snapshot(route):
+                return
+            if event.is_final:
+                pending.pop(event.item_id, None)
+                received[event.item_id] = event.transcript
+            else:
+                pending[event.item_id] = event.transcript
             self.bridge._on_input_transcription(event)
+            self._speech_changed.set()
+
+        def attach_input(live):
+            nonlocal input_session
+            input_session = live
+            live.on("input_audio_transcription_completed", caller_input)
 
         try:
             assistant = await self._replace(
@@ -264,12 +302,13 @@ class LiveCharacterController:
                     "Speak only the supplied commentary, introduce yourself by name, then remain silent. "
                     "Do not answer the caller, improvise, repeat prior speech, or claim the call transferred."
                 ),
+                on_enter=attach_input,
             )
-            assistant.duplex_session.on(
-                "input_audio_transcription_completed", caller_input
-            )
-            for chunk in chunk_commentary(message.text):
-                assistant.duplex_session.append_commentary(chunk, delegation_id=None)
+            if not self._announcement_stop.is_set():
+                for chunk in chunk_commentary(message.text):
+                    assistant.duplex_session.append_commentary(
+                        chunk, delegation_id=None
+                    )
             async with asyncio.timeout(45):
                 while not self._announcement_stop.is_set():
                     self._speech_changed.clear()
@@ -291,15 +330,35 @@ class LiveCharacterController:
                 self._announcement_stop.is_set(),
             )
         except TimeoutError:
+            if assistant is None:
+                raise
             logger.warning(
                 "dispatch_timing stage=live_character_announcement_timeout message_id=%s",
                 message.message_id,
             )
         finally:
-            if assistant is not None:
-                assistant.duplex_session.off(
-                    "input_audio_transcription_completed", caller_input
-                )
+            try:
+                if not self._closed:
+                    await self._silence()
+                    try:
+                        async with asyncio.timeout(self.caller_drain_timeout):
+                            while self.router.can_deliver_for_snapshot(route) and (
+                                pending or self.session.user_state == "speaking"
+                            ):
+                                self._speech_changed.clear()
+                                await self._speech_changed.wait()
+                    except TimeoutError:
+                        for item_id, transcript in pending.items():
+                            if self.router.can_deliver_for_snapshot(route):
+                                self.bridge.on_user_transcript(
+                                    transcript, is_final=True, item_id=item_id
+                                )
+                                received[item_id] = transcript
+            finally:
+                if input_session is not None:
+                    input_session.off(
+                        "input_audio_transcription_completed", caller_input
+                    )
             if self.ledger and self._record:
                 if completed:
                     self.ledger.mark_live_audio_finished(self._record)
@@ -311,10 +370,11 @@ class LiveCharacterController:
             self._announcing = False
             # Only caller text joins the conversation history; the announcement
             # model's temporary persona and output must never leak into it.
-            for event in received:
-                if event.transcript:
-                    history.add_message(role="user", content=event.transcript)
-            if not self._closed:
+            if self.router.can_deliver_for_snapshot(route):
+                for transcript in received.values():
+                    if transcript:
+                        history.add_message(role="user", content=transcript)
+            if not self._closed and assistant is not None:
                 await self._conversation(bounded_history(history))
 
     async def close(self):

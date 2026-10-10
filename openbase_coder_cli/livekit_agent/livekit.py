@@ -1031,6 +1031,8 @@ async def _discard_live_voice_model(live_model_task: "asyncio.Task[Any]") -> Non
     discard = getattr(live_model, "discard_preconnected", None)
     if discard is not None:
         await discard()
+    if live_model is not None:
+        await live_model.aclose()
 
 
 async def _start_live_voice_session(
@@ -1122,6 +1124,7 @@ async def _start_live_voice_session(
         discard = getattr(live_model, "discard_preconnected", None)
         if discard is not None:
             await discard()
+        await live_model.aclose()
         raise
     logger.info(
         "dispatch_timing stage=agent_session_start_complete room_name=%s "
@@ -1452,6 +1455,7 @@ async def livekit_agent(ctx: JobContext):
                 live_model=await live_model_task,
             )
         except Exception as exc:
+            await _discard_live_voice_model(live_model_task)
             summary = exception_chain_summary(exc)
             # The cached readiness was wrong about the gateway: the next
             # call probes again instead of trusting it.

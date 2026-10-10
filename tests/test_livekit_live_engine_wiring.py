@@ -488,6 +488,7 @@ async def test_live_session_start_failure_closes_the_preconnected_session_and_cl
     (model,) = _FakeGPTLiveModel.instances
     (preconnected,) = model.sessions
     assert preconnected.closed is True
+    assert model.closed is True
     assert (
         cache.get(decision.credentials, tts_provider_id="t", stt_provider_id="s")
         is None
@@ -585,6 +586,27 @@ async def test_a_connection_failure_discards_the_preconnected_session(
         await _run_entrypoint(ctx, _live_decision(), monkeypatch)
     for model in _FakeGPTLiveModel.instances:
         assert all(session.closed for session in model.sessions)
+
+
+async def test_discard_without_a_prepared_live_model():
+    task = asyncio.create_task(asyncio.sleep(0, result=None))
+    await task
+    await livekit._discard_live_voice_model(task)
+
+
+async def test_route_identity_failure_closes_the_early_model(wiring, monkeypatch):
+    from openbase_coder_cli import voice_identity
+
+    def invalid_identity(router):
+        raise ValueError("Unknown agent voice")
+
+    monkeypatch.setattr(voice_identity, "route_voice_identity", invalid_identity)
+    ctx = _fake_ctx()
+    await _run_entrypoint(ctx, _live_decision(), monkeypatch)
+    (model,) = _FakeGPTLiveModel.instances
+    assert model.closed
+    assert all(session.closed for session in model.sessions)
+    assert len(wiring.pipeline_calls) == 1
 
 
 async def test_call_nobody_joins_ends_itself(wiring, monkeypatch):

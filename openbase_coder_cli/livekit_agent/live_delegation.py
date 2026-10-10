@@ -617,6 +617,8 @@ class LiveDelegationBridge:
         self._closed = False
         self.character_route_changed = None
         self._suspended_input_session = None
+        self._suspended_input_handler = None
+        self._input_route = None
 
     # wiring
 
@@ -642,6 +644,7 @@ class LiveDelegationBridge:
         """Subscribe to the plugin session: closed caller utterances and delegations."""
         self.detach()
         self._live_session = live_session
+        self._input_route = self._voice_router.route_snapshot()
         if self._attached_at is None:
             self._attached_at = self._clock()
         for event_name, handler in self._session_handlers():
@@ -649,8 +652,11 @@ class LiveDelegationBridge:
 
     def detach(self) -> None:
         if self._suspended_input_session is not None:
-            self._suspended_input_session.off("input_audio_transcription_completed", self._on_input_transcription)
+            self._suspended_input_session.off(
+                "input_audio_transcription_completed", self._suspended_input_handler
+            )
             self._suspended_input_session = None
+            self._suspended_input_handler = None
         if self._live_session is not None:
             for event_name, handler in self._session_handlers():
                 try:
@@ -668,12 +674,17 @@ class LiveDelegationBridge:
             record, self._speaking_record = self._speaking_record, None
             if self._ledger is not None:
                 self._ledger.mark_live_audio_finished(record, interrupted=True)
-        self.detach()
         if old is not None:
-            # Preserve the plugin's final caller fragment when closing the old
-            # socket. Delegations and output from that socket are no longer valid.
-            old.on("input_audio_transcription_completed", self._on_input_transcription)
+            route = self._input_route
+            self.detach()
+
+            def caller_input(event):
+                if self._voice_router.can_deliver_for_snapshot(route):
+                    self._on_input_transcription(event)
+
+            old.on("input_audio_transcription_completed", caller_input)
             self._suspended_input_session = old
+            self._suspended_input_handler = caller_input
 
     async def aclose(self) -> None:
         if self._closed:

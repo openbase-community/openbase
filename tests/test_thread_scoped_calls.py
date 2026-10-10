@@ -27,6 +27,7 @@ from openbase_coder_cli.livekit_agent.packets import voice_route_command_from_pa
 from tests.test_livekit_live_engine_wiring import (
     _fake_ctx,
     _FakeAgentSession,
+    _FakeGPTLiveModel,
     _live_decision,
     _run_entrypoint,
     wiring,  # noqa: F401  (pytest fixture)
@@ -309,6 +310,28 @@ async def test_live_call_started_from_a_thread_talks_to_that_thread(
     await asyncio.sleep(0.1)
     assert target.prompts and "Hey, can you hear me" in target.prompts[0]
     assert thread_call.dispatcher.prompts == []
+
+
+async def test_thread_start_discards_a_dispatcher_preconnection_with_another_voice(
+    thread_call, monkeypatch
+):
+    from openbase_coder_cli import voice_identity
+
+    monkeypatch.setattr(
+        voice_identity, "current_voice_identity",
+        lambda: SimpleNamespace(gpt_live_voice="beacon"),
+    )
+    await _run_entrypoint(thread_call.ctx, _live_decision(), monkeypatch)
+    early, routed = _FakeGPTLiveModel.instances
+    assert early.kwargs["voice"] == "beacon"
+    assert early.closed
+    assert early.sessions[0].closed
+    expected = voice_identity.agent_voice_identity(_start_route_payload()["state"]["active_target_voice_id"])
+    assert routed.kwargs["voice"] == expected.gpt_live_voice
+    assert routed.kwargs["voice"] != "beacon"
+    for callback in thread_call.ctx.shutdown_callbacks:
+        await callback()
+    assert routed.closed
 
 
 async def test_ending_a_thread_call_resets_the_persisted_route(
