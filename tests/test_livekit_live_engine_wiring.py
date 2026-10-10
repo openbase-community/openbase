@@ -125,6 +125,9 @@ class _FakePluginSession:
 
 
 class _FakeGPTLiveModel:
+    async def aclose(self):
+        self.closed = True
+
     instances: list["_FakeGPTLiveModel"] = []
 
     def __init__(self, **kwargs) -> None:
@@ -729,3 +732,11 @@ def test_job_received_logs_the_dispatch_latency(caplog):
     assert "job_id=AJ_1" in message and "dispatch_id=AD_1" in message
     age = int(message.split("room_age_ms=")[1].split()[0])
     assert 1400 <= age <= 5000
+
+
+def test_live_model_uses_dispatcher_mapping_and_explicit_agent_voice(monkeypatch):
+    from openbase_coder_cli import voice_identity
+    monkeypatch.setattr(livekit, "import_live_model", lambda: _FakeGPTLiveModel)
+    monkeypatch.setattr(voice_identity, "current_voice_identity", lambda: SimpleNamespace(gpt_live_voice="beacon"))
+    assert livekit._build_live_voice_model(_live_decision()).kwargs["voice"] == "beacon"
+    assert livekit._build_live_voice_model(_live_decision(), voice="cedar").kwargs["voice"] == "cedar"

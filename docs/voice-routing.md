@@ -116,7 +116,7 @@ Agents can make a short spoken announcement in the active private voice session:
 openbase-coder user say "Lucy" "I finished the documentation update."
 ```
 
-The first argument is the speaking agent name. The remaining words are the message to speak. Announcements use your chosen dispatcher voice. If you pin a different GPT-Live voice with `LIVEKIT_LIVE_VOICE_VOICE`, Cartesia and Openbase Cloud announcements use its paired Cartesia voice; local Kokoro announcements keep the chosen Kokoro voice. On a GPT-Live call the voice model speaks the announcement itself, in the call's voice. This is useful for Super Agent introductions, plan-mode questions, completion notices, and brief requests for user attention. If no voice room is active, the command sends the same message as a phone alert that opens the speaking agent's thread. This fallback requires an Openbase Cloud login and a phone (iPhone or Android) registered for notifications; if either delivery path fails, the command exits with an error instead of claiming success.
+The first argument is the speaking agent name. The remaining words are the message to speak. Announcements use that agent's stable assigned voice. On GPT-Live calls its Cartesia identity maps to the matching GPT-Live character; a bounded announcement session speaks, then the active conversation resumes in its own voice. This never transfers the call to the announcing agent. The caller can interrupt announcements. This is useful for introductions, plan-mode questions, completion notices, and brief requests for attention. If no voice room is active, the command sends the same message as a phone alert that opens the speaking agent's thread. This fallback requires an Openbase Cloud login and a phone registered for notifications; if either delivery path fails, the command exits with an error instead of claiming success.
 
 For local audio cues:
 
@@ -187,3 +187,5 @@ Openbase Coder runtime. A declined or expired invitation cannot be reused.
 - `openbase-coder user call AGENT_NAME`: explicitly ring registered phones
   (iPhone or Android) for an urgent, short-lived handoff to an existing agent
   thread.
+
+On GPT-Live, starting a call on an agent or transferring to it selects that agent's mapped voice. Voice changes require a new GPT-Live session and may introduce a brief gap; the LiveKit room, active thread, and bounded recent conversation history continue. Returning to Dispatcher restores its configured voice. Catalog collisions can give different agents the same GPT-Live voice. The classic `pipeline` voice model remains selectable for subsequent calls.

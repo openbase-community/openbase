@@ -44,7 +44,7 @@ def _start_route_payload(**overrides) -> dict:
         "label": "Hi are you there?",
         "agent_name": "Linda",
         "state": {
-            "active_target_voice_id": "voice-linda",
+            "active_target_voice_id": "829ccd10-f8b3-43cd-b8a0-4aeaa81f3b30",
             "active_target_voice_name": "Linda",
         },
     }
@@ -62,7 +62,7 @@ def test_voice_route_command_from_payload_reads_the_transfer():
     assert command.thread_id == THREAD_ID
     assert command.cwd == "/data/workspace"
     assert command.label == "Hi are you there?"
-    assert command.active_target_voice_id == "voice-linda"
+    assert command.active_target_voice_id == "829ccd10-f8b3-43cd-b8a0-4aeaa81f3b30"
     assert command.active_target_voice_name == "Linda"
 
 
@@ -251,7 +251,7 @@ async def test_pipeline_call_started_from_a_thread_talks_to_that_thread(
         "active_target_thread_id": THREAD_ID,
         "active_target_kind": "codex_thread",
         "active_target_label": "Hi are you there?",
-        "active_target_voice_id": "voice-linda",
+        "active_target_voice_id": "829ccd10-f8b3-43cd-b8a0-4aeaa81f3b30",
         "active_target_voice_name": "Linda",
         "route_owner_id": router._route_owner_id,
     }

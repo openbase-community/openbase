@@ -288,12 +288,11 @@ def user_say(request):
             voice_entry.voice_name or "",
             voice_entry.source,
         )
-        # The agent's own voice assignment identifies the thread; the
-        # announcement itself speaks with the user's voice identity.
         result = async_to_sync(publish_announcer_message)(
             input_serializer.validated_data["text"],
             room_name=room_name,
             agent_name=agent_name,
+            voice_id=voice_entry.voice_id,
         )
     except UnknownAgentVoiceError as exc:
         catalog_voice = get_tts_provider(selected_tts_provider_id()).voice_for_name(

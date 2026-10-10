@@ -136,8 +136,7 @@ async def _publish_announcer_message_with(
     }
     normalized_agent_name = " ".join((agent_name or "").split())
     if normalized_agent_name:
-        # The live voice engine names the agent in speech (one voice per
-        # call); the pipeline ignores this and keeps choosing by voice_id.
+        # Both engines preserve the speaking agent and its assigned voice.
         payload["agent_name"] = normalized_agent_name
     target_voice_id = _safe_announcer_voice_id(
         (voice_id or "").strip() or _identity_voice_id()

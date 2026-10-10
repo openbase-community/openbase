@@ -976,19 +976,24 @@ async def _decide_voice_engine_for_call() -> VoiceEngineDecision:
     )
 
 
-def _build_live_voice_model(decision: VoiceEngineDecision, *, preconnect: bool = False):
+def _build_live_voice_model(decision: VoiceEngineDecision, *, preconnect: bool = False, voice: str | None = None):
     gpt_live_model = import_live_model()
     if preconnect:
         gpt_live_model = _preconnecting_model_class(gpt_live_model)
     credentials = decision.credentials
     assert credentials is not None
-    return gpt_live_model(
+    from openbase_coder_cli.voice_identity import current_voice_identity
+
+    selected_voice = voice or current_voice_identity().gpt_live_voice
+    model = gpt_live_model(
         model=LIVE_VOICE_MODEL,
-        voice=LIVE_VOICE_DEFAULT_VOICE,
+        voice=selected_voice,
         delegation="client",
         api_key=credentials.api_key,
         base_url=credentials.base_url,
     )
+    model._openbase_voice = selected_voice
+    return model
 
 
 async def _prepare_live_voice_model(
@@ -1041,8 +1046,16 @@ async def _start_live_voice_session(
     ``live_model`` is the model prepared by ``_prepare_live_voice_model``
     (its gateway connection already opening); None builds one here.
     """
+    from openbase_coder_cli.livekit_agent.live_characters import LiveCharacterController
+    from openbase_coder_cli.voice_identity import route_voice_identity
+
+    identity = route_voice_identity(voice_router)
+    if live_model is not None and getattr(live_model, "_openbase_voice", identity.gpt_live_voice) != identity.gpt_live_voice:
+        await live_model.discard_preconnected()
+        await live_model.aclose()
+        live_model = None
     if live_model is None:
-        live_model = _build_live_voice_model(decision)
+        live_model = _build_live_voice_model(decision, voice=identity.gpt_live_voice)
     session_start = time.monotonic()
     session_vad = _diagnostic_vad(ctx.proc.userdata["vad"])
     # No STT, TTS or turn detector: the voice model listens, speaks and owns
@@ -1086,6 +1099,18 @@ async def _start_live_voice_session(
             assistant.duplex_session, timeout=LIVE_VOICE_PREFLIGHT_TIMEOUT_SECONDS
         )
         live_ready = True
+        characters = LiveCharacterController(
+            session=session, bridge=bridge, router=voice_router,
+            model_factory=lambda voice: _build_live_voice_model(decision, voice=voice),
+            instructions=lambda label: live_voice_startup_instructions(agent_label=label),
+            on_error=handle_live_error,
+            ledger=delivery_ledger,
+            initial_model=live_model,
+            timeout=LIVE_VOICE_PREFLIGHT_TIMEOUT_SECONDS,
+        )
+        bridge.characters = characters
+        bridge.character_route_changed = characters.route_changed
+        characters.start()
     except BaseException:
         await bridge.aclose()
         for event_name, handler in session_diagnostic_handlers:
@@ -1178,6 +1203,7 @@ async def _transfer_live_voice_route(
     except Exception:
         logger.warning("Unable to transfer LiveKit voice route", exc_info=True)
         voice_router.exit_to_dispatch()
+        bridge.notify_route_changed(action="exit_to_dispatch", agent_label=None)
         bridge.announce("Unable to transfer voice route.")
         return
     bridge.notify_route_changed(
@@ -1197,15 +1223,18 @@ def _wire_live_voice_call(
 ) -> None:
     """Room and session plumbing for the live engine.
 
-    No mic lifecycle (the mic stays open), no TTS announcer: ``user say``
-    becomes commentary the voice model weaves in, audio-file announcements
-    still play through the session, and route changes are narrated by the one
-    voice on the call. Caller utterances (prompts and spoken commands) reach
+    The mic stays open. Character sessions own mapped announcements and
+    transfer handoffs; audio-file announcements use the existing queue.
+    Caller utterances (prompts and spoken commands) reach
     the bridge straight from the plugin session it attached to, not from
     ``user_input_transcribed`` here, so each one is handled exactly once.
     """
 
     def on_agent_state_changed(event) -> None:
+        if hasattr(bridge, "characters"):
+            bridge.characters.state_changed(event)
+            if bridge.characters.announcing:
+                return
         bridge.on_agent_state_changed(
             str(getattr(event, "old_state", "") or ""),
             str(getattr(event, "new_state", "") or ""),
@@ -1214,6 +1243,8 @@ def _wire_live_voice_call(
     session.on("agent_state_changed", on_agent_state_changed)
 
     def on_user_state_changed(event) -> None:
+        if hasattr(bridge, "characters"):
+            bridge.characters.user_state_changed(event)
         bridge.on_user_state_changed(
             str(getattr(event, "old_state", "") or ""),
             str(getattr(event, "new_state", "") or ""),
@@ -1256,7 +1287,7 @@ def _wire_live_voice_call(
                 len(message.text),
                 _packet_hash(data_packet),
             )
-            bridge.announce(message.text, agent_name=message.agent_name)
+            bridge.characters.announce(message)
             return
         audio_message = parse_announcer_audio_packet(data_packet)
         if audio_message is not None:
@@ -1303,6 +1334,8 @@ def _wire_live_voice_call(
             session.off(event_name, handler)
         session.off("agent_state_changed", on_agent_state_changed)
         session.off("user_state_changed", on_user_state_changed)
+        if hasattr(bridge, "characters"):
+            await bridge.characters.close()
         await bridge.aclose()
         await audio_queue.close()
         await voice_router.close()

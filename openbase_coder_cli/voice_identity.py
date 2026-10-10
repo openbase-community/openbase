@@ -1,13 +1,8 @@
-"""The one voice identity a user hears, mapped to each voice engine.
+"""Stable dispatcher and agent identities, mapped to each voice engine.
 
-The chosen dispatcher voice (a TTS-provider voice, Cartesia by default) is the
-identity. The classic pipeline and background announcements speak with it
-directly; a GPT-Live call speaks with the same-gender GPT-Live voice paired to
-it in ``cartesia_voice_catalog.py``. The pairing runs the other way when an
-operator pins the live engine's voice with ``LIVEKIT_LIVE_VOICE_VOICE``: the
-call keeps that voice and Cartesia announcements speak with its best match.
-Kokoro announcements retain the selected local voice while the GPT-Live
-identity honors the pin. The default pair is Jacqueline and marin.
+The dispatcher follows its configured provider voice and optional GPT-Live
+pin. Each agent retains its own assigned provider voice and catalog mapping;
+that dispatcher-only pin never collapses the roster into a single voice.
 """
 
 from __future__ import annotations
@@ -115,3 +110,28 @@ def live_voice_override() -> GptLiveVoiceCatalogEntry | None:
     """The GPT-Live voice pinned through the environment, if it is one the
     live engine accepts."""
     return gpt_live_voice_for_id(os.getenv(LIVE_VOICE_OVERRIDE_ENV, ""))
+
+
+def agent_voice_identity(voice_id: str, *, provider_id: str | None = None) -> VoiceIdentity:
+    """Map an assigned agent voice without applying the dispatcher override."""
+    from openbase_coder_cli.dispatcher_config import selected_tts_provider_id
+
+    provider = get_tts_provider(provider_id or selected_tts_provider_id())
+    voice = provider.voice_for_id(voice_id)
+    if voice is None:
+        raise ValueError(f"Unknown agent voice: {voice_id}")
+    return VoiceIdentity(
+        provider=provider.provider_id,
+        voice_id=voice.id,
+        voice_name=voice.name,
+        gpt_live_voice=_paired_live_voice(voice),
+        source="agent_voice",
+    )
+
+
+def route_voice_identity(router) -> VoiceIdentity:
+    if router.is_dispatcher_active:
+        return current_voice_identity()
+    if not router.active_target_voice_id:
+        raise ValueError("Active agent has no assigned voice")
+    return agent_voice_identity(router.active_target_voice_id)

@@ -615,6 +615,8 @@ class LiveDelegationBridge:
         # When the plugin reported the gateway socket gone; None while it is up.
         self._session_down_at: float | None = None
         self._closed = False
+        self.character_route_changed = None
+        self._suspended_input_session = None
 
     # wiring
 
@@ -638,6 +640,7 @@ class LiveDelegationBridge:
 
     def attach(self, live_session) -> None:
         """Subscribe to the plugin session: closed caller utterances and delegations."""
+        self.detach()
         self._live_session = live_session
         if self._attached_at is None:
             self._attached_at = self._clock()
@@ -645,6 +648,9 @@ class LiveDelegationBridge:
             live_session.on(event_name, handler)
 
     def detach(self) -> None:
+        if self._suspended_input_session is not None:
+            self._suspended_input_session.off("input_audio_transcription_completed", self._on_input_transcription)
+            self._suspended_input_session = None
         if self._live_session is not None:
             for event_name, handler in self._session_handlers():
                 try:
@@ -652,6 +658,22 @@ class LiveDelegationBridge:
                 except Exception:
                     self._log.debug("live session off() failed", exc_info=True)
         self._live_session = None
+
+    def suspend_session(self) -> None:
+        """Hold backend deliveries while the immutable character is replaced."""
+        if self._session_down_at is None:
+            self._session_down_at = self._clock()
+        old = self._live_session
+        if self._speaking_record is not None:
+            record, self._speaking_record = self._speaking_record, None
+            if self._ledger is not None:
+                self._ledger.mark_live_audio_finished(record, interrupted=True)
+        self.detach()
+        if old is not None:
+            # Preserve the plugin's final caller fragment when closing the old
+            # socket. Delegations and output from that socket are no longer valid.
+            old.on("input_audio_transcription_completed", self._on_input_transcription)
+            self._suspended_input_session = old
 
     async def aclose(self) -> None:
         if self._closed:
@@ -1446,12 +1468,18 @@ class LiveDelegationBridge:
         self._append_commentary(message, None)
 
     def notify_route_changed(self, *, action: str, agent_label: str | None) -> None:
-        """Tell the one voice who is on the call now (one voice per call)."""
+        """Invalidate old speech and hand the new route to the character owner."""
         label = (agent_label or "").strip() or DISPATCHER_AGENT_LABEL
         if action == "exit_to_dispatch":
             label = DISPATCHER_AGENT_LABEL
         self._active_agent_label = label
         self._reset_utterance_state()
+        if self.character_route_changed is not None:
+            for entry in self._entries.values():
+                if not self._voice_router.can_deliver_for_snapshot(entry.route):
+                    entry.superseded = True
+            self.character_route_changed()
+            return
         instructions = ""
         try:
             instructions = self._developer_instructions() or ""
@@ -1699,7 +1727,9 @@ class LiveDelegationBridge:
                 self._stats["superseded"] += 1
         self._active_agent_label = DISPATCHER_AGENT_LABEL
         self._reset_utterance_state()
-        if changed or delegation_id is not None:
+        if changed and self.character_route_changed is not None:
+            self.character_route_changed()
+        elif changed or delegation_id is not None:
             self._append_commentary(BACK_TO_DISPATCH_COMMENTARY, delegation_id)
 
     def _cursor(self, key: str) -> LiveSpeechCursor:

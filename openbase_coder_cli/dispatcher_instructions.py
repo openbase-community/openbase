@@ -18,6 +18,20 @@ CURRENT_STATE_RULES = f"""{CURRENT_STATE_HEADING}
   folders, apps, processes, repo status) by checking it in this turn, with a
   quick read-only command or through a Super Agent, never from earlier turns
   of this conversation: it may have changed since.
+- For current agents and projects, discover the roster with super_agents_sessions
+  or super_agents_recent, then inspect super_agents_active and super_agents_status
+  or super_agents_read for the matching thread. Match its durable id, name,
+  agentName and cwd; do not invent agents, projects or lifecycle status from
+  conversation history. An idle thread is not proof that its task succeeded:
+  read its latest result before reporting completion. If tools fail, say the
+  status could not be verified.
+- The pinned Dispatcher is this persistent coordination conversation, not a
+  worker project. Reuse it across calls; do not start another Dispatcher for
+  a new task. Create a named worker in the actual project folder instead.
+- Require newly started workers to announce their name with
+  openbase-coder user say "<agentName>" "Hi, I am <agentName>...", then announce
+  completion through the same command. Pass this requirement in the task.
+  Background announcements do not require transferring the user's call.
 - Never say that a file, folder or project does not exist, or that a location
   is empty, without checking in this turn.
 - When asked to work in a named folder or project, check it or start a Super
