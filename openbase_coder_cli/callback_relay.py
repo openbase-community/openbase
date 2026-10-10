@@ -32,6 +32,7 @@ class ListenerOwner:
     fd: int
     host: str
     port: int
+    socket_identity: str | None = None
 
     @classmethod
     def find(cls, port: int) -> ListenerOwner:
@@ -49,10 +50,44 @@ class ListenerOwner:
         process = psutil.Process(conn.pid)
         if process.uids().real != os.getuid():
             raise ValueError("callback listener belongs to another user")
-        return cls(process.pid, process.create_time(), conn.fd, conn.laddr.ip, port)
+        identity = cls.identity(process.pid, conn.fd)
+        return cls(
+            process.pid, process.create_time(), conn.fd, conn.laddr.ip, port, identity
+        )
+
+    @staticmethod
+    def identity(pid: int, fd: int) -> str | None:
+        if sys.platform == "linux":
+            return os.readlink(f"/proc/{pid}/fd/{fd}")
+        return None
+
+    def process_alive(self) -> bool:
+        try:
+            return psutil.Process(self.pid).create_time() == self.created
+        except psutil.Error:
+            return False
+
+    def owns_connection(self, peer: tuple) -> bool:
+        try:
+            process = psutil.Process(self.pid)
+            return process.create_time() == self.created and any(
+                connection.laddr.ip == self.host
+                and connection.laddr.port == self.port
+                and connection.raddr
+                and connection.raddr.ip == peer[0]
+                and connection.raddr.port == peer[1]
+                for connection in process.net_connections(kind="tcp")
+            )
+        except (psutil.Error, OSError):
+            return False
 
     def alive(self) -> bool:
         try:
+            if (
+                self.socket_identity is not None
+                and self.identity(self.pid, self.fd) != self.socket_identity
+            ):
+                return False
             process = psutil.Process(self.pid)
             return process.create_time() == self.created and any(
                 c.fd == self.fd
@@ -71,6 +106,7 @@ class CallbackRelay:
         self.deadline = time.monotonic() + ttl
         self.done = asyncio.Event()
         self.active: set[asyncio.Task] = set()
+        self.connected: set[asyncio.Task] = set()
         self.server: asyncio.Server | None = None
 
     async def start(self) -> int:
@@ -82,7 +118,13 @@ class CallbackRelay:
         try:
             while not self.done.is_set() and time.monotonic() < deadline:
                 if not await asyncio.to_thread(self.owner.alive):
-                    break
+                    self.server.close()
+                    for task in self.active - self.connected:
+                        task.cancel()
+                    if not self.connected or not await asyncio.to_thread(
+                        self.owner.process_alive
+                    ):
+                        break
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(
                         self.done.wait(),
@@ -100,10 +142,17 @@ class CallbackRelay:
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
         task = asyncio.current_task()
-        if len(self.active) >= 8:
+        if (
+            len(self.active) >= 8
+            or self.done.is_set()
+            or time.monotonic() >= self.deadline
+        ):
             writer.close()
             return
         self.active.add(task)
+        timeout = asyncio.get_running_loop().call_later(
+            max(0, self.deadline - time.monotonic()), task.cancel
+        )
         upstream = None
         try:
             hello = await asyncio.wait_for(reader.readline(), 3)
@@ -119,10 +168,17 @@ class CallbackRelay:
             first = await reader.read(16384)
             if not first:
                 return
+            if not await asyncio.to_thread(self.owner.alive):
+                return
+            self.connected.add(task)
             source, upstream = await asyncio.wait_for(
                 asyncio.open_connection(self.owner.host, self.owner.port), 3
             )
-            if not await asyncio.to_thread(self.owner.alive):
+            if not await asyncio.to_thread(
+                self.owner.alive
+            ) and not await asyncio.to_thread(
+                self.owner.owns_connection, upstream.get_extra_info("sockname")
+            ):
                 return
             upstream.write(first)
             await upstream.drain()
@@ -152,10 +208,12 @@ class CallbackRelay:
             # available until an authenticated exchange or the deadline.
             pass
         finally:
+            timeout.cancel()
             writer.close()
             if upstream:
                 upstream.close()
             self.active.discard(task)
+            self.connected.discard(task)
 
 
 def start_relay(port: int, token: str, ttl: int = 600, *, expires_at: int) -> int:
