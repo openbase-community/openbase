@@ -31,10 +31,6 @@ NETMESH_ALLOWED_SUFFIXES = (".net.obs.so", ".net-staging.obs.so")
 # openbase-tunneld service, cleaned up on any provider switch.
 LEGACY_TUNNELD_AGENT = "cloud.openbase.tunneld"
 
-# Services whose behaviour depends on the transport (LiveKit's rtc candidate
-# mode, the backend's serve/status probing, the agent's LiveKit connection).
-_RESTART_SERVICE_NAMES = ("livekit-server", "livekit-agent", "django-cli")
-
 
 def _env_path():
     return get_data_dir() / ".env"
@@ -671,8 +667,9 @@ def _apply_serve_best_effort() -> None:
 def _restart_transport_services() -> None:
     from openbase_coder_cli.services.definitions import SERVICES
     from openbase_coder_cli.services.launchd import launchctl_kickstart
+    from openbase_coder_cli.services.tailnet_transition import TRANSPORT_SERVICES
 
-    for service_name in _RESTART_SERVICE_NAMES:
+    for service_name in TRANSPORT_SERVICES:
         service = next((s for s in SERVICES if s.name == service_name), None)
         if service is None:
             continue

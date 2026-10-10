@@ -18,6 +18,8 @@ behavior doc: `docs/code-sync.md`; engineer glossary: workspace
 
 LiveKit stale-pool self-healing lives in `openbase_coder_cli/services/livekit_pool_watchdog.py`, run on the `sync-workers` tick: it detects the `wait_pc_connection timed out` failure signature and bounces `livekit-agent` (escalating to `livekit-server` + `livekit-agent` on recurrence), plus recycles idle host agents after real token/room/turn/job inactivity. Container workspaces skip proactive idle recycling; failure recovery remains enabled. Both paths protect active calls and the five-minute token-join grace and share a rate limit. Don't re-add manual-restart-only advice for the "waiting for agent" WebRTC-timeout failure; extend that watchdog instead.
 
+Fresh-install VPN transition lives in `openbase_coder_cli/services/tailnet_transition.py`, also on the `sync-workers` tick. Openbase VPN enrolls at sign-in/pairing, after setup starts every service, so in tailscale mode with no tailnet address `livekit-server` serves loopback only (and marks `~/.openbase/livekit-awaiting-tailnet`) instead of exiting — setup waits on its port before starting later services. Once the address resolves, the job restarts `livekit-server`, `livekit-agent` and `django-cli` in place (no voice call active; no new Background Items notification). Never reintroduce a hard exit for a missing node IP.
+
 Codex version-skew self-healing lives in
 `openbase_coder_cli/services/codex_version_skew.py`, also on the
 `sync-workers` tick: a `codex-app-server` (or the dispatcher instance) that

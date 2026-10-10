@@ -33,6 +33,32 @@ def _is_ip_version(value: str, version: int) -> bool:
         return False
 
 
+# Set in livekit-server's environment when it started loopback-only because
+# the tailnet had no address yet (see tailnet_transition).
+AWAITING_TAILNET_ENV_KEY = "OPENBASE_LIVEKIT_AWAITING_TAILNET"
+
+
+def tailnet_media_endpoint(env: dict[str, str]) -> tuple[str, str, str] | None:
+    """``(ipv4, ipv6 or "", interface)`` LiveKit advertises in tailscale mode.
+
+    None until the VPN has assigned this node an address on a local interface.
+    """
+    node_ip = env.get("LIVEKIT_NODE_IP") or network.tailscale_ip("4") or ""
+    node_ip_v6 = env.get("LIVEKIT_NODE_IP_V6") or network.tailscale_ip("6") or ""
+    if node_ip and not _is_ip_version(node_ip, 4):
+        print(f"Ignoring invalid Tailscale IPv4 value: {node_ip}", file=sys.stderr)
+        node_ip = ""
+    if node_ip_v6 and not _is_ip_version(node_ip_v6, 6):
+        print(f"Ignoring invalid Tailscale IPv6 value: {node_ip_v6}", file=sys.stderr)
+        node_ip_v6 = ""
+    if not node_ip:
+        return None
+    interface = env.get("LIVEKIT_INTERFACE") or network.resolve_interface(node_ip)
+    if not interface:
+        return None
+    return node_ip, node_ip_v6, interface
+
+
 def _livekit_config_body(
     tcp_port: str,
     udp_port: str,
@@ -105,50 +131,44 @@ def build_livekit_server(
         node_ip_args = ["--node-ip", bind_ip]
         config_body = _livekit_config_body(tcp_port, udp_port, loopback_iface, [], [])
     elif mode == "tailscale":
-        tcp_port = env.get("LIVEKIT_TCP_PORT", "7881")
-        node_ip = env.get("LIVEKIT_NODE_IP") or network.tailscale_ip("4") or ""
-        node_ip_v6 = env.get("LIVEKIT_NODE_IP_V6") or network.tailscale_ip("6") or ""
-        if node_ip and not _is_ip_version(node_ip, 4):
-            print(f"Ignoring invalid Tailscale IPv4 value: {node_ip}", file=sys.stderr)
-            node_ip = ""
-        if node_ip_v6 and not _is_ip_version(node_ip_v6, 6):
-            print(
-                f"Ignoring invalid Tailscale IPv6 value: {node_ip_v6}",
-                file=sys.stderr,
-            )
-            node_ip_v6 = ""
-        if not node_ip:
-            print(
-                "LIVEKIT_NODE_IP is required for Tailscale LiveKit signaling "
-                "and media.",
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
-        interface = env.get("LIVEKIT_INTERFACE") or network.resolve_interface(node_ip)
-        if not interface:
-            print(
-                "LIVEKIT_INTERFACE is required for Tailscale LiveKit media.",
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
         bind_ip = env.get("LIVEKIT_BIND_IP", "127.0.0.1")
-        node_ip_args = ["--node-ip", node_ip]
-        extra_ips = [f"{node_ip}/32"]
-        if node_ip_v6:
-            extra_ips.append(f"{node_ip_v6}/128")
-        config_body = _livekit_config_body(
-            tcp_port,
-            udp_port,
-            loopback_iface,
-            [interface],
-            extra_ips,
-            # --node-ip maps every gathered host candidate to the VPN address
-            # unless LiveKit is told to preserve internal candidates too. The
-            # phone needs the VPN candidate, while the same-host voice worker
-            # needs loopback because a packet-tunnel VPN cannot hairpin its own
-            # traffic reliably.
-            advertise_internal_ip=True,
-        )
+        endpoint = tailnet_media_endpoint(env)
+        if endpoint is None:
+            # Openbase VPN enrolls at sign-in/pairing, after setup, so a fresh
+            # install legitimately has no tailnet address yet. Serve loopback
+            # only instead of exiting: setup waits for this port before it
+            # starts the services after it (2026-10-09: the exit failed every
+            # fresh Openbase VPN setup and left the API on 7999 down). The
+            # sync-workers tailnet_transition job restarts the transport
+            # services once the VPN assigns an address.
+            print(
+                "No tailnet IP yet (VPN not enrolled); serving LiveKit on "
+                "loopback until the VPN connects.",
+                file=sys.stderr,
+            )
+            env = {**env, AWAITING_TAILNET_ENV_KEY: "1"}
+            node_ip_args = ["--node-ip", bind_ip]
+            config_body = _livekit_config_body("0", udp_port, loopback_iface, [], [])
+        else:
+            node_ip, node_ip_v6, interface = endpoint
+            tcp_port = env.get("LIVEKIT_TCP_PORT", "7881")
+            node_ip_args = ["--node-ip", node_ip]
+            extra_ips = [f"{node_ip}/32"]
+            if node_ip_v6:
+                extra_ips.append(f"{node_ip_v6}/128")
+            config_body = _livekit_config_body(
+                tcp_port,
+                udp_port,
+                loopback_iface,
+                [interface],
+                extra_ips,
+                # --node-ip maps every gathered host candidate to the VPN address
+                # unless LiveKit is told to preserve internal candidates too. The
+                # phone needs the VPN candidate, while the same-host voice worker
+                # needs loopback because a packet-tunnel VPN cannot hairpin its own
+                # traffic reliably.
+                advertise_internal_ip=True,
+            )
     else:
         print(f"Unsupported LIVEKIT_NETWORK_MODE: {mode}", file=sys.stderr)
         raise SystemExit(1)
@@ -429,7 +449,7 @@ def _resolve_binaries(name: str, config: InstallationConfig) -> dict[str, str]:
     return {key: resolvers[key]() for key in keys}
 
 
-def _load_env(config: InstallationConfig) -> dict[str, str]:
+def load_service_env(config: InstallationConfig) -> dict[str, str]:
     """Process env, with the installation's env file layered on top.
 
     On macOS/Linux the bash wrapper already does ``set -a; source
@@ -468,7 +488,7 @@ def run(name: str) -> None:
     )
     binaries = _resolve_binaries(name, config)
     build, _ = RUNNERS[name]
-    argv, env = build(_load_env(config), binaries)
+    argv, env = build(load_service_env(config), binaries)
     if name in ("codex-app-server", "codex-app-server-dispatcher"):
         from openbase_coder_cli.codex_control_plane import (
             dispatcher_codex_app_server_endpoint,
@@ -487,6 +507,12 @@ def run(name: str) -> None:
         else:
             endpoint = dispatcher_codex_app_server_endpoint(env)
         prepare_codex_app_server_start(endpoint, binaries["codex"])
+    if name == "livekit-server":
+        from openbase_coder_cli.services import tailnet_transition
+
+        tailnet_transition.record_livekit_start(
+            awaiting_tailnet=AWAITING_TAILNET_ENV_KEY in env
+        )
     from openbase_coder_cli.services.freshness.runtime import capture_service
 
     capture_service(name, config, argv)
