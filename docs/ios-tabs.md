@@ -83,6 +83,8 @@ The Dispatcher's conversation, opened from the top of **Pinned** in the drawer. 
 
 The full thread list (from the drawer's search button or **See all**), with status badges and active/loaded counts.
 
+On Android, **Search threads** focuses an editable search field; **See all** starts with the unfiltered list. Search matches thread names, project paths, devices, and displayed statuses without regard to capitalization. It loads older pages automatically, and **Clear search** restores the loaded list. If a page fails, available results remain visible and **Retry** resumes loading; background updates preserve that pause. **Threads unavailable** means no list has loaded yet, rather than an empty search result. Opening search preserves your new-chat draft.
+
 - **New thread** creates a thread from a recent project.
 - Swipe left to favorite (pin), swipe right to archive. Pinned threads appear under **Pinned** in the drawer.
 - Pull to refresh.
