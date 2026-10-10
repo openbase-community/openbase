@@ -31,16 +31,21 @@ if stat -c '%.9Y' "$home" >/dev/null 2>&1; then mtime_format=(-c '%.9Y'); else m
 # not followed), as integer nanoseconds since the epoch so that copies made
 # within the same second still compare correctly.
 newest_mtime() {
-    local newest=0 line seconds fraction
-    while IFS= read -r line; do
-        seconds="${line%%.*}"
-        fraction="${line#*.}"
-        if [ "$fraction" = "$line" ]; then fraction=""; fi
-        fraction="$(printf '%-9.9s' "$fraction" | tr ' ' 0)"
-        line=$((seconds * 1000000000 + 10#$fraction))
-        if [ "$line" -gt "$newest" ]; then newest="$line"; fi
-    done < <(find "$1" -exec stat "${mtime_format[@]}" {} +)
-    echo "$newest"
+    find "$1" -exec stat "${mtime_format[@]}" {} + | {
+        local newest=0 line seconds fraction
+        while IFS= read -r line; do
+            seconds="${line%%.*}"
+            fraction="${line#*.}"
+            if [ "$fraction" = "$line" ]; then fraction=""; fi
+            fraction="$(printf '%-9.9s' "$fraction" | tr ' ' 0)"
+            line=$((seconds * 1000000000 + 10#$fraction))
+            if [ "$line" -gt "$newest" ]; then newest="$line"; fi
+        done
+        echo "$newest"
+    } || {
+        echo "cannot determine freshness of $1; refusing to replace or retire state" >&2
+        return 1
+    }
 }
 
 persist_dir() {
@@ -56,8 +61,8 @@ persist_dir() {
         local adopt=1
         if [ -e "$data_path" ] || [ -L "$data_path" ]; then
             local home_mtime data_mtime
-            home_mtime="$(newest_mtime "$home_path")"
-            data_mtime="$(newest_mtime "$data_path")"
+            home_mtime="$(newest_mtime "$home_path")" || exit 1
+            data_mtime="$(newest_mtime "$data_path")" || exit 1
             if [ "$data_mtime" -ge "$home_mtime" ]; then
                 adopt=0
                 verdict="kept $data_path: the volume copy is at least as new as $home_path (an older image layer's store)"

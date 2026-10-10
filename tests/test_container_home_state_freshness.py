@@ -17,10 +17,11 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
-from test_container_home_state import _boot, _copy, _store, newest_mtime_ns
+from test_container_home_state import SCRIPT, _boot, _copy, _store, newest_mtime_ns
 
 OLD = 1_700_000_000
 NEWER = OLD + 3_600
@@ -54,6 +55,80 @@ def _registry(volume: Path) -> str:
 
 def _parked(volume: Path) -> list[Path]:
     return sorted(volume.glob("super-agents.replaced-*"))
+
+
+@pytest.mark.parametrize("operation", ["boot", "refresh"])
+@pytest.mark.parametrize("failed_side", ["home", "volume"])
+@pytest.mark.parametrize("failed_command", ["find", "stat"])
+def test_incomplete_freshness_scan_refuses_to_change_either_store(
+    tmp_path, volume, operation, failed_side, failed_command
+) -> None:
+    home = _home_with_store(tmp_path, "home", '{"layer": true}', mtime=OLD + 60)
+    store = _volume_store(volume, '{"volume": true}', mtime=NEWER)
+    failed_root = home / ".super-agents" if failed_side == "home" else store
+    shims = tmp_path / "shims"
+    shims.mkdir()
+    executable = shutil.which(failed_command)
+    assert executable is not None
+    shim = shims / failed_command
+    shim.write_text(
+        '#!/bin/bash\n'
+        'for argument in "$@"; do\n'
+        '    if [ "$argument" = "$FAILED_ROOT" ]; then\n'
+        '        printf "1700000000.000000000\\n"\n'
+        '        echo "simulated incomplete scan" >&2\n'
+        '        exit 1\n'
+        '    fi\n'
+        'done\n'
+        'exec "$REAL_COMMAND" "$@"\n',
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{shims}:{os.environ['PATH']}",
+        "FAILED_ROOT": str(failed_root),
+        "REAL_COMMAND": executable,
+    }
+
+    if operation == "boot":
+        result = subprocess.run(
+            ["bash", str(SCRIPT), str(home), str(volume)],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+    else:
+        result = _copy("--refresh", str(home), str(volume), env=env)
+
+    assert result.returncode != 0
+    assert "simulated incomplete scan" in result.stderr
+    assert not (home / ".super-agents").is_symlink()
+    assert (home / ".super-agents" / "state.json").read_text() == '{"layer": true}'
+    assert _registry(volume) == '{"volume": true}'
+    assert _parked(volume) == []
+    assert not list(home.glob(".super-agents.migrated-*"))
+
+
+@pytest.mark.parametrize("operation", ["boot", "refresh"])
+@pytest.mark.parametrize("newer_side", ["home", "volume"])
+def test_freshness_distinguishes_writes_in_the_same_second(
+    tmp_path, volume, operation, newer_side
+) -> None:
+    home = _home_with_store(tmp_path, "home", '{"layer": true}', mtime=OLD)
+    store = _volume_store(volume, '{"volume": true}', mtime=OLD)
+    newer_root = home / ".super-agents" if newer_side == "home" else store
+    stamp = OLD * 1_000_000_000 + 1
+    os.utime(newer_root / "state.json", ns=(stamp, stamp))
+
+    if operation == "boot":
+        _boot(home, volume)
+    else:
+        result = _copy("--refresh", str(home), str(volume))
+        assert result.returncode == 0, result.stderr
+
+    expected = '{"layer": true}' if newer_side == "home" else '{"volume": true}'
+    assert _registry(volume) == expected
 
 
 # --- pre-upgrade-copy-home-state.sh -----------------------------------------
