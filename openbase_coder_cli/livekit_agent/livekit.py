@@ -1119,6 +1119,14 @@ async def _start_live_voice_session(
     def gate_caller_speech(event):
         bridge.speech_gate.user_state_changed(event.new_state)
         if event.new_state == "speaking":
+            # Clear queued playout once the caller is really interrupting;
+            # a shorter blip is echo or noise and the answer plays through it.
+            asyncio.get_running_loop().call_later(
+                bridge.speech_gate.barge_in_min_seconds, _interrupt_if_interrupting
+            )
+
+    def _interrupt_if_interrupting():
+        if bridge.speech_gate.speaking:
             session.interrupt(force=True)
 
     # Bind before start, including callers who speak over the first greeting.
