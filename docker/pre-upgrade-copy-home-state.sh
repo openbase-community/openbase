@@ -66,16 +66,21 @@ chown "$owner" "$data_dir"
 # not followed), as integer nanoseconds since the epoch so that copies made
 # within the same second still compare correctly.
 newest_mtime() {
-    local newest=0 line seconds fraction
-    while IFS= read -r line; do
-        seconds="${line%%.*}"
-        fraction="${line#*.}"
-        if [ "$fraction" = "$line" ]; then fraction=""; fi
-        fraction="$(printf '%-9.9s' "$fraction" | tr ' ' 0)"
-        line=$((seconds * 1000000000 + 10#$fraction))
-        if [ "$line" -gt "$newest" ]; then newest="$line"; fi
-    done < <(find "$1" -exec stat "${mtime_format[@]}" {} +)
-    echo "$newest"
+    find "$1" -exec stat "${mtime_format[@]}" {} + | {
+        local newest=0 line seconds fraction
+        while IFS= read -r line; do
+            seconds="${line%%.*}"
+            fraction="${line#*.}"
+            if [ "$fraction" = "$line" ]; then fraction=""; fi
+            fraction="$(printf '%-9.9s' "$fraction" | tr ' ' 0)"
+            line=$((seconds * 1000000000 + 10#$fraction))
+            if [ "$line" -gt "$newest" ]; then newest="$line"; fi
+        done
+        echo "$newest"
+    } || {
+        echo "cannot determine freshness of $1; refusing to replace or retire state" >&2
+        return 1
+    }
 }
 
 give_to_owner() {
@@ -100,8 +105,8 @@ replace_existing() {
         set_aside "$dest"
         return 0
     fi
-    src_mtime="$(newest_mtime "$src")"
-    dest_mtime="$(newest_mtime "$dest")"
+    src_mtime="$(newest_mtime "$src")" || exit 1
+    dest_mtime="$(newest_mtime "$dest")" || exit 1
     if [ "$dest_mtime" -gt "$src_mtime" ]; then
         echo "kept $dest (volume copy is newer than $src)"
         return 1
