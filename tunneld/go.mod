@@ -4,6 +4,7 @@ go 1.26.5
 
 require (
 	github.com/pion/turn/v4 v4.1.4
+	golang.org/x/net v0.57.0
 	tailscale.com v1.100.0
 )
 
@@ -51,7 +52,6 @@ require (
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
 	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b // indirect
-	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect

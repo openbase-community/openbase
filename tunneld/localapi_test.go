@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"testing"
 
@@ -89,5 +91,31 @@ func TestResolveOpenbaseLocalAddr(t *testing.T) {
 		if _, err := resolveOpenbaseLocalAddr(bad); err == nil {
 			t.Fatalf("expected error for %q", bad)
 		}
+	}
+}
+
+func TestResolveRejectsBadNamesBeforeTheNodeIsUp(t *testing.T) {
+	api := &localAPI{token: "secret"}
+	server := httptest.NewServer(api.handler())
+	t.Cleanup(server.Close)
+	get := func(query string) int {
+		t.Helper()
+		req, _ := http.NewRequest("GET", server.URL+"/resolve"+query, nil)
+		req.Header.Set("Authorization", "Bearer secret")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if status := get(""); status != 400 {
+		t.Fatalf("missing name: %d", status)
+	}
+	if status := get("?name=bad/name"); status != 400 {
+		t.Fatalf("bad name: %d", status)
+	}
+	if status := get("?name=crm.abcdefghijkl.vpn.obs.so"); status != 503 {
+		t.Fatalf("no node yet: %d", status)
 	}
 }
