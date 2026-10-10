@@ -298,7 +298,9 @@ def _default_client_for_execution_backend(
 
         # Check the base class, not the adapter: older published versions
         # have no notification hook and need the compatibility state watcher.
-        client = OpenbaseClaudeClient(backend_identity=identity)
+        from openbase_coder_cli.agent_announcements.claude import managed_claude_client
+
+        client = managed_claude_client(OpenbaseClaudeClient, backend_identity=identity)
         client.supports_turn_notifications = callable(
             getattr(ClaudeAgentSdkClient, "handle_notification", None)
         )

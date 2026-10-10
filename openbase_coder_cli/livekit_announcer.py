@@ -90,10 +90,11 @@ async def publish_announcer_message(
     room_name: str | None = None,
     voice_id: str | None = None,
     agent_name: str | None = None,
+    message_id: str | None = None,
     livekit_client: livekit_api.LiveKitAPI | None = None,
 ) -> AnnouncerPublishResult:
     normalized_text = validate_announcer_text(text)
-    message_id = f"announcer-{uuid.uuid4().hex}"
+    message_id = message_id or f"announcer-{uuid.uuid4().hex}"
 
     async def operation(client) -> AnnouncerPublishResult:
         return await _publish_announcer_message_with(
@@ -102,6 +103,17 @@ async def publish_announcer_message(
         )
 
     return await _run_with_livekit_client(operation, livekit_client)
+
+
+async def resolve_announcer_room() -> str | None:
+    """Snapshot a task's destination so its completion cannot follow a new call."""
+    async def operation(client):
+        try:
+            return (await _resolve_target_room(client, room_name=None)).room_name
+        except NoActiveLiveKitRoomError:
+            return None
+
+    return await _run_with_livekit_client(operation, None)
 
 
 async def _publish_announcer_message_with(
