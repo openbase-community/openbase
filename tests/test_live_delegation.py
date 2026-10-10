@@ -905,6 +905,139 @@ async def test_a_recoverable_server_error_does_not_hold_commentary():
     await bridge.aclose()
 
 
+@pytest.mark.parametrize("held", [False, True])
+async def test_reconnect_retains_every_unheard_streamed_chunk(held):
+    clock = {"now": 100.0}
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        clock=lambda: clock["now"]
+    )
+    live.delegate("d1", "Run the tests")
+    await _settle()
+    if held:
+        live.drop()
+    sentences = [f"Test number {number} passed." for number in range(12)]
+    for count in range(1, len(sentences) + 1):
+        dispatcher.progress("turn-1", _progress_snapshot(" ".join(sentences[:count])))
+    dispatcher.result = {
+        "_livekit_speech_text": " ".join(sentences),
+        "_livekit_turn_id": "turn-1",
+        "status": "completed",
+        "progress": {},
+    }
+    dispatcher.result_gate.set()
+    await _settle()
+    if not held:
+        live.drop()
+    live.emit("session_reconnected")
+    assert live.of("commentary", None) == sentences
+    await bridge.aclose()
+
+
+async def test_buffered_speech_during_the_gap_does_not_confirm_old_appends():
+    clock = {"now": 100.0}
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        clock=lambda: clock["now"]
+    )
+    live.delegate("d1", "Run the tests")
+    await _settle()
+    dispatcher.result_gate.set()
+    await _settle()
+    live.drop()
+    clock["now"] += 1.0
+    bridge.on_agent_state_changed("listening", "speaking")
+    live.emit("session_reconnected")
+    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    await bridge.aclose()
+
+
+async def test_steering_during_the_gap_preserves_the_shared_turns_unheard_prefix():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.delegate("d1", "Run the tests")
+    live.final("Run the tests")
+    await _settle()
+    live.drop()
+    dispatcher.progress("turn-1", _progress_snapshot("Tests passed."))
+    live.final("Also run the linter")
+    await _settle()
+    dispatcher.result = {
+        "_livekit_speech_text": "Tests passed. Linter passed.",
+        "_livekit_turn_id": "turn-1",
+        "status": "completed",
+        "progress": {},
+    }
+    dispatcher.result_gate.set()
+    await _settle()
+    live.emit("session_reconnected")
+    assert live.of("commentary", None) == ["Tests passed.", "Linter passed."]
+    assert len(_redelivery_notes(live)) == 1
+    await bridge.aclose()
+
+
+@pytest.mark.parametrize("drop_seen", [False, True])
+async def test_unbound_delivery_reconnect_requires_an_observed_drop(drop_seen):
+    clock = {"now": 100.0}
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        clock=lambda: clock["now"]
+    )
+    live.final("Run the tests")
+    await _settle()
+    dispatcher.result_gate.set()
+    await _settle()
+    clock["now"] += 1.0
+    if drop_seen:
+        live.drop()
+    live.emit("session_reconnected")
+    assert live.of("commentary", None) == ["All tests pass. The build is green."] * (
+        2 if drop_seen else 1
+    )
+    if drop_seen:
+        clock["now"] += 1.0
+        live.drop()
+        live.emit("session_reconnected")
+        assert len(live.of("commentary", None)) == 3
+    await bridge.aclose()
+
+
+@pytest.mark.parametrize("stale_reason", ["completed_turn_superseded", "route_changed"])
+async def test_reconnect_does_not_replay_stale_held_answers(stale_reason):
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    live.delegate("d1", "Run the tests")
+    live.final("Run the tests")
+    await _settle()
+    live.drop()
+    dispatcher.result_gate.set()
+    await _settle()
+    if stale_reason == "route_changed":
+        router.transfer(FakeVoiceClient(thread_id="other-thread"))
+    else:
+        dispatcher.result_gate.clear()
+        live.final("Now inspect the build")
+        await _settle()
+    live.emit("session_reconnected")
+    assert live.of("commentary") == []
+    await bridge.aclose()
+
+
+async def test_held_answer_survives_a_long_outage_and_claims_orphan_delivery():
+    clock = {"now": 100.0}
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        clock=lambda: clock["now"]
+    )
+    live.delegate("d1", "Run the tests")
+    await _settle()
+    live.drop()
+    dispatcher.result_gate.set()
+    await _settle()
+    bridge.deliver_orphaned_result(
+        dispatcher, "turn-1", "All tests pass. The build is green."
+    )
+    assert live.of("commentary") == []
+    clock["now"] += 120.0
+    live.emit("session_reconnected")
+    assert live.of("commentary", None) == ["All tests pass. The build is green."]
+    await bridge.aclose()
+
+
 async def test_appends_during_the_gap_are_not_bound_to_the_dead_session():
     """A turn steered during the gap inherits the dead delegation; its thinking
     must not be queued for that id (the new session would reject it)."""
