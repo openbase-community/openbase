@@ -1569,6 +1569,20 @@ async def test_turn_errors_become_immediate_commentary(busy, expected):
 # --- announcer ------------------------------------------------------------------
 
 
+async def test_greeting_is_one_spoken_instruction_not_another_commentary_answer():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    try:
+        bridge.greet("Hi, I'm Jacqueline.")
+        assert len(live.of("instructions", None)) == 1
+        assert live.of("instructions", None)[0].endswith('"Hi, I\'m Jacqueline."')
+        assert live.of("commentary") == []
+        assert bridge.speech_gate.authorized
+        bridge.on_user_state_changed("listening", "speaking")
+        assert not bridge.speech_gate.authorized
+    finally:
+        await bridge.aclose()
+
+
 async def test_user_say_announcements_become_session_wide_commentary():
     bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
     bridge.announce("Finished the report.", agent_name="Lucy")

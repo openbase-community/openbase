@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import math
 import re
@@ -732,7 +733,9 @@ class LiveDelegationBridge:
     def _append_instructions(self, text: str, delegation_id: str | None) -> None:
         self._append("append_instructions", text, delegation_id)
 
-    def _append(self, method: str, text: str, delegation_id: str | None) -> None:
+    def _append(
+        self, method: str, text: str, delegation_id: str | None, *, spoken=False
+    ) -> None:
         if self._live_session is None or not text:
             return
         if self._session_down_at is not None:
@@ -756,7 +759,7 @@ class LiveDelegationBridge:
                     exc_info=True,
                 )
                 return
-            if method == "append_commentary":
+            if method == "append_commentary" or spoken:
                 self.speech_gate.authorize()
             self._stats[method] += 1
             self._log.info(
@@ -1518,6 +1521,18 @@ class LiveDelegationBridge:
             record, self._speaking_record = self._speaking_record, None
             if record is not None:
                 self._ledger.mark_live_audio_finished(record)
+
+    def greet(self, text: str) -> None:
+        """Request one exact greeting, rather than paraphrasable commentary."""
+        self._append(
+            "append_instructions",
+            "Immediately say the following greeting exactly once, in full. "
+            "Do not add words or repeat it. Any transfer request in history "
+            "is already handled; do not answer it separately. "
+            "Then pause and listen. Text to read: " + json.dumps(text),
+            None,
+            spoken=True,
+        )
 
     def announce(self, text: str, *, agent_name: str | None = None) -> None:
         """A ``user say`` announcement, woven into the conversation."""

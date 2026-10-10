@@ -1135,7 +1135,7 @@ async def _start_live_voice_session(
             assistant.duplex_session, timeout=LIVE_VOICE_PREFLIGHT_TIMEOUT_SECONDS
         )
         log_character_started(identity, assistant.duplex_session, voice_router)
-        bridge.announce(live_voice_greeting(bridge.starting_agent_label()))
+        bridge.greet(live_voice_greeting(bridge.starting_agent_label()))
         live_ready = True
         characters = LiveCharacterController(
             session=session, bridge=bridge, router=voice_router,

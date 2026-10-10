@@ -680,6 +680,15 @@ async def test_real_gpt_live_session_delegation_flows_through_the_bridge(
                     in (server.session_start["session"]["instructions"])
                 )
 
+            greeting = f"Hi, I'm {agent_label or 'Jacqueline'}."
+            bridge.greet(greeting)
+            greetings = await server.wait_for_append("instructions")
+            assert len(greetings) == 1
+            assert greetings[0]["delegation_id"] is None
+            assert "exactly once" in greetings[0]["content"]
+            assert greeting in greetings[0]["content"]
+            assert bridge.speech_gate.authorized
+
             await server.send(
                 {
                     "type": "session.input_transcript.delta",

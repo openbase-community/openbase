@@ -257,7 +257,7 @@ async def test_each_route_introduces_once_across_returns_and_announcement_restor
     for route in ["blake", "blake", "blake", "dispatcher", "blake", "lucy"]:
         current["id"] = route
         await controller._conversation(history)
-    assert [call.args[0] for call in bridge.announce.call_args_list] == [
+    assert [call.args[0] for call in bridge.greet.call_args_list] == [
         "Hi, I'm Blake.",
         "Hi, I'm Lucy.",
     ]

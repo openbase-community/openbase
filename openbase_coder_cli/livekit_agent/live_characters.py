@@ -240,7 +240,7 @@ class LiveCharacterController:
             self._resume_output()
             if snapshot.active_thread_id not in self._introduced_routes:
                 self._introduced_routes.add(snapshot.active_thread_id)
-                self.bridge.announce(
+                self.bridge.greet(
                     live_voice_greeting(self.bridge.starting_agent_label())
                 )
             return assistant
