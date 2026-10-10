@@ -21,7 +21,12 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
+from openbase_coder_cli.file_lock import LOCK_EX, LOCK_UN, flock
 from openbase_coder_cli.paths import OPENBASE_BASE_DIR
+from openbase_coder_cli.services.mutation_lock import (
+    ServiceMutationBusy,
+    service_mutation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,12 +55,16 @@ _last_restart_monotonic: float | None = None
 @contextmanager
 def transport_lease() -> Iterator[None]:
     """Keep the transition job out of the way while the caller handles it."""
-    LEASE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    LEASE_PATH.touch()
+    with service_mutation():
+        LEASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        LEASE_PATH.touch()
+        generation = LEASE_PATH.stat().st_mtime_ns
     try:
         yield
     finally:
-        LEASE_PATH.unlink(missing_ok=True)
+        with service_mutation():
+            if LEASE_PATH.exists() and LEASE_PATH.stat().st_mtime_ns == generation:
+                LEASE_PATH.unlink()
 
 
 def _lease_held() -> bool:
@@ -65,11 +74,24 @@ def _lease_held() -> bool:
         return False
 
 
+@contextmanager
+def _marker_lock() -> Iterator[None]:
+    """Serialize marker updates without blocking service startup on its batch."""
+    path = AWAITING_TAILNET_MARKER.with_suffix(".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+") as handle:
+        flock(handle, LOCK_EX)
+        try:
+            yield
+        finally:
+            flock(handle, LOCK_UN)
+
+
 def record_livekit_start(*, awaiting_tailnet: bool) -> None:
     """Record loopback starts; only a completed transport transition clears it."""
     if awaiting_tailnet:
-        AWAITING_TAILNET_MARKER.parent.mkdir(parents=True, exist_ok=True)
-        AWAITING_TAILNET_MARKER.touch()
+        with _marker_lock():
+            AWAITING_TAILNET_MARKER.touch()
 
 
 def pending_generation() -> int | None:
@@ -87,13 +109,12 @@ def finish_transition(generation: int | None) -> None:
     """
     if generation is None:
         return
-    try:
-        if AWAITING_TAILNET_MARKER.stat().st_mtime_ns == generation:
+    with _marker_lock():
+        if pending_generation() == generation:
             AWAITING_TAILNET_MARKER.unlink()
-    except FileNotFoundError:
-        pass
 
 
+@service_mutation()
 def kickstart_transport_services() -> bool:
     """Kick the transport services in place after login or a transport switch.
 
@@ -181,11 +202,17 @@ def run_tick() -> bool:
         logger.info("tailnet_transition deferred voice_session_active")
         return False
 
-    logger.info(
-        "tailnet_transition tailnet_ready restarting services=%s",
-        list(TRANSPORT_SERVICES),
-    )
-    _last_restart_monotonic = now
-    _restart_transport_services()
-    finish_transition(generation)
-    return True
+    try:
+        with service_mutation(timeout=0):
+            if _lease_held() or pending_generation() != generation:
+                return False
+            logger.info(
+                "tailnet_transition tailnet_ready restarting services=%s",
+                list(TRANSPORT_SERVICES),
+            )
+            _last_restart_monotonic = now
+            _restart_transport_services()
+            finish_transition(generation)
+            return True
+    except ServiceMutationBusy:
+        return False
