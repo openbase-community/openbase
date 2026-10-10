@@ -1065,3 +1065,26 @@ def test_new_empty_room_protects_watchdog_before_agent_join(monkeypatch, millise
     monkeypatch.setattr(livekit_announcer.time, "time", lambda: 1300.0)
     assert not asyncio.run(livekit_announcer.active_voice_room_exists(
         include_agent_only_rooms=True, recent_room_seconds=300))
+
+
+def test_managed_say_uses_exact_thread_and_stable_message_id(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    for thread_id, voice_id in [("worker-one", "voice-one"), ("worker-two", "voice-two")]:
+        record_voice_assignment(
+            thread_id=thread_id, agent_name="Rowan", cwd="/project", voice_id=voice_id,
+            voice_name="Rowan", kind="super_agent", source="test",
+        )
+    sent = []
+    async def publish(text, **kwargs):
+        sent.append(kwargs)
+        return SimpleNamespace(message_id=kwargs["message_id"], room_name=kwargs["room_name"])
+    monkeypatch.setattr(views, "publish_announcer_message", publish)
+    message_id = "announcer-managed-" + "a" * 32
+    request = APIRequestFactory().post("/api/user/say/", {
+        "agent_name": "Rowan", "thread_id": "worker-one", "text": "A completed result.",
+        "room_name": "original-room", "message_id": message_id,
+    }, format="json")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+    response = views.user_say(request)
+    assert response.status_code == 202
+    assert sent == [{"room_name": "original-room", "voice_id": "voice-one", "agent_name": "Rowan", "message_id": message_id}]

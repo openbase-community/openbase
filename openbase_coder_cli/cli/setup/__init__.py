@@ -639,18 +639,17 @@ _BACKEND_PICKER_OPTIONS = (
     (
         CODEX_BACKEND,
         "codex",
-        "native Codex app-server with OpenAI models, using your Codex CLI login",
+        "Make sure the codex CLI is installed and logged in.",
     ),
     (
         CLAUDE_CODE_BACKEND,
         "claude-code",
-        "Claude Code using your local Claude login and billing",
+        "Make sure the claude CLI is installed and logged in.",
     ),
     (
         OPENBASE_CLOUD_BACKEND,
         "openbase-cloud",
-        "Cloud-proxied Claude Code with only an Openbase login; no personal "
-        "Anthropic account needed",
+        "No personal AI accounts needed.",
     ),
 )
 
@@ -658,19 +657,17 @@ _AUDIO_PROVIDER_PICKER_OPTIONS = (
     (
         AUDIO_PROVIDER_OPENBASE_CLOUD,
         "Cloud TTS/STT",
-        "managed speech-to-text and text-to-speech through Openbase Cloud "
-        "(recommended)",
+        "recommended, easy, generous free usage",
     ),
     (
         AUDIO_PROVIDER_CARTESIA,
         "Bring your own keys",
-        "AssemblyAI speech-to-text and Cartesia text-to-speech with your own API keys",
+        "AssemblyAI + Cartesia keys required",
     ),
     (
         AUDIO_PROVIDER_LOCAL,
         "Local models",
-        "on-device Kokoro TTS and MLX Whisper STT; Apple Silicon with Python "
-        "3.12 only (not recommended)",
+        "beta, not recommended (Apple Silicon, Python 3.12 only)",
     ),
 )
 
@@ -704,14 +701,10 @@ def _require_tailnet_provider_choice(
         )
         return configured if configured in PROVIDER_VALUES else PROVIDER_TAILSCALE
     if interactive:
-        from openbase_coder_cli.services.tailscale_provider import (
-            default_tailnet_provider,
-        )
-
         return _prompt_pick(
             "Tailnet transport:",
             _TAILNET_PROVIDER_PICKER_OPTIONS,
-            default=default_tailnet_provider(),
+            default=PROVIDER_NETMESH,
         )
     return None
 

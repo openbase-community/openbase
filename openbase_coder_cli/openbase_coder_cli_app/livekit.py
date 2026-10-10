@@ -141,6 +141,10 @@ class LiveKitCompanionSessionSerializer(serializers.Serializer):
 
 
 class AnnouncerSaySerializer(serializers.Serializer):
+    thread_id = serializers.CharField(required=False, max_length=256)
+    message_id = serializers.RegexField(
+        r"^announcer-(?:managed-)?[0-9a-f]{32}$", required=False,
+    )
     agent_name = serializers.CharField(
         trim_whitespace=True,
         max_length=256,
@@ -278,7 +282,14 @@ def user_say(request):
     )
     voice_entry = None
     try:
-        voice_entry = get_voice_history_entry_for_agent_name(agent_name)
+        if thread_id := input_serializer.validated_data.get("thread_id"):
+            from openbase_coder_cli.livekit_voice_history import get_voice_history_entry
+
+            voice_entry = get_voice_history_entry(thread_id)
+            if voice_entry is None or voice_entry.agent_name != agent_name:
+                raise UnknownAgentVoiceError("The requested thread has no matching speaking identity.")
+        else:
+            voice_entry = get_voice_history_entry_for_agent_name(agent_name)
         logger.info(
             "dispatch_timing stage=user_say_voice_resolved agent_name=%s "
             "thread_id=%s voice_id=%s voice_name=%s source=%s",
@@ -293,6 +304,8 @@ def user_say(request):
             room_name=room_name,
             agent_name=agent_name,
             voice_id=voice_entry.voice_id,
+            **({"message_id": input_serializer.validated_data["message_id"]}
+               if "message_id" in input_serializer.validated_data else {}),
         )
     except UnknownAgentVoiceError as exc:
         catalog_voice = get_tts_provider(selected_tts_provider_id()).voice_for_name(
