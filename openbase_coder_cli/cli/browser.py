@@ -261,9 +261,9 @@ def browser_replay(url: str) -> None:
     loopback addresses are accepted; the single-use code in URL is not
     printed or logged.
     """
-    from openbase_coder_cli.openbase_coder_cli_app.oauth_callback_replay import (
-        replay_loopback_callback,
-    )
+    # Plain module on purpose: this command runs from any terminal, where no
+    # Django settings exist, so it must not import the local API view.
+    from openbase_coder_cli.login_callback import replay_loopback_callback
 
     try:
         result = replay_loopback_callback(url)

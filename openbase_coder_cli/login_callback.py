@@ -12,9 +12,15 @@ handler and must start fast.
 from __future__ import annotations
 
 import ipaddress
+import logging
 import secrets
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlsplit
+
+import httpx
+
+logger = logging.getLogger(__name__)
+REPLAY_TIMEOUT_SECONDS = 10.0
 
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 REDIRECT_QUERY_KEYS = ("redirect_uri", "redirect_url")
@@ -169,3 +175,36 @@ def loopback_replay_target(pasted: str) -> LoopbackReplayTarget | None:
     if parts.query:
         path += "?" + parts.query
     return LoopbackReplayTarget(port=port, path=path)
+
+
+def replay_loopback_callback(url: str) -> dict:
+    """GET a pasted-back callback against this host's loopback; result only.
+
+    Shared by ``openbase-coder browser replay`` and the local API endpoint,
+    so it must stay free of Django imports: the command runs from any
+    terminal, with no settings configured. Redirects are never followed and
+    the single-use code in ``url`` is never logged.
+    """
+    target = loopback_replay_target(url)
+    if target is None:
+        raise ValueError("not a loopback callback address")
+    try:
+        response = httpx.get(
+            target.url, follow_redirects=False, timeout=REPLAY_TIMEOUT_SECONDS
+        )
+    except httpx.HTTPError as exc:
+        logger.info(
+            "oauth callback replay to port %s failed: %s",
+            target.port,
+            type(exc).__name__,
+        )
+        return {
+            "ok": False,
+            "port": target.port,
+            "error": f"localhost:{target.port} did not answer: {type(exc).__name__}",
+        }
+    return {
+        "ok": response.status_code < 400,
+        "port": target.port,
+        "status_code": response.status_code,
+    }

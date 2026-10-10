@@ -455,12 +455,8 @@ def test_browser_open_reports_the_phone_forward_outcome(monkeypatch):
 
 
 def test_browser_replay_command(monkeypatch):
-    from openbase_coder_cli.openbase_coder_cli_app import (
-        oauth_callback_replay as replay,
-    )
-
     monkeypatch.setattr(
-        replay.httpx,
+        httpx,
         "get",
         lambda url, **kwargs: httpx.Response(200, request=httpx.Request("GET", url)),
     )
@@ -475,7 +471,7 @@ def test_browser_replay_command(monkeypatch):
     def refuse(url, **kwargs):
         raise httpx.ConnectError("refused")
 
-    monkeypatch.setattr(replay.httpx, "get", refuse)
+    monkeypatch.setattr(httpx, "get", refuse)
     closed = CliRunner().invoke(
         browser_cli.browser, ["replay", "http://localhost:1455/cb"]
     )
@@ -487,3 +483,28 @@ def test_browser_replay_command(monkeypatch):
     )
     assert bad.exit_code != 0
     assert "loopback" in bad.output or "localhost" in bad.output
+
+
+def test_browser_replay_needs_no_django_settings():
+    """The command must work from any terminal (QA found it crashed on a VM
+    shell because it imported the DRF view, which needs settings)."""
+    import subprocess
+    import sys
+
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"DJANGO_SETTINGS_MODULE", "OPENBASE_CODER_CLI_SECRET_KEY"}
+    }
+    code = (
+        "import importlib\n"
+        "b = importlib.import_module('openbase_coder_cli.cli.browser')\n"
+        "from click.testing import CliRunner\n"
+        "r = CliRunner().invoke(b.browser, ['replay', 'http://localhost:1/x'])\n"
+        "assert r.exit_code != 0 and 'django' not in r.output.lower(), r.output\n"
+        "assert 'settings' not in str(r.exception).lower(), r.exception\n"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True
+    )
+    assert completed.returncode == 0, completed.stderr
