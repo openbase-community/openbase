@@ -1075,7 +1075,6 @@ def _prepare_call_start_route(thread_id: str, *, label: str | None = None) -> di
                 status=status.HTTP_400_BAD_REQUEST,
             )
         }
-    transfer.commit()
     return {"voice_route": transfer.command_payload()}
 
 

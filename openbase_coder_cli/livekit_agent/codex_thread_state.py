@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 from openbase_coder_cli.file_lock import LOCK_EX, LOCK_UN, flock
@@ -54,6 +54,8 @@ def persist_voice_route_state(
     active_target_label: str | None,
     active_target_voice_id: str | None,
     active_target_voice_name: str | None,
+    route_owner_id: str | None = None,
+    expected_route_owner_id: str | None = None,
 ) -> None:
     if state_path is None or not dispatcher_thread_id:
         return
@@ -63,25 +65,38 @@ def persist_voice_route_state(
         else state_path.with_name("livekit-voice-route.json")
     )
     route_path.parent.mkdir(parents=True, exist_ok=True)
-    route_path.write_text(
-        json.dumps(
-            {
-                "dispatcher_thread_id": dispatcher_thread_id,
-                "dispatcher_voice_id": dispatcher_voice["id"],
-                "dispatcher_voice_name": dispatcher_voice["name"],
-                "active_target_thread_id": active_target_thread_id,
-                "active_target_kind": active_target_kind,
-                "active_target_label": active_target_label,
-                "active_target_voice_id": active_target_voice_id,
-                "active_target_voice_name": active_target_voice_name,
-                "updated_at": time.time(),
-                "instruction_override_supported": True,
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
+    lock = (
+        thread_state_file_lock(route_path)
+        if route_owner_id is not None or expected_route_owner_id is not None
+        else nullcontext()
     )
+    with lock:
+        if expected_route_owner_id is not None:
+            if not route_path.exists():
+                return
+            current = json.loads(route_path.read_text(encoding="utf-8"))
+            if current.get("route_owner_id") != expected_route_owner_id:
+                return
+        route_path.write_text(
+            json.dumps(
+                {
+                    "dispatcher_thread_id": dispatcher_thread_id,
+                    "dispatcher_voice_id": dispatcher_voice["id"],
+                    "dispatcher_voice_name": dispatcher_voice["name"],
+                    "active_target_thread_id": active_target_thread_id,
+                    "active_target_kind": active_target_kind,
+                    "active_target_label": active_target_label,
+                    "active_target_voice_id": active_target_voice_id,
+                    "active_target_voice_name": active_target_voice_name,
+                    "updated_at": time.time(),
+                    "instruction_override_supported": True,
+                    "route_owner_id": route_owner_id,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
     try:
         from openbase_coder_cli.livekit_voice_history import record_voice_assignment
 

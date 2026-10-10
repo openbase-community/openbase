@@ -46,6 +46,7 @@ class LiveKitVoiceRouter:
         self._proactive_steer_prompt_hashes: dict[str, float] = {}
         self._orphaned_result_handler = None
         self._route_version = 0
+        self._route_owner_id = uuid.uuid4().hex
         self.delivery_ledger = delivery_ledger
         self.input_buffer = VoiceInputBuffer()
         # What the caller has open in the phone app (screen_context); set per
@@ -152,6 +153,7 @@ class LiveKitVoiceRouter:
             active_target_label=label,
             active_target_voice_id=target_voice_id,
             active_target_voice_name=target_voice_name,
+            route_owner_id=self._route_owner_id,
         )
         logger.info(
             "dispatch_timing stage=voice_route_changed action=transfer_to_thread "
@@ -208,7 +210,9 @@ class LiveKitVoiceRouter:
         # during the next dispatcher call.
         if not self.is_dispatcher_active:
             try:
-                self._dispatcher_client.reset_voice_route_to_dispatcher()
+                self._dispatcher_client.reset_voice_route_to_dispatcher(
+                    expected_route_owner_id=self._route_owner_id
+                )
             except Exception:
                 logger.warning(
                     "Unable to reset the voice route at call end", exc_info=True
