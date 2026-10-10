@@ -613,7 +613,10 @@ async def test_real_gateway_rejection_fails_the_startup_readiness_wait():
 
 
 @pytest.mark.parametrize("preconnect", [False, True])
-async def test_real_gpt_live_session_delegation_flows_through_the_bridge(preconnect):
+@pytest.mark.parametrize("agent_label", [None, "Linda"])
+async def test_real_gpt_live_session_delegation_flows_through_the_bridge(
+    preconnect, agent_label
+):
     from livekit.agents.llm import ChatContext
     from livekit.plugins.openai.realtime import GPTLiveModel
 
@@ -621,6 +624,7 @@ async def test_real_gpt_live_session_delegation_flows_through_the_bridge(preconn
         _preconnecting_model_class,
         wait_live_session_started,
     )
+    from openbase_coder_cli.livekit_agent.livekit import LiveVoiceAssistant
 
     async with FakeGPTLiveServer() as server:
         model_class = (
@@ -647,11 +651,13 @@ async def test_real_gpt_live_session_delegation_flows_through_the_bridge(preconn
             voice_router=_FakeRouter(client),
             developer_instructions=lambda: "guidance",
             progress_thinking_interval=3600,
+            initial_agent_label=agent_label,
         )
+        assistant = LiveVoiceAssistant(bridge)
         bridge.attach(live)
         try:
             await live._update_session(
-                instructions="You are the voice relay.",
+                instructions=assistant.instructions,
                 chat_ctx=ChatContext.empty(),
                 tools=[],
             )
@@ -662,8 +668,12 @@ async def test_real_gpt_live_session_delegation_flows_through_the_bridge(preconn
             assert server.session_start["session"]["model"] == "gpt-live-1"
             assert (
                 server.session_start["session"]["instructions"]
-                == "You are the voice relay."
+                == assistant.instructions
             )
+            if agent_label:
+                assert f"everything the caller says goes to {agent_label}" in (
+                    server.session_start["session"]["instructions"]
+                )
 
             await server.send(
                 {
