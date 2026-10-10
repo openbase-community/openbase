@@ -679,3 +679,171 @@ def test_livekit_room_token_lets_the_phone_publish_its_on_screen_thread(
     assert video["roomJoin"] is True
     assert video["room"] == "room-test"
     assert video["canUpdateOwnMetadata"] is True
+
+
+# --- start-up latency: explicit agent dispatch at token time -------------------------
+
+
+def _room_token_ready(monkeypatch, tmp_path: Path) -> None:
+    from openbase_coder_cli.services import livekit_pool_activity
+
+    monkeypatch.setattr(livekit_pool_activity, "_ACTIVITY_DIR", tmp_path / "activity")
+    monkeypatch.setattr(
+        views._livekit,
+        "_livekit_client_token_credentials",
+        lambda: ("livekit-client-key", "livekit-client-secret"),
+    )
+    monkeypatch.setattr(
+        views._livekit,
+        "ensure_openbase_cloud_audio_subscription",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        views._livekit,
+        "local_audio_readiness",
+        lambda **_kwargs: SimpleNamespace(ready=True, detail=None),
+    )
+
+
+def _room_token(monkeypatch, tmp_path: Path, *, dispatched: bool):
+    _room_token_ready(monkeypatch, tmp_path)
+    calls: list[dict] = []
+
+    def fake_dispatch(**kwargs):
+        calls.append(kwargs)
+        return dispatched
+
+    monkeypatch.setattr(views._livekit, "dispatch_agent_before_join", fake_dispatch)
+    response = views.livekit_room_token(
+        _jwt_authenticated_request(
+            "POST",
+            "/api/livekit-room-token/",
+            {"room_name": "room-fast", "livekit_dispatch_agent_name": "livekit-agent"},
+        )
+    )
+    assert response.status_code == 200
+    import jwt
+
+    return calls, jwt.decode(
+        response.data["token"], options={"verify_signature": False}
+    )
+
+
+def test_room_token_dispatches_the_agent_before_the_phone_joins(monkeypatch, tmp_path):
+    """The agent is dispatched when the token is minted, with the same metadata
+    the room configuration would have carried, and the token then carries no
+    room configuration (LiveKit would otherwise dispatch a second agent)."""
+    calls, claims = _room_token(monkeypatch, tmp_path, dispatched=True)
+    (call,) = calls
+    assert call["room_name"] == "room-fast"
+    assert call["agent_name"] == "livekit-agent"
+    assert json.loads(call["metadata"]) == {"user_identity": "gabe@example.com"}
+    assert "roomConfig" not in claims
+    assert claims["video"]["room"] == "room-fast"
+
+
+def test_room_token_keeps_the_room_configuration_when_dispatch_is_not_possible(
+    monkeypatch, tmp_path
+):
+    calls, claims = _room_token(monkeypatch, tmp_path, dispatched=False)
+    assert len(calls) == 1
+    (agent,) = claims["roomConfig"]["agents"]
+    assert agent["agentName"] == "livekit-agent"
+    assert json.loads(agent["metadata"]) == {"user_identity": "gabe@example.com"}
+
+
+def test_dispatch_before_join_never_raises_and_can_be_disabled(monkeypatch):
+    livekit_views = views._livekit
+    attempts: list[str] = []
+
+    async def exploding(**kwargs):
+        attempts.append(kwargs["room_name"])
+        raise RuntimeError("livekit-server down")
+
+    monkeypatch.setattr(livekit_views, "_create_agent_dispatch", exploding)
+    monkeypatch.delenv("LIVEKIT_EXPLICIT_AGENT_DISPATCH", raising=False)
+    assert (
+        livekit_views.dispatch_agent_before_join(
+            room_name="room-1", agent_name="livekit-agent", metadata="{}"
+        )
+        is False
+    )
+    assert attempts == ["room-1"]
+    monkeypatch.setenv("LIVEKIT_EXPLICIT_AGENT_DISPATCH", "0")
+    assert (
+        livekit_views.dispatch_agent_before_join(
+            room_name="room-2", agent_name="livekit-agent", metadata="{}"
+        )
+        is False
+    )
+    assert attempts == ["room-1"]
+
+
+class _FakeDispatchClient:
+    def __init__(self, existing_rooms: list[str]) -> None:
+        self.existing_rooms = existing_rooms
+        self.dispatches: list = []
+        self.closed = False
+        self.room = SimpleNamespace(list_rooms=self._list_rooms)
+        self.agent_dispatch = SimpleNamespace(create_dispatch=self._create_dispatch)
+
+    async def _list_rooms(self, request):
+        names = list(request.names)
+        return SimpleNamespace(
+            rooms=[SimpleNamespace(name=n) for n in self.existing_rooms if n in names]
+        )
+
+    async def _create_dispatch(self, request):
+        self.dispatches.append(request)
+        return SimpleNamespace(id="AD_1")
+
+    async def aclose(self):
+        self.closed = True
+
+
+def test_create_agent_dispatch_creates_the_room_once(monkeypatch):
+    import asyncio
+
+    from openbase_coder_cli import livekit_announcer
+
+    livekit_views = views._livekit
+    fresh = _FakeDispatchClient(existing_rooms=[])
+    monkeypatch.setattr(livekit_announcer, "_build_livekit_client", lambda: fresh)
+    assert (
+        asyncio.run(
+            livekit_views._create_agent_dispatch(
+                room_name="room-new", agent_name="livekit-agent", metadata='{"a": 1}'
+            )
+        )
+        is True
+    )
+    (request,) = fresh.dispatches
+    assert (request.agent_name, request.room, request.metadata) == (
+        "livekit-agent",
+        "room-new",
+        '{"a": 1}',
+    )
+    assert fresh.closed is True
+
+    # A room that already exists (a second device joining) gets no second agent.
+    taken = _FakeDispatchClient(existing_rooms=["room-busy"])
+    monkeypatch.setattr(livekit_announcer, "_build_livekit_client", lambda: taken)
+    assert (
+        asyncio.run(
+            livekit_views._create_agent_dispatch(
+                room_name="room-busy", agent_name="livekit-agent", metadata="{}"
+            )
+        )
+        is False
+    )
+    assert taken.dispatches == [] and taken.closed is True
+
+
+def test_explicit_agent_dispatch_switch_reads_the_environment(monkeypatch):
+    livekit_views = views._livekit
+    monkeypatch.delenv("LIVEKIT_EXPLICIT_AGENT_DISPATCH", raising=False)
+    assert livekit_views.explicit_agent_dispatch_enabled() is True
+    monkeypatch.setenv("LIVEKIT_EXPLICIT_AGENT_DISPATCH", "0")
+    assert livekit_views.explicit_agent_dispatch_enabled() is False
+    monkeypatch.setenv("LIVEKIT_EXPLICIT_AGENT_DISPATCH", "off")
+    assert livekit_views.explicit_agent_dispatch_enabled() is False

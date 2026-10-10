@@ -107,6 +107,37 @@ LIVE_VOICE_PREFLIGHT_TIMEOUT_SECONDS = float(
 LIVE_VOICE_PREFLIGHT_CLOSE_WAIT_SECONDS = float(
     os.getenv("LIVEKIT_LIVE_VOICE_PREFLIGHT_CLOSE_WAIT_SECONDS", "0.75") or 0.75
 )
+# Start-up latency (forensics F6, 2026-10-09: 7 s from room token to GPT-Live
+# session on a cloud workspace). The agent job process probes the live engine
+# (entitlement + handshake) at prewarm and every REFRESH seconds, and a call
+# reuses a result younger than TTL instead of probing; a failed probe retries
+# after RETRY seconds and is never reused.
+LIVE_VOICE_READINESS_TTL_SECONDS = float(
+    os.getenv("LIVEKIT_LIVE_VOICE_READINESS_TTL_SECONDS", "900") or 900
+)
+LIVE_VOICE_READINESS_REFRESH_SECONDS = float(
+    os.getenv("LIVEKIT_LIVE_VOICE_READINESS_REFRESH_SECONDS", "600") or 600
+)
+LIVE_VOICE_READINESS_RETRY_SECONDS = float(
+    os.getenv("LIVEKIT_LIVE_VOICE_READINESS_RETRY_SECONDS", "60") or 60
+)
+# Whether the job process keeps the readiness cache warm in the background.
+LIVE_VOICE_READINESS_PREWARM = os.getenv(
+    "LIVEKIT_LIVE_VOICE_READINESS_PREWARM", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+# Open the GPT-Live websocket while the room connects and the start route is
+# applied, so AgentSession.start finds it open instead of waiting for it.
+LIVE_VOICE_PRECONNECT = os.getenv(
+    "LIVEKIT_LIVE_VOICE_PRECONNECT", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+# The room token view dispatches the agent to the room when the token is
+# issued (explicit dispatch) instead of when the phone joins, so the agent's
+# start-up overlaps the phone's join. A job started that way may sit in the
+# room before anyone joins: it ends itself after this many seconds without a
+# caller so an abandoned token does not keep a billed live session open.
+LIVEKIT_PARTICIPANT_JOIN_TIMEOUT_SECONDS = float(
+    os.getenv("LIVEKIT_PARTICIPANT_JOIN_TIMEOUT_SECONDS", "90") or 90
+)
 
 ANNOUNCER_TOPIC = "openbase.announcer.say"
 VOICE_ROUTE_TOPIC = "openbase.voice.route"
