@@ -51,10 +51,11 @@ def test_managed_selection_never_reads_or_mints_byok(config, monkeypatch):
     assert response["Cache-Control"] == "no-store"
 
 
-def test_byok_uses_selected_backend_key_and_scoped_token(config, monkeypatch):
+@pytest.mark.parametrize("voice_model", ["gpt-live-1", "pipeline"])
+def test_byok_uses_selected_backend_key_and_scoped_token(config, monkeypatch, voice_model):
     dispatcher_config.set_stt_provider("assemblyai")
     # Deliberately unrelated call engine: dictation still follows STT.
-    monkeypatch.setenv("OPENBASE_VOICE_ENGINE", "gpt_live")
+    dispatcher_config.set_voice_model(voice_model)
     config.write_text("ASSEMBLY_AI_API_KEY=backend-test-value\n")
     calls = []
 
