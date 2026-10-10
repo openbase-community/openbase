@@ -146,3 +146,11 @@ Interpretation:
   the same Unix user remain inside the same local trust boundary.
 - Electron (`desktop/electron/main.cjs`) still shells out to the Tailscale
   binary for its own identity display; wiring it to `/status` is a follow-up.
+
+### Phone CLI callback relay
+
+`browser open` uses the Python `openbase_coder_cli.callback_relay` child process for OAuth callbacks. It exposes a random relay port through this daemon; it does **not** expose the CLI's callback port. The relay snapshots a loopback-only listener's PID, process creation time, file descriptor, host and port, checks that it belongs to the invoking user, and rechecks the listener before forwarding traffic. Loss of that listener, cancellation, or the original deadline closes the relay and removes its dynamic forward. The daemon TTL also limits exposure if the child crashes.
+
+The existing `loopback_forward.token` / `forward_token` field carries `OBR1_<relay-port>_<unix-expiry>_<random-capability>`, with a 24-byte random URL-safe suffix. This keeps old app-control and Cloud push validators compatible. New native clients validate the structure and VPN target, connect to that relay port over VPN, send `OPENBASE-LOOPBACK/1 <complete-token>\n`, and require `OK\n` before sending browser bytes. The relay strips this handshake; HTTP/TLS bytes and the original localhost Host header remain unchanged. Tokens, URLs containing authorization codes, and callback bodies must not be logged.
+
+A health handshake and browser preconnect never connect to the real CLI listener. Dynamic forwarding uses `one_shot=false`: the capability handshake is itself a two-way exchange, and some login flows serve a localhost page before the actual callback. The Python relay owns completion and permits multiple HTTP connections while the same CLI listener remains live. Both sides bound connection counts and enforce the original deadline; duplicate native requests cannot extend it or replace another live capability on the same localhost port. A `started` acknowledgement means native listeners and relay health are ready, not that external authorization succeeded.

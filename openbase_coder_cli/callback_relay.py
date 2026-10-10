@@ -67,7 +67,8 @@ class ListenerOwner:
 
 class CallbackRelay:
     def __init__(self, owner: ListenerOwner, token: str, ttl: float):
-        self.owner, self.token, self.ttl = owner, token, ttl
+        self.owner, self.token = owner, token
+        self.deadline = time.monotonic() + ttl
         self.done = asyncio.Event()
         self.active: set[asyncio.Task] = set()
         self.server: asyncio.Server | None = None
@@ -77,7 +78,7 @@ class CallbackRelay:
         return self.server.sockets[0].getsockname()[1]
 
     async def run(self) -> None:
-        deadline = time.monotonic() + self.ttl
+        deadline = self.deadline
         try:
             while not self.done.is_set() and time.monotonic() < deadline:
                 if not await asyncio.to_thread(self.owner.alive):
@@ -201,7 +202,9 @@ async def _main(config: dict) -> None:
     )
 
     relay = CallbackRelay(
-        ListenerOwner(**config["owner"]), config["token"], min(600, config["ttl"])
+        ListenerOwner(**config["owner"]),
+        config["token"],
+        min(600, config["ttl"], config["expires_at"] - time.time()),
     )
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
