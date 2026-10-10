@@ -16,21 +16,9 @@ docs.openbase.cloud); this file is the deeper image/development reference.
 
 ## Publishing
 
-CI publishes `openbaseai/openbase` (linux/amd64 + linux/arm64) via
-`.github/workflows/docker-image.yml` on pushes to `main` that touch the
-image inputs, tagging `latest` plus a version derived from the newest `v*`
-tag (`.github/scripts/release-version.sh stamp`). It needs the
-`DOCKERHUB_TOKEN` repo secret (a Docker Hub access token for the `openbaseai`
-account); without it the workflow warns and skips.
+CI publishes `openbaseai/openbase` (linux/amd64 + linux/arm64) via `.github/workflows/docker-image.yml` on pushes to `main` that touch the image inputs, tagging `latest` plus a version derived from the newest `v*` tag (`.github/scripts/release-version.sh stamp`). It needs the `DOCKERHUB_TOKEN` repo secret (a Docker Hub access token for the `openbaseai` account); without it the workflow warns and skips.
 
-Staging promotions dispatch the workflow on `staging` with a custom
-`maritime-<sha>` tag and `platforms=amd64` (Maritime runs x86_64), right
-after the push: the stamp is the version of the staging release cut from the
-same commit, so the build does not wait for that release. The workflow
-clones the sibling repos (console, coder-react, super-agents, skills,
-workspace root) at the branch being built (`main` and `staging` use their
-own branch, anything else `develop`) and passes their head SHAs as
-`SIBLING_REVS`, so the layer cache never serves a stale clone.
+Staging promotions dispatch the workflow on `staging` with a custom `maritime-<sha>` tag and `platforms=amd64` (Maritime runs x86_64), right after the push. The stamp uses an existing tag at HEAD or computes the next staging version, so the build does not wait for the release. Independently started release and image builds can observe different tag baselines during concurrent releases. The workflow clones the sibling repos (console, coder-react, super-agents, skills, workspace root) at the branch being built (`main` and `staging` use their own branch, anything else `develop`) and passes their head SHAs as `SIBLING_REVS` to invalidate cached clones when siblings change. These SHAs invalidate the cache; they do not pin clones against a branch moving during the build.
 
 ## Build
 

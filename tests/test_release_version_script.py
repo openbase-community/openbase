@@ -85,3 +85,13 @@ def test_stamp_past_a_dev_tag_is_valid_pep440(repo):
 def test_stamp_past_a_stable_tag_is_a_post_release(repo):
     _commit(repo)
     assert _version(repo, "stamp", "main") == "0.51.0.post1"
+
+
+@pytest.mark.parametrize(
+    "branch,expected", [("main", "0.52.0"), ("staging", "0.51.35.dev0")]
+)
+def test_next_ignores_alpha_beta_rc_and_hyphenated_tags(repo, branch, expected):
+    _commit(repo, "v0.51.34.dev0")
+    for tag in ("v9.0.0a1", "v9.0.0b1", "v9.0.0rc1", "v9.0.0-preview"):
+        _git(repo, "tag", tag)
+    assert _version(repo, "next", branch) == expected
