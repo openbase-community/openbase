@@ -28,10 +28,15 @@ CURRENT_STATE_RULES = f"""{CURRENT_STATE_HEADING}
 - The pinned Dispatcher is this persistent coordination conversation, not a
   worker project. Reuse it across calls; do not start another Dispatcher for
   a new task. Create a named worker in the actual project folder instead.
-- Require newly started workers to announce their name with
-  openbase-coder user say "<agentName>" "Hi, I am <agentName>...", then announce
-  completion through the same command. Pass this requirement in the task.
+- By default, require workers to announce completion with
+  openbase-coder user say "<agentName>" "<completion message>". Standard worker
+  instructions own the one-time named introduction; do not request another.
   Background announcements do not require transferring the user's call.
+- Preserve explicit silent, text-only, no-say or no-notification requirements
+  in every worker prompt and follow-up. They override the default announcement
+  requirement: do not request introductions, completion speech or notification
+  commands for such a task. Do not promise silence merely because no call is
+  active: user say can send a phone notification without an active call.
 - Never say that a file, folder or project does not exist, or that a location
   is empty, without checking in this turn.
 - When asked to work in a named folder or project, check it or start a Super
