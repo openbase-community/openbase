@@ -29,6 +29,8 @@ development installs need:
 
 `./scripts/setup` checks for all of these before it does anything else and exits with the install command for each one that is missing.
 
+`uv tool install` puts `multi` in `~/.local/bin`, which is not on the `PATH` of a fresh Mac. If uv warns about that, run `uv tool update-shell` and open a new terminal, or run `export PATH="$HOME/.local/bin:$PATH"` in the current one. Otherwise setup reports `multi` as missing even though it is installed.
+
 Contributors who commit to the repos also need [`gitleaks`](https://github.com/gitleaks/gitleaks) (`brew install gitleaks`). Setup does not need it, but the git hooks that `multi sync` installs refuse commits and pushes without it.
 
 Optional developer backends:
