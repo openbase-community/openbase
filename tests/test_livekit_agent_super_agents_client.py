@@ -1550,8 +1550,8 @@ async def test_super_agents_livekit_client_resumes_codex_thread_by_id(
         {
             "thread_id": "canonical-dispatcher-thread",
             "label": "dispatcher",
-            "agent_name": None,
-            "developer_instructions": "Super Agent thread name: dispatcher",
+            "agent_name": "Jacqueline",
+            "developer_instructions": "Super Agent thread name: dispatcher\nYour name is Jacqueline.",
         }
     ]
     assert backend.started_threads == []

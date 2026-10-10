@@ -62,6 +62,57 @@ def isolated_config(monkeypatch, tmp_path):
     return config_path
 
 
+@pytest.mark.parametrize("voice_id", [JACQUELINE, DANIEL])
+def test_dispatcher_spoken_persona_matches_configured_voice_not_navigation_role(
+    isolated_config, voice_id,
+):
+    from unittest.mock import Mock
+
+    from openbase_coder_cli.livekit_agent.config import (
+        live_voice_greeting,
+        live_voice_startup_instructions,
+    )
+    from openbase_coder_cli.livekit_agent.super_agents_client import (
+        SuperAgentsLiveKitClient,
+    )
+
+    dispatcher_config.set_dispatcher_voice(voice_id, isolated_config)
+    identity = current_voice_identity(isolated_config)
+    client = SuperAgentsLiveKitClient(
+        cwd="/project",
+        state_path=str(isolated_config.parent / "route.json"),
+        dispatcher_config_path=isolated_config,
+        initial_thread_id="canonical-dispatcher",
+        super_agent_name="DiSpAtChEr",
+        backend_client=Mock(),
+    )
+    assert client._thread_id == "canonical-dispatcher"
+    assert client._super_agent_name == "DiSpAtChEr"
+    assert client._super_agent_agent_name == identity.voice_name
+    assert client._turn_input("Your name?", developer_instructions=None, dispatch_id="test")["agentName"] == identity.voice_name
+    assert f"Your name is {identity.voice_name}." in client._thread_developer_instructions()
+    assert f"Your name is {identity.voice_name}." in client._turn_developer_instructions(None)
+    assert live_voice_greeting(None) == f"Hi, I'm {identity.voice_name}."
+    assert f"Your name in this call is {identity.voice_name}." in live_voice_startup_instructions()
+    assert live_voice_greeting("Blake") == "Hi, I'm Blake."
+
+
+def test_noncanonical_thread_keeps_its_explicit_agent_name(isolated_config):
+    from unittest.mock import Mock
+
+    from openbase_coder_cli.livekit_agent.super_agents_client import (
+        SuperAgentsLiveKitClient,
+    )
+
+    client = SuperAgentsLiveKitClient(
+        cwd="/project", persist_thread=False, initial_thread_id="real-agent-id",
+        super_agent_name="Dispatcher", super_agent_agent_name="Blake",
+        backend_client=Mock(), dispatcher_config_path=isolated_config,
+    )
+    assert client._super_agent_agent_name == "Blake"
+    assert client._thread_id == "real-agent-id"
+
+
 # --- catalog integrity -----------------------------------------------------
 
 

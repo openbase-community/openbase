@@ -318,6 +318,19 @@ class SuperAgentsLiveKitClient(
             or os.getenv("LIVEKIT_DISPATCHER_CONFIG_PATH")
             or CODEX_DISPATCHER_CONFIG_PATH
         )
+        if (
+            persist_thread
+            and (self._super_agent_name or "").casefold()
+            == DEFAULT_DISPATCHER_LABEL.casefold()
+            and self._super_agent_agent_name is None
+        ):
+            from openbase_coder_cli.voice_identity import current_voice_identity
+
+            # Keep the canonical thread label/id. Only its speaking persona
+            # follows the existing configured voice, just like worker agents.
+            self._super_agent_agent_name = current_voice_identity(
+                self._dispatcher_config_path
+            ).voice_name
         self._model_name = model_name or _model_name_for_role(
             self._dispatcher_config_path,
             use_super_agent_model=self._use_super_agent_reasoning,
