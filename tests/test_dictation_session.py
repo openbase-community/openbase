@@ -9,6 +9,7 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "openbase_coder_cli.config.setti
 import django
 import httpx
 import pytest
+from asgiref.sync import async_to_sync
 from django.urls import resolve
 from rest_framework.test import APIRequestFactory, force_authenticate
 
@@ -35,7 +36,7 @@ def invoke(authenticated=True, body=None):
     )
     if authenticated:
         force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
-    return resolve("/api/dictation/session/").func(request)
+    return async_to_sync(resolve("/api/dictation/session/").func)(request)
 
 
 def test_managed_selection_never_reads_or_mints_byok(config, monkeypatch):
@@ -178,6 +179,6 @@ def test_another_cloud_identity_cannot_mint(config, monkeypatch):
         format="json",
         HTTP_AUTHORIZATION="Bearer header.payload.signature",
     )
-    response = resolve("/api/dictation/session/").func(request)
+    response = async_to_sync(resolve("/api/dictation/session/").func)(request)
     assert response.status_code == 401
     assert "not authorized" in str(response.data)
