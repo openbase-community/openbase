@@ -84,9 +84,8 @@ def test_livekit_defers_until_pairing_then_restarts_with_vpn_address(vpn):
     vpn.ipv4 = "100.64.1.2"
     assert tailnet_transition.run_tick() is True
     assert vpn.restarts == [("livekit-server", "livekit-agent", "django-cli")]
+    assert not tailnet_transition.AWAITING_TAILNET_MARKER.exists()
 
-    # The restarted server advertises the VPN address and clears the marker,
-    # so later ticks do nothing.
     runners.run("livekit-server")
     assert _node_ip(vpn.execs[-1]) == "100.64.1.2"
     assert not tailnet_transition.AWAITING_TAILNET_MARKER.exists()
@@ -118,11 +117,55 @@ def test_tick_retries_no_sooner_than_retry_window(vpn, monkeypatch):
     vpn.ipv4 = "100.64.1.2"
     clock = iter([1000.0, 1000.0 + 60, 1000.0 + tailnet_transition.RETRY_SECONDS])
     monkeypatch.setattr(tailnet_transition.time, "monotonic", lambda: next(clock))
+
+    def restart_without_address():
+        vpn.restarts.append(tailnet_transition.TRANSPORT_SERVICES)
+        vpn.ipv4 = None
+        runners.run("livekit-server")
+        vpn.ipv4 = "100.64.1.2"
+
+    monkeypatch.setattr(
+        tailnet_transition, "_restart_transport_services", restart_without_address
+    )
     # The marker survives (the restart raced the address away again).
     assert tailnet_transition.run_tick() is True
     assert tailnet_transition.run_tick() is False
     assert tailnet_transition.run_tick() is True
     assert len(vpn.restarts) == 2
+
+
+def test_partial_transition_retries_after_server_has_recovered(vpn, monkeypatch):
+    runners.run("livekit-server")
+    vpn.ipv4 = "100.64.1.2"
+    clock = iter([1000.0, 1000.0 + tailnet_transition.RETRY_SECONDS])
+    monkeypatch.setattr(tailnet_transition.time, "monotonic", lambda: next(clock))
+
+    def restart_with_consumer_failure():
+        runners.run("livekit-server")
+        raise RuntimeError("agent restart failed")
+
+    monkeypatch.setattr(
+        tailnet_transition, "_restart_transport_services", restart_with_consumer_failure
+    )
+    with pytest.raises(RuntimeError, match="agent restart failed"):
+        tailnet_transition.run_tick()
+    assert _node_ip(vpn.execs[-1]) == "100.64.1.2"
+    assert tailnet_transition.AWAITING_TAILNET_MARKER.exists()
+
+    monkeypatch.setattr(tailnet_transition, "_restart_transport_services", lambda: None)
+    assert tailnet_transition.run_tick() is True
+    assert not tailnet_transition.AWAITING_TAILNET_MARKER.exists()
+
+
+def test_independent_server_restart_keeps_consumer_transition_pending(vpn):
+    runners.run("livekit-server")
+    vpn.ipv4 = "100.64.1.2"
+    runners.run("livekit-server")
+    assert _node_ip(vpn.execs[-1]) == "100.64.1.2"
+    assert tailnet_transition.AWAITING_TAILNET_MARKER.exists()
+    assert tailnet_transition.run_tick() is True
+    assert vpn.restarts == [tailnet_transition.TRANSPORT_SERVICES]
+    assert not tailnet_transition.AWAITING_TAILNET_MARKER.exists()
 
 
 def test_non_tailscale_mode_never_restarts(vpn, monkeypatch):
