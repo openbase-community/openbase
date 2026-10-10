@@ -849,6 +849,16 @@ class SuperAgentsLiveKitClient(
                 or ""
             ).lower()
             has_pending_requests = _progress_has_pending_requests(progress)
+            response_turn = progress.get("turn")
+            if (
+                status == "running"
+                and not has_pending_requests
+                and isinstance(response_turn, dict)
+                and response_turn.get("turnId") == turn_id
+                and response_turn.get("responseFinishedAt")
+                and _speech_text_from_progress(progress, turn_scoped=True, turn_id=turn_id)
+            ):
+                return progress
             if status == "waiting" and not has_pending_requests:
                 should_wait, empty_answer_started_at = _should_wait_for_speech_text(
                     progress,

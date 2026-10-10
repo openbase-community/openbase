@@ -83,6 +83,8 @@ async def test_claude_completion_reaches_socket_and_reconnect(
                 store.update_turn(
                     store.get_session(thread_id).active_turn_id, status="cancelled"
                 )
+            if outcome == "completed":
+                yield SimpleNamespace(content=[SimpleNamespace(text="Final reply")])
             yield SimpleNamespace(result="Immediate reply", num_turns=1)
 
     original_init = ClaudeAgentSdkClient.__init__
@@ -161,6 +163,11 @@ async def test_claude_completion_reaches_socket_and_reconnect(
         assert snapshot["type"] == "thread_state"
         assert "Immediate reply" in json.dumps(snapshot)
         assert snapshot["data"]["current_turn"] is None
+        if outcome == "completed":
+            assert (
+                snapshot["data"]["turn_history"][-1]["accumulated_output"]
+                == "Immediate reply\n\nFinal reply"
+            )
         await disconnect(socket)
     await manager._client.close()
 
@@ -174,7 +181,8 @@ async def test_websocket_interrupt_isolates_output_and_stops_owner(
     monkeypatch.setenv("OPENBASE_CODING_BACKEND", "openbase_cloud")
     monkeypatch.setenv("OPENBASE_CLOUD_ANTHROPIC_AUTH_TOKEN", "test-token")
     monkeypatch.setattr(
-        "super_agents.claude_options.claude_state_path", lambda: tmp_path / "claude.json"
+        "super_agents.claude_options.claude_state_path",
+        lambda: tmp_path / "claude.json",
     )
     monkeypatch.setattr(
         "openbase_coder_cli.thread_sync.session_manager._notify_manual_thread_finished",
@@ -210,7 +218,9 @@ async def test_websocket_interrupt_isolates_output_and_stops_owner(
                     yield SimpleNamespace(content=[SimpleNamespace(text=partial)])
                 waiting.set()
                 await release.wait()
-                yield SimpleNamespace(content=[SimpleNamespace(text="late full answer")])
+                yield SimpleNamespace(
+                    content=[SimpleNamespace(text="late full answer")]
+                )
             else:
                 yield SimpleNamespace(content=[SimpleNamespace(text=self.prompt)])
             yield SimpleNamespace(result=self.prompt, num_turns=1)
@@ -219,10 +229,12 @@ async def test_websocket_interrupt_isolates_output_and_stops_owner(
 
     def isolated_init(self, **kwargs):
         original_init(
-            self, store=store,
+            self,
+            store=store,
             sdk_loader=lambda: SimpleNamespace(
                 ClaudeSDKClient=SDKClient, ClaudeAgentOptions=lambda **options: options
-            ), **kwargs,
+            ),
+            **kwargs,
         )
 
     monkeypatch.setattr(ClaudeAgentSdkClient, "__init__", isolated_init)
@@ -234,16 +246,22 @@ async def test_websocket_interrupt_isolates_output_and_stops_owner(
         lambda: manager,
     )
     owner = manager._client
-    canceller = ClaudeAgentSdkClient(backend_identity="openbase_cloud") if foreign else owner
+    canceller = (
+        ClaudeAgentSdkClient(backend_identity="openbase_cloud") if foreign else owner
+    )
     if foreign:
         monkeypatch.setattr(owner, "cancel_by_label", canceller.cancel_by_label)
-    thread_id = (await owner.start_thread({"name": "interrupt", "cwd": str(tmp_path)}))["threadId"]
+    thread_id = (await owner.start_thread({"name": "interrupt", "cwd": str(tmp_path)}))[
+        "threadId"
+    ]
 
     async def send(socket, action, **fields):
-        await socket.send_input({
-            "type": "websocket.receive",
-            "text": json.dumps({"action": action, **fields}),
-        })
+        await socket.send_input(
+            {
+                "type": "websocket.receive",
+                "text": json.dumps({"action": action, **fields}),
+            }
+        )
 
     async def terminal(socket, turn_id):
         async with asyncio.timeout(1):

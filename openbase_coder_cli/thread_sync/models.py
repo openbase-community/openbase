@@ -49,6 +49,7 @@ class TurnInfo(BaseModel):
     status: ThreadStatus = ThreadStatus.running
     accumulated_output: str = ""
     accumulated_stderr: str = ""
+    response_finished_at: datetime | None = None
     return_code: int | None = None
     message: str = Field(default="", serialization_alias="prompt")
     model: str | None = None

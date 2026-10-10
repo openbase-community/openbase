@@ -123,10 +123,10 @@ def _turn_status(status: Any, error: Any) -> SessionStatus:
 
 
 def _turn_sort_key(turn: dict[str, Any]) -> int:
-    for key in ("completedAt", "finishedAt", "updatedAt", "startedAt", "createdAt"):
+    for key in ("startedAt", "createdAt", "completedAt", "finishedAt", "updatedAt"):
         value = turn.get(key)
         if isinstance(value, (int, float)):
-            return int(value)
+            return int(value * 1000)
         if isinstance(value, str) and value:
             try:
                 return int(
@@ -322,6 +322,11 @@ def _run_from_turn(
         completed_at=completed_at,
         status=status,
         accumulated_output=_extract_agent_output(turn),
+        response_finished_at=(
+            _timestamp_to_datetime(turn["responseFinishedAt"])
+            if turn.get("responseFinishedAt")
+            else None
+        ),
         accumulated_stderr=stderr,
         return_code={SessionStatus.completed: 0, SessionStatus.error: -1}.get(status),
         message=message,
@@ -435,6 +440,8 @@ def _session_from_thread(
     active_turn_id = _optional_thread_string(thread, "activeTurnId", "active_turn_id")
     turns = sorted(thread.get("turns", []), key=_turn_sort_key)
     for turn in turns:
+        if _status_type(turn.get("status")) == "queued":
+            continue
         turn_id = extract_turn_id(turn)
         if not isinstance(turn, dict) or not turn_id:
             continue

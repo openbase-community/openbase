@@ -352,7 +352,7 @@ class CodexAppServerSessionManager(
         if not thread_id:
             return
 
-        if method == "server_request":
+        if method in {"server_request", "turn/updated"}:
             await self._broadcast_thread_state(thread_id)
             return
 
