@@ -13,6 +13,7 @@ from openbase_coder_cli.livekit_agent.config import live_voice_startup_instructi
 from openbase_coder_cli.livekit_agent.live_characters import (
     CharacterAssistant,
     LiveCharacterController,
+    announcement_instructions,
     bounded_history,
 )
 from openbase_coder_cli.livekit_agent.live_preconnect import wait_live_session_started
@@ -39,6 +40,17 @@ def test_bounded_history_keeps_recent_text_and_excludes_old_personas():
     assert len(bounded.items) == 64
     assert bounded.items[-1].text_content == "request 99"
     assert all(item.role == "user" for item in bounded.items)
+
+
+def test_completion_announcement_preserves_script_and_names_agent_once():
+    instructions = announcement_instructions("Gemma", "Done creating voice acceptance file.")
+    assert 'Script: "Gemma: Done creating voice acceptance file."' in instructions
+    introduction = announcement_instructions("Gemma", "Hi, I'm Gemma.")
+    assert introduction.endswith('Script: "Hi, I\'m Gemma."')
+    # A name inside another word is not an introduction.
+    assert 'Script: "Ray: The array is ready."' in announcement_instructions(
+        "Ray", "The array is ready."
+    )
 
 
 async def test_real_sdk_handoff_changes_immutable_voice_and_preserves_history():
@@ -146,7 +158,7 @@ async def test_announcement_restores_route_and_holds_backend_speech(monkeypatch)
     def speak(*args, **kwargs):
         controller._announcement_stop.set()
 
-    live.append_commentary.side_effect = speak
+    live.append_instructions.side_effect = speak
     await controller._announcement(
         AnnouncerMessage("id", "Hi, I'm Oliver.", "oliver", "Oliver")
     )
@@ -157,6 +169,8 @@ async def test_announcement_restores_route_and_holds_backend_speech(monkeypatch)
     restored = controller._conversation.call_args.args[0]
     assert restored.items[0].text_content == "Continue my task"
     assert not controller.announcing
+    live.append_commentary.assert_not_called()
+    live.append_instructions.assert_called_once()
 
 
 async def test_queue_deduplicates_and_shutdown_cancels_owned_worker():
@@ -321,7 +335,8 @@ async def test_real_announcement_talkover_preserves_final_once_and_rejects_old_r
                     AnnouncerMessage("id", "The work is ready.", "voice", "Oliver")
                 )
             )
-            await server.wait_for_append("commentary")
+            await server.wait_for_append("instructions")
+            assert 'Script: "Oliver: The work is ready."' in server.session_start["session"]["instructions"]
             announcement = session.current_agent.duplex_session
             await server.send(
                 {
@@ -452,6 +467,7 @@ async def test_transfer_during_announcement_start_never_injects_old_commentary(
         AnnouncerMessage("id", "Old route notice", "voice", "Oliver")
     )
     live.append_commentary.assert_not_called()
+    live.append_instructions.assert_not_called()
     live.off.assert_called_once()
     controller._conversation.assert_awaited_once()
 
