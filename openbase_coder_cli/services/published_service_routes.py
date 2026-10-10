@@ -45,16 +45,8 @@ def allocate_private_service_hostname(name: str) -> ServiceHostnameAllocation:
     This process then verifies that the record resolves to the local node before
     returning it to the publication transaction.
     """
-    from openbase_coder_cli.services.published_services import (
-        HOSTNAME_TAILNET_PORT,
-        validate_hostname,
-    )
+    from openbase_coder_cli.services.published_services import HOSTNAME_TAILNET_PORT
 
-    if tp.is_netmesh_tsnet():
-        raise HostnamePublicationUnavailable(
-            "Openbase Direct cannot publish private host services. "
-            "Switch this computer to Openbase VPN first."
-        )
     if not tp.is_netmesh():
         raise HostnamePublicationUnavailable(
             "Private hostname publication requires Openbase VPN; the official Tailscale "
@@ -77,10 +69,14 @@ def allocate_private_service_hostname(name: str) -> ServiceHostnameAllocation:
         )
     node_name, node_ips = _self_node_identity()
     from openbase_coder_cli.services.cloud_registration import (
-        allocate_netmesh_service_hostname,
+        WORKSPACE_SELF_NODE_ID,
         list_netmesh_devices,
     )
 
+    if tp.is_netmesh_tsnet():
+        # A workspace's machine token may only act on its own node, and Cloud
+        # resolves "self" to it; the device list is an owner-login endpoint.
+        return _allocate_for_node(name, WORKSPACE_SELF_NODE_ID, node_name, node_ips)
     matching_nodes = []
     for node in list_netmesh_devices():
         cloud_ips = set()
@@ -101,7 +97,18 @@ def allocate_private_service_hostname(name: str) -> ServiceHostnameAllocation:
         raise HostnamePublicationUnavailable(
             "Openbase Cloud could not identify this VPN node unambiguously."
         )
-    node_id = str(matching_nodes[0]["id"])
+    return _allocate_for_node(name, str(matching_nodes[0]["id"]), node_name, node_ips)
+
+
+def _allocate_for_node(
+    name: str, node_id: str, node_name: str, node_ips: set[str]
+) -> ServiceHostnameAllocation:
+    from openbase_coder_cli.services.cloud_registration import (
+        WORKSPACE_SELF_NODE_ID,
+        allocate_netmesh_service_hostname,
+    )
+    from openbase_coder_cli.services.published_services import validate_hostname
+
     allocation_result = allocate_netmesh_service_hostname(
         node_id=node_id, service_name=name
     )
@@ -115,6 +122,11 @@ def allocate_private_service_hostname(name: str) -> ServiceHostnameAllocation:
             allocation_result.error or "Private hostname allocation failed."
         )
     created = allocation.get("created") is True
+    allocated_node_id = str(allocation.get("node_id") or "")
+    if node_id == WORKSPACE_SELF_NODE_ID and allocated_node_id:
+        # Cloud answered with the real node id; keep it for release and
+        # certificate challenges (both accept it for this workspace).
+        node_id = allocated_node_id
     try:
         hostname = validate_hostname(str(allocation.get("hostname") or ""))
         _validate_account_hostname(name, hostname, node_name)
@@ -123,7 +135,7 @@ def allocate_private_service_hostname(name: str) -> ServiceHostnameAllocation:
         raise RuntimeError(
             "Openbase Cloud returned an invalid private hostname."
         ) from exc
-    if str(allocation.get("node_id")) != node_id:
+    if allocated_node_id != node_id:
         _rollback_hostname_allocation(name, node_id, created)
         raise RuntimeError(
             "Openbase Cloud returned a private hostname outside this node's allocation."
@@ -136,6 +148,23 @@ def allocate_private_service_hostname(name: str) -> ServiceHostnameAllocation:
     return ServiceHostnameAllocation(hostname, node_id, created)
 
 
+def resolve_private_hostname(hostname: str, port: int) -> set[str]:
+    """Addresses ``hostname`` resolves to, through the resolver that sees it.
+
+    A host VPN installs the private service zone in the OS resolver; the
+    embedded node (cloud workspaces) keeps it inside the daemon, so ask the
+    daemon there. Raises ``OSError`` or ``RuntimeError`` on lookup failure.
+    """
+    if tp.is_netmesh_tsnet():
+        from openbase_coder_cli.services.tunneld import tunneld_resolve
+
+        return {str(ipaddress.ip_address(item)) for item in tunneld_resolve(hostname)}
+    return {
+        str(ipaddress.ip_address(address[4][0]))
+        for address in socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    }
+
+
 def _await_hostname_resolution(hostname: str, node_ips: set[str]) -> None:
     """Poll DNS until the freshly written record resolves to this node."""
     from openbase_coder_cli.services.published_services import HOSTNAME_TAILNET_PORT
@@ -145,13 +174,8 @@ def _await_hostname_resolution(hostname: str, node_ips: set[str]) -> None:
         resolution_error: Exception | None = None
         resolved_ips: set[str] = set()
         try:
-            resolved_ips = {
-                str(ipaddress.ip_address(address[4][0]))
-                for address in socket.getaddrinfo(
-                    hostname, HOSTNAME_TAILNET_PORT, type=socket.SOCK_STREAM
-                )
-            }
-        except (OSError, ValueError) as exc:
+            resolved_ips = resolve_private_hostname(hostname, HOSTNAME_TAILNET_PORT)
+        except (OSError, ValueError, RuntimeError) as exc:
             resolution_error = exc
         if resolved_ips and resolved_ips <= node_ips:
             return
@@ -175,10 +199,7 @@ def verify_private_service_hostname(name: str, hostname: str) -> None:
     from openbase_coder_cli.services.published_services import validate_hostname
 
     _validate_account_hostname(name, validate_hostname(hostname), node_name)
-    resolved_ips = {
-        str(ipaddress.ip_address(address[4][0]))
-        for address in socket.getaddrinfo(hostname, 80, type=socket.SOCK_STREAM)
-    }
+    resolved_ips = resolve_private_hostname(hostname, 80)
     if not resolved_ips or not resolved_ips <= node_ips:
         raise RuntimeError(
             "The stored private service hostname does not resolve to this VPN node."
@@ -288,6 +309,18 @@ def reconcile_openbase_routes(
     return applied_hash
 
 
+def _replaces_routes_as_a_set() -> bool:
+    """Providers whose Openbase routes are replaced whole, compare-and-swap.
+
+    The hardened Mac helper and the embedded node (whose routes the CLI
+    registry defines) both work this way; stock Tailscale edits one listener
+    at a time.
+    """
+    return tp.is_netmesh_tsnet() or (
+        tp.is_netmesh() and not tp.netmesh_uses_stock_tailscale()
+    )
+
+
 def apply_route(
     service: PublishedService,
     *,
@@ -300,16 +333,11 @@ def apply_route(
         load_services,
     )
 
-    if tp.is_netmesh_tsnet():
-        raise RuntimeError(
-            "Openbase Direct cannot publish arbitrary host services. "
-            "Switch this computer to Openbase VPN first."
-        )
     if service.mode == MODE_HOSTNAME:
         if not service.hostname:
             raise RuntimeError("Private hostname publication is missing its hostname.")
         verify_private_service_hostname(service.name, service.hostname)
-    if tp.is_netmesh() and not tp.netmesh_uses_stock_tailscale():
+    if _replaces_routes_as_a_set():
         if not tp.serve_capability().get("supported"):
             raise HostnamePublicationUnavailable(
                 "Update the Openbase VPN helper; legacy Serve is not supported."
@@ -332,7 +360,7 @@ def remove_route(
 ) -> str | None:
     from openbase_coder_cli.services.published_services import load_services
 
-    if tp.is_netmesh() and not tp.netmesh_uses_stock_tailscale():
+    if _replaces_routes_as_a_set():
         if not tp.serve_capability().get("supported"):
             raise HostnamePublicationUnavailable(
                 "Update the Openbase VPN helper; legacy Serve is not supported."

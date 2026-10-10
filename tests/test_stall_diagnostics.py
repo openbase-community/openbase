@@ -426,12 +426,17 @@ def test_scan_stalled_running_turns_ignores_plain_long_turn(tmp_path, monkeypatc
     assert sd.scan_stalled_running_turns(now=now, state_db_path=db) == []
 
 
-@pytest.mark.parametrize("command", [
-    "cd ~/Desktop/demo && npx create-react-app tictactoe --template minimal 2>&1 | head -20",
-    "cd ~/Desktop/demo && mkdir -p app && cd app && npm init -y && npm install react react-dom",
-    "cd ~/Documents/demo && pnpm build",
-])
-def test_package_work_in_protected_folder_is_not_permission_evidence(tmp_path, monkeypatch, command):
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd ~/Desktop/demo && npx create-react-app tictactoe --template minimal 2>&1 | head -20",
+        "cd ~/Desktop/demo && mkdir -p app && cd app && npm init -y && npm install react react-dom",
+        "cd ~/Documents/demo && pnpm build",
+    ],
+)
+def test_package_work_in_protected_folder_is_not_permission_evidence(
+    tmp_path, monkeypatch, command
+):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(sd, "dialog_presenter_started_after", lambda since: None)
     now = dt.datetime(2026, 9, 13, 4, 35, 0)
@@ -442,10 +447,14 @@ def test_package_work_in_protected_folder_is_not_permission_evidence(tmp_path, m
 
 def test_package_work_preserves_independent_dialog_evidence(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    monkeypatch.setattr(sd, "dialog_presenter_started_after", lambda since: "SecurityAgent")
+    monkeypatch.setattr(
+        sd, "dialog_presenter_started_after", lambda since: "SecurityAgent"
+    )
     now = dt.datetime(2026, 9, 13, 4, 35, 0)
     created = (now - dt.timedelta(seconds=180)).strftime("%Y-%m-%d %H:%M:%S")
-    db = _running_turn_db(tmp_path, created_at=created, command="cd ~/Desktop/demo && pnpm build")
+    db = _running_turn_db(
+        tmp_path, created_at=created, command="cd ~/Desktop/demo && pnpm build"
+    )
     blocked = sd.scan_stalled_running_turns(now=now, state_db_path=db)
     assert len(blocked) == 1
     assert blocked[0].diagnosis.likely_blocked_on_dialog
@@ -490,3 +499,39 @@ def test_scan_stalled_running_turns_ignores_orphan_from_before_watcher(
 
 def test_scan_stalled_running_turns_missing_db_returns_empty(tmp_path):
     assert sd.scan_stalled_running_turns(state_db_path=tmp_path / "nope.sqlite3") == []
+
+
+async def test_stall_watch_loop_speaks_each_stalled_turn_once_via_the_given_speaker(
+    monkeypatch,
+):
+    """The GPT-Live engine injects its own speaker; the hint names the folder."""
+    import asyncio
+
+    spoken: list[str] = []
+    turn = sd.StalledTurn(
+        session_id="s_1",
+        session_name="dispatcher",
+        agent_name="Dispatcher",
+        turn_id="t-1",
+        diagnosis=sd.StallDiagnosis(
+            elapsed_seconds=45.0,
+            blocking_dialog_process=None,
+            in_flight_tool="Bash",
+            in_flight_command="ls ~/Desktop",
+            protected_folder="Desktop",
+        ),
+    )
+    monkeypatch.setattr(sd, "scan_blocked_turns", lambda since: [])
+    monkeypatch.setattr(sd, "scan_stalled_running_turns", lambda since: [turn])
+
+    async def speak(text: str) -> bool:
+        spoken.append(text)
+        return True
+
+    task = asyncio.create_task(sd.stall_watch_loop(poll_seconds=0.01, speak=speak))
+    await asyncio.sleep(0.08)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert len(spoken) == 1
+    assert "Desktop" in spoken[0]

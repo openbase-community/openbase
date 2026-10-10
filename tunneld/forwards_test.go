@@ -388,3 +388,112 @@ func TestForwardLocalAPI(t *testing.T) {
 		t.Fatalf("not up: %d", status)
 	}
 }
+
+func TestServiceForwardPipesToAnotherLoopbackPort(t *testing.T) {
+	tm := newTestForwardManager(t, 18080)
+	info, err := tm.Add(forwardRequest{Port: 443, LocalPort: 59443, Persistent: true})
+	if err != nil {
+		t.Fatalf("add service forward: %v", err)
+	}
+	if info.LocalPort != 59443 || info.Target != "127.0.0.1:59443" || !info.Persistent || !info.ExpiresAt.IsZero() {
+		t.Fatalf("service forward info = %+v", info)
+	}
+	// The test dial ignores the port, but the manager must hand it the local
+	// port, not the tailnet port: capture it.
+	var dialed []int
+	var mu sync.Mutex
+	inner := tm.forwardManager.dial
+	tm.forwardManager.dial = func(ctx context.Context, port int) (net.Conn, error) {
+		mu.Lock()
+		dialed = append(dialed, port)
+		mu.Unlock()
+		return inner(ctx, port)
+	}
+	resp, err := http.Get("http://" + tm.addr(443) + "/svc")
+	if err != nil {
+		t.Fatalf("get through service forward: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(body) != "callback /svc" {
+		t.Fatalf("body = %q", body)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(dialed) != 1 || dialed[0] != 59443 {
+		t.Fatalf("dialed %v, want [59443]", dialed)
+	}
+	if len(tm.List()) != 1 {
+		t.Fatalf("a persistent forward must not retire after a connection: %v", tm.List())
+	}
+}
+
+func TestServiceForwardValidation(t *testing.T) {
+	tm := newTestForwardManager(t, 18080)
+	cases := []struct {
+		name string
+		req  forwardRequest
+	}{
+		{"local port privileged", forwardRequest{Port: 443, LocalPort: 80}},
+		{"local port too high", forwardRequest{Port: 443, LocalPort: 70000}},
+		{"privileged tailnet port that is not a service port", forwardRequest{Port: 22, LocalPort: 59443}},
+		{"service forwards are never one-shot", forwardRequest{Port: 443, LocalPort: 59443, OneShot: true}},
+		{"persistent needs a local port", forwardRequest{Port: 3000, Persistent: true}},
+		{"persistent takes no ttl", forwardRequest{Port: 443, LocalPort: 59443, Persistent: true, TTLSeconds: 30}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tm.Add(tc.req)
+			var fe *forwardError
+			if !errors.As(err, &fe) || fe.status != 400 {
+				t.Fatalf("Add(%+v) err = %v, want 400", tc.req, err)
+			}
+		})
+	}
+	// A plain forward on an unprivileged port may still name a local port
+	// and keep a TTL.
+	info, err := tm.Add(forwardRequest{Port: 8443, LocalPort: 59443, TTLSeconds: 30})
+	if err != nil || info.Persistent || info.ExpiresAt.IsZero() {
+		t.Fatalf("ttl service forward: %+v %v", info, err)
+	}
+	if _, err := tm.Add(forwardRequest{Port: 443, LocalPort: 59443, Persistent: true}); err != nil {
+		t.Fatalf("service forward: %v", err)
+	}
+	if _, err := tm.Add(forwardRequest{Port: 80, LocalPort: 59080, Persistent: true}); err != nil {
+		t.Fatalf("http service forward: %v", err)
+	}
+}
+
+func TestRedirectForwardAnswersWithHTTPS(t *testing.T) {
+	tm := newTestForwardManager(t, 18080)
+	for _, bad := range []forwardRequest{
+		{Port: 8080, RedirectHTTPS: true, Persistent: true},
+		{Port: 80, RedirectHTTPS: true},
+		{Port: 80, RedirectHTTPS: true, Persistent: true, LocalPort: 3000},
+		{Port: 80, RedirectHTTPS: true, Persistent: true, Peer: "100.64.0.9"},
+	} {
+		_, err := tm.Add(bad)
+		var fe *forwardError
+		if !errors.As(err, &fe) || fe.status != 400 {
+			t.Fatalf("Add(%+v) err = %v, want 400", bad, err)
+		}
+	}
+	info, err := tm.Add(forwardRequest{Port: 80, RedirectHTTPS: true, Persistent: true})
+	if err != nil || !info.RedirectHTTPS || !info.Persistent {
+		t.Fatalf("redirect forward: %+v %v", info, err)
+	}
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	req, _ := http.NewRequest("GET", "http://"+tm.addr(80)+"/path?x=1", nil)
+	req.Host = "crm.abcdefghijkl.vpn.obs.so"
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusPermanentRedirect || resp.Header.Get("Location") != "https://crm.abcdefghijkl.vpn.obs.so/path?x=1" {
+		t.Fatalf("status %d location %q", resp.StatusCode, resp.Header.Get("Location"))
+	}
+	if !tm.Remove(80) {
+		t.Fatal("remove redirect forward")
+	}
+}

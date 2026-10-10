@@ -71,6 +71,7 @@ from openbase_coder_cli.livekit_agent.config import (
     load_direct_livekit_developer_instructions,
 )
 from openbase_coder_cli.livekit_agent.live_call_context import LiveCallContext
+from openbase_coder_cli.livekit_agent.live_gateway_events import log_gateway_event
 from openbase_coder_cli.livekit_agent.live_speech_gate import LiveSpeechGate
 from openbase_coder_cli.livekit_agent.live_spoken_output import answer_commands
 from openbase_coder_cli.livekit_agent.screen_context import apply_screen_context
@@ -685,7 +686,11 @@ class LiveDelegationBridge:
             ("delegation_created", self.on_delegation_created),
             ("session_reconnected", self.on_session_reconnected),
             ("error", self._on_session_error),
+            ("openai_server_event_received", self._on_gateway_event),
         )
+
+    def _on_gateway_event(self, event) -> None:
+        log_gateway_event(self._log, event)
 
     def attach(self, live_session) -> None:
         """Subscribe to the plugin session: closed caller utterances and delegations."""

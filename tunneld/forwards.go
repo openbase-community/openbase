@@ -9,6 +9,12 @@ package main
 // and may be pinned to a single peer. Reachability is already restricted
 // to the owner's own devices by the Openbase VPN policy; the pin, TTL and
 // one-shot flags narrow it further.
+//
+// Service forwards are the persistent variant behind `service publish` on
+// a container host: tailnet :443 (or :80) piped to a different loopback
+// port (the CLI's private HTTPS ingress), with no TTL. They are the only
+// forwards allowed below 1024, and only to a loopback target the CLI owns;
+// the tsnet listener is userspace, so no privilege is involved.
 
 import (
 	"context"
@@ -17,7 +23,9 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"net/netip"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -44,18 +52,35 @@ type forwardRequest struct {
 	TTLSeconds int    `json:"ttl_seconds,omitempty"`
 	OneShot    bool   `json:"one_shot,omitempty"`
 	Peer       string `json:"peer,omitempty"` // tailnet IP or stable node id
+	// LocalPort pipes the tailnet port to a different loopback port (a
+	// service forward); zero means the same port.
+	LocalPort int `json:"local_port,omitempty"`
+	// Persistent disables the TTL; the forward lives until removed or the
+	// daemon exits. Only service forwards (LocalPort set) may ask for it.
+	Persistent bool `json:"persistent,omitempty"`
+	// RedirectHTTPS answers tailnet :80 itself with a redirect to the same
+	// host over HTTPS (what the Mac helper does for published hostnames);
+	// it is the only form a port-80 forward may take and it is persistent.
+	RedirectHTTPS bool `json:"redirect_https,omitempty"`
 }
 
 // forwardInfo is the public description of a live forward.
 type forwardInfo struct {
-	Port        int       `json:"port"`
-	Target      string    `json:"target"`
-	CreatedAt   time.Time `json:"created_at"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	OneShot     bool      `json:"one_shot"`
-	Peer        string    `json:"peer,omitempty"`
-	Connections int64     `json:"connections"`
+	Port          int       `json:"port"`
+	LocalPort     int       `json:"local_port"`
+	Target        string    `json:"target"`
+	CreatedAt     time.Time `json:"created_at"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	OneShot       bool      `json:"one_shot"`
+	Persistent    bool      `json:"persistent"`
+	RedirectHTTPS bool      `json:"redirect_https"`
+	Peer          string    `json:"peer,omitempty"`
+	Connections   int64     `json:"connections"`
 }
+
+// servicePorts are the tailnet ports a service forward may bind below the
+// unprivileged range: the private hostname HTTPS and HTTP ports.
+var servicePorts = map[int]bool{80: true, 443: true}
 
 // forwardError carries an HTTP-ish status so the local API can map
 // validation failures (400) and conflicts (409) without string matching.
@@ -132,8 +157,30 @@ func newForwardManager(srv *tsnet.Server, lc *local.Client, reserved ...int) *fo
 
 // Add validates the request, opens the tailnet listener and starts serving.
 func (m *forwardManager) Add(req forwardRequest) (forwardInfo, error) {
-	if req.Port < forwardMinPort || req.Port > forwardMaxPort {
-		return forwardInfo{}, badForward("port must be between %d and %d", forwardMinPort, forwardMaxPort)
+	if req.RedirectHTTPS {
+		if req.Port != 80 || req.LocalPort != 0 || req.OneShot || !req.Persistent || req.TTLSeconds != 0 {
+			return forwardInfo{}, badForward("redirect_https is a persistent forward on port 80 with no target")
+		}
+		return m.addRedirect(req)
+	}
+	service := req.LocalPort != 0
+	if service {
+		if req.LocalPort < forwardMinPort || req.LocalPort > forwardMaxPort {
+			return forwardInfo{}, badForward("local_port must be between %d and %d", forwardMinPort, forwardMaxPort)
+		}
+		if !servicePorts[req.Port] && (req.Port < forwardMinPort || req.Port > forwardMaxPort) {
+			return forwardInfo{}, badForward("port must be 80, 443 or between %d and %d", forwardMinPort, forwardMaxPort)
+		}
+		if req.OneShot {
+			return forwardInfo{}, badForward("a service forward cannot be one-shot")
+		}
+	} else {
+		if req.Port < forwardMinPort || req.Port > forwardMaxPort {
+			return forwardInfo{}, badForward("port must be between %d and %d", forwardMinPort, forwardMaxPort)
+		}
+		if req.Persistent {
+			return forwardInfo{}, badForward("only a service forward (local_port) may be persistent")
+		}
 	}
 	ttl := forwardDefaultTTL
 	if req.TTLSeconds < 0 {
@@ -144,6 +191,13 @@ func (m *forwardManager) Add(req forwardRequest) (forwardInfo, error) {
 	}
 	if req.TTLSeconds > 0 {
 		ttl = time.Duration(req.TTLSeconds) * time.Second
+	}
+	if req.Persistent && req.TTLSeconds != 0 {
+		return forwardInfo{}, badForward("a persistent forward takes no ttl_seconds")
+	}
+	localPort := req.Port
+	if service {
+		localPort = req.LocalPort
 	}
 	peer := strings.TrimSpace(req.Peer)
 	if strings.ContainsAny(peer, " \t\r\n/\\@") {
@@ -173,26 +227,93 @@ func (m *forwardManager) Add(req forwardRequest) (forwardInfo, error) {
 		ln:     ln,
 		active: map[net.Conn]struct{}{},
 		info: forwardInfo{
-			Port:      req.Port,
-			Target:    fmt.Sprintf("127.0.0.1:%d", req.Port),
-			CreatedAt: now,
-			ExpiresAt: now.Add(ttl),
-			OneShot:   req.OneShot,
-			Peer:      peer,
+			Port:       req.Port,
+			LocalPort:  localPort,
+			Target:     fmt.Sprintf("127.0.0.1:%d", localPort),
+			CreatedAt:  now,
+			OneShot:    req.OneShot,
+			Persistent: req.Persistent,
+			Peer:       peer,
 		},
 	}
-	entry.timer = time.AfterFunc(ttl, func() {
-		if m.remove(req.Port, entry) {
-			log.Printf("dynamic forward :%d expired", req.Port)
-		}
-	})
+	if req.Persistent {
+		log.Printf("service forward tailnet :%d -> %s (persistent, peer %q)", req.Port, entry.info.Target, peer)
+	} else {
+		entry.info.ExpiresAt = now.Add(ttl)
+		entry.timer = time.AfterFunc(ttl, func() {
+			if m.remove(req.Port, entry) {
+				log.Printf("dynamic forward :%d expired", req.Port)
+			}
+		})
+		log.Printf("dynamic forward tailnet :%d -> %s (ttl %s, one_shot %v, peer %q)",
+			req.Port, entry.info.Target, ttl, req.OneShot, peer)
+	}
 	m.entries[req.Port] = entry
 	m.mu.Unlock()
 
 	go m.serve(entry)
-	log.Printf("dynamic forward tailnet :%d -> %s (ttl %s, one_shot %v, peer %q)",
-		req.Port, entry.info.Target, ttl, req.OneShot, peer)
 	return entry.snapshot(), nil
+}
+
+// addRedirect binds tailnet :80 and answers every request with a permanent
+// redirect to https://<host><uri>, so a published hostname typed without a
+// scheme still lands on the TLS ingress. Only the request line and Host
+// header are read; nothing is forwarded.
+func (m *forwardManager) addRedirect(req forwardRequest) (forwardInfo, error) {
+	peer := strings.TrimSpace(req.Peer)
+	if peer != "" {
+		return forwardInfo{}, badForward("redirect_https cannot be pinned to a peer")
+	}
+	m.mu.Lock()
+	if m.reserved[req.Port] {
+		m.mu.Unlock()
+		return forwardInfo{}, conflictForward("port %d is reserved by a fixed forward", req.Port)
+	}
+	if _, exists := m.entries[req.Port]; exists {
+		m.mu.Unlock()
+		return forwardInfo{}, conflictForward("port %d is already forwarded", req.Port)
+	}
+	if len(m.entries) >= forwardMaxCount {
+		m.mu.Unlock()
+		return forwardInfo{}, conflictForward("at most %d dynamic forwards may be active", forwardMaxCount)
+	}
+	ln, err := m.listen(req.Port)
+	if err != nil {
+		m.mu.Unlock()
+		return forwardInfo{}, conflictForward("listen tailnet :%d: %v", req.Port, err)
+	}
+	entry := &forwardEntry{
+		ln:     ln,
+		active: map[net.Conn]struct{}{},
+		info: forwardInfo{
+			Port:          req.Port,
+			Target:        "https redirect",
+			CreatedAt:     m.now(),
+			Persistent:    true,
+			RedirectHTTPS: true,
+		},
+	}
+	m.entries[req.Port] = entry
+	m.mu.Unlock()
+	go m.serveRedirect(entry)
+	log.Printf("service forward tailnet :%d -> https redirect (persistent)", req.Port)
+	return entry.snapshot(), nil
+}
+
+func (m *forwardManager) serveRedirect(entry *forwardEntry) {
+	server := &http.Server{
+		ReadHeaderTimeout: 10 * time.Second,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			entry.connections.Add(1)
+			host := r.Host
+			if h, _, err := net.SplitHostPort(host); err == nil {
+				host = h
+			}
+			target := &url.URL{Scheme: "https", Host: host, Path: r.URL.Path, RawQuery: r.URL.RawQuery}
+			http.Redirect(w, r, target.String(), http.StatusPermanentRedirect)
+		}),
+	}
+	_ = server.Serve(entry.ln) // returns when the listener closes (remove, shutdown)
 }
 
 // Remove closes the forward on port; it reports whether one existed.
@@ -296,7 +417,7 @@ func (m *forwardManager) handleConn(entry *forwardEntry, conn net.Conn) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), forwardDialWait)
-	upstream, err := m.dial(ctx, entry.info.Port)
+	upstream, err := m.dial(ctx, entry.info.LocalPort)
 	cancel()
 	if err != nil {
 		log.Printf("dynamic forward :%d dial %s: %v", entry.info.Port, entry.info.Target, err)

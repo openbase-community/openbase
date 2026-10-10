@@ -19,6 +19,7 @@ binary:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -272,6 +273,18 @@ def serve_status_json() -> dict[str, Any]:
                 "7880": {"TCPForward": "127.0.0.1:7880"},
             }
         }
+        # Published hostnames ride the daemon's service forwards (tailnet
+        # :443 to the private HTTPS ingress, :80 redirecting to HTTPS).
+        from openbase_coder_cli.services.tunneld import tunneld_list_forwards
+
+        for forward in tunneld_list_forwards():
+            port = str(forward.get("port"))
+            if forward.get("redirect_https"):
+                payload["TCP"][port] = {"HTTPS": True}
+            elif forward.get("persistent") and forward.get("local_port"):
+                payload["TCP"][port] = {
+                    "TCPForward": f"127.0.0.1:{forward['local_port']}"
+                }
         if host:
             payload["Web"] = {
                 f"{host}:18080": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:7999"}}}
@@ -338,10 +351,43 @@ def _validated_rules(rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return validated
 
 
+def tunneld_serve_capability() -> dict[str, Any]:
+    """The embedded node's Serve capability, in the hardened helper's shape.
+
+    openbase-tunneld routes published hostnames itself (persistent service
+    forwards on tailnet :443 and :80), and the CLI's registry is the single
+    source of its desired routes, so its snapshot and apply are consistent
+    by construction (see ``serve_snapshot``).
+    """
+    from openbase_coder_cli.services.tunneld import tunneld_health
+
+    health = tunneld_health()
+    if not health.get("reachable"):
+        return {
+            "supported": False,
+            "error": str(health.get("error") or "openbase-tunneld is not reachable"),
+        }
+    if health.get("error"):
+        return {"supported": False, "error": str(health["error"])}
+    return {
+        "supported": True,
+        "provider": "openbase-tunneld",
+        "atomic_etag": True,
+        "service_hostnames": {
+            "supported": True,
+            "serve_routing": True,
+            "pattern": "{service}.{account_namespace}.{service_domain}",
+            "http_port": 80,
+            "https_port": 443,
+            "https_supported": True,
+        },
+    }
+
+
 def serve_capability() -> dict[str, Any]:
     """Return the hardened helper's declared atomic Serve capability."""
     if is_netmesh_tsnet():
-        return {"supported": False, "error": "Openbase Direct is not a host VPN."}
+        return tunneld_serve_capability()
     if not is_netmesh() or netmesh_uses_stock_tailscale():
         return {
             "supported": False,
@@ -429,8 +475,35 @@ def hostname_serve_capability() -> dict[str, Any]:
     }
 
 
+def _tsnet_rules_hash(rules: list[dict[str, Any]]) -> str:
+    """Stable digest of a validated rule set; the embedded node's config hash."""
+    canonical = json.dumps(
+        sorted(rules, key=lambda rule: json.dumps(rule, sort_keys=True)),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "tsnet-" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _tsnet_registry_rules() -> list[dict[str, Any]]:
+    from openbase_coder_cli.services.published_services import published_serve_rules
+    from openbase_coder_cli.services.tailscale_serve import openbase_serve_rules
+
+    return [*openbase_serve_rules(), *published_serve_rules()]
+
+
+TSNET_SERVE_ETAG = "openbase-tunneld"
+
+
 def serve_snapshot() -> dict[str, Any]:
-    if not is_netmesh() or is_netmesh_tsnet() or netmesh_uses_stock_tailscale():
+    if is_netmesh_tsnet():
+        # The daemon holds no route config of its own: the registry is the
+        # desired state and the forwards are reconciled from it on apply.
+        return {
+            "etag": TSNET_SERVE_ETAG,
+            "hash": _tsnet_rules_hash(_validated_rules(_tsnet_registry_rules())),
+        }
+    if not is_netmesh() or netmesh_uses_stock_tailscale():
         raise RuntimeError(
             "Atomic Serve snapshots require the hardened Openbase VPN helper."
         )
@@ -449,7 +522,9 @@ def serve_snapshot() -> dict[str, Any]:
 
 def plan_serve(rules: list[dict[str, Any]]) -> dict[str, Any]:
     validated = _validated_rules(rules)
-    if not is_netmesh() or is_netmesh_tsnet() or netmesh_uses_stock_tailscale():
+    if is_netmesh_tsnet():
+        return {"hash": _tsnet_rules_hash(validated)}
+    if not is_netmesh() or netmesh_uses_stock_tailscale():
         raise RuntimeError(
             "Atomic Serve planning requires the hardened Openbase VPN helper."
         )
@@ -511,12 +586,14 @@ def apply_serve(
     """
     validated = _validated_rules(rules)
     if is_netmesh_tsnet():
-        # The daemon forwards 18080/7880/7881 itself; "applying serve" means
-        # making sure it is running and logged in.
+        # The daemon forwards 18080/7880/7881 itself; published hostnames
+        # need its persistent service forwards (tailnet :443 to the private
+        # HTTPS ingress, :80 redirecting there), reconciled from the rules.
         from openbase_coder_cli.services.tunneld import ensure_tunneld_running
 
         ensure_tunneld_running()
-        return {}
+        _reconcile_tsnet_service_forwards(validated)
+        return {"hash": _tsnet_rules_hash(validated)}
     if is_netmesh() and not netmesh_uses_stock_tailscale():
         if expected_etag is None or expected_hash is None:
             raise RuntimeError(
@@ -553,6 +630,59 @@ def apply_serve(
                 or "tailscale serve failed."
             )
     return {}
+
+
+def _reconcile_tsnet_service_forwards(rules: list[dict[str, Any]]) -> None:
+    """Keep the daemon's :443/:80 service forwards in step with the rules."""
+    from openbase_coder_cli.services.published_services import HTTPS_PROXY_PORT
+    from openbase_coder_cli.services.tunneld import (
+        tunneld_add_forward,
+        tunneld_list_forwards,
+        tunneld_remove_forward,
+    )
+
+    unsupported = sorted(
+        {
+            rule["kind"]
+            for rule in rules
+            if rule["kind"] in {"published-dynamic", "published-hostname"}
+        }
+    )
+    if unsupported:
+        raise RuntimeError(
+            "Openbase Direct routes only HTTPS hostname publications; "
+            f"unsupported route kinds: {', '.join(unsupported)}."
+        )
+    wanted = any(rule["kind"] == "published-https-hostname" for rule in rules)
+    live = {
+        int(item["port"]): item for item in tunneld_list_forwards() if "port" in item
+    }
+    https = live.get(443)
+    http = live.get(80)
+    https_ok = bool(
+        https
+        and https.get("persistent")
+        and https.get("local_port") == HTTPS_PROXY_PORT
+    )
+    http_ok = bool(http and http.get("redirect_https"))
+    if wanted:
+        if https and not https_ok:
+            raise RuntimeError(
+                "Tailnet port 443 is taken by another forward on this node."
+            )
+        if http and not http_ok:
+            raise RuntimeError(
+                "Tailnet port 80 is taken by another forward on this node."
+            )
+        if not https_ok:
+            tunneld_add_forward(443, local_port=HTTPS_PROXY_PORT, persistent=True)
+        if not http_ok:
+            tunneld_add_forward(80, redirect_https=True, persistent=True)
+        return
+    if https_ok:
+        tunneld_remove_forward(443)
+    if http_ok:
+        tunneld_remove_forward(80)
 
 
 def remove_serve(proto: str, port: int) -> None:

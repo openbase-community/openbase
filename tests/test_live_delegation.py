@@ -2506,3 +2506,69 @@ async def test_a_starved_report_after_the_model_spoke_is_not_redelivered(monkeyp
         assert live.speech() == ["All tests pass. The build is green."]
     finally:
         await bridge.aclose()
+
+
+async def test_gateway_response_lifecycle_is_logged_but_deltas_stay_quiet(caplog):
+    import logging
+
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    try:
+        with caplog.at_level(
+            logging.INFO, logger="openbase_coder_cli.livekit_agent.live_delegation"
+        ):
+            live.emit(
+                "openai_server_event_received",
+                {"type": "session.output_audio.delta", "delta": "AAAA"},
+            )
+            live.emit(
+                "openai_server_event_received",
+                {
+                    "type": "response.event",
+                    "delegation_id": "d1",
+                    "event": {"type": "response.output_text.delta", "delta": "x"},
+                },
+            )
+            live.emit(
+                "openai_server_event_received",
+                {
+                    "type": "response.event",
+                    "delegation_id": "d1",
+                    "event": {
+                        "type": "response.completed",
+                        "response": {
+                            "status": "incomplete",
+                            "incomplete_details": {"reason": "max_output_tokens"},
+                        },
+                    },
+                },
+            )
+            live.emit(
+                "openai_server_event_received",
+                {
+                    "type": "error",
+                    "error": {"code": "rate_limited", "type": "server_error"},
+                },
+            )
+            live.emit(
+                "openai_server_event_received",
+                {"type": "session.closed", "reason": "allowance_exhausted"},
+            )
+        lines = [
+            r.getMessage()
+            for r in caplog.records
+            if "live_gateway_event" in r.getMessage()
+        ]
+        assert len(lines) == 3
+        assert (
+            "type=response.completed delegation_id=d1 status=incomplete incomplete=reason:max_output_tokens"
+            in lines[0]
+        )
+        assert (
+            "type=error delegation_id= code=rate_limited error_type=server_error"
+            in lines[1]
+        )
+        assert (
+            "type=session.closed delegation_id= reason=allowance_exhausted" in lines[2]
+        )
+    finally:
+        await bridge.aclose()

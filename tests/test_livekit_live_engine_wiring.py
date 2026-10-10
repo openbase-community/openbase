@@ -343,7 +343,9 @@ async def test_live_hangup_ends_job_and_closes_character_resources(wiring, monke
     assert not wiring.live.handlers["input_audio_transcription_completed"]
 
 
-async def test_pipeline_hangup_ends_job_after_real_pipeline_construction(wiring, monkeypatch):
+async def test_pipeline_hangup_ends_job_after_real_pipeline_construction(
+    wiring, monkeypatch
+):
     from unittest.mock import AsyncMock
 
     from livekit.agents.voice.events import CloseEvent, CloseReason
@@ -351,13 +353,17 @@ async def test_pipeline_hangup_ends_job_after_real_pipeline_construction(wiring,
     # Exercise the production builder: mocking _start_voice_session would
     # miss a cleanup hook installed only on the GPT-Live path.
     voice = SimpleNamespace(id="voice", name="Voice")
-    provider = SimpleNamespace(provider_id="test", default_announcer_voice=lambda: voice)
+    provider = SimpleNamespace(
+        provider_id="test", default_announcer_voice=lambda: voice
+    )
     monkeypatch.setattr(livekit, "get_tts_provider", lambda _: provider)
     monkeypatch.setattr(livekit, "VoiceSelectingTTS", lambda **_: object())
     monkeypatch.setattr(livekit, "_build_stt", lambda _: object())
     monkeypatch.setattr(livekit, "CodexLiveKitLLM", lambda *args, **kwargs: object())
     monkeypatch.setattr(livekit, "SafeMultilingualModel", lambda **_: object())
-    monkeypatch.setattr(livekit, "_register_session_diagnostics", lambda *args, **kwargs: ())
+    monkeypatch.setattr(
+        livekit, "_register_session_diagnostics", lambda *args, **kwargs: ()
+    )
     delete = AsyncMock()
     monkeypatch.setattr(livekit, "_delete_room", delete)
     ctx = _fake_ctx()
@@ -856,3 +862,25 @@ def test_live_model_uses_dispatcher_mapping_and_explicit_agent_voice(monkeypatch
         livekit._build_live_voice_model(_live_decision(), voice="cedar").kwargs["voice"]
         == "cedar"
     )
+
+
+async def test_live_engine_speaks_stall_hints_through_the_character(
+    wiring, monkeypatch
+):
+    """A pending macOS permission prompt is announced inside the live call as
+    commentary for the current character, not via the announcer swap."""
+    from openbase_coder_cli.livekit_agent import stall_diagnostics
+
+    captured: dict = {}
+
+    async def capture_stall_loop(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(stall_diagnostics, "stall_watch_loop", capture_stall_loop)
+    ctx = _fake_ctx()
+    await _run_entrypoint(ctx, _live_decision(), monkeypatch)
+    assert "speak" in captured and "prepare_announcement" not in captured
+    before = len(wiring.live.appends)
+    assert await captured["speak"]("Heads up, allow access to your Desktop folder.")
+    added = wiring.live.appends[before:]
+    assert any("Desktop folder" in text for _kind, text, _d in added), added

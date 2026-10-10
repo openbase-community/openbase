@@ -70,6 +70,7 @@ func (a *localAPI) handler() http.Handler {
 	mux.HandleFunc("GET /forwards", a.handleListForwards)
 	mux.HandleFunc("POST /forwards", a.handleAddForward)
 	mux.HandleFunc("DELETE /forwards/{port}", a.handleRemoveForward)
+	mux.HandleFunc("GET /resolve", a.handleResolve)
 	return a.requireToken(mux)
 }
 
@@ -316,4 +317,43 @@ func (a *localAPI) handleRemoveForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleResolve answers GET /resolve?name=<host> with the addresses the
+// node's own resolver returns for name: tailnet MagicDNS and the account's
+// private service records, which the container's system resolver never
+// sees. The CLI uses it to confirm a freshly allocated private hostname
+// points at this node before it publishes a service there.
+func (a *localAPI) handleResolve(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(r.URL.Query().Get("name"))), ".")
+	if name == "" || len(name) > 253 || strings.ContainsAny(name, " \t\r\n/\\@") {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "name must be a DNS name"})
+		return
+	}
+	if a.lc == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "tailnet node is not up yet"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	addresses := []string{}
+	var lastErr error
+	for _, queryType := range []string{"A", "AAAA"} {
+		raw, _, err := a.lc.QueryDNS(ctx, name+".", queryType)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		found, err := dnsAnswerAddresses(raw)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		addresses = append(addresses, found...)
+	}
+	if len(addresses) == 0 && lastErr != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": lastErr.Error(), "name": name})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"name": name, "addresses": addresses})
 }

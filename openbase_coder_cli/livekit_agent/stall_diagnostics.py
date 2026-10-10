@@ -521,8 +521,14 @@ async def stall_watch_loop(
     poll_seconds: float = 15.0,
     is_call_active=None,
     prepare_announcement=None,
+    speak=None,
 ) -> None:
     """Background poller: surface blocked agent turns during a live call.
+
+    ``speak(text) -> bool`` (awaitable) delivers one hint; by default it is
+    the classic announcer path, :func:`speak_via_local_api`. The GPT-Live
+    engine passes its own speaker so the hint is woven into the current
+    character's speech instead of swapping in an announcer session.
 
     Runs for the lifetime of a LiveKit voice session. Every ``poll_seconds``
     it surfaces two classes of stuck agent turn (dispatcher OR spawned
@@ -544,6 +550,11 @@ async def stall_watch_loop(
     spoken_turn_ids: set[str] = set()
     last_attempted_at: dict[str, float] = {}
     loop = asyncio.get_running_loop()
+    if speak is None:
+
+        async def speak(text: str) -> bool:
+            return await loop.run_in_executor(None, speak_via_local_api, text)
+
     # Only surface failures observed from when the watcher started, so a
     # pre-existing stale failure doesn't get announced on a fresh call.
     since = _dt.datetime.now()
@@ -563,9 +574,7 @@ async def stall_watch_loop(
         interrupted_reply = False
         if prepare_announcement is not None:
             interrupted_reply = bool(prepare_announcement())
-        queued = await loop.run_in_executor(
-            None, speak_via_local_api, turn.spoken_hint()
-        )
+        queued = bool(await speak(turn.spoken_hint()))
         if queued:
             spoken_turn_ids.add(turn.turn_id)
             last_attempted_at.pop(turn.turn_id, None)

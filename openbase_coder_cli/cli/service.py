@@ -49,16 +49,37 @@ def service() -> None:
     """Publish local HTTP services privately over the Openbase VPN."""
 
 
+def _persistence_label() -> str:
+    """Where a persistent publication is restored: launchd, or the container start."""
+    return "workspace start" if tailscale_provider.is_netmesh_tsnet() else "launchd"
+
+
 def _persistence_choice(persist: bool | None) -> bool:
     if persist is not None:
         return persist
+    where = _persistence_label()
     if sys.stdin.isatty():
         return click.confirm(
-            "Start this published service automatically at login with launchd?",
+            f"Start this published service automatically at {where}?",
             default=False,
         )
-    click.echo("Persistence was not enabled. Use --persist to opt in to launchd.")
+    click.echo(f"Persistence was not enabled. Use --persist to opt in to {where}.")
     return False
+
+
+def _start_gateway(service_entry: PublishedService) -> PublishedService:
+    """Start the service gateway the way this host keeps it alive.
+
+    launchd owns persistent gateways on a Mac. A cloud workspace has no
+    launchd: every gateway is a session process, and `service restore`
+    (run by the container entrypoint) brings persistent ones back after a
+    restart.
+    """
+    if service_entry.persistent and not tailscale_provider.is_netmesh_tsnet():
+        install_launchd_service(service_entry)
+        return service_entry
+    pid = start_ephemeral_gateway(service_entry)
+    return replace(service_entry, pid=pid)
 
 
 def _registry_transaction(function):
@@ -163,11 +184,9 @@ def publish(
         save_registry(
             ServiceRegistry(tuple(desired_services), registry.last_applied_serve_hash)
         )
-        if persistent:
-            install_launchd_service(service_entry)
-        else:
-            pid = start_ephemeral_gateway(service_entry)
-            service_entry = replace(service_entry, pid=pid)
+        started = _start_gateway(service_entry)
+        if started is not service_entry:
+            service_entry = started
             service_recovery.begin(
                 "publish", registry, service_entry, release_hostname=hostname_created
             )
@@ -226,7 +245,7 @@ def publish(
     click.echo("  Mode: account-private hostname")
     click.echo("  Visibility: Openbase VPN/tailnet only (never Funnel/public internet)")
     if persistent:
-        click.echo("  Persistence: launchd enabled by explicit opt-in")
+        click.echo(f"  Persistence: {_persistence_label()} enabled by explicit opt-in")
     else:
         click.echo("  Persistence: current login session only")
 
@@ -355,7 +374,7 @@ def list_command() -> None:
                 if item.mode == MODE_HOSTNAME
                 else f"tailnet :{item.tailnet_port}/{item.name}/"
             )
-        mode = "launchd" if item.persistent else "session"
+        mode = _persistence_label() if item.persistent else "session"
         health = "ready" if gateway_healthy(item, timeout=0.1) else "gateway stopped"
         click.echo(
             f"{item.name:<20} {url} -> 127.0.0.1:{item.local_port} "
@@ -390,6 +409,65 @@ def doctor(name: str, as_json: bool) -> None:
             )
     if not result["ready"]:
         raise click.exceptions.Exit(1)
+
+
+@service.command("restore")
+def restore_command() -> None:
+    """Bring persistent publications back after a workspace restart.
+
+    Cloud workspaces have no launchd: the container entrypoint runs this
+    once the embedded node is up. Each persistent hostname publication whose
+    gateway is gone gets its certificate checked and its gateway restarted,
+    then the node's :443/:80 service forwards are reconciled.
+    """
+    from openbase_coder_cli.services.published_service_routes import (
+        reconcile_openbase_routes,
+    )
+    from openbase_coder_cli.services.service_certificates import ensure_certificate
+
+    _require_tsnet_host()
+    with registry_lock():
+        try:
+            if service_recovery.recover():
+                click.echo("Removed an interrupted publication first.")
+            registry = load_registry()
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise click.ClickException(str(exc)) from exc
+        services = list(registry.services)
+        restored = []
+        failures = []
+        for index, item in enumerate(services):
+            if item.mode != MODE_HOSTNAME or not item.persistent:
+                continue
+            if gateway_healthy(item, timeout=0.2):
+                continue
+            try:
+                ensure_certificate(item)
+                started = replace(item, pid=start_ephemeral_gateway(item))
+                if not gateway_healthy(started):
+                    stop_gateway(started)
+                    raise RuntimeError("the gateway did not become healthy")
+            except (OSError, ValueError, RuntimeError) as exc:
+                failures.append(f"{item.name}: {exc}")
+                continue
+            services[index] = started
+            restored.append(item.name)
+        try:
+            save_registry(
+                ServiceRegistry(tuple(services), registry.last_applied_serve_hash)
+            )
+            applied_hash = reconcile_openbase_routes(
+                services, services, registry.last_applied_serve_hash
+            )
+            save_registry(ServiceRegistry(tuple(services), applied_hash))
+        except (OSError, ValueError, RuntimeError) as exc:
+            failures.append(f"routes: {exc}")
+    for name in restored:
+        click.echo(f"Restored {name}.")
+    if not restored and not failures:
+        click.echo("Nothing to restore.")
+    if failures:
+        raise click.ClickException("; ".join(failures))
 
 
 @service.command("recover")

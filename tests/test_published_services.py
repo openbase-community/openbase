@@ -370,12 +370,24 @@ def test_remove_serve_uses_exact_listener_flags(monkeypatch):
     assert commands == [["/usr/bin/tailscale", "serve", "--http=52807", "off"]]
 
 
-def test_openbase_direct_is_rejected_without_applying_a_route(monkeypatch):
+def test_openbase_direct_routes_only_https_hostnames(monkeypatch, isolated_registry):
     provider = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
     monkeypatch.setattr(provider, "is_netmesh_tsnet", lambda: True)
+    monkeypatch.setattr(provider, "serve_capability", lambda: {"supported": True})
+    monkeypatch.setattr(
+        provider, "serve_snapshot", lambda: {"etag": "t", "hash": "unit-test-plan"}
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.services.tunneld.ensure_tunneld_running", lambda: None
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.services.tunneld.tunneld_list_forwards", list
+    )
 
-    with pytest.raises(RuntimeError, match="Openbase Direct"):
-        routes.apply_route(PublishedService("docs", 3000, 52807, 52808))
+    # A legacy dynamic publication has no route on the embedded node.
+    legacy = PublishedService("docs", 3000, 52807, 52808)
+    with pytest.raises(RuntimeError, match="HTTPS hostname"):
+        routes.apply_route(legacy, desired_services=[legacy])
 
 
 def test_portless_path_mode_is_retired(isolated_registry):

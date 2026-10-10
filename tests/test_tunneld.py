@@ -122,3 +122,56 @@ def test_managed_tunneld_enrolls_after_control_api_is_ready(monkeypatch) -> None
     )
 
     assert submitted == ["single-use-test-key"]
+
+
+def test_add_forward_sends_service_forward_fields(monkeypatch) -> None:
+    import httpx
+
+    posted = {}
+
+    def fake_post(url, *, json, headers, timeout):
+        posted.update(url=url, json=json)
+        return httpx.Response(201, json={"port": 443, "local_port": 59443})
+
+    monkeypatch.setattr(tunneld.httpx, "post", fake_post)
+    monkeypatch.setattr(tunneld, "_control_headers", lambda: {})
+
+    tunneld.tunneld_add_forward(443, local_port=59443, persistent=True)
+    assert posted["url"].endswith("/forwards")
+    assert posted["json"] == {
+        "port": 443,
+        "one_shot": False,
+        "local_port": 59443,
+        "persistent": True,
+    }
+
+    tunneld.tunneld_add_forward(3000, ttl_seconds=60)
+    assert posted["json"] == {"port": 3000, "one_shot": False, "ttl_seconds": 60}
+
+    tunneld.tunneld_add_forward(80, redirect_https=True, persistent=True)
+    assert posted["json"] == {
+        "port": 80,
+        "one_shot": False,
+        "persistent": True,
+        "redirect_https": True,
+    }
+
+
+def test_resolve_returns_the_daemon_resolvers_addresses(monkeypatch) -> None:
+    import httpx
+
+    answers = {"status": 200, "json": {"addresses": ["100.64.0.10"]}}
+
+    def fake_get(url, *, params, headers, timeout):
+        assert url.endswith("/resolve")
+        assert params == {"name": "crm.abcdefghijkl.vpn.obs.so"}
+        return httpx.Response(answers["status"], json=answers["json"])
+
+    monkeypatch.setattr(tunneld.httpx, "get", fake_get)
+    monkeypatch.setattr(tunneld, "_control_headers", lambda: {})
+
+    assert tunneld.tunneld_resolve("crm.abcdefghijkl.vpn.obs.so") == ["100.64.0.10"]
+
+    answers.update(status=502, json={"error": "lookup failed"})
+    with pytest.raises(RuntimeError, match="lookup failed"):
+        tunneld.tunneld_resolve("crm.abcdefghijkl.vpn.obs.so")

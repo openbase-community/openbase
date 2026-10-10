@@ -1487,6 +1487,109 @@ def test_verify_cloud_audio_subscription_reports_lapsed_subscription(monkeypatch
     assert spoken == [livekit.CLOUD_AUDIO_ALLOWANCE_SPOKEN]
 
 
+def _published_status_payload(room) -> dict:
+    assert len(room.local_participant.published) == 1
+    data, _reliable, topic = room.local_participant.published[0]
+    assert topic == config.AGENT_STATUS_TOPIC
+    return json.loads(data.decode("utf-8"))
+
+
+def test_report_agent_error_names_the_allowance_behind_a_bare_audio_403(monkeypatch):
+    # The audio proxy refuses a capped stream with a bodyless 403, the same
+    # shape as a bad token. The usage summary says which it was.
+    class CloudAudioHandshakeError(RuntimeError):
+        status = 403
+
+    exc = CloudAudioHandshakeError(
+        "403, message='Forbidden', url='wss://app.openbase.cloud/api/openbase/audio/assemblyai/v3/ws?token=secret'"
+    )
+    checks: list[dict] = []
+
+    def out_of_credits(**kwargs):
+        checks.append(kwargs)
+        raise livekit.OpenbaseCloudAudioSubscriptionError(
+            "Openbase Cloud audio is out of transcription credits for this month."
+        )
+
+    monkeypatch.setattr(
+        livekit, "ensure_openbase_cloud_audio_subscription", out_of_credits
+    )
+    monkeypatch.setattr(livekit, "selected_tts_provider_id", lambda: "openbase_cloud")
+    monkeypatch.setattr(livekit, "selected_stt_provider_id", lambda: "openbase_cloud")
+    room = _FakeRoom()
+
+    asyncio.run(livekit._report_agent_error(room, exc))
+
+    payload = _published_status_payload(room)
+    assert payload["code"] == "subscription_required"
+    assert payload["detail"] == (
+        "Openbase Cloud audio is out of transcription credits for this month."
+    )
+    assert checks == [
+        {
+            "tts_provider_id": "openbase_cloud",
+            "stt_provider_id": "openbase_cloud",
+            "web_backend_url": livekit.WEB_BACKEND_URL,
+            "live_voice": False,
+        }
+    ]
+
+
+def test_report_agent_error_keeps_the_403_wording_when_credit_remains(monkeypatch):
+    class CloudAudioHandshakeError(RuntimeError):
+        status = 403
+
+    exc = CloudAudioHandshakeError(
+        "403, message='Forbidden', url='wss://app.openbase.cloud/api/openbase/audio/cartesia/tts/websocket'"
+    )
+    monkeypatch.setattr(
+        livekit, "ensure_openbase_cloud_audio_subscription", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(livekit, "selected_tts_provider_id", lambda: "openbase_cloud")
+    monkeypatch.setattr(livekit, "selected_stt_provider_id", lambda: "openbase_cloud")
+    room = _FakeRoom()
+
+    asyncio.run(livekit._report_agent_error(room, exc))
+
+    payload = _published_status_payload(room)
+    assert payload["code"] == "cloud_audio_auth_failed"
+    assert "monthly Openbase audio allowance is used up" in payload["detail"]
+
+
+def test_report_agent_error_checks_live_voice_credits_for_a_dead_live_session(
+    monkeypatch,
+):
+    # The GPT-Live plugin raises a bare "GPT-Live returned an error" for the
+    # gateway's billing close; the live voice credit check supplies the reason.
+    from openbase_coder_cli.livekit_agent.live_voice import LiveVoiceSessionError
+
+    checks: list[dict] = []
+
+    def out_of_live_credits(**kwargs):
+        checks.append(kwargs)
+        raise livekit.OpenbaseCloudAudioSubscriptionError(
+            "Openbase Cloud audio is out of live voice credits for this month."
+        )
+
+    monkeypatch.setattr(
+        livekit, "ensure_openbase_cloud_audio_subscription", out_of_live_credits
+    )
+    monkeypatch.setattr(livekit, "selected_tts_provider_id", lambda: "cartesia")
+    monkeypatch.setattr(livekit, "selected_stt_provider_id", lambda: "assemblyai")
+    room = _FakeRoom()
+
+    asyncio.run(
+        livekit._report_agent_error(
+            room, LiveVoiceSessionError(RuntimeError("GPT-Live returned an error"))
+        )
+    )
+
+    payload = _published_status_payload(room)
+    assert payload["code"] == "subscription_required"
+    assert "out of live voice credits" in payload["detail"]
+    assert checks[0]["live_voice"] is True
+
+
 def test_verify_cloud_audio_subscription_skips_transient_errors(monkeypatch):
     room = _FakeRoom()
     session = SimpleNamespace(

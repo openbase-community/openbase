@@ -80,8 +80,8 @@ def test_exchange_requests_and_accepts_the_notify_scope(bootstrap_paths):
             "obmb_one-time", "https://backend.example.com"
         )
 
-    # The exchange opts in to notify; an older Cloud ignores the body.
-    assert post.call_args.kwargs["json"] == {"scopes": ["notify"]}
+    # The exchange opts in to the optional scopes; an older Cloud ignores the body.
+    assert post.call_args.kwargs["json"] == {"scopes": ["notify", "netmesh_publish"]}
     saved = json.loads(machine_token.read_text())
     assert saved["scopes"] == ["llm_proxy", "audio_proxy", "notify"]
 
@@ -150,21 +150,28 @@ def _entrypoint_env(tmp_path, extra: dict[str, str] | None = None) -> dict[str, 
         check=True,
         timeout=30,
     )
-    return dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    return dict(
+        line.split("=", 1) for line in result.stdout.splitlines() if "=" in line
+    )
 
 
 def test_container_routes_browser_logins_to_the_phone(tmp_path):
     dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
     assert 'BROWSER="openbase-browser"' in dockerfile
     assert 'GH_BROWSER="openbase-browser"' in dockerfile
-    assert 'COPY --chmod=0755 docker/openbase-browser /usr/local/bin/openbase-browser' in dockerfile
+    assert (
+        "COPY --chmod=0755 docker/openbase-browser /usr/local/bin/openbase-browser"
+        in dockerfile
+    )
 
     # Maritime's VM init drops the image ENV, so the entrypoint re-asserts it.
     env = _entrypoint_env(tmp_path)
     assert env["BROWSER"] == "openbase-browser"
     assert env["GH_BROWSER"] == "openbase-browser"
 
-    overridden = _entrypoint_env(tmp_path, {"BROWSER": "custom-browser", "GH_BROWSER": "custom-gh"})
+    overridden = _entrypoint_env(
+        tmp_path, {"BROWSER": "custom-browser", "GH_BROWSER": "custom-gh"}
+    )
     assert overridden["BROWSER"] == "custom-browser"
     assert overridden["GH_BROWSER"] == "custom-gh"
 
@@ -172,15 +179,23 @@ def test_container_routes_browser_logins_to_the_phone(tmp_path):
 def test_container_image_includes_agent_instructions_and_skills():
     dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
 
-    assert 'ARG WORKSPACE_REF=develop' in dockerfile
-    assert 'ARG SKILLS_REF=develop' in dockerfile
-    assert 'git clone --depth 1 --branch "$SKILLS_REF" "$SKILLS_REPO" skills' in dockerfile
-    assert 'git clone --depth 1 --branch "$WORKSPACE_REF" "$WORKSPACE_REPO" /tmp/workspace-root' in dockerfile
-    assert 'cp -R /tmp/workspace-root/instructions instructions' in dockerfile
+    assert "ARG WORKSPACE_REF=develop" in dockerfile
+    assert "ARG SKILLS_REF=develop" in dockerfile
+    assert (
+        'git clone --depth 1 --branch "$SKILLS_REF" "$SKILLS_REPO" skills' in dockerfile
+    )
+    assert (
+        'git clone --depth 1 --branch "$WORKSPACE_REF" "$WORKSPACE_REPO" /tmp/workspace-root'
+        in dockerfile
+    )
+    assert "cp -R /tmp/workspace-root/instructions instructions" in dockerfile
     # The workflow passes the built branch, so a staging image bundles the
     # staging super-agents, not develop's.
-    assert 'ARG SUPER_AGENTS_REF=develop' in dockerfile
-    assert 'git clone --depth 1 --branch "$SUPER_AGENTS_REF" "$SUPER_AGENTS_REPO" super-agents' in dockerfile
+    assert "ARG SUPER_AGENTS_REF=develop" in dockerfile
+    assert (
+        'git clone --depth 1 --branch "$SUPER_AGENTS_REF" "$SUPER_AGENTS_REPO" super-agents'
+        in dockerfile
+    )
 
 
 def test_container_entrypoint_maritime_selects_netmesh():
@@ -250,6 +265,45 @@ def test_container_boot_renders_instructions_before_services_start():
     # Regression (2026-10-09): an image upgrade on a persisted /data does not
     # re-run setup, so boot itself must render the instruction files.
     entrypoint = (Path(__file__).parents[1] / "docker" / "entrypoint.sh").read_text()
-    refresh = entrypoint.index("refresh_openbase_instruction_files_from_installation as refresh; refresh(report=print)")
+    refresh = entrypoint.index(
+        "refresh_openbase_instruction_files_from_installation as refresh; refresh(report=print)"
+    )
     assert refresh > entrypoint.index("# --- First-run setup")
     assert refresh < entrypoint.index('start_supervised "$name" bash "$wrapper"')
+
+
+def test_exchange_requests_the_publish_scope_and_retries_on_an_older_cloud(
+    bootstrap_paths,
+):
+    machine_token, _owner_identity, _netmesh_key = bootstrap_paths
+    rejected = httpx.Response(
+        400,
+        json={"detail": "Unknown machine token scopes requested: netmesh_publish."},
+        request=httpx.Request("POST", "https://backend.example.com"),
+    )
+    granted = bootstrap_response(scopes=["llm_proxy", "audio_proxy", "notify"])
+    with mock.patch.object(httpx, "post", side_effect=[rejected, granted]) as post:
+        provision_module._exchange_bootstrap(
+            "obmb_one-time", "https://backend.example.com"
+        )
+
+    requested = [call.kwargs["json"] for call in post.call_args_list]
+    assert requested == [
+        {"scopes": ["notify", "netmesh_publish"]},
+        {"scopes": ["notify"]},
+    ]
+    saved = json.loads(machine_token.read_text())
+    assert saved["scopes"] == ["llm_proxy", "audio_proxy", "notify"]
+
+
+def test_exchange_accepts_the_publish_scope(bootstrap_paths):
+    machine_token, _owner_identity, _netmesh_key = bootstrap_paths
+    granted = bootstrap_response(
+        scopes=["llm_proxy", "audio_proxy", "notify", "netmesh_publish"]
+    )
+    with mock.patch.object(httpx, "post", return_value=granted):
+        provision_module._exchange_bootstrap(
+            "obmb_one-time", "https://backend.example.com"
+        )
+    saved = json.loads(machine_token.read_text())
+    assert saved["scopes"] == ["llm_proxy", "audio_proxy", "notify", "netmesh_publish"]
