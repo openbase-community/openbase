@@ -40,11 +40,19 @@ from .setup import setup
 WEB_BACKEND_ENV_KEY = "OPENBASE_CODER_CLI_WEB_BACKEND_URL"
 BOOTSTRAP_TOKEN_ENV_KEY = "OPENBASE_CODER_BOOTSTRAP_TOKEN"
 BOOTSTRAP_EXCHANGE_PATH = "/api/openbase/devspaces/bootstrap/exchange/"
-REQUESTED_OPTIONAL_SCOPES = ("notify",)
+REQUESTED_OPTIONAL_SCOPES = ("notify", "netmesh_publish")
+# What Cloud may hand back: the base pair plus any subset of the optional
+# scopes, in Cloud's canonical order.
 ACCEPTED_BOOTSTRAP_SCOPES = (
     ["llm_proxy", "audio_proxy"],
     ["llm_proxy", "audio_proxy", "notify"],
+    ["llm_proxy", "audio_proxy", "netmesh_publish"],
+    ["llm_proxy", "audio_proxy", "notify", "netmesh_publish"],
 )
+# A Cloud that predates a scope rejects the whole request; retry with the
+# scopes it knows, newest first dropped.
+_SCOPE_REQUEST_FALLBACKS = (REQUESTED_OPTIONAL_SCOPES, ("notify",), ())
+UNKNOWN_SCOPES_MARKER = "Unknown machine token scopes"
 NETMESH_AUTHKEY_FILE = DEFAULT_ENV_FILE_PATH.parent / "bootstrap-netmesh-authkey"
 
 
@@ -124,20 +132,31 @@ def _stage_single_use_netmesh_key(auth_key: str) -> None:
 def _exchange_bootstrap(bootstrap_token: str, web_backend_url: str) -> dict:
     if urlsplit(web_backend_url).scheme != "https":
         raise click.ClickException("Workspace bootstrap requires an HTTPS backend.")
-    try:
-        response = httpx.post(
-            f"{web_backend_url.rstrip('/')}{BOOTSTRAP_EXCHANGE_PATH}",
-            headers={"Authorization": f"Openbase-Bootstrap {bootstrap_token}"},
-            # Opt in to the notify scope so the workspace can push "open this
-            # URL" notifications to the owner's phones; older Cloud versions
-            # ignore the body and grant the base pair.
-            json={"scopes": list(REQUESTED_OPTIONAL_SCOPES)},
-            timeout=30,
-        )
-    except httpx.HTTPError as exc:
-        raise click.ClickException(
-            f"Workspace bootstrap request failed: {exc}"
-        ) from exc
+    for attempt, requested in enumerate(_SCOPE_REQUEST_FALLBACKS):
+        try:
+            response = httpx.post(
+                f"{web_backend_url.rstrip('/')}{BOOTSTRAP_EXCHANGE_PATH}",
+                headers={"Authorization": f"Openbase-Bootstrap {bootstrap_token}"},
+                # Opt in to the optional scopes (notify: push "open this URL"
+                # to the owner's phones; netmesh_publish: private service
+                # hostnames for this node). The oldest Cloud versions ignore
+                # the body and grant the base pair; a Cloud that knows some
+                # but not all of the scopes rejects the request, so retry
+                # with fewer (the grant is single-use only once consumed).
+                json={"scopes": list(requested)},
+                timeout=30,
+            )
+        except httpx.HTTPError as exc:
+            raise click.ClickException(
+                f"Workspace bootstrap request failed: {exc}"
+            ) from exc
+        if (
+            response.status_code == 400
+            and UNKNOWN_SCOPES_MARKER in response.text
+            and attempt + 1 < len(_SCOPE_REQUEST_FALLBACKS)
+        ):
+            continue
+        break
     if response.status_code >= 400:
         # Say who answered: a 403 from Cloud is a JSON "detail", while an
         # upstream proxy or WAF answers with HTML/text. Never echo secrets

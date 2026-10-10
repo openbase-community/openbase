@@ -92,12 +92,16 @@ def renewal_due(certificate: x509.Certificate) -> bool:
 
 
 def dns_challenge(service: PublishedService, validation: str, *, remove=False) -> None:
-    from openbase_coder_cli.services.cloud_registration import _post_to_cloud
+    from openbase_coder_cli.services.cloud_registration import (
+        NETMESH_PUBLISH_SCOPE,
+        _post_to_cloud,
+    )
 
     result = _post_to_cloud(
         DNS_ENDPOINT,
         {"node_id": service.node_id, "validation": validation},
         method="DELETE" if remove else "POST",
+        machine_scope=NETMESH_PUBLISH_SCOPE,
     )
     if not result.ok:
         raise RuntimeError(

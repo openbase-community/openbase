@@ -21,8 +21,10 @@ from openbase_coder_cli.paths import MACHINE_TOKEN_JSON_PATH
 
 DEFAULT_MACHINE_TOKEN_SCOPES = ("llm_proxy", "audio_proxy")
 # Extra scopes a cloud workspace may request at bootstrap (see provision):
-# notify = push "open this URL" notifications to the owner's own phones.
-OPTIONAL_BOOTSTRAP_SCOPES = ("notify",)
+# notify = push "open this URL" notifications to the owner's own phones;
+# netmesh_publish = private service hostnames and certificate DNS challenges
+# for the workspace's own mesh node (`service publish`).
+OPTIONAL_BOOTSTRAP_SCOPES = ("notify", "netmesh_publish")
 
 
 class MachineTokenError(RuntimeError):
@@ -97,7 +99,7 @@ class MachineTokenManager:
         ):
             raise MachineTokenError(
                 "Bootstrap machine token scopes must be llm_proxy and audio_proxy, "
-                "optionally followed by notify."
+                f"optionally followed by {' and/or '.join(OPTIONAL_BOOTSTRAP_SCOPES)}."
             )
         if not install_id:
             raise MachineTokenError("Bootstrap response did not include an install ID.")
