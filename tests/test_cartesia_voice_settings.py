@@ -746,6 +746,51 @@ def test_room_token_dispatches_the_agent_before_the_phone_joins(monkeypatch, tmp
     assert claims["video"]["room"] == "room-fast"
 
 
+def test_early_dispatch_carries_the_thread_a_call_starts_from(monkeypatch, tmp_path):
+    """A call started from a project thread routes there from the first word.
+
+    The early agent dispatch must carry the same prepared voice route as the
+    token's room configuration, or a thread call dispatched at token time
+    would start on the dispatcher.
+    """
+    _room_token_ready(monkeypatch, tmp_path)
+    route = {"command_id": "route-1", "target_thread_id": "thread-dorothy"}
+    prepared: list[tuple[str, str | None]] = []
+
+    def fake_prepare(thread_id, *, label=None):
+        prepared.append((thread_id, label))
+        return {"voice_route": route}
+
+    calls: list[dict] = []
+
+    def fake_dispatch(**kwargs):
+        calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(views._livekit, "_prepare_call_start_route", fake_prepare)
+    monkeypatch.setattr(views._livekit, "dispatch_agent_before_join", fake_dispatch)
+    response = views.livekit_room_token(
+        _jwt_authenticated_request(
+            "POST",
+            "/api/livekit-room-token/",
+            {
+                "room_name": "room-thread",
+                "livekit_dispatch_agent_name": "livekit-agent",
+                "thread_id": "thread-dorothy",
+            },
+        )
+    )
+    assert response.status_code == 200
+    assert prepared == [("thread-dorothy", None)]
+    (call,) = calls
+    assert json.loads(call["metadata"])["voice_route"] == route
+    import jwt
+
+    claims = jwt.decode(response.data["token"], options={"verify_signature": False})
+    (agent,) = claims["roomConfig"]["agents"]
+    assert agent["metadata"] == call["metadata"]
+
+
 def test_room_token_keeps_the_room_configuration_when_dispatch_is_not_possible(
     monkeypatch, tmp_path
 ):
