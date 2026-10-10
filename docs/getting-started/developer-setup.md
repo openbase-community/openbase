@@ -77,11 +77,13 @@ the workspace from the one recorded in `~/.openbase/installation.json`, then
 from the checkout behind an editable CLI install; otherwise it errors and asks
 you to clone the workspace or use the standalone install.
 
-## Optional visual developer apps
+## Visual developer apps
 
-The services and browser console are complete without Electron. On macOS,
-interactive `./scripts/setup` offers to launch two optional visual surfaces;
-you can launch either later:
+On macOS, `./scripts/setup` always builds the Electron developer app: it
+installs and verifies the Electron runtime, builds the dashboard renderer, and
+installs the Openbase launcher in `/Applications`. Setup fails, rather than
+reporting success, if any of those steps fails. Interactive setup then offers
+to launch it together with the Swift menu-bar UI; you can launch either later:
 
 ```bash
 ./scripts/dev-launch --electron  # dashboard/status only; setup is disabled
