@@ -1307,6 +1307,22 @@ class FakeSteerTimeoutSuperAgentsBackend(FakeLongRunningSuperAgentsBackend):
         self.queued.append((input_data, turn_input))
         return {"queued": True, "queuedId": "queued-1"}
 
+    async def progress_by_label(self, input_data) -> dict[str, Any]:
+        if not self.started_turns:
+            return {"status": "completed", "threadId": input_data.thread_id}
+        if input_data.turn_id == "turn-1":
+            self.progress_called.set()
+            await self.release_progress.wait()
+            return {"turnId": "turn-1", "status": "cancelled"}
+        assert self.queued
+        return {
+            "turnId": "turn-2",
+            "status": "completed",
+            "summary": {
+                "items": [{"type": "agentMessage", "text": "The merged answer."}]
+            },
+        }
+
 
 @pytest.mark.asyncio
 async def test_a_replacement_whose_steer_times_out_cancels_the_fragment_turn(
@@ -1328,7 +1344,7 @@ async def test_a_replacement_whose_steer_times_out_cancels_the_fragment_turn(
     )
     await asyncio.sleep(0)
     backend.release_progress.set()
-    await asyncio.gather(first, merged)
+    first_result, merged_result = await asyncio.gather(first, merged)
 
     # The queued follow-up re-runs the whole request, so the fragment turn
     # it replaces is cancelled before it can finish its half.
@@ -1337,6 +1353,68 @@ async def test_a_replacement_whose_steer_times_out_cancels_the_fragment_turn(
     assert backend.queued[0][1]["prompt"] == (
         "Subtract 38 from the result and answer just the number"
     )
+    assert first_result["_livekit_turn_id"] == "turn-1"
+    assert merged_result["_livekit_turn_id"] == "turn-2"
+    assert merged_result["_livekit_speech_text"] == "The merged answer."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("steer_failure", ["unavailable", "rejected"])
+async def test_queued_replacement_cancels_and_waits_for_its_own_answer(
+    tmp_path: Path, steer_failure: str
+) -> None:
+    class QueuedBackend(FakeSteerTimeoutSuperAgentsBackend):
+        async def steer_by_label(self, input_data, prompt, turn_input=None):
+            if steer_failure == "rejected":
+                raise RuntimeError("turn cannot accept steering")
+            queued = await self.queue_turn_by_label(input_data, {"prompt": prompt})
+            return {**queued, "interruptedCurrentWork": False}
+
+    backend = QueuedBackend()
+    client = SuperAgentsLiveKitClient(
+        cwd=str(tmp_path),
+        state_path=str(tmp_path / "voice-route.json"),
+        backend_client=backend,
+    )
+    first = asyncio.create_task(client.run_turn("Check the build"))
+    await backend.progress_called.wait()
+    merged = asyncio.create_task(
+        client.run_turn("Check the build and summarize it", replaces_active_turn=True)
+    )
+    await asyncio.sleep(0)
+    backend.release_progress.set()
+    _, merged_result = await asyncio.gather(first, merged)
+    assert [query.turn_id for query in backend.cancelled] == ["turn-1"]
+    assert len(backend.queued) == 1
+    assert merged_result["_livekit_turn_id"] == "turn-2"
+    assert merged_result["_livekit_speech_text"] == "The merged answer."
+
+
+@pytest.mark.asyncio
+async def test_replacement_does_not_queue_when_cancellation_fails(
+    tmp_path: Path,
+) -> None:
+    class FailedCancelBackend(FakeSteerTimeoutSuperAgentsBackend):
+        async def cancel_by_label(self, input_data):
+            raise RuntimeError("cancellation unavailable")
+
+    backend = FailedCancelBackend()
+    client = SuperAgentsLiveKitClient(
+        cwd=str(tmp_path),
+        state_path=str(tmp_path / "voice-route.json"),
+        backend_client=backend,
+    )
+    first = asyncio.create_task(client.run_turn("Check the build"))
+    await backend.progress_called.wait()
+    try:
+        with pytest.raises(RuntimeError, match="cancellation unavailable"):
+            await client.run_turn(
+                "Check the build and summarize it", replaces_active_turn=True
+            )
+        assert not backend.queued
+    finally:
+        backend.release_progress.set()
+        await first
 
 
 @pytest.mark.asyncio

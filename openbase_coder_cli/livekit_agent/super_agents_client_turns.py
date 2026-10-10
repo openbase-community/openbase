@@ -435,9 +435,10 @@ class SuperAgentsClientTurnsMixin:
             }.items()
             if value is not None
         }
+        active_turn_id = self._active_turn_id
         try:
             result = await self._backend_client.steer_by_label(
-                self._query(thread_id=thread_id, turn_id=self._active_turn_id),
+                self._query(thread_id=thread_id, turn_id=active_turn_id),
                 prompt,
                 turn_input,
             )
@@ -447,11 +448,11 @@ class SuperAgentsClientTurnsMixin:
             # and the transcripts were silently dropped). Capture the input
             # in the local follow-up queue instead of losing it; the queue
             # drains as soon as the active turn finishes.
-            active_turn_id = self._active_turn_id
             if interrupt_current_work and active_turn_id:
-                # The queued follow-up re-runs the whole request, so the
-                # fragment turn it replaces must not finish its half first.
                 await self._cancel_turn_before_queueing(thread_id, active_turn_id)
+                return await self._queue_rejected_steer(
+                    thread_id, prompt, blocked_by_turn_id=active_turn_id
+                )
             try:
                 _ensure_not_moved(thread_id)
                 queued = await self._backend_client.queue_turn_by_label(
@@ -498,6 +499,7 @@ class SuperAgentsClientTurnsMixin:
                     prompt_debug["hash"],
                 )
                 self._active_turn_id = actual_turn_id
+                active_turn_id = actual_turn_id
                 result = await self._backend_client.steer_by_label(
                     self._query(thread_id=thread_id, turn_id=actual_turn_id),
                     prompt,
@@ -512,10 +514,12 @@ class SuperAgentsClientTurnsMixin:
                 )
                 if not start_when_inactive:
                     return None
+                if interrupt_current_work:
+                    await self._cancel_turn_before_queueing(thread_id, active_turn_id)
                 return await self._queue_rejected_steer(
                     thread_id,
                     prompt,
-                    blocked_by_turn_id=self._active_turn_id,
+                    blocked_by_turn_id=active_turn_id,
                 )
             elif _is_no_active_turn_error(exc):
                 logger.info(
@@ -540,6 +544,14 @@ class SuperAgentsClientTurnsMixin:
                 return turn_id
             else:
                 raise
+        if interrupt_current_work and _response_is_queued(result):
+            await self._cancel_turn_before_queueing(thread_id, active_turn_id)
+            return await self._wait_for_queued_turn_to_start(
+                thread_id,
+                queued_id=_extract_queued_id(result),
+                blocked_by_turn_id=active_turn_id,
+                dispatch_id=f"voice-{uuid.uuid4().hex[:12]}",
+            )
         turn_id = _extract_turn_id(result) or self._active_turn_id
         self._active_turn_id = turn_id
         self._active_turn_prompt_hash = prompt_debug["hash"]
@@ -553,22 +565,10 @@ class SuperAgentsClientTurnsMixin:
         return turn_id
 
     async def _cancel_turn_before_queueing(self, thread_id: str, turn_id: str) -> None:
-        """Best effort: stop a fragment turn whose replacement is about to queue."""
-        try:
-            await self._backend_client.cancel_by_label(
-                self._query(thread_id=thread_id, turn_id=turn_id)
-            )
-        except Exception:
-            # The follow-up still queues; at worst the fragment turn finishes
-            # first, which is today's behavior.
-            logger.warning(
-                "%s stage=steer_timeout_cancel_failed thread_id=%s turn_id=%s",
-                DISPATCH_TIMING_LOG,
-                thread_id,
-                turn_id,
-                exc_info=True,
-            )
-            return
+        """Stop a fragment turn before waiting for its queued replacement."""
+        await self._backend_client.cancel_by_label(
+            self._query(thread_id=thread_id, turn_id=turn_id)
+        )
         logger.info(
             "%s stage=steer_timeout_cancelled_replaced_turn thread_id=%s turn_id=%s",
             DISPATCH_TIMING_LOG,

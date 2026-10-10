@@ -22,7 +22,7 @@ fragment that closes (or opens) meanwhile; a delegation flushes the hold at
 once. When the rest of a request arrives after its first half already started
 a turn, the merged request replaces that turn (``run_turn(...,
 replaces_active_turn=True)``: a mid-turn steer where the backend supports it,
-interrupt-and-rerun where it does not), so a split request executes once.
+interrupt-and-rerun where it does not), avoiding a full queued replay.
 A delegation the model does emit is bound to the turn already running
 for the same utterance instead of starting a second one, and spoken results
 then go out as ``append_commentary`` bound to that delegation; without one
@@ -117,14 +117,13 @@ UTTERANCE_TRANSCRIPT_LAG_SECONDS = 1.5
 # A fragment that arrives after a turn already started on the caller's
 # previous words, before that turn said anything, continues that request when
 # it reads as the rest of a sentence: punctuation-led (". Answer just the
-# number"), lowercase-led, or opened by a coordinating conjunction ("and
+# number") or opened by a coordinating conjunction ("and
 # answer just the number"). The merged request then *replaces* the fragment
 # turn (``LiveDelegationEntry.replaces_turn`` -> ``run_turn(...,
 # replaces_active_turn=True)``): a backend that steers mid-turn absorbs the
 # rest, and one that cannot (Claude Code queues a steer as a separate turn)
-# interrupts the fragment turn first, so a split request never executes
-# twice. A capitalized new sentence ("Run the linter") is a separate request
-# and is never merged (the merge would replay the previous command).
+# interrupts the fragment turn first. Lowercase alone is not evidence of a
+# continuation: "run the linter" must not replay the previous command.
 CONTINUATION_SECONDS = 8.0
 _LEADING_PUNCTUATION = ".,;:!?"
 _CONTINUATION_LEAD_WORDS = frozenset({"and", "or", "but", "nor"})
@@ -357,10 +356,14 @@ def looks_like_continuation(text: str) -> bool:
     text = (text or "").strip()
     if not text:
         return False
-    if text[0] in _LEADING_PUNCTUATION or text[0].islower():
+    if text[0] in _LEADING_PUNCTUATION:
         return True
     words = _normalize_spoken_command(text).split()
-    return bool(words) and words[0] in _CONTINUATION_LEAD_WORDS
+    return (
+        bool(words)
+        and words[0] in _CONTINUATION_LEAD_WORDS
+        and words[1:2] not in (["also"], ["then"])
+    )
 
 
 def _ends_with_words(text: str, tail: str) -> bool:
@@ -923,14 +926,20 @@ class LiveDelegationBridge:
                     self._bind(open_entry, delegation_id)
                     return
                 open_entry.open_utterance = ""
-                self._start_turn(
-                    pending,
+                text = (
+                    join_fragments(open_entry.lead_in, pending)
+                    if open_entry.lead_in
+                    else pending
+                )
+                entry = self._start_turn(
+                    text,
                     source="delegation",
                     delegation_id=delegation_id,
                     key=delegation_id,
                     open_utterance=pending,
                     replaces_turn=True,
                 )
+                entry.lead_in = open_entry.lead_in
                 return
             open_entry.open_utterance = ""
         if is_trivial_utterance(pending):
