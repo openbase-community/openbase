@@ -1052,7 +1052,9 @@ async def _decide_voice_engine_for_call() -> VoiceEngineDecision:
     )
 
 
-def _build_live_voice_model(decision: VoiceEngineDecision, *, preconnect: bool = False, voice: str | None = None):
+def _build_live_voice_model(
+    decision: VoiceEngineDecision, *, preconnect: bool = False, voice: str | None = None
+):
     gpt_live_model = import_live_model()
     if preconnect:
         gpt_live_model = _preconnecting_model_class(gpt_live_model)
@@ -1134,7 +1136,11 @@ async def _start_live_voice_session(
     from openbase_coder_cli.voice_identity import route_voice_identity
 
     identity = route_voice_identity(voice_router)
-    if live_model is not None and getattr(live_model, "_openbase_voice", identity.gpt_live_voice) != identity.gpt_live_voice:
+    if (
+        live_model is not None
+        and getattr(live_model, "_openbase_voice", identity.gpt_live_voice)
+        != identity.gpt_live_voice
+    ):
         await live_model.discard_preconnected()
         await live_model.aclose()
         live_model = None
@@ -1203,11 +1209,15 @@ async def _start_live_voice_session(
         bridge.greet(live_voice_greeting(bridge.starting_agent_label()))
         live_ready = True
         characters = LiveCharacterController(
-            session=session, bridge=bridge, router=voice_router,
+            session=session,
+            bridge=bridge,
+            router=voice_router,
             model_factory=lambda voice: _build_live_voice_model(
                 decision, voice=voice, preconnect=LIVE_VOICE_PRECONNECT
             ),
-            instructions=lambda label: live_voice_startup_instructions(agent_label=label),
+            instructions=lambda label: live_voice_startup_instructions(
+                agent_label=label
+            ),
             on_error=handle_live_error,
             ledger=delivery_ledger,
             initial_model=live_model,
@@ -1629,13 +1639,23 @@ async def livekit_agent(ctx: JobContext):
     # and any fire-and-forgotten sub-agent alike.
     from . import stall_diagnostics
 
+    if live_bridge is not None:
+        # GPT-Live: the hint is commentary for the current character, which
+        # keeps the call and its voice; the classic announcer path would swap
+        # in an announcement session (and has no voice for "Dispatcher").
+        stall_hint_kwargs = {"speak": _live_stall_hint_speaker(live_bridge)}
+    else:
+        stall_hint_kwargs = {
+            "prepare_announcement": lambda: (
+                stall_diagnostics.interrupt_nonplaying_reply(session)
+            )
+        }
     stall_task = asyncio.create_task(
         stall_diagnostics.stall_watch_loop(
-            is_call_active=lambda: ctx.room.connection_state
-            == rtc.ConnectionState.CONN_CONNECTED,
-            prepare_announcement=lambda: stall_diagnostics.interrupt_nonplaying_reply(
-                session
+            is_call_active=lambda: (
+                ctx.room.connection_state == rtc.ConnectionState.CONN_CONNECTED
             ),
+            **stall_hint_kwargs,
         ),
         name="openbase-stall-watch-loop",
     )
@@ -1653,6 +1673,19 @@ async def livekit_agent(ctx: JobContext):
         decision.engine,
         int((time.monotonic() - job_received) * 1000),
     )
+
+
+def _live_stall_hint_speaker(live_bridge: LiveDelegationBridge):
+    """Speak a blocked-turn hint through the live character, keeping the call."""
+
+    async def speak(text: str) -> bool:
+        live_bridge.announce(text)
+        logger.info(
+            "dispatch_timing stage=live_stall_hint_announced text_len=%d", len(text)
+        )
+        return True
+
+    return speak
 
 
 def _log_job_received(ctx: JobContext) -> None:
