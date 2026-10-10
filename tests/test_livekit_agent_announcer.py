@@ -128,36 +128,10 @@ def test_openbase_cloud_audio_token_fails_closed_on_empty_token(monkeypatch):
     assert "empty Openbase machine token" in str(exc_info.value)
 
 
-def test_livekit_agent_capacity_caps_idle_pool_for_remote_models(monkeypatch):
+def test_livekit_agent_takes_every_call_however_busy_the_machine(monkeypatch):
+    """A single-user worker never declines its own user's call on CPU load."""
     monkeypatch.delenv(livekit.LIVEKIT_AGENT_LOAD_THRESHOLD_ENV, raising=False)
     monkeypatch.delenv(livekit.LIVEKIT_AGENT_NUM_IDLE_PROCESSES_ENV, raising=False)
-    monkeypatch.setattr(
-        livekit,
-        "selected_stt_provider_id",
-        lambda: livekit.ASSEMBLYAI_STT_PROVIDER_ID,
-    )
-    monkeypatch.setattr(
-        livekit,
-        "selected_tts_provider_id",
-        lambda: livekit.CARTESIA_PROVIDER_ID,
-    )
-
-    assert livekit._livekit_agent_server_options() == {"num_idle_processes": 1}
-
-
-def test_livekit_agent_capacity_uses_local_friendly_defaults_for_local_stt(monkeypatch):
-    monkeypatch.delenv(livekit.LIVEKIT_AGENT_LOAD_THRESHOLD_ENV, raising=False)
-    monkeypatch.delenv(livekit.LIVEKIT_AGENT_NUM_IDLE_PROCESSES_ENV, raising=False)
-    monkeypatch.setattr(
-        livekit,
-        "selected_stt_provider_id",
-        lambda: livekit.LOCAL_MLX_WHISPER_STT_PROVIDER_ID,
-    )
-    monkeypatch.setattr(
-        livekit,
-        "selected_tts_provider_id",
-        lambda: livekit.CARTESIA_PROVIDER_ID,
-    )
 
     assert livekit._livekit_agent_server_options() == {
         "load_threshold": float("inf"),
@@ -165,61 +139,24 @@ def test_livekit_agent_capacity_uses_local_friendly_defaults_for_local_stt(monke
     }
 
 
-def test_livekit_agent_capacity_uses_local_friendly_defaults_for_local_tts(monkeypatch):
-    monkeypatch.delenv(livekit.LIVEKIT_AGENT_LOAD_THRESHOLD_ENV, raising=False)
-    monkeypatch.delenv(livekit.LIVEKIT_AGENT_NUM_IDLE_PROCESSES_ENV, raising=False)
-    monkeypatch.setattr(
-        livekit,
-        "selected_stt_provider_id",
-        lambda: livekit.ASSEMBLYAI_STT_PROVIDER_ID,
-    )
-    monkeypatch.setattr(
-        livekit,
-        "selected_tts_provider_id",
-        lambda: KOKORO_PROVIDER_ID,
-    )
-
-    assert livekit._livekit_agent_server_options() == {
-        "load_threshold": float("inf"),
-        "num_idle_processes": 1,
-    }
-
-
-def test_livekit_agent_capacity_accepts_env_overrides_for_remote_models(monkeypatch):
-    monkeypatch.setenv(livekit.LIVEKIT_AGENT_LOAD_THRESHOLD_ENV, "1.5")
+def test_livekit_agent_capacity_accepts_env_overrides(monkeypatch):
+    monkeypatch.setenv(livekit.LIVEKIT_AGENT_LOAD_THRESHOLD_ENV, "0.9")
     monkeypatch.setenv(livekit.LIVEKIT_AGENT_NUM_IDLE_PROCESSES_ENV, "3")
-    monkeypatch.setattr(
-        livekit,
-        "selected_stt_provider_id",
-        lambda: livekit.ASSEMBLYAI_STT_PROVIDER_ID,
-    )
-    monkeypatch.setattr(
-        livekit,
-        "selected_tts_provider_id",
-        lambda: livekit.CARTESIA_PROVIDER_ID,
-    )
 
     assert livekit._livekit_agent_server_options() == {
-        "load_threshold": 1.5,
+        "load_threshold": 0.9,
         "num_idle_processes": 3,
     }
 
 
-def test_livekit_agent_capacity_ignores_invalid_env_for_remote_models(monkeypatch):
+def test_livekit_agent_capacity_ignores_invalid_env(monkeypatch):
     monkeypatch.setenv(livekit.LIVEKIT_AGENT_LOAD_THRESHOLD_ENV, "nope")
     monkeypatch.setenv(livekit.LIVEKIT_AGENT_NUM_IDLE_PROCESSES_ENV, "-1")
-    monkeypatch.setattr(
-        livekit,
-        "selected_stt_provider_id",
-        lambda: livekit.ASSEMBLYAI_STT_PROVIDER_ID,
-    )
-    monkeypatch.setattr(
-        livekit,
-        "selected_tts_provider_id",
-        lambda: livekit.CARTESIA_PROVIDER_ID,
-    )
 
-    assert livekit._livekit_agent_server_options() == {"num_idle_processes": 1}
+    assert livekit._livekit_agent_server_options() == {
+        "load_threshold": float("inf"),
+        "num_idle_processes": 1,
+    }
 
 
 def test_parse_voice_route_packet_reads_exit_action():
