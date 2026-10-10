@@ -200,6 +200,30 @@ func TestForwardExpiresAfterTTL(t *testing.T) {
 	}
 }
 
+func TestForwardOneShotTTLClosesIdlePreconnect(t *testing.T) {
+	tm := newTestForwardManager(t)
+	if _, err := tm.Add(forwardRequest{Port: 52809, OneShot: true, TTLSeconds: 1}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	preconnect, err := net.Dial("tcp", tm.addr(52809))
+	if err != nil {
+		t.Fatalf("preconnect: %v", err)
+	}
+	defer preconnect.Close()
+	preconnect.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buffer := make([]byte, 1)
+	if _, err := preconnect.Read(buffer); err != io.EOF {
+		t.Fatalf("idle connection was not closed by expiry: %v", err)
+	}
+	if len(tm.List()) != 0 {
+		t.Fatalf("one-shot forward survived its TTL: %+v", tm.List())
+	}
+	if connection, err := net.DialTimeout("tcp", tm.addr(52809), time.Second); err == nil {
+		connection.Close()
+		t.Fatal("expired forward still accepts connections")
+	}
+}
+
 func TestForwardValidation(t *testing.T) {
 	tm := newTestForwardManager(t, 18080)
 	cases := []struct {

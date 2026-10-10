@@ -430,3 +430,52 @@ def test_consumer_and_view_surface_the_forward_outcome(monkeypatch):
     assert response.status_code == 202
     assert response.data["forward"] == "started"
     assert "forward_error" not in response.data
+
+
+@pytest.mark.parametrize(
+    "fields, expected",
+    [
+        (
+            {"forward": "x" * 100, "forward_error": "y" * 2000},
+            {"forward": "x" * 32, "forward_error": "y" * 1024},
+        ),
+        ({"forward": "future_status"}, {"forward": "future_status"}),
+        ({"forward": "failed", "forward_error": []}, {"forward": "failed"}),
+        ({"forward": [], "forward_error": "ignored"}, {}),
+        ({"forward": None, "forward_error": "ignored"}, {}),
+        ({"forward_error": "ignored"}, {}),
+    ],
+)
+def test_forward_receipt_validation_survives_the_api_round_trip(
+    monkeypatch, fields, expected
+):
+    consumer = IOSAppControlConsumer()
+    consumer.channel_layer = FakeChannelLayer()
+    asyncio.run(
+        consumer.receive_json(
+            {
+                "type": "ios_app_control_ack",
+                "command_id": "cmd-bounded",
+                "opened": True,
+                **fields,
+            }
+        )
+    )
+    _group, message = consumer.channel_layer.sent[-1]
+    channel_layer = FakeChannelLayer(ack=message)
+    monkeypatch.setattr(views, "get_channel_layer", lambda: channel_layer)
+    response = views.ios_app_control(
+        _request(
+            {
+                "action": "open_url",
+                "url": "https://a.example/",
+                "loopback_forward": FORWARD,
+            }
+        )
+    )
+    assert response.status_code == 202
+    assert {
+        key: response.data[key]
+        for key in ("forward", "forward_error")
+        if key in response.data
+    } == expected

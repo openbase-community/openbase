@@ -433,7 +433,9 @@ def test_browser_open_reports_the_phone_forward_outcome(monkeypatch):
         ("started", "is forwarding the login callback"),
         ("vpn_down", "Openbase VPN is off"),
         ("failed", "could not forward the callback (port busy)"),
-        (None, "predates callback forwarding"),
+        ("unsupported", "could not forward the callback (port busy)"),
+        ("future_status", "did not confirm callback forwarding"),
+        (None, "did not confirm callback forwarding"),
     ]:
         receipt = {"command_id": "c-1", "delivered": True, "opened": True}
         if forward_status:

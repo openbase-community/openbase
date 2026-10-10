@@ -17,11 +17,11 @@ Cloud workspaces and other hosts that run the embedded tailnet node (Openbase Di
 
 ```bash
 openbase-coder service expose 3000             # http://<workspace-name>.net.obs.so:3000/ for 10 minutes
-openbase-coder service expose 1455 --one-shot  # closes after the first connection (a login callback)
+openbase-coder service expose 1455 --one-shot  # closes after the first two-way exchange (a login callback)
 openbase-coder service unexpose 3000
 ```
 
-An exposed port is reachable only by the devices of your account over Openbase VPN, expires after `--ttl` seconds (one hour at most), and is plain HTTP inside the encrypted VPN. `--peer` limits it to one device and `--one-shot` closes it after its first completed connection. `service list` shows exposed ports next to published services. Automatic login callback forwarding from `openbase-coder browser open` is not available yet; use the paste-back flow described in the bundled `openbase-cloud-workspace-logins` skill.
+An exposed port is reachable only by the devices of your account over Openbase VPN, expires after `--ttl` seconds (one hour at most), and is plain HTTP inside the encrypted VPN. `--peer` limits it to one device and `--one-shot` closes it after its first completed connection that transferred bytes in both directions. Empty browser preconnects do not consume the forward; the TTL still closes the listener and active connections. `service list` shows exposed ports next to published services. For automatic login callback forwarding and the paste-back fallback, see [sign in from your phone](../docker.md#sign-in-from-your-phone).
 
 ## Account namespace and private DNS
 
