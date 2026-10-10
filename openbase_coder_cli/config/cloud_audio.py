@@ -111,7 +111,7 @@ def openbase_cloud_subscription_entitlement(
     }
 
 
-def _audio_usage_summary(
+def audio_usage_summary(
     web_backend_url: str,
     *,
     access_token: str | None = None,
@@ -121,6 +121,10 @@ def _audio_usage_summary(
         "/api/openbase/audio/usage/",
         access_token=access_token,
     )
+
+
+# Retain the internal name for existing subscription callers and integrations.
+_audio_usage_summary = audio_usage_summary
 
 
 def _workspace_cloud_token(web_backend_url: str) -> str:

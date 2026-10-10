@@ -55,6 +55,81 @@ def _put(data: dict):
     )
 
 
+def _usage():
+    return voice_model_settings.voice_model_usage(
+        _authenticated_request("GET", "/api/settings/voice-model/usage/")
+    )
+
+
+def test_usage_passes_authoritative_budget_and_uses_selected_cloud(monkeypatch):
+    budget = {
+        "warning_id": "account-period",
+        "low": True,
+        "shared": True,
+        "remaining_percent": 10,
+    }
+    monkeypatch.setattr(
+        voice_model_settings, "web_backend_url", lambda: "https://cloud.example/"
+    )
+
+    def fetch(url):
+        assert url == "https://cloud.example"
+        return {"live_voice_budget": budget}
+
+    monkeypatch.setattr(voice_model_settings, "audio_usage_summary", fetch)
+    response = _usage().data
+    assert response["model"] == GPT_LIVE_VOICE_MODEL_ID
+    assert response["budget"]["remaining_percent"] == 10
+    assert response["budget"]["low"] is True
+    first_id = response["budget"]["warning_id"]
+    assert _usage().data["budget"]["warning_id"] == first_id
+    monkeypatch.setattr(
+        voice_model_settings, "web_backend_url", lambda: "https://other-cloud.example"
+    )
+    monkeypatch.setattr(
+        voice_model_settings,
+        "audio_usage_summary",
+        lambda url: {"live_voice_budget": budget},
+    )
+    assert _usage().data["budget"]["warning_id"] != first_id
+
+
+def test_pipeline_usage_does_not_contact_cloud(monkeypatch):
+    dispatcher_config.set_voice_model("pipeline")
+
+    def unexpected(url):
+        pytest.fail("Classic voice should not poll Cloud usage")
+
+    monkeypatch.setattr(voice_model_settings, "audio_usage_summary", unexpected)
+    assert _usage().data == {"model": "pipeline", "budget": None}
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        voice_model_settings.AuthLoginRequiredError,
+        voice_model_settings.AuthTransientError,
+        voice_model_settings.OpenbaseCloudAudioSubscriptionError,
+    ],
+)
+def test_unavailable_usage_keeps_settings_working(monkeypatch, failure):
+    def unavailable(url):
+        raise failure("unavailable")
+
+    monkeypatch.setattr(voice_model_settings, "audio_usage_summary", unavailable)
+    assert _usage().data["budget"] is None
+    assert _put({"model": "pipeline"}).status_code == 200
+
+
+def test_older_cloud_does_not_guess_from_provider_spend(monkeypatch):
+    monkeypatch.setattr(
+        voice_model_settings,
+        "audio_usage_summary",
+        lambda url: {"live_voice_spend_percent": 95},
+    )
+    assert _usage().data["budget"] is None
+
+
 def test_voice_model_settings_defaults_to_gpt_live(
     _isolated_voice_config: Path,
 ) -> None:

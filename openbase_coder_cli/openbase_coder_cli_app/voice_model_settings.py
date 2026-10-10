@@ -8,11 +8,22 @@ STT and TTS provider settings only matter for the classic pipeline.
 
 from __future__ import annotations
 
+from hashlib import sha256
+
 from rest_framework import serializers, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from openbase_coder_cli import dispatcher_config
+from openbase_coder_cli.config.cloud_audio import (
+    OpenbaseCloudAudioSubscriptionError,
+    audio_usage_summary,
+)
+from openbase_coder_cli.config.token_manager import (
+    AuthLoginRequiredError,
+    AuthTransientError,
+)
+from openbase_coder_cli.services.onboarding import web_backend_url
 from openbase_coder_cli.voice_models import (
     DEFAULT_VOICE_MODEL_ID,
     VOICE_ENGINE_PIPELINE,
@@ -20,6 +31,36 @@ from openbase_coder_cli.voice_models import (
 )
 
 APPLIES_HINT = "The new voice model applies to the next voice call."
+
+
+@api_view(["GET"])
+def voice_model_usage(request):
+    """An unavailable budget must never prevent changing the voice model."""
+    model = dispatcher_config.selected_voice_model_id()
+    if dispatcher_config.selected_voice_engine() == VOICE_ENGINE_PIPELINE:
+        return Response({"model": model, "budget": None})
+    cloud_url = web_backend_url().rstrip("/")
+    try:
+        usage = audio_usage_summary(cloud_url)
+    except (
+        AuthLoginRequiredError,
+        AuthTransientError,
+        OpenbaseCloudAudioSubscriptionError,
+    ):
+        return Response({"model": model, "budget": None})
+    # Older Cloud versions do not report the enforced shared/lifetime budget.
+    # Do not guess from provider-only spend: it can understate actual usage.
+    budget = usage.get("live_voice_budget")
+    if isinstance(budget, dict) and budget.get("warning_id"):
+        budget = {
+            **budget,
+            "warning_id": sha256(
+                f"{cloud_url}:{budget['warning_id']}".encode()
+            ).hexdigest(),
+        }
+    else:
+        budget = None
+    return Response({"model": model, "budget": budget})
 
 
 class VoiceModelSettingsSerializer(serializers.Serializer):

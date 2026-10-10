@@ -168,6 +168,7 @@ from openbase_coder_cli.openbase_coder_cli_app.views import (
 )
 from openbase_coder_cli.openbase_coder_cli_app.voice_model_settings import (
     voice_model_settings,
+    voice_model_usage,
 )
 
 router = DefaultRouter()
@@ -535,6 +536,11 @@ urlpatterns = [
         "settings/backend-model/",
         backend_model_settings,
         name="backend-model-settings",
+    ),
+    path(
+        "settings/voice-model/usage/",
+        voice_model_usage,
+        name="voice-model-usage",
     ),
     path(
         "settings/voice-model/",
