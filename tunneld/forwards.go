@@ -308,22 +308,25 @@ func (m *forwardManager) handleConn(entry *forwardEntry, conn net.Conn) {
 	}
 	defer entry.untrack(upstream)
 	entry.connections.Add(1)
-	done := make(chan struct{}, 2)
+	done := make(chan int64, 2)
 	copyStream := func(destination, source net.Conn) {
-		_, err := io.Copy(destination, source)
+		copied, err := io.Copy(destination, source)
 		if halfCloser, ok := destination.(interface{ CloseWrite() error }); ok && err == nil {
 			halfCloser.CloseWrite()
 		} else {
 			conn.Close()
 			upstream.Close()
 		}
-		done <- struct{}{}
+		done <- copied
 	}
 	go copyStream(upstream, conn)
 	go copyStream(conn, upstream)
-	<-done
-	<-done
-	if entry.info.OneShot {
+	first, second := <-done, <-done
+	// Only an exchange that carried bytes both ways retires a one-shot
+	// forward. Browsers open speculative preconnects that close without
+	// sending anything; retiring on one of those would drop the forward
+	// before the real OAuth callback request arrives.
+	if entry.info.OneShot && first > 0 && second > 0 {
 		if m.remove(entry.info.Port, entry) {
 			log.Printf("dynamic forward :%d retired after its one-shot connection", entry.info.Port)
 		}
