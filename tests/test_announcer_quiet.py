@@ -7,7 +7,10 @@ import pytest
 
 from openbase_coder_cli.livekit_agent.speech_queue import AnnouncerSpeechQueue
 from openbase_coder_cli.livekit_agent.turn_detection import UserTurnClosureDecision
-from openbase_coder_cli.livekit_agent.voice_delivery import VoiceDeliveryLedger, VoiceRouteSnapshot
+from openbase_coder_cli.livekit_agent.voice_delivery import (
+    VoiceDeliveryLedger,
+    VoiceRouteSnapshot,
+)
 
 
 def queue_for(session, *, grace=0, ledger=None):

@@ -1,10 +1,10 @@
 """Exercise the SDK retry boundary that previously terminated a live voice session."""
-import asyncio
 from dataclasses import replace
 
 import pytest
-from livekit.agents import stt, APIConnectionError
+from livekit.agents import APIConnectionError, stt
 from livekit.agents.types import APIConnectOptions
+
 from openbase_coder_cli.livekit_agent.provider_recovery import voice_connect_options
 
 

@@ -1,8 +1,9 @@
 """Bound incoming retries without letting short outages terminate outbound speech."""
 import logging
 
-from livekit.agents.voice.agent_session import SessionConnectOptions
 from livekit.agents.types import APIConnectOptions
+from livekit.agents.voice.agent_session import SessionConnectOptions
+
 from openbase_coder_cli.livekit_agent.tts_selection import TTS_CONNECT_OPTIONS
 
 logger = logging.getLogger(__name__)

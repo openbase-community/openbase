@@ -66,7 +66,7 @@ def test_only_missing_transcript_timeout_not_handoff_failure_notifies():
                 vad_transcript_timeout_seconds=0.015,
             )
             ledger.set_lifecycle_sink(
-                lambda event, record, reason: events.append(event)
+                lambda event, record, reason, events=events: events.append(event)
             )
             ledger.set_transcript_timeout_sink(notices.append)
             ledger._emit_vad_quiet_mute()

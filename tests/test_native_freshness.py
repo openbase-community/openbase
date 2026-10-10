@@ -41,14 +41,22 @@ def test_native_rebuild_does_not_refresh_running_process(evidence):
 @pytest.mark.parametrize("change", ["pid", "start", "component", "uuid", "unverified", "missing", "schema", "nan"])
 def test_invalid_native_evidence_never_reports_current(evidence, change):
     workspace, record, _ = evidence
-    if change == "pid": record["pid"] += 1
-    if change == "start": record["process_start"] -= 1
-    if change == "component": record["component"] = "NetmeshHelper"
-    if change == "uuid": record["image_uuid"] = "other-image"
-    if change == "unverified": record["build"]["verified"] = False
-    if change == "missing": record = None
-    if change == "schema": record["schema_version"] = 99
-    if change == "nan": record["process_start"] = float("nan")
+    if change == "pid":
+        record["pid"] += 1
+    if change == "start":
+        record["process_start"] -= 1
+    if change == "component":
+        record["component"] = "NetmeshHelper"
+    if change == "uuid":
+        record["image_uuid"] = "other-image"
+    if change == "unverified":
+        record["build"]["verified"] = False
+    if change == "missing":
+        record = None
+    if change == "schema":
+        record["schema_version"] = 99
+    if change == "nan":
+        record["process_start"] = float("nan")
     assert native.compare_native(record, "OpenbaseNetmesh", os.getpid(), workspace, {})["state"] == "unknown"
 
 

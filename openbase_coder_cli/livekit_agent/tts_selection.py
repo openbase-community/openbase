@@ -5,16 +5,19 @@ import logging
 import time
 from collections.abc import Callable
 
+from livekit.agents import APIError
 from livekit.agents import (
     tts as livekit_tts,
 )
-from livekit.agents import APIError
-from livekit.agents.types import APIConnectOptions, DEFAULT_API_CONNECT_OPTIONS
+from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, APIConnectOptions
 
 from openbase_coder_cli.livekit_agent.config import LIVEKIT_VERBOSE_LOGGING
-from openbase_coder_cli.livekit_agent.speech_playout import bind_interruption
 from openbase_coder_cli.livekit_agent.speech_formatter import format_for_speech
-from openbase_coder_cli.livekit_agent.tts_progress import TTSProgressGuard, TTSStreamStalled
+from openbase_coder_cli.livekit_agent.speech_playout import bind_interruption
+from openbase_coder_cli.livekit_agent.tts_progress import (
+    TTSProgressGuard,
+    TTSStreamStalled,
+)
 from openbase_coder_cli.tts_providers import (
     CARTESIA_PROVIDER_ID,
     DEFAULT_CARTESIA_TTS_MODEL,

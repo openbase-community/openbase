@@ -49,6 +49,7 @@ def test_expired_unsubmitted_input_is_not_attached_to_a_new_question(monkeypatch
 def test_bridge_does_not_execute_until_quiet_and_preserves_cancelled_input():
     import asyncio
     from types import SimpleNamespace
+
     from openbase_coder_cli.livekit_agent.codex_llm import CodexLLMStream
 
     async def scenario():
