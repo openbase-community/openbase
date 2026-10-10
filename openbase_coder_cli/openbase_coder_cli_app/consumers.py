@@ -129,6 +129,7 @@ class ThreadConsumer(AsyncJsonWebsocketConsumer):
                     "data": annotate_thread_payload(
                         thread.model_dump(mode="json"),
                         thread_id=self.thread_id,
+                        with_events=True,
                     ),
                 }
             )
@@ -230,6 +231,7 @@ class ThreadConsumer(AsyncJsonWebsocketConsumer):
                 "data": annotate_thread_payload(
                     event["data"],
                     thread_id=self.thread_id,
+                    with_events=True,
                 ),
             }
         )
@@ -241,6 +243,7 @@ class ThreadConsumer(AsyncJsonWebsocketConsumer):
                 "data": annotate_thread_payload(
                     event["data"],
                     thread_id=self.thread_id,
+                    with_events=True,
                 ),
             }
         )

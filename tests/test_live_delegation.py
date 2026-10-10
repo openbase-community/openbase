@@ -230,6 +230,7 @@ def _make_bridge(
     lag=0.0,
     call_id="",
     barge_in_min=0.0,
+    thread_exchange_fetcher=None,
 ):
     dispatcher = FakeVoiceClient(thread_id="dispatcher-thread")
     router = FakeVoiceRouter(dispatcher)
@@ -253,11 +254,21 @@ def _make_bridge(
         utterance_transcript_lag_seconds=lag,
         call_id=call_id,
         **({"clock": clock} if clock is not None else {}),
+        **(
+            {"thread_exchange_fetcher": thread_exchange_fetcher}
+            if thread_exchange_fetcher is not None
+            else {"thread_exchange_fetcher": _no_exchanges}
+        ),
     )
     bridge.attach(live)
     # Caller speech interrupts at once unless a test exercises the echo debounce.
     bridge.speech_gate.barge_in_min_seconds = barge_in_min
     return bridge, live, router, dispatcher, delivery_ledger, lifecycle
+
+
+async def _no_exchanges(thread_id: str):
+    # Tests that are not about the thread brief get a quiet voice session.
+    return []
 
 
 async def _settle():
@@ -712,7 +723,8 @@ async def test_a_reconnect_unbinds_dead_delegations_and_answers_session_wide():
     assert live.speech(None) == ["All tests pass. The build is green."]
     (briefing,) = [t for t in live.of("thinking", None) if "re-established" in t]
     assert "Do not greet the caller again" in briefing
-    assert "the dispatcher is still working" in briefing
+    assert "the dispatcher is already answering" in briefing
+    assert "do not ask the caller to repeat" in briefing
     await bridge.aclose()
 
 
@@ -722,7 +734,8 @@ async def test_a_reconnect_with_nothing_running_briefs_without_a_pending_note():
     await _settle()
     (briefing,) = live.of("thinking", None)
     assert "re-established" in briefing
-    assert "still working" not in briefing
+    assert "already answering" not in briefing
+    assert "continue from where they were" in briefing
     assert dispatcher.prompts == []
     await bridge.aclose()
 

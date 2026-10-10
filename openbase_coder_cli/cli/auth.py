@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import html
 import json
 import os
 import threading
@@ -35,6 +34,7 @@ from openbase_coder_cli.config.token_manager import (
 from openbase_coder_cli.paths import AUTH_JSON_PATH, MACHINE_TOKEN_JSON_PATH
 from openbase_coder_cli.services.cloud_registration import register_and_report
 
+from .login_pages import login_complete_page, stale_login_page
 from .password_auth import exchange_password_for_jwts
 from .tailnet import reconcile_after_login
 
@@ -42,47 +42,6 @@ DESKTOP_LOGIN_COMPLETE_URL = "openbase://open?source=cli-auth&intent=login-compl
 # How long the local OAuth callback listener waits for the browser redirect
 # before giving up and releasing the port.
 LOGIN_CALLBACK_TIMEOUT_SECONDS = 300.0
-
-
-def _oauth_success_html(*, desktop_url: str = DESKTOP_LOGIN_COMPLETE_URL) -> bytes:
-    escaped_desktop_url = html.escape(desktop_url, quote=True)
-    script_desktop_url = json.dumps(desktop_url)
-    return f"""<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8">
-    <title>Openbase Coder login complete</title>
-    <style>
-      body {{
-        color: #18181b;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        margin: 0;
-        padding: 48px;
-      }}
-      main {{
-        margin: 0 auto;
-        max-width: 560px;
-      }}
-      a {{
-        color: #2563eb;
-      }}
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>Logged in successfully</h1>
-      <p>Openbase Coder has received your login. You can return to the terminal.</p>
-      <p>If you started from the Mac app, it should reopen automatically.</p>
-      <p><a href="{escaped_desktop_url}">Open the Mac app</a></p>
-    </main>
-    <script>
-      window.setTimeout(function () {{
-        window.location.href = {script_desktop_url};
-      }}, 250);
-    </script>
-  </body>
-</html>
-""".encode("utf-8")
 
 
 def _get_web_backend_url() -> str:
@@ -128,18 +87,14 @@ class _OAuthCallbackHandler(BaseHTTPRequestHandler):
             self.send_response(409)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write(
-                b"<html><body><h1>Older login attempt ignored</h1>"
-                b"<p>Please continue in the newest Openbase login tab.</p>"
-                b"</body></html>"
-            )
+            self.wfile.write(stale_login_page())
             return
 
         self.server.result = result
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
-        self.wfile.write(_oauth_success_html())
+        self.wfile.write(login_complete_page(desktop_url=DESKTOP_LOGIN_COMPLETE_URL))
         self.server.done.set()
 
     def log_message(self, format: str, *args) -> None:  # noqa: A003

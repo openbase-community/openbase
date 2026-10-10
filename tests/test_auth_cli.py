@@ -7,6 +7,7 @@ import time
 from click.testing import CliRunner
 
 from openbase_coder_cli.cli import main
+from openbase_coder_cli.cli.login_pages import login_complete_page, stale_login_page
 from openbase_coder_cli.config.token_manager import AuthLoginRequiredError
 
 auth_cli = importlib.import_module("openbase_coder_cli.cli.auth")
@@ -352,14 +353,27 @@ def test_auth_status_logged_out_exits_nonzero(monkeypatch):
     assert "Not logged in" in result.output
 
 
-def test_oauth_success_page_announces_success_and_returns_to_desktop():
-    html = auth_cli._oauth_success_html().decode("utf-8")
+def test_oauth_success_page_sends_user_back_to_app_or_terminal():
+    html = login_complete_page(desktop_url=auth_cli.DESKTOP_LOGIN_COMPLETE_URL).decode(
+        "utf-8"
+    )
 
-    assert "Logged in successfully" in html
-    assert "Open the Mac app" in html
+    assert "You&#x27;re signed in." in html
+    assert "Return to the Openbase app or your terminal" in html
+    assert "Open the Openbase app" in html
+    assert "<svg" in html  # inline brand logo, no network fetch from loopback
     assert "openbase://open?source=cli-auth&amp;intent=login-complete" in html
     assert '"openbase://open?source=cli-auth&intent=login-complete"' in html
     assert "window.location.href" in html
+    for paywall_word in ("subscribe", "plan", "pay", "billing", "dashboard"):
+        assert paywall_word not in html.lower().replace("display", "")
+
+
+def test_stale_login_page_points_to_newest_tab():
+    html = stale_login_page().decode("utf-8")
+
+    assert "newest" in html
+    assert "window.location" not in html
 
 
 def _free_port():
