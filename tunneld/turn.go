@@ -75,8 +75,19 @@ func startTURN(srv *tsnet.Server, stateDir string, tailnetIP net.IP) (*turnCrede
 		return nil, fmt.Errorf("listen tailnet udp %s: %w", addr, err)
 	}
 
+	_, err = startTURNOnPacketConn(pc, creds)
+	if err != nil {
+		pc.Close()
+		return nil, err
+	}
+	return creds, nil
+}
+
+// Both transports share loopback-only allocation sockets. The OS VPN mode
+// receives packets on its existing private interface, not a second tsnet node.
+func startTURNOnPacketConn(pc net.PacketConn, creds *turnCredentials) (*turn.Server, error) {
 	authKey := turn.GenerateAuthKey(creds.Username, turnRealm, creds.Password)
-	_, err = turn.NewServer(turn.ServerConfig{
+	return turn.NewServer(turn.ServerConfig{
 		Realm: turnRealm,
 		AuthHandler: func(username, realm string, srcAddr net.Addr) ([]byte, bool) {
 			if username == creds.Username {
@@ -86,6 +97,9 @@ func startTURN(srv *tsnet.Server, stateDir string, tailnetIP net.IP) (*turnCrede
 		},
 		PacketConnConfigs: []turn.PacketConnConfig{{
 			PacketConn: pc,
+			PermissionHandler: func(_ net.Addr, peerIP net.IP) bool {
+				return peerIP.Equal(net.IPv4(127, 0, 0, 1))
+			},
 			RelayAddressGenerator: &turn.RelayAddressGeneratorStatic{
 				// Loopback-only allocation sockets: every peer the relay talks
 				// to is host-local (LiveKit runs in "local" network mode in
@@ -98,11 +112,6 @@ func startTURN(srv *tsnet.Server, stateDir string, tailnetIP net.IP) (*turnCrede
 			},
 		}},
 	})
-	if err != nil {
-		pc.Close()
-		return nil, fmt.Errorf("turn server: %w", err)
-	}
-	return creds, nil
 }
 
 func randomHex(bytes int) string {

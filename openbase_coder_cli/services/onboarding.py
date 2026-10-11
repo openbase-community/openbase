@@ -233,7 +233,7 @@ def onboarding_status_payload() -> dict[str, Any]:
     }
     from openbase_coder_cli.services import tailscale_provider as tp
 
-    if tp.is_netmesh_tsnet():
+    if tp.is_netmesh():
         # Embedded-mode phones route WebRTC media through the tunneld TURN
         # relay; this endpoint is their credential channel (loopback and the
         # user's own tailnet only).

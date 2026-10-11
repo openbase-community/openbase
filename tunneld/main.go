@@ -16,6 +16,7 @@
 // Subcommands:
 //
 //	openbase-tunneld serve   run the desktop daemon (default)
+//	openbase-tunneld voice-turn run a private relay on the existing system VPN
 //	openbase-tunneld peer    join as a second node and fetch a URL over the
 //	                         tailnet (simulates the phone; used for e2e tests)
 package main
@@ -37,12 +38,14 @@ func main() {
 	switch cmd {
 	case "serve":
 		err = runServe(args)
+	case "voice-turn":
+		err = runVoiceTURN(args)
 	case "peer":
 		err = runPeer(args)
 	case "voicetest":
 		err = runVoiceTest(args)
 	default:
-		err = fmt.Errorf("unknown subcommand %q (expected \"serve\", \"peer\", or \"voicetest\")", cmd)
+		err = fmt.Errorf("unknown subcommand %q (expected \"serve\", \"voice-turn\", \"peer\", or \"voicetest\")", cmd)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "openbase-tunneld:", err)

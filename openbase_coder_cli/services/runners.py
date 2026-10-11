@@ -393,6 +393,31 @@ def build_openbase_tunneld(
     return [binaries["tunneld"], "serve"], env
 
 
+def build_openbase_voice_turn(
+    env: dict[str, str], binaries: dict[str, str]
+) -> RunnerArgvEnv:
+    from openbase_coder_cli.paths import OPENBASE_BASE_DIR
+    from openbase_coder_cli.services import tailscale_provider as tp
+
+    if env.get("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER") != tp.PROVIDER_NETMESH:
+        raise RuntimeError("System VPN voice relay is not selected")
+    endpoint = tailnet_media_endpoint(env)
+    if endpoint is None:
+        raise RuntimeError(
+            "Waiting for the system VPN address before voice TURN starts"
+        )
+    ip, _, _ = endpoint
+    state = str(OPENBASE_BASE_DIR / "voice-turn")
+    return [
+        binaries["tunneld"],
+        "voice-turn",
+        "--bind-ip",
+        ip,
+        "--statedir",
+        state,
+    ], env
+
+
 def build_openbase_cloud_auth_rehydrate(
     env: dict[str, str], binaries: dict[str, str]
 ) -> RunnerArgvEnv:
@@ -430,6 +455,7 @@ RUNNERS: dict[str, tuple[callable, tuple[str, ...]]] = {
     "django-cli": (build_django_cli, ("openbase_coder",)),
     "sync-daemon": (build_sync_daemon, ("openbase_syncd",)),
     "openbase-tunneld": (build_openbase_tunneld, ("tunneld",)),
+    "openbase-voice-turn": (build_openbase_voice_turn, ("tunneld",)),
     "openbase-cloud-auth-rehydrate": (
         build_openbase_cloud_auth_rehydrate,
         ("openbase_coder",),

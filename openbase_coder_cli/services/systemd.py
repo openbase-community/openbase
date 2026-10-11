@@ -24,6 +24,7 @@ OPENBASE_UNIT_PREFIX = f"{LAUNCHD_DOMAIN}."
 VOICE_INTERRUPTING_SERVICE_LABELS = {
     f"{LAUNCHD_DOMAIN}.livekit-agent",
     f"{LAUNCHD_DOMAIN}.livekit-server",
+    f"{LAUNCHD_DOMAIN}.openbase-voice-turn",
 }
 
 

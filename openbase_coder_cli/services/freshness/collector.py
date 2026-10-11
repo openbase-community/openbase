@@ -51,7 +51,18 @@ def _service_detail(service, pid: int, workspace: Path, current: dict) -> dict:
     if record.get("kind") != service.freshness_kind:
         return unknown
     if service.freshness_kind == "build":
-        return compare_build(record.get("artifact"), service.name, workspace, current)
+        component = (
+            "openbase-tunneld"
+            if service.name == "openbase-voice-turn"
+            else service.name
+        )
+        result = compare_build(record.get("artifact"), component, workspace, current)
+        if service.name == "openbase-voice-turn":
+            result["component"] = service.description
+            result["action"] = (
+                "Run openbase-coder restart --service openbase-voice-turn."
+            )
+        return result
     if service.freshness_kind == "binary":
         from openbase_coder_cli.services.installation import InstallationConfig
         from openbase_coder_cli.services.runners import _resolve_binaries
