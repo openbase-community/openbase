@@ -142,6 +142,24 @@ def test_list_shows_exposed_ports(monkeypatch):
     assert "peer 100.64.0.9" in result.output
 
 
+def test_list_hides_the_published_services_plumbing(monkeypatch):
+    _tsnet(monkeypatch)
+    monkeypatch.setattr(
+        service_cli, "load_registry", lambda: service_cli.ServiceRegistry((), None)
+    )
+    monkeypatch.setattr(
+        service_cli,
+        "tunneld_list_forwards",
+        lambda: [
+            {"port": 443, "local_port": 7998, "persistent": True},
+            {"port": 80, "redirect_https": True, "persistent": True},
+        ],
+    )
+    result = CliRunner().invoke(service_cli.service, ["list"])
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == "No local services are published."
+
+
 def test_list_without_forwards_or_services(monkeypatch):
     _tsnet(monkeypatch, enabled=False)
     monkeypatch.setattr(

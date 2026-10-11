@@ -347,7 +347,15 @@ def list_command() -> None:
         services = list(load_registry().services)
     except (OSError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
-    forwards = tunneld_list_forwards() if tailscale_provider.is_netmesh_tsnet() else []
+    forwards = [
+        forward
+        for forward in (
+            tunneld_list_forwards() if tailscale_provider.is_netmesh_tsnet() else []
+        )
+        # The persistent :443/:80 forwards are the published services' own
+        # plumbing (HTTPS ingress and redirect), not exposed ports.
+        if not (forward.get("persistent") or forward.get("redirect_https"))
+    ]
     if not services and not forwards:
         click.echo("No local services are published.")
         return
