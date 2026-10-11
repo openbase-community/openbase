@@ -28,6 +28,7 @@ from .models import ThreadStatus as SessionStatus
 from .models import TurnInfo as RunInfo
 from .session_manager_approvals import SessionManagerApprovalsMixin
 from .session_manager_base import (
+    _TRACKED_TURN_TEXT_LIMIT,
     ThreadListPage,
     _configured_model_for_role,
     _default_client_for_execution_backend,
@@ -256,6 +257,11 @@ class CodexAppServerSessionManager(
         self._delivered_item_text: dict[tuple[str, str], str] = {}
         self._turn_prompt: dict[str, str] = {}
         self._turn_steers: dict[str, list[Any]] = {}
+        # Each backend notification is handled in its own task, so a turn's
+        # turn/started can be processed after its turn/completed. Finished
+        # turns are remembered (bounded) so that late start is ignored instead
+        # of re-announcing a finished turn as running.
+        self._finished_turns: dict[str, None] = {}
         self._state_lock = asyncio.Lock()
         self._claude_watchers: dict[str, asyncio.Task[None]] = {}
 
@@ -454,6 +460,9 @@ class CodexAppServerSessionManager(
             if turn_id:
                 async with self._state_lock:
                     self._forget_turn_locked(turn_id)
+                    self._finished_turns[turn_id] = None
+                    while len(self._finished_turns) > _TRACKED_TURN_TEXT_LIMIT:
+                        self._finished_turns.pop(next(iter(self._finished_turns)))
             # Agent turns can write reports too, even when another turn is queued
             # or the completed thread is no longer available to read.
             request_notification_sweep()
@@ -504,6 +513,8 @@ class CodexAppServerSessionManager(
         (with a new prompt) replaced the previous one.
         """
         async with self._state_lock:
+            if turn_id in self._finished_turns:
+                return
             already_known = turn_id in self._turn_to_session
             self._turn_to_session[turn_id] = thread_id
             self._delivered_text.setdefault(turn_id, "")
@@ -536,6 +547,10 @@ class CodexAppServerSessionManager(
                     turn, "reasoningEffort", "reasoning_effort"
                 ),
             )
+        async with self._state_lock:
+            # The turn may have finished while its state was being read.
+            if turn_id in self._finished_turns:
+                return
         await _broadcast(
             thread_id,
             {"type": "turn_started", "data": run.model_dump(mode="json")},
