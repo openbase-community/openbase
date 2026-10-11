@@ -146,7 +146,7 @@ class FakeGPTLiveServer:
         return [
             e
             for e in self.appends("commentary")
-            if "Text to read: " in str(e.get("content", ""))
+            if "backend answer segment" in str(e.get("content", ""))
         ]
 
     async def wait_for_answers(self, count: int = 1, timeout: float = 5.0):
@@ -698,7 +698,7 @@ async def test_real_gpt_live_session_delegation_flows_through_the_bridge(
 
             greeting = f"Hi, I'm {agent_label or 'Jacqueline'}."
             bridge.greet(greeting)
-            greetings = await server.wait_for_append("instructions")
+            greetings = await server.wait_for_append("commentary")
             assert len(greetings) == 1
             assert greetings[0]["delegation_id"] is None
             assert "exactly once" in greetings[0]["content"]

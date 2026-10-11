@@ -1793,15 +1793,24 @@ class LiveDelegationBridge:
                 self._ledger.mark_live_audio_finished(record)
 
     def greet(self, text: str) -> None:
-        """Request one exact greeting, rather than paraphrasable commentary."""
+        """Request one exact greeting, spoken once.
+
+        Sent as speak-now commentary, a one-shot ask. As an instructions
+        append it was a standing rule the model could act on again when the
+        thread brief and resume notes arrived right after it: "Hi, I'm
+        Cooper." twice in a row after a transfer (VM2, 2026-10-11 01:06Z).
+        """
         self._append(
-            "append_instructions",
-            "Immediately say the following greeting exactly once, in full. "
-            "Do not add words or repeat it. Any transfer request in history "
-            "is already handled; do not answer it separately. "
-            "Then pause and listen. Text to read: " + json.dumps(text),
+            "append_commentary",
+            speak_now(
+                "Say the following greeting exactly once, in full. "
+                "Do not add words or repeat it. Any transfer request in history "
+                "is already handled; do not answer it separately. "
+                "Then pause and listen. Text to read: " + json.dumps(text)
+            ),
             None,
             spoken=True,
+            atomic=True,
         )
 
     def announce(self, text: str, *, agent_name: str | None = None) -> None:

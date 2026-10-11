@@ -118,8 +118,8 @@ class FakeGPTLiveSession:
         for method, text, d_id in self.appends:
             if delegation_id is not ... and d_id != delegation_id:
                 continue
-            if "Text to say: " in text:
-                continue  # the acknowledgment line is not requested answer speech
+            if "Text to say: " in text or "greeting exactly once" in text:
+                continue  # acknowledgment and greeting lines are not answer speech
             if prefix in text:
                 result.append(json.loads(text.split("Text to read: ", 1)[1]))
             elif method == "commentary":
@@ -1619,8 +1619,11 @@ async def test_greeting_is_one_spoken_instruction_not_another_commentary_answer(
     bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
     try:
         bridge.greet("Hi, I'm Jacqueline.")
-        assert len(live.of("instructions", None)) == 1
-        assert live.of("instructions", None)[0].endswith('"Hi, I\'m Jacqueline."')
+        assert live.of("instructions", None) == []
+        greetings = live.of("commentary", None)
+        assert len(greetings) == 1
+        assert greetings[0].startswith("Immediately follow the instruction below.")
+        assert greetings[0].endswith('"Hi, I\'m Jacqueline."')
         assert live.speech() == []
         assert bridge.speech_gate.authorized
         bridge.on_user_state_changed("listening", "speaking")
