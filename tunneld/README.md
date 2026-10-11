@@ -33,6 +33,10 @@ Cloud workspaces (Maritime) and other embedded-node hosts can expose one loopbac
 
 Rules: ports 1024-65535 only, never the fixed ports above or TURN port 3478, at most 16 live forwards, default TTL 10 minutes and at most an hour. `one_shot` retires the forward after its first completed connection (an OAuth callback is one request). Expiry, removal, and one-shot retirement close active connections as well as the listener. `peer` pins the forward to one device, given as a tailnet IP or stable node id; both forms require a successful WhoIs lookup matching the remote address. Every forward listens on the tailnet only; reachability is already limited to the same account's devices by the Openbase VPN policy. All three routes require the control token, and unknown request fields are rejected so a misspelled pin cannot silently create an unpinned forward.
 
+## TURN relay for the VPN transport
+
+`openbase-tunneld turn` runs only the TURN relay, with no embedded node, on an OS socket bound to the tailnet (100.64.0.0/10) address of a local interface. The CLI installs it as the `openbase-voice-turn` service with the `netmesh` (Openbase VPN) transport and advertises its credentials as `voice_turn` with `relay_required: false`. A phone whose build cannot run the VPN joins the tailnet from an in-app node instead, and its WebRTC sockets have no OS route to the computer: this relay is its only voice media path, while a phone on the VPN keeps direct media. The relay follows the VPN address across reconnects, never listens on a LAN or public interface, and shares `<statedir>/turn.json` with `serve`.
+
 ## Build
 
 ```sh
