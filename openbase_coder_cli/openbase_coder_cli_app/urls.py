@@ -7,6 +7,9 @@ from __future__ import annotations
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
+from openbase_coder_cli.openbase_coder_cli_app.ai_account_views import (
+    ai_account_settings,
+)
 from openbase_coder_cli.openbase_coder_cli_app.common import offloaded_view
 from openbase_coder_cli.openbase_coder_cli_app.dictation import dictation_session
 from openbase_coder_cli.openbase_coder_cli_app.health_warnings import health_warnings
@@ -201,6 +204,7 @@ urlpatterns = [
     ),
     path("diagnostics/ios-logs/", ios_logs_upload, name="ios-logs-upload"),
     path("user/ios-app-control/", ios_app_control, name="ios-app-control"),
+    path("settings/ai-account/", ai_account_settings, name="ai-account-settings"),
     path(
         "user/oauth-callback-replay/",
         oauth_callback_replay,
