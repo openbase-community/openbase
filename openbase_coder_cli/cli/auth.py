@@ -41,6 +41,10 @@ from .password_auth import exchange_password_for_jwts
 from .tailnet import reconcile_after_login
 
 DESKTOP_LOGIN_COMPLETE_URL = "openbase://open?source=cli-auth&intent=login-complete"
+# Set by the desktop app on every CLI command it spawns. Only then is the
+# openbase:// scheme known to be registered, so only then does the "signed in"
+# page reopen the app; a terminal login just points back to the terminal.
+DESKTOP_APP_ENV_VAR = "OPENBASE_LAUNCHED_BY_DESKTOP"
 # How long the local OAuth callback listener waits for the browser redirect
 # before giving up and releasing the port.
 LOGIN_CALLBACK_TIMEOUT_SECONDS = 300.0
@@ -58,6 +62,12 @@ def _get_oauth_redirect_uri() -> str:
     return os.environ.get(
         "OPENBASE_CODER_CLI_OAUTH_REDIRECT_URI", DEFAULT_OAUTH_REDIRECT_URI
     )
+
+
+def _login_return_desktop_url() -> str | None:
+    if os.environ.get(DESKTOP_APP_ENV_VAR) == "1":
+        return DESKTOP_LOGIN_COMPLETE_URL
+    return None
 
 
 class _OAuthCallbackHandler(BaseHTTPRequestHandler):
@@ -96,7 +106,7 @@ class _OAuthCallbackHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
-        self.wfile.write(login_complete_page(desktop_url=DESKTOP_LOGIN_COMPLETE_URL))
+        self.wfile.write(login_complete_page(desktop_url=_login_return_desktop_url()))
         self.server.done.set()
 
     def log_message(self, format: str, *args) -> None:  # noqa: A003
