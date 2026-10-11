@@ -152,6 +152,16 @@ class LiveCharacterController:
         # The initial session already received its greeting. A return to a
         # known route is continuity, not another first introduction.
         self._introduced_routes = {router.route_snapshot().active_thread_id}
+        if speech_gate is not None:
+            # A barge-in the gate confirms also ends an announcement in progress.
+            previous = speech_gate.on_barge_in
+
+            def on_barge_in():
+                if previous is not None:
+                    previous()
+                self._stop_announcement_for_barge_in()
+
+            speech_gate.on_barge_in = on_barge_in
 
     def _silence(self):
         if self._speech_gate is not None:
@@ -221,8 +231,30 @@ class LiveCharacterController:
 
     def user_state_changed(self, event):
         if self._announcing and event.new_state == "speaking":
-            self._silence()
-            self._announcement_stop.set()
+            if self._speech_gate is None:
+                self._stop_announcement_for_barge_in()
+            else:
+                # VAD alone is not a barge-in: speakerphone echo of the
+                # announcement trips it too. The gate decides (0.5 s rule when
+                # the agent is quiet, caller words over its own speech), and
+                # its on_barge_in stops the announcement; this check covers a
+                # gate that decides on its timer without a later event.
+                asyncio.get_running_loop().call_later(
+                    self._speech_gate.barge_in_min_seconds,
+                    self._check_announcement_barge_in,
+                )
+        self._speech_changed.set()
+        self._wake.set()
+
+    def _check_announcement_barge_in(self):
+        if self._announcing and self._speech_gate.speaking:
+            self._stop_announcement_for_barge_in()
+
+    def _stop_announcement_for_barge_in(self):
+        if not self._announcing or self._announcement_stop.is_set():
+            return
+        self._silence()
+        self._announcement_stop.set()
         self._speech_changed.set()
         self._wake.set()
 
@@ -419,11 +451,26 @@ class LiveCharacterController:
             self.bridge._on_input_transcription(event)
             self._speech_changed.set()
 
+        def gateway_event(event):
+            # The bridge is suspended during an announcement, so the gate's
+            # echo check gets the announcer's and the caller's words here.
+            gate = self._speech_gate
+            if gate is None or not isinstance(event, dict):
+                return
+            kind = event.get("type")
+            if kind == "session.output_transcript.delta":
+                gate.agent_said(str(event.get("delta") or ""))
+            elif kind == "session.input_transcript.delta":
+                gate.caller_heard(str(event.get("delta") or ""))
+
         def attach_input(live):
             nonlocal input_session, wire_evidence
             input_session = live
             wire_evidence = AnnouncementWireEvidence(live, message.message_id)
             live.on("input_audio_transcription_completed", caller_input)
+            live.on("openai_server_event_received", gateway_event)
+            if self._speech_gate is not None:
+                self._speech_gate.agent_said(message.text)
 
         try:
             assistant = await self._replace(
@@ -489,6 +536,7 @@ class LiveCharacterController:
                     input_session.off(
                         "input_audio_transcription_completed", caller_input
                     )
+                    input_session.off("openai_server_event_received", gateway_event)
             if self.ledger and self._record:
                 if completed:
                     self.ledger.mark_live_audio_finished(self._record)
