@@ -233,13 +233,21 @@ def onboarding_status_payload() -> dict[str, Any]:
     }
     from openbase_coder_cli.services import tailscale_provider as tp
 
-    if tp.is_netmesh_tsnet():
-        # Embedded-mode phones route WebRTC media through the tunneld TURN
-        # relay; this endpoint is their credential channel (loopback and the
-        # user's own tailnet only).
+    if tp.is_netmesh_tsnet() or tp.is_netmesh():
+        # Phones on the embedded transport route WebRTC media through this
+        # computer's TURN relay (tunneld's own node in netmesh-tsnet, the
+        # openbase-voice-turn service on the VPN address in netmesh); this
+        # endpoint is their credential channel (loopback and the user's own
+        # tailnet only). relay_required tells a phone with its own VPN route
+        # whether LiveKit advertises only loopback candidates (embedded
+        # transport, every client must relay) or a routable VPN address
+        # (direct media works and is preferred).
         from openbase_coder_cli.services.tunneld import voice_turn_info
 
         turn = voice_turn_info()
         if turn:
-            payload["voice_turn"] = turn
+            payload["voice_turn"] = {
+                **turn,
+                "relay_required": tp.is_netmesh_tsnet(),
+            }
     return payload

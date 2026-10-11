@@ -39,6 +39,7 @@ from openbase_coder_cli.services.definitions import (
     RETIRED_SERVICE_NAMES,
     SERVICES,
     TUNNELD_SERVICE,
+    VOICE_TURN_SERVICE,
     ServiceDefinition,
     default_services,
     retired_service_stub,
@@ -926,6 +927,8 @@ def install_all_services(config: InstallationConfig) -> None:
     # the outgoing transport alongside the selected VPN.
     if tp.provider() != tp.PROVIDER_NETMESH_TSNET and remove_service(TUNNELD_SERVICE):
         click.echo("  Removed openbase-tunneld (Openbase Direct is not selected).")
+    if tp.provider() != tp.PROVIDER_NETMESH and remove_service(VOICE_TURN_SERVICE):
+        click.echo("  Removed openbase-voice-turn (Openbase VPN is not selected).")
     services = include_installed_optional_services(
         default_services(coding_backend), launchctl_status
     )

@@ -894,3 +894,31 @@ def test_adding_the_launcher_changes_the_plist_once_then_stays_stable(
     monkeypatch.setattr(launchd, "stable_runtime_package", lambda: package)
     assert launchd._write_service_files(_sample_service(), config, binaries) is True
     assert launchd._write_service_files(_sample_service(), config, binaries) is False
+
+
+@pytest.mark.parametrize(
+    ("provider", "removed_names"),
+    [
+        ("netmesh-tsnet", {"openbase-voice-turn"}),
+        ("netmesh", {"openbase-tunneld"}),
+        ("tailscale", {"openbase-tunneld", "openbase-voice-turn"}),
+    ],
+)
+def test_install_removes_the_other_transport_daemons(
+    monkeypatch, provider, removed_names
+):
+    monkeypatch.setattr(launchd.tp, "provider", lambda: provider)
+    removed = []
+    monkeypatch.setattr(launchd, "_ensure_launchd_paths", lambda: None)
+    monkeypatch.setattr(launchd, "_selected_backend", lambda _config: "openbase-cloud")
+    monkeypatch.setattr(launchd, "launchctl_status", lambda svc: {"installed": False})
+    monkeypatch.setattr(launchd, "_resolve_binaries", lambda _config, _services: {})
+    monkeypatch.setattr(
+        launchd, "remove_service", lambda svc: removed.append(svc.name) or False
+    )
+    monkeypatch.setattr(launchd, "_write_service_files", lambda *_args: False)
+    monkeypatch.setattr(launchd, "_activate_service", lambda _svc, _reload: "Restarted")
+    monkeypatch.setattr(launchd, "wait_for_provider", lambda _svc: None)
+    launchd.install_all_services(InstallationConfig(standalone=True))
+    transport_daemons = {"openbase-tunneld", "openbase-voice-turn"}
+    assert transport_daemons & set(removed) == removed_names

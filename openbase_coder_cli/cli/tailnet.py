@@ -183,6 +183,49 @@ def _apply_provider(name: str, *, push_cloud: bool) -> None:
         click.echo("Next: make sure the Tailscale app is running and signed in.")
 
 
+def _install_voice_turn_relay() -> None:
+    """Install the TURN relay the VPN transport runs for embedded-mode phones.
+
+    A phone that cannot run the VPN joins the tailnet from an in-app node
+    whose WebRTC sockets have no OS route to this computer; the relay on the
+    VPN address is its only media path. Best effort: the VPN itself does not
+    depend on it, so a build failure is reported, not fatal.
+    """
+    from openbase_coder_cli.services.definitions import VOICE_TURN_SERVICE
+    from openbase_coder_cli.services.installation import InstallationConfig
+    from openbase_coder_cli.services.launchd import (
+        install_service,
+        launchctl_kickstart,
+    )
+    from openbase_coder_cli.services.tunneld import install_tunneld_binary
+
+    try:
+        config = InstallationConfig.load()
+        install_tunneld_binary(config)
+        install_service(config, VOICE_TURN_SERVICE)
+        launchctl_kickstart(VOICE_TURN_SERVICE)
+        click.echo("Installed the openbase-voice-turn relay for embedded-mode phones.")
+    except Exception as exc:  # noqa: BLE001 - the VPN works without the relay
+        click.echo(
+            click.style(
+                "Warning: could not install the openbase-voice-turn relay; phones "
+                f"without the Openbase VPN will have no voice media route: {exc}",
+                fg="yellow",
+            )
+        )
+
+
+def _remove_voice_turn_relay() -> None:
+    from openbase_coder_cli.services.definitions import VOICE_TURN_SERVICE
+    from openbase_coder_cli.services.launchd import remove_service
+
+    try:
+        if remove_service(VOICE_TURN_SERVICE):
+            click.echo("Removed openbase-voice-turn.")
+    except Exception as exc:  # noqa: BLE001 - best-effort teardown
+        click.echo(f"Note: could not remove openbase-voice-turn: {exc}")
+
+
 def _teardown_transport(previous: str) -> None:
     """Best-effort teardown of the transport we're leaving."""
     from openbase_coder_cli.services.definitions import TUNNELD_SERVICE
@@ -219,6 +262,7 @@ def _teardown_transport(previous: str) -> None:
                 "with netmesh MagicDNS while connected)."
             )
     elif previous == tp.PROVIDER_NETMESH:
+        _remove_voice_turn_relay()
         if tp.netmesh_uses_stock_tailscale():
             click.echo(
                 "Log the official Tailscale client out of the netmesh (or back "
@@ -345,6 +389,7 @@ def _bring_up_transport(name: str) -> None:
     if name == tp.PROVIDER_NETMESH and tp.netmesh_uses_stock_tailscale():
         _join_netmesh_with_stock_tailscale()
         _apply_serve_best_effort()
+        _install_voice_turn_relay()
         return
     if name == tp.PROVIDER_NETMESH:
         # A connected official Tailscale client steals the 100.100.100.100
@@ -364,6 +409,7 @@ def _bring_up_transport(name: str) -> None:
         # first-class CLI/setup choice instead of "go open the desktop app."
         _provision_netmesh_companion()
         _apply_serve_best_effort()
+        _install_voice_turn_relay()
         return
     if name != tp.PROVIDER_NETMESH_TSNET:
         if name == tp.PROVIDER_TAILSCALE:

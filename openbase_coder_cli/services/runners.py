@@ -393,6 +393,13 @@ def build_openbase_tunneld(
     return [binaries["tunneld"], "serve"], env
 
 
+def build_openbase_voice_turn(
+    env: dict[str, str], binaries: dict[str, str]
+) -> RunnerArgvEnv:
+    # TURN relay only, on the OS VPN address; no embedded node.
+    return [binaries["tunneld"], "turn"], env
+
+
 def build_openbase_cloud_auth_rehydrate(
     env: dict[str, str], binaries: dict[str, str]
 ) -> RunnerArgvEnv:
@@ -430,6 +437,7 @@ RUNNERS: dict[str, tuple[callable, tuple[str, ...]]] = {
     "django-cli": (build_django_cli, ("openbase_coder",)),
     "sync-daemon": (build_sync_daemon, ("openbase_syncd",)),
     "openbase-tunneld": (build_openbase_tunneld, ("tunneld",)),
+    "openbase-voice-turn": (build_openbase_voice_turn, ("tunneld",)),
     "openbase-cloud-auth-rehydrate": (
         build_openbase_cloud_auth_rehydrate,
         ("openbase_coder",),

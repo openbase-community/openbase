@@ -234,7 +234,10 @@ def test_full_restart_includes_enabled_optional_daemons_not_oneshots(monkeypatch
 
 
 @pytest.mark.parametrize("standalone", [False, True])
-def test_tunneld_restart_prepares_dev_build_before_scheduling(monkeypatch, standalone):
+@pytest.mark.parametrize("service", ["openbase-tunneld", "openbase-voice-turn"])
+def test_tunneld_restart_prepares_dev_build_before_scheduling(
+    monkeypatch, standalone, service
+):
     calls = []
     monkeypatch.setattr(
         restart_module,
@@ -249,7 +252,7 @@ def test_tunneld_restart_prepares_dev_build_before_scheduling(monkeypatch, stand
         "Popen",
         lambda *_args, **_kwargs: calls.append("schedule"),
     )
-    restart_module.schedule_restart(RestartRequest(services=("openbase-tunneld",)))
+    restart_module.schedule_restart(RestartRequest(services=(service,)))
     assert calls == (["schedule"] if standalone else ["build", "schedule"])
 
 

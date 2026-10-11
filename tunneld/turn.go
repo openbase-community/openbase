@@ -75,8 +75,26 @@ func startTURN(srv *tsnet.Server, stateDir string, tailnetIP net.IP) (*turnCrede
 		return nil, fmt.Errorf("listen tailnet udp %s: %w", addr, err)
 	}
 
+	// Loopback-only allocation sockets: every peer the relay talks to is
+	// host-local (LiveKit runs in "local" network mode in embedded transport,
+	// advertising 127.0.0.1 candidates), and macOS delivers same-host packets
+	// with a loopback source anyway. Binding loopback keeps relay ports off
+	// the LAN entirely — pion permissions were the only gate before.
+	if _, err := newTURNServer(pc, creds, net.IPv4(127, 0, 0, 1)); err != nil {
+		pc.Close()
+		return nil, err
+	}
+	return creds, nil
+}
+
+// newTURNServer serves TURN on pc, allocating relay sockets bound to relayIP.
+// The relay address is also the source LiveKit sees on relayed packets, so it
+// must be an address the phone will have installed a TURN permission for: the
+// candidate address LiveKit advertises (loopback in embedded transport, the
+// VPN address when the computer rides a device-wide tailnet).
+func newTURNServer(pc net.PacketConn, creds *turnCredentials, relayIP net.IP) (*turn.Server, error) {
 	authKey := turn.GenerateAuthKey(creds.Username, turnRealm, creds.Password)
-	_, err = turn.NewServer(turn.ServerConfig{
+	server, err := turn.NewServer(turn.ServerConfig{
 		Realm: turnRealm,
 		AuthHandler: func(username, realm string, srcAddr net.Addr) ([]byte, bool) {
 			if username == creds.Username {
@@ -87,22 +105,15 @@ func startTURN(srv *tsnet.Server, stateDir string, tailnetIP net.IP) (*turnCrede
 		PacketConnConfigs: []turn.PacketConnConfig{{
 			PacketConn: pc,
 			RelayAddressGenerator: &turn.RelayAddressGeneratorStatic{
-				// Loopback-only allocation sockets: every peer the relay talks
-				// to is host-local (LiveKit runs in "local" network mode in
-				// embedded transport, advertising 127.0.0.1 candidates), and
-				// macOS delivers same-host packets with a loopback source
-				// anyway. Binding loopback keeps relay ports off the LAN
-				// entirely — pion permissions were the only gate before.
-				RelayAddress: net.IPv4(127, 0, 0, 1),
-				Address:      "127.0.0.1",
+				RelayAddress: relayIP,
+				Address:      relayIP.String(),
 			},
 		}},
 	})
 	if err != nil {
-		pc.Close()
 		return nil, fmt.Errorf("turn server: %w", err)
 	}
-	return creds, nil
+	return server, nil
 }
 
 func randomHex(bytes int) string {

@@ -158,7 +158,7 @@ from openbase_coder_cli.runtime import (
     packaged_skills_dir,  # noqa: F401
 )
 from openbase_coder_cli.services.cloud_registration import register_and_report
-from openbase_coder_cli.services.definitions import TUNNELD_SERVICE
+from openbase_coder_cli.services.definitions import TUNNELD_SERVICE, VOICE_TURN_SERVICE
 from openbase_coder_cli.services.installation import InstallationConfig
 from openbase_coder_cli.services.launchd import install_all_services, install_service
 from openbase_coder_cli.services.onboarding import compute_cli_configured
@@ -1055,6 +1055,21 @@ def _run_setup_phases(
                 ) from exc
             click.echo(f"    Installed {installed_tunneld}")
         install_all_services(config)
+        if tailnet_provider == PROVIDER_NETMESH:
+            # The VPN transport runs only tunneld's TURN relay, bound to the
+            # VPN address, so phones on the embedded transport have a media
+            # route. The VPN itself does not depend on it.
+            click.echo("  Building and installing the openbase-voice-turn relay...")
+            try:
+                install_tunneld_binary(config)
+                install_service(config, VOICE_TURN_SERVICE)
+            except Exception as exc:  # noqa: BLE001 - the VPN works without it
+                click.echo(
+                    click.style(
+                        f"    WARN  openbase-voice-turn was not installed: {exc}",
+                        fg="yellow",
+                    )
+                )
         if tailnet_provider == PROVIDER_NETMESH_TSNET:
             click.echo("  Installing openbase-tunneld service...")
             install_service(config, TUNNELD_SERVICE)
