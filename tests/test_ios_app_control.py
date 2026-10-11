@@ -659,7 +659,9 @@ def test_show_text_without_a_connected_app_pushes_a_link_not_the_text(monkeypatc
     from openbase_coder_cli.openbase_coder_cli_app import shown_text
 
     browser_mod = importlib.import_module("openbase_coder_cli.cli.browser")
-    monkeypatch.setattr(browser_mod, "self_vpn_address", lambda: "100.64.0.33")
+    monkeypatch.setattr(
+        browser_mod, "self_vpn_hostname", lambda: "devspace-abc.net.obs.so"
+    )
     pushed = []
     monkeypatch.setattr(
         cloud_notifications,
@@ -678,7 +680,10 @@ def test_show_text_without_a_connected_app_pushes_a_link_not_the_text(monkeypatc
     assert push["title"] == "Your GitHub code"
     assert "WXYZ-5678" not in str(push)
     link = push["user_info"]["url"]
-    assert link.startswith("openbase-app://show-text?") and "host=100.64.0.33" in link
+    assert (
+        link.startswith("openbase-app://show-text?")
+        and "host=devspace-abc.net.obs.so" in link
+    )
     text_id = link.split("id=")[1].split("&")[0]
 
     fetch = APIRequestFactory().get(f"/api/user/shown-text/{text_id}/")
@@ -692,8 +697,27 @@ def test_show_text_without_a_connected_app_pushes_a_link_not_the_text(monkeypatc
 
 def test_show_text_push_failure_reports_not_notified(monkeypatch):
     browser_mod = importlib.import_module("openbase_coder_cli.cli.browser")
-    monkeypatch.setattr(browser_mod, "self_vpn_address", lambda: None)
+    monkeypatch.setattr(browser_mod, "self_vpn_hostname", lambda: None)
     monkeypatch.setattr(views, "get_channel_layer", lambda: FakeChannelLayer())
     monkeypatch.setattr(views, "IOS_APP_CONTROL_ACK_TIMEOUT_SECONDS", 0.05)
     response = views.ios_app_control(_request({"action": "show_text", "text": "X"}))
     assert response.data["notified"] is False
+
+
+def test_self_vpn_hostname_only_returns_openbase_device_names(monkeypatch):
+    from openbase_coder_cli.services import tailscale_provider
+
+    browser_mod = importlib.import_module("openbase_coder_cli.cli.browser")
+    monkeypatch.setattr(tailscale_provider, "is_netmesh_tsnet", lambda: False)
+    for dns, expected in (
+        ("vm-32.net-staging.obs.so.", "vm-32.net-staging.obs.so"),
+        ("Mac.NET.OBS.SO", "mac.net.obs.so"),
+        ("mac.tail1234.ts.net.", None),
+        ("", None),
+    ):
+        monkeypatch.setattr(
+            tailscale_provider,
+            "status_json",
+            lambda dns=dns: {"BackendState": "Running", "Self": {"DNSName": dns}},
+        )
+        assert browser_mod.self_vpn_hostname() == expected, dns
