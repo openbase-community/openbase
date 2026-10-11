@@ -1793,7 +1793,7 @@ class LiveDelegationBridge:
             for entry in self._entries.values():
                 if not self._voice_router.can_deliver_for_snapshot(entry.route):
                     entry.superseded = True
-            self.character_route_changed(action, announce=announce)
+            self.character_route_changed(action, announce=announce, agent_label=label)
             return
         instructions = ""
         try:

@@ -929,55 +929,18 @@ async def _start_voice_session(
 
     dispatcher_voice = dispatcher_voice_config()
     tts_provider = get_tts_provider(dispatcher_voice.provider)
-    announcer_voice = (
-        tts_provider.voice_for_id(CARTESIA_ANNOUNCER_VOICE_ID)
-        if tts_provider.provider_id == CARTESIA_PROVIDER_ID
-        else None
-    ) or tts_provider.default_announcer_voice()
-    openbase_cloud_audio_token = (
-        _openbase_cloud_audio_token()
-        if tts_provider.provider_id == OPENBASE_CLOUD_TTS_PROVIDER_ID
-        else ""
-    )
-    cartesia_api_key = openbase_cloud_audio_token or CARTESIA_API_KEY
-    cartesia_base_url = (
-        _openbase_cloud_audio_http_base_url("cartesia")
-        if openbase_cloud_audio_token
-        else None
-    )
-    cartesia_api_version = (
-        OPENBASE_CLOUD_AUDIO_CARTESIA_VERSION if openbase_cloud_audio_token else None
-    )
-    # Cloud audio tokens are short-lived; hand the TTS a way to refresh them
-    # so websocket reconnects later in the session stay authenticated.
-    audio_api_key_provider = (
-        _openbase_cloud_audio_token if openbase_cloud_audio_token else None
-    )
+    credentials = _tts_credentials(tts_provider)
     direct_tts = VoiceSelectingTTS(
         default_voice_id=dispatcher_voice.voice_id,
         default_voice_name=dispatcher_voice.name,
         active_voice_id=lambda: voice_router.active_target_voice_id,
         active_voice_name=lambda: voice_router.active_target_voice_name,
-        api_key=cartesia_api_key,
-        api_key_provider=audio_api_key_provider,
         provider=tts_provider,
         role="direct",
-        base_url=cartesia_base_url,
-        api_version=cartesia_api_version,
         delivery_ledger=delivery_ledger,
+        **credentials,
     )
-    announcer_tts = VoiceSelectingTTS(
-        default_voice_id=announcer_voice.id,
-        default_voice_name=announcer_voice.name,
-        active_voice_id=lambda: voice_router.active_target_voice_id,
-        active_voice_name=lambda: voice_router.active_target_voice_name,
-        api_key=cartesia_api_key,
-        api_key_provider=audio_api_key_provider,
-        provider=tts_provider,
-        role="announcer",
-        base_url=cartesia_base_url,
-        api_version=cartesia_api_version,
-    )
+    announcer_tts = _build_announcer_tts(voice_router, tts_provider, credentials)
 
     session_vad = _diagnostic_vad(ctx.proc.userdata["vad"])
     turn_signal_tracker = VoiceTurnSignalTracker()
@@ -1235,6 +1198,7 @@ async def _start_live_voice_session(
             speech_gate=bridge.speech_gate,
             timeout=LIVE_VOICE_CHARACTER_START_TIMEOUT_SECONDS,
             start_attempts=LIVE_VOICE_CHARACTER_START_ATTEMPTS,
+            announce_route=getattr(_live_route_announcer(voice_router), "announce", None),
         )
         bridge.characters = characters
         bridge.character_route_changed = characters.route_changed
@@ -1684,6 +1648,62 @@ async def livekit_agent(ctx: JobContext):
         ctx.room.name,
         decision.engine,
         int((time.monotonic() - job_received) * 1000),
+    )
+
+
+def _tts_credentials(tts_provider) -> dict:
+    """Cartesia access for the configured provider: Openbase Cloud's audio
+    proxy with a short-lived token (plus a refresher, so websocket reconnects
+    later in the session stay authenticated), or a local key."""
+    openbase_cloud_audio_token = (
+        _openbase_cloud_audio_token()
+        if tts_provider.provider_id == OPENBASE_CLOUD_TTS_PROVIDER_ID
+        else ""
+    )
+    return {
+        "api_key": openbase_cloud_audio_token or CARTESIA_API_KEY,
+        "api_key_provider": _openbase_cloud_audio_token if openbase_cloud_audio_token else None,
+        "base_url": _openbase_cloud_audio_http_base_url("cartesia")
+        if openbase_cloud_audio_token
+        else None,
+        "api_version": OPENBASE_CLOUD_AUDIO_CARTESIA_VERSION
+        if openbase_cloud_audio_token
+        else None,
+    }
+
+
+def _build_announcer_tts(voice_router, tts_provider, credentials: dict) -> VoiceSelectingTTS:
+    """The announcer voice both engines speak route moves and notices with."""
+    announcer_voice = (
+        tts_provider.voice_for_id(CARTESIA_ANNOUNCER_VOICE_ID)
+        if tts_provider.provider_id == CARTESIA_PROVIDER_ID
+        else None
+    ) or tts_provider.default_announcer_voice()
+    return VoiceSelectingTTS(
+        default_voice_id=announcer_voice.id,
+        default_voice_name=announcer_voice.name,
+        active_voice_id=lambda: voice_router.active_target_voice_id,
+        active_voice_name=lambda: voice_router.active_target_voice_name,
+        provider=tts_provider,
+        role="announcer",
+        **credentials,
+    )
+
+
+def _live_route_announcer(voice_router) -> "RouteAnnouncer | None":
+    """Classic's announcer TTS for a live call's transfer and return words."""
+    from openbase_coder_cli.livekit_agent.route_announcements import RouteAnnouncer
+
+    try:
+        tts_provider = get_tts_provider(dispatcher_voice_config().provider)
+        tts = _build_announcer_tts(voice_router, tts_provider, _tts_credentials(tts_provider))
+    except Exception:
+        # The call goes on without spoken route moves (no TTS provider or
+        # credentials configured for this install).
+        logger.warning("dispatch_timing stage=live_route_announcer_unavailable", exc_info=True)
+        return None
+    return RouteAnnouncer(
+        tts=tts, voice_router=voice_router, dispatcher_voice_id=_dispatcher_voice_id
     )
 
 

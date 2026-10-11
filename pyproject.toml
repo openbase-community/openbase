@@ -102,8 +102,6 @@ source = "vcs"
 packages = ["openbase_coder_cli"]
 artifacts = [
     "openbase_coder_cli/resources/sounds/deactivate.wav",
-    "openbase_coder_cli/resources/sounds/voice-route-transferred.wav",
-    "openbase_coder_cli/resources/sounds/back-to-dispatch.wav",
 ]
 
 [tool.hatch.build.targets.sdist]

@@ -24,7 +24,6 @@ from .live_announcement import (
 )
 from .live_preconnect import wait_live_session_started
 from .live_speech_gate import SpeechGatedAgent
-from .route_announcements import play_route_announcement, route_announcement_path
 
 logger = logging.getLogger(__name__)
 
@@ -116,8 +115,12 @@ class LiveCharacterController:
         initial_model=None,
         speech_gate=None,
         start_attempts=2,
+        announce_route=None,
     ):
         self.session = session
+        # Speaks a transfer or return after the handoff, as Classic's announcer
+        # does (``RouteAnnouncer.announce``); None keeps route moves silent.
+        self.announce_route = announce_route
         self.bridge = bridge
         self.router = router
         self.model_factory = model_factory
@@ -134,9 +137,9 @@ class LiveCharacterController:
         self._task = None
         self._closed = False
         self._route_pending = False
-        # The clip the next handoff plays before any greeting (a transfer or a
-        # return); None when the move is silent, as Classic is for a transfer
-        # the requesting agent confirms itself.
+        # The route move the next handoff announces before any greeting:
+        # (action, announce, agent_label); None after a restore, which moves
+        # no route.
         self._route_announcement = None
         self._wake = asyncio.Event()
         self._announcement_stop = asyncio.Event()
@@ -166,13 +169,13 @@ class LiveCharacterController:
     def start(self):
         self._task = asyncio.create_task(self._run(), name="live-characters")
 
-    def route_changed(self, action=None, *, announce=True):
+    def route_changed(self, action=None, *, announce=True, agent_label=None):
         # Detach synchronously: no result can enter the old character while
         # the actor waits for the framework to finish its handoff.
         self.bridge.suspend_session()
         self._silence()
         self._route_pending = True
-        self._route_announcement = route_announcement_path(action, announce=announce)
+        self._route_announcement = (action, announce, agent_label) if action else None
         self._announcement_stop.set()
         self._speech_changed.set()
         self._wake.set()
@@ -308,27 +311,24 @@ class LiveCharacterController:
             return assistant
 
     async def _announce_route(self):
-        """Play the pending route clip through the new character's output."""
-        path = self._route_announcement
+        """Speak the pending route move through the new character's output."""
+        move = self._route_announcement
         self._route_announcement = None
-        if path is None:
+        if move is None or self.announce_route is None:
             return
+        action, announce, agent_label = move
         try:
-            played = await play_route_announcement(self.session, path)
+            await self.announce_route(
+                self.session, action, announce=announce, agent_label=agent_label
+            )
         except Exception:
-            # The call goes on without its chime; a failed clip must not end
-            # the call through the character loop's error path.
+            # The call goes on without the announcement; a synthesis failure
+            # must not end the call through the character loop's error path.
             logger.warning(
-                "dispatch_timing stage=live_route_announcement_failed clip=%s",
-                path.name,
+                "dispatch_timing stage=live_route_announcement_failed action=%s",
+                action,
                 exc_info=True,
             )
-            return
-        logger.info(
-            "dispatch_timing stage=live_route_announcement clip=%s played=%s",
-            path.name,
-            played,
-        )
 
     async def _run(self):
         try:
