@@ -126,8 +126,6 @@ from openbase_coder_cli.livekit_agent.config import (  # noqa: F401
     LIVEKIT_DISPATCH_AGENT_NAME,
     LIVEKIT_DISPATCHER_CONFIG_PATH,
     LIVEKIT_DISPATCHER_WARMUP,
-    LIVEKIT_ENDPOINTING_MAX_DELAY_SECONDS,
-    LIVEKIT_ENDPOINTING_MIN_DELAY_SECONDS,
     LIVEKIT_PARTICIPANT_JOIN_TIMEOUT_SECONDS,
     LIVEKIT_STT_PROVIDER,
     LIVEKIT_VERBOSE_LOGGING,
@@ -960,12 +958,6 @@ async def _start_voice_session(
             "turn_detection": SafeMultilingualModel(
                 turn_signal_tracker=turn_signal_tracker,
             ),
-            # A natural pause inside a sentence must not commit the turn
-            # (see LIVEKIT_ENDPOINTING_MIN_DELAY_SECONDS).
-            "endpointing": {
-                "min_delay": LIVEKIT_ENDPOINTING_MIN_DELAY_SECONDS,
-                "max_delay": LIVEKIT_ENDPOINTING_MAX_DELAY_SECONDS,
-            },
             "interruption": {"mode": "vad"},
             # livekit-agents 1.8 deprecated the top-level kwarg; same semantics.
             "preemptive_generation": {"enabled": False},

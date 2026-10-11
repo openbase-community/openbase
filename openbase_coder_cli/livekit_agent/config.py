@@ -155,17 +155,6 @@ LIVE_VOICE_CHARACTER_START_TIMEOUT_SECONDS = float(
 LIVE_VOICE_CHARACTER_START_ATTEMPTS = max(
     1, int(os.getenv("LIVEKIT_LIVE_VOICE_CHARACTER_START_ATTEMPTS", "2") or 2)
 )
-# Classic pipeline endpointing: how long LiveKit waits after the caller goes
-# quiet before committing the user turn. Streaming STT finals arrive at every
-# natural pause, and the default 0.5 s committed a 10 s sentence three times
-# (VM2, 2026-10-11); 1.2 s rides out a breath while the quiet floor that
-# follows acceptance credits the wait, so the reply is not later overall.
-LIVEKIT_ENDPOINTING_MIN_DELAY_SECONDS = float(
-    os.getenv("LIVEKIT_ENDPOINTING_MIN_DELAY_SECONDS", "1.2") or 1.2
-)
-LIVEKIT_ENDPOINTING_MAX_DELAY_SECONDS = float(
-    os.getenv("LIVEKIT_ENDPOINTING_MAX_DELAY_SECONDS", "3.0") or 3.0
-)
 # A voice turn that fails to reach or start on the backend is retried with
 # these backoffs (seconds, in order; the last one repeats) inside this window
 # before the caller hears a specific failure line (turn_recovery.py).
