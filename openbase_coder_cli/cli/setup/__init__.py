@@ -376,6 +376,16 @@ class _SetupProgress:
         "--backend and default the audio provider to openbase-cloud."
     ),
 )
+@click.option(
+    "--defer-app-qr",
+    is_flag=True,
+    hidden=True,
+    help=(
+        "Skip the phone-app QR code; ./scripts/setup prints it with "
+        "'openbase-coder app-download-qr' as its last step, after the "
+        "developer app is built and launched."
+    ),
+)
 def setup(
     workspace_dir: str | None,
     env_file: str,
@@ -390,6 +400,7 @@ def setup(
     shared_super_agents_mcp: bool,
     include_default_hooks: bool,
     interactive_mode: bool | None,
+    defer_app_qr: bool,
 ) -> None:
     """Full install flow for Openbase Coder.
 
@@ -455,13 +466,16 @@ def setup(
     )
 
     click.echo()
-    click.echo("Setup complete.")
+    # The workspace wrapper still builds the developer app after this step
+    # and prints its own completion line.
+    click.echo("Services set up." if defer_app_qr else "Setup complete.")
     click.echo()
     if interactive:
         post_login_health = _interactive_cloud_login_and_checks(
             env_file, cli_configured=cli_configured
         )
-        _print_app_download_qr()
+        if not defer_app_qr:
+            _print_app_download_qr()
         if system_before is not None:
             print_agent_setup_summary(
                 include_default_hooks=include_default_hooks,
@@ -569,6 +583,12 @@ def _interactive_cloud_login_and_checks(
         tailnet_provider=provider,
     )
     return serve_health.healthy
+
+
+@click.command("app-download-qr", hidden=True)
+def app_download_qr() -> None:
+    """Print the phone-app download QR code (the last step of ./scripts/setup)."""
+    _print_app_download_qr()
 
 
 def _print_app_download_qr() -> None:

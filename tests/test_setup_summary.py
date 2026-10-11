@@ -80,3 +80,47 @@ def test_interactive_setup_summarizes_developer_agent_configuration(
     assert ("configurations is disabled" in paragraph) == (not shared_mcp)
     assert paragraph.endswith("process to load these settings.")
     assert result.output.rstrip().split("\n")[-1].startswith("ℹ️ System changes:")
+
+
+@pytest.mark.parametrize("defer_app_qr", [True, False])
+def test_interactive_setup_defers_app_qr_to_the_workspace_wrapper(
+    monkeypatch, tmp_path: Path, defer_app_qr: bool
+) -> None:
+    monkeypatch.setattr(setup_cli, "is_supported", lambda: True)
+    monkeypatch.setattr(setup_cli, "_run_setup_phases", lambda *_a, **_kw: True)
+    monkeypatch.setattr(setup_cli, "compute_cli_configured", lambda: True)
+    monkeypatch.setattr(setup_cli, "current_runtime_package", lambda: object())
+    monkeypatch.setattr(
+        setup_cli, "_interactive_cloud_login_and_checks", lambda *_a, **_kw: None
+    )
+    printed: list[bool] = []
+    monkeypatch.setattr(
+        setup_cli, "_print_app_download_qr", lambda: printed.append(True)
+    )
+
+    args = [
+        "--interactive",
+        "--env-file",
+        str(tmp_path / ".env"),
+        "--backend",
+        "codex",
+        "--audio-provider",
+        "openbase-cloud",
+        "--tailnet-provider",
+        "tailscale",
+    ]
+    if defer_app_qr:
+        args.append("--defer-app-qr")
+    result = CliRunner().invoke(setup_cli.setup, args)
+
+    assert result.exit_code == 0, result.output
+    assert printed == ([] if defer_app_qr else [True])
+
+
+def test_app_download_qr_command_prints_the_downloads_url() -> None:
+    from openbase_coder_cli.cli import main
+
+    result = CliRunner().invoke(main, ["app-download-qr"])
+
+    assert result.exit_code == 0, result.output
+    assert "https://openbase.cloud/downloads.html" in result.output

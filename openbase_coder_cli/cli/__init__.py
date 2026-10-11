@@ -42,7 +42,7 @@ from .self_update import self_update, version_command
 from .server import server
 from .service import service
 from .services import services
-from .setup import setup
+from .setup import app_download_qr, setup
 from .super_agent_name import super_agent_name
 from .sync import sync
 from .sync_daemon import sync_daemon_cli
@@ -113,6 +113,7 @@ def main():
 main.add_command(server)
 main.add_command(service)
 main.add_command(setup)
+main.add_command(app_download_qr)
 main.add_command(backend)
 main.add_command(services)
 main.add_command(doctor)
