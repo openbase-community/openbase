@@ -38,9 +38,10 @@ Contributors who commit to the repos also need [`gitleaks`](https://github.com/g
 
 Optional developer backends:
 
-- Codex CLI (`npm install -g @openai/codex`, then `codex login`) authenticated in your normal user account when using the `codex` backend
-- Claude Code (`curl -fsSL https://claude.ai/install.sh | bash`, then `claude login`) for the `claude-code` backend (Openbase uses your own
-  `claude login` directly; `openbase-coder claude login` is a thin wrapper)
+- Codex CLI (`npm install -g @openai/codex`) for the `codex` backend
+- Claude Code (`curl -fsSL https://claude.ai/install.sh | bash`) for the `claude-code` backend
+
+Openbase uses your own Codex or Claude Code login. If the backend you pick in setup isn't signed in yet, interactive setup says so and offers to sign you in (`codex login` or `claude login`). Otherwise sign in yourself before your first call; `openbase-coder claude login` is a thin wrapper around `claude login`.
 
 ## Node
 
