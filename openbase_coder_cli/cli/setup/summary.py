@@ -1,13 +1,13 @@
 """Final developer-facing explanation of agent configuration after setup."""
 
-import click
+from openbase_coder_cli.cli.setup.notices import info_notice
 
 
-def print_agent_setup_summary(
+def agent_setup_summary(
     *, include_default_hooks: bool, shared_super_agents_mcp: bool
-) -> None:
+) -> str:
     sentences = [
-        "ℹ️  Your Codex and Claude Code setup now includes Openbase session "
+        "Your Codex and Claude Code setup now includes Openbase session "
         "profiles for model and tool settings, plus links to the bundled "
         "Openbase skills."
     ]
@@ -34,5 +34,4 @@ def print_agent_setup_summary(
     sentences.append(
         "Start or resume a new Codex or Claude Code process to load these settings."
     )
-    click.echo()
-    click.echo(" ".join(sentences))
+    return info_notice(" ".join(sentences))

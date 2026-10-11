@@ -89,10 +89,10 @@ from openbase_coder_cli.cli.setup.hooks import (
 from openbase_coder_cli.cli.setup.hooks import (
     ensure_session_id_hook_script as _ensure_session_id_hook_script,
 )
-from openbase_coder_cli.cli.setup.summary import print_agent_setup_summary
+from openbase_coder_cli.cli.setup.summary import agent_setup_summary
 from openbase_coder_cli.cli.setup.system_summary import (
     SystemSetupSnapshot,
-    print_system_setup_summary,
+    system_setup_summary,
 )
 from openbase_coder_cli.cli.setup.workspace import (
     BUNDLED_SOUND_FILES,  # noqa: F401
@@ -386,6 +386,16 @@ class _SetupProgress:
         "developer app is built and launched."
     ),
 )
+@click.option(
+    "--deferred-notes-file",
+    type=click.Path(dir_okay=False),
+    hidden=True,
+    help=(
+        "Write the closing ℹ️ setup summaries to this file instead of printing "
+        "them; ./scripts/setup prints them after the developer app is built, "
+        "right before the phone-app QR code."
+    ),
+)
 def setup(
     workspace_dir: str | None,
     env_file: str,
@@ -401,6 +411,7 @@ def setup(
     include_default_hooks: bool,
     interactive_mode: bool | None,
     defer_app_qr: bool,
+    deferred_notes_file: str | None,
 ) -> None:
     """Full install flow for Openbase Coder.
 
@@ -477,18 +488,25 @@ def setup(
         if not defer_app_qr:
             _print_app_download_qr()
         if system_before is not None:
-            print_agent_setup_summary(
-                include_default_hooks=include_default_hooks,
-                shared_super_agents_mcp=shared_super_agents_mcp,
-            )
-            print_system_setup_summary(
-                system_before,
-                SystemSetupSnapshot.capture(Path(env_file)),
-                service_manager=service_manager_name(),
-                skip_services=skip_services,
-                serve_healthy=(
-                    serve_healthy if post_login_health is None else post_login_health
-                ),
+            _emit_notes(
+                [
+                    agent_setup_summary(
+                        include_default_hooks=include_default_hooks,
+                        shared_super_agents_mcp=shared_super_agents_mcp,
+                    ),
+                    system_setup_summary(
+                        system_before,
+                        SystemSetupSnapshot.capture(Path(env_file)),
+                        service_manager=service_manager_name(),
+                        skip_services=skip_services,
+                        serve_healthy=(
+                            serve_healthy
+                            if post_login_health is None
+                            else post_login_health
+                        ),
+                    ),
+                ],
+                deferred_notes_file,
             )
     else:
         web_backend_url = (
@@ -583,6 +601,15 @@ def _interactive_cloud_login_and_checks(
         tailnet_provider=provider,
     )
     return serve_health.healthy
+
+
+def _emit_notes(notes: list[str], deferred_notes_file: str | None) -> None:
+    """Print the ℹ️ summaries, or leave them for ./scripts/setup to print last."""
+    text = "".join(f"\n{note}\n" for note in notes)
+    if deferred_notes_file:
+        Path(deferred_notes_file).write_text(text, encoding="utf-8")
+    else:
+        click.echo(text, nl=False)
 
 
 @click.command("app-download-qr", hidden=True)
