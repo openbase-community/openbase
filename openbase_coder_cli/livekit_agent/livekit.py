@@ -1153,15 +1153,22 @@ async def _start_live_voice_session(
     def gate_caller_speech(event):
         bridge.speech_gate.user_state_changed(event.new_state)
         if event.new_state == "speaking":
-            # Clear queued playout once the caller is really interrupting;
-            # a shorter blip is echo or noise and the answer plays through it.
+            # Settle the barge-in once the caller has spoken long enough; a
+            # shorter blip is echo or noise and the answer plays through it.
+            # Over the agent's own audio the gate waits for a transcript.
             asyncio.get_running_loop().call_later(
-                bridge.speech_gate.barge_in_min_seconds, _interrupt_if_interrupting
+                bridge.speech_gate.barge_in_min_seconds, _check_barge_in
             )
 
-    def _interrupt_if_interrupting():
-        if bridge.speech_gate.speaking:
-            session.interrupt(force=True)
+    def _check_barge_in():
+        bridge.speech_gate.speaking  # noqa: B018 - evaluating revokes
+
+    # Clear queued playout once the caller is really interrupting. The gate
+    # may decide inside the audio node it is filtering, so interrupt from the
+    # loop rather than from within that generator.
+    bridge.speech_gate.on_barge_in = lambda: asyncio.get_running_loop().call_soon(
+        lambda: session.interrupt(force=True)
+    )
 
     # Bind before start, including callers who speak over the first greeting.
     session.on("user_state_changed", gate_caller_speech)
