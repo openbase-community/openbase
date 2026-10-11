@@ -47,6 +47,8 @@ class LiveKitVoiceRouter:
         if callable(reload):
             reload()
         self._target_clients: dict[str, SuperAgentsLiveKitClient] = {}
+        self._warm_tasks: set[asyncio.Task[None]] = set()
+        self._closed = False
         self._active_target_voice_id: str | None = None
         self._active_target_voice_name: str | None = None
         self._proactive_steer_prompt_hashes: dict[str, float] = {}
@@ -159,6 +161,8 @@ class LiveKitVoiceRouter:
         voice_id: str | None = None,
         voice_name: str | None = None,
     ) -> bool:
+        if self._closed:
+            return False
         self._route_request += 1
         request = self._route_request
         target_voice = stable_super_agent_voice(thread_id, label)
@@ -202,7 +206,10 @@ class LiveKitVoiceRouter:
         self._active_target_voice_id = target_voice_id
         self._active_target_voice_name = target_voice_name
         self._route_version += 1
-        _warm_in_background(target_client)
+        warm_task = _warm_in_background(target_client)
+        if warm_task is not None:
+            self._warm_tasks.add(warm_task)
+            warm_task.add_done_callback(self._warm_tasks.discard)
         self._dispatcher_client.persist_voice_route(
             active_target_thread_id=thread_id,
             active_target_kind="codex_thread",
@@ -265,6 +272,7 @@ class LiveKitVoiceRouter:
             self._proactive_steer_prompt_hashes.pop(prompt_hash, None)
 
     async def close(self) -> None:
+        self._closed = True
         self._route_request += 1
         self._pending_route_request = None
         # The call is over: the next one starts on its own route, so a target
@@ -281,6 +289,14 @@ class LiveKitVoiceRouter:
                 logger.warning(
                     "Unable to reset the voice route at call end", exc_info=True
                 )
+        # A warm-up can be inside connect(), before its client is cached.
+        # Cancel and settle those connects before closing their owners.
+        warming = tuple(self._warm_tasks)
+        for task in warming:
+            task.cancel()
+        if warming:
+            await asyncio.gather(*warming, return_exceptions=True)
+        self._warm_tasks.clear()
         for client in self._target_clients.values():
             await client.aclose()
         # The dispatcher client must close too: the claude_code backend keeps
@@ -291,7 +307,7 @@ class LiveKitVoiceRouter:
         await self._dispatcher_client.aclose()
 
 
-def _warm_in_background(client) -> None:
+def _warm_in_background(client) -> asyncio.Task[None] | None:
     """Connect the target's backend CLI now, off the route change's path.
 
     Passes the same per-turn instructions the first voice turn will use, so
@@ -307,10 +323,7 @@ def _warm_in_background(client) -> None:
         except Exception:  # noqa: BLE001 - warming is best effort
             logger.debug("target session warm-up failed", exc_info=True)
 
-    try:
-        asyncio.get_running_loop().create_task(run(), name="voice-target-warm")
-    except RuntimeError:
-        pass
+    return asyncio.create_task(run(), name="voice-target-warm")
 
 
 async def _transfer_voice_route(
