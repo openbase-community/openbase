@@ -622,22 +622,31 @@ def test_host_vpn_backend_relays_on_its_own_vpn_address(monkeypatch):
     assert browser_cli._try_arrange_forward(1455) is None
 
 
-def test_host_vpn_forward_says_how_to_unblock_a_firewalled_python(monkeypatch, capsys):
-    """The relay still starts (paste-back works) and the fix is printed."""
-    from openbase_coder_cli import callback_relay, host_firewall
-    from openbase_coder_cli.services import tailscale_provider
+def test_firewall_hint_appears_only_when_the_phone_could_not_forward(
+    monkeypatch, capsys
+):
+    """Current apps reach the relay through the API; blame the firewall only on failure."""
+    from openbase_coder_cli import host_firewall
+    from openbase_coder_cli.login_callback import LoopbackForward
 
-    monkeypatch.setattr(
-        tailscale_provider,
-        "status_json",
-        lambda: {"BackendState": "Running", "Self": {"TailscaleIPs": ["100.64.0.33"]}},
-    )
-    monkeypatch.setattr(callback_relay, "start_relay", lambda *a, **k: 49153)
     monkeypatch.setattr(
         host_firewall, "blocked_interpreter", lambda: "/opt/py/bin/python3.12"
     )
-    forward = browser_cli._try_arrange_forward(1455)
-    assert forward is not None and forward.relay_port == 49153
-    out = capsys.readouterr().out
-    assert "macOS Firewall blocks incoming connections" in out
-    assert "--unblockapp /opt/py/bin/python3.12" in out
+    forward = LoopbackForward(port=1455, target="100.64.0.33", token="t" * 24)
+    monkeypatch.setattr(browser_cli, "_arrange_forward", lambda port: forward)
+    monkeypatch.setattr(browser_cli, "_record_redirect", lambda: None)
+    for status, shown in (("started", False), ("failed", True)):
+        monkeypatch.setattr(
+            browser_cli,
+            "_deliver",
+            lambda url, fwd, status=status: {
+                "delivered": True,
+                "opened": True,
+                "forward": status,
+                "forward_error": "VPN callback relay unavailable",
+            },
+        )
+        result = CliRunner().invoke(browser_cli.browser, ["open", LOGIN_URL])
+        assert result.exit_code == 0, result.output
+        assert ("macOS Firewall blocks" in result.output) is shown, status
+        assert "sudo" not in result.output and "socketfilterfw" not in result.output

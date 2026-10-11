@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_INTERVAL_SECONDS = 60.0
 DEFAULT_MAX_AGE_DAYS = 15
 DEFAULT_STABILITY_DELAY_SECONDS = 0.2
-CLOUD_REGISTER_INTERVAL_SECONDS = 3600.0
+CLOUD_REGISTER_INTERVAL_SECONDS = 30.0
 CLOUD_WEBHOOK_POLL_INTERVAL_SECONDS = 30.0
 LIVEKIT_POOL_WATCHDOG_TICK_SECONDS = 30.0
 TAILNET_TRANSITION_TICK_SECONDS = 15.0
@@ -175,31 +175,32 @@ def _claude_app_index_tick() -> None:
         logger.debug("claude_app_index skipped reason=%s", result.get("reason"))
 
 
+_cloud_registration_watch = None
+
+
 def _cloud_registration_tick() -> None:
     from openbase_coder_cli.config.token_manager import (
         DEFAULT_WEB_BACKEND_URL,
         TokenManager,
     )
     from openbase_coder_cli.services.cloud_registration import register_and_report
+    from openbase_coder_cli.services.cloud_registration_watch import (
+        CloudRegistrationWatch,
+    )
 
-    # Login-time registration is one-shot and fails silently on network or
-    # backend blips, leaving the machine invisible to the account until the
-    # next login. This periodic re-report self-heals; the first tick runs at
-    # service start, so a restart also re-registers promptly.
-    if not TokenManager(DEFAULT_WEB_BACKEND_URL).has_refresh_token:
-        logger.debug("cloud_registration skipped no_login")
-        return
-    result = register_and_report()
-    if result.ok:
-        logger.info("cloud_registration report_complete")
-    elif not result.supported:
-        logger.debug("cloud_registration endpoint_unsupported")
-    else:
-        logger.warning(
-            "cloud_registration report_failed error=%s status=%s",
-            result.error,
-            result.status_code,
+    # Login-time registration is one-shot and some login paths skip it, while
+    # a logout deregisters the device. The watch re-registers as soon as the
+    # signed-in account changes, retries failures with backoff, and refreshes
+    # hourly; the first tick runs at service start.
+    global _cloud_registration_watch
+    if _cloud_registration_watch is None:
+        _cloud_registration_watch = CloudRegistrationWatch(
+            owner_sub=lambda: TokenManager(DEFAULT_WEB_BACKEND_URL)
+            .get_owner_identity()
+            .get("sub", ""),
+            register=register_and_report,
         )
+    _cloud_registration_watch.tick()
 
 
 def _livekit_pool_watchdog_tick() -> None:

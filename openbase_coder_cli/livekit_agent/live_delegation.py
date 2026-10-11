@@ -79,6 +79,10 @@ from openbase_coder_cli.livekit_agent.live_gateway_events import (
     OutputTranscriptLog,
     log_gateway_event,
 )
+from openbase_coder_cli.livekit_agent.live_gateway_stop import (
+    LiveGatewayStop,
+    gateway_stop_from_error,
+)
 from openbase_coder_cli.livekit_agent.live_speech_gate import LiveSpeechGate
 from openbase_coder_cli.livekit_agent.live_spoken_output import (
     SPEAK_NOW_ASK,
@@ -691,6 +695,7 @@ class LiveDelegationBridge:
         # The gateway's last error code before a reconnect: a planned restart
         # ("gateway_restarting") cuts nothing, so the model resumes silently.
         self._last_gateway_error_code: str | None = None
+        self.gateway_stop: LiveGatewayStop | None = None
         self._heartbeat_interval = progress_thinking_interval
         self._settle_seconds = utterance_settle_seconds
         self._hold_max_seconds = utterance_hold_max_seconds
@@ -764,6 +769,7 @@ class LiveDelegationBridge:
                     event.get("error") if isinstance(event.get("error"), dict) else {}
                 )
                 self._last_gateway_error_code = str(error.get("code") or "") or None
+                self.gateway_stop = gateway_stop_from_error(error)
             elif kind == "session.output_transcript.delta":
                 # What the agent says is what its speakerphone echo sounds like.
                 self.speech_gate.agent_said(
@@ -778,6 +784,7 @@ class LiveDelegationBridge:
     def attach(self, live_session) -> None:
         """Subscribe to the plugin session: closed caller utterances and delegations."""
         self.detach()
+        self.gateway_stop = None
         self._live_session = live_session
         self._input_route = self._voice_router.route_snapshot()
         if self._attached_at is None:

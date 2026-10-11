@@ -56,7 +56,8 @@ def test_other_platforms_and_unreadable_setting(monkeypatch, macos):
     assert host_firewall.blocked_interpreter("/x") is None
 
 
-def test_hint_names_both_fixes():
+def test_hint_points_the_user_at_settings_never_a_command():
     hint = host_firewall.unblock_hint("/opt/py/bin/python3.12")
     assert "System Settings > Network > Firewall > Options" in hint
-    assert "--unblockapp /opt/py/bin/python3.12" in hint
+    assert "python3.12" in hint and "needs your password" in hint
+    assert "sudo" not in hint and "--unblockapp" not in hint

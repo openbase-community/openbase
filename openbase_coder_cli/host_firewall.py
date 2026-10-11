@@ -51,11 +51,12 @@ def blocked_interpreter(executable: str | None = None) -> str | None:
 
 
 def unblock_hint(program: str) -> str:
-    """One line telling the user how to let the relay accept the phone."""
+    """One line for the user: only they can change the firewall setting."""
     return (
         "macOS Firewall blocks incoming connections for this computer's Openbase "
-        "Python, so your phone cannot deliver the sign-in to it. Fix it once: "
-        "System Settings > Network > Firewall > Options, set "
-        f"{os.path.basename(program)} to Allow, or run: sudo {SOCKETFILTERFW} "
-        f"--unblockapp {program}"
+        "Python, and your phone could not reach the sign-in another way. Updating "
+        "the Openbase app on your phone usually fixes this. Otherwise, you can "
+        "allow it yourself in System Settings > Network > Firewall > Options "
+        f"({os.path.basename(program)}: Allow incoming connections); "
+        "that change needs your password."
     )

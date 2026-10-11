@@ -248,3 +248,22 @@ def test_cloud_bearer_token_falls_back_to_machine_token(monkeypatch):
         == "machine.token"
     )
     assert seen["url"] == "https://cloud.example"
+
+
+def test_heartbeat_logs_rejected_status(monkeypatch):
+    monkeypatch.setattr(cloud_cli, "TokenManager", FakeTokenManager)
+    monkeypatch.setattr(cloud_cli, "_web_backend_url", lambda: "https://cloud.test")
+    monkeypatch.setattr(
+        cloud_cli, "_agent_runs_active", lambda local_url, manager: False
+    )
+    monkeypatch.setattr(
+        cloud_cli.httpx,
+        "post",
+        lambda url, **kwargs: httpx.Response(403, json={"detail": "nope"}),
+    )
+
+    result = CliRunner().invoke(cloud_cli.cloud, ["heartbeat", "--interval", "0"])
+
+    assert result.exit_code == 0
+    assert "Heartbeat started" in result.output
+    assert "Heartbeat HTTP 403" in result.output

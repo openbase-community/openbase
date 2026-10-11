@@ -115,6 +115,8 @@ def browser_open(
         click.echo(OPENED_MESSAGE)
         if forward is not None:
             click.echo(_forward_note(receipt))
+            if receipt.get("forward") == "failed":
+                _firewall_note()
     elif not no_push and _push(url, forward):
         _record_redirect()
         click.echo(PUSHED_MESSAGE)
@@ -126,6 +128,19 @@ def browser_open(
             f"for up to {forward.ttl_seconds // 60} minutes. If your phone cannot "
             "forward it, paste the final localhost address back here."
         )
+
+
+def _firewall_note() -> None:
+    """Explain a blocked relay only once the phone has failed to reach it.
+
+    Current phone apps reach the relay through this computer's local API when
+    a direct connection fails, so a firewall that blocks this Python matters
+    only when both paths failed (or for an app too old to try the API).
+    """
+    from openbase_coder_cli.host_firewall import blocked_interpreter, unblock_hint
+
+    if blocked := blocked_interpreter():
+        click.echo(unblock_hint(blocked))
 
 
 def _record_redirect() -> None:
@@ -162,12 +177,6 @@ def _try_arrange_forward(port: int) -> LoopbackForward | None:
         bind_host = target
     if target is None:
         return None
-    if bind_host is not None:
-        from openbase_coder_cli.host_firewall import blocked_interpreter, unblock_hint
-
-        # The relay still starts: paste-back keeps working while blocked.
-        if blocked := blocked_interpreter():
-            click.echo(unblock_hint(blocked))
     forward = LoopbackForward.create(port, target)
     expires_at = int(time.time()) + DEFAULT_FORWARD_TTL_SECONDS
     relay_port = start_relay(

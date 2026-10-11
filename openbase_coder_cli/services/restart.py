@@ -6,7 +6,7 @@ import shlex
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 import click
@@ -32,6 +32,8 @@ from openbase_coder_cli.services.voice_warning import (
 
 DEFAULT_RESTART_DELAY_SECONDS = 8.0
 API_RESTART_DELAY_SECONDS = 0.5
+# Services whose executable is the openbase-tunneld build.
+TUNNELD_BINARY_SERVICES = frozenset({"openbase-tunneld", "openbase-voice-turn"})
 
 
 @dataclass(frozen=True)
@@ -104,15 +106,30 @@ def schedule_restart(
                 "Could not prepare the pinned LiveKit engine; restart was not "
                 "scheduled. Resolve the download error above and retry."
             )
-    if not config.standalone and (
-        "openbase-tunneld" in plan.services or "openbase-voice-turn" in plan.services
-    ):
+    tunneld_services = [s for s in plan.services if s in TUNNELD_BINARY_SERVICES]
+    if not config.standalone and tunneld_services:
         try:
             install_tunneld_binary(config)
         except RuntimeError as exc:
-            raise click.ClickException(
-                f"Could not prepare Openbase Direct; restart was not scheduled: {exc}"
-            ) from exc
+            if any(s in TUNNELD_BINARY_SERVICES for s in request.services):
+                raise click.ClickException(
+                    "Could not prepare Openbase Direct; restart was not "
+                    f"scheduled: {exc}"
+                ) from exc
+            # Openbase Direct is optional: a broad restart must never be
+            # blocked by its build (Gabe's Mac, 2026-10-11: no Go toolchain).
+            # Leave those services as they are and restart everything else.
+            click.echo(
+                f"Warning: could not prepare Openbase Direct ({exc}); "
+                f"skipping {', '.join(tunneld_services)} in this restart.",
+                err=True,
+            )
+            plan = replace(
+                plan,
+                services=tuple(
+                    s for s in plan.services if s not in TUNNELD_BINARY_SERVICES
+                ),
+            )
     if warn and plan.interrupts_voice:
         warn_before_voice_interruption(
             reason="restart",

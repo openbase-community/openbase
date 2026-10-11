@@ -274,6 +274,36 @@ def test_failed_tunneld_build_leaves_services_running(monkeypatch):
     assert "compiler failed" in result.output
 
 
+def test_failed_tunneld_build_does_not_block_full_restart(monkeypatch):
+    scheduled = []
+
+    def fail_build(_config):
+        raise RuntimeError("the Go toolchain is required")
+
+    monkeypatch.setattr(
+        restart_module, "require_installation", lambda: InstallationConfig()
+    )
+    monkeypatch.setattr(
+        restart_module,
+        "build_restart_plan",
+        lambda request: RestartPlan(
+            services=("django-cli", "openbase-voice-turn"),
+            recreate_dispatcher=False,
+            interrupts_voice=False,
+            delay_seconds=0.0,
+        ),
+    )
+    monkeypatch.setattr(restart_module, "install_tunneld_binary", fail_build)
+    monkeypatch.setattr(
+        restart_module.subprocess,
+        "Popen",
+        lambda *args, **_kwargs: scheduled.append(args[0][-1]),
+    )
+    plan = restart_module.schedule_restart(RestartRequest())
+    assert plan.services == ("django-cli",)
+    assert scheduled and "openbase-voice-turn" not in scheduled[0]
+
+
 def test_restart_codex_app_server_restarts_control_plane_consumers():
     plan = build_restart_plan(RestartRequest(services=("codex-app-server",)))
 
