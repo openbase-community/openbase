@@ -116,3 +116,28 @@ def test_ports_listening_sees_a_new_loopback_server():
         assert str(port) in result.output
     finally:
         server.close()
+
+
+def test_ended_session_queues_a_follow_up_turn(monkeypatch):
+    import os
+
+    with pytest.raises(pty_session.PtySessionError, match="thread id"):
+        pty_session.start("bad", ["true"], notify_thread="a/b")
+    prompt = pty_session.notify_prompt("gcloud", 0, "exited")
+    assert "pty read gcloud" in prompt and "status command" in prompt
+
+    queued = []
+    monkeypatch.setattr(
+        pty_session, "_notify_thread", lambda t, p: queued.append((t, p))
+    )
+    # Run the holder in-process so the patched notifier is the one called.
+    paths = pty_session.session_paths("inproc")
+    paths.root.mkdir(parents=True, mode=0o700)
+    os.mkfifo(paths.input, 0o600)
+    paths.output.touch(mode=0o600)
+    pty_session._write_meta(
+        paths, {"command": ["true"], "exit_code": None, "notify_thread": "s_123"}
+    )
+    pty_session._hold("inproc")
+    assert queued and queued[0][0] == "s_123"
+    assert "inproc ended: exited, exit 0" in queued[0][1]

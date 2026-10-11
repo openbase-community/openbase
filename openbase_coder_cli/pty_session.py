@@ -141,8 +141,48 @@ def list_sessions() -> list[dict]:
     return sessions
 
 
-def start(name: str, command: list[str], *, cwd: str | None = None) -> dict:
-    """Start ``command`` in a new detached pty session called ``name``."""
+THREAD_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
+
+
+def notify_prompt(name: str, exit_code: int | None, reason: str) -> str:
+    """The follow-up turn queued on the agent's thread when a session ends.
+
+    Carries no session output: only the name, the exit code and what to do.
+    """
+    return (
+        f"[pty session {name} ended: {reason}, exit {exit_code}] "
+        f"Read its last output with `openbase-coder pty read {name}`, confirm "
+        "the result with the tool's own status command, and tell the user "
+        "whether the sign-in finished."
+    )
+
+
+def _notify_thread(thread_id: str, prompt: str) -> None:
+    from openbase_coder_cli.cli.local_server import local_server_request
+
+    with contextlib.suppress(Exception):
+        local_server_request(
+            "POST",
+            f"/api/threads/{thread_id}/turns/queue/",
+            json={"prompt": prompt},
+            timeout=15,
+        )
+
+
+def start(
+    name: str,
+    command: list[str],
+    *,
+    cwd: str | None = None,
+    notify_thread: str | None = None,
+) -> dict:
+    """Start ``command`` in a new detached pty session called ``name``.
+
+    ``notify_thread`` queues a follow-up turn on that thread when the
+    command ends, so the agent can confirm the outcome to the user.
+    """
+    if notify_thread is not None and THREAD_ID_RE.fullmatch(notify_thread) is None:
+        raise PtySessionError("That is not a thread id.")
     if not command:
         raise PtySessionError("Give the command to run after --.")
     paths = session_paths(name)
@@ -161,7 +201,13 @@ def start(name: str, command: list[str], *, cwd: str | None = None) -> dict:
     os.close(fd)
     _write_meta(
         paths,
-        {"command": command, "cwd": cwd, "started_at": time.time(), "exit_code": None},
+        {
+            "command": command,
+            "cwd": cwd,
+            "started_at": time.time(),
+            "exit_code": None,
+            "notify_thread": notify_thread,
+        },
     )
     holder = subprocess.Popen(
         [sys.executable, "-m", "openbase_coder_cli.pty_session", "hold", name],
@@ -351,6 +397,10 @@ def _hold(name: str) -> int:
         exit_code=exit_code if exit_code is not None else -1, ended_reason=reason
     )
     _write_meta(paths, meta)
+    if meta.get("notify_thread"):
+        _notify_thread(
+            meta["notify_thread"], notify_prompt(name, meta.get("exit_code"), reason)
+        )
     with contextlib.suppress(OSError):
         os.close(master_fd)
     return 0

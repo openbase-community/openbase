@@ -27,13 +27,21 @@ def pty() -> None:
 @pty.command("start", context_settings={"ignore_unknown_options": True})
 @click.argument("name")
 @click.argument("command", nargs=-1, required=True, type=click.UNPROCESSED)
-def start_command(name: str, command: tuple[str, ...]) -> None:
+@click.option(
+    "--notify-thread",
+    default=None,
+    help="Queue a follow-up turn on this thread (your Super Agent thread id) "
+    "when the command ends, so you can confirm the result to the user.",
+)
+def start_command(
+    name: str, command: tuple[str, ...], notify_thread: str | None
+) -> None:
     """Start COMMAND in session NAME (put the command after --).
 
-    Example: openbase-coder pty start gcloud -- gcloud auth login --no-launch-browser
+    Example: openbase-coder pty start gcloud --notify-thread <id> -- gcloud auth login
     """
     try:
-        status = pty_session.start(name, list(command))
+        status = pty_session.start(name, list(command), notify_thread=notify_thread)
     except (pty_session.PtySessionError, OSError) as exc:
         raise _fail(exc) from exc
     state = "running" if status["running"] else f"ended (exit {status['exit_code']})"
