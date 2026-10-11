@@ -232,3 +232,30 @@ def test_status_reports_whether_the_cli_is_available(monkeypatch):
     assert options["openbase_cloud"]["available"] is True
     assert options["codex"]["available"] is False
     assert options["claude_code"]["available"] is True
+
+
+def test_macos_login_url_is_sent_to_the_phone(manager, monkeypatch, tmp_path):
+    cli = _fake_cli(
+        tmp_path,
+        'echo "Open https://auth.openai.com/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A1455"\nsleep 1\n',
+    )
+    monkeypatch.setattr(ai_account, "_command", lambda provider: [cli])
+    opened = []
+    monkeypatch.setattr(ai_account, "browser_env_ignored", lambda: True)
+    monkeypatch.setattr(ai_account, "_open_on_phone", opened.append)
+    manager.start(ai_account.CODEX)
+    _wait(manager, lambda s: s["url"])
+    assert opened == [
+        "https://auth.openai.com/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A1455"
+    ]
+
+
+def test_linux_relies_on_the_browser_shim(manager, monkeypatch, tmp_path):
+    cli = _fake_cli(tmp_path, 'echo "Open https://example.com/auth"\nsleep 1\n')
+    monkeypatch.setattr(ai_account, "_command", lambda provider: [cli])
+    opened = []
+    monkeypatch.setattr(ai_account, "browser_env_ignored", lambda: False)
+    monkeypatch.setattr(ai_account, "_open_on_phone", opened.append)
+    manager.start(ai_account.CODEX)
+    _wait(manager, lambda s: s["url"])
+    assert opened == []

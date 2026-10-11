@@ -314,6 +314,8 @@ class LoginManager:
                     if job.state == "starting":
                         job.state = "waiting"
                         job.message = "Finish signing in on your phone."
+                        if browser_env_ignored():
+                            _open_on_phone(job.url)
                 if job.provider == CLAUDE_CODE and _CODE_PROMPT.search(job.output):
                     job.needs_code = True
         with contextlib.suppress(OSError):
@@ -345,6 +347,36 @@ class LoginManager:
                     f"{LABELS[job.provider]} sign-in did not finish"
                     f" (exit {returncode}). Start again to retry."
                 )
+
+
+def browser_env_ignored() -> bool:
+    """Whether CLIs here ignore $BROWSER and open this computer's own browser.
+
+    On macOS the common URL openers (Rust `webbrowser`, Node `open`) go
+    straight to LaunchServices, so the phone shim never runs: send the
+    printed sign-in URL to the phone ourselves.
+    """
+    import platform
+
+    return platform.system() == "Darwin"
+
+
+def _open_on_phone(url: str) -> None:
+    """`openbase-coder browser open URL` in the background (phone + forward)."""
+    import sys
+
+    def run() -> None:
+        with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+            subprocess.run(
+                [sys.executable, "-m", "openbase_coder_cli", "browser", "open", url],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=90,
+                check=False,
+            )
+
+    threading.Thread(target=run, daemon=True).start()
 
 
 LOGINS = LoginManager()
