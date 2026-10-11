@@ -264,19 +264,25 @@ def expected_serve_base_hash(
 ) -> str:
     """The helper config hash a CAS Serve apply must be based on.
 
-    With no recorded last-applied hash, a helper still reporting its initial
-    empty config (fresh install, nothing to overwrite) is as valid a base as
-    the baseline plan; the empty-config hash is the helper's own plan of zero
-    rules rather than a hardcoded digest.
+    The guard exists so a re-apply never clobbers routes Openbase did not
+    place. Three live states hold none, so each is a valid base: the config
+    Openbase last applied; exactly Openbase's own rules as planned for this
+    node now; and an empty config. The empty case is routine, not drift: a
+    freshly enrolled node (first install, account switch, re-enrollment)
+    starts empty, and the hardened engine clears Serve on some restarts, while
+    the recorded hash still describes the previous node's config. The plans
+    come from the helper itself rather than hardcoded digests.
+
+    Any other live config is unknown, and the recorded (or baseline) hash is
+    returned so the caller's comparison refuses it.
     """
-    if last_applied_hash:
+    if last_applied_hash and snapshot_hash == last_applied_hash:
         return last_applied_hash
-    expected = str(tp.plan_serve(previous_rules)["hash"])
-    if snapshot_hash != expected:
-        empty_hash = str(tp.plan_serve([])["hash"])
-        if snapshot_hash == empty_hash:
-            return empty_hash
-    return expected
+    for rules in (previous_rules, []):
+        planned = str(tp.plan_serve(rules)["hash"])
+        if snapshot_hash == planned:
+            return planned
+    return last_applied_hash or str(tp.plan_serve(previous_rules)["hash"])
 
 
 def reconcile_openbase_routes(

@@ -882,11 +882,54 @@ def test_reconcile_accepts_fresh_helper_empty_config_as_initial_base(monkeypatch
     assert applied[0][1] == {"expected_etag": "v1", "expected_hash": "empty"}
 
 
-def test_reconcile_keeps_drift_guard_once_a_hash_was_recorded(monkeypatch):
+def test_reconcile_accepts_empty_config_after_node_change(monkeypatch):
+    """A re-enrolled node starts empty while the recorded hash is the old node's."""
     provider = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
     applied = []
     monkeypatch.setattr(
         provider, "serve_snapshot", lambda: {"etag": "v1", "hash": "empty"}
+    )
+    monkeypatch.setattr(
+        provider,
+        "plan_serve",
+        lambda rules: {"hash": "empty" if rules == [] else "baseline"},
+    )
+    monkeypatch.setattr(
+        provider,
+        "apply_serve",
+        lambda rules, **kwargs: applied.append((rules, kwargs)) or {"hash": "next"},
+    )
+
+    assert routes.reconcile_openbase_routes([], [], "old-node") == "next"
+    assert applied[0][1] == {"expected_etag": "v1", "expected_hash": "empty"}
+
+
+def test_reconcile_accepts_own_rules_for_this_node(monkeypatch):
+    provider = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
+    applied = []
+    monkeypatch.setattr(
+        provider, "serve_snapshot", lambda: {"etag": "v1", "hash": "baseline"}
+    )
+    monkeypatch.setattr(
+        provider,
+        "plan_serve",
+        lambda rules: {"hash": "empty" if rules == [] else "baseline"},
+    )
+    monkeypatch.setattr(
+        provider,
+        "apply_serve",
+        lambda rules, **kwargs: applied.append((rules, kwargs)) or {"hash": "next"},
+    )
+
+    assert routes.reconcile_openbase_routes([], [], "old-node") == "next"
+    assert applied[0][1]["expected_hash"] == "baseline"
+
+
+def test_reconcile_keeps_drift_guard_for_unknown_routes(monkeypatch):
+    provider = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
+    applied = []
+    monkeypatch.setattr(
+        provider, "serve_snapshot", lambda: {"etag": "v1", "hash": "someone-else"}
     )
     monkeypatch.setattr(
         provider,
