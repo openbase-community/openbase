@@ -616,3 +616,38 @@ def test_phone_show_text_cli(monkeypatch):
     assert sent[0]["action"] == "show_text" and sent[0]["url"].startswith(
         "https://github.com"
     )
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ({"shown": True}, {"shown": True}),
+        ({"shown": False, "notified": True}, {"shown": False, "notified": True}),
+        ({"copied": True, "opened": True}, {"copied": True, "opened": True}),
+        (
+            {"copied": False, "error": "text is missing"},
+            {"copied": False, "error": "text is missing"},
+        ),
+        ({"shown": "yes", "text": "ABCD-1234"}, {}),
+    ],
+)
+def test_consumer_forwards_copy_and_show_outcomes(content, expected):
+    """The consumer whitelists ack fields; copy/show outcomes must pass, the text never."""
+    consumer = IOSAppControlConsumer()
+    consumer.channel_layer = FakeChannelLayer()
+    asyncio.run(
+        consumer.receive_json(
+            {
+                "type": "ios_app_control_ack",
+                "command_id": "ios-app-control-x1",
+                **content,
+            }
+        )
+    )
+    forwarded = consumer.channel_layer.sent[0][1]
+    assert forwarded == {
+        "type": "ios_app_control_ack",
+        "command_id": "ios-app-control-x1",
+        **expected,
+    }
+    assert "text" not in forwarded
