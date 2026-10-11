@@ -357,6 +357,54 @@ def phone_open_url(ctx: click.Context, url: str) -> None:
     )
 
 
+@phone.command("copy")
+@click.option(
+    "--text-stdin",
+    "text_stdin",
+    is_flag=True,
+    required=True,
+    help="Read the text from stdin, so it stays out of the command line and logs.",
+)
+@click.option("--label", default=None, help='What it is, e.g. "GitHub code".')
+@click.option(
+    "--open",
+    "open_url",
+    default=None,
+    help="Open this page on the phone right after copying (e.g. the device-code page).",
+)
+def phone_copy(text_stdin: bool, label: str | None, open_url: str | None) -> None:
+    """Put a short code on the phone's clipboard (and optionally open a page).
+
+    For device-code logins: the user then only has to paste the code on the
+    page. The phone keeps it on this device only and clears it after two
+    minutes. Needs the Openbase app connected (in front); otherwise tell the
+    user the code in the chat.
+    """
+    text = sys.stdin.readline().rstrip("\r\n")
+    if not text:
+        raise click.ClickException("No text on stdin.")
+    payload = {"action": "copy_text", "text": text}
+    if label:
+        payload["label"] = label
+    if open_url:
+        payload["url"] = open_url
+    data = _publish_ios_app_control(payload)
+    if data.get("copied"):
+        opened = " and opened the page" if data.get("opened") else ""
+        click.echo(
+            f"Copied to the phone's clipboard{opened}. The user can paste it now."
+        )
+        return
+    if data.get("delivered") and "copied" not in data:
+        raise click.ClickException(
+            "The phone app is too old to copy text; tell the user the code instead."
+        )
+    raise click.ClickException(
+        "The phone did not copy it (app not connected or in the background); "
+        "tell the user the code in the chat instead."
+    )
+
+
 @phone.command("mute")
 def phone_mute() -> None:
     """Mute the active voice call on the phone."""

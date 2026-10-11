@@ -490,3 +490,73 @@ def test_authenticated_callback_capability_survives_serialization():
     serializer = LoopbackForwardSerializer(data=payload)
     assert serializer.is_valid(), serializer.errors
     assert serializer.validated_data == payload
+
+
+def test_copy_text_reaches_the_phone_and_reports_copied(monkeypatch):
+    channel_layer = FakeChannelLayer(
+        ack={"type": "ios_app_control_ack", "copied": True, "opened": True}
+    )
+    monkeypatch.setattr(views, "get_channel_layer", lambda: channel_layer)
+    response = views.ios_app_control(
+        _request(
+            {
+                "action": "copy_text",
+                "text": "ABCD-1234",
+                "label": "GitHub code",
+                "url": "https://github.com/login/device",
+            }
+        )
+    )
+    assert response.status_code == 202
+    assert response.data["copied"] is True and response.data["opened"] is True
+    assert "ABCD-1234" not in str(response.data)
+    sent = channel_layer.sent[0][1]["data"]
+    assert sent["text"] == "ABCD-1234" and sent["label"] == "GitHub code"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"action": "copy_text"},
+        {"action": "copy_text", "text": "two\nlines"},
+        {"action": "copy_text", "text": "x" * 257},
+        {"action": "copy_text", "text": "x", "url": "javascript:alert(1)"},
+        {"action": "open_url", "url": "https://example.com", "text": "x"},
+    ],
+)
+def test_copy_text_validation(monkeypatch, payload):
+    monkeypatch.setattr(views, "get_channel_layer", lambda: FakeChannelLayer())
+    assert views.ios_app_control(_request(payload)).status_code == 400
+
+
+def test_phone_copy_reads_stdin_and_reports(monkeypatch):
+    import importlib
+
+    from click.testing import CliRunner
+
+    user_cli = importlib.import_module("openbase_coder_cli.cli.user")
+    sent = []
+    monkeypatch.setattr(
+        user_cli,
+        "_publish_ios_app_control",
+        lambda payload: sent.append(payload) or {"delivered": True, "copied": True},
+    )
+    result = CliRunner().invoke(
+        user_cli.user,
+        ["phone", "copy", "--text-stdin", "--label", "GitHub code"],
+        input="ABCD-1234\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "ABCD-1234" not in result.output
+    assert sent == [
+        {"action": "copy_text", "text": "ABCD-1234", "label": "GitHub code"}
+    ]
+
+    monkeypatch.setattr(
+        user_cli, "_publish_ios_app_control", lambda payload: {"delivered": False}
+    )
+    result = CliRunner().invoke(
+        user_cli.user, ["phone", "copy", "--text-stdin"], input="ABCD-1234\n"
+    )
+    assert result.exit_code != 0
+    assert "tell the user the code" in result.output
