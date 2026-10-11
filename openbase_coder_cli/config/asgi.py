@@ -47,24 +47,32 @@ _inner = wrap_asgi_application(
 )
 
 
-_stack_dump_file = None
+_stack_sampler_installed = False
 
 
 def _install_stack_dump_signal() -> None:
-    """`kill -USR1 <pid>` appends every thread's Python stack to
-    ~/.openbase/logs/django-cli-stacks.log: an in-process profiler for a hot or
-    wedged API where py-spy would need root (macOS)."""
-    global _stack_dump_file
-    import faulthandler
+    """`kill -USR1 <pid>` samples every thread's Python stack for 15 s and
+    appends the hottest stacks to ~/.openbase/logs/django-cli-stacks.log: an
+    in-process profiler for a hot API where py-spy would need root (macOS).
+    faulthandler's all-thread dump is not used: it segfaulted the live server.
+    """
+    global _stack_sampler_installed
     import signal
-    from pathlib import Path
 
-    if _stack_dump_file is not None or not hasattr(signal, "SIGUSR1"):
+    if _stack_sampler_installed or not hasattr(signal, "SIGUSR1"):
         return
-    log_dir = Path.home() / ".openbase" / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    _stack_dump_file = open(log_dir / "django-cli-stacks.log", "a")  # noqa: SIM115
-    faulthandler.register(signal.SIGUSR1, file=_stack_dump_file, all_threads=True)
+    _stack_sampler_installed = True
+
+    def start_sampling(_signum, _frame) -> None:
+        import threading
+
+        from openbase_coder_cli.stack_sampler import sample_to_log
+
+        threading.Thread(
+            target=sample_to_log, name="stack-sampler", daemon=True
+        ).start()
+
+    signal.signal(signal.SIGUSR1, start_sampling)
 
 
 async def application(scope, receive, send):
