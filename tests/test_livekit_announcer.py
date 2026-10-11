@@ -1062,6 +1062,31 @@ def test_livekit_companion_start_api_explains_a_linux_host_without_a_desktop(
     assert "xdotool" in response.data["detail"]
 
 
+def test_livekit_companion_status_api_says_cloud_workspaces_cannot_share(monkeypatch):
+    from openbase_coder_cli.linux_computer_use import LinuxComputerUseError
+
+    monkeypatch.setattr(views._screen_share.platform, "system", lambda: "Linux")
+
+    def missing_desktop():
+        raise LinuxComputerUseError("Linux computer use requires X11 tooling: DISPLAY")
+
+    monkeypatch.setattr(views._screen_share, "_linux_desktop_check", missing_desktop)
+    monkeypatch.setattr(
+        views._screen_share,
+        "_companion_client_factory",
+        lambda: pytest.fail("no companion is consulted without a desktop"),
+    )
+
+    response = views.livekit_companion_status(_companion_request("status"))
+
+    assert response.data["supported"] is False
+    assert response.data["state"] == "unavailable"
+    assert response.data["code"] == "linux_desktop_unavailable"
+    assert response.data["detail"] == (
+        "Screen sharing is available on your Mac, not on cloud workspaces."
+    )
+
+
 def test_livekit_companion_start_api_is_noop_on_windows(monkeypatch):
     monkeypatch.setattr(views._screen_share.platform, "system", lambda: "Windows")
 

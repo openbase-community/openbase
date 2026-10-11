@@ -105,6 +105,39 @@ def _start_macos(payload: dict[str, str]) -> dict[str, Any]:
 
 
 LINUX_DESKTOP_UNAVAILABLE_CODE = "linux_desktop_unavailable"
+NO_DISPLAY_DETAIL = "Screen sharing is available on your Mac, not on cloud workspaces."
+
+
+def screen_share_capability() -> dict[str, Any]:
+    """Whether this backend can share a screen at all, decided here so no
+    client has to guess from the host type.
+
+    macOS can always share (the desktop app may still need launching or a
+    permission grant, which are start-time errors, not capability). A Linux
+    host can share only with an X display and the xdotool toolchain; a cloud
+    workspace without one reports `supported: false` with a plain reason.
+    """
+    host = _platform()
+    if host == "macos":
+        return {"supported": True, "platform": host}
+    if host == "linux":
+        try:
+            _linux_desktop_check()
+        except LinuxComputerUseError as exc:
+            return {
+                "supported": False,
+                "platform": host,
+                "code": LINUX_DESKTOP_UNAVAILABLE_CODE,
+                "detail": NO_DISPLAY_DETAIL,
+                "reason": str(exc),
+            }
+        return {"supported": True, "platform": host}
+    return {
+        "supported": False,
+        "platform": host,
+        "code": "platform_unsupported",
+        "detail": "Screen sharing is available on macOS and Linux computers.",
+    }
 
 
 def _linux_desktop_check() -> None:
@@ -230,7 +263,9 @@ def livekit_companion_status(request):
     """Report companion state and, on macOS, the privacy grants it needs."""
     _require_jwt_caller(request)
     host = _platform()
-    body: dict[str, Any] = {"supported": host in ("macos", "linux"), "platform": host}
+    body: dict[str, Any] = screen_share_capability()
+    if not body["supported"]:
+        return Response({**body, "state": "unavailable"})
     if host == "macos":
         try:
             response = desktop_control.request("GET", "/status", launch=False)
