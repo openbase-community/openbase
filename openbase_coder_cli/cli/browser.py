@@ -199,10 +199,21 @@ def _self_tailnet_target(status_fn) -> str | None:
     return None
 
 
+# A forwarded open waits longer: the phone binds its loopback listener and
+# health-checks the relay (up to four seconds) before it answers, and giving
+# up early sends the push fallback too, so the user gets the page twice.
+FORWARDED_DELIVERY_TIMEOUT_SECONDS = 12
+
+
 def _deliver(url: str, forward: LoopbackForward | None) -> dict | None:
     """The phone's receipt when it acknowledged delivery, else None; bounded
     even if authentication or the server stalls."""
-    return _bounded_attempt(lambda: _try_deliver(url, forward))
+    if forward is None:
+        return _bounded_attempt(lambda: _try_deliver(url, forward))
+    return _bounded_attempt(
+        lambda: _try_deliver(url, forward),
+        timeout=FORWARDED_DELIVERY_TIMEOUT_SECONDS,
+    )
 
 
 def _forward_note(receipt: dict) -> str:
@@ -250,7 +261,9 @@ def _try_deliver(url: str, forward: LoopbackForward | None) -> dict | None:
     """The phone app's receipt when it acknowledged; any failure means None."""
     try:
         data = publish_open_url(
-            url, loopback_forward=forward.as_app_control() if forward else None
+            url,
+            loopback_forward=forward.as_app_control() if forward else None,
+            timeout=FORWARDED_DELIVERY_TIMEOUT_SECONDS if forward else 10,
         )
     except (click.ClickException, OSError, ValueError):
         # Server unreachable, rejected, or answered garbage: the printed URL

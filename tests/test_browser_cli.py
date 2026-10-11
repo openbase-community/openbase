@@ -50,7 +50,7 @@ def _no_tailnet_and_no_push(monkeypatch):
 def _patch_publish(monkeypatch, result):
     calls = []
 
-    def publish(url, *, loopback_forward=None):
+    def publish(url, *, loopback_forward=None, timeout=10):
         calls.append(url if loopback_forward is None else (url, loopback_forward))
         if isinstance(result, Exception):
             raise result

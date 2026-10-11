@@ -24,6 +24,10 @@ from openbase_coder_cli.open_url_policy import normalize_open_url, open_url_erro
 IOS_APP_CONTROL_GROUP = "ios_app_control"
 logger = logging.getLogger(__name__)
 IOS_APP_CONTROL_ACK_TIMEOUT_SECONDS = 5.0
+# An open that asks the phone to forward a login callback acks only after the
+# phone bound its loopback listener and health-checked the relay (up to four
+# seconds); timing out first makes the caller push a second copy of the page.
+IOS_FORWARDED_OPEN_ACK_TIMEOUT_SECONDS = 10.0
 # Channel-layer group names only allow [a-zA-Z0-9._-]; command ids are
 # validated against this before being embedded in an ack group name.
 COMMAND_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -149,13 +153,13 @@ def publish_ios_app_control(payload: dict[str, Any]) -> dict[str, Any]:
     if channel_layer is None:
         raise RuntimeError("Channel layer is not configured.")
     is_call_control = command["action"] in IOS_CALL_CONTROL_ACTIONS
-    ack = async_to_sync(_publish_and_await_ack)(
-        channel_layer,
-        command,
-        IOS_CALL_CONTROL_ACK_TIMEOUT_SECONDS
-        if is_call_control
-        else IOS_APP_CONTROL_ACK_TIMEOUT_SECONDS,
-    )
+    if is_call_control:
+        ack_timeout = IOS_CALL_CONTROL_ACK_TIMEOUT_SECONDS
+    elif command.get("loopback_forward"):
+        ack_timeout = IOS_FORWARDED_OPEN_ACK_TIMEOUT_SECONDS
+    else:
+        ack_timeout = IOS_APP_CONTROL_ACK_TIMEOUT_SECONDS
+    ack = async_to_sync(_publish_and_await_ack)(channel_layer, command, ack_timeout)
     delivered = ack is not None
     result = {}
     if ack is not None and type(ack.get("opened")) is bool:

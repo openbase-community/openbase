@@ -16,7 +16,10 @@ def publish_app_control(payload: dict[str, object], *, timeout: float = 10) -> d
 
 
 def publish_open_url(
-    url: str, *, loopback_forward: dict[str, object] | None = None
+    url: str,
+    *,
+    loopback_forward: dict[str, object] | None = None,
+    timeout: float = 10,
 ) -> dict:
     """Ask the connected Openbase phone app to open ``url``.
 
@@ -27,4 +30,4 @@ def publish_open_url(
     payload: dict[str, object] = {"action": "open_url", "url": url}
     if loopback_forward:
         payload["loopback_forward"] = loopback_forward
-    return publish_app_control(payload)
+    return publish_app_control(payload, timeout=timeout)
