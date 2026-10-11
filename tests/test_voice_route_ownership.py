@@ -304,8 +304,11 @@ async def test_transfer_warms_the_target_session_in_the_background(
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     warmed = asyncio.Event()
 
+    seen: list = []
+
     class WarmingTarget(TargetClient):
-        async def warm(self):
+        async def warm(self, developer_instructions=None):
+            seen.append(developer_instructions)
             warmed.set()
             return True
 
@@ -317,6 +320,8 @@ async def test_transfer_warms_the_target_session_in_the_background(
         thread_id="s_marian", cwd=str(tmp_path), label="Marian", voice_name="Marian"
     )
     await asyncio.wait_for(warmed.wait(), 1)
+    # The first voice turn's instructions, so the warmed CLI is reused (700639e).
+    assert seen == [voice_routing.load_direct_livekit_developer_instructions()]
 
 
 async def test_a_failing_warm_up_never_breaks_the_transfer(monkeypatch, tmp_path):
@@ -325,7 +330,7 @@ async def test_a_failing_warm_up_never_breaks_the_transfer(monkeypatch, tmp_path
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
 
     class FailingTarget(TargetClient):
-        async def warm(self):
+        async def warm(self, developer_instructions=None):
             raise RuntimeError("cli not ready")
 
     monkeypatch.setattr(voice_routing, "SuperAgentsLiveKitClient", FailingTarget)

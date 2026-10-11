@@ -150,8 +150,10 @@ class _FakeBackendClient:
     async def prepare(self):
         return "dispatcher-thread"
 
-    async def warm(self):
+    async def warm(self, developer_instructions=None):
+        # Warmed with the first turn's instructions (cli 700639e).
         self.warm_calls += 1
+        self.warm_instructions = developer_instructions
         return True
 
     async def aclose(self):
@@ -600,8 +602,8 @@ async def test_gateway_startup_failure_after_framework_start_falls_back(
         assert not ended and not ctx.shutdowns
         (packet,) = _status_packets(ctx.room)
         assert packet["detail"] == (
-        "Live voice is temporarily unavailable; using standard voice for this call."
-    )
+            "Live voice is temporarily unavailable; using standard voice for this call."
+        )
         assert packet["severity"] == "warning"
     finally:
         wiring.live._main_atask.cancel()
