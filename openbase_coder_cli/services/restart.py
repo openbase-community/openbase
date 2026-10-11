@@ -101,7 +101,10 @@ def schedule_restart(
                 "Could not prepare the pinned LiveKit engine; restart was not "
                 "scheduled. Resolve the download error above and retry."
             )
-    if not config.standalone and "openbase-tunneld" in plan.services:
+    if not config.standalone and {
+        "openbase-tunneld",
+        "openbase-voice-turn",
+    }.intersection(plan.services):
         try:
             install_tunneld_binary(config)
         except RuntimeError as exc:

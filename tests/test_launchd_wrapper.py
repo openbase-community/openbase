@@ -745,6 +745,12 @@ def test_install_removes_inactive_direct_even_when_unloaded(
     removed = []
     installed = []
     monkeypatch.setattr(launchd.tp, "provider", lambda: provider)
+    from openbase_coder_cli.services import tunneld
+
+    builds = []
+    monkeypatch.setattr(
+        tunneld, "install_tunneld_binary", lambda config: builds.append(config)
+    )
     monkeypatch.setattr(launchd, "_ensure_launchd_paths", lambda: None)
     monkeypatch.setattr(launchd, "_selected_backend", lambda _config: "openbase-cloud")
     monkeypatch.setattr(
@@ -770,6 +776,8 @@ def test_install_removes_inactive_direct_even_when_unloaded(
     assert not wrapper.exists()
     assert (TUNNELD_SERVICE in removed) == loaded
     assert "openbase-tunneld" not in installed
+    assert ("openbase-voice-turn" in installed) == (provider == "netmesh")
+    assert bool(builds) == (provider == "netmesh")
     assert "django-cli" in installed
 
 

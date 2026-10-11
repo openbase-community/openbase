@@ -151,3 +151,15 @@ By default this command:
 Continue with the [next steps](index.md#next-steps) on the Getting Started
 overview. For the developer install/test workflow, contribution branches, and
 service debugging, see the workspace repo's `DEV_RUNBOOK.md`.
+
+### Voice from an embedded phone
+
+An Openbase VPN backend starts a private voice relay for phones that use
+Openbase Direct. The relay uses the backend's existing VPN address; it does
+not create another network node or change the account's transport choice.
+It listens only on the private VPN interface. Voice relay allocations stay
+on the backend's loopback interface, not its LAN.
+
+If the VPN is not connected, the relay waits for its private address. Connect
+the VPN before starting a call. The system service retries after the VPN
+connects.

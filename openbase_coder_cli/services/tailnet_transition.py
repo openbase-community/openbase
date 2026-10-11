@@ -129,7 +129,12 @@ def kickstart_transport_services() -> bool:
 
     generation = pending_generation()
     kicked_all = True
-    for name in TRANSPORT_SERVICES:
+    from openbase_coder_cli.services import tailscale_provider as tp
+
+    services = TRANSPORT_SERVICES
+    if tp.provider() == tp.PROVIDER_NETMESH:
+        services = ("openbase-voice-turn", *services)
+    for name in services:
         try:
             kicked = launchctl_kickstart(find_service(name))
         except Exception:  # noqa: BLE001 - service may not be installed

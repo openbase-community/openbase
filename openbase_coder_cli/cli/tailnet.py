@@ -185,9 +185,14 @@ def _apply_provider(name: str, *, push_cloud: bool) -> None:
 
 def _teardown_transport(previous: str) -> None:
     """Best-effort teardown of the transport we're leaving."""
-    from openbase_coder_cli.services.definitions import TUNNELD_SERVICE
+    from openbase_coder_cli.services.definitions import (
+        TUNNELD_SERVICE,
+        VOICE_TURN_SERVICE,
+    )
     from openbase_coder_cli.services.launchd import remove_service
 
+    if previous == tp.PROVIDER_NETMESH:
+        remove_service(VOICE_TURN_SERVICE)
     if previous == tp.PROVIDER_NETMESH_TSNET:
         try:
             remove_service(TUNNELD_SERVICE)
@@ -341,9 +346,22 @@ def prepare_embedded_enrollment(env_path=None) -> dict | None:
     }
 
 
+def _install_vpn_voice_relay() -> None:
+    from openbase_coder_cli.services.definitions import VOICE_TURN_SERVICE
+    from openbase_coder_cli.services.installation import InstallationConfig
+    from openbase_coder_cli.services.launchd import install_service, launchctl_status
+    from openbase_coder_cli.services.tunneld import install_tunneld_binary
+
+    if not launchctl_status(VOICE_TURN_SERVICE).get("installed"):
+        config = InstallationConfig.load()
+        install_tunneld_binary(config)
+        install_service(config, VOICE_TURN_SERVICE)
+
+
 def _bring_up_transport(name: str) -> None:
     if name == tp.PROVIDER_NETMESH and tp.netmesh_uses_stock_tailscale():
         _join_netmesh_with_stock_tailscale()
+        _install_vpn_voice_relay()
         _apply_serve_best_effort()
         return
     if name == tp.PROVIDER_NETMESH:
@@ -363,6 +381,7 @@ def _bring_up_transport(name: str) -> None:
         # IS the transport. Build/register/connect it here so `netmesh` is a
         # first-class CLI/setup choice instead of "go open the desktop app."
         _provision_netmesh_companion()
+        _install_vpn_voice_relay()
         _apply_serve_best_effort()
         return
     if name != tp.PROVIDER_NETMESH_TSNET:

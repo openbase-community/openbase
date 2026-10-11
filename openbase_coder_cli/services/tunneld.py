@@ -24,11 +24,12 @@ from typing import Any
 
 import httpx
 
-from openbase_coder_cli.paths import OPENBASE_BIN_DIR
+from openbase_coder_cli.paths import OPENBASE_BASE_DIR, OPENBASE_BIN_DIR
 from openbase_coder_cli.services.installation import InstallationConfig
 
 TUNNELD_LOCAL_API = os.environ.get("OPENBASE_TUNNELD_URL", "http://127.0.0.1:7998")
 TSNET_CONTROL_URL_ENV_KEY = "OPENBASE_TSNET_CONTROL_URL"
+VOICE_TURN_LOCAL_API = "http://127.0.0.1:7997"
 TUNNELD_TIMEOUT_SECONDS = 5
 TUNNELD_PROBE_TIMEOUT_SECONDS = 8
 TUNNELD_START_WAIT_SECONDS = 15
@@ -197,10 +198,27 @@ def voice_turn_info() -> dict[str, Any] | None:
     """
     import json
 
-    try:
-        raw = json.loads((_state_dir() / "turn.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    from openbase_coder_cli.services import tailscale_provider as tp
+
+    if tp.provider() == tp.PROVIDER_NETMESH:
+        # Only a live relay may advertise credentials; never trust stale state.
+        state = OPENBASE_BASE_DIR / "voice-turn"
+        try:
+            token = (state / "control.token").read_text(encoding="utf-8")
+            response = httpx.get(
+                f"{VOICE_TURN_LOCAL_API}/credentials",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=1,
+            )
+            response.raise_for_status()
+            raw = response.json()
+        except (OSError, ValueError, httpx.HTTPError):
+            return None
+    else:
+        try:
+            raw = json.loads((_state_dir() / "turn.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
     if not isinstance(raw, dict) or not raw.get("username") or not raw.get("password"):
         return None
     return {

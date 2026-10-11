@@ -142,6 +142,17 @@ SERVICES: list[ServiceDefinition] = [
         install_by_default=False,
     ),
     ServiceDefinition(
+        name="openbase-voice-turn",
+        description="Private voice TURN relay on the system VPN",
+        command_template="openbase-voice-turn",
+        workdir_template="{data_dir}",
+        install_by_default=False,
+        cleanup_ports=(7997,),
+        cleanup_command_substrings=("openbase-tunneld", "voice-turn"),
+        freshness_kind="build",
+        freshness_packages=(),
+    ),
+    ServiceDefinition(
         name="openbase-tunneld",
         freshness_kind="build",
         freshness_packages=(),
@@ -153,9 +164,11 @@ SERVICES: list[ServiceDefinition] = [
         install_by_default=False,
         port=7998,
         cleanup_ports=(7998,),
-        cleanup_command_substrings=("openbase-tunneld",),
+        cleanup_command_substrings=("openbase-tunneld", "serve"),
     ),
 ]
+
+VOICE_TURN_SERVICE = next(s for s in SERVICES if s.name == "openbase-voice-turn")
 
 TUNNELD_SERVICE = next(s for s in SERVICES if s.name == "openbase-tunneld")
 

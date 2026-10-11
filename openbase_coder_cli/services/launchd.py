@@ -39,6 +39,7 @@ from openbase_coder_cli.services.definitions import (
     RETIRED_SERVICE_NAMES,
     SERVICES,
     TUNNELD_SERVICE,
+    VOICE_TURN_SERVICE,
     ServiceDefinition,
     default_services,
     retired_service_stub,
@@ -929,6 +930,15 @@ def install_all_services(config: InstallationConfig) -> None:
     services = include_installed_optional_services(
         default_services(coding_backend), launchctl_status
     )
+    if tp.provider() == tp.PROVIDER_NETMESH:
+        from openbase_coder_cli.services.tunneld import install_tunneld_binary
+
+        install_tunneld_binary(config)
+        if VOICE_TURN_SERVICE not in services:
+            services.append(VOICE_TURN_SERVICE)
+    else:
+        remove_service(VOICE_TURN_SERVICE)
+        services = [service for service in services if service != VOICE_TURN_SERVICE]
     services = order_services(services)
     binaries = _resolve_binaries(config, services)
 
