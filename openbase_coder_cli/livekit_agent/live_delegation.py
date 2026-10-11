@@ -1702,7 +1702,10 @@ class LiveDelegationBridge:
         )
         self._entries[key] = entry
         self._prune_entries()
-        if source == "transcript" and not replaces_turn:
+        # A new spoken request, whether the closed transcript or GPT-Live's
+        # own delegation started it (2026-10-11: delegation-started turns, the
+        # common case, got no "One moment."). A steer of a running turn does not.
+        if source in {"transcript", "delegation"} and not replaces_turn:
             self._acknowledge_request(entry)
         self._log_forced(
             text,
