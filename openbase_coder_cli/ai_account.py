@@ -78,10 +78,33 @@ def is_linked(provider: str) -> bool:
 
         return codex_auth_present()
     if provider == CLAUDE_CODE:
-        from openbase_coder_cli.claude_auth import claude_auth_status
-
-        return claude_auth_status(timeout=15).logged_in
+        return _claude_status().logged_in
     return provider == OPENBASE_CLOUD
+
+
+_CLAUDE_STATUS_TTL_SECONDS = 10.0
+_claude_status_cache: tuple[float, object] | None = None
+
+
+def _claude_status():
+    """`claude auth status`, cached briefly: the phone polls during a login."""
+    global _claude_status_cache
+    from openbase_coder_cli.claude_auth import claude_auth_status
+
+    now = time.monotonic()
+    if (
+        _claude_status_cache
+        and now - _claude_status_cache[0] < _CLAUDE_STATUS_TTL_SECONDS
+    ):
+        return _claude_status_cache[1]
+    status = claude_auth_status(timeout=15)
+    _claude_status_cache = (now, status)
+    return status
+
+
+def _forget_claude_status() -> None:
+    global _claude_status_cache
+    _claude_status_cache = None
 
 
 def linked_account(provider: str) -> str | None:
@@ -106,9 +129,7 @@ def linked_account(provider: str) -> str | None:
         value = claims.get("email") or claims.get("name")
         return str(value) if value else None
     if provider == CLAUDE_CODE:
-        from openbase_coder_cli.claude_auth import claude_auth_status
-
-        status = claude_auth_status(timeout=15)
+        status = _claude_status()
         try:
             payload = json.loads(status.raw_output)
         except (ValueError, TypeError):
@@ -302,6 +323,7 @@ class LoginManager:
         with job.lock:
             if job.state == "cancelled":
                 return
+        _forget_claude_status()
         linked = is_linked(job.provider)
         with job.lock:
             if returncode == 0 and linked:
@@ -400,6 +422,7 @@ def unlink(provider: str) -> None:
         raise ValueError(f"Unknown AI account: {provider}")
     if selected_choice() == provider:
         select(OPENBASE_CLOUD)
+    _forget_claude_status()
     with contextlib.suppress(OSError, subprocess.TimeoutExpired):
         subprocess.run(
             _logout_command(provider),
