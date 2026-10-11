@@ -70,8 +70,9 @@ def notify_thread_turn_finished(
     """Record a thread-finished notification for a manual thread.
 
     Callers have already checked ``is_manual_thread``. A completion on an
-    already-read thread notification reopens it ("unread again"), which is
-    what makes the notification exist iff the latest result is unread.
+    already-read thread notification reopens it ("unread again"), and one on
+    a still-unread notification replaces it with the newer result, so the
+    notification always describes the latest unread turn and alerts for it.
     """
     entry = notification_store.upsert_notification(
         KIND_THREAD,
@@ -79,6 +80,7 @@ def notify_thread_turn_finished(
         title=title,
         body=_truncate(body),
         thread_id=thread_id,
+        refresh_if_unread=True,
         alert_after=_held_alert_after(),
     )
     if entry:
@@ -285,14 +287,16 @@ def _push_in_background(entry: dict[str, Any]) -> None:
 
 
 def _send_held_push(entry: dict[str, Any]) -> None:
-    current = notification_store.get_notification(str(entry.get("id") or ""))
+    current = notification_store.get_notification(
+        str(entry.get("kind") or ""), str(entry.get("entity_id") or "")
+    )
     if (
         current is None
         or current.get("read_at")
         or current.get("resolved_at")
-        or current.get("created_at") != entry.get("created_at")
+        or current.get("id") != entry.get("id")
     ):
-        # Read, resolved, or superseded by a newer upsert (which owns its
+        # Read, resolved, or superseded by a newer revision (which owns its
         # own push) while the hold was running.
         return
     _send_push(entry)
