@@ -61,6 +61,24 @@ def _voice_prompt_transcript(prompt: str) -> str:
     return prompt.strip()
 
 
+# A steer lands inside work the agent is already doing. Say so, and leave
+# stopping, changing course or carrying on to the agent's own judgment (Gabe,
+# 2026-10-11: no keyword matching of "stop"; the agent decides). Thread views
+# strip it like every Openbase system note.
+LIVE_STEER_NOTE = (
+    "[Openbase system note: the caller said this while you were still working "
+    "on their current request. Decide yourself whether to stop, change course "
+    "or continue.]"
+)
+
+
+def frame_steer(prompt: str) -> str:
+    """``prompt`` with the mid-turn note in front (once)."""
+    if prompt.startswith(LIVE_STEER_NOTE):
+        return prompt
+    return f"{LIVE_STEER_NOTE}\n\n{prompt}"
+
+
 def _wrap_transcript(transcript: str) -> str:
     # The transcript came out of an already-wrapped prompt, so it is already
     # HTML-escaped; wrap_voice_prompt would double-escape entities.
@@ -448,7 +466,7 @@ class SuperAgentsClientTurnsMixin:
         try:
             result = await self._backend_client.steer_by_label(
                 self._query(thread_id=thread_id, turn_id=active_turn_id),
-                prompt,
+                frame_steer(prompt),
                 turn_input,
             )
         except TimeoutError:
@@ -511,7 +529,7 @@ class SuperAgentsClientTurnsMixin:
                 active_turn_id = actual_turn_id
                 result = await self._backend_client.steer_by_label(
                     self._query(thread_id=thread_id, turn_id=actual_turn_id),
-                    prompt,
+                    frame_steer(prompt),
                     turn_input,
                 )
             elif _is_turn_cannot_accept_steering_error(exc):
@@ -572,38 +590,6 @@ class SuperAgentsClientTurnsMixin:
             prompt_debug["length"],
         )
         return turn_id
-
-    async def interrupt_active_turn(self) -> bool:
-        """Stop the turn this client is running, as a spoken "stop" asks.
-
-        The backend's hard cancel (Codex turn/interrupt, Claude session
-        interrupt), the same the thread's Stop button uses. False when no
-        turn is running or the backend reports none.
-        """
-        thread_id = self._thread_id
-        turn_id = self._active_turn_id
-        if not thread_id or not turn_id or self._active_turn_has_completed():
-            return False
-        try:
-            await self._backend_client.cancel_by_label(
-                self._query(thread_id=thread_id, turn_id=turn_id)
-            )
-        except (RuntimeError, ValueError) as exc:
-            logger.info(
-                "%s stage=voice_stop_no_active_turn thread_id=%s turn_id=%s error=%s",
-                DISPATCH_TIMING_LOG,
-                thread_id,
-                turn_id,
-                type(exc).__name__,
-            )
-            return False
-        logger.info(
-            "%s stage=voice_stop_interrupted_turn thread_id=%s turn_id=%s",
-            DISPATCH_TIMING_LOG,
-            thread_id,
-            turn_id,
-        )
-        return True
 
     async def _cancel_turn_before_queueing(self, thread_id: str, turn_id: str) -> None:
         """Stop a fragment turn before waiting for its queued replacement."""

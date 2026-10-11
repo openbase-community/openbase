@@ -18,6 +18,9 @@ from openbase_coder_cli.livekit_agent.super_agents_client import (
     _response_is_queued,
     _speech_text_from_progress,
 )
+from openbase_coder_cli.livekit_agent.super_agents_client_turns import (
+    frame_steer,
+)
 
 
 class FakeSuperAgentsBackend:
@@ -742,7 +745,7 @@ async def test_super_agents_livekit_client_steers_backend_active_turn(
     assert len(backend.steered) == 1
     steer_input, prompt = backend.steered[0]
     assert steer_input.turn_id == "active-turn-1"
-    assert prompt == "please adjust that"
+    assert prompt == frame_steer("please adjust that")
     assert result["_livekit_turn_id"] == "active-turn-1"
     assert result["_livekit_speech_text"] == "The steered dispatcher answer is ready."
 
@@ -773,7 +776,7 @@ async def test_super_agents_livekit_client_preserves_started_turn_after_cancella
     assert len(backend.steered) == 1
     steer_input, prompt = backend.steered[0]
     assert steer_input.turn_id == "turn-1"
-    assert prompt == "change it to blueberries"
+    assert prompt == frame_steer("change it to blueberries")
     assert result["_livekit_turn_id"] == "turn-1"
     assert result["_livekit_speech_text"] == "The interrupted turn accepted steering."
 
@@ -1176,7 +1179,7 @@ async def test_super_agents_livekit_client_proactively_steers_active_turn(
     assert len(backend.steered) == 1
     steer_input, prompt = backend.steered[0]
     assert steer_input.turn_id == "turn-1"
-    assert prompt == "stop and write about blueberries"
+    assert prompt == frame_steer("stop and write about blueberries")
 
     backend.release_progress.set()
     first_result = await first
@@ -1222,7 +1225,7 @@ async def test_replacing_a_fragment_turn_interrupts_it_on_a_non_steering_backend
     assert steer_input.turn_id == "turn-1"
     # The whole request, not the unsubmitted remainder: the interrupted
     # work is discarded.
-    assert prompt == (
+    assert prompt == frame_steer(
         "Subtract 38 from the result in this thread and answer just the number"
     )
     assert backend.steer_turn_inputs[0]["interruptCurrentWork"] is True
@@ -1263,7 +1266,7 @@ async def test_replacing_a_fragment_turn_steers_the_remainder_on_codex(
     _steer_input, prompt = backend.steered[0]
     # Codex steers mid-turn natively: only the new words reach the turn and
     # nothing is interrupted.
-    assert prompt == "<voice>and answer just the number</voice>"
+    assert prompt == frame_steer("<voice>and answer just the number</voice>")
     assert "interruptCurrentWork" not in backend.steer_turn_inputs[0]
 
 
@@ -2223,7 +2226,7 @@ async def test_steer_active_turn_skips_transcript_covered_by_prior_fragments(
     assert await client.steer_active_turn(extended) == "turn-1"
     assert len(backend.steered) == 1
     _steer_input, steered_prompt = backend.steered[0]
-    assert steered_prompt == "<voice>Now do the fix.</voice>"
+    assert steered_prompt == frame_steer("<voice>Now do the fix.</voice>")
 
 
 @pytest.mark.asyncio
@@ -2648,28 +2651,3 @@ def test_spoken_dispatcher_effort_is_chosen_by_model():
     assert spoken_dispatcher_effort("opus") == "medium"
     assert spoken_dispatcher_effort("gpt-5.5") == "medium"
     assert spoken_dispatcher_effort(None) == "medium"
-
-
-@pytest.mark.asyncio
-async def test_interrupt_active_turn_cancels_through_the_backend():
-    from types import SimpleNamespace
-    from unittest.mock import AsyncMock
-
-    from openbase_coder_cli.livekit_agent.super_agents_client import (
-        SuperAgentsLiveKitClient,
-    )
-
-    client = SuperAgentsLiveKitClient.__new__(SuperAgentsLiveKitClient)
-    client._thread_id = "s_cooper"
-    client._active_turn_id = "t_1"
-    client._active_turn_has_completed = lambda: False
-    client._query = lambda **kw: SimpleNamespace(**kw)
-    client._backend_client = SimpleNamespace(cancel_by_label=AsyncMock(return_value={}))
-    assert await client.interrupt_active_turn() is True
-    query = client._backend_client.cancel_by_label.await_args.args[0]
-    assert (query.thread_id, query.turn_id) == ("s_cooper", "t_1")
-
-    client._backend_client.cancel_by_label = AsyncMock(side_effect=ValueError("none"))
-    assert await client.interrupt_active_turn() is False
-    client._active_turn_id = None
-    assert await client.interrupt_active_turn() is False

@@ -95,7 +95,6 @@ from openbase_coder_cli.livekit_agent.speech_formatter import (
 from openbase_coder_cli.livekit_agent.spoken_commands import (
     _is_exit_to_dispatch_command,
     _normalize_spoken_command,
-    is_stop_command,
 )
 from openbase_coder_cli.livekit_agent.super_agents_client import (
     _looks_like_raw_backend_error,
@@ -221,7 +220,6 @@ LIVE_CHARACTER_REDELIVERY = (
     "The following from {label} has not yet been spoken. Relay it now; "
     "{disposition}. Do not repeat anything already spoken."
 )
-STOPPED_LINE = "Stopped."
 # A thread can hold an earlier request that never got its answer (a text
 # turn that failed on allowance, for instance). A spoken turn answers what
 # was just said, not that backlog (2026-10-10: a voice question was answered
@@ -843,73 +841,6 @@ class LiveDelegationBridge:
                 spoken=True,
                 atomic=True,
             )
-
-    def _stop_requested(
-        self, text: str, client, route, key: str | None, delegation_id: str | None
-    ) -> LiveDelegationEntry:
-        """A spoken "stop": cancel the active thread's turn instead of steering it.
-
-        Its pending answer is dropped, the caller hears "Stopped." when a turn
-        was running, and the call stays up. With nothing running the speech
-        was already cut by the barge-in, so nothing more happens.
-        """
-        running = [
-            e
-            for e in self._entries.values()
-            if e.client is client and not e.completed and not e.superseded
-        ]
-        for entry in running:
-            # Superseded drops its answer; the turn's own wait task keeps
-            # running so the client still knows which turn to cancel.
-            entry.superseded = True
-            if entry.heartbeat is not None and not entry.heartbeat.done():
-                entry.heartbeat.cancel()
-        self._log_forced(
-            text, decision="stop", key=key or "", delegation_id=delegation_id
-        )
-        stub = LiveDelegationEntry(
-            key=key or f"stop-{self._clock():.3f}",
-            prompt=text,
-            route=route,
-            client=client,
-            agent_label=self._active_agent_label,
-            delegation_id=delegation_id,
-            source="stop",
-            created_at=self._clock(),
-            superseded=True,
-            completed=True,
-        )
-        interrupt = getattr(client, "interrupt_active_turn", None)
-        if interrupt is None:
-            return stub
-
-        async def stop() -> None:
-            try:
-                stopped = await interrupt()
-            except Exception:  # noqa: BLE001 - a failed stop must not end the call
-                self._log.warning(
-                    "%s stage=live_stop_failed", DISPATCH_TIMING_LOG, exc_info=True
-                )
-                return
-            self._log.info(
-                "%s stage=live_stop key=%s stopped=%s running_entries=%d",
-                DISPATCH_TIMING_LOG,
-                stub.key,
-                stopped,
-                len(running),
-            )
-            if stopped and not self._closed and self._live_session is not None:
-                self._live_session.append_commentary(
-                    speak_now(
-                        "Say exactly the following, once, and nothing else. "
-                        "Text to say: " + json.dumps(STOPPED_LINE)
-                    ),
-                    delegation_id=None,
-                )
-                self.speech_gate.authorize(limit_ms=LIVE_VOICE_ACK_LIMIT_MS)
-
-        asyncio.create_task(stop(), name="live-voice-stop")
-        return stub
 
     def _acknowledge_request(self, entry: LiveDelegationEntry) -> None:
         """One short authorised line while the thread works; capped playback."""
@@ -1725,8 +1656,6 @@ class LiveDelegationBridge:
         """
         client = self._voice_router.active_client
         route = self._voice_router.route_snapshot()
-        if is_stop_command(text):
-            return self._stop_requested(text, client, route, key, delegation_id)
         inherited: LiveDelegationEntry | None = None
         self._call_context.observe_route(route, self._active_agent_label)
         pending_deliveries: list[_CommentaryDelivery] = []

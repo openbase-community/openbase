@@ -16,7 +16,6 @@ from openbase_coder_cli.livekit_agent.config import (
 from openbase_coder_cli.livekit_agent.screen_context import apply_screen_context
 from openbase_coder_cli.livekit_agent.spoken_commands import (
     _is_exit_to_dispatch_command,
-    is_stop_command,
 )
 from openbase_coder_cli.livekit_agent.tts_selection import text_for_tts
 from openbase_coder_cli.livekit_agent.turn_detection import (
@@ -186,18 +185,6 @@ class CodexLLMStream(llm.LLMStream):
                     reason="exit_to_dispatch_command",
                 )
             self._emit_delta("Back to dispatch.")
-            return
-
-        if is_stop_command(prompt):
-            # A spoken stop cancels the running turn rather than steering it.
-            interrupt = getattr(
-                self._voice_router.active_client, "interrupt_active_turn", None
-            )
-            stopped = bool(interrupt is not None and await interrupt())
-            if delivery_record is not None:
-                delivery_ledger.mark_cancelled(delivery_record, reason="spoken_stop")
-            if stopped:
-                self._emit_delta("Stopped.")
             return
 
         # No onboarding nudge on a spoken turn: it sends the Dispatcher off to
