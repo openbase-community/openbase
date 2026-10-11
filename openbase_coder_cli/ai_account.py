@@ -145,6 +145,14 @@ def linked_account(provider: str) -> str | None:
     return None
 
 
+def is_available(provider: str) -> bool:
+    """Whether this computer has the provider's CLI to run the login with."""
+    if provider == OPENBASE_CLOUD:
+        return True
+    name = "codex" if provider == CODEX else "claude"
+    return bool(find_backend_binary(name) or shutil.which(name))
+
+
 def _command(provider: str) -> list[str]:
     if provider == CODEX:
         return [
@@ -443,6 +451,7 @@ def status() -> dict:
             {
                 "id": choice,
                 "label": LABELS[choice],
+                "available": is_available(choice),
                 "linked": True if choice == OPENBASE_CLOUD else is_linked(choice),
                 "account": None
                 if choice == OPENBASE_CLOUD
