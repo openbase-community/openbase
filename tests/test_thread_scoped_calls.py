@@ -299,7 +299,8 @@ async def test_live_call_started_from_a_thread_talks_to_that_thread(
     assert agent._bridge._call_id == thread_call.ctx.room.name
     # Explicit greeting uses the actual starting character, without a transfer.
     [(kind, command, delegation_id)] = wiring.live.appends
-    assert kind == "instructions"
+    # A one-shot ask, not a standing rule (34f92d5: no double greeting).
+    assert kind == "commentary"
     assert delegation_id is None
     assert "exactly once" in command
     assert json.loads(command.split("Text to read: ", 1)[1]) == "Hi, I'm Linda."
