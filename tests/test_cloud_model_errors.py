@@ -143,3 +143,52 @@ def test_provider_credit_exhaustion_reads_as_a_temporary_outage(raw):
     assert normalize_model_proxy_error(raw) == PROVIDER_UNAVAILABLE_MESSAGE
     assert model_proxy_denial_spoken_message(raw) == PROVIDER_UNAVAILABLE_MESSAGE
     assert "credit" not in PROVIDER_UNAVAILABLE_MESSAGE.lower()
+
+
+@pytest.mark.parametrize(
+    "prefix", ["API Error: 403 ", "Failed to authenticate. API Error: 403 "]
+)
+def test_request_budget_error_does_not_claim_monthly_exhaustion(prefix):
+    from openbase_coder_cli.claude_auth import is_spend_limit_text
+    from openbase_coder_cli.cloud_model_errors import model_proxy_denial_spoken_message
+    from openbase_coder_cli.livekit_agent.super_agents_client import _safe_spoken_answer
+
+    raw = prefix + json.dumps(
+        {
+            "code": "model_request_exceeds_allowance",
+            "detail": "This model request's estimated cost exceeds the remaining allowance.",
+            "remaining_millicents": "83463",
+        }
+    )
+    expected = "This request may cost more than your remaining model credit. Start a shorter conversation or ask for a shorter reply."
+    assert normalize_model_proxy_error(raw) == expected
+    assert model_proxy_denial_spoken_message(raw) == expected
+    assert (
+        _safe_spoken_answer(raw, auth_failed=False, backend="openbase_cloud")
+        == expected
+    )
+    assert not is_backend_auth_failure_text(raw)
+    assert is_spend_limit_text(raw)
+    run = _run_from_turn({"id": "turn-1", "status": "failed", "lastUsefulMessage": raw})
+    assert run.accumulated_output == expected
+    assert "used up" not in expected
+    assert (
+        _safe_spoken_answer(raw, auth_failed=True, backend="openbase_cloud") == expected
+    )
+    from openbase_coder_cli.livekit_agent import turn_recovery
+
+    failure = turn_recovery.classify_error_text(raw)
+    assert failure.kind == turn_recovery.KIND_TERMINAL
+    assert not failure.retryable
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        'API Error: 401 {"code":"model_request_exceeds_allowance"}',
+        'API Error: 500 {"code":"model_request_exceeds_allowance"}',
+        'Yesterday I saw API Error: 403 {"code":"model_request_exceeds_allowance"}',
+    ],
+)
+def test_request_budget_marker_only_matches_proxy_denials(raw):
+    assert normalize_model_proxy_error(raw) == raw
