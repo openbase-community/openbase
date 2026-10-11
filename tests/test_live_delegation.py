@@ -2644,6 +2644,24 @@ async def test_output_transcript_deltas_are_logged_per_burst(caplog):
             if "live_output_transcript" in r.getMessage()
         ]
         assert "audio_ms=200" in lines[-1] and "peak_dbfs=-8.7" in lines[-1]
+        assert "heard_chars=0" in lines[-1]
+        with caplog.at_level(
+            logging.INFO, logger="openbase_coder_cli.livekit_agent.live_delegation"
+        ):
+            live.emit(
+                "openai_server_event_received",
+                {"type": "session.input_transcript.delta", "delta": "nine plus"},
+            )
+            live.emit(
+                "openai_server_event_received",
+                {"type": "session.closed", "reason": "done"},
+            )
+        lines = [
+            r.getMessage()
+            for r in caplog.records
+            if "live_output_transcript" in r.getMessage()
+        ]
+        assert "heard_chars=9 heard='nine plus'" in lines[-1]
     finally:
         await bridge.aclose()
 

@@ -64,6 +64,18 @@ class OutputTranscriptLog:
         self._timer = None
         self._audio_bytes = 0
         self._audio_peak = 0
+        self._input_parts: list[str] = []
+
+    def input_delta(self, text: str) -> None:
+        """What the model heard from the caller in this window.
+
+        Speaker echo the model takes for a barge-in cancels its own reply
+        server-side, which our VAD never sees; the caller transcript in the
+        same window as a cut reply is the evidence.
+        """
+        if text:
+            self._input_parts.append(text)
+        self._schedule()
 
     def delta(self, text: str) -> None:
         if text:
@@ -107,20 +119,25 @@ class OutputTranscriptLog:
         if self._timer is not None:
             self._timer.cancel()
             self._timer = None
-        if not self._parts and not self._audio_bytes:
+        if not self._parts and not self._audio_bytes and not self._input_parts:
             return
         text = "".join(self._parts)
+        heard = "".join(self._input_parts)
         audio_ms = self._audio_bytes // 48  # 24 kHz mono int16: 48 bytes per ms
         peak_dbfs = 20 * math.log10(max(self._audio_peak / 32768, 1e-6))
         self._parts = []
+        self._input_parts = []
         self._audio_bytes = 0
         self._audio_peak = 0
         self._log.info(
-            "%s stage=live_output_transcript chars=%d audio_ms=%d peak_dbfs=%.1f text=%r",
+            "%s stage=live_output_transcript chars=%d audio_ms=%d peak_dbfs=%.1f "
+            "heard_chars=%d heard=%r text=%r",
             DISPATCH_TIMING_LOG,
             len(text),
             audio_ms,
             peak_dbfs,
+            len(heard),
+            heard[:80],
             text[:160],
         )
 
@@ -138,6 +155,9 @@ def log_gateway_event(
             return
         if kind == "session.output_audio.delta":
             transcript.audio_delta(str(event.get("delta") or ""))
+            return
+        if kind == "session.input_transcript.delta":
+            transcript.input_delta(str(event.get("delta") or ""))
             return
         if kind not in _QUIET_GATEWAY_EVENTS:
             transcript.flush()
