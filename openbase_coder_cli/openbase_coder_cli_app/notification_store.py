@@ -86,10 +86,10 @@ def upsert_notification(
     thread's later turn finishing). ``alert_after`` (ISO UTC) asks clients
     to hold the banner until then (see ``web_redirect_hold``).
 
-    Every rewrite of an existing entity gets a new ``revision`` and with it
-    a new ``id`` (``kind:entity#revision``): clients dedupe alerts and tag
-    tray entries by ``id``, so the new revision alerts once and replaces the
-    superseded one. The store key stays ``kind:entity``.
+    Every rewrite of an existing entity bumps its ``revision``. ``id``
+    stays ``kind:entity`` so tray entries (tagged by id) replace each other,
+    while clients dedupe alerts on id plus revision, so a newer revision
+    alerts once.
     """
     if kind not in VALID_KINDS:
         raise ValueError(f"invalid notification kind {kind!r}")
@@ -110,7 +110,7 @@ def upsert_notification(
             return None
         revision = int(existing.get("revision") or 1) + 1 if existing else 1
         entry = {
-            "id": note_id if revision == 1 else f"{note_id}#{revision}",
+            "id": note_id,
             "revision": revision,
             "kind": kind,
             "entity_id": entity,

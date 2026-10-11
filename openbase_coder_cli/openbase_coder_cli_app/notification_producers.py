@@ -294,7 +294,7 @@ def _send_held_push(entry: dict[str, Any]) -> None:
         current is None
         or current.get("read_at")
         or current.get("resolved_at")
-        or current.get("id") != entry.get("id")
+        or current.get("revision") != entry.get("revision")
     ):
         # Read, resolved, or superseded by a newer revision (which owns its
         # own push) while the hold was running.
@@ -327,7 +327,12 @@ def _send_push(entry: dict[str, Any]) -> None:
 
 def _push_user_info(entry: dict[str, Any]) -> dict[str, str]:
     kind = entry.get("kind")
-    user_info: dict[str, str] = {"notification_id": str(entry.get("id") or "")}
+    user_info: dict[str, str] = {
+        "notification_id": str(entry.get("id") or ""),
+        # Apps dedupe alerts on id plus revision; the id alone tags the
+        # tray entry, so a newer revision replaces the older alert.
+        "notification_revision": str(entry.get("revision") or 1),
+    }
     if kind == KIND_THREAD:
         user_info["openbase_destination"] = "threads"
         user_info["thread_id"] = str(entry.get("thread_id") or "")

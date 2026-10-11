@@ -205,16 +205,22 @@ def test_later_turn_replaces_an_unread_thread_notification_with_a_new_revision(
         "t-1", title="T", body="Apple, banana"
     )
     first, second = _no_cloud_push
-    assert (first["id"], second["id"]) == ("thread:t-1", "thread:t-1#2")
+    assert (first["id"], first["revision"]) == ("thread:t-1", 1)
+    assert (second["id"], second["revision"]) == ("thread:t-1", 2)
+    assert notification_producers._push_user_info(second) == {
+        "notification_id": "thread:t-1",
+        "notification_revision": "2",
+        "openbase_destination": "threads",
+        "thread_id": "t-1",
+    }
     listed = notification_store.list_notifications()
     assert listed["unread_count"] == 1
     assert [(e["id"], e["body"]) for e in listed["notifications"]] == [
-        ("thread:t-1#2", "Apple, banana")
+        ("thread:t-1", "Apple, banana")
     ]
     assert notification_store.mark_read(kind="thread", entity_id="t-1") == 1
     reopened = notification_store.upsert_notification("thread", "t-1", title="T")
-    assert reopened["id"] == "thread:t-1#3"
-    assert notification_store.mark_read(["thread:t-1#3"]) == 1
+    assert (reopened["id"], reopened["revision"]) == ("thread:t-1", 3)
 
 
 def test_reopen_if_read_false_stays_read():
