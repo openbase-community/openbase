@@ -2,7 +2,8 @@
 
 After `openbase-coder login` (also run by the desktop app's onboarding), the
 browser lands on the local callback. These pages tell the user they are signed
-in and should return to the Openbase app or their terminal, matching the cloud
+in and should return to whichever started the login, the Openbase app or their
+terminal, matching the cloud
 web's sign-in look so the hand-off never reads like a paywall.
 """
 
@@ -56,13 +57,32 @@ def _render(
     return page.encode("utf-8")
 
 
-def login_complete_page(*, desktop_url: str) -> bytes:
-    """The page shown once the CLI has received a successful login."""
+def login_complete_page(*, desktop_url: str | None) -> bytes:
+    """The page shown once the CLI has received a successful login.
+
+    ``desktop_url`` is the app deep link to reopen. It is only passed when the
+    desktop app started the login; a terminal-started login (e.g. during
+    ``./scripts/setup``, before the app is built) has no ``openbase://`` handler
+    registered, so the page just sends the user back to their terminal.
+    """
+    if desktop_url is None:
+        return _render(
+            page_title="Signed in to Openbase",
+            icon_svg=_CHECK_ICON,
+            eyebrow="Signed in",
+            heading="You're signed in.",
+            subtitle="Return to your terminal to keep going.",
+            card_html="""
+          <ul>
+            <li><span class="step">1</span><span>Head back to your <strong>terminal</strong>. Setup continues there.</span></li>
+          </ul>""",
+            close_note="You can close this tab.",
+        )
+
     escaped_desktop_url = html.escape(desktop_url, quote=True)
     card_html = f"""
           <ul>
-            <li><span class="step">1</span><span><strong>Started in the Openbase app?</strong> It reopens on its own. If it doesn't, use the button below.</span></li>
-            <li><span class="step">2</span><span><strong>Started in your terminal?</strong> You're all set. Head back to it to continue.</span></li>
+            <li><span class="step">1</span><span>The <strong>Openbase app</strong> reopens on its own. If it doesn't, use the button below.</span></li>
           </ul>
           <a class="button" href="{escaped_desktop_url}">Open the Openbase app</a>"""
     script_html = f"""<script>
@@ -75,7 +95,7 @@ def login_complete_page(*, desktop_url: str) -> bytes:
         icon_svg=_CHECK_ICON,
         eyebrow="Signed in",
         heading="You're signed in.",
-        subtitle="Return to the Openbase app or your terminal to keep going.",
+        subtitle="Return to the Openbase app to keep going.",
         card_html=card_html,
         close_note="You can close this tab.",
         script_html=script_html,

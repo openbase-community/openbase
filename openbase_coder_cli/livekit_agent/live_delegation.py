@@ -721,9 +721,18 @@ class LiveDelegationBridge:
         )
 
     def _on_gateway_event(self, event) -> None:
-        if isinstance(event, dict) and event.get("type") == "error":
-            error = event.get("error") if isinstance(event.get("error"), dict) else {}
-            self._last_gateway_error_code = str(error.get("code") or "") or None
+        if isinstance(event, dict):
+            kind = event.get("type")
+            if kind == "error":
+                error = (
+                    event.get("error") if isinstance(event.get("error"), dict) else {}
+                )
+                self._last_gateway_error_code = str(error.get("code") or "") or None
+            elif kind == "session.output_transcript.delta":
+                # What the agent says is what its speakerphone echo sounds like.
+                self.speech_gate.agent_said(str(event.get("delta") or ""))
+            elif kind == "session.input_transcript.delta":
+                self.speech_gate.caller_heard(str(event.get("delta") or ""))
         log_gateway_event(self._log, event, self._output_transcript)
 
     def attach(self, live_session) -> None:
@@ -1693,7 +1702,10 @@ class LiveDelegationBridge:
         )
         self._entries[key] = entry
         self._prune_entries()
-        if source == "transcript" and not replaces_turn:
+        # A new spoken request, whether the closed transcript or GPT-Live's
+        # own delegation started it (2026-10-11: delegation-started turns, the
+        # common case, got no "One moment."). A steer of a running turn does not.
+        if source in {"transcript", "delegation"} and not replaces_turn:
             self._acknowledge_request(entry)
         self._log_forced(
             text,

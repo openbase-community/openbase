@@ -30,3 +30,14 @@ def open_url_error(value: str) -> str | None:
     if any(ord(char) < 32 for char in value):
         return "url must not contain control characters."
     return None
+
+
+def normalize_open_url(value: str) -> str:
+    """Lowercase the scheme of an allowed URL.
+
+    Schemes are case-insensitive (RFC 3986), but Android resolves intents
+    case-sensitively, so "Https://..." (an autocapitalized URL) would match
+    no browser there.
+    """
+    scheme, separator, rest = value.partition(":")
+    return f"{scheme.lower()}{separator}{rest}" if separator else value

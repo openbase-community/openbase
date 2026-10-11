@@ -80,7 +80,10 @@ class RouteAnnouncer:
             audio=announcement_audio(
                 self._tts, message.text, voice_id=message.voice_id, outcome=outcome
             ),
-            allow_interruptions=False,
+            # GPT-Live's server-side turn detection rejects
+            # allow_interruptions=False (the SDK warns and ignores it); the
+            # speech gate already treats this playout as agent audio, so the
+            # announcer's own echo does not count as the caller interrupting.
             add_to_chat_ctx=False,
         )
         await handle.wait_for_playout()

@@ -79,7 +79,49 @@ def test_interactive_setup_summarizes_developer_agent_configuration(
     assert ("registration is enabled" in paragraph) == shared_mcp
     assert ("configurations is disabled" in paragraph) == (not shared_mcp)
     assert paragraph.endswith("process to load these settings.")
-    assert result.output.rstrip().split("\n")[-1].startswith("ℹ️ System changes:")
+    assert result.output.rstrip().split("\n")[-1].startswith("ℹ️  System changes:")
+
+
+def test_deferred_notes_file_holds_the_info_summaries_for_the_wrapper(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(setup_cli, "is_supported", lambda: True)
+    monkeypatch.setattr(setup_cli, "_run_setup_phases", lambda *_a, **_kw: True)
+    monkeypatch.setattr(setup_cli, "compute_cli_configured", lambda: True)
+    monkeypatch.setattr(setup_cli, "current_runtime_package", lambda: None)
+    monkeypatch.setattr(
+        setup_cli, "_interactive_cloud_login_and_checks", lambda *_a, **_kw: None
+    )
+    monkeypatch.setattr(
+        setup_cli.SystemSetupSnapshot,
+        "capture",
+        lambda _path: setup_cli.SystemSetupSnapshot(),
+    )
+    notes_file = tmp_path / "notes.txt"
+
+    result = CliRunner().invoke(
+        setup_cli.setup,
+        [
+            "--interactive",
+            "--env-file",
+            str(tmp_path / ".env"),
+            "--backend",
+            "codex",
+            "--audio-provider",
+            "openbase-cloud",
+            "--tailnet-provider",
+            "tailscale",
+            "--defer-app-qr",
+            "--deferred-notes-file",
+            str(notes_file),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "ℹ️" not in result.output
+    notes = [line for line in notes_file.read_text().splitlines() if line]
+    assert notes[0].startswith("ℹ️  Your Codex and Claude Code setup")
+    assert notes[1].startswith("ℹ️  System changes:")
 
 
 @pytest.mark.parametrize("defer_app_qr", [True, False])

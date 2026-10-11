@@ -2725,3 +2725,18 @@ async def test_a_spoken_request_is_acknowledged_once_and_the_answer_is_asked_for
         assert live.acks() == ["One moment."]
     finally:
         await bridge.aclose()
+
+
+async def test_a_request_the_model_delegated_is_acknowledged_too():
+    """VM2 2026-10-11: "Cooper, how many files are in your project folder?" was
+    started by GPT-Live's delegation event and got no "One moment."."""
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    try:
+        live.delegate("d1", "How many files are in your project folder")
+        await _settle()
+        assert live.acks() == ["One moment."]
+        dispatcher.result_gate.set()
+        await _settle()
+        assert live.acks() == ["One moment."]
+    finally:
+        await bridge.aclose()

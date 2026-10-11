@@ -8,8 +8,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import click
-
+from openbase_coder_cli.cli.setup.notices import info_notice
 from openbase_coder_cli.paths import (
     INSTALLATION_JSON_PATH,
     LAUNCHD_DOMAIN,
@@ -148,14 +147,14 @@ def _describe_changes(
     return sentences
 
 
-def print_system_setup_summary(
+def system_setup_summary(
     before: SystemSetupSnapshot,
     after: SystemSetupSnapshot,
     *,
     service_manager: str,
     skip_services: bool,
     serve_healthy: bool,
-) -> None:
+) -> str:
     unknown = set(before.unreadable + after.unreadable)
     sentences = _describe_changes(
         before.services,
@@ -201,5 +200,4 @@ def print_system_setup_summary(
             + ", ".join(sorted(set(before.unreadable + after.unreadable)))
             + "."
         )
-    click.echo()
-    click.echo("ℹ️ System changes: " + " ".join(sentences))
+    return info_notice("System changes: " + " ".join(sentences))

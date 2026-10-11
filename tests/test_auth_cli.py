@@ -358,20 +358,45 @@ def test_auth_status_logged_out_exits_nonzero(monkeypatch):
     assert "Not logged in" in result.output
 
 
-def test_oauth_success_page_sends_user_back_to_app_or_terminal():
+def _assert_no_paywall(html):
+    for paywall_word in ("subscribe", "plan", "pay", "billing", "dashboard"):
+        assert paywall_word not in html.lower().replace("display", "")
+
+
+def test_oauth_success_page_for_desktop_login_reopens_the_app():
     html = login_complete_page(desktop_url=auth_cli.DESKTOP_LOGIN_COMPLETE_URL).decode(
         "utf-8"
     )
 
     assert "You&#x27;re signed in." in html
-    assert "Return to the Openbase app or your terminal" in html
+    assert "Return to the Openbase app" in html
     assert "Open the Openbase app" in html
     assert "<svg" in html  # inline brand logo, no network fetch from loopback
     assert "openbase://open?source=cli-auth&amp;intent=login-complete" in html
     assert '"openbase://open?source=cli-auth&intent=login-complete"' in html
     assert "window.location.href" in html
-    for paywall_word in ("subscribe", "plan", "pay", "billing", "dashboard"):
-        assert paywall_word not in html.lower().replace("display", "")
+    _assert_no_paywall(html)
+
+
+def test_oauth_success_page_for_terminal_login_never_opens_the_app():
+    """A terminal login (e.g. ./scripts/setup) runs before the app registers
+    openbase://, so the page must not try the scheme at all."""
+    html = login_complete_page(desktop_url=None).decode("utf-8")
+
+    assert "You&#x27;re signed in." in html
+    assert "Return to your terminal" in html
+    assert "openbase://" not in html
+    assert "Open the Openbase app" not in html
+    assert "<script" not in html
+    _assert_no_paywall(html)
+
+
+def test_login_return_target_follows_desktop_env(monkeypatch):
+    monkeypatch.delenv(auth_cli.DESKTOP_APP_ENV_VAR, raising=False)
+    assert auth_cli._login_return_desktop_url() is None
+
+    monkeypatch.setenv(auth_cli.DESKTOP_APP_ENV_VAR, "1")
+    assert auth_cli._login_return_desktop_url() == auth_cli.DESKTOP_LOGIN_COMPLETE_URL
 
 
 def test_stale_login_page_points_to_newest_tab():

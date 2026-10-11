@@ -29,7 +29,7 @@ def system_paths(monkeypatch, tmp_path):
     return base / ".env", git_ignore
 
 
-def test_system_summary_reports_only_observed_changes(system_paths, capsys):
+def test_system_summary_reports_only_observed_changes(system_paths):
     env_file, git_ignore = system_paths
     git_ignore.write_text("existing-pattern\nremove-me\n")
     before = summary.SystemSetupSnapshot.capture(env_file)
@@ -42,14 +42,13 @@ def test_system_summary_reports_only_observed_changes(system_paths, capsys):
     git_ignore.write_text("existing-pattern\nnew-pattern\n")
     after = summary.SystemSetupSnapshot.capture(env_file)
 
-    summary.print_system_setup_summary(
+    output = summary.system_setup_summary(
         before,
         after,
         service_manager="launchd",
         skip_services=False,
         serve_healthy=True,
     )
-    output = capsys.readouterr().out
     assert "Added launchd service definitions: com.openbase.coder.django-cli" in output
     assert "Added local configuration/launcher files: ~/.openbase/.env" in output
     assert (
@@ -64,20 +63,17 @@ def test_system_summary_reports_only_observed_changes(system_paths, capsys):
     assert len(output.strip().splitlines()) == 1
 
 
-def test_system_summary_rerun_does_not_claim_new_services_or_ignores(
-    system_paths, capsys
-):
+def test_system_summary_rerun_does_not_claim_new_services_or_ignores(system_paths):
     env_file, git_ignore = system_paths
     git_ignore.write_text("already-present\n")
     snapshot = summary.SystemSetupSnapshot.capture(env_file)
-    summary.print_system_setup_summary(
+    output = summary.system_setup_summary(
         snapshot,
         snapshot,
         service_manager="launchd",
         skip_services=True,
         serve_healthy=False,
     )
-    output = capsys.readouterr().out
     assert "Background service installation was skipped" in output
     assert "Global Git ignore entries are unchanged" in output
     assert "Private-network health was not confirmed" in output
@@ -85,13 +81,12 @@ def test_system_summary_rerun_does_not_claim_new_services_or_ignores(
     assert "refreshed" not in output
 
 
-def test_unreadable_configuration_is_not_reported_as_removed(capsys):
+def test_unreadable_configuration_is_not_reported_as_removed():
     before = summary.SystemSetupSnapshot(files={"~/config": "fingerprint"})
     after = summary.SystemSetupSnapshot(unreadable=["~/config"])
-    summary.print_system_setup_summary(
+    output = summary.system_setup_summary(
         before, after, service_manager="launchd", skip_services=True, serve_healthy=True
     )
-    output = capsys.readouterr().out
     assert "Could not compare: ~/config" in output
     assert "Removed local" not in output
 

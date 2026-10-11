@@ -65,7 +65,7 @@ never block: fresh non-interactive installs require `--backend` and default
 the audio provider to `openbase-cloud`. See [setup](../commands/setup.md)
 for the full flag list and the `--interactive` override.
 
-Interactive runs offer `openbase-coder login` (browser OAuth), then confirm the device is registered with Openbase Cloud and that the selected private-network transport exposes the local API and LiveKit. Non-interactive runs print the login hint instead. Either way, `./scripts/setup` then builds and launches the developer app (see below), prints "Setup complete", and finishes with a QR code for the [phone app downloads page](https://openbase.cloud/downloads.html): install the iOS or Android app last.
+Interactive runs offer `openbase-coder login` (browser OAuth), then confirm the device is registered with Openbase Cloud and that the selected private-network transport exposes the local API and LiveKit. Non-interactive runs print the login hint instead. Either way, `./scripts/setup` then builds and launches the developer app (see below), prints "Setup complete" and a short summary of what setup changed on your machine, and finishes with a QR code for the [phone app downloads page](https://openbase.cloud/downloads.html): install the iOS or Android app last.
 
 If a standalone desktop/CLI install, or a different development workspace
 install, already exists, the workspace script stops and links to

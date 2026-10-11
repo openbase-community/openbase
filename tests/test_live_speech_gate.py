@@ -43,6 +43,7 @@ async def test_caller_interrupt_discards_stale_tail_even_after_new_authorization
     async def frames():
         yield "current answer"
         gate.user_state_changed("speaking")
+        gate.caller_heard(" hold on")  # over the agent, words prove the caller
         yield "over caller"
         gate.user_state_changed("listening")
         gate.authorize()
@@ -168,6 +169,7 @@ async def test_real_sdk_output_node_blocks_early_audio_and_passes_authorized_rep
                 for r in caplog.records
             )
             gate.user_state_changed("speaking")
+            gate.caller_heard(" hold on")
             await session.interrupt(force=True)
             count = len(sink.frames)
             await send_audio(8000)  # provider continues after interrupt
@@ -194,6 +196,7 @@ async def test_short_caller_blip_does_not_cut_the_answer_but_sustained_speech_do
         yield "part three"
         gate.user_state_changed("speaking")  # the caller really talks over it
         clock["now"] += 0.6
+        gate.caller_heard(" wait, hold on")
         yield "cut"
         yield "cut too"
 
@@ -291,3 +294,116 @@ async def test_a_bounded_permit_covers_one_burst_and_cuts_the_models_continuatio
         yield frame()
 
     assert [f async for f in gate.filter_audio(self_answer())] == []
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 100.0
+
+    def __call__(self):
+        return self.now
+
+
+def _open_permitted_burst(gate):
+    from openbase_coder_cli.livekit_agent.live_speech_gate import _SpeechBurst
+
+    gate.authorize()
+    return _SpeechBurst(gate)
+
+
+def test_echo_of_the_agent_does_not_barge_in_over_its_own_answer():
+    # Maritime 376, 2026-10-10: speakerphone echo kept VAD "speaking" for
+    # 0.5 s and every answer was cut after about a second.
+    clock = _Clock()
+    gate = LiveSpeechGate(barge_in_min_seconds=0.5, clock=clock)
+    interrupts = []
+    gate.on_barge_in = lambda: interrupts.append(clock.now)
+    burst = _open_permitted_burst(gate)
+    gate.agent_said("I'm Marian. Nine plus five is fourteen.")
+    gate.user_state_changed("speaking")
+    clock.now += 2.0
+    assert not gate.speaking
+    gate.caller_heard(" nine plus five is")
+    assert not gate.speaking
+    gate.user_state_changed("listening")
+    assert gate.authorized and burst.permitted
+    assert interrupts == []
+
+
+def test_caller_words_over_the_agent_barge_in_and_interrupt_once():
+    clock = _Clock()
+    gate = LiveSpeechGate(barge_in_min_seconds=0.5, clock=clock)
+    interrupts = []
+    gate.on_barge_in = lambda: interrupts.append(clock.now)
+    _open_permitted_burst(gate)
+    gate.agent_said("The answer is fourteen.")
+    gate.user_state_changed("speaking")
+    clock.now += 0.6
+    assert not gate.speaking
+    gate.caller_heard(" wait, stop")
+    assert gate.speaking
+    assert not gate.authorized
+    gate.caller_heard(" please")
+    gate.user_state_changed("listening")
+    assert len(interrupts) == 1
+
+
+def test_echo_tail_still_counts_as_the_agent_after_its_burst_ends():
+    from openbase_coder_cli.livekit_agent.live_speech_gate import ECHO_TAIL_SECONDS
+
+    clock = _Clock()
+    gate = LiveSpeechGate(barge_in_min_seconds=0.5, clock=clock)
+    burst = _open_permitted_burst(gate)
+    gate._burst_closed(burst)
+    clock.now += ECHO_TAIL_SECONDS / 2
+    assert gate.agent_audible
+    clock.now += ECHO_TAIL_SECONDS
+    assert not gate.agent_audible
+
+
+def test_caller_speech_with_the_agent_silent_keeps_the_vad_rule():
+    clock = _Clock()
+    gate = LiveSpeechGate(barge_in_min_seconds=0.5, clock=clock)
+    interrupts = []
+    gate.on_barge_in = lambda: interrupts.append(clock.now)
+    gate.authorize()
+    gate.user_state_changed("speaking")
+    clock.now += 0.3
+    assert not gate.speaking
+    clock.now += 0.3
+    assert gate.speaking
+    assert not gate.authorized
+    assert len(interrupts) == 1
+
+
+def test_is_echo_compares_words_with_what_the_agent_just_said():
+    clock = _Clock()
+    gate = LiveSpeechGate(clock=clock)
+    gate.agent_said("Nine plus five is fourteen.")
+    assert gate.is_echo("five is fourteen")
+    assert not gate.is_echo("hold on a second")
+    clock.now += 60
+    gate.agent_said("")
+    assert not gate.is_echo("five is fourteen")
+
+
+async def test_announcer_playout_counts_as_agent_audio_for_barge_in():
+    """VM2 2026-10-11: the route announcer's echo (session.say, outside the
+    bursts) counted as the caller and the greeting after it opened muted."""
+    clock = {"now": 10.0}
+    gate = LiveSpeechGate(barge_in_min_seconds=0.5, clock=lambda: clock["now"])
+    gate.agent_said("Voice route transferred.")
+    gate.agent_state_changed("speaking")
+    assert gate.agent_audible
+    gate.user_state_changed("speaking")  # the announcer's echo
+    clock["now"] += 1.0
+    gate.caller_heard(" route transferred")
+    assert not gate.speaking
+    gate.agent_state_changed("listening")
+    gate.user_state_changed("listening")
+    gate.authorize()
+
+    async def greeting():
+        yield "Hi, I'm Cooper."
+
+    assert [f async for f in gate.filter_audio(greeting())] == ["Hi, I'm Cooper."]
