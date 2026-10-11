@@ -25,12 +25,24 @@ Verified against livekit-plugins-openai 1.8.4: ``GPTLiveSession._msg_ch`` is a
 from __future__ import annotations
 
 import logging
+from collections import deque
 
 from livekit.agents.utils.aio.channel import ChanClosed, ChanEmpty
 
 logger = logging.getLogger(__name__)
 
 INPUT_AUDIO_APPEND_TYPE = "session.input_audio.append"
+# Caller audio kept from before session.started and sent once it starts.
+PRESTART_AUDIO_KEEP_MS = 1500.0
+
+
+def _frame_ms(frame) -> float:
+    duration = getattr(frame, "duration", None)
+    if duration is not None:
+        return float(duration) * 1000.0
+    rate = getattr(frame, "sample_rate", 0) or 0
+    samples = getattr(frame, "samples_per_channel", 0) or 0
+    return samples * 1000.0 / rate if rate else 0.0
 
 
 def _is_input_audio(event) -> bool:
@@ -89,17 +101,32 @@ def install_gpt_live_reconnect_patch() -> bool:
     def push_audio(self, frame):
         started = getattr(self, "_session_started_fut", None)
         if started is not None and not started.done():
-            dropped = getattr(self, "_openbase_prestart_audio_dropped", 0) + 1
-            self._openbase_prestart_audio_dropped = dropped
-            if dropped == 1:
-                logger.info("dispatch_timing stage=live_prestart_audio_dropping")
+            # Keep only the most recent stretch: enough to hold the start of
+            # what the caller says while a character session starts (iPhone
+            # 12, 2026-10-11 08:17Z: "Transfer me…" spoken 1 s into a restore
+            # was lost), too little to trip the gateway's rate limit.
+            held = getattr(self, "_openbase_prestart_frames", None)
+            if held is None:
+                held = self._openbase_prestart_frames = deque()
+                self._openbase_prestart_held_ms = 0.0
+                self._openbase_prestart_audio_dropped = 0
+                logger.info("dispatch_timing stage=live_prestart_audio_holding")
+            held.append(frame)
+            self._openbase_prestart_held_ms += _frame_ms(frame)
+            while held and self._openbase_prestart_held_ms > PRESTART_AUDIO_KEEP_MS:
+                self._openbase_prestart_held_ms -= _frame_ms(held.popleft())
+                self._openbase_prestart_audio_dropped += 1
             return None
-        dropped = getattr(self, "_openbase_prestart_audio_dropped", 0)
-        if dropped:
-            self._openbase_prestart_audio_dropped = 0
+        held = getattr(self, "_openbase_prestart_frames", None)
+        if held is not None:
+            self._openbase_prestart_frames = None
             logger.info(
-                "dispatch_timing stage=live_prestart_audio_dropped frames=%d", dropped
+                "dispatch_timing stage=live_prestart_audio_dropped frames=%d kept=%d",
+                getattr(self, "_openbase_prestart_audio_dropped", 0),
+                len(held),
             )
+            while held:
+                original_push_audio(self, held.popleft())
         return original_push_audio(self, frame)
 
     session_cls._reset_for_reconnect = _reset_for_reconnect

@@ -66,11 +66,16 @@ async def test_patch_installs_once_and_drains_before_the_plugin_reset(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_input_audio_before_session_started_is_dropped(monkeypatch):
-    """A character swap opens a new session; caller audio pushed while it waits
-    for session.started was queued and drained in a burst that tripped
-    input_audio_rate_limit_exceeded (Maritime, 2026-10-11 05:42Z)."""
+async def test_input_audio_before_session_started_keeps_only_the_latest_stretch(
+    monkeypatch,
+):
+    """Audio queued during a session start tripped the gateway's rate limit
+    (Maritime, 05:42Z); dropping all of it lost a request spoken 1 s into a
+    restore (iPhone 12, 08:17Z). The last 1.5 s is kept and sent on start."""
     import asyncio
+    from types import SimpleNamespace
+
+    from openbase_coder_cli.livekit_agent import gpt_live_reconnect_patch as patch
 
     pushed = []
     monkeypatch.setattr(
@@ -90,9 +95,15 @@ async def test_input_audio_before_session_started_is_dropped(monkeypatch):
     assert install_gpt_live_reconnect_patch()
     stand_in = type("StandIn", (), {})()
     stand_in._session_started_fut = asyncio.get_running_loop().create_future()
-    gpt_live_model.GPTLiveSession.push_audio(stand_in, "frame-1")
-    gpt_live_model.GPTLiveSession.push_audio(stand_in, "frame-2")
+    frames = [SimpleNamespace(duration=0.1, n=i) for i in range(30)]  # 3 s
+    for frame in frames:
+        gpt_live_model.GPTLiveSession.push_audio(stand_in, frame)
     assert pushed == []
     stand_in._session_started_fut.set_result(None)
-    gpt_live_model.GPTLiveSession.push_audio(stand_in, "frame-3")
-    assert pushed == ["frame-3"]
+    live = SimpleNamespace(duration=0.1, n=99)
+    gpt_live_model.GPTLiveSession.push_audio(stand_in, live)
+    kept = [frame.n for frame in pushed[:-1]]
+    assert sum(0.1 for _ in kept) <= patch.PRESTART_AUDIO_KEEP_MS / 1000 + 1e-9
+    assert kept == list(range(30 - len(kept), 30)), "the most recent frames, in order"
+    assert len(kept) >= 14
+    assert pushed[-1].n == 99
