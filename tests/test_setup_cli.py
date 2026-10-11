@@ -1345,11 +1345,7 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
     _patch_setup(monkeypatch, "current_runtime_package", lambda: None)
     _patch_setup(monkeypatch, "ensure_backend_binary", lambda _backend: None)
     _patch_setup(monkeypatch, "ensure_pinned_livekit_server", lambda: None)
-    _patch_setup(
-        monkeypatch,
-        "claude_auth_status",
-        lambda: SimpleNamespace(logged_in=False, raw_output="{}", returncode=0),
-    )
+    _patch_setup(monkeypatch, "backend_login_missing", lambda _backend: True)
     _patch_setup(
         monkeypatch,
         "_ensure_thread_sync_exchange_dir",
@@ -1476,7 +1472,7 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
     assert result.exit_code == 0, result.output
     assert calls == ["thread-sync", "sounds", "configure"]
     assert hook_calls == ["hooks"]
-    assert "Claude Code is not logged in" in result.output
+    assert "Claude Code isn't signed in on your computer" in result.output
 
     calls.clear()
     monkeypatch.setattr(
@@ -2373,3 +2369,45 @@ def test_ensure_env_file_defaults_to_tailscale_when_detected(
 
     content = env_file.read_text(encoding="utf-8")
     assert "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER=tailscale\n" in content
+
+
+@pytest.mark.parametrize("backend", ["claude_code", "codex"])
+def test_interactive_setup_offers_backend_cli_login(monkeypatch, tmp_path, backend):
+    logged_in = {"value": False}
+    logins = []
+    _patch_setup(
+        monkeypatch, "_selected_coding_backend", lambda _env, _requested: backend
+    )
+    _patch_setup(
+        monkeypatch, "backend_login_missing", lambda _b: not logged_in["value"]
+    )
+
+    def fake_login(selected):
+        logins.append(selected)
+        logged_in["value"] = True
+        return 0
+
+    _patch_setup(monkeypatch, "run_backend_login", fake_login)
+    monkeypatch.setattr(click, "confirm", lambda *_args, **_kwargs: True)
+    echoed = []
+    monkeypatch.setattr(
+        click, "echo", lambda message="", **_kwargs: echoed.append(message)
+    )
+
+    setup_cli._interactive_backend_login(str(tmp_path / ".env"))
+
+    assert logins == [backend]
+    assert echoed[-1].endswith("is signed in.")
+
+
+def test_interactive_setup_skips_login_when_backend_signed_in(monkeypatch, tmp_path):
+    _patch_setup(
+        monkeypatch, "_selected_coding_backend", lambda _env, _requested: "claude_code"
+    )
+    _patch_setup(monkeypatch, "backend_login_missing", lambda _b: False)
+    _patch_setup(
+        monkeypatch,
+        "run_backend_login",
+        lambda _b: pytest.fail("login must not run when already signed in"),
+    )
+    setup_cli._interactive_backend_login(str(tmp_path / ".env"))

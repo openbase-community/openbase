@@ -17,6 +17,13 @@ from shutil import which  # noqa: F401
 import click
 from click.core import ParameterSource
 
+from openbase_coder_cli.backend_auth import (
+    BACKEND_LABELS,
+    CLI_LOGIN_BACKENDS,
+    backend_login_message,
+    backend_login_missing,
+    run_backend_login,
+)
 from openbase_coder_cli.backend_binaries import ensure_backend_binary
 from openbase_coder_cli.backend_config import (
     CLAUDE_CODE_BACKEND,
@@ -482,6 +489,7 @@ def setup(
     click.echo("Services set up." if defer_app_qr else "Setup complete.")
     click.echo()
     if interactive:
+        _interactive_backend_login(env_file)
         post_login_health = _interactive_cloud_login_and_checks(
             env_file, cli_configured=cli_configured
         )
@@ -564,6 +572,34 @@ def _report_cloud_readiness(
             "  Re-check with 'openbase-coder onboarding status' once the "
             "selected private connection is ready."
         )
+
+
+def _warn_if_backend_login_missing(backend: str) -> None:
+    """Say up front when the selected Claude Code / Codex CLI isn't signed in,
+    instead of letting the first call fail with the CLI's own cryptic error."""
+    if backend not in CLI_LOGIN_BACKENDS or not backend_login_missing(backend):
+        return
+    click.echo(click.style(backend_login_message(backend), fg="yellow"))
+
+
+def _interactive_backend_login(env_file: str) -> None:
+    """Offer to sign the selected Claude Code / Codex CLI in during setup."""
+    backend = _selected_coding_backend(Path(env_file), None)
+    if backend not in CLI_LOGIN_BACKENDS or not backend_login_missing(backend):
+        return
+    label = BACKEND_LABELS[backend]
+    click.echo(
+        f"{label} isn't signed in on this computer. Openbase uses your own "
+        f"{label} login for coding sessions and calls."
+    )
+    if not click.confirm(f"Sign in to {label} now?", default=True):
+        click.echo(click.style(backend_login_message(backend), fg="yellow"))
+        return
+    run_backend_login(backend)
+    if backend_login_missing(backend):
+        click.echo(click.style(backend_login_message(backend), fg="yellow"))
+    else:
+        click.echo(f"{label} is signed in.")
 
 
 def _interactive_cloud_login_and_checks(
@@ -953,13 +989,7 @@ def _run_setup_phases(
     )
     if include_default_hooks:
         ensure_default_session_id_hooks()
-    if selected_coding_backend == CLAUDE_CODE_BACKEND:
-        status = claude_auth_status()
-        if not status.logged_in:
-            click.echo(
-                "Claude Code is not logged in. Run `claude login` before using "
-                "the Claude Code backend."
-            )
+    _warn_if_backend_login_missing(selected_coding_backend)
 
     # --- Install/update user-facing CLI shim ---
     _install_cli_shim(workspace_dir if use_dev_workspace else "")
