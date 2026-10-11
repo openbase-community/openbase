@@ -112,3 +112,14 @@ async def test_no_dispatcher_or_no_store_does_nothing(tmp_path, monkeypatch):
         is None
     )
     assert manager.calls == []
+
+
+@pytest.mark.asyncio
+async def test_threshold_override_for_qa(route, tmp_path, monkeypatch):
+    monkeypatch.setenv(dc.COMPACT_FRACTION_ENV, "0.01")
+    manager = FakeManager()
+    db = _store(tmp_path, finished=_iso(120))
+    await dc.compact_dispatcher_if_due(manager=manager, state_db_path=db)
+    assert manager.calls == [("s_disp", 2_000)]
+    monkeypatch.setenv(dc.COMPACT_FRACTION_ENV, "nonsense")
+    assert dc.compact_fraction() == dc.COMPACT_FRACTION

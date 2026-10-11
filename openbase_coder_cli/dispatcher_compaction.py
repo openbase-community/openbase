@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import logging
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -23,10 +24,21 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 COMPACT_FRACTION = 0.6
+#: Overrides COMPACT_FRACTION (e.g. 0.01 to exercise compaction in QA without
+#: first filling a 200k-token Dispatcher).
+COMPACT_FRACTION_ENV = "OPENBASE_DISPATCHER_COMPACT_FRACTION"
 IDLE_SECONDS = 45.0
 POLL_SECONDS = 30.0
 DEFAULT_CONTEXT_WINDOW = 200_000
 LONG_CONTEXT_WINDOW = 1_000_000
+
+
+def compact_fraction() -> float:
+    try:
+        value = float(os.environ.get(COMPACT_FRACTION_ENV, ""))
+    except ValueError:
+        return COMPACT_FRACTION
+    return value if 0 < value <= 1 else COMPACT_FRACTION
 
 
 def context_window(model: str | None) -> int:
@@ -115,7 +127,7 @@ async def compact_dispatcher_if_due(
     compact = getattr(manager, "compact_thread", None)
     if not callable(compact):
         return None
-    min_tokens = int(COMPACT_FRACTION * context_window(state["model"]))
+    min_tokens = int(compact_fraction() * context_window(state["model"]))
     result = await compact(thread_id, min_tokens)
     if result and result.get("compacted"):
         logger.info(
