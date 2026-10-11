@@ -440,3 +440,29 @@ def test_a_stop_that_reuses_one_of_the_agents_words_is_not_echo():
     assert gate.is_echo("a refrigerant absorbs heat")  # a dropped word still echoes
     assert gate.is_echo("refrigerant")
     assert not gate.is_echo("stop")
+
+
+def test_the_agents_tail_is_stripped_from_a_caller_utterance_spoken_over_it():
+    """376, 2026-10-11: the caller's request over the agent's closing words
+    came through as "You're Explain in about five sentences..." and the agent
+    asked whether they had said "you're welcome"."""
+    gate = LiveSpeechGate(clock=lambda: 0.0)
+    gate.agent_said("Happy to help. You're")
+    gate.user_state_changed("listening")
+    assert gate.strip_echo_prefix(
+        "You're Explain in about five sentences how a fridge works."
+    ) == ("You're Explain in about five sentences how a fridge works."), (
+        "not over the agent: nothing is echo"
+    )
+    gate.playout_requested()
+    gate.user_state_changed("speaking")
+    assert (
+        gate.strip_echo_prefix(
+            "You're Explain in about five sentences how a fridge works."
+        )
+        == "Explain in about five sentences how a fridge works."
+    )
+    assert gate.strip_echo_prefix("You're") == "You're", "all echo is left to is_echo"
+    assert gate.strip_echo_prefix("Explain how a fridge works.") == (
+        "Explain how a fridge works."
+    )

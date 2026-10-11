@@ -28,6 +28,11 @@ AGENT_WORDS_WINDOW_SECONDS = 20.0
 # (376, 2026-10-11: that stop was ignored as echo under a bag-of-words share).
 ECHO_WORD_SHARE = 0.5
 ECHO_MIN_RUN_WORDS = 2
+# When the caller starts talking over the agent, the model's transcript of
+# the caller can begin with the tail of the agent's own speech picked up by
+# the speakerphone ("You're Explain in about five sentences...", 376,
+# 2026-10-11). Only the last few agent words can be that tail.
+ECHO_PREFIX_AGENT_TAIL_WORDS = 8
 _WORD = re.compile(r"[a-z0-9']+")
 
 
@@ -188,6 +193,38 @@ class LiveSpeechGate:
             return words[0] in said
         needed = max(ECHO_MIN_RUN_WORDS, math.ceil(len(words) * ECHO_WORD_SHARE))
         return _longest_common_run(words, said) >= needed
+
+    def strip_echo_prefix(self, text):
+        """``text`` without leading words that repeat, in order, the tail of
+        what the agent just said, when the caller began over the agent's
+        audio. An utterance that is entirely echo is left to :meth:`is_echo`.
+        """
+        if not self._caller_over_agent or not text:
+            return text
+        matches = list(_WORD.finditer(text.lower()))
+        words = [match.group(0) for match in matches]
+        if not words:
+            return text
+        tail = [word for _, word in self._agent_words][-ECHO_PREFIX_AGENT_TAIL_WORDS:]
+        best = 0
+        for start in range(len(tail)):
+            length = 0
+            while (
+                start + length < len(tail)
+                and length < len(words)
+                and tail[start + length] == words[length]
+            ):
+                length += 1
+            best = max(best, length)
+        if best == 0 or best >= len(words):
+            return text
+        remainder = text[matches[best].start() :].lstrip(" ,.;:!?-")
+        logger.info(
+            "dispatch_timing stage=live_echo_prefix_stripped words=%d dropped=%r",
+            best,
+            text[: matches[best].start()].strip()[-60:],
+        )
+        return remainder
 
     def caller_heard(self, text):
         """A caller transcript fragment from the model (input transcript delta).

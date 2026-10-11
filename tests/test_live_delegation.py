@@ -2980,3 +2980,19 @@ async def test_a_lone_transfer_request_is_not_carried():
         assert marian.prompts == []
     finally:
         await bridge.aclose()
+
+
+async def test_an_echoed_agent_tail_does_not_reach_the_agent_as_the_callers_words():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    try:
+        bridge.speech_gate.agent_said("Happy to help. You're")
+        bridge.speech_gate.playout_requested()
+        bridge.on_user_state_changed("listening", "speaking")
+        bridge.on_user_state_changed("speaking", "listening")
+        live.final("You're Explain in about five sentences how a refrigerator works.")
+        await _settle()
+        assert len(dispatcher.prompts) == 1
+        assert "You're" not in dispatcher.prompts[0][0]
+        assert "Explain in about five sentences" in dispatcher.prompts[0][0]
+    finally:
+        await bridge.aclose()

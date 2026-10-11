@@ -983,6 +983,10 @@ class LiveDelegationBridge:
             if item_id in self._handled_item_ids:
                 return
             self._handled_item_ids.append(item_id)
+        # Speakerphone echo of the agent's last words can lead the transcript
+        # when the caller spoke over it; the agent must not read them as the
+        # caller's.
+        text = self.speech_gate.strip_echo_prefix(text)
         if _is_exit_to_dispatch_command(text):
             if self._take_recent_exit_command():
                 # The model delegated this command first; it is handled.
