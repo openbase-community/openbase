@@ -174,6 +174,23 @@ class SessionManagerThreadsMixin:
         """Archive a Codex app-server thread."""
         return await self.close_session(thread_id)
 
+    async def compact_thread(
+        self, thread_id: str, min_context_tokens: int
+    ) -> dict | None:
+        """Compact the thread's backend session now if it is idle and large.
+
+        Only backends that offer it (Claude Code via super-agents) do anything;
+        Codex compacts its own threads. Returns the backend's result, or None.
+        """
+        compact = getattr(self._client, "compact_session_by_label", None)
+        if not callable(compact):
+            return None
+        return await compact(
+            LabelQueryInput(thread_id=thread_id),
+            None,
+            min_context_tokens=min_context_tokens,
+        )
+
     async def rename_thread(self, thread_id: str, name: str) -> SessionInfo | None:
         """Rename a thread on its backend and broadcast the new snapshot."""
         cleaned = " ".join(name.split())

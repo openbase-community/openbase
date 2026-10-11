@@ -51,6 +51,7 @@ async def application(scope, receive, send):
     """ASGI application with lifespan passthrough."""
     if scope["type"] == "lifespan":
         notification_task = None
+        compaction_task = None
         while True:
             message = await receive()
             if message["type"] == "lifespan.startup":
@@ -72,12 +73,24 @@ async def application(scope, receive, send):
                 notification_task = asyncio.create_task(
                     run_notification_sweeps(), name="notification-producers"
                 )
+                # Compact the Dispatcher between requests, not during one.
+                from openbase_coder_cli.dispatcher_compaction import (
+                    dispatcher_compaction_loop,
+                )
+
+                compaction_task = asyncio.create_task(
+                    dispatcher_compaction_loop(), name="dispatcher-compaction"
+                )
                 await send({"type": "lifespan.startup.complete"})
             elif message["type"] == "lifespan.shutdown":
                 if notification_task is not None:
                     notification_task.cancel()
                     with suppress(asyncio.CancelledError):
                         await notification_task
+                if compaction_task is not None:
+                    compaction_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await compaction_task
                 await send({"type": "lifespan.shutdown.complete"})
                 return
     else:
