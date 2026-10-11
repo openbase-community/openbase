@@ -28,7 +28,7 @@ _TURN_SIGNAL_TTL_SECONDS = 30.0
 _MAX_TURN_SIGNALS = 64
 
 MIN_USER_TURN_QUIET_GRACE_SECONDS = 2.0
-LOW_CONFIDENCE_USER_TURN_QUIET_GRACE_SECONDS = 3.0
+LOW_CONFIDENCE_USER_TURN_QUIET_GRACE_SECONDS = 2.5
 LOW_EOU_PROBABILITY_THRESHOLD = 0.30
 # When the STT final arrives this late, the turn detector scored a stale
 # transcript: the user has already been silent the whole time and the quiet
@@ -52,7 +52,7 @@ TRANSCRIPTION_NOTICE_MIN_SPEECH_SECONDS = 2.0
 # already verified `end_of_turn_delay` seconds of silence before the
 # utterance is even accepted; credit it (bounded, in case the metric is
 # unreliable) so the floor counts from when the user actually stopped.
-MAX_PRE_ACCEPT_QUIET_CREDIT_SECONDS = 1.5
+MAX_PRE_ACCEPT_QUIET_CREDIT_SECONDS = 2.0
 
 
 @dataclass(frozen=True)

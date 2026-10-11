@@ -179,3 +179,95 @@ def test_logins_open_on_the_phone_on_any_host(monkeypatch):
     pty_session.start("browser", ["sh", "-c", 'echo "BROWSER=$BROWSER"'])
     output, _ = _read_until("browser", "BROWSER=")
     assert f"BROWSER={shim}" in output
+
+
+def test_login_sessions_do_not_inherit_the_agents_gateway_credentials(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "obmt_gateway")
+    monkeypatch.setenv(
+        "ANTHROPIC_BASE_URL", "https://app.example/api/openbase/llm/anthropic"
+    )
+    pty_session.start(
+        "env",
+        [
+            "sh",
+            "-c",
+            'echo "token=${ANTHROPIC_AUTH_TOKEN:-none} base=${ANTHROPIC_BASE_URL:-none}"',
+        ],
+    )
+    output, _ = _read_until("env", "base=")
+    assert "token=none base=none" in output
+
+
+def test_unfinished_ai_login_restores_the_previous_login(monkeypatch, tmp_path):
+    assert pty_session.login_provider_for(["/usr/bin/codex", "login"]) == "codex"
+    assert pty_session.login_provider_for(["codex", "login", "status"]) is None
+    assert (
+        pty_session.login_provider_for(["claude", "auth", "login", "--claudeai"])
+        == "claude_code"
+    )
+    assert pty_session.login_provider_for(["gcloud", "auth", "login"]) is None
+
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    auth = home / "auth.json"
+    auth.write_text('{"tokens": "old"}')
+    monkeypatch.setattr(
+        pty_session,
+        "login_homes",
+        lambda: {
+            "codex_home": str(home),
+            "claude_config_dir": str(tmp_path / "claude"),
+        },
+    )
+    codex = tmp_path / "codex"
+    # The CLI must see the API's CODEX_HOME, and its deletion must be undone.
+    codex.write_text(
+        f'#!/bin/sh\n[ "$CODEX_HOME" = "{home}" ] || exit 9\nrm -f "$CODEX_HOME/auth.json"\nexit 1\n'
+    )
+    codex.chmod(0o755)
+    paths = pty_session.session_paths("relink")
+    paths.root.mkdir(parents=True, mode=0o700)
+    os.mkfifo(paths.input, 0o600)
+    paths.output.touch(mode=0o600)
+    pty_session._write_meta(
+        paths, {"command": [str(codex), "login"], "exit_code": None}
+    )
+    pty_session._hold("relink")
+    assert auth.read_text() == '{"tokens": "old"}'
+    assert pty_session._read_meta(paths)["exit_code"] == 1  # not 9: the home was set
+
+
+def test_login_homes_prefer_the_api_and_fall_back_locally(monkeypatch):
+    import importlib
+
+    local_server = importlib.import_module("openbase_coder_cli.cli.local_server")
+
+    class Response:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    monkeypatch.setattr(
+        local_server,
+        "local_server_request",
+        lambda *a, **k: Response(
+            {
+                "homes": {
+                    "codex_home": "/data/codex",
+                    "claude_config_dir": "/data/claude",
+                }
+            }
+        ),
+    )
+    assert pty_session.login_homes() == {
+        "codex_home": "/data/codex",
+        "claude_config_dir": "/data/claude",
+    }
+
+    def down(*a, **k):
+        raise OSError("api down")
+
+    monkeypatch.setattr(local_server, "local_server_request", down)
+    assert set(pty_session.login_homes()) == {"codex_home", "claude_config_dir"}

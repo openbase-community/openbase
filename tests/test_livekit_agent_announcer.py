@@ -11,7 +11,13 @@ from livekit import rtc
 
 from openbase_coder_cli import livekit_voice_route as voice_route
 from openbase_coder_cli.host_kind import with_host_section
-from openbase_coder_cli.livekit_agent import audio_scoring, config, livekit, voices
+from openbase_coder_cli.livekit_agent import (
+    audio_scoring,
+    config,
+    livekit,
+    speech_queue,
+    voices,
+)
 from openbase_coder_cli.livekit_agent.codex_app_client import CodexAppServerClient
 from openbase_coder_cli.livekit_agent.livekit import (
     ANNOUNCER_AUDIO_KIND,
@@ -448,37 +454,25 @@ def test_direct_livekit_instruction_loader_priority(tmp_path):
     explicit.write_text("explicit file instructions\n", encoding="utf-8")
     default.write_text("default file instructions\n", encoding="utf-8")
 
-    assert (
-        load_direct_livekit_developer_instructions(
-            env={
-                DIRECT_LIVEKIT_INSTRUCTIONS_PATH_ENV: str(explicit),
-                DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV: "env text instructions",
-            },
-            default_path=default,
-        )
-        == with_host_section("explicit file instructions")
-    )
-    assert (
-        load_direct_livekit_developer_instructions(
-            env={DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV: "env text instructions"},
-            default_path=default,
-        )
-        == with_host_section("default file instructions")
-    )
-    assert (
-        load_direct_livekit_developer_instructions(
-            env={DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV: "env text instructions"},
-            default_path=tmp_path / "missing.md",
-        )
-        == with_host_section("env text instructions")
-    )
-    assert (
-        load_direct_livekit_developer_instructions(
-            env={},
-            default_path=tmp_path / "missing.md",
-        )
-        == with_host_section(DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS)
-    )
+    assert load_direct_livekit_developer_instructions(
+        env={
+            DIRECT_LIVEKIT_INSTRUCTIONS_PATH_ENV: str(explicit),
+            DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV: "env text instructions",
+        },
+        default_path=default,
+    ) == with_host_section("explicit file instructions")
+    assert load_direct_livekit_developer_instructions(
+        env={DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV: "env text instructions"},
+        default_path=default,
+    ) == with_host_section("default file instructions")
+    assert load_direct_livekit_developer_instructions(
+        env={DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV: "env text instructions"},
+        default_path=tmp_path / "missing.md",
+    ) == with_host_section("env text instructions")
+    assert load_direct_livekit_developer_instructions(
+        env={},
+        default_path=tmp_path / "missing.md",
+    ) == with_host_section(DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS)
 
 
 def test_super_agent_voices_use_builtin_catalog_pool(monkeypatch):
@@ -881,12 +875,12 @@ async def test_announcer_queue_plays_audio_file_without_chat_context(
         silence_grace_seconds=0,
     )
 
-    async def fake_audio_file_frames(path):
+    async def fake_audio_file_frames(_session, path):
         assert path == audio_path
         if False:
             yield None
 
-    monkeypatch.setattr(queue, "_audio_file_frames", fake_audio_file_frames)
+    monkeypatch.setattr(speech_queue, "audio_file_frames", fake_audio_file_frames)
 
     await queue._speak(
         AnnouncerAudioMessage(
@@ -918,12 +912,12 @@ async def test_announcer_queue_defers_audio_file_while_user_speaks(
         silence_grace_seconds=0,
     )
 
-    async def fake_audio_file_frames(path):
+    async def fake_audio_file_frames(_session, path):
         assert path == audio_path
         if False:
             yield None
 
-    monkeypatch.setattr(queue, "_audio_file_frames", fake_audio_file_frames)
+    monkeypatch.setattr(speech_queue, "audio_file_frames", fake_audio_file_frames)
 
     speak_task = asyncio.create_task(
         queue._speak(
@@ -1752,6 +1746,56 @@ async def test_dropped_utterance_recovered_after_uninterruptible_speech(monkeypa
         await asyncio.sleep(0.05)
     # Both dropped fragments fold into one recovered reply.
     assert session.generated == ["are you there hello again"]
+
+
+@pytest.mark.asyncio
+async def test_dropped_utterance_recovery_waits_for_a_quiet_gap_after_the_newest_final(
+    monkeypatch,
+):
+    """Streaming STT splits one sentence into finals at every pause; the
+    recovery must not force a reply after the first fragment while the rest
+    is still coming (376, 2026-10-11: a 13 s sentence closed twice mid-way)."""
+    from openbase_coder_cli.livekit_agent import session_diagnostics
+
+    monkeypatch.setattr(session_diagnostics, "DROPPED_UTTERANCE_GRACE_SECONDS", 0.08)
+
+    class FakeSession:
+        def __init__(self):
+            self.handlers = {}
+            self.current_speech = None
+            self.generated = []
+            self.user_state = "speaking"
+
+        def on(self, event_name, handler):
+            self.handlers[event_name] = handler
+
+        def generate_reply(self, *, user_input):
+            self.generated.append(user_input)
+
+    class FakeClient:
+        async def steer_active_turn(self, prompt):
+            return None
+
+        def has_active_prompt(self, prompt):
+            return False
+
+    session = FakeSession()
+    router = LiveKitVoiceRouter(FakeClient())
+    livekit._register_session_diagnostics(session, router, enable_logging=False)
+
+    for fragment in ("write six files", "named golf", "hotel", "india juliet"):
+        session.handlers["user_input_transcribed"](
+            SimpleNamespace(is_final=True, transcript=fragment)
+        )
+        await asyncio.sleep(0.05)  # shorter than the grace: the sentence goes on
+    await asyncio.sleep(0.2)
+    assert session.generated == [], "still speaking: no recovery"
+    session.user_state = "listening"
+    for _ in range(40):
+        if session.generated:
+            break
+        await asyncio.sleep(0.02)
+    assert session.generated == ["write six files named golf hotel india juliet"]
 
 
 @pytest.mark.asyncio

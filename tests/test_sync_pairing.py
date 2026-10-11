@@ -1139,6 +1139,9 @@ def test_is_cloud_workspace_uses_markers_then_runtime(monkeypatch):
     assert sync_pairing.is_cloud_workspace() is True
     monkeypatch.setattr(cloud_registration, "runtime_flavor", lambda: "native")
     assert sync_pairing.is_cloud_workspace() is False
+    # A Maritime workspace has no marker files; its environment names it.
+    monkeypatch.setenv("MARITIME_AGENT_ID", "agent-1")
+    assert sync_pairing.is_cloud_workspace() is True
 
 
 # --- project-only inside a folder the others sync whole (~/Projects) -------------

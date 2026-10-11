@@ -24,9 +24,12 @@ from openbase_coder_cli.thread_sync.session_manager import (  # noqa: E402
     CodexAppServerSessionManager,
 )
 
+# Generous enough for a loaded host: these bound a hang, not a latency target.
+SOCKET_EVENT_TIMEOUT_SECONDS = 5
+
 
 async def receive(socket):
-    frame = await socket.receive_output(timeout=1)
+    frame = await socket.receive_output(timeout=SOCKET_EVENT_TIMEOUT_SECONDS)
     return json.loads(frame["text"])
 
 
@@ -90,6 +93,8 @@ async def test_claude_completion_reaches_socket_and_reconnect(
     original_init = ClaudeAgentSdkClient.__init__
 
     def isolated_init(self, **kwargs):
+        # managed_claude_client passes its own store; the test's wins.
+        kwargs.pop("store", None)
         original_init(
             self,
             store=store,
@@ -228,6 +233,8 @@ async def test_websocket_interrupt_isolates_output_and_stops_owner(
     original_init = ClaudeAgentSdkClient.__init__
 
     def isolated_init(self, **kwargs):
+        # managed_claude_client passes its own store; the test's wins.
+        kwargs.pop("store", None)
         original_init(
             self,
             store=store,
@@ -264,7 +271,7 @@ async def test_websocket_interrupt_isolates_output_and_stops_owner(
         )
 
     async def terminal(socket, turn_id):
-        async with asyncio.timeout(1):
+        async with asyncio.timeout(SOCKET_EVENT_TIMEOUT_SECONDS):
             while True:
                 event = await receive(socket)
                 if event["type"] == "turn_completed":

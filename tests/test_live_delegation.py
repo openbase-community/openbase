@@ -17,7 +17,6 @@ from openbase_coder_cli.livekit_agent.live_delegation import (
     COMMENTARY_MAX_TOKENS,
     LIVE_APPROVAL_PENDING_COMMENTARY,
     LIVE_BACKEND_BUSY_COMMENTARY,
-    LIVE_BACKEND_UNRESPONSIVE_COMMENTARY,
     LIVE_EMPTY_ANSWER_COMMENTARY,
     LiveDelegationBridge,
     LiveSpeechCursor,
@@ -240,6 +239,8 @@ def _make_bridge(
     call_id="",
     barge_in_min=0.0,
     thread_exchange_fetcher=None,
+    recovery_window=0.0,
+    recovery_backoff=(0.01,),
 ):
     dispatcher = FakeVoiceClient(thread_id="dispatcher-thread")
     router = FakeVoiceRouter(dispatcher)
@@ -262,6 +263,8 @@ def _make_bridge(
         utterance_hold_max_seconds=hold_max,
         utterance_transcript_lag_seconds=lag,
         call_id=call_id,
+        recovery_window_seconds=recovery_window,
+        recovery_backoff_seconds=recovery_backoff,
         **({"clock": clock} if clock is not None else {}),
         **(
             {"thread_exchange_fetcher": thread_exchange_fetcher}
@@ -1595,10 +1598,15 @@ async def test_exit_to_dispatch_while_dispatcher_active_is_a_normal_prompt():
     ("busy", "expected"),
     [
         (True, LIVE_BACKEND_BUSY_COMMENTARY),
-        (False, LIVE_BACKEND_UNRESPONSIVE_COMMENTARY),
+        (
+            False,
+            "That request failed on the dispatcher's backend 1 times. Ask me again in a moment.",
+        ),
     ],
 )
-async def test_turn_errors_become_immediate_commentary(busy, expected):
+async def test_turn_errors_become_commentary_once_recovery_is_over(busy, expected):
+    """A zero recovery window: the failure is final at once. A churning
+    backend is reported as busy; anything else says what failed."""
     bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
     dispatcher.busy = busy
     dispatcher.result = RuntimeError("app-server down")
@@ -1609,6 +1617,122 @@ async def test_turn_errors_become_immediate_commentary(busy, expected):
     assert live.speech("d1") == [expected]
     record = next(r for r in ledger._records.values() if r.message_id == "live-d1")
     assert record.status == "cancelled"
+    await bridge.aclose()
+
+
+# --- turn recovery ------------------------------------------------------------
+
+
+def _failed_turn(turn_id: str, error: str) -> dict:
+    return {
+        "_livekit_speech_text": "Sorry — that request didn't reach the coding agent.",
+        "_livekit_turn_id": turn_id,
+        "_livekit_backend_auth_failure": False,
+        "_livekit_turn_failed": True,
+        "_livekit_turn_error": error,
+        "status": "failed",
+        "progress": {},
+    }
+
+
+async def _wait_for(predicate, timeout=2.0):
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not predicate():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("condition not met in time")
+        await asyncio.sleep(0.005)
+
+
+async def test_a_failed_turn_is_retried_and_its_answer_spoken_without_an_error():
+    """Gabe 2026-10-11: a backend start hiccup must never cost the caller
+    their request or produce "didn't reach the coding agent"."""
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        recovery_window=5.0, recovery_backoff=(0.1,)
+    )
+    dispatcher.result = _failed_turn("turn-1", "Control request timeout: initialize")
+    dispatcher.result_gate.set()
+    live.delegate("d1", "Check the build")
+    await _wait_for(lambda: len(dispatcher.prompts) == 1)
+    # The second attempt, after the backoff, succeeds.
+    dispatcher.result = {
+        "_livekit_speech_text": "All tests pass. The build is green.",
+        "_livekit_turn_id": "turn-2",
+        "status": "completed",
+        "progress": {},
+    }
+    await _wait_for(lambda: live.speech("d1") != [])
+    assert len(dispatcher.prompts) == 2
+    assert dispatcher.prompts[0][0] == dispatcher.prompts[1][0]
+    assert live.speech("d1") == ["All tests pass. The build is green."]
+    assert bridge.handled_failed_turn("turn-1")
+    assert not bridge.handled_failed_turn("turn-2")
+    assert bridge._stats["turn_retries"] == 1
+    await bridge.aclose()
+
+
+async def test_recovery_that_runs_out_says_what_failed_and_keeps_the_request():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        recovery_window=0.05, recovery_backoff=(0.02,)
+    )
+    kept: list[str] = []
+
+    async def keep_request_for_later(prompt):
+        kept.append(prompt)
+        return True
+
+    dispatcher.keep_request_for_later = keep_request_for_later
+    dispatcher.result = _failed_turn("turn-1", "Control request timeout: initialize")
+    dispatcher.result_gate.set()
+    live.delegate("d1", "Check the build")
+    await _wait_for(lambda: live.speech("d1") != [])
+    assert len(dispatcher.prompts) >= 2, "retried at least once inside the window"
+    (line,) = live.speech("d1")
+    assert line.startswith("the dispatcher couldn't start on your computer")
+    assert "permission dialog" in line
+    assert line.endswith(
+        "I kept your request in the dispatcher's thread, so it runs once the backend is back."
+    )
+    assert kept == ["Check the build"]
+    assert bridge.handled_failed_turn("turn-1")
+    await bridge.aclose()
+
+
+async def test_a_terminal_failure_is_not_retried():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        recovery_window=5.0, recovery_backoff=(0.01,)
+    )
+    dispatcher.result = _failed_turn(
+        "turn-1", "This model is not available on your plan. Choose Claude Haiku."
+    )
+    dispatcher.result_gate.set()
+    live.delegate("d1", "Check the build")
+    await _wait_for(lambda: live.speech("d1") != [])
+    assert len(dispatcher.prompts) == 1
+    assert "not available on your plan" in live.speech("d1")[0]
+    await bridge.aclose()
+
+
+async def test_a_superseded_request_stops_retrying_quietly():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        recovery_window=5.0, recovery_backoff=(0.05,)
+    )
+    dispatcher.result = _failed_turn("turn-1", "Control request timeout: initialize")
+    dispatcher.result_gate.set()
+    live.delegate("d1", "Check the build")
+    await _wait_for(lambda: len(dispatcher.prompts) == 1)
+    await asyncio.sleep(0.005)
+    # A new request supersedes the first while its retry is pending.
+    dispatcher.result = {
+        "_livekit_speech_text": "Two files.",
+        "_livekit_turn_id": "turn-2",
+        "status": "completed",
+        "progress": {},
+    }
+    live.delegate("d2", "How many files are there?")
+    await _wait_for(lambda: live.speech("d2") != [])
+    await asyncio.sleep(0.1)
+    assert live.speech("d1") == [], "the superseded request speaks no error"
+    assert live.speech("d2") == ["Two files."]
     await bridge.aclose()
 
 
@@ -2740,3 +2864,63 @@ async def test_a_request_the_model_delegated_is_acknowledged_too():
         assert live.acks() == ["One moment."]
     finally:
         await bridge.aclose()
+
+
+async def test_a_start_held_by_a_consent_dialog_is_spoken_once_and_released_once():
+    """super-agents 6af0383: the turn waits for the macOS dialog; the caller
+    hears what to click once, then that the agent is going ahead."""
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        recovery_window=5.0, recovery_backoff=(0.1,)
+    )
+    live.delegate("d1", "Check the build")
+    await _settle()
+    blocked = {
+        "status": "running",
+        "lastObservedState": (
+            "macOS is waiting for permission: Openbase Services needs access to "
+            "your Desktop folder. Click Allow in the dialog on your Mac and the "
+            "agent will continue."
+        ),
+        "turn": {
+            "turnId": "turn-1",
+            "status": "running",
+            "errorKind": "blocked_permission_dialog",
+        },
+    }
+    dispatcher.progress("turn-1", blocked)
+    dispatcher.progress("turn-1", blocked)
+    assert live.speech("d1") == [blocked["lastObservedState"]]
+    dispatcher.progress(
+        "turn-1",
+        {
+            "status": "running",
+            "lastObservedState": "Folder access granted; Claude Code is starting",
+            "turn": {"turnId": "turn-1", "status": "running"},
+        },
+    )
+    assert live.speech("d1")[-1] == "Thanks, access granted; the agent is starting now."
+    assert len(dispatcher.prompts) == 1, "a held start is never retried"
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.speech("d1")[-1] == "All tests pass. The build is green."
+    await bridge.aclose()
+
+
+async def test_a_turn_failed_by_an_unanswered_dialog_speaks_the_backend_message_verbatim():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        recovery_window=5.0, recovery_backoff=(0.1,)
+    )
+    message = (
+        "macOS is waiting for permission: Openbase Services needs access to your "
+        "Desktop folder. Click Allow in the dialog on your Mac and the agent will continue."
+    )
+    dispatcher.result = {
+        **_failed_turn("turn-1", message),
+        "_livekit_turn_error_kind": "blocked_permission_dialog",
+    }
+    dispatcher.result_gate.set()
+    live.delegate("d1", "Check the build")
+    await _wait_for(lambda: live.speech("d1") != [])
+    assert live.speech("d1") == [message]
+    assert len(dispatcher.prompts) == 1, "terminal until the user acts"
+    await bridge.aclose()

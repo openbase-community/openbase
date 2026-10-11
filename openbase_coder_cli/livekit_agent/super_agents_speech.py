@@ -204,7 +204,11 @@ def _belongs_to_turn(value: dict[str, Any], turn_id: str | None) -> bool:
 
 
 def _own_last_useful_message(value: dict[str, Any]) -> str | None:
-    text = value.get("lastUsefulMessage")
+    return _own_string(value, "lastUsefulMessage")
+
+
+def _own_string(value: dict[str, Any], key: str) -> str | None:
+    text = value.get(key)
     if isinstance(text, str) and text.strip():
         return text.strip()
     return None

@@ -1168,9 +1168,21 @@ async def _start_live_voice_session(
     session_say = getattr(session, "say", None)
 
     def say_and_note_words(text, *args, **kwargs):
+        gate = bridge.speech_gate
         if isinstance(text, str):
-            bridge.speech_gate.agent_said(text)
-        return session_say(text, *args, **kwargs)
+            gate.agent_said(text)
+        gate.playout_requested()
+        try:
+            handle = session_say(text, *args, **kwargs)
+        except BaseException:
+            gate.playout_finished()
+            raise
+        add_done = getattr(handle, "add_done_callback", None)
+        if callable(add_done):
+            add_done(lambda _handle: gate.playout_finished())
+        else:
+            gate.playout_finished()
+        return handle
 
     if session_say is not None:
         session.say = say_and_note_words
@@ -1260,6 +1272,9 @@ def _build_delivery_ledger(
         room_name=ctx.room.name,
         room_id=room_id,
         live_mode=live_mode,
+        # Classic: the mic is shut only around the agent's own audio, so the
+        # caller can steer the running turn by voice (see voice_delivery).
+        mute_only_around_playback=not live_mode,
     )
     delivery_ledger.set_lifecycle_sink(
         lambda event, record, reason: _schedule_voice_lifecycle_packet(
@@ -1644,7 +1659,12 @@ async def livekit_agent(ctx: JobContext):
         # GPT-Live: the hint is commentary for the current character, which
         # keeps the call and its voice; the classic announcer path would swap
         # in an announcement session (and has no voice for "Dispatcher").
-        stall_hint_kwargs = {"speak": _live_stall_hint_speaker(live_bridge)}
+        stall_hint_kwargs = {
+            "speak": _live_stall_hint_speaker(live_bridge),
+            "should_announce": lambda turn: not live_bridge.handled_failed_turn(
+                turn.turn_id
+            ),
+        }
     else:
         stall_hint_kwargs = {
             "prepare_announcement": lambda: (

@@ -28,6 +28,7 @@ from .models import ThreadStatus as SessionStatus
 from .models import TurnInfo as RunInfo
 from .session_manager_approvals import SessionManagerApprovalsMixin
 from .session_manager_base import (
+    _TRACKED_TURN_TEXT_LIMIT,
     ThreadListPage,
     _configured_model_for_role,
     _default_client_for_execution_backend,
@@ -42,7 +43,10 @@ from .session_manager_base import (
 )
 from .session_manager_claude_events import ClaudeEventsMixin
 from .session_manager_routines import SessionManagerRoutinesMixin
-from .session_manager_threads import SessionManagerThreadsMixin
+from .session_manager_threads import (
+    SessionManagerThreadsMixin,
+    dispatcher_turn_instructions,
+)
 from .session_manager_turns import SessionManagerTurnsMixin
 from .thread_moves import ensure_thread_writable
 from .thread_payloads import (
@@ -188,13 +192,18 @@ async def _notify_manual_thread_finished(
 
 
 def _turn_failure_message(params: dict[str, Any]) -> str:
+    from openbase_coder_cli.backend_auth import login_failure_message
+    from openbase_coder_cli.cloud_model_errors import normalize_model_proxy_error
+
+    if login_message := login_failure_message(params, live=True):
+        return login_message
     error = params.get("error")
     if isinstance(error, dict):
         message = error.get("message")
         if isinstance(message, str) and message.strip():
-            return message.strip()
+            return normalize_model_proxy_error(message.strip())
     if isinstance(error, str) and error.strip():
-        return error.strip()
+        return normalize_model_proxy_error(error.strip())
     return "The agent turn failed unexpectedly."
 
 
@@ -252,6 +261,11 @@ class CodexAppServerSessionManager(
         self._delivered_item_text: dict[tuple[str, str], str] = {}
         self._turn_prompt: dict[str, str] = {}
         self._turn_steers: dict[str, list[Any]] = {}
+        # Each backend notification is handled in its own task, so a turn's
+        # turn/started can be processed after its turn/completed. Finished
+        # turns are remembered (bounded) so that late start is ignored instead
+        # of re-announcing a finished turn as running.
+        self._finished_turns: dict[str, None] = {}
         self._state_lock = asyncio.Lock()
         self._claude_watchers: dict[str, asyncio.Task[None]] = {}
 
@@ -294,6 +308,8 @@ class CodexAppServerSessionManager(
 
         ensure_thread_writable(session_id)
         if self._uses_backend_session_api():
+            if dispatcher_rules := dispatcher_turn_instructions(session_id):
+                role_turn_input["developerInstructions"] = dispatcher_rules
             started = await self._client.start_turn_by_label(
                 LabelQueryInput(thread_id=session_id, cwd=thread.directory),
                 role_turn_input,
@@ -450,6 +466,9 @@ class CodexAppServerSessionManager(
             if turn_id:
                 async with self._state_lock:
                     self._forget_turn_locked(turn_id)
+                    self._finished_turns[turn_id] = None
+                    while len(self._finished_turns) > _TRACKED_TURN_TEXT_LIMIT:
+                        self._finished_turns.pop(next(iter(self._finished_turns)))
             # Agent turns can write reports too, even when another turn is queued
             # or the completed thread is no longer available to read.
             request_notification_sweep()
@@ -500,6 +519,8 @@ class CodexAppServerSessionManager(
         (with a new prompt) replaced the previous one.
         """
         async with self._state_lock:
+            if turn_id in self._finished_turns:
+                return
             already_known = turn_id in self._turn_to_session
             self._turn_to_session[turn_id] = thread_id
             self._delivered_text.setdefault(turn_id, "")
@@ -532,6 +553,10 @@ class CodexAppServerSessionManager(
                     turn, "reasoningEffort", "reasoning_effort"
                 ),
             )
+        async with self._state_lock:
+            # The turn may have finished while its state was being read.
+            if turn_id in self._finished_turns:
+                return
         await _broadcast(
             thread_id,
             {"type": "turn_started", "data": run.model_dump(mode="json")},

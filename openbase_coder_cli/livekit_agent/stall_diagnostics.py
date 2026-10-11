@@ -135,10 +135,15 @@ class StallDiagnosis:
 
     @property
     def likely_blocked(self) -> bool:
-        """Whether there is a concrete reason to believe the turn is stuck
-        (rather than merely slow): a mid-turn consent dialog, or an in-flight
-        command reaching into a TCC-protected folder."""
-        return self.likely_blocked_on_dialog or self.protected_folder is not None
+        """Only a command reaching into a protected folder is evidence.
+
+        A dialog presenter that started after the turn used to count on its
+        own, but any app's dialog spawns one (a reinstall, a notification
+        prompt): on 2026-10-11 a healthy turn pacing `sleep 5` between files
+        was announced as a permission problem on a call. The presenter now
+        only corroborates a protected-folder command.
+        """
+        return self.protected_folder is not None
 
     def spoken_hint(self) -> str:
         minutes = max(1, round(self.elapsed_seconds / 60))
@@ -345,6 +350,111 @@ class BlockedTurn:
         }
 
 
+#: ``turns.error_kind`` super-agents sets while (or after) a Claude Code start
+#: waits on a macOS folder-consent dialog (``claude_cwd_access``). The session's
+#: ``last_observed_state`` then names the folder and what to click. This is the
+#: fast signal: it appears within seconds of the spawn attempt, long before the
+#: 60 s initialize timeout behind ``CONTROL_INIT_TIMEOUT_SIGNATURE``.
+BLOCKED_PERMISSION_DIALOG_KIND = "blocked_permission_dialog"
+
+_GENERIC_CONSENT_MESSAGE = (
+    "macOS is waiting for permission: Openbase Services needs access to a "
+    "protected folder. Click Allow in the dialog on your Mac and the agent "
+    "will continue."
+)
+
+
+@dataclass
+class ConsentBlockedTurn:
+    session_id: str
+    session_name: str
+    agent_name: str | None
+    turn_id: str
+    status: str
+    message: str
+
+    def spoken_hint(self) -> str:
+        who = self.agent_name if self.agent_name else "an agent"
+        if who.lower() == "dispatcher":
+            who = "an agent"
+        return f"Heads up — {who} is waiting on your Mac. {self.message}"
+
+    def packet_payload(self) -> dict:
+        return {
+            "event": "agent_turn_blocked",
+            "session_name": self.session_name,
+            "agent_name": self.agent_name,
+            "turn_id": self.turn_id,
+            "reason": BLOCKED_PERMISSION_DIALOG_KIND,
+        }
+
+
+def scan_consent_blocked_turns(
+    *,
+    since: _dt.datetime | None = None,
+    state_db_path: Path | None = None,
+) -> list[ConsentBlockedTurn]:
+    """Find turns super-agents flagged as waiting on a folder-consent dialog.
+
+    Running turns are reported as soon as the flag appears; a turn that then
+    failed (the dialog went unanswered) is reported too. ``since`` keeps a
+    fresh call from re-announcing a turn that started before the watcher. An
+    older store without the ``error_kind`` column yields nothing.
+    """
+    import sqlite3
+
+    if state_db_path is None:
+        try:
+            from openbase_coder_cli.thread_sync.thread_sync_common import (
+                super_agents_state_db_path,
+            )
+
+            state_db_path = super_agents_state_db_path()
+        except Exception:  # noqa: BLE001 - resolution is best-effort
+            return []
+    if not Path(state_db_path).exists():
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{state_db_path}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error:
+        return []
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT t.id AS turn_id, t.status, t.created_at, t.last_error, "
+            "s.id AS session_id, s.name, s.agent_name, s.last_observed_state "
+            "FROM turns t JOIN sessions s ON s.id = t.session_id "
+            "WHERE t.error_kind = ? AND t.status IN ('running', 'waiting', 'failed')",
+            (BLOCKED_PERMISSION_DIALOG_KIND,),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+    results: list[ConsentBlockedTurn] = []
+    for row in rows:
+        if since is not None:
+            started = _parse_sqlite_ts(row["created_at"])
+            if started is not None and started < since:
+                continue
+        message = (
+            row["last_error"]
+            if row["status"] == "failed"
+            else row["last_observed_state"]
+        ) or _GENERIC_CONSENT_MESSAGE
+        results.append(
+            ConsentBlockedTurn(
+                session_id=row["session_id"],
+                session_name=row["name"],
+                agent_name=row["agent_name"],
+                turn_id=row["turn_id"],
+                status=row["status"],
+                message=message,
+            )
+        )
+    return results
+
+
 def scan_blocked_turns(
     *,
     since: _dt.datetime | None = None,
@@ -478,7 +588,7 @@ def scan_stalled_running_turns(
     try:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT t.id AS turn_id, t.created_at, "
+            "SELECT t.id AS turn_id, t.created_at, t.updated_at, "
             "s.id AS session_id, s.name, s.agent_name "
             "FROM turns t JOIN sessions s ON s.id = t.session_id "
             "WHERE t.status = 'running'"
@@ -496,6 +606,11 @@ def scan_stalled_running_turns(
             continue
         elapsed = (now - started).total_seconds()
         if elapsed < min_elapsed_seconds:
+            continue
+        # A turn that streamed output recently is working, however long its
+        # current tool call: every stream message bumps updated_at.
+        last_output = _parse_sqlite_ts(row["updated_at"] or "") or started
+        if (now - last_output).total_seconds() < min_elapsed_seconds:
             continue
         diagnosis = diagnose(
             turn_started_at=started,
@@ -516,14 +631,26 @@ def scan_stalled_running_turns(
     return results
 
 
+#: The consent-flag scan is one indexed sqlite read, so it runs every tick; the
+#: presenter/log scans are heavier and run every ``HEAVY_SCAN_EVERY`` ticks
+#: (the previous 15 s cadence).
+CONSENT_POLL_SECONDS = 5.0
+HEAVY_SCAN_EVERY = 3
+
+
 async def stall_watch_loop(
     *,
-    poll_seconds: float = 15.0,
+    poll_seconds: float = CONSENT_POLL_SECONDS,
     is_call_active=None,
     prepare_announcement=None,
     speak=None,
+    should_announce=None,
 ) -> None:
     """Background poller: surface blocked agent turns during a live call.
+
+    ``should_announce(turn) -> bool``, if given, lets the engine veto a hint
+    for a turn whose failure it already recovered from or explained itself
+    (GPT-Live turn recovery); a vetoed turn is never announced.
 
     ``speak(text) -> bool`` (awaitable) delivers one hint; by default it is
     the classic announcer path, :func:`speak_via_local_api`. The GPT-Live
@@ -534,6 +661,9 @@ async def stall_watch_loop(
     it surfaces two classes of stuck agent turn (dispatcher OR spawned
     sub-agent), so the person on the phone learns their Mac needs attention:
 
+    0. turns super-agents flagged as waiting on a folder-consent dialog
+       (:func:`scan_consent_blocked_turns`), checked every tick because it is
+       the fast, specific signal;
     1. turns that *failed* with the blocked-at-init signature
        (:func:`scan_blocked_turns`); and
     2. turns still *running* well past the stall threshold with a concrete
@@ -562,6 +692,15 @@ async def stall_watch_loop(
     async def _announce(turn) -> None:
         if is_call_active is not None and not is_call_active():
             return
+        if should_announce is not None and not should_announce(turn):
+            if turn.turn_id not in spoken_turn_ids:
+                spoken_turn_ids.add(turn.turn_id)
+                logger.info(
+                    "%s stage=agent_turn_blocked_hint_vetoed turn_id=%s",
+                    "dispatch_timing",
+                    turn.turn_id,
+                )
+            return
         now = time.monotonic()
         if not announcement_attempt_due(
             turn.turn_id,
@@ -589,9 +728,18 @@ async def stall_watch_loop(
             interrupted_reply,
         )
 
+    tick = 0
     while True:
         try:
             await asyncio.sleep(poll_seconds)
+            tick += 1
+            consent_blocked = await loop.run_in_executor(
+                None, lambda: scan_consent_blocked_turns(since=since)
+            )
+            for turn in consent_blocked:
+                await _announce(turn)
+            if tick % HEAVY_SCAN_EVERY:
+                continue
             blocked = await loop.run_in_executor(
                 None, lambda: scan_blocked_turns(since=since)
             )

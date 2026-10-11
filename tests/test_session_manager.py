@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -1473,6 +1474,53 @@ def test_send_message_starts_claude_code_backend_turn(tmp_path: Path) -> None:
     )
 
 
+def test_send_message_on_dispatcher_thread_carries_the_live_dispatcher_rules(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """376, 2026-10-11 04:42Z: the typed Dispatcher chat kept the rules
+    stored at thread creation and started a new worker for "Have Marian
+    write…"; typed turns now pass the current rules like voice turns do."""
+    from openbase_coder_cli import dispatcher_instructions
+    from openbase_coder_cli.thread_sync import session_manager_threads
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    client = FakeBackendSessionClient(
+        {
+            "read_by_label": [
+                {
+                    "threadId": "s_dispatcher",
+                    "session": {
+                        "id": "s_dispatcher",
+                        "name": "dispatcher",
+                        "cwd": str(project_dir),
+                        "status": "waiting",
+                        "createdAt": "2026-06-19T20:00:00.000Z",
+                        "updatedAt": "2026-06-19T21:00:00.000Z",
+                    },
+                }
+            ],
+            "start_turn_by_label": [{"turnId": "t_2"}],
+        }
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.livekit_voice_route.is_dispatcher_thread",
+        lambda thread_id: thread_id == "s_dispatcher",
+    )
+    assert session_manager_threads.dispatcher_turn_instructions("s_other") is None
+
+    manager = CodexAppServerSessionManager(
+        client=client, model_for_role=lambda role: None
+    )
+    asyncio.run(manager.send_message("s_dispatcher", "Have Marian write files"))
+
+    turn_input = client.calls[-1][1]["turn_input"]
+    assert dispatcher_instructions.START_HEADING in turn_input["developerInstructions"]
+    assert (
+        "continue that agent on its own thread" in turn_input["developerInstructions"]
+    )
+
+
 def test_list_threads_marks_waiting_on_user_input_as_waiting(tmp_path: Path) -> None:
     project_dir = tmp_path / "project"
     project_dir.mkdir()
@@ -2226,6 +2274,75 @@ def test_turn_started_notification_announces_externally_started_turn(
     assert events[0][1]["data"]["turn_id"] == "turn-2"
     assert events[0][1]["data"]["prompt"] == "Queued prompt"
     assert events[1][1]["data"]["current_turn"]["turn_id"] == "turn-2"
+
+
+@pytest.mark.parametrize("finish_during_read", [False, True])
+def test_late_turn_started_never_reannounces_a_finished_turn(
+    monkeypatch, tmp_path: Path, finish_during_read: bool
+) -> None:
+    """Each notification runs in its own task, so a turn's turn/started can be
+    handled after (or while) its turn/completed is: clients must not see the
+    finished turn come back as running."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    events: list[dict[str, Any]] = []
+
+    async def fake_broadcast(_session_id: str, event: dict[str, Any]) -> None:
+        events.append(event)
+
+    monkeypatch.setattr(
+        "openbase_coder_cli.thread_sync.session_manager._broadcast",
+        fake_broadcast,
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.openbase_coder_cli_app.notification_runtime.request_notification_sweep",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.thread_sync.session_manager._notify_manual_thread_finished",
+        AsyncMock(),
+    )
+    done_thread = {
+        "thread": _thread(
+            "thr-1",
+            str(project_dir),
+            turns=[
+                _turn(
+                    "turn-1",
+                    message="Hi",
+                    output="Hello",
+                    started_at=10,
+                    completed_at=11,
+                    status="completed",
+                )
+            ],
+        )
+    }
+    client = FakeSuperAgentsClient({"read_thread": [done_thread] * 4})
+    manager = _manager(client)
+    started = {"threadId": "thr-1", "turn": {"id": "turn-1", "startedAt": 10}}
+    completed = {"threadId": "thr-1", "turnId": "turn-1"}
+
+    async def run() -> None:
+        if not finish_during_read:
+            await manager._handle_client_event("turn/completed", completed)
+            await manager._handle_client_event("turn/started", started)
+            return
+        read_state = manager.get_session_state
+        finished: list[bool] = []
+
+        async def finishing_read(thread_id: str):
+            if not finished:
+                finished.append(True)
+                await manager._handle_client_event("turn/completed", completed)
+            return await read_state(thread_id)
+
+        monkeypatch.setattr(manager, "get_session_state", finishing_read)
+        await manager._handle_client_event("turn/started", started)
+
+    asyncio.run(run())
+
+    assert "turn_started" not in [event["type"] for event in events]
 
 
 def test_interrupt_turn_uses_active_turn_id(tmp_path: Path) -> None:

@@ -350,7 +350,8 @@ def test_openbase_cloud_setup_provisions_machine_token(monkeypatch, tmp_path) ->
 def test_setup_never_runs_interactive_claude_login(
     monkeypatch, tmp_path, capfd
 ) -> None:
-    """Setup only warns about a missing Claude login; it never launches one."""
+    """The setup phases only warn about a missing Claude login (the interactive
+    tail offers to sign in); they never launch one."""
 
     class CaptureProgress:
         enabled = True
@@ -365,16 +366,13 @@ def test_setup_never_runs_interactive_claude_login(
     monkeypatch.setattr(
         setup_cli, "_selected_coding_backend", lambda *args: "claude_code"
     )
-    monkeypatch.setattr(
-        setup_cli,
-        "claude_auth_status",
-        lambda: SimpleNamespace(logged_in=False, raw_output="", returncode=1),
-    )
+    monkeypatch.setattr(setup_cli, "backend_login_missing", lambda _backend: True)
 
     def fail_interactive_login(*args, **kwargs):
         raise AssertionError("setup must not run an interactive claude login")
 
     monkeypatch.setattr(setup_cli, "run_claude_login", fail_interactive_login)
+    monkeypatch.setattr(setup_cli, "run_backend_login", fail_interactive_login)
     monkeypatch.setattr(
         setup_cli,
         "tailscale_serve_health",
@@ -393,4 +391,4 @@ def test_setup_never_runs_interactive_claude_login(
         audio_provider="openbase-cloud",
     )
 
-    assert "Claude Code is not logged in" in capfd.readouterr().out
+    assert "Claude Code isn't signed in on your computer" in capfd.readouterr().out

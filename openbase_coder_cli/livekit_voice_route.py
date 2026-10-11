@@ -266,6 +266,24 @@ def _normalize_voice_name(value: str | None) -> str:
     return " ".join(value.casefold().split())
 
 
+RETIRED_DISPATCHER_LABEL_PREFIX = "dispatcher (retired"
+
+
+def is_dispatcher_label(label: str | None) -> bool:
+    """Whether ``label`` names the Dispatcher thread, current or retired.
+
+    Recreating the Dispatcher (an AI-account switch) renames the previous
+    session ``dispatcher (retired)``; it is still the Dispatcher's past, not
+    a Super Agent, so it keeps the Dispatcher's name and voice instead of
+    being given a derived human character (376, 2026-10-11: "Hi, I'm
+    Jacqueline" from a retired Dispatcher the phone still had open).
+    """
+    normalized = _normalize_voice_name(label)
+    return normalized in DISPATCHER_THREAD_LABELS or normalized.startswith(
+        RETIRED_DISPATCHER_LABEL_PREFIX
+    )
+
+
 def is_dispatcher_identity(
     thread_id: str | None = None,
     label: str | None = None,
@@ -275,10 +293,7 @@ def is_dispatcher_identity(
     route_state = route_state or get_livekit_voice_route_state()
     if thread_id and route_state.dispatcher_thread_id == thread_id:
         return True
-    return (
-        _normalize_voice_name(label) in DISPATCHER_THREAD_LABELS
-        or _normalize_voice_name(agent_name) == "dispatcher"
-    )
+    return is_dispatcher_label(label) or _normalize_voice_name(agent_name) == "dispatcher"
 
 
 def load_direct_livekit_developer_instructions(

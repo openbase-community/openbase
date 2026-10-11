@@ -155,6 +155,19 @@ LIVE_VOICE_CHARACTER_START_TIMEOUT_SECONDS = float(
 LIVE_VOICE_CHARACTER_START_ATTEMPTS = max(
     1, int(os.getenv("LIVEKIT_LIVE_VOICE_CHARACTER_START_ATTEMPTS", "2") or 2)
 )
+# A voice turn that fails to reach or start on the backend is retried with
+# these backoffs (seconds, in order; the last one repeats) inside this window
+# before the caller hears a specific failure line (turn_recovery.py).
+LIVE_TURN_RECOVERY_WINDOW_SECONDS = float(
+    os.getenv("LIVEKIT_TURN_RECOVERY_WINDOW_SECONDS", "90") or 90
+)
+LIVE_TURN_RECOVERY_BACKOFF_SECONDS = tuple(
+    float(part)
+    for part in (
+        os.getenv("LIVEKIT_TURN_RECOVERY_BACKOFF_SECONDS", "3,6,12,20") or "3,6,12,20"
+    ).split(",")
+    if part.strip()
+) or (3.0, 6.0, 12.0, 20.0)
 LIVEKIT_DISPATCHER_WARMUP = os.getenv(
     "LIVEKIT_DISPATCHER_WARMUP", "1"
 ).strip().lower() not in {"0", "false", "no", "off"}

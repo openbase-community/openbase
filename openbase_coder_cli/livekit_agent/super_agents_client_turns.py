@@ -61,6 +61,24 @@ def _voice_prompt_transcript(prompt: str) -> str:
     return prompt.strip()
 
 
+# A steer lands inside work the agent is already doing. Say so, and leave
+# stopping, changing course or carrying on to the agent's own judgment (Gabe,
+# 2026-10-11: no keyword matching of "stop"; the agent decides). Thread views
+# strip it like every Openbase system note.
+LIVE_STEER_NOTE = (
+    "[Openbase system note: the caller said this while you were still working "
+    "on their current request. Decide yourself whether to stop, change course "
+    "or continue.]"
+)
+
+
+def frame_steer(prompt: str) -> str:
+    """``prompt`` with the mid-turn note in front (once)."""
+    if prompt.startswith(LIVE_STEER_NOTE):
+        return prompt
+    return f"{LIVE_STEER_NOTE}\n\n{prompt}"
+
+
 def _wrap_transcript(transcript: str) -> str:
     # The transcript came out of an already-wrapped prompt, so it is already
     # HTML-escaped; wrap_voice_prompt would double-escape entities.
@@ -448,7 +466,7 @@ class SuperAgentsClientTurnsMixin:
         try:
             result = await self._backend_client.steer_by_label(
                 self._query(thread_id=thread_id, turn_id=active_turn_id),
-                prompt,
+                frame_steer(prompt),
                 turn_input,
             )
         except TimeoutError:
@@ -511,7 +529,7 @@ class SuperAgentsClientTurnsMixin:
                 active_turn_id = actual_turn_id
                 result = await self._backend_client.steer_by_label(
                     self._query(thread_id=thread_id, turn_id=actual_turn_id),
-                    prompt,
+                    frame_steer(prompt),
                     turn_input,
                 )
             elif _is_turn_cannot_accept_steering_error(exc):

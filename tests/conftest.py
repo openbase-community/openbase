@@ -124,6 +124,21 @@ def _isolated_host_state(monkeypatch, tmp_path):
         "openbase_coder_cli.sync_daemon.SYNC_DAEMON_SOCKET_PATH",
         tmp_path / "openbase-sync" / "syncd.sock",
     )
+    # A live CLI login failure is remembered for the AI account card; keep it
+    # (and the cloud-workspace wording switch) off this machine's real state.
+    monkeypatch.setattr(
+        "openbase_coder_cli.backend_auth.RELINK_STATE_PATH",
+        tmp_path / "ai-account-relink.json",
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.backend_auth.on_cloud_workspace", lambda: False
+    )
+    # Never ask this machine's real Claude Code / Codex CLI whether it is
+    # signed in; tests that need a signed-out CLI patch the probe themselves.
+    monkeypatch.setattr(
+        "openbase_coder_cli.backend_auth._probe_login_missing", lambda _backend: False
+    )
+    monkeypatch.setattr("openbase_coder_cli.backend_auth._login_state_cache", {})
     # Discard inherited backend settings and changes made by other tests.
     # Tests must see only what they set themselves.
     monkeypatch.delenv("OPENBASE_CODER_CLI_WEB_BACKEND_URL", raising=False)

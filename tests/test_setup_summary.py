@@ -9,6 +9,12 @@ from click.testing import CliRunner
 setup_cli = importlib.import_module("openbase_coder_cli.cli.setup")
 
 
+@pytest.fixture(autouse=True)
+def _backend_cli_signed_in(monkeypatch):
+    """These tests cover the summary; the backend login prompt has its own."""
+    monkeypatch.setattr(setup_cli, "_interactive_backend_login", lambda _env: None)
+
+
 @pytest.mark.parametrize("developer_install", [True, False])
 @pytest.mark.parametrize("include_hooks", [True, False])
 @pytest.mark.parametrize("shared_mcp", [True, False])

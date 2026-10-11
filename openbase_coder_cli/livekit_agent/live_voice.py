@@ -560,10 +560,35 @@ def _fallback(reason: str, detail: str) -> VoiceEngineDecision:
     )
 
 
+_PROVIDER_BILLING_MARKERS = (
+    "credit",
+    "billing",
+    "quota",
+    "insufficient",
+    "no credits",
+)
+
+
 def live_voice_unavailable_detail(decision: VoiceEngineDecision) -> str:
-    """Human-readable packet detail for a live -> pipeline fallback."""
-    return (
-        "Live voice is unavailable for this call, so the classic voice pipeline "
-        f"is used instead (reason: {decision.fallback_reason}). "
-        f"{decision.fallback_detail or ''}"
-    ).strip()
+    """What the phone shows for a live -> pipeline fallback: plain words, no
+    reason codes or exception text (those stay in the logs). Only a cause the
+    user can act on, signing in or a plan, is named."""
+    reason = decision.fallback_reason or ""
+    detail = (decision.fallback_detail or "").lower()
+    if reason == "login_required":
+        return (
+            "Live voice isn't available until you sign in to Openbase Cloud "
+            "(run openbase-coder login); using standard voice for this call."
+        )
+    if reason == "subscription_required":
+        return (
+            "Live voice needs an Openbase Cloud plan that includes it; using "
+            "standard voice for this call."
+        )
+    if reason == "live_session_start_failed" or any(
+        marker in detail for marker in _PROVIDER_BILLING_MARKERS
+    ):
+        return (
+            "Live voice is temporarily unavailable; using standard voice for this call."
+        )
+    return "Live voice isn't available right now; using standard voice for this call."

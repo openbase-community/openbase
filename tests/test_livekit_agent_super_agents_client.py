@@ -18,6 +18,9 @@ from openbase_coder_cli.livekit_agent.super_agents_client import (
     _response_is_queued,
     _speech_text_from_progress,
 )
+from openbase_coder_cli.livekit_agent.super_agents_client_turns import (
+    frame_steer,
+)
 
 
 class FakeSuperAgentsBackend:
@@ -650,6 +653,12 @@ async def test_super_agents_livekit_client_creates_thread_and_turn_through_backe
     assert "voice instructions" in backend.started_turns[0][1]["developerInstructions"]
     assert result["_livekit_turn_id"] == "turn-1"
     assert result["_livekit_speech_text"] == "The dispatcher answer is ready."
+    # A completed turn is a success for turn recovery: VM2 04:14Z retried every
+    # finished turn as "unknown: Claude Code response completed" because the
+    # flag carried the imported helper (always truthy) instead of the status.
+    assert result["_livekit_turn_failed"] is False
+    assert result["_livekit_turn_error"] == ""
+    assert result["_livekit_turn_error_kind"] == ""
     assert "fresh" not in backend.started_threads[0]
 
 
@@ -742,7 +751,7 @@ async def test_super_agents_livekit_client_steers_backend_active_turn(
     assert len(backend.steered) == 1
     steer_input, prompt = backend.steered[0]
     assert steer_input.turn_id == "active-turn-1"
-    assert prompt == "please adjust that"
+    assert prompt == frame_steer("please adjust that")
     assert result["_livekit_turn_id"] == "active-turn-1"
     assert result["_livekit_speech_text"] == "The steered dispatcher answer is ready."
 
@@ -773,7 +782,7 @@ async def test_super_agents_livekit_client_preserves_started_turn_after_cancella
     assert len(backend.steered) == 1
     steer_input, prompt = backend.steered[0]
     assert steer_input.turn_id == "turn-1"
-    assert prompt == "change it to blueberries"
+    assert prompt == frame_steer("change it to blueberries")
     assert result["_livekit_turn_id"] == "turn-1"
     assert result["_livekit_speech_text"] == "The interrupted turn accepted steering."
 
@@ -1176,7 +1185,7 @@ async def test_super_agents_livekit_client_proactively_steers_active_turn(
     assert len(backend.steered) == 1
     steer_input, prompt = backend.steered[0]
     assert steer_input.turn_id == "turn-1"
-    assert prompt == "stop and write about blueberries"
+    assert prompt == frame_steer("stop and write about blueberries")
 
     backend.release_progress.set()
     first_result = await first
@@ -1222,7 +1231,7 @@ async def test_replacing_a_fragment_turn_interrupts_it_on_a_non_steering_backend
     assert steer_input.turn_id == "turn-1"
     # The whole request, not the unsubmitted remainder: the interrupted
     # work is discarded.
-    assert prompt == (
+    assert prompt == frame_steer(
         "Subtract 38 from the result in this thread and answer just the number"
     )
     assert backend.steer_turn_inputs[0]["interruptCurrentWork"] is True
@@ -1263,7 +1272,7 @@ async def test_replacing_a_fragment_turn_steers_the_remainder_on_codex(
     _steer_input, prompt = backend.steered[0]
     # Codex steers mid-turn natively: only the new words reach the turn and
     # nothing is interrupted.
-    assert prompt == "<voice>and answer just the number</voice>"
+    assert prompt == frame_steer("<voice>and answer just the number</voice>")
     assert "interruptCurrentWork" not in backend.steer_turn_inputs[0]
 
 
@@ -1885,23 +1894,19 @@ def test_backend_auth_failure_warning_debounced_and_backend_specific(
 
     assert (
         super_agents_client_module._flag_backend_auth_failure(
-            "Failed to authenticate: OAuth session expired and could not be refreshed",
-            backend="claude_code",
-            turn_id="t_1",
+            "claude_code", backend="claude_code", turn_id="t_1"
         )
         is True
     )
     # The human-readable WARNING fires once and names the Claude-specific fix.
-    assert caplog.text.count("surfaced in a spoken answer") == 1
+    assert caplog.text.count("could not authenticate") == 1
     assert "claude login" in caplog.text
 
     # Debounced: an immediate repeat must not emit a second WARNING.
     super_agents_client_module._flag_backend_auth_failure(
-        "Failed to authenticate: OAuth session expired and could not be refreshed",
-        backend="claude_code",
-        turn_id="t_2",
+        "claude_code", backend="claude_code", turn_id="t_2"
     )
-    assert caplog.text.count("surfaced in a spoken answer") == 1
+    assert caplog.text.count("could not authenticate") == 1
 
 
 def test_backend_auth_failure_always_emits_error_marker(monkeypatch, caplog) -> None:
@@ -1916,18 +1921,16 @@ def test_backend_auth_failure_always_emits_error_marker(monkeypatch, caplog) -> 
 
     for turn_id in ("t_1", "t_2"):
         super_agents_client_module._flag_backend_auth_failure(
-            "Not logged in · Please run /login.",
-            backend="openbase_cloud",
-            turn_id=turn_id,
+            "openbase_cloud", backend="openbase_cloud", turn_id=turn_id
         )
 
     assert caplog.text.count("stage=voice_turn_backend_auth_failure") == 2
-    # Codex/openbase_cloud remediation must NOT tell the user to run `claude login`.
+    # Openbase Cloud remediation must NOT tell the user to run `claude login`.
     assert "claude login" not in caplog.text
     assert "machine token" in caplog.text
 
 
-def test_backend_auth_failure_ignores_normal_speech(monkeypatch, caplog) -> None:
+def test_backend_auth_failure_ignores_turns_without_one(monkeypatch, caplog) -> None:
     import logging
 
     monkeypatch.setattr(
@@ -1935,25 +1938,44 @@ def test_backend_auth_failure_ignores_normal_speech(monkeypatch, caplog) -> None
     )
     caplog.set_level(logging.WARNING)
 
+    assert super_agents_client_module._flag_backend_auth_failure(None) is False
+    progress = {
+        "status": "completed",
+        "turnId": "t_1",
+        "turn": {"turnId": "t_1", "status": "completed"},
+    }
     assert (
-        super_agents_client_module._flag_backend_auth_failure(
-            "The build passed and I pushed the fix.", backend="codex"
-        )
+        super_agents_client_module._progress_auth_failed(progress, turn_id="t_1")
         is False
     )
-    assert super_agents_client_module._flag_backend_auth_failure("") is False
-
-    assert "auth failure" not in caplog.text
     assert "voice_turn_backend_auth_failure" not in caplog.text
 
 
-def test_safe_spoken_answer_replaces_auth_failure_with_graceful_line() -> None:
-    fallback = super_agents_client_module.BACKEND_ERROR_SPOKEN_FALLBACK
+def test_cloud_auth_failure_is_structured_and_speaks_the_fallback() -> None:
+    progress = {
+        "status": "failed",
+        "turnId": "t_1",
+        "turn": {
+            "turnId": "t_1",
+            "status": "failed",
+            "errorKind": "authentication_failed",
+        },
+    }
+    assert super_agents_client_module._progress_auth_failed(progress, turn_id="t_1")
+    # No CLI login to fix on an Openbase Cloud backend.
+    assert (
+        super_agents_client_module._progress_login_backend(
+            progress, backend="openbase_cloud", turn_id="t_1"
+        )
+        is None
+    )
     assert (
         super_agents_client_module._safe_spoken_answer(
-            "Not logged in · Please run /login.", auth_failed=True
+            "Failed to authenticate. API Error: 401",
+            auth_failed=True,
+            backend="openbase_cloud",
         )
-        == fallback
+        == super_agents_client_module.BACKEND_ERROR_SPOKEN_FALLBACK
     )
 
 
@@ -2213,7 +2235,7 @@ async def test_steer_active_turn_skips_transcript_covered_by_prior_fragments(
     assert await client.steer_active_turn(extended) == "turn-1"
     assert len(backend.steered) == 1
     _steer_input, steered_prompt = backend.steered[0]
-    assert steered_prompt == "<voice>Now do the fix.</voice>"
+    assert steered_prompt == frame_steer("<voice>Now do the fix.</voice>")
 
 
 @pytest.mark.asyncio

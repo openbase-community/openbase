@@ -295,6 +295,32 @@ def test_canonical_dispatcher_is_exempt_independent_of_title(worker, monkeypatch
     assert not options.mcp_servers
 
 
+@pytest.mark.parametrize("title", ["dispatcher", "dispatcher (retired)", "Dispatcher (retired 1a2b3c4d)"])
+def test_a_dispatcher_by_label_is_exempt_even_when_the_route_id_moved_on(
+    worker, monkeypatch, title
+):
+    """A recreated Dispatcher's old session (renamed "dispatcher (retired)") and
+    the new one before the route state learns its id must never be managed
+    as a worker and given a voice name (376, 2026-10-11: "Hi, I'm Jacqueline")."""
+    import claude_agent_sdk as sdk
+
+    from openbase_coder_cli.agent_announcements import claude
+
+    monkeypatch.setattr(
+        claude,
+        "get_livekit_voice_route_state",
+        lambda: SimpleNamespace(dispatcher_thread_id="another-id"),
+    )
+    worker.store.rename_session(worker.session.id, title)
+    session = worker.store.get_session(worker.session.id)
+    announcements = ManagedAnnouncements(worker.store, protocol=worker.protocol)
+    assert not announcements.eligible(session)
+    options = sdk.ClaudeAgentOptions()
+    announcements.configure_session(session, options, sdk)
+    assert not options.hooks
+    assert worker.store.get_session(worker.session.id).agent_name == session.agent_name
+
+
 async def test_direct_text_has_no_delegation_origin_or_default_announcements(worker):
     w = worker
     turn = w.store.create_turn(

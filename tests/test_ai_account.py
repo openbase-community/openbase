@@ -79,6 +79,8 @@ def test_claude_login_takes_a_pasted_code(manager, monkeypatch, tmp_path):
     manager.start(ai_account.CLAUDE_CODE)
     prompted = _wait(manager, lambda s: s["needs_code"])
     assert prompted["url"].startswith("https://claude.ai/oauth/authorize")
+    # The paste field comes with the link, not with any prompt wording.
+    assert "Paste" not in prompted.get("message", "")
 
     with pytest.raises(ValueError):
         manager.submit_code("bad\ncode")
@@ -232,3 +234,86 @@ def test_status_reports_whether_the_cli_is_available(monkeypatch):
     assert options["openbase_cloud"]["available"] is True
     assert options["codex"]["available"] is False
     assert options["claude_code"]["available"] is True
+
+
+def test_status_reports_accounts_that_need_a_relink(monkeypatch):
+    from openbase_coder_cli import backend_auth
+
+    monkeypatch.setattr(ai_account, "is_linked", lambda p: p != "claude_code")
+    monkeypatch.setattr(ai_account, "linked_account", lambda p: None)
+    monkeypatch.setattr(ai_account, "selected_choice", lambda: "claude_code")
+    backend_auth.mark_relink_needed("codex")
+    options = {o["id"]: o for o in ai_account.status()["options"]}
+    assert options["openbase_cloud"]["needs_relink"] is False
+    # Its login failed during a turn.
+    assert options["codex"]["needs_relink"] is True
+    # In use without a login.
+    assert options["claude_code"]["needs_relink"] is True
+
+
+def test_macos_login_url_is_sent_to_the_phone(manager, monkeypatch, tmp_path):
+    cli = _fake_cli(
+        tmp_path,
+        'echo "Open https://auth.openai.com/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A1455"\nsleep 1\n',
+    )
+    monkeypatch.setattr(ai_account, "_command", lambda provider: [cli])
+    opened = []
+    monkeypatch.setattr(ai_account, "browser_env_ignored", lambda: True)
+    monkeypatch.setattr(ai_account, "_open_on_phone", opened.append)
+    manager.start(ai_account.CODEX)
+    _wait(manager, lambda s: s["url"])
+    assert opened == [
+        "https://auth.openai.com/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A1455"
+    ]
+
+
+def test_linux_relies_on_the_browser_shim(manager, monkeypatch, tmp_path):
+    cli = _fake_cli(tmp_path, 'echo "Open https://example.com/auth"\nsleep 1\n')
+    monkeypatch.setattr(ai_account, "_command", lambda provider: [cli])
+    opened = []
+    monkeypatch.setattr(ai_account, "browser_env_ignored", lambda: False)
+    monkeypatch.setattr(ai_account, "_open_on_phone", opened.append)
+    manager.start(ai_account.CODEX)
+    _wait(manager, lambda s: s["url"])
+    assert opened == []
+
+
+@pytest.mark.parametrize("outcome", ["cancel", "fail"])
+def test_an_unfinished_relink_keeps_the_existing_login(
+    manager, monkeypatch, tmp_path, outcome
+):
+    auth = tmp_path / "codex-home" / "auth.json"
+    auth.parent.mkdir()
+    auth.write_text('{"tokens": "old"}')
+    monkeypatch.setattr(ai_account, "_credential_paths", lambda provider: [auth])
+    # Like `codex login`: drop the stored login first, then wait for the browser.
+    exit_line = "sleep 30\n" if outcome == "cancel" else "exit 1\n"
+    cli = _fake_cli(
+        tmp_path, f'rm -f "{auth}"\necho "Open https://auth.openai.com/x"\n{exit_line}'
+    )
+    monkeypatch.setattr(ai_account, "_command", lambda provider: [cli])
+    monkeypatch.setattr(ai_account, "browser_env_ignored", lambda: False)
+    manager.start(ai_account.CODEX)
+    if outcome == "cancel":
+        _wait(manager, lambda s: s["url"])
+        assert not auth.exists()
+        manager.cancel()
+        _wait(manager, lambda s: auth.exists())
+    else:
+        _wait(manager, lambda s: s["state"] == "failed")
+    assert auth.read_text() == '{"tokens": "old"}'
+
+
+def test_a_successful_relink_keeps_the_new_login(manager, monkeypatch, tmp_path):
+    auth = tmp_path / "auth.json"
+    auth.write_text('{"tokens": "old"}')
+    monkeypatch.setattr(ai_account, "_credential_paths", lambda provider: [auth])
+    cli = _fake_cli(
+        tmp_path,
+        f'echo \'{{"tokens": "new"}}\' > "{auth}"\ntouch "$MARKER"\necho "Open https://auth.openai.com/x"\n',
+    )
+    monkeypatch.setattr(ai_account, "_command", lambda provider: [cli])
+    monkeypatch.setattr(ai_account, "browser_env_ignored", lambda: False)
+    manager.start(ai_account.CODEX)
+    _wait(manager, lambda s: s["state"] == "succeeded")
+    assert "new" in auth.read_text()

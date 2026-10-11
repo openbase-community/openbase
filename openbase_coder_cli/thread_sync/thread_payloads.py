@@ -196,8 +196,11 @@ def _file_edit_paths(turn: dict[str, Any]) -> list[str]:
 
 
 def _extract_agent_output(turn: dict[str, Any]) -> str:
+    from openbase_coder_cli.backend_auth import login_failure_message
     from openbase_coder_cli.cloud_model_errors import normalize_model_proxy_error
 
+    if login_message := login_failure_message(turn):
+        return login_message
     final_parts: list[str] = []
     fallback_parts: list[str] = []
     for item in turn.get("items", []):

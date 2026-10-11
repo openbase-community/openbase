@@ -178,6 +178,31 @@ def _try_arrange_forward(port: int) -> LoopbackForward | None:
     )
 
 
+# Openbase VPN device names; the computer's local API answers on these.
+OPENBASE_DEVICE_ZONES = (".net.obs.so", ".net-staging.obs.so")
+
+
+def self_vpn_hostname() -> str | None:
+    """This computer's Openbase VPN device name, where its local API answers.
+
+    The API (:18080) is a VPN serve route keyed by this name, not a port on
+    the raw VPN address, so a phone must reach it by name.
+    """
+    from openbase_coder_cli.services import tailscale_provider
+
+    if tailscale_provider.is_netmesh_tsnet():
+        from openbase_coder_cli.services.tunneld import tunneld_status
+
+        _available, payload, _error = tunneld_status()
+    else:
+        _available, payload, _error = _host_vpn_status()
+    self_info = payload.get("Self") if isinstance(payload, dict) else None
+    name = str((self_info or {}).get("DNSName") or "").strip().rstrip(".").lower()
+    if name and name.endswith(OPENBASE_DEVICE_ZONES):
+        return name
+    return None
+
+
 def self_vpn_address() -> str | None:
     """This computer's own Openbase VPN address (cloud workspace or host VPN)."""
     from openbase_coder_cli.services import tailscale_provider

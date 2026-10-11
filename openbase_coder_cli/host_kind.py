@@ -67,9 +67,9 @@ _LIVE_VOICE_NOTES = {
 
 def host_kind() -> str:
     """The kind of computer this install runs on."""
-    from openbase_coder_cli.services.cloud_workspace import cloud_workspace_id
+    from openbase_coder_cli.services.cloud_workspace import is_cloud_workspace
 
-    if cloud_workspace_id():
+    if is_cloud_workspace():
         return HOST_KIND_CLOUD_WORKSPACE
     if sys.platform == "darwin":
         return HOST_KIND_MAC

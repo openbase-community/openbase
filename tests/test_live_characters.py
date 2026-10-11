@@ -566,7 +566,7 @@ async def test_transfer_during_announcement_start_never_injects_old_commentary(
     )
     live.append_commentary.assert_not_called()
     live.append_instructions.assert_not_called()
-    assert live.off.call_count == 3
+    assert live.off.call_count == 4
     controller._conversation.assert_awaited_once()
 
 
@@ -771,3 +771,33 @@ async def test_returns_are_silent_and_every_transfer_greets(monkeypatch):
         "Hi, I'm Blake.",
         "Hi, I'm Blake.",
     ]
+
+
+async def test_announcement_echo_does_not_stop_it_but_a_confirmed_barge_in_does():
+    """2026-10-11 (investigate-user-say-gptlive): raw VAD stopped a `user say`
+    announcement, so speakerphone echo could cut it. The gate decides now."""
+    from openbase_coder_cli.livekit_agent.live_speech_gate import LiveSpeechGate
+
+    clock = {"now": 10.0}
+    gate = LiveSpeechGate(barge_in_min_seconds=0.05, clock=lambda: clock["now"])
+    session = Mock()
+    controller = LiveCharacterController(
+        session=session,
+        bridge=Mock(),
+        router=Mock(),
+        model_factory=Mock(),
+        instructions=Mock(),
+        on_error=AsyncMock(),
+        speech_gate=gate,
+    )
+    controller._announcing = True
+    gate.agent_said("Lucy finished the report.")
+    gate.agent_state_changed("speaking")
+    gate.user_state_changed("speaking")  # the announcement's echo
+    controller.user_state_changed(SimpleNamespace(new_state="speaking"))
+    clock["now"] += 1.0
+    await asyncio.sleep(0.1)
+    gate.caller_heard(" finished the report")
+    assert not controller._announcement_stop.is_set()
+    gate.caller_heard(" hold on, can you explain why it broke")  # real caller words
+    assert controller._announcement_stop.is_set()

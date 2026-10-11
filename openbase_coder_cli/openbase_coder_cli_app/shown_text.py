@@ -3,7 +3,7 @@
 `show_text` normally reaches the app over its app-control websocket. A
 suspended app has no socket, so the text is parked here (in memory, one
 fetch, ten minutes at most) and the phone gets a Cloud push carrying only an
-``openbase-app://show-text?id=<id>&host=<this computer's VPN address>`` link.
+``openbase-app://show-text?id=<id>&host=<this computer's VPN device name>`` link.
 Tapping it makes the app fetch the text from this computer over the VPN, so
 the text itself never passes through Openbase Cloud or the push services.
 """
@@ -56,10 +56,10 @@ def take(text_id: str) -> dict | None:
 
 def push_parked_text(text: str, label: str | None, url: str | None) -> bool:
     """Park the text and push a tap-to-show link to the owner's phones."""
-    from openbase_coder_cli.cli.browser import self_vpn_address
+    from openbase_coder_cli.cli.browser import self_vpn_hostname
     from openbase_coder_cli.config.cloud_notifications import send_notification_push
 
-    host = self_vpn_address()
+    host = self_vpn_hostname()
     if host is None:
         return False
     text_id = park(text, label, url)

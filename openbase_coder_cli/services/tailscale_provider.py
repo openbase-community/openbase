@@ -485,23 +485,25 @@ def _tsnet_rules_hash(rules: list[dict[str, Any]]) -> str:
     return "tsnet-" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _tsnet_registry_rules() -> list[dict[str, Any]]:
-    from openbase_coder_cli.services.published_services import published_serve_rules
-    from openbase_coder_cli.services.tailscale_serve import openbase_serve_rules
-
-    return [*openbase_serve_rules(), *published_serve_rules()]
-
-
 TSNET_SERVE_ETAG = "openbase-tunneld"
 
 
 def serve_snapshot() -> dict[str, Any]:
     if is_netmesh_tsnet():
-        # The daemon holds no route config of its own: the registry is the
-        # desired state and the forwards are reconciled from it on apply.
+        # The daemon holds no route config of its own. What was last applied
+        # is the hash the registry recorded; a node nothing was applied on
+        # serves only the built-in Openbase rules (its fixed forwards). The
+        # registry's services are NOT the snapshot: publish saves the new
+        # service before applying its route, and the compare-and-swap must
+        # see the state from before that apply.
+        from openbase_coder_cli.services.published_services import load_registry
+        from openbase_coder_cli.services.tailscale_serve import openbase_serve_rules
+
+        applied = load_registry().last_applied_serve_hash
         return {
             "etag": TSNET_SERVE_ETAG,
-            "hash": _tsnet_rules_hash(_validated_rules(_tsnet_registry_rules())),
+            "hash": applied
+            or _tsnet_rules_hash(_validated_rules(openbase_serve_rules())),
         }
     if not is_netmesh() or netmesh_uses_stock_tailscale():
         raise RuntimeError(

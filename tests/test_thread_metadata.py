@@ -398,3 +398,30 @@ def test_conversation_role_survives_transfer_without_collapsing_title(
     assert canonical["voice_route"]["active"] is False
     assert old["conversation_role"] == "agent"
     assert old["thread_id"] == "historical"
+
+
+def test_a_retired_dispatcher_keeps_the_dispatcher_identity(tmp_path: Path, monkeypatch):
+    """Recreating the Dispatcher renames the old session "dispatcher (retired)";
+    it must not become a Super Agent with a derived character (376, 2026-10-11:
+    "Hi, I'm Jacqueline" from the retired Dispatcher)."""
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    (tmp_path / "livekit-voice-route.json").write_text(
+        json.dumps(
+            {
+                "dispatcher_thread_id": "dispatcher-2",
+                "dispatcher_voice_id": "dispatcher-voice",
+                "dispatcher_voice_name": "Cory",
+                "updated_at": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    retired = annotate_thread_payload(
+        {"thread_id": "dispatcher-1", "name": "dispatcher (retired)"}
+    )
+    assert retired["agent_name"] == "dispatcher"
+    assert retired["voice_route"]["role"] == "none"
+    assert retired["voice_assignment"]["voice_name"] == "Cory"
+    assert retired["voice_assignment"]["source"] == "retired_dispatcher"
+    assert voice_route.is_dispatcher_label("Dispatcher (retired 1a2b3c4d)")
+    assert not voice_route.is_dispatcher_label("dispatcher helper")

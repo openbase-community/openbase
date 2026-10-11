@@ -146,6 +146,9 @@ THREAD_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
 THREAD_ID_ENV_KEYS = ("SUPER_AGENTS_THREAD_ID", "CODEX_THREAD_ID")
+# Credentials Openbase injects so agents reach their model through Openbase
+# Cloud; stripped from login sessions so CLIs see the user's own state.
+GATEWAY_ENV_KEYS = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY")
 
 
 def own_thread_id() -> str | None:
@@ -307,6 +310,52 @@ def _remove(paths: SessionPaths) -> None:
         paths.root.rmdir()
 
 
+def login_provider_for(command: list[str]) -> str | None:
+    """The AI account a command signs in to (`codex login`, `claude auth login`).
+
+    Those CLIs remove the existing login when they start, so an unfinished
+    run would sign a working account out; the holder restores it.
+    """
+    if not command:
+        return None
+    name = os.path.basename(command[0]).lower()
+    args = [arg.lower() for arg in command[1:]]
+    if name == "codex" and args[:1] == ["login"] and "status" not in args:
+        return "codex"
+    if name == "claude" and args[:2] == ["auth", "login"]:
+        return "claude_code"
+    return None
+
+
+def login_homes() -> dict[str, str]:
+    """The API's Codex/Claude homes, so an agent-run login links the same
+    account the API and the dispatcher use; this process's own paths when
+    the API is unreachable."""
+    from openbase_coder_cli import ai_account
+    from openbase_coder_cli.cli.local_server import local_server_request
+
+    with contextlib.suppress(Exception):
+        payload = local_server_request(
+            "GET", "/api/settings/ai-account/", timeout=5
+        ).json()
+        homes = payload.get("homes") if isinstance(payload, dict) else None
+        if (
+            isinstance(homes, dict)
+            and homes.get("codex_home")
+            and homes.get("claude_config_dir")
+        ):
+            return {k: str(homes[k]) for k in ("codex_home", "claude_config_dir")}
+    return ai_account.login_homes()
+
+
+def _login_credential_paths(provider: str, homes: dict[str, str]) -> list[Path]:
+    if provider == "codex":
+        return [Path(homes["codex_home"]) / "auth.json"]
+    if provider == "claude_code":
+        return [Path(homes["claude_config_dir"]) / ".credentials.json"]
+    return []
+
+
 def phone_browser_command() -> str:
     """An executable that opens its URL argument on the user's phone.
 
@@ -350,10 +399,28 @@ def _hold(name: str) -> int:
     command = meta["command"]
     env = dict(os.environ)
     env.setdefault("TERM", "xterm-256color")
+    # The agent's own model-gateway credentials (Openbase Cloud) are not the
+    # user's login: a CLI that sees them would report "already signed in".
+    for key in GATEWAY_ENV_KEYS:
+        env.pop(key, None)
     # Sign-in pages go to the user's phone, never this computer's browser.
     env["BROWSER"] = phone_browser_command()
     env.setdefault("GH_BROWSER", env["BROWSER"])
     env.pop("DJANGO_SETTINGS_MODULE", None)
+    from openbase_coder_cli import ai_account
+
+    login_provider = login_provider_for(command)
+    saved_login: dict[Path, bytes | None] = {}
+    if login_provider:
+        homes = login_homes()
+        # Sign in where the API and the dispatcher look for the login.
+        env["CODEX_HOME"] = homes["codex_home"]
+        env["CLAUDE_CONFIG_DIR"] = homes["claude_config_dir"]
+        for path in _login_credential_paths(login_provider, homes):
+            try:
+                saved_login[path] = path.read_bytes()
+            except OSError:
+                saved_login[path] = None
     pid, master_fd = pty.fork()
     if pid == 0:
         try:
@@ -435,6 +502,9 @@ def _hold(name: str) -> int:
         _, wait_status = os.waitpid(pid, 0)
         exit_code = os.waitstatus_to_exitcode(wait_status)
     secrets.clear()
+    if saved_login and (reason != "exited" or exit_code != 0):
+        # Cancelled, timed out or failed: put back the login the CLI removed.
+        ai_account._restore_credentials(saved_login)
     meta = _read_meta(paths)
     meta.update(
         exit_code=exit_code if exit_code is not None else -1, ended_reason=reason

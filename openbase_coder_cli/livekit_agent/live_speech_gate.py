@@ -79,6 +79,7 @@ class LiveSpeechGate:
         self._agent_words = deque()
         self._last_permitted_end = None
         self._agent_state_speaking = False
+        self._pending_playouts = 0
         self._caller_over_agent = False
         self._caller_heard = ""
 
@@ -117,10 +118,24 @@ class LiveSpeechGate:
             self._last_permitted_end = self._clock()
         self._agent_state_speaking = speaking
 
+    def playout_requested(self):
+        """A session.say was requested; it counts as agent audio until it ends.
+
+        Synthesis can take over a second before the first frame, and the
+        agent state only turns "speaking" then. A VAD trigger in that gap was
+        taken for a caller barge-in and cut the route cue 60 ms into its
+        audio (Maritime, 2026-10-11 02:37Z, heard='').
+        """
+        self._pending_playouts += 1
+
+    def playout_finished(self):
+        self._pending_playouts = max(0, self._pending_playouts - 1)
+        self._last_permitted_end = self._clock()
+
     @property
     def agent_audible(self):
         """The agent's voice is playing, or its sound is still echoing back."""
-        if self._agent_state_speaking:
+        if self._agent_state_speaking or self._pending_playouts:
             return True
         if any(burst.permitted for burst in self._open.values()):
             return True

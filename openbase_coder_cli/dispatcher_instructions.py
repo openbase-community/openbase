@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from .backend_auth import backend_login_message
+from .backend_config import CLAUDE_CODE_BACKEND, CODEX_BACKEND
 from .host_kind import HOST_KIND_HEADING, with_host_section
 from .paths import CLAUDE_CONFIG_DIR, CODEX_HOME_DIR
 from .runtime import packaged_skills_dir
@@ -9,6 +11,8 @@ from .runtime import packaged_skills_dir
 SKILL_NAME = "openbase-super-agent-dispatcher"
 PROCEDURE_HEADING = "## Loaded canonical Super Agent dispatch procedure"
 CURRENT_STATE_HEADING = "## Current state of the user's computer"
+_CLAUDE_LOGIN = backend_login_message(CLAUDE_CODE_BACKEND, name="")
+_CODEX_LOGIN = backend_login_message(CODEX_BACKEND, name="")
 # A persistent dispatcher once answered "your desktop is empty" from a listing
 # made 100 minutes earlier in the same thread, and refused to open a desktop
 # folder created since; the state had changed, the conversation had not.
@@ -46,6 +50,10 @@ CURRENT_STATE_RULES = f"""{CURRENT_STATE_HEADING}
   requirement: do not request introductions, completion speech or notification
   commands for such a task. Do not promise silence merely because no call is
   active: user say can send a phone notification without an active call.
+- A Super Agent turn whose errorKind is "authentication_failed" on a Claude
+  Code or Codex thread means that coding CLI isn't signed in on the user's
+  computer. Never call it an Openbase sign-in problem.
+  Tell the user: "{_CLAUDE_LOGIN}" For Codex: "{_CODEX_LOGIN}"
 - Never say that a file, folder or project does not exist, or that a location
   is empty, without checking in this turn.
 - When asked to work in a named folder or project, check it or start a Super
@@ -68,6 +76,18 @@ START_RULES = f"""{START_HEADING}
 - Say an agent is working only after a result shows a started turn
   (turnStarted true, or a turnId). If the result says turnStarted false, start
   the turn before confirming anything to the user.
+- When the user names an agent that already exists ("have Marian write…",
+  "tell Cooper to also…", "connect me to Marian"), continue that agent on its
+  own thread: call super_agents_steer (or the transfer) with `name` set to the
+  agent's name exactly as the user said it, e.g. `name="Marian"`. It delivers
+  into the agent's running turn, or starts the agent's next turn when it is
+  idle; the name resolves to the agent even when its thread has a different
+  label. An agent is identified by `agentName` in super_agents_active and
+  super_agents_recent, never by a thread label that happens to contain the
+  name: a thread labelled "marian-step-files" whose agentName is Siobhan is
+  Siobhan's, not Marian's. Never super_agents_start a second thread for a
+  name that is already listed as an agentName: the user expects the agent
+  they named, with its context, not a new worker.
 - Your own working directory never changes; nothing the user says moves it.
   When you start a Super Agent, choose its `cwd` yourself by looking: `ls`
   your own directory (the projects folder on a Cloud workspace, home on a

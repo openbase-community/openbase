@@ -59,6 +59,24 @@ def nvm_binary_candidates(name: str) -> list[Path]:
     return candidates
 
 
+def node_runtime_bin_dir() -> Path | None:
+    """Directory of the ``node`` the login shell would run, if any.
+
+    Background services start without the login shell's PATH, so an nvm-only
+    Node (the documented developer install) is invisible to them. pnpm's
+    ``#!/usr/bin/env node`` entry point then dies with "env: node: No such
+    file or directory" even though setup resolved pnpm itself by absolute
+    path. Service wrappers put this directory on PATH to close that gap.
+    """
+    found = which("node")
+    if found:
+        return Path(found).parent
+    for candidate in nvm_binary_candidates("node"):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate.parent
+    return None
+
+
 def backend_binary_candidates(name: str) -> list[Path]:
     """Places a backend CLI may live, beyond PATH lookup."""
     return [

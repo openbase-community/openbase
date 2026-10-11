@@ -579,3 +579,93 @@ def test_service_status_probes_the_configured_api_port(monkeypatch) -> None:
     assert django["port"] == 18789
     assert django["running"] is True
     assert 7999 not in probed
+
+
+@pytest.mark.parametrize("codex_linked", [False, True])
+def test_codex_services_on_an_openbase_cloud_workspace_are_not_an_outage(
+    monkeypatch, codex_linked
+) -> None:
+    """Cloud mode keeps local Codex configured only so earlier threads stay
+    visible; its stopped app servers must not read as "degraded"."""
+    from openbase_coder_cli.services import onboarding
+
+    monkeypatch.setattr(
+        services_views, "service_supports_configured_backends", lambda service: True
+    )
+    monkeypatch.setattr(services_views, "configured_coding_backend", lambda: "openbase_cloud")
+    monkeypatch.setattr(onboarding, "codex_auth_present", lambda: codex_linked)
+    monkeypatch.setattr(services_views, "_check_port", lambda port: True)
+    monkeypatch.setattr(services_views, "_check_web_backend", lambda: True)
+    monkeypatch.setattr(services_views, "_check_codex_app_server", lambda: False)
+    monkeypatch.setattr(
+        services_views,
+        "launchctl_status",
+        lambda service: {"installed": True, "pid": None, "last_exit_code": 1},
+    )
+    monkeypatch.setattr(
+        services_views,
+        "tailscale_serve_status",
+        lambda: SimpleNamespace(
+            tailscale_running=True,
+            host="ws.tailnet.ts.net",
+            openbase_url="http://ws.tailnet.ts.net:18080",
+            openbase_configured=True,
+            livekit_configured=True,
+        ),
+    )
+    monkeypatch.setattr(
+        services_views,
+        "keep_awake_status_payload",
+        lambda: {"name": "Keep Awake", "running": True, "optional": False},
+    )
+
+    request = APIRequestFactory().get("/api/status/")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+    services = views.service_status(request).data["services"]
+
+    for key in ("codex_app_server", "codex_app_server_dispatcher"):
+        assert services[key]["running"] is False
+        assert services[key]["optional"] is True
+        assert services[key]["status_note"].startswith("Not in use")
+    assert ("isn't linked" in services["codex_app_server"]["status_note"]) is not codex_linked
+
+
+def test_a_selected_codex_without_a_login_stays_required_and_says_why(monkeypatch) -> None:
+    from openbase_coder_cli.services import onboarding
+
+    monkeypatch.setattr(
+        services_views, "service_supports_configured_backends", lambda service: True
+    )
+    monkeypatch.setattr(services_views, "configured_coding_backend", lambda: "codex")
+    monkeypatch.setattr(onboarding, "codex_auth_present", lambda: False)
+    monkeypatch.setattr(services_views, "_check_port", lambda port: True)
+    monkeypatch.setattr(services_views, "_check_web_backend", lambda: True)
+    monkeypatch.setattr(services_views, "_check_codex_app_server", lambda: False)
+    monkeypatch.setattr(
+        services_views,
+        "launchctl_status",
+        lambda service: {"installed": True, "pid": None, "last_exit_code": 1},
+    )
+    monkeypatch.setattr(
+        services_views,
+        "tailscale_serve_status",
+        lambda: SimpleNamespace(
+            tailscale_running=True,
+            host="mac.tailnet.ts.net",
+            openbase_url="http://mac.tailnet.ts.net:18080",
+            openbase_configured=True,
+            livekit_configured=True,
+        ),
+    )
+    monkeypatch.setattr(
+        services_views,
+        "keep_awake_status_payload",
+        lambda: {"name": "Keep Awake", "running": True, "optional": False},
+    )
+
+    request = APIRequestFactory().get("/api/status/")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+    services = views.service_status(request).data["services"]
+
+    assert services["codex_app_server"]["optional"] is False
+    assert "isn't signed in" in services["codex_app_server"]["status_note"]

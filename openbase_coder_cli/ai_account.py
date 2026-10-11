@@ -27,6 +27,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from openbase_coder_cli.backend_binaries import find_backend_binary
 from openbase_coder_cli.backend_config import (
@@ -55,9 +56,6 @@ MAX_CODE_LENGTH = 512
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)")
 _URL = re.compile(r"https://[^\s\"'<>\x1b]+")
-_CODE_PROMPT = re.compile(
-    r"paste\s+(?:the\s+)?(?:authentication\s+|auth(?:orization)?\s+)?code", re.I
-)
 
 
 def selected_choice() -> str:
@@ -206,6 +204,9 @@ class LoginJob:
     code_sent: bool = False
     state: str = "starting"  # starting | waiting | succeeded | failed | cancelled
     message: str = ""
+    # The credentials as they were before this login (path -> bytes, or None
+    # when absent), put back if it does not succeed.
+    saved_credentials: dict[Path, bytes | None] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def snapshot(self) -> dict:
@@ -243,7 +244,14 @@ class LoginManager:
         import pty
 
         master_fd, slave_fd = pty.openpty()
-        job = LoginJob(provider=provider, master_fd=master_fd)
+        job = LoginJob(
+            provider=provider,
+            master_fd=master_fd,
+            # `codex login` deletes auth.json as it starts, so a relink that
+            # is cancelled or fails would otherwise sign a working account
+            # out (QA on Maritime 376).
+            saved_credentials=_snapshot_credentials(provider),
+        )
         try:
             job.process = subprocess.Popen(
                 _command(provider),
@@ -314,8 +322,13 @@ class LoginManager:
                     if job.state == "starting":
                         job.state = "waiting"
                         job.message = "Finish signing in on your phone."
-                if job.provider == CLAUDE_CODE and _CODE_PROMPT.search(job.output):
-                    job.needs_code = True
+                        if browser_env_ignored():
+                            _open_on_phone(job.url)
+                        # Claude Code takes a pasted code for as long as its
+                        # sign-in page is open, so the paste field is offered
+                        # with the link rather than inferred from the prompt
+                        # wording (which can change and stall the sign-in).
+                        job.needs_code = job.provider == CLAUDE_CODE
         with contextlib.suppress(OSError):
             os.close(job.master_fd)
 
@@ -329,14 +342,22 @@ class LoginManager:
             with job.lock:
                 job.state = "failed"
                 job.message = "Sign-in timed out. Start again when you are ready."
+            _restore_credentials(job.saved_credentials)
+            _forget_claude_status()
             return
         with job.lock:
-            if job.state == "cancelled":
-                return
+            cancelled = job.state == "cancelled"
+        if cancelled:
+            _restore_credentials(job.saved_credentials)
+            _forget_claude_status()
+            return
         _forget_claude_status()
         linked = is_linked(job.provider)
         with job.lock:
             if returncode == 0 and linked:
+                from openbase_coder_cli.backend_auth import clear_relink_needed
+
+                clear_relink_needed(job.provider)
                 job.state = "succeeded"
                 job.message = f"{LABELS[job.provider]} account linked."
             else:
@@ -345,6 +366,82 @@ class LoginManager:
                     f"{LABELS[job.provider]} sign-in did not finish"
                     f" (exit {returncode}). Start again to retry."
                 )
+        if job.state == "failed":
+            _restore_credentials(job.saved_credentials)
+            _forget_claude_status()
+
+
+def _credential_paths(provider: str) -> list[Path]:
+    """Files holding ``provider``'s CLI login on this computer.
+
+    Claude Code on macOS keeps its login in the Keychain, which a cancelled
+    `claude auth login` leaves alone; only file-based logins need guarding.
+    """
+    if provider == CODEX:
+        return [CODEX_HOME_DIR / "auth.json"]
+    if provider == CLAUDE_CODE:
+        from openbase_coder_cli.paths import CLAUDE_CONFIG_DIR
+
+        return [CLAUDE_CONFIG_DIR / ".credentials.json"]
+    return []
+
+
+def _snapshot_credentials(provider: str) -> dict[Path, bytes | None]:
+    saved: dict[Path, bytes | None] = {}
+    for path in _credential_paths(provider):
+        try:
+            saved[path] = path.read_bytes()
+        except OSError:
+            saved[path] = None
+    return saved
+
+
+def _restore_credentials(saved: dict[Path, bytes | None]) -> None:
+    """Put back a login an unfinished sign-in removed or replaced."""
+    for path, content in saved.items():
+        if content is None:
+            continue
+        try:
+            if path.read_bytes() == content:
+                continue
+        except OSError:
+            pass
+        with contextlib.suppress(OSError):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(f".{path.name}.restore")
+            tmp.write_bytes(content)
+            tmp.chmod(0o600)
+            os.replace(tmp, path)
+
+
+def browser_env_ignored() -> bool:
+    """Whether CLIs here ignore $BROWSER and open this computer's own browser.
+
+    On macOS the common URL openers (Rust `webbrowser`, Node `open`) go
+    straight to LaunchServices, so the phone shim never runs: send the
+    printed sign-in URL to the phone ourselves.
+    """
+    import platform
+
+    return platform.system() == "Darwin"
+
+
+def _open_on_phone(url: str) -> None:
+    """`openbase-coder browser open URL` in the background (phone + forward)."""
+    import sys
+
+    def run() -> None:
+        with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+            subprocess.run(
+                [sys.executable, "-m", "openbase_coder_cli", "browser", "open", url],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=90,
+                check=False,
+            )
+
+    threading.Thread(target=run, daemon=True).start()
 
 
 LOGINS = LoginManager()
@@ -432,6 +529,9 @@ def unlink(provider: str) -> None:
         raise ValueError(f"Unknown AI account: {provider}")
     if selected_choice() == provider:
         select(OPENBASE_CLOUD)
+    from openbase_coder_cli.backend_auth import clear_relink_needed
+
+    clear_relink_needed(provider)
     _forget_claude_status()
     with contextlib.suppress(OSError, subprocess.TimeoutExpired):
         subprocess.run(
@@ -444,23 +544,49 @@ def unlink(provider: str) -> None:
         )
 
 
-def status() -> dict:
-    selected = selected_choice()
+def login_homes() -> dict[str, str]:
+    """Where this computer's agents keep their Codex and Claude Code logins.
+
+    The API process is the source of truth: a login written anywhere else
+    (an agent shell with a different HOME or CODEX_HOME) links nothing.
+    """
+    from openbase_coder_cli.paths import CLAUDE_CONFIG_DIR
+
     return {
-        "selected": selected,
-        "default": OPENBASE_CLOUD,
-        "options": [
+        "codex_home": str(CODEX_HOME_DIR),
+        "claude_config_dir": str(CLAUDE_CONFIG_DIR),
+    }
+
+
+def status() -> dict:
+    from openbase_coder_cli.backend_auth import relink_needed_backends
+
+    selected = selected_choice()
+    failed_logins = relink_needed_backends()
+    options = []
+    homes = login_homes()
+    for choice in CHOICES:
+        linked = True if choice == OPENBASE_CLOUD else is_linked(choice)
+        options.append(
             {
                 "id": choice,
                 "label": LABELS[choice],
                 "available": is_available(choice),
-                "linked": True if choice == OPENBASE_CLOUD else is_linked(choice),
+                "linked": linked,
                 "account": None
-                if choice == OPENBASE_CLOUD
-                else (linked_account(choice) if is_linked(choice) else None),
+                if choice == OPENBASE_CLOUD or not linked
+                else linked_account(choice),
                 "selected": choice == selected,
+                # Its login failed during a turn, or it is in use without a
+                # login: agents cannot run on it until it is relinked.
+                "needs_relink": choice != OPENBASE_CLOUD
+                and (choice in failed_logins or (choice == selected and not linked)),
             }
-            for choice in CHOICES
-        ],
+        )
+    return {
+        "homes": homes,
+        "selected": selected,
+        "default": OPENBASE_CLOUD,
+        "options": options,
         "login": LOGINS.current(),
     }

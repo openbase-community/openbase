@@ -19,6 +19,11 @@ from super_agents.app_protocol import (
     response_is_queued as _response_is_queued,
 )
 
+from openbase_coder_cli.backend_auth import (
+    backend_login_spoken_message,
+    failed_turn_login_backend,
+    turn_failed,
+)
 from openbase_coder_cli.backend_config import (
     CLAUDE_CODE_BACKEND,
     CODEX_BACKEND,
@@ -151,32 +156,74 @@ def _auth_failure_remediation(backend: str | None) -> str:
     return "sign the coding backend back in"
 
 
+def _progress_login_backend(
+    progress: dict[str, Any],
+    *,
+    backend: str | None,
+    turn_id: str | None,
+    check_login: bool = False,
+) -> str | None:
+    """The CLI backend whose missing login made this turn fail, or None.
+
+    Structured signals only (see :mod:`openbase_coder_cli.backend_auth`): the
+    turn's ``errorKind``, and with ``check_login`` the CLI's own login state.
+    """
+    views = [
+        view
+        for view in (progress.get("turn"), progress.get("summary"), progress)
+        if isinstance(view, dict)
+        and (
+            not turn_id or (view.get("turnId") or view.get("id") or turn_id) == turn_id
+        )
+    ]
+    for view in views:
+        if found := failed_turn_login_backend(view, backend):
+            return found
+    if check_login:
+        for view in views:
+            if turn_failed(view):
+                return failed_turn_login_backend(view, backend, check_login=True)
+    return None
+
+
+def _progress_auth_failed(progress: dict[str, Any], *, turn_id: str | None) -> bool:
+    """Whether the turn's structured error kind is an authentication failure,
+    on any backend (an Openbase Cloud proxy token too)."""
+    from openbase_coder_cli.backend_auth import turn_reports_authentication_failure
+
+    return any(
+        turn_reports_authentication_failure(view)
+        for view in (progress.get("turn"), progress.get("summary"), progress)
+        if isinstance(view, dict)
+        and (
+            not turn_id or (view.get("turnId") or view.get("id") or turn_id) == turn_id
+        )
+    )
+
+
 def _flag_backend_auth_failure(
-    speech_text: str,
+    failed_backend: str | None,
     *,
     backend: str | None = None,
     turn_id: str | None = None,
 ) -> bool:
-    """Surface a coding-backend auth failure that came back as a turn answer.
+    """Log a turn that failed because ``failed_backend`` couldn't authenticate.
 
-    Returns True when ``speech_text`` is a backend auth-failure sentinel (not a
-    real answer). Always emits a structured ERROR marker so an auth failure can
-    never look like a successful completed turn; additionally logs a debounced,
-    backend-correct human-readable hint.
+    Always emits a structured ERROR marker so an auth failure can never look
+    like a successful turn; additionally logs a debounced, backend-correct
+    human-readable hint.
     """
     global _last_backend_auth_warn_monotonic
-    if not is_backend_auth_failure_text(speech_text):
+    if failed_backend is None:
         return False
-    remediation = _auth_failure_remediation(backend)
+    remediation = _auth_failure_remediation(failed_backend)
     # Never debounced: the structured marker must fire on every failed turn so
     # monitoring and field tests catch it even inside the warning's debounce.
     logger.error(
-        "%s stage=voice_turn_backend_auth_failure backend=%s turn_id=%s "
-        "text_hash=%s remediation=%s",
+        "%s stage=voice_turn_backend_auth_failure backend=%s turn_id=%s remediation=%s",
         DISPATCH_TIMING_LOG,
-        backend or "unknown",
+        backend or failed_backend,
         turn_id or "",
-        hashlib.sha256(speech_text.strip().encode("utf-8")).hexdigest()[:12],
         remediation,
     )
     now = time.monotonic()
@@ -184,8 +231,8 @@ def _flag_backend_auth_failure(
     if last is None or now - last >= BACKEND_AUTH_WARN_DEBOUNCE_SECONDS:
         _last_backend_auth_warn_monotonic = now
         logger.warning(
-            "Coding backend auth failure surfaced in a spoken answer (backend=%s); %s.",
-            backend or "unknown",
+            "Coding backend %s could not authenticate; %s.",
+            failed_backend,
             remediation,
         )
     return True
@@ -213,17 +260,60 @@ def _looks_like_raw_backend_error(text: str | None) -> bool:
     return "api error:" in text.lower()
 
 
+def _turn_error_containers(progress: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    return tuple(
+        container
+        for container in (
+            progress,
+            progress.get("turn"),
+            progress.get("summary"),
+            progress.get("error"),
+        )
+        if isinstance(container, dict)
+    )
+
+
+def _turn_error_text(progress: dict[str, Any]) -> str:
+    """The backend's error for a failed turn, wherever the snapshot carries it."""
+    for container in _turn_error_containers(progress):
+        for key in ("lastError", "last_error", "error", "message"):
+            value = container.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            if isinstance(value, dict):
+                message = value.get("message")
+                if isinstance(message, str) and message.strip():
+                    return message.strip()
+    # A Claude session's state line is the failure's human wording (super-agents
+    # 6af0383: "macOS is waiting for permission: ...").
+    state = progress.get("lastObservedState")
+    return state.strip() if isinstance(state, str) else ""
+
+
+def _turn_error_kind(progress: dict[str, Any]) -> str:
+    """super-agents' ``errorKind`` for a failed turn (``blocked_permission_dialog``,
+    ``authentication_failed``, ...), or an empty string."""
+    for container in _turn_error_containers(progress):
+        for key in ("errorKind", "error_kind"):
+            value = container.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
 def _safe_spoken_answer(
     speech_text: str,
     *,
-    auth_failed: bool,
+    login_backend: str | None = None,
+    auth_failed: bool = False,
     backend: str | None = None,
     turn_id: str | None = None,
 ) -> str:
     """Return text safe to speak: a graceful line for any backend error answer.
 
-    ``auth_failed`` is the result of :func:`_flag_backend_auth_failure` (already
-    logged). This additionally catches non-auth proxy/API error bodies so the
+    ``login_backend`` names a CLI whose missing login failed the turn (from
+    :func:`_progress_login_backend`, already logged): the caller hears how to
+    sign it back in. This additionally catches proxy/API error bodies so the
     dispatcher never reads a 403/500 payload aloud.
     """
     # A monthly-spend-limit 403 arrives looking like an auth failure ("Failed
@@ -244,6 +334,8 @@ def _safe_spoken_answer(
             turn_id or "",
         )
         return allowance_denial
+    if login_backend:
+        return backend_login_spoken_message(login_backend)
     if auth_failed:
         return BACKEND_ERROR_SPOKEN_FALLBACK
     if not _looks_like_raw_backend_error(speech_text):
@@ -564,13 +656,24 @@ class SuperAgentsLiveKitClient(
             result = await self._wait_for_turn(thread_id, turn_id)
             speech_text = _speech_text_from_progress(result, turn_id=turn_id)
             backend = getattr(self._backend_client, "backend", None)
+            login_backend = await asyncio.to_thread(
+                _progress_login_backend,
+                result,
+                backend=backend,
+                turn_id=turn_id,
+                check_login=True,
+            )
             auth_failed = _flag_backend_auth_failure(
-                speech_text,
+                login_backend
+                or (
+                    backend if _progress_auth_failed(result, turn_id=turn_id) else None
+                ),
                 backend=backend,
                 turn_id=turn_id,
             )
             spoken_text = _safe_spoken_answer(
                 speech_text,
+                login_backend=login_backend,
                 auth_failed=auth_failed,
                 backend=backend,
                 turn_id=turn_id,
@@ -578,12 +681,10 @@ class SuperAgentsLiveKitClient(
             turn_status = result.get("status") or result.get("summary", {}).get(
                 "status"
             )
-            if (
-                isinstance(turn_status, str)
-                and turn_status.lower() == "failed"
-                and not spoken_text
-                and not auth_failed
-            ):
+            status_failed = (
+                isinstance(turn_status, str) and turn_status.lower() == "failed"
+            )
+            if status_failed and not spoken_text and not auth_failed:
                 # Failed turns yield no fresh assistant text (cached
                 # lastUsefulMessage candidates are excluded upstream), and
                 # silence here historically fell through to stale speech or
@@ -599,6 +700,25 @@ class SuperAgentsLiveKitClient(
                 "_livekit_speech_text": spoken_text,
                 "_livekit_turn_id": turn_id,
                 "_livekit_backend_auth_failure": auth_failed,
+                # turn_recovery retries a failed turn instead of speaking the
+                # generic line above; the backend's error names the failure.
+                # ``status_failed`` is the boolean; ``turn_failed`` is the imported
+                # helper, and a function is always truthy (VM2 04:14Z: every
+                # completed turn was retried as "unknown: Claude Code response
+                # completed"). A turn that produced answer text is an answer
+                # whatever the snapshot's status says; only a failed turn with
+                # no text is a recovery case.
+                "_livekit_turn_failed": status_failed and not speech_text,
+                "_livekit_turn_error": (
+                    _turn_error_text(result)
+                    if status_failed and not speech_text
+                    else ""
+                ),
+                "_livekit_turn_error_kind": (
+                    _turn_error_kind(result)
+                    if status_failed and not speech_text
+                    else ""
+                ),
                 "progress": result,
             }
             logger.info(
@@ -660,13 +780,26 @@ class SuperAgentsLiveKitClient(
                 wait_task.result(), turn_id=turn_id
             )
             backend = getattr(self._backend_client, "backend", None)
+            progress = wait_task.result()
+            login_backend = _progress_login_backend(
+                progress, backend=backend, turn_id=turn_id
+            )
             auth_failed = _flag_backend_auth_failure(
-                speech_text,
+                login_backend
+                or (
+                    backend
+                    if _progress_auth_failed(progress, turn_id=turn_id)
+                    else None
+                ),
                 backend=backend,
                 turn_id=turn_id,
             )
             spoken_text = _safe_spoken_answer(
-                speech_text, auth_failed=auth_failed, backend=backend, turn_id=turn_id
+                speech_text,
+                login_backend=login_backend,
+                auth_failed=auth_failed,
+                backend=backend,
+                turn_id=turn_id,
             )
             if spoken_text:
                 logger.info(
@@ -733,13 +866,22 @@ class SuperAgentsLiveKitClient(
             return
         speech_text = _speech_text_from_progress(wait_task.result(), turn_id=turn_id)
         backend = getattr(self._backend_client, "backend", None)
+        progress = wait_task.result()
+        login_backend = _progress_login_backend(
+            progress, backend=backend, turn_id=turn_id
+        )
         auth_failed = _flag_backend_auth_failure(
-            speech_text,
+            login_backend
+            or (backend if _progress_auth_failed(progress, turn_id=turn_id) else None),
             backend=backend,
             turn_id=turn_id,
         )
         spoken_text = _safe_spoken_answer(
-            speech_text, auth_failed=auth_failed, backend=backend, turn_id=turn_id
+            speech_text,
+            login_backend=login_backend,
+            auth_failed=auth_failed,
+            backend=backend,
+            turn_id=turn_id,
         )
         if not spoken_text:
             return
@@ -750,6 +892,40 @@ class SuperAgentsLiveKitClient(
             len(spoken_text),
         )
         handler(self, turn_id, spoken_text)
+
+    async def keep_request_for_later(self, prompt: str) -> bool:
+        """Queue ``prompt`` as the thread's next turn once recovery has failed.
+
+        The caller's request is not lost: Super Agents runs it as a follow-up
+        when the thread next accepts turns. False when even queueing fails.
+        """
+        try:
+            thread_id = await self._ensure_thread()
+            result = await self._backend_client.queue_turn_by_label(
+                self._query(thread_id=thread_id),
+                self._turn_input(
+                    prompt,
+                    developer_instructions=None,
+                    dispatch_id=f"voice-{uuid.uuid4().hex[:12]}",
+                ),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - the spoken line changes
+            logger.info(
+                "%s stage=voice_request_keep_failed error=%s",
+                DISPATCH_TIMING_LOG,
+                exc,
+            )
+            return False
+        kept = bool(_response_is_queued(result) or _extract_turn_id(result))
+        logger.info(
+            "%s stage=voice_request_kept thread_id=%s kept=%s",
+            DISPATCH_TIMING_LOG,
+            thread_id,
+            kept,
+        )
+        return kept
 
     def backend_appears_busy(self) -> bool:
         """True when the active turn streamed a backend event recently.
@@ -870,7 +1046,9 @@ class SuperAgentsLiveKitClient(
                 and isinstance(response_turn, dict)
                 and response_turn.get("turnId") == turn_id
                 and response_turn.get("responseFinishedAt")
-                and _speech_text_from_progress(progress, turn_scoped=True, turn_id=turn_id)
+                and _speech_text_from_progress(
+                    progress, turn_scoped=True, turn_id=turn_id
+                )
             ):
                 return progress
             if status == "waiting" and not has_pending_requests:
