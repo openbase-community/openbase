@@ -26,6 +26,11 @@ PLAIN_URL = "https://auth.example.com/device"
 
 
 @pytest.fixture(autouse=True)
+def _isolated_data_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+
+
+@pytest.fixture(autouse=True)
 def _no_tailnet_and_no_push(monkeypatch):
     """Default every test to a host without the embedded node and with the
     Cloud push fallback unavailable; tests that need them opt in."""
@@ -95,6 +100,20 @@ def test_browser_open_reports_delivery(monkeypatch):
     assert result.exit_code == 0
     assert result.output.splitlines() == [PLAIN_URL, browser_cli.OPENED_MESSAGE]
     assert calls == [PLAIN_URL]
+
+
+def test_browser_open_holds_completion_alerts_only_when_the_phone_got_the_url(
+    monkeypatch,
+):
+    from openbase_coder_cli import web_redirect_hold
+
+    _patch_publish(monkeypatch, {"command_id": "c-1", "delivered": False})
+    CliRunner().invoke(browser_cli.browser, ["open", PLAIN_URL, "--no-push"])
+    assert web_redirect_hold.alert_hold_until() is None
+
+    monkeypatch.setattr(browser_cli, "_push", lambda url, forward: True)
+    CliRunner().invoke(browser_cli.browser, ["open", PLAIN_URL])
+    assert web_redirect_hold.alert_hold_until() is not None
 
 
 def test_browser_open_prints_paste_back_hint_when_not_delivered(monkeypatch):

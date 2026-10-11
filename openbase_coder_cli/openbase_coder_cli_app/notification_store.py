@@ -74,12 +74,14 @@ def upsert_notification(
     thread_id: str | None = None,
     project_path: str | None = None,
     reopen_if_read: bool = True,
+    alert_after: str | None = None,
 ) -> dict[str, Any] | None:
     """Create a notification, or reopen the existing one for this entity.
 
     Returns the entry when it was newly created or newly reopened (callers
     use that as the "fire a push" signal); returns None when the entity
-    already has a live unread notification.
+    already has a live unread notification. ``alert_after`` (ISO UTC) asks
+    clients to hold the banner until then (see ``web_redirect_hold``).
     """
     if kind not in VALID_KINDS:
         raise ValueError(f"invalid notification kind {kind!r}")
@@ -107,9 +109,17 @@ def upsert_notification(
             "read_at": None,
             "resolved_at": None,
         }
+        if alert_after:
+            entry["alert_after"] = alert_after
         state["notifications"][note_id] = entry
         _write_state_unlocked(state)
         return dict(entry)
+
+
+def get_notification(note_id: str) -> dict[str, Any] | None:
+    with _lock:
+        entry = _read_state_unlocked()["notifications"].get(note_id)
+    return dict(entry) if entry else None
 
 
 def mark_read(

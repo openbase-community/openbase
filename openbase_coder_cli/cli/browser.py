@@ -38,6 +38,7 @@ from openbase_coder_cli.login_callback import (
     relay_capability,
 )
 from openbase_coder_cli.open_url_policy import open_url_error
+from openbase_coder_cli.web_redirect_hold import record_web_redirect
 
 logger = logging.getLogger(__name__)
 
@@ -108,10 +109,12 @@ def browser_open(
 
     receipt = _deliver(url, forward)
     if receipt:
+        _record_redirect()
         click.echo(OPENED_MESSAGE)
         if forward is not None:
             click.echo(_forward_note(receipt))
     elif not no_push and _push(url, forward):
+        _record_redirect()
         click.echo(PUSHED_MESSAGE)
     else:
         click.echo(NOT_DELIVERED_HINT)
@@ -121,6 +124,14 @@ def browser_open(
             f"for up to {forward.ttl_seconds // 60} minutes. If your phone cannot "
             "forward it, paste the final localhost address back here."
         )
+
+
+def _record_redirect() -> None:
+    """Hold completion banners while the user is on the page (best effort)."""
+    try:
+        record_web_redirect()
+    except OSError:
+        pass
 
 
 def _arrange_forward(port: int) -> LoopbackForward | None:

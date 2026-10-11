@@ -11,11 +11,12 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 from asgiref.sync import async_to_sync
 
-from openbase_coder_cli import sharing_service
+from openbase_coder_cli import sharing_service, web_redirect_hold
 from openbase_coder_cli.openbase_coder_cli_app import notification_store
 from openbase_coder_cli.openbase_coder_cli_app.notification_store import (
     KIND_APPROVAL,
@@ -78,6 +79,7 @@ def notify_thread_turn_finished(
         title=title,
         body=_truncate(body),
         thread_id=thread_id,
+        alert_after=_held_alert_after(),
     )
     if entry:
         _push_in_background(entry)
@@ -121,6 +123,7 @@ def _sweep_reports() -> None:
             title=str(title),
             body=_truncate(project_path.rsplit("/", 1)[-1] if project_path else ""),
             project_path=project_path or None,
+            alert_after=_held_alert_after(),
         )
         if entry:
             _push_in_background(entry)
@@ -245,12 +248,33 @@ def _conflict_summary(conflict: dict[str, Any]) -> str:
     return "A thread diverged across your devices."
 
 
+def _held_alert_after() -> str | None:
+    """``alert_after`` for an informational notification created now.
+
+    Thread finishes and new reports are held while the phone shows a page
+    this computer just sent it to; approvals and sync conflicts still alert
+    at once because an agent or the user is blocked on them.
+    """
+    until = web_redirect_hold.alert_hold_until()
+    return web_redirect_hold.iso_utc(until) if until is not None else None
+
+
 def _push_in_background(entry: dict[str, Any]) -> None:
     """Relay the notification to Openbase Cloud (APNs/FCM) off-thread.
 
     Strictly fire-and-forget: local notification behavior must be identical
     when the cloud is unreachable or the relay endpoint is not deployed.
+    A held entry (``alert_after``) is pushed only once the hold ends, and
+    only if it is still unread then. The hold timer lives in memory, so a
+    server restart drops the deferred push; the feed entry itself remains.
     """
+    delay = _seconds_until(entry.get("alert_after"))
+    if delay > 0:
+        timer = threading.Timer(delay, _send_held_push, args=(dict(entry),))
+        timer.name = "notification-push-held"
+        timer.daemon = True
+        timer.start()
+        return
     thread = threading.Thread(
         target=_send_push,
         args=(dict(entry),),
@@ -258,6 +282,30 @@ def _push_in_background(entry: dict[str, Any]) -> None:
         daemon=True,
     )
     thread.start()
+
+
+def _send_held_push(entry: dict[str, Any]) -> None:
+    current = notification_store.get_notification(str(entry.get("id") or ""))
+    if (
+        current is None
+        or current.get("read_at")
+        or current.get("resolved_at")
+        or current.get("created_at") != entry.get("created_at")
+    ):
+        # Read, resolved, or superseded by a newer upsert (which owns its
+        # own push) while the hold was running.
+        return
+    _send_push(entry)
+
+
+def _seconds_until(iso_value: Any) -> float:
+    if not isinstance(iso_value, str) or not iso_value:
+        return 0.0
+    try:
+        moment = datetime.fromisoformat(iso_value.replace("Z", "+00:00"))
+    except ValueError:
+        return 0.0
+    return (moment - datetime.now(UTC)).total_seconds()
 
 
 def _send_push(entry: dict[str, Any]) -> None:
