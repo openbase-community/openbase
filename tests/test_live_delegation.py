@@ -2740,3 +2740,70 @@ async def test_a_request_the_model_delegated_is_acknowledged_too():
         assert live.acks() == ["One moment."]
     finally:
         await bridge.aclose()
+
+
+# --- spoken stop ------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("Wait, stop.", True),
+        ("stop", True),
+        ("Cancel that.", True),
+        ("Okay stop it please", True),
+        ("Hold on, stop.", True),
+        ("Don't stop the server.", False),
+        ("Stop using tabs in that file.", False),
+        ("Wait", False),
+        ("Please stop and then write the tests again", False),
+    ],
+)
+def test_only_a_bare_stop_is_a_stop_command(text, expected):
+    from openbase_coder_cli.livekit_agent.spoken_commands import is_stop_command
+
+    assert is_stop_command(text) is expected
+
+
+async def test_a_spoken_stop_interrupts_the_running_turn_and_says_stopped():
+    """Gabe 2026-10-11: "wait, stop" should stop active coding work, not only
+    the agent's speech."""
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    interrupted = []
+
+    async def interrupt_active_turn():
+        interrupted.append(True)
+        return True
+
+    dispatcher.interrupt_active_turn = interrupt_active_turn
+    try:
+        live.final("Write a script that renames all my photos.")
+        await _settle()
+        assert len(dispatcher.prompts) == 1
+        live.final("Wait, stop.")
+        await _settle()
+        assert interrupted == [True]
+        assert len(dispatcher.prompts) == 1, "the stop is not sent to the agent"
+        said = [t for m, t, _ in live.appends if "Text to say: " in t]
+        assert said and said[-1].endswith('"Stopped."')
+        dispatcher.result_gate.set()
+        await _settle()
+        assert live.speech() == [], "the stopped turn's answer is dropped"
+    finally:
+        await bridge.aclose()
+
+
+async def test_a_spoken_stop_with_nothing_running_stays_quiet():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+
+    async def interrupt_active_turn():
+        return False
+
+    dispatcher.interrupt_active_turn = interrupt_active_turn
+    try:
+        live.final("Stop.")
+        await _settle()
+        assert dispatcher.prompts == []
+        assert [t for m, t, _ in live.appends if "Stopped." in t] == []
+    finally:
+        await bridge.aclose()

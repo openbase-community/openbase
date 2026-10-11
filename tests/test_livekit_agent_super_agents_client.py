@@ -2638,3 +2638,28 @@ def test_spoken_dispatcher_effort_is_chosen_by_model():
     assert spoken_dispatcher_effort("opus") == "medium"
     assert spoken_dispatcher_effort("gpt-5.5") == "medium"
     assert spoken_dispatcher_effort(None) == "medium"
+
+
+@pytest.mark.asyncio
+async def test_interrupt_active_turn_cancels_through_the_backend():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from openbase_coder_cli.livekit_agent.super_agents_client import (
+        SuperAgentsLiveKitClient,
+    )
+
+    client = SuperAgentsLiveKitClient.__new__(SuperAgentsLiveKitClient)
+    client._thread_id = "s_cooper"
+    client._active_turn_id = "t_1"
+    client._active_turn_has_completed = lambda: False
+    client._query = lambda **kw: SimpleNamespace(**kw)
+    client._backend_client = SimpleNamespace(cancel_by_label=AsyncMock(return_value={}))
+    assert await client.interrupt_active_turn() is True
+    query = client._backend_client.cancel_by_label.await_args.args[0]
+    assert (query.thread_id, query.turn_id) == ("s_cooper", "t_1")
+
+    client._backend_client.cancel_by_label = AsyncMock(side_effect=ValueError("none"))
+    assert await client.interrupt_active_turn() is False
+    client._active_turn_id = None
+    assert await client.interrupt_active_turn() is False
