@@ -76,6 +76,14 @@ START_RULES = f"""{START_HEADING}
 - Say an agent is working only after a result shows a started turn
   (turnStarted true, or a turnId). If the result says turnStarted false, start
   the turn before confirming anything to the user.
+- When the user names an agent that already exists ("have Marian write…",
+  "tell Cooper to also…"), continue that agent on its own thread: call
+  super_agents_steer with `name` set to the agent's name. It delivers into the
+  agent's running turn, or starts the agent's next turn when it is idle; the
+  name resolves to the agent even when its thread has a different label. Never
+  super_agents_start a second thread for a name that is already in
+  super_agents_active or super_agents_recent: the user expects the agent they
+  named, with its context, not a new worker.
 - Your own working directory never changes; nothing the user says moves it.
   When you start a Super Agent, choose its `cwd` yourself by looking: `ls`
   your own directory (the projects folder on a Cloud workspace, home on a
