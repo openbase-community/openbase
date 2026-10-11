@@ -248,6 +248,11 @@ class LinuxDesktop:
         self._run(["xdotool", "windowactivate", window_ids[-1]])
         return True
 
+    def display_size(self) -> tuple[int, int]:
+        result = self._run(["xdotool", "getdisplaygeometry"], capture_output=True)
+        width, height = result.stdout.split()[:2]
+        return int(width), int(height)
+
     def cursor_position(self) -> tuple[int, int]:
         output = self._run(
             ["xdotool", "getmouselocation", "--shell"],
@@ -313,6 +318,13 @@ class LinuxDesktop:
             self.move_relative(
                 _number(message.get("deltaX")) * 1.35,
                 _number(message.get("deltaY")) * 1.35,
+            )
+        elif action == "move_to":
+            # Console viewers send the position as a fraction of the display.
+            width, height = self.display_size()
+            self.move_to(
+                min(max(_number(message.get("x")), 0.0), 1.0) * width,
+                min(max(_number(message.get("y")), 0.0), 1.0) * height,
             )
         elif action == "click":
             self.click_current(message.get("button"))

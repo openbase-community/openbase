@@ -18,7 +18,8 @@ def test_desktop_maps_remote_control_to_xdotool(toolchain):
 
     def fake_run(command, **kwargs):
         commands.append(command)
-        return subprocess.CompletedProcess(command, 0, stdout="")
+        stdout = "1920 1080\n" if command[1:] == ["getdisplaygeometry"] else ""
+        return subprocess.CompletedProcess(command, 0, stdout=stdout)
 
     desktop = lcu.LinuxDesktop(display=":7", runner=fake_run)
 
@@ -31,6 +32,7 @@ def test_desktop_maps_remote_control_to_xdotool(toolchain):
     desktop.handle_remote_control_message(
         {"action": "keypress", "keys": ["COMMAND", "C"]}
     )
+    desktop.handle_remote_control_message({"action": "move_to", "x": 0.5, "y": 0.25})
 
     assert commands == [
         ["xdotool", "mousemove_relative", "--", "14", "-7"],
@@ -38,6 +40,8 @@ def test_desktop_maps_remote_control_to_xdotool(toolchain):
         ["xdotool", "type", "--clearmodifiers", "--delay", "0", "hello"],
         ["xdotool", "key", "--clearmodifiers", "ctrl+a"],
         ["xdotool", "key", "--clearmodifiers", "ctrl+c"],
+        ["xdotool", "getdisplaygeometry"],
+        ["xdotool", "mousemove", "960", "270"],
     ]
 
 
