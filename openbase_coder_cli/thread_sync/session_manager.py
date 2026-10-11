@@ -90,6 +90,57 @@ async def _broadcast(session_id: str, event: dict[str, Any]) -> None:
         )
 
 
+def finished_notification_text(session_state: Any, *, failed: bool) -> tuple[str, str]:
+    """Title and body for a thread-finished alert.
+
+    The title is the thread's label as the apps show it (its name, else its
+    title or first prompt), so two threads that began alike stay apart; the
+    body is the start of the reply that just finished, so a later turn's
+    alert never reads like the first request finishing.
+    """
+    label = _first_line(
+        session_state.name or session_state.title or session_state.preview or ""
+    ) or (Path(session_state.directory).name if session_state.directory else "")
+    agent_name = (getattr(session_state, "agent_name", None) or "").strip()
+    if agent_name and label and agent_name != label:
+        title = f"{agent_name}: {label}"
+    else:
+        title = agent_name or label or "Thread finished"
+    reply = _latest_reply_line(session_state)
+    if failed:
+        body = f"The turn failed: {reply}" if reply else "The turn failed."
+    else:
+        body = reply or "The agent finished."
+    return title, body
+
+
+def _latest_reply_line(session_state: Any) -> str:
+    """First line of the agent's reply in the turn that just finished."""
+    run = session_state.current_run or (
+        session_state.run_history[-1] if session_state.run_history else None
+    )
+    if run is None:
+        return ""
+    replies = [
+        message.text
+        for message in run.messages
+        if message.role == "assistant" and message.text.strip()
+    ]
+    return _first_line(replies[-1] if replies else run.accumulated_output)
+
+
+def _first_line(text: str) -> str:
+    """First line with readable text, minus Markdown markers."""
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("```"):
+            continue
+        line = line.lstrip("#>*-+ ").replace("**", "").replace("`", "").strip()
+        if line:
+            return line
+    return ""
+
+
 async def _notify_manual_thread_finished(
     thread_id: str,
     session_state: Any,
@@ -122,16 +173,7 @@ async def _notify_manual_thread_finished(
         if not await sync_to_async(is_manual_thread, thread_sensitive=False)(thread_id):
             return
 
-        title = (
-            session_state.title
-            or session_state.name
-            or Path(session_state.directory).name
-            or "Thread finished"
-        )
-        if failed:
-            body = "The turn failed."
-        else:
-            body = (session_state.preview or "").strip() or "The agent finished."
+        title, body = finished_notification_text(session_state, failed=failed)
         await sync_to_async(notify_thread_turn_finished, thread_sensitive=False)(
             thread_id,
             title=title,
