@@ -6,6 +6,9 @@ import asyncio
 
 from .models import ThreadStatus
 
+# How often a legacy client's session state is read for changes.
+LEGACY_CLAUDE_POLL_SECONDS = 0.5
+
 
 class ClaudeEventsMixin:
     def _watch_legacy_claude_thread(self, thread_id: str) -> None:
@@ -62,4 +65,4 @@ class ClaudeEventsMixin:
                 or run.status not in {ThreadStatus.running, ThreadStatus.waiting}
             ) and not state.queued_turns:
                 return
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(LEGACY_CLAUDE_POLL_SECONDS)

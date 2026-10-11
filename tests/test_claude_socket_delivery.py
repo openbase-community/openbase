@@ -106,6 +106,13 @@ async def test_claude_completion_reaches_socket_and_reconnect(
 
     monkeypatch.setattr(ClaudeAgentSdkClient, "__init__", isolated_init)
     if legacy:
+        # The legacy path learns of completion by polling; poll fast so a
+        # loaded machine never turns one slow read into a timeout.
+        monkeypatch.setattr(
+            "openbase_coder_cli.thread_sync.session_manager_claude_events."
+            "LEGACY_CLAUDE_POLL_SECONDS",
+            0.02,
+        )
         monkeypatch.delattr(ClaudeAgentSdkClient, "handle_notification")
         monkeypatch.setattr(
             ClaudeAgentSdkClient, "_notify_turn", lambda *args, **kwargs: None
@@ -146,15 +153,17 @@ async def test_claude_completion_reaches_socket_and_reconnect(
         assert (await receive(socket))["type"] == "thread_state"
         await manager.send_message(thread_id, "hello")
         # Streaming content arrives while the SDK is still waiting to finish.
-        async with asyncio.timeout(1):
+        async with asyncio.timeout(5):
             while True:
                 event = await receive(socket)
                 if "Immediate reply" in json.dumps(event):
                     break
         assert not finished.is_set()
         release.set()
-        await asyncio.wait_for(finished.wait(), timeout=1)
-        async with asyncio.timeout(1):
+        # Generous bounds: they only cap how long a real failure takes to
+        # report (1 s timed out 1-3 times in 10 under a loaded suite).
+        await asyncio.wait_for(finished.wait(), timeout=5)
+        async with asyncio.timeout(5):
             while (event := await receive(socket))["type"] != "turn_completed":
                 pass
         assert "Immediate reply" in json.dumps(event)
