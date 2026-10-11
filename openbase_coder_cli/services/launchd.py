@@ -15,7 +15,10 @@ from string import Formatter
 
 import click
 
-from openbase_coder_cli.backend_binaries import backend_binary_candidates
+from openbase_coder_cli.backend_binaries import (
+    backend_binary_candidates,
+    node_runtime_bin_dir,
+)
 from openbase_coder_cli.env_file import selected_backend_from_env_file
 from openbase_coder_cli.paths import (
     DEFAULT_ENV_FILE_PATH,
@@ -449,10 +452,40 @@ def render_wrapper(
             set +a
         fi
 
-        export PATH="$HOME/.openbase/bin:$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        export PATH="{_wrapper_path_prefix()}:$PATH"
 
         {cmd}
     """)
+
+
+# Login-shell directories launchd does not provide. Order is deliberate:
+# Openbase's own tools first, then user installs, then Homebrew/system.
+_WRAPPER_PATH_DIRS = (
+    "$HOME/.openbase/bin",
+    "$HOME/.local/bin",
+    "$HOME/bin",
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+)
+
+
+def _wrapper_path_prefix() -> str:
+    """PATH entries a wrapper prepends, plus the Node runtime when it lives
+    somewhere launchd would not otherwise look (nvm installs in particular).
+
+    The console build runs pnpm, whose entry point is ``#!/usr/bin/env node``;
+    resolving pnpm by absolute path is not enough when ``node`` itself is
+    off PATH.
+    """
+    dirs = list(_WRAPPER_PATH_DIRS)
+    node_dir = node_runtime_bin_dir()
+    if node_dir is not None:
+        home = str(Path.home())
+        covered = {d.replace("$HOME", home) for d in _WRAPPER_PATH_DIRS}
+        rendered = str(node_dir)
+        if rendered not in covered and '"' not in rendered and "$" not in rendered:
+            dirs.append(rendered)
+    return ":".join(dirs)
 
 
 def generate_wrapper(

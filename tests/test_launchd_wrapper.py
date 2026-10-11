@@ -277,12 +277,61 @@ def test_generate_wrapper_includes_user_bin_paths(tmp_path, monkeypatch):
         env_file=str(tmp_path / ".env"),
     )
 
+    monkeypatch.setattr(launchd, "node_runtime_bin_dir", lambda: None)
+
     wrapper = launchd.generate_wrapper(service, config, {"python": "/usr/bin/python3"})
 
     assert (
         'export PATH="$HOME/.openbase/bin:$HOME/.local/bin:$HOME/bin:'
         '/opt/homebrew/bin:/usr/local/bin:$PATH"' in wrapper.read_text()
     )
+
+
+def test_generate_wrapper_adds_nvm_node_dir_to_path(tmp_path, monkeypatch):
+    """An nvm-only Node is invisible to launchd; pnpm's ``env node`` shebang
+    then fails the console build (fresh-install QA, 2026-10-10)."""
+    monkeypatch.setattr(launchd, "LAUNCHD_WRAPPER_DIR", tmp_path / "launchd")
+    monkeypatch.setattr(launchd, "OPENBASE_BASE_DIR", tmp_path / "openbase")
+    nvm_bin = tmp_path / ".nvm" / "versions" / "node" / "v22.23.3" / "bin"
+    monkeypatch.setattr(launchd, "node_runtime_bin_dir", lambda: nvm_bin)
+
+    service = ServiceDefinition(
+        name="sample",
+        description="Sample",
+        command_template="sample",
+        workdir_template="{workspace}",
+    )
+    config = InstallationConfig(
+        workspace_path=str(tmp_path / "workspace"),
+        env_file=str(tmp_path / ".env"),
+    )
+
+    wrapper = launchd.generate_wrapper(service, config, {"python": "/usr/bin/python3"})
+
+    assert f'/opt/homebrew/bin:/usr/local/bin:{nvm_bin}:$PATH"' in wrapper.read_text()
+
+
+def test_generate_wrapper_skips_node_dir_already_on_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(launchd, "LAUNCHD_WRAPPER_DIR", tmp_path / "launchd")
+    monkeypatch.setattr(launchd, "OPENBASE_BASE_DIR", tmp_path / "openbase")
+    monkeypatch.setattr(
+        launchd, "node_runtime_bin_dir", lambda: launchd.Path("/opt/homebrew/bin")
+    )
+
+    service = ServiceDefinition(
+        name="sample",
+        description="Sample",
+        command_template="sample",
+        workdir_template="{workspace}",
+    )
+    config = InstallationConfig(
+        workspace_path=str(tmp_path / "workspace"),
+        env_file=str(tmp_path / ".env"),
+    )
+
+    wrapper = launchd.generate_wrapper(service, config, {"python": "/usr/bin/python3"})
+
+    assert '/opt/homebrew/bin:/usr/local/bin:$PATH"' in wrapper.read_text()
 
 
 def test_generate_wrapper_execs_runner_module_with_service_name(tmp_path, monkeypatch):
