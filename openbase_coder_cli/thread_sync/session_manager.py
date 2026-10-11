@@ -43,7 +43,10 @@ from .session_manager_base import (
 )
 from .session_manager_claude_events import ClaudeEventsMixin
 from .session_manager_routines import SessionManagerRoutinesMixin
-from .session_manager_threads import SessionManagerThreadsMixin
+from .session_manager_threads import (
+    SessionManagerThreadsMixin,
+    dispatcher_turn_instructions,
+)
 from .session_manager_turns import SessionManagerTurnsMixin
 from .thread_moves import ensure_thread_writable
 from .thread_payloads import (
@@ -305,6 +308,8 @@ class CodexAppServerSessionManager(
 
         ensure_thread_writable(session_id)
         if self._uses_backend_session_api():
+            if dispatcher_rules := dispatcher_turn_instructions(session_id):
+                role_turn_input["developerInstructions"] = dispatcher_rules
             started = await self._client.start_turn_by_label(
                 LabelQueryInput(thread_id=session_id, cwd=thread.directory),
                 role_turn_input,

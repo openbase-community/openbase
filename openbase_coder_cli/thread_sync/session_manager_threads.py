@@ -79,6 +79,26 @@ def _default_developer_instructions(thread_id: str) -> str | None:
     return load_super_agent_developer_instructions()
 
 
+def dispatcher_turn_instructions(thread_id: str) -> str | None:
+    """The current Dispatcher rules for a typed turn on the Dispatcher thread.
+
+    A session's stored developer instructions are captured when it is
+    created, so a typed Dispatcher turn kept following rules from that day
+    (376, 2026-10-11: "Have Marian write…" started a new worker long after
+    the rule to continue a named agent shipped). Voice turns already pass the
+    live rules per turn; typed turns now do the same, and super-agents folds
+    identical text in without duplicating it.
+    """
+    from openbase_coder_cli.livekit_voice_route import (
+        dispatcher_developer_instructions,
+        is_dispatcher_thread,
+    )
+
+    if not is_dispatcher_thread(thread_id):
+        return None
+    return dispatcher_developer_instructions()
+
+
 class SessionManagerThreadsMixin:
     """Thread lifecycle, listing, reading and resume."""
 

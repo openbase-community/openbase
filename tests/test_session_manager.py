@@ -1474,6 +1474,53 @@ def test_send_message_starts_claude_code_backend_turn(tmp_path: Path) -> None:
     )
 
 
+def test_send_message_on_dispatcher_thread_carries_the_live_dispatcher_rules(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """376, 2026-10-11 04:42Z: the typed Dispatcher chat kept the rules
+    stored at thread creation and started a new worker for "Have Marian
+    write…"; typed turns now pass the current rules like voice turns do."""
+    from openbase_coder_cli import dispatcher_instructions
+    from openbase_coder_cli.thread_sync import session_manager_threads
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    client = FakeBackendSessionClient(
+        {
+            "read_by_label": [
+                {
+                    "threadId": "s_dispatcher",
+                    "session": {
+                        "id": "s_dispatcher",
+                        "name": "dispatcher",
+                        "cwd": str(project_dir),
+                        "status": "waiting",
+                        "createdAt": "2026-06-19T20:00:00.000Z",
+                        "updatedAt": "2026-06-19T21:00:00.000Z",
+                    },
+                }
+            ],
+            "start_turn_by_label": [{"turnId": "t_2"}],
+        }
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.livekit_voice_route.is_dispatcher_thread",
+        lambda thread_id: thread_id == "s_dispatcher",
+    )
+    assert session_manager_threads.dispatcher_turn_instructions("s_other") is None
+
+    manager = CodexAppServerSessionManager(
+        client=client, model_for_role=lambda role: None
+    )
+    asyncio.run(manager.send_message("s_dispatcher", "Have Marian write files"))
+
+    turn_input = client.calls[-1][1]["turn_input"]
+    assert dispatcher_instructions.START_HEADING in turn_input["developerInstructions"]
+    assert (
+        "continue that agent on its own thread" in turn_input["developerInstructions"]
+    )
+
+
 def test_list_threads_marks_waiting_on_user_input_as_waiting(tmp_path: Path) -> None:
     project_dir = tmp_path / "project"
     project_dir.mkdir()
