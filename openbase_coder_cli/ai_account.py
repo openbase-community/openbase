@@ -27,6 +27,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from openbase_coder_cli.backend_binaries import find_backend_binary
 from openbase_coder_cli.backend_config import (
@@ -206,6 +207,9 @@ class LoginJob:
     code_sent: bool = False
     state: str = "starting"  # starting | waiting | succeeded | failed | cancelled
     message: str = ""
+    # The credentials as they were before this login (path -> bytes, or None
+    # when absent), put back if it does not succeed.
+    saved_credentials: dict[Path, bytes | None] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def snapshot(self) -> dict:
@@ -243,7 +247,14 @@ class LoginManager:
         import pty
 
         master_fd, slave_fd = pty.openpty()
-        job = LoginJob(provider=provider, master_fd=master_fd)
+        job = LoginJob(
+            provider=provider,
+            master_fd=master_fd,
+            # `codex login` deletes auth.json as it starts, so a relink that
+            # is cancelled or fails would otherwise sign a working account
+            # out (QA on Maritime 376).
+            saved_credentials=_snapshot_credentials(provider),
+        )
         try:
             job.process = subprocess.Popen(
                 _command(provider),
@@ -331,10 +342,15 @@ class LoginManager:
             with job.lock:
                 job.state = "failed"
                 job.message = "Sign-in timed out. Start again when you are ready."
+            _restore_credentials(job.saved_credentials)
+            _forget_claude_status()
             return
         with job.lock:
-            if job.state == "cancelled":
-                return
+            cancelled = job.state == "cancelled"
+        if cancelled:
+            _restore_credentials(job.saved_credentials)
+            _forget_claude_status()
+            return
         _forget_claude_status()
         linked = is_linked(job.provider)
         with job.lock:
@@ -350,6 +366,52 @@ class LoginManager:
                     f"{LABELS[job.provider]} sign-in did not finish"
                     f" (exit {returncode}). Start again to retry."
                 )
+        if job.state == "failed":
+            _restore_credentials(job.saved_credentials)
+            _forget_claude_status()
+
+
+def _credential_paths(provider: str) -> list[Path]:
+    """Files holding ``provider``'s CLI login on this computer.
+
+    Claude Code on macOS keeps its login in the Keychain, which a cancelled
+    `claude auth login` leaves alone; only file-based logins need guarding.
+    """
+    if provider == CODEX:
+        return [CODEX_HOME_DIR / "auth.json"]
+    if provider == CLAUDE_CODE:
+        from openbase_coder_cli.paths import CLAUDE_CONFIG_DIR
+
+        return [CLAUDE_CONFIG_DIR / ".credentials.json"]
+    return []
+
+
+def _snapshot_credentials(provider: str) -> dict[Path, bytes | None]:
+    saved: dict[Path, bytes | None] = {}
+    for path in _credential_paths(provider):
+        try:
+            saved[path] = path.read_bytes()
+        except OSError:
+            saved[path] = None
+    return saved
+
+
+def _restore_credentials(saved: dict[Path, bytes | None]) -> None:
+    """Put back a login an unfinished sign-in removed or replaced."""
+    for path, content in saved.items():
+        if content is None:
+            continue
+        try:
+            if path.read_bytes() == content:
+                continue
+        except OSError:
+            pass
+        with contextlib.suppress(OSError):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(f".{path.name}.restore")
+            tmp.write_bytes(content)
+            tmp.chmod(0o600)
+            os.replace(tmp, path)
 
 
 def browser_env_ignored() -> bool:
