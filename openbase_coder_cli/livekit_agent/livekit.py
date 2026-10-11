@@ -359,7 +359,24 @@ server = LiveKitAgentServer(
 )
 
 
+def _disable_legacy_thread_intro() -> None:
+    """Blank super-agents' legacy intro hook in this process and its children.
+
+    Managed workers own their introduction. Job processes are forked from a
+    forkserver that can carry an older environment (an install's env file
+    still naming the hook), and every Dispatcher-started agent then also
+    said "Hey there, I'm <name>." (376, 2026-10-11: two intros per agent).
+    """
+    from openbase_coder_cli.backend_config import (
+        OPENBASE_THREAD_INTRO_COMMAND,
+        SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV,
+    )
+
+    os.environ[SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV] = OPENBASE_THREAD_INTRO_COMMAND
+
+
 def prewarm(proc: JobProcess):
+    _disable_legacy_thread_intro()
     install_vad_backlog_patch()
     install_gpt_live_reconnect_patch()
     vad_model = silero.VAD.load()
@@ -2185,6 +2202,7 @@ def _wire_pipeline_voice_call(
 
 
 def main():
+    _disable_legacy_thread_intro()
     install_worker_failure_watchdog()
     install_proc_pool_liveness_patch()
     install_assemblyai_idle_noise_filter()

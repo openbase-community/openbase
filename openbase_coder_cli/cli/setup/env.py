@@ -73,6 +73,7 @@ def _ensure_env_file(
     if path.is_file():
         path.chmod(0o600)
         _drop_managed_claude_config_dir(path)
+        _drop_legacy_thread_intro_command(path)
         updates = _missing_livekit_client_credential_values(path)
         current_values = _env_file_values(path)
         updates.update(
@@ -287,6 +288,26 @@ def _ensure_openbase_cloud_machine_token(env_file: Path) -> None:
         )
     else:
         click.echo("Openbase Cloud machine token is configured.")
+
+
+def _drop_legacy_thread_intro_command(path: Path) -> None:
+    """Remove the retired super-agents intro hook from the env file.
+
+    Managed workers own their introduction; an older install's
+    SUPER_AGENTS_THREAD_INTRO_COMMAND made every agent introduce itself
+    twice wherever a process loaded this file directly.
+    """
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    kept = [
+        line
+        for line in lines
+        if line.split("=", 1)[0].strip() != "SUPER_AGENTS_THREAD_INTRO_COMMAND"
+    ]
+    if kept != lines:
+        path.write_text("".join(kept), encoding="utf-8")
+        click.echo(
+            f"Removed the retired SUPER_AGENTS_THREAD_INTRO_COMMAND from {path}."
+        )
 
 
 def _drop_managed_claude_config_dir(path: Path) -> None:

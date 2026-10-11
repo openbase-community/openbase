@@ -801,3 +801,45 @@ async def test_announcement_echo_does_not_stop_it_but_a_confirmed_barge_in_does(
     assert not controller._announcement_stop.is_set()
     gate.caller_heard(" hold on, can you explain why it broke")  # real caller words
     assert controller._announcement_stop.is_set()
+
+
+async def test_queued_announcement_waits_while_the_gate_still_hears_the_agent():
+    """376, 2026-10-11 06:46Z: an announcement took the floor in the gap
+    between two sentences of the Dispatcher's answer and cut it at 8 s."""
+    session = SimpleNamespace(
+        current_agent=SimpleNamespace(chat_ctx=llm.ChatContext()),
+        agent_state="listening",
+        user_state="listening",
+        output=Mock(audio_enabled=True),
+        interrupt=Mock(side_effect=lambda **_: asyncio.sleep(0)),
+    )
+    gate = SimpleNamespace(
+        agent_audible=True, on_barge_in=None, barge_in_min_seconds=0.5
+    )
+    controller = LiveCharacterController(
+        session=session,
+        bridge=Mock(),
+        router=Mock(),
+        model_factory=Mock(),
+        instructions=Mock(),
+        on_error=AsyncMock(),
+        speech_gate=gate,
+    )
+    played = []
+
+    async def announcement(message):
+        played.append(message.message_id)
+
+    controller._announcement = announcement
+    import openbase_coder_cli.livekit_agent.live_characters as module
+
+    module.ANNOUNCEMENT_FLOOR_RECHECK_SECONDS = 0.02
+    controller.start()
+    controller.announce(AnnouncerMessage("a1", "Asher finished.", "asher", "Asher"))
+    await asyncio.sleep(0.1)
+    assert played == [], "the agent is still audible"
+    gate.agent_audible = False
+    await asyncio.sleep(0.1)
+    assert played == ["a1"]
+    controller._closed = True
+    controller._task.cancel()

@@ -27,6 +27,10 @@ from .live_speech_gate import SpeechGatedAgent
 
 logger = logging.getLogger(__name__)
 
+# How often a queued announcement looks for the floor while agent audio is
+# still audible.
+ANNOUNCEMENT_FLOOR_RECHECK_SECONDS = 0.5
+
 
 def log_character_started(identity, live, router, *, announcement=False):
     logger.info(
@@ -382,6 +386,16 @@ class LiveCharacterController:
                     self.session.agent_state == "speaking"
                     or self.session.user_state == "speaking"
                 ):
+                    continue
+                # The session's state drops to quiet in the gaps between the
+                # model's sentences; the gate still counts the reply as
+                # audible there (open burst or its echo tail). Taking the
+                # floor in such a gap cut a 25 s Dispatcher answer at 8 s
+                # (376, 2026-10-11 06:46Z). Look again shortly.
+                if self._speech_gate is not None and self._speech_gate.agent_audible:
+                    asyncio.get_running_loop().call_later(
+                        ANNOUNCEMENT_FLOOR_RECHECK_SECONDS, self._wake.set
+                    )
                     continue
                 message = self._queue.get_nowait()
                 await self._announcement(message)
