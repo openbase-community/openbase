@@ -144,6 +144,18 @@ def list_sessions() -> list[dict]:
 THREAD_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
+THREAD_ID_ENV_KEYS = ("SUPER_AGENTS_THREAD_ID", "CODEX_THREAD_ID")
+
+
+def own_thread_id() -> str | None:
+    """The calling agent's thread id, from its backend's tool environment."""
+    for key in THREAD_ID_ENV_KEYS:
+        value = os.environ.get(key, "").strip()
+        if value and THREAD_ID_RE.fullmatch(value):
+            return value
+    return None
+
+
 def notify_prompt(name: str, exit_code: int | None, reason: str) -> str:
     """The follow-up turn queued on the agent's thread when a session ends.
 
