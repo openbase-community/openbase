@@ -541,15 +541,39 @@ def test_import_live_model_returns_the_plugin_class():
     assert live_voice.import_live_model() is GPTLiveModel
 
 
-def test_unavailable_detail_names_the_reason():
-    decision = VoiceEngineDecision(
-        engine="pipeline",
-        fallback_reason="gateway_not_deployed",
-        fallback_detail="HTTP 404.",
+def test_unavailable_detail_is_plain_words_for_the_phone():
+    """The header text carries no reason codes, exception text or billing
+    detail; those stay in the logs (orchestrator, 2026-10-11)."""
+    generic = live_voice_unavailable_detail(
+        VoiceEngineDecision(
+            engine="pipeline",
+            fallback_reason="gateway_not_deployed",
+            fallback_detail="HTTP 404.",
+        )
     )
-    detail = live_voice_unavailable_detail(decision)
-    assert "classic voice pipeline" in detail and "gateway_not_deployed" in detail
-    assert detail.endswith("HTTP 404.")
+    assert generic == (
+        "Live voice isn't available right now; using standard voice for this call."
+    )
+    credits = live_voice_unavailable_detail(
+        VoiceEngineDecision(
+            engine="pipeline",
+            fallback_reason="live_session_start_failed",
+            fallback_detail=(
+                "The live voice session could not start: RuntimeError: GPT-Live "
+                "session closed during startup (credit_balance_exhausted: You have "
+                "no credits remaining, see platform.openai.com billing)."
+            ),
+        )
+    )
+    assert credits == (
+        "Live voice is temporarily unavailable; using standard voice for this call."
+    )
+    for word in ("RuntimeError", "credit", "billing", "gateway_not_deployed", "404"):
+        assert word not in generic and word not in credits
+    plan = live_voice_unavailable_detail(
+        VoiceEngineDecision(engine="pipeline", fallback_reason="subscription_required")
+    )
+    assert plan.startswith("Live voice needs an Openbase Cloud plan")
 
 
 # --- the real plugin session against the fake gateway ------------------------------------
