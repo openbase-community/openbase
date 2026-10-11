@@ -171,3 +171,73 @@ async def test_without_an_announcer_route_moves_stay_silent(monkeypatch):
     controller.route_changed("transfer_to_thread", agent_label="Lucy")
     await controller._conversation(llm.ChatContext())
     bridge.greet.assert_called_once_with("Hi, I'm Lucy.")
+
+
+async def test_a_cue_cut_off_before_it_was_audible_is_said_again(monkeypatch):
+    # Maritime 376, 2026-10-11 02:37Z: a VAD-only barge-in interrupted the
+    # session 60 ms into "Back to dispatch." and nothing was heard.
+    announcer, _ = _announcer()
+    seconds = iter([0.13, 1.2])
+
+    async def fake_audio(given_tts, text, *, voice_id, outcome):
+        outcome.audio_seconds = next(seconds)
+        outcome.audio_events = 3
+        outcome.completed = True
+        yield rtc.AudioFrame(
+            data=b"\0\0" * 480,
+            sample_rate=24000,
+            num_channels=1,
+            samples_per_channel=480,
+        )
+
+    monkeypatch.setattr(route_announcements, "announcement_audio", fake_audio)
+    handles = [
+        SimpleNamespace(interrupted=True),
+        SimpleNamespace(interrupted=False),
+    ]
+    session = Mock()
+    session.user_state = "listening"
+
+    def say(text, **kwargs):
+        handle = handles.pop(0)
+
+        async def playout():
+            async for _ in kwargs["audio"]:
+                pass
+
+        handle.wait_for_playout = AsyncMock(side_effect=playout)
+        return handle
+
+    session.say.side_effect = say
+    assert await announcer.announce(session, "exit_to_dispatch") is True
+    assert session.say.call_count == 2
+
+
+async def test_a_cue_the_caller_heard_and_talked_over_is_not_repeated(monkeypatch):
+    announcer, _ = _announcer()
+
+    async def fake_audio(given_tts, text, *, voice_id, outcome):
+        outcome.audio_seconds = 0.9
+        outcome.completed = True
+        yield rtc.AudioFrame(
+            data=b"\0\0" * 480,
+            sample_rate=24000,
+            num_channels=1,
+            samples_per_channel=480,
+        )
+
+    monkeypatch.setattr(route_announcements, "announcement_audio", fake_audio)
+    session = Mock()
+
+    def say(text, **kwargs):
+        async def playout():
+            async for _ in kwargs["audio"]:
+                pass
+
+        return SimpleNamespace(
+            interrupted=True, wait_for_playout=AsyncMock(side_effect=playout)
+        )
+
+    session.say.side_effect = say
+    assert await announcer.announce(session, "transfer_to_thread") is False
+    assert session.say.call_count == 1

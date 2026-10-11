@@ -16,7 +16,9 @@ it: the apps' "verbose audio" switch only logs playback diagnostics.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 import uuid
 
 from livekit.agents import AgentSession
@@ -70,10 +72,28 @@ class RouteAnnouncer:
         announce: bool = True,
         agent_label: str | None = None,
     ) -> bool:
-        """Speak the move through ``session``'s output; True when it played out."""
+        """Speak the move through ``session``'s output; True when it played out.
+
+        A cue cut off before it was audible is said once more after the
+        caller falls quiet: on Maritime 376 (2026-10-11 02:37Z) a VAD-only
+        barge-in that began in the announcer's first-audio delay interrupted
+        the session 60 ms into "Back to dispatch.", so nothing was heard.
+        """
         message = self.message_for(action, announce=announce, agent_label=agent_label)
         if message is None:
             return False
+        for attempt in range(1, ANNOUNCE_ATTEMPTS + 1):
+            played, heard_seconds = await self._say(session, message, action, attempt)
+            if (
+                played
+                or heard_seconds >= AUDIBLE_SECONDS
+                or attempt == ANNOUNCE_ATTEMPTS
+            ):
+                return played
+            await _caller_quiet(session, timeout=CALLER_QUIET_TIMEOUT_SECONDS)
+        return False
+
+    async def _say(self, session, message, action, attempt) -> tuple[bool, float]:
         outcome = AnnouncementSynthesisOutcome()
         handle = session.say(
             message.text,
@@ -82,7 +102,7 @@ class RouteAnnouncer:
             ),
             # GPT-Live's server-side turn detection rejects
             # allow_interruptions=False (the SDK warns and ignores it); the
-            # speech gate already treats this playout as agent audio, so the
+            # speech gate treats this playout as agent audio, so the
             # announcer's own echo does not count as the caller interrupting.
             add_to_chat_ctx=False,
         )
@@ -90,12 +110,30 @@ class RouteAnnouncer:
         played = outcome.completed and not getattr(handle, "interrupted", False)
         logger.info(
             "dispatch_timing stage=live_route_announcement message_id=%s action=%s "
-            "voice_id=%s audio_events=%d audio_seconds=%.2f played=%s",
+            "voice_id=%s audio_events=%d audio_seconds=%.2f played=%s attempt=%d",
             message.message_id,
             action,
             self._tts.resolve_voice_id(message.voice_id),
             outcome.audio_events,
             outcome.audio_seconds,
             played,
+            attempt,
         )
-        return played
+        return played, outcome.audio_seconds
+
+
+ANNOUNCE_ATTEMPTS = 2
+# Below this much synthesized audio a cut-off cue was not heard; above it the
+# caller heard enough of it and interrupted on purpose.
+AUDIBLE_SECONDS = 0.5
+CALLER_QUIET_TIMEOUT_SECONDS = 3.0
+
+
+async def _caller_quiet(session: AgentSession, *, timeout: float) -> None:
+    """Wait (bounded) until the caller is not speaking."""
+    deadline = time.monotonic() + timeout
+    while (
+        getattr(session, "user_state", None) == "speaking"
+        and time.monotonic() < deadline
+    ):
+        await asyncio.sleep(0.1)
