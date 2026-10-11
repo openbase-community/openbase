@@ -10,6 +10,14 @@ already discards the plugin's own audio buffer; this patch also discards the
 queued audio events, keeping instructions, thinking and commentary appends
 in order so the application's context still reaches the new session.
 
+The same burst happens when a session first starts: every character swap
+opens a new session, the call keeps pushing caller audio into it while it
+waits for ``session.started``, and the drained queue trips the same limit;
+that session then stays deaf until the plugin reconnects (Maritime,
+2026-10-11 05:42Z: 55 s with no input transcripts after a transfer). Input
+audio pushed before ``session.started`` is therefore dropped as well: no
+session can be listening to it yet.
+
 Verified against livekit-plugins-openai 1.8.4: ``GPTLiveSession._msg_ch`` is a
 ``utils.aio.Chan`` drained by ``_send_task`` after ``session.start``.
 """
@@ -76,6 +84,25 @@ def install_gpt_live_reconnect_patch() -> bool:
             )
         return original(self)
 
+    original_push_audio = session_cls.push_audio
+
+    def push_audio(self, frame):
+        started = getattr(self, "_session_started_fut", None)
+        if started is not None and not started.done():
+            dropped = getattr(self, "_openbase_prestart_audio_dropped", 0) + 1
+            self._openbase_prestart_audio_dropped = dropped
+            if dropped == 1:
+                logger.info("dispatch_timing stage=live_prestart_audio_dropping")
+            return None
+        dropped = getattr(self, "_openbase_prestart_audio_dropped", 0)
+        if dropped:
+            self._openbase_prestart_audio_dropped = 0
+            logger.info(
+                "dispatch_timing stage=live_prestart_audio_dropped frames=%d", dropped
+            )
+        return original_push_audio(self, frame)
+
     session_cls._reset_for_reconnect = _reset_for_reconnect
+    session_cls.push_audio = push_audio
     session_cls._openbase_reconnect_patched = True
     return True
