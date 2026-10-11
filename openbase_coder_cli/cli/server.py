@@ -7,8 +7,10 @@ This module provides the CLI command to start the Django server.
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import click
@@ -117,6 +119,8 @@ def server(
             str(port),
             "--timeout-keep-alive",
             "0",
+            "--timeout-graceful-shutdown",
+            str(GRACEFUL_SHUTDOWN_SECONDS),
             "--log-level",
             "info",
         ]
@@ -156,12 +160,62 @@ def server(
     # Run the server
     with keep_system_awake(warn=lambda message: click.echo(message, err=True)):
         try:
-            subprocess.run(cmd, env=os.environ, check=True)
+            _run_supervised(cmd)
         except KeyboardInterrupt:
             click.echo("\nServer stopped.")
         except subprocess.CalledProcessError as e:
             click.echo(f"Server exited with error: {e.returncode}", err=True)
             sys.exit(e.returncode)
+
+
+GRACEFUL_SHUTDOWN_SECONDS = 5
+# After a stop signal, how long the server may take to exit before it is
+# killed. Without this a server wedged in shutdown (e.g. joining busy worker
+# threads at exit) outlived its launchd job, kept :7999 and served stale code
+# while every restart's new server failed to bind (2026-10-11).
+STOP_KILL_AFTER_SECONDS = 10.0
+
+
+def _run_supervised(cmd: list[str]) -> None:
+    """Run the server child, forwarding stop signals and killing it if it
+    does not exit in time. Raises CalledProcessError on a failing exit."""
+    child = subprocess.Popen(cmd, env=os.environ)
+    kill_at: list[float] = []
+
+    def forward(signum, _frame) -> None:
+        # Only signal here: waiting inside a handler would deadlock on the
+        # Popen wait lock held by the interrupted wait below.
+        if child.poll() is None:
+            child.send_signal(signum)
+        if not kill_at:
+            kill_at.append(time.monotonic() + STOP_KILL_AFTER_SECONDS)
+
+    previous = {
+        sig: signal.signal(sig, forward) for sig in (signal.SIGTERM, signal.SIGINT)
+    }
+    try:
+        while True:
+            try:
+                returncode = child.wait(timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                if kill_at and time.monotonic() >= kill_at[0]:
+                    click.echo(
+                        "Server did not stop within "
+                        f"{STOP_KILL_AFTER_SECONDS:.0f}s; killing it.",
+                        err=True,
+                    )
+                    child.kill()
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+    if kill_at:
+        raise SystemExit(0)
+    if returncode != 0:
+        raise subprocess.CalledProcessError(returncode, cmd)
 
 
 def _build_console() -> None:
