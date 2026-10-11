@@ -1,12 +1,16 @@
 """Voice delivery state and diagnostics for LiveKit spoken turns.
 
-Mute semantics (intended behavior — do not "fix"): once the user goes quiet
-and their utterance is accepted, ``safe_to_mute_user`` tells the client to
-mute its microphone, and it stays muted until ``safe_to_unmute`` after the
-agent's spoken reply. A slow coding-backend turn extends that muted window
-for however long the turn runs; the sustained mute is deliberate, not a
-stuck state. When a call looks deaf during a long pending turn, investigate
-backend turn latency (see dev-docs/TROUBLESHOOTING.md), not the mute.
+Mute semantics: once the user goes quiet and their utterance is accepted,
+``safe_to_mute_user`` tells the client to mute its microphone. As soon as
+the request is committed to the coding backend the mic is released again
+(``safe_to_unmute`` with reason ``backend_working``,
+:meth:`VoiceDeliveryLedger.release_mic_for_backend_wait`): the caller must be
+able to steer the running turn by voice (Gabe, 2026-10-11; before, the mute
+lasted the whole backend turn and a mid-turn "also add a NOTES file" never
+reached STT). The mute returns with the reply's ``agent_audio_started`` (a
+``safe_to_mute_user`` is sent alongside it so the keepalive covers long
+replies) and the mic reopens on ``safe_to_unmute`` after the agent's spoken
+reply. So the mic is closed only around the agent's own audio.
 
 ``safe_to_unmute`` is a mic-release, not a status update: it is only sent
 when a lifecycle mute is actually outstanding (or after real agent audio),
@@ -109,6 +113,9 @@ class VoiceDeliveryRecord:
     audio_seconds: float = 0.0
     reserved_for_tts: bool = False
     delivered: bool = False
+    # The mic was reopened while the backend worked on this request; the
+    # reply's audio start must close it again.
+    mic_released_for_backend: bool = False
     terminal_reason: str | None = None
     user_turn_closed: bool = False
     user_turn_closure_confidence: float | None = None
@@ -728,6 +735,29 @@ class VoiceDeliveryLedger:
         self._log(record, "answer_owed")
         return True
 
+    def release_mic_for_backend_wait(self, record: VoiceDeliveryRecord) -> bool:
+        """Reopen the caller's mic while the backend works on ``record``.
+
+        The lifecycle mute closed the mic for the quiet floor; the request is
+        now with the coding backend, and what the caller says next must be
+        transcribed and steered into that turn. Nothing happens in live mode,
+        when no lifecycle mute is outstanding, or while agent audio is still
+        pending or playing (an announcement keeps the mic shut until it ends).
+        """
+        if self._live_mode or not self._lifecycle_mute_outstanding:
+            return False
+        if self._announcement_pending() or any(
+            self._remaining_playout_seconds(other) > MIN_PLAYOUT_DEFER_SECONDS
+            for other in self._records.values()
+            if other.delivery_id in self._playout_release_tasks
+        ):
+            self._log(record, "mic_release_deferred", reason="agent_audio_pending")
+            return False
+        record.mic_released_for_backend = True
+        self._log(record, "mic_released_for_backend")
+        self._emit_lifecycle("safe_to_unmute", record, reason="backend_working")
+        return True
+
     def mark_text_generated(
         self,
         record: VoiceDeliveryRecord,
@@ -998,6 +1028,10 @@ class VoiceDeliveryLedger:
             voice_id=voice_id,
             voice_name=voice_name,
         )
+        if record.mic_released_for_backend and not self._lifecycle_mute_outstanding:
+            # The mic was open during the backend wait: close it for the
+            # reply, and keep the mute keepalive running through a long one.
+            self._emit_lifecycle("safe_to_mute_user", record, reason="agent_playback")
         self._emit_lifecycle("agent_audio_started", record)
 
     def mark_audio_frame_queued(

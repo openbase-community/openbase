@@ -1603,3 +1603,51 @@ def test_sustained_vad_speech_keeps_provisional_mute_and_duration():
         ledger._provisional_mute_recovery.cancel()
 
     asyncio.run(run())
+
+
+def test_mic_reopens_while_the_backend_works_and_closes_for_the_reply():
+    """Gabe 2026-10-11: a voice steer must reach STT during a Classic turn.
+    The mute covers only the agent's own audio, not the backend wait."""
+    events: list[tuple[str, str, str]] = []
+    ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
+    ledger.set_lifecycle_sink(
+        lambda event, record, reason: events.append((event, record.delivery_id, reason))
+    )
+    record = ledger.accept_utterance(message_id="m1", prompt="Write six files")
+    assert not ledger.release_mic_for_backend_wait(record), "nothing to release yet"
+    ledger.schedule_user_turn_closure(
+        record,
+        UserTurnClosureDecision(
+            confidence=0.8,
+            source="turn_detector",
+            quiet_grace_seconds=0,
+            completion_reason="quiet_floor",
+        ),
+    )
+    assert ledger.release_mic_for_backend_wait(record)
+    assert record.mic_released_for_backend
+    assert not ledger.release_mic_for_backend_wait(record), "already open"
+    ledger.mark_answer_owed(record, turn_id="t1", client=None)
+    ledger.mark_text_generated(record, speech_text="Done.", tts_text="Done.")
+    ledger.reserve_for_tts(record)
+    ledger.mark_audio_started(
+        record, latency_ms=10, role="agent", voice_id="v", voice_name="Marian"
+    )
+    assert [(event, reason) for event, _, reason in events] == [
+        ("utterance_accepted", ""),
+        ("safe_to_mute_user", "quiet_floor"),
+        ("safe_to_unmute", "backend_working"),
+        ("safe_to_mute_user", "agent_playback"),
+        ("agent_audio_started", ""),
+    ]
+
+
+def test_mic_release_is_a_no_op_in_live_mode():
+    events: list[tuple[str, str, str]] = []
+    ledger = VoiceDeliveryLedger(route_snapshot=_snapshot, live_mode=True)
+    ledger.set_lifecycle_sink(
+        lambda event, record, reason: events.append((event, record.delivery_id, reason))
+    )
+    record = ledger.accept_utterance(message_id="m1", prompt="Write six files")
+    assert not ledger.release_mic_for_backend_wait(record)
+    assert all(event != "safe_to_unmute" for event, _, _ in events)

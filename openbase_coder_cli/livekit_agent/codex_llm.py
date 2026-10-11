@@ -246,6 +246,11 @@ class CodexLLMStream(llm.LLMStream):
                 self._message_id,
                 delivery_record.prompt_len,
             )
+            # The request is with the backend: reopen the mic so the caller
+            # can steer the running turn (voice steers on Classic).
+            release_mic = getattr(delivery_ledger, "release_mic_for_backend_wait", None)
+            if callable(release_mic):
+                release_mic(delivery_record)
         self._backend_voice_client = voice_client
         self._backend_committed = True
         developer_instructions = load_direct_livekit_developer_instructions()
