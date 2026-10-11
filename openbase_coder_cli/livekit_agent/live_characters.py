@@ -16,7 +16,7 @@ from livekit.agents import llm
 from openbase_coder_cli.agent_announcements.playback import monitor_speech, speech_guard
 from openbase_coder_cli.voice_identity import agent_voice_identity, route_voice_identity
 
-from .config import live_voice_greeting
+from .config import live_voice_greeting, live_voice_return_greeting
 from .live_announcement import (
     AnnouncementWireEvidence,
     announcement_commands,
@@ -273,7 +273,7 @@ class LiveCharacterController:
         )
         return assistant
 
-    async def _conversation(self, history):
+    async def _conversation(self, history, *, route_changed=False):
         while not self._closed:
             snapshot = self.router.route_snapshot()
             assistant = await self._replace(
@@ -292,6 +292,12 @@ class LiveCharacterController:
                 self.bridge.greet(
                     live_voice_greeting(self.bridge.starting_agent_label())
                 )
+            elif route_changed:
+                # A return: the caller knows this character, but the one just
+                # left took its own "taking you back" words with it.
+                self.bridge.greet(
+                    live_voice_return_greeting(self.bridge.starting_agent_label())
+                )
             return assistant
 
     async def _run(self):
@@ -302,7 +308,8 @@ class LiveCharacterController:
                 if self._route_pending:
                     self._route_pending = False
                     await self._conversation(
-                        bounded_history(self.session.current_agent.chat_ctx)
+                        bounded_history(self.session.current_agent.chat_ctx),
+                        route_changed=True,
                     )
                     if not self._queue.empty():
                         self._wake.set()

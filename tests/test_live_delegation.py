@@ -2611,6 +2611,39 @@ async def test_output_transcript_deltas_are_logged_per_burst(caplog):
         ]
         assert len(lines) == 1
         assert "chars=32" in lines[0] and "I'm not in a dispatcher session." in lines[0]
+        assert "audio_ms=0" in lines[0]
+        import base64
+        from array import array
+
+        loud = array("h", [12000, -12000] * 240).tobytes()  # 20 ms at 24 kHz
+        with caplog.at_level(
+            logging.INFO, logger="openbase_coder_cli.livekit_agent.live_delegation"
+        ):
+            for _ in range(10):
+                live.emit(
+                    "openai_server_event_received",
+                    {
+                        "type": "session.output_audio.delta",
+                        "delta": base64.b64encode(loud).decode(),
+                    },
+                )
+            live.emit(
+                "openai_server_event_received",
+                {
+                    "type": "session.output_transcript.delta",
+                    "delta": "Nine plus five is fourteen.",
+                },
+            )
+            live.emit(
+                "openai_server_event_received",
+                {"type": "session.closed", "reason": "done"},
+            )
+        lines = [
+            r.getMessage()
+            for r in caplog.records
+            if "live_output_transcript" in r.getMessage()
+        ]
+        assert "audio_ms=200" in lines[-1] and "peak_dbfs=-8.7" in lines[-1]
     finally:
         await bridge.aclose()
 
