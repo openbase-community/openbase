@@ -201,7 +201,8 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v5
         with:
-          node-version: "22"
+          # Mirrors the workspace .nvmrc (not checked out at a matching ref here).
+          node-version: "24.18.0"
           # No lockfile at the synthesized build-workspace root; disable
           # setup-node's automatic packageManager cache probing.
           package-manager-cache: false
