@@ -90,6 +90,8 @@ async def test_claude_completion_reaches_socket_and_reconnect(
     original_init = ClaudeAgentSdkClient.__init__
 
     def isolated_init(self, **kwargs):
+        # managed_claude_client passes its own store; the test's wins.
+        kwargs.pop("store", None)
         original_init(
             self,
             store=store,
@@ -228,6 +230,8 @@ async def test_websocket_interrupt_isolates_output_and_stops_owner(
     original_init = ClaudeAgentSdkClient.__init__
 
     def isolated_init(self, **kwargs):
+        # managed_claude_client passes its own store; the test's wins.
+        kwargs.pop("store", None)
         original_init(
             self,
             store=store,
