@@ -14,6 +14,7 @@ from openbase_coder_cli.services.definitions import SERVICES, ServiceDefinition
 from openbase_coder_cli.services.launchd import (
     install_all_services,
     install_service,
+    installed_or_enabled_status,
     launchctl_bootout,
     launchctl_status,
     regenerate_all_services,
@@ -24,7 +25,10 @@ from openbase_coder_cli.services.registry import (
     require_installation,
     target_services,
 )
-from openbase_coder_cli.services.selection import configured_coding_backends
+from openbase_coder_cli.services.selection import (
+    configured_coding_backends,
+    include_installed_optional_services,
+)
 from openbase_coder_cli.services.tailnet_experience import tailnet_provider_name
 from openbase_coder_cli.services.tailscale_serve import (
     configure_tailscale_serve,
@@ -36,12 +40,17 @@ from openbase_coder_cli.services.voice_warning import (
 )
 
 
-def _ensure_started(config, svc: ServiceDefinition, verb: str) -> None:
+def _ensure_started(config, svc: ServiceDefinition, verb: str) -> bool:
     try:
         install_service(config, svc)
-        click.echo(f"  Installed and {verb} {svc.name}")
     except click.ClickException as exc:
-        click.echo(f"  Failed to {verb} {svc.name}: {exc}")
+        click.echo(
+            click.style(f"  Failed to start {svc.name}: {exc.message}", fg="red"),
+            err=True,
+        )
+        return False
+    click.echo(f"  Installed and {verb} {svc.name}")
+    return True
 
 
 def _ensure_tailscale_serve_routes() -> None:
@@ -100,10 +109,19 @@ def start(name: str | None) -> None:
     """Start all or one service."""
     config = require_installation()
     targets = target_services(name)
-    for svc in targets:
-        _ensure_started(config, svc, "started")
+    if name is None:
+        # A stopped optional service (e.g. openbase-voice-turn) is unloaded
+        # but still installed; `start` must bring it back too.
+        targets = include_installed_optional_services(
+            targets, installed_or_enabled_status
+        )
+    failed = [
+        svc.name for svc in targets if not _ensure_started(config, svc, "started")
+    ]
     if name is None:
         _ensure_tailscale_serve_routes()
+    if failed:
+        raise click.ClickException(f"Failed to start: {', '.join(failed)}")
 
 
 @services.command()

@@ -14,7 +14,10 @@ import click
 from openbase_coder_cli.livekit_install import ensure_pinned_livekit_server
 from openbase_coder_cli.services.definitions import SERVICES
 from openbase_coder_cli.services.dependencies import order_services
-from openbase_coder_cli.services.launchd import install_service, launchctl_status
+from openbase_coder_cli.services.launchd import (
+    install_service,
+    installed_or_enabled_status,
+)
 from openbase_coder_cli.services.mutation_lock import service_mutation
 from openbase_coder_cli.services.registry import find_service, require_installation
 from openbase_coder_cli.services.selection import (
@@ -59,7 +62,7 @@ def build_restart_plan(request: RestartRequest) -> RestartPlan:
         requested_targets = [
             service.name
             for service in include_installed_optional_services(
-                configured_default_services(), launchctl_status
+                configured_default_services(), installed_or_enabled_status
             )
         ]
     unknown = [target for target in requested_targets if target not in valid_targets]

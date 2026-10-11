@@ -926,7 +926,7 @@ def install_all_services(config: InstallationConfig) -> None:
     if tp.provider() != tp.PROVIDER_NETMESH and remove_service(VOICE_TURN_SERVICE):
         click.echo("  Removed openbase-voice-turn (Openbase VPN is not selected).")
     services = include_installed_optional_services(
-        configured_default_services(), launchctl_status
+        configured_default_services(), installed_or_enabled_status
     )
     services = order_services(services)
     binaries = _resolve_binaries(config, services)
@@ -1006,9 +1006,66 @@ def _activate_service(svc: ServiceDefinition, reload_required: bool) -> str:
     the only way launchd re-reads the plist. Returns the verb for user output.
     """
     if not reload_required and launchctl_restart(svc):
-        return "Restarted"
-    launchctl_bootstrap(svc)
-    return "Loaded"
+        verb = "Restarted"
+    else:
+        launchctl_bootstrap(svc)
+        verb = "Loaded"
+    if not _wait_until_loaded(svc):
+        # launchctl can report success for a job that is gone moments later
+        # (2026-10-11: `services stop` then `start` printed success, yet
+        # `launchctl print` said not found). Bootstrap once more from the
+        # plist on disk, then refuse to claim a start that did not happen.
+        launchctl_bootstrap(svc)
+        verb = "Loaded"
+        if not _wait_until_loaded(svc):
+            status = launchctl_status(svc)
+            if not status.get("installed"):
+                detail = "launchd has no job for it"
+            else:
+                detail = (
+                    "it is loaded but not running "
+                    f"(last exit: {status.get('last_exit_code') or 'unknown'})"
+                )
+            raise click.ClickException(
+                f"{_service_label(svc)} did not start: {detail}. See {_log_path(svc)}."
+            )
+    return verb
+
+
+# How long activation waits for launchd to show the job loaded and running.
+LOAD_VERIFY_TIMEOUT_SECONDS = 10.0
+
+
+def _wait_until_loaded(svc: ServiceDefinition) -> bool:
+    """True once launchd shows ``svc`` loaded (and running, if KeepAlive)."""
+    if _external_supervisor() or not _is_macos():
+        return True
+    deadline = time.monotonic() + LOAD_VERIFY_TIMEOUT_SECONDS
+    while True:
+        status = launchctl_status(svc)
+        if status.get("installed") and (status.get("pid") or not svc.keep_alive):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.25)
+
+
+def service_files_present(svc: ServiceDefinition) -> bool:
+    """True when ``svc`` has generated files, i.e. was installed and not removed.
+
+    A stopped service is unloaded from launchd but keeps its wrapper, so this
+    (unlike ``launchctl_status``) still recognises an enabled optional service
+    after `services stop`.
+    """
+    return _wrapper_path(svc).is_file()
+
+
+def installed_or_enabled_status(svc: ServiceDefinition) -> dict:
+    """``launchctl_status`` that also counts a stopped-but-installed service."""
+    status = launchctl_status(svc)
+    if not status.get("installed") and service_files_present(svc):
+        return {**status, "installed": True}
+    return status
 
 
 @service_mutation()

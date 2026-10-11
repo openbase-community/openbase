@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 from types import SimpleNamespace
 
+import click
 from click.testing import CliRunner
 
 services_cli = importlib.import_module("openbase_coder_cli.cli.services")
@@ -90,9 +91,12 @@ def test_services_start_all_configures_tailscale_serve_routes(monkeypatch):
     monkeypatch.setattr(services_cli, "require_installation", lambda: object())
     monkeypatch.setattr(services_cli, "target_services", lambda _name: targets)
     monkeypatch.setattr(
+        services_cli, "include_installed_optional_services", lambda t, _s: t
+    )
+    monkeypatch.setattr(
         services_cli,
         "_ensure_started",
-        lambda _config, svc, _verb: calls.append(svc.name),
+        lambda _config, svc, _verb: calls.append(svc.name) or True,
     )
     monkeypatch.setattr(
         services_cli,
@@ -115,7 +119,7 @@ def test_services_start_one_does_not_configure_tailscale_serve_routes(monkeypatc
     monkeypatch.setattr(
         services_cli,
         "_ensure_started",
-        lambda _config, svc, _verb: calls.append(svc.name),
+        lambda _config, svc, _verb: calls.append(svc.name) or True,
     )
     monkeypatch.setattr(
         services_cli,
@@ -257,8 +261,9 @@ def test_services_status_reports_shared_daemon_even_with_idle_runner_pid(monkeyp
     result = CliRunner().invoke(services_cli.services, ["status"])
 
     assert result.exit_code == 0, result.output
-    assert "codex-app-server     available through the shared Codex daemon (0.161.0)" in (
-        result.output
+    assert (
+        "codex-app-server     available through the shared Codex daemon (0.161.0)"
+        in (result.output)
     )
     assert "upgrade the Codex CLI to 0.161.0" in result.output
     assert "pid 4242" not in result.output
@@ -292,7 +297,49 @@ def test_services_status_newer_own_server_asks_for_cli_upgrade_not_restart(monke
     result = CliRunner().invoke(services_cli.services, ["status"])
 
     assert result.exit_code == 0, result.output
-    assert "Codex 0.161.0 but 0.160.1 is installed — upgrade the Codex CLI to 0.161.0" in (
-        result.output
+    assert (
+        "Codex 0.161.0 but 0.160.1 is installed — upgrade the Codex CLI to 0.161.0"
+        in (result.output)
     )
     assert "restart to update" not in result.output
+
+
+def test_services_start_exits_nonzero_when_a_service_fails(monkeypatch):
+    target = SimpleNamespace(name="django-cli")
+    monkeypatch.setattr(services_cli, "require_installation", lambda: object())
+    monkeypatch.setattr(services_cli, "target_services", lambda _name: [target])
+
+    def fail(_config, _svc):
+        raise click.ClickException("launchd has no job for it")
+
+    monkeypatch.setattr(services_cli, "install_service", fail)
+
+    result = CliRunner().invoke(services_cli.services, ["start", "django-cli"])
+
+    assert result.exit_code != 0
+    assert "Installed and started" not in result.output
+    assert "Failed to start django-cli: launchd has no job for it" in result.output
+
+
+def test_services_start_all_includes_stopped_optional_services(monkeypatch):
+    calls = []
+    default = SimpleNamespace(name="django-cli")
+    optional = SimpleNamespace(name="openbase-voice-turn")
+    monkeypatch.setattr(services_cli, "require_installation", lambda: object())
+    monkeypatch.setattr(services_cli, "target_services", lambda _name: [default])
+    monkeypatch.setattr(
+        services_cli,
+        "include_installed_optional_services",
+        lambda targets, _status: [*targets, optional],
+    )
+    monkeypatch.setattr(
+        services_cli,
+        "_ensure_started",
+        lambda _config, svc, _verb: calls.append(svc.name) or True,
+    )
+    monkeypatch.setattr(services_cli, "configure_tailscale_serve", lambda: None)
+
+    result = CliRunner().invoke(services_cli.services, ["start"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == ["django-cli", "openbase-voice-turn"]

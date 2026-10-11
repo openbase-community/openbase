@@ -19,7 +19,7 @@ restart_module = importlib.import_module("openbase_coder_cli.services.restart")
 @pytest.fixture(autouse=True)
 def isolate_restart_installation(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        restart_module, "launchctl_status", lambda _svc: {"installed": False}
+        restart_module, "installed_or_enabled_status", lambda _svc: {"installed": False}
     )
     monkeypatch.setattr(
         restart_module,
@@ -219,7 +219,7 @@ def test_full_restart_includes_enabled_optional_daemons_not_oneshots(monkeypatch
     }
     monkeypatch.setattr(
         restart_module,
-        "launchctl_status",
+        "installed_or_enabled_status",
         lambda svc: {"installed": svc.name in enabled, "pid": None},
     )
     plan = build_restart_plan(RestartRequest())
