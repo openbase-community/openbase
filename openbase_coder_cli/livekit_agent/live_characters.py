@@ -16,7 +16,7 @@ from livekit.agents import llm
 from openbase_coder_cli.agent_announcements.playback import monitor_speech, speech_guard
 from openbase_coder_cli.voice_identity import agent_voice_identity, route_voice_identity
 
-from .config import live_voice_greeting, live_voice_return_greeting
+from .config import live_voice_greeting
 from .live_announcement import (
     AnnouncementWireEvidence,
     announcement_commands,
@@ -302,12 +302,8 @@ class LiveCharacterController:
                 self.bridge.greet(
                     live_voice_greeting(self.bridge.starting_agent_label())
                 )
-            elif route_changed:
-                # A return: the caller knows this character, but the one just
-                # left took its own "taking you back" words with it.
-                self.bridge.greet(
-                    live_voice_return_greeting(self.bridge.starting_agent_label())
-                )
+            # A return says nothing here: the route announcer speaks the
+            # Classic "Back to dispatch." line in the Dispatcher's voice.
             return assistant
 
     async def _announce_route(self):

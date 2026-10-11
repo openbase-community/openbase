@@ -296,16 +296,6 @@ def live_voice_greeting(agent_label: str | None) -> str:
     return f"Hi, I'm {live_voice_agent_name(agent_label)}."
 
 
-def live_voice_return_greeting(agent_label: str | None) -> str:
-    """Spoken when the call comes back to a character the caller already met.
-
-    The model's own "Okay, I'll take you back" belongs to the character being
-    left and is discarded with it, so without this line a return was silent
-    (Maritime, 2026-10-10 23:57Z).
-    """
-    return f"Back with {live_voice_agent_name(agent_label)}."
-
-
 def live_voice_start_route_note(agent_label: str) -> str:
     return (
         f"This call started inside {agent_label}'s thread: from the first word, "

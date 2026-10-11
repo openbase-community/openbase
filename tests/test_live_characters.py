@@ -738,9 +738,9 @@ async def test_real_announcement_stream_keeps_input_and_restores_after_pcm(
                 await value.aclose()
 
 
-async def test_a_return_after_a_route_change_greets_briefly(monkeypatch):
-    """Maritime 2026-10-10 23:57Z: the return to the Dispatcher was silent; the
-    model's own "taking you back" words were discarded with the old character."""
+async def test_a_return_after_a_route_change_does_not_greet_again(monkeypatch):
+    """The route announcer says "Back to dispatch." in the Dispatcher's voice
+    (Classic wording Gabe asked for); the character itself stays quiet."""
     import openbase_coder_cli.livekit_agent.live_characters as module
 
     current = {"id": "dispatcher"}
@@ -753,12 +753,6 @@ async def test_a_return_after_a_route_change_greets_briefly(monkeypatch):
     bridge = Mock()
     bridge.starting_agent_label.side_effect = lambda: labels[current["id"]]
     monkeypatch.setattr(module, "route_voice_identity", lambda _: Mock())
-    monkeypatch.setattr(
-        module,
-        "live_voice_agent_name",
-        lambda label: label or "Jacqueline",
-        raising=False,
-    )
     controller = LiveCharacterController(
         session=Mock(),
         bridge=bridge,
@@ -769,16 +763,7 @@ async def test_a_return_after_a_route_change_greets_briefly(monkeypatch):
     )
     controller._replace = AsyncMock(return_value=SimpleNamespace(duplex_session=Mock()))
     history = llm.ChatContext()
-    for route, changed in [
-        ("blake", True),
-        ("blake", False),
-        ("dispatcher", True),
-        ("blake", True),
-    ]:
+    for route, changed in [("blake", True), ("dispatcher", True), ("blake", True)]:
         current["id"] = route
         await controller._conversation(history, route_changed=changed)
-    greetings = [call.args[0] for call in bridge.greet.call_args_list]
-    assert greetings[0] == "Hi, I'm Blake."
-    assert greetings[1].startswith("Back with ")
-    assert greetings[2] == "Back with Blake."
-    assert len(greetings) == 3
+    assert [call.args[0] for call in bridge.greet.call_args_list] == ["Hi, I'm Blake."]
