@@ -14,6 +14,7 @@ from openbase_coder_cli.codex_home_instructions import (
 )
 
 from .agents import codex
+from .ai_account_cli import ai_account_group
 from .auth import auth, login, logout
 from .backend import backend
 from .boilersync import boilersync
@@ -31,9 +32,11 @@ from .doctor import doctor
 from .mcp_gateway import mcp_gateway
 from .onboarding import onboarding
 from .plugins import plugins
+from .ports import ports
 from .profiles import profiles
 from .projects import projects
 from .provision import provision
+from .pty import pty
 from .report import report
 from .reports import reports
 from .restart import restart, self_restart
@@ -111,6 +114,9 @@ def main():
 
 
 main.add_command(server)
+main.add_command(pty)
+main.add_command(ports)
+main.add_command(ai_account_group)
 main.add_command(service)
 main.add_command(setup)
 main.add_command(app_download_qr)
