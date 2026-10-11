@@ -19,7 +19,7 @@ from openbase_coder_cli.login_callback import (
     DEFAULT_FORWARD_TTL_SECONDS,
     is_tailnet_forward_target,
 )
-from openbase_coder_cli.open_url_policy import open_url_error
+from openbase_coder_cli.open_url_policy import normalize_open_url, open_url_error
 
 IOS_APP_CONTROL_GROUP = "ios_app_control"
 logger = logging.getLogger(__name__)
@@ -89,6 +89,7 @@ class IOSAppControlSerializer(serializers.Serializer):
             if not url:
                 raise serializers.ValidationError("url is required for open_url.")
             _validate_url(url)
+            attrs["url"] = normalize_open_url(url)
         elif "loopback_forward" in attrs:
             raise serializers.ValidationError(
                 "loopback_forward only applies to open_url."

@@ -37,7 +37,7 @@ from openbase_coder_cli.login_callback import (
     loopback_callback_port,
     relay_capability,
 )
-from openbase_coder_cli.open_url_policy import open_url_error
+from openbase_coder_cli.open_url_policy import normalize_open_url, open_url_error
 from openbase_coder_cli.web_redirect_hold import record_web_redirect
 
 logger = logging.getLogger(__name__)
@@ -94,6 +94,7 @@ def browser_open(
     error = open_url_error(url)
     if error:
         raise click.BadParameter(error, param_hint="URL")
+    url = normalize_open_url(url)
     click.echo(url)
 
     forward: LoopbackForward | None = None

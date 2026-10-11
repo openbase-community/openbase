@@ -116,6 +116,15 @@ def test_browser_open_holds_completion_alerts_only_when_the_phone_got_the_url(
     assert web_redirect_hold.alert_hold_until() is not None
 
 
+def test_browser_open_lowercases_the_url_scheme(monkeypatch):
+    calls = _patch_publish(monkeypatch, {"command_id": "c-1", "delivered": True})
+
+    result = CliRunner().invoke(browser_cli.browser, ["open", "Https://example.com/A"])
+
+    assert result.exit_code == 0
+    assert calls == ["https://example.com/A"]
+
+
 def test_browser_open_prints_paste_back_hint_when_not_delivered(monkeypatch):
     _patch_publish(monkeypatch, {"command_id": "c-1", "delivered": False})
 
