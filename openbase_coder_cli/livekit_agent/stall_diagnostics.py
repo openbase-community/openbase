@@ -522,8 +522,13 @@ async def stall_watch_loop(
     is_call_active=None,
     prepare_announcement=None,
     speak=None,
+    should_announce=None,
 ) -> None:
     """Background poller: surface blocked agent turns during a live call.
+
+    ``should_announce(turn) -> bool``, if given, lets the engine veto a hint
+    for a turn whose failure it already recovered from or explained itself
+    (GPT-Live turn recovery); a vetoed turn is never announced.
 
     ``speak(text) -> bool`` (awaitable) delivers one hint; by default it is
     the classic announcer path, :func:`speak_via_local_api`. The GPT-Live
@@ -561,6 +566,15 @@ async def stall_watch_loop(
 
     async def _announce(turn) -> None:
         if is_call_active is not None and not is_call_active():
+            return
+        if should_announce is not None and not should_announce(turn):
+            if turn.turn_id not in spoken_turn_ids:
+                spoken_turn_ids.add(turn.turn_id)
+                logger.info(
+                    "%s stage=agent_turn_blocked_hint_vetoed turn_id=%s",
+                    "dispatch_timing",
+                    turn.turn_id,
+                )
             return
         now = time.monotonic()
         if not announcement_attempt_due(

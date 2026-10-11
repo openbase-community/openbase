@@ -260,6 +260,24 @@ def _looks_like_raw_backend_error(text: str | None) -> bool:
     return "api error:" in text.lower()
 
 
+def _turn_error_text(progress: dict[str, Any]) -> str:
+    """The backend's error for a failed turn, wherever the snapshot carries it."""
+    for container in (
+        progress,
+        progress.get("turn") if isinstance(progress.get("turn"), dict) else {},
+        progress.get("summary") if isinstance(progress.get("summary"), dict) else {},
+    ):
+        for key in ("lastError", "last_error", "error"):
+            value = container.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            if isinstance(value, dict):
+                message = value.get("message")
+                if isinstance(message, str) and message.strip():
+                    return message.strip()
+    return ""
+
+
 def _safe_spoken_answer(
     speech_text: str,
     *,
@@ -659,6 +677,10 @@ class SuperAgentsLiveKitClient(
                 "_livekit_speech_text": spoken_text,
                 "_livekit_turn_id": turn_id,
                 "_livekit_backend_auth_failure": auth_failed,
+                # turn_recovery retries a failed turn instead of speaking the
+                # generic line above; the backend's error names the failure.
+                "_livekit_turn_failed": turn_failed,
+                "_livekit_turn_error": _turn_error_text(result) if turn_failed else "",
                 "progress": result,
             }
             logger.info(
@@ -832,6 +854,40 @@ class SuperAgentsLiveKitClient(
             len(spoken_text),
         )
         handler(self, turn_id, spoken_text)
+
+    async def keep_request_for_later(self, prompt: str) -> bool:
+        """Queue ``prompt`` as the thread's next turn once recovery has failed.
+
+        The caller's request is not lost: Super Agents runs it as a follow-up
+        when the thread next accepts turns. False when even queueing fails.
+        """
+        try:
+            thread_id = await self._ensure_thread()
+            result = await self._backend_client.queue_turn_by_label(
+                self._query(thread_id=thread_id),
+                self._turn_input(
+                    prompt,
+                    developer_instructions=None,
+                    dispatch_id=f"voice-{uuid.uuid4().hex[:12]}",
+                ),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - the spoken line changes
+            logger.info(
+                "%s stage=voice_request_keep_failed error=%s",
+                DISPATCH_TIMING_LOG,
+                exc,
+            )
+            return False
+        kept = bool(_response_is_queued(result) or _extract_turn_id(result))
+        logger.info(
+            "%s stage=voice_request_kept thread_id=%s kept=%s",
+            DISPATCH_TIMING_LOG,
+            thread_id,
+            kept,
+        )
+        return kept
 
     def backend_appears_busy(self) -> bool:
         """True when the active turn streamed a backend event recently.

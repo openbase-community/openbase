@@ -63,11 +63,13 @@ import math
 import re
 import time
 from collections import Counter, deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 from openbase_coder_cli.livekit_agent.config import (
+    LIVE_TURN_RECOVERY_BACKOFF_SECONDS,
+    LIVE_TURN_RECOVERY_WINDOW_SECONDS,
     LIVE_VOICE_ACK_LIMIT_MS,
     LIVE_VOICE_ACK_TEXT,
     load_direct_livekit_developer_instructions,
@@ -102,6 +104,11 @@ from openbase_coder_cli.livekit_agent.super_agents_client import (
 )
 from openbase_coder_cli.livekit_agent.super_agents_speech import (
     _progress_has_pending_requests,
+)
+from openbase_coder_cli.livekit_agent.turn_recovery import (
+    TurnFailure,
+    TurnRecoveryFailed,
+    run_with_recovery,
 )
 from openbase_coder_cli.voice_tags import wrap_voice_prompt
 
@@ -644,6 +651,8 @@ class LiveDelegationBridge:
         utterance_transcript_lag_seconds: float = UTTERANCE_TRANSCRIPT_LAG_SECONDS,
         clock: Callable[[], float] = time.monotonic,
         call_id: str = "",
+        recovery_window_seconds: float = LIVE_TURN_RECOVERY_WINDOW_SECONDS,
+        recovery_backoff_seconds: Sequence[float] = LIVE_TURN_RECOVERY_BACKOFF_SECONDS,
         initial_agent_label: str | None = None,
     ) -> None:
         self._voice_router = voice_router
@@ -673,6 +682,11 @@ class LiveDelegationBridge:
         self._cursors: dict[str, LiveSpeechCursor] = {}
         self._listening_clients: list[Any] = []
         self._handled_item_ids: deque[str] = deque(maxlen=64)
+        # Turn ids whose failure recovery handled (retried, or spoke its own
+        # specific line): the blocked-turn hint must not repeat them.
+        self._recovered_turn_ids: set[str] = set()
+        self._recovery_window_seconds = recovery_window_seconds
+        self._recovery_backoff_seconds = tuple(recovery_backoff_seconds)
         self._last_exit_command_at: float | None = None
         self._skipped: _SkippedUtterance | None = None
         self._utterance_seq = 0
@@ -1925,21 +1939,77 @@ class LiveDelegationBridge:
             self._progress_heartbeat(entry),
             name=f"openbase-live-heartbeat-{entry.key}",
         )
-        try:
-            result = await entry.client.run_turn(
+        developer_instructions = self._developer_instructions()
+
+        async def attempt(index: int) -> dict:
+            # Only the first attempt may replace a running fragment turn;
+            # a retry starts over after the backend lost the earlier one.
+            return await entry.client.run_turn(
                 prompt,
-                developer_instructions=self._developer_instructions(),
-                replaces_active_turn=entry.replaces_turn,
+                developer_instructions=developer_instructions,
+                replaces_active_turn=entry.replaces_turn and index == 0,
+            )
+
+        def still_wanted() -> bool:
+            return (
+                not entry.superseded
+                and not self._closed
+                and self._voice_router.can_deliver_for_snapshot(entry.route)
+            )
+
+        try:
+            result = await run_with_recovery(
+                attempt,
+                should_continue=still_wanted,
+                window_seconds=self._recovery_window_seconds,
+                backoff_seconds=self._recovery_backoff_seconds,
+                on_retry=lambda failure, n, delay: self._on_turn_retry(
+                    entry, failure, n, delay
+                ),
+                label=entry.key,
             )
         except asyncio.CancelledError:
             raise
-        except Exception:
-            self._on_turn_failed(entry)
+        except TurnRecoveryFailed as exc:
+            await self._on_turn_failed(entry, exc)
+            return
+        except Exception:  # noqa: BLE001 - never let a turn error end the call
+            await self._on_turn_failed(entry, None)
             return
         finally:
             if entry.heartbeat is not None:
                 entry.heartbeat.cancel()
         self._on_turn_result(entry, result)
+
+    def _on_turn_retry(
+        self,
+        entry: LiveDelegationEntry,
+        failure: TurnFailure,
+        attempt: int,
+        delay: float,
+    ) -> None:
+        """A failed attempt is being retried: silent for the caller, and the
+        stall hint for that attempt's turn is ours to replace."""
+        if failure.turn_id:
+            self._recovered_turn_ids.add(failure.turn_id)
+        if entry.turn_id:
+            self._recovered_turn_ids.add(entry.turn_id)
+        self._stats["turn_retries"] += 1
+        self._log.info(
+            "%s stage=live_delegation_turn_retry key=%s delegation_id=%s attempt=%d "
+            "kind=%s delay_s=%g",
+            DISPATCH_TIMING_LOG,
+            entry.key,
+            entry.delegation_id or "",
+            attempt,
+            failure.kind,
+            delay,
+        )
+
+    def handled_failed_turn(self, turn_id: str) -> bool:
+        """Whether recovery already dealt with ``turn_id``'s failure, so the
+        background blocked-turn hint must stay quiet about it."""
+        return bool(turn_id) and turn_id in self._recovered_turn_ids
 
     async def _progress_heartbeat(self, entry: LiveDelegationEntry) -> None:
         while True:
@@ -1954,7 +2024,11 @@ class LiveDelegationBridge:
                 entry.delegation_id,
             )
 
-    def _on_turn_failed(self, entry: LiveDelegationEntry) -> None:
+    async def _on_turn_failed(
+        self, entry: LiveDelegationEntry, failed: TurnRecoveryFailed | None
+    ) -> None:
+        """Recovery is over: say what failed and what to do, once, and keep
+        the request in the thread when the backend can still take it later."""
         entry.completed = True
         busy = False
         appears_busy = getattr(entry.client, "backend_appears_busy", None)
@@ -1964,27 +2038,59 @@ class LiveDelegationBridge:
             except Exception:
                 busy = False
         self._stats["turns_failed"] += 1
+        failure = failed.failure if failed is not None else None
+        if failure is not None and failure.turn_id:
+            self._recovered_turn_ids.add(failure.turn_id)
+        if entry.turn_id:
+            self._recovered_turn_ids.add(entry.turn_id)
         self._log.exception(
             "%s stage=live_delegation_turn_failed key=%s delegation_id=%s "
-            "backend_busy=%s",
+            "backend_busy=%s kind=%s attempts=%d reason=%s",
             DISPATCH_TIMING_LOG,
             entry.key,
             entry.delegation_id or "",
             busy,
+            failure.kind if failure is not None else "",
+            failed.attempts if failed is not None else 0,
+            failed.reason if failed is not None else "",
         )
         if self._ledger is not None and entry.record is not None:
             self._ledger.mark_cancelled(entry.record, reason="live_turn_failed")
-        if entry.superseded:
+        if entry.superseded or self._closed:
             return
-        self._deliver(
-            entry,
-            [
+        if failure is None:
+            line = (
                 LIVE_BACKEND_BUSY_COMMENTARY
                 if busy
                 else LIVE_BACKEND_UNRESPONSIVE_COMMENTARY
-            ],
-            final=True,
-        )
+            )
+        elif busy:
+            # The backend's event stream is still moving: churning, not down.
+            line = LIVE_BACKEND_BUSY_COMMENTARY
+        else:
+            kept = False
+            if (
+                failure.retryable
+                and failed is not None
+                and failed.reason != "caller_moved_on"
+            ):
+                keep = getattr(entry.client, "keep_request_for_later", None)
+                if callable(keep):
+                    try:
+                        kept = bool(await keep(entry.prompt))
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:  # noqa: BLE001 - the line just omits it
+                        kept = False
+            line = failure.spoken_line(
+                self._active_agent_label,
+                elapsed_seconds=failed.elapsed_seconds if failed is not None else 0.0,
+                attempts=failed.attempts if failed is not None else 1,
+                kept=kept,
+            )
+        if entry.superseded or self._closed:
+            return
+        self._deliver(entry, [line], final=True)
 
     def _on_turn_result(self, entry: LiveDelegationEntry, result: dict) -> None:
         entry.completed = True

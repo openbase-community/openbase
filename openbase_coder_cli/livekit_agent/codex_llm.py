@@ -11,6 +11,8 @@ from livekit.agents.llm.chat_context import ChatMessage
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 from openbase_coder_cli.livekit_agent.config import (
+    LIVE_TURN_RECOVERY_BACKOFF_SECONDS,
+    LIVE_TURN_RECOVERY_WINDOW_SECONDS,
     load_direct_livekit_developer_instructions,
 )
 from openbase_coder_cli.livekit_agent.screen_context import apply_screen_context
@@ -22,6 +24,11 @@ from openbase_coder_cli.livekit_agent.turn_detection import (
     VoiceTurnSignalTracker,
     decide_user_turn_closure,
     latest_user_turn_signals_from_chat_ctx,
+)
+from openbase_coder_cli.livekit_agent.turn_recovery import (
+    KIND_BACKEND_SLOW,
+    TurnRecoveryFailed,
+    run_with_recovery,
 )
 from openbase_coder_cli.voice_tags import wrap_voice_prompt
 
@@ -126,43 +133,70 @@ class CodexLLMStream(llm.LLMStream):
                         reason="livekit_llm_stream_cancelled",
                     )
             raise
-        except Exception:
+        except Exception as exc:
             if delivery_record is not None:
                 delivery_ledger.mark_cancelled(
                     delivery_record,
                     reason="livekit_llm_stream_failed",
                 )
             backend_busy = False
-            appears_busy = getattr(
-                self._voice_router.active_client, "backend_appears_busy", None
-            )
+            voice_client = self._voice_router.active_client
+            appears_busy = getattr(voice_client, "backend_appears_busy", None)
             if callable(appears_busy):
                 try:
                     backend_busy = bool(appears_busy())
                 except Exception:
                     backend_busy = False
+            failed = exc if isinstance(exc, TurnRecoveryFailed) else None
             logger.exception(
                 "dispatch_timing stage=livekit_llm_backend_failed message_id=%s "
-                "backend_busy=%s",
+                "backend_busy=%s kind=%s attempts=%d reason=%s",
                 self._message_id,
                 backend_busy,
+                failed.failure.kind if failed is not None else "",
+                failed.attempts if failed is not None else 0,
+                failed.reason if failed is not None else "",
             )
-            # Speak the failure instead of leaving the room silent: emit a
-            # short fallback so TTS tells the user the backend is down —
-            # or merely busy, when its event stream shows it is still alive
-            # (2026-09-18: a churning backend was announced as unresponsive).
+            # Recovery (turn_recovery.run_with_recovery) already retried the
+            # turn inside its window; speak what failed and what to do
+            # instead of leaving the room silent, or say busy when the
+            # backend's event stream shows it is still alive (2026-09-18: a
+            # churning backend was announced as unresponsive).
             if not self._event_ch.closed:
-                if backend_busy:
-                    self._emit_delta(
-                        "The coding agent is deep in a long task right now, so "
-                        "I couldn't get a word in. Give it a moment — I'll "
-                        "catch up as soon as it frees up."
+                if failed is None or (
+                    failed.failure.kind == KIND_BACKEND_SLOW and backend_busy
+                ):
+                    if backend_busy:
+                        self._emit_delta(
+                            "The coding agent is deep in a long task right now, so "
+                            "I couldn't get a word in. Give it a moment — I'll "
+                            "catch up as soon as it frees up."
+                        )
+                    else:
+                        self._emit_delta(
+                            "Sorry, my coding backend isn't responding right now, so I "
+                            "couldn't handle that. Give it a moment and ask me again."
+                        )
+                    return
+                kept = False
+                if failed.failure.retryable and failed.reason != "caller_moved_on":
+                    keep = getattr(voice_client, "keep_request_for_later", None)
+                    if callable(keep):
+                        try:
+                            kept = bool(await keep(prompt))
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:  # noqa: BLE001 - the line just omits it
+                            kept = False
+                self._emit_delta(
+                    failed.failure.spoken_line(
+                        self._voice_router.route_snapshot().active_voice_name
+                        or "the coding agent",
+                        elapsed_seconds=failed.elapsed_seconds,
+                        attempts=failed.attempts,
+                        kept=kept,
                     )
-                else:
-                    self._emit_delta(
-                        "Sorry, my coding backend isn't responding right now, so I "
-                        "couldn't handle that. Give it a moment and ask me again."
-                    )
+                )
                 return
             raise
 
@@ -214,9 +248,15 @@ class CodexLLMStream(llm.LLMStream):
             )
         self._backend_voice_client = voice_client
         self._backend_committed = True
-        result = await voice_client.run_turn(
-            prompt,
-            developer_instructions=load_direct_livekit_developer_instructions(),
+        developer_instructions = load_direct_livekit_developer_instructions()
+        result = await run_with_recovery(
+            lambda attempt: voice_client.run_turn(
+                prompt, developer_instructions=developer_instructions
+            ),
+            should_continue=lambda: not self._event_ch.closed,
+            window_seconds=LIVE_TURN_RECOVERY_WINDOW_SECONDS,
+            backoff_seconds=LIVE_TURN_RECOVERY_BACKOFF_SECONDS,
+            label=self._message_id,
         )
 
         speech_text = result.get("_livekit_speech_text", "")

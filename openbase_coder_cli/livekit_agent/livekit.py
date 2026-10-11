@@ -1656,7 +1656,12 @@ async def livekit_agent(ctx: JobContext):
         # GPT-Live: the hint is commentary for the current character, which
         # keeps the call and its voice; the classic announcer path would swap
         # in an announcement session (and has no voice for "Dispatcher").
-        stall_hint_kwargs = {"speak": _live_stall_hint_speaker(live_bridge)}
+        stall_hint_kwargs = {
+            "speak": _live_stall_hint_speaker(live_bridge),
+            "should_announce": lambda turn: not live_bridge.handled_failed_turn(
+                turn.turn_id
+            ),
+        }
     else:
         stall_hint_kwargs = {
             "prepare_announcement": lambda: (

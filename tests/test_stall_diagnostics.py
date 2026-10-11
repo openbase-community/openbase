@@ -535,3 +535,37 @@ async def test_stall_watch_loop_speaks_each_stalled_turn_once_via_the_given_spea
         await task
     assert len(spoken) == 1
     assert "Desktop" in spoken[0]
+
+
+async def test_stall_watch_loop_lets_the_engine_veto_a_hint_it_already_handled(
+    monkeypatch,
+):
+    """GPT-Live turn recovery retries a turn that failed at init and speaks
+    its own line; the background hint must not add a second story."""
+    import asyncio
+
+    spoken: list[str] = []
+    blocked = sd.BlockedTurn(
+        session_id="s_1",
+        session_name="cooper",
+        agent_name="Cooper",
+        turn_id="t-1",
+        last_error="Control request timeout: initialize",
+    )
+    monkeypatch.setattr(sd, "scan_blocked_turns", lambda since: [blocked])
+    monkeypatch.setattr(sd, "scan_stalled_running_turns", lambda since: [])
+
+    async def speak(text: str) -> bool:
+        spoken.append(text)
+        return True
+
+    task = asyncio.create_task(
+        sd.stall_watch_loop(
+            poll_seconds=0.01, speak=speak, should_announce=lambda turn: False
+        )
+    )
+    await asyncio.sleep(0.08)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert spoken == []
