@@ -316,9 +316,6 @@ class LiveCharacterController:
         if move is None or self.announce_route is None:
             return
         action, announce, agent_label = move
-        gate = self._speech_gate
-        if gate is not None:
-            gate.external_playout_started()
         try:
             await self.announce_route(
                 self.session, action, announce=announce, agent_label=agent_label
@@ -331,9 +328,6 @@ class LiveCharacterController:
                 action,
                 exc_info=True,
             )
-        finally:
-            if gate is not None:
-                gate.external_playout_ended()
 
     async def _run(self):
         try:

@@ -388,16 +388,18 @@ def test_is_echo_compares_words_with_what_the_agent_just_said():
 
 
 async def test_announcer_playout_counts_as_agent_audio_for_barge_in():
-    """VM2 2026-10-11: the route announcer's echo counted as the caller, and
-    the greeting burst right after it opened muted and was discarded."""
+    """VM2 2026-10-11: the route announcer's echo (session.say, outside the
+    bursts) counted as the caller and the greeting after it opened muted."""
     clock = {"now": 10.0}
     gate = LiveSpeechGate(barge_in_min_seconds=0.5, clock=lambda: clock["now"])
-    gate.external_playout_started("Voice route transferred.")
+    gate.agent_said("Voice route transferred.")
+    gate.agent_state_changed("speaking")
     assert gate.agent_audible
     gate.user_state_changed("speaking")  # the announcer's echo
     clock["now"] += 1.0
+    gate.caller_heard(" route transferred")
     assert not gate.speaking
-    gate.external_playout_ended()
+    gate.agent_state_changed("listening")
     gate.user_state_changed("listening")
     gate.authorize()
 

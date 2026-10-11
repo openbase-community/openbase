@@ -1163,6 +1163,18 @@ async def _start_live_voice_session(
     def _check_barge_in():
         bridge.speech_gate.speaking  # noqa: B018 - evaluating revokes
 
+    # The announcer's words are what its echo transcribes to, like the
+    # model's; every session.say on this session goes through here.
+    session_say = getattr(session, "say", None)
+
+    def say_and_note_words(text, *args, **kwargs):
+        if isinstance(text, str):
+            bridge.speech_gate.agent_said(text)
+        return session_say(text, *args, **kwargs)
+
+    if session_say is not None:
+        session.say = say_and_note_words
+
     # Clear queued playout once the caller is really interrupting. The gate
     # may decide inside the audio node it is filtering, so interrupt from the
     # loop rather than from within that generator.
@@ -1205,7 +1217,9 @@ async def _start_live_voice_session(
             speech_gate=bridge.speech_gate,
             timeout=LIVE_VOICE_CHARACTER_START_TIMEOUT_SECONDS,
             start_attempts=LIVE_VOICE_CHARACTER_START_ATTEMPTS,
-            announce_route=getattr(_live_route_announcer(voice_router), "announce", None),
+            announce_route=getattr(
+                _live_route_announcer(voice_router), "announce", None
+            ),
         )
         bridge.characters = characters
         bridge.character_route_changed = characters.route_changed
@@ -1334,6 +1348,10 @@ def _wire_live_voice_call(
     """
 
     def on_agent_state_changed(event) -> None:
+        # Any agent audio, announcer clips included, echoes on a speakerphone.
+        bridge.speech_gate.agent_state_changed(
+            str(getattr(event, "new_state", "") or "")
+        )
         if hasattr(bridge, "characters"):
             bridge.characters.state_changed(event)
             if bridge.characters.announcing:
@@ -1669,7 +1687,9 @@ def _tts_credentials(tts_provider) -> dict:
     )
     return {
         "api_key": openbase_cloud_audio_token or CARTESIA_API_KEY,
-        "api_key_provider": _openbase_cloud_audio_token if openbase_cloud_audio_token else None,
+        "api_key_provider": _openbase_cloud_audio_token
+        if openbase_cloud_audio_token
+        else None,
         "base_url": _openbase_cloud_audio_http_base_url("cartesia")
         if openbase_cloud_audio_token
         else None,
@@ -1679,7 +1699,9 @@ def _tts_credentials(tts_provider) -> dict:
     }
 
 
-def _build_announcer_tts(voice_router, tts_provider, credentials: dict) -> VoiceSelectingTTS:
+def _build_announcer_tts(
+    voice_router, tts_provider, credentials: dict
+) -> VoiceSelectingTTS:
     """The announcer voice both engines speak route moves and notices with."""
     announcer_voice = (
         tts_provider.voice_for_id(CARTESIA_ANNOUNCER_VOICE_ID)
@@ -1703,11 +1725,15 @@ def _live_route_announcer(voice_router) -> "RouteAnnouncer | None":
 
     try:
         tts_provider = get_tts_provider(dispatcher_voice_config().provider)
-        tts = _build_announcer_tts(voice_router, tts_provider, _tts_credentials(tts_provider))
+        tts = _build_announcer_tts(
+            voice_router, tts_provider, _tts_credentials(tts_provider)
+        )
     except Exception:
         # The call goes on without spoken route moves (no TTS provider or
         # credentials configured for this install).
-        logger.warning("dispatch_timing stage=live_route_announcer_unavailable", exc_info=True)
+        logger.warning(
+            "dispatch_timing stage=live_route_announcer_unavailable", exc_info=True
+        )
         return None
     return RouteAnnouncer(tts=tts)
 
