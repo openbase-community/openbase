@@ -23,7 +23,6 @@ from openbase_coder_cli.livekit_agent.turn_detection import (
     decide_user_turn_closure,
     latest_user_turn_signals_from_chat_ctx,
 )
-from openbase_coder_cli.onboarding_reminder import append_onboarding_reminder
 from openbase_coder_cli.voice_tags import wrap_voice_prompt
 
 if TYPE_CHECKING:
@@ -188,9 +187,9 @@ class CodexLLMStream(llm.LLMStream):
             self._emit_delta("Back to dispatch.")
             return
 
+        # No onboarding nudge on a spoken turn: it sends the Dispatcher off to
+        # read a skill while the caller waits (typed turns still carry it).
         prompt = wrap_voice_prompt(prompt)
-        if self._voice_router.is_dispatcher_active:
-            prompt = append_onboarding_reminder(prompt)
         prompt = apply_screen_context(self._voice_router, prompt)
 
         voice_client = self._voice_router.active_client
