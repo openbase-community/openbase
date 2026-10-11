@@ -21,9 +21,10 @@ option today.)
 In addition to the shared [prerequisites](index.md#prerequisites),
 development installs need:
 
+- On macOS, [Homebrew](https://brew.sh), which the `brew install` commands below use
 - Git: `xcode-select --install` on macOS, or your distribution's package on Linux (for example `sudo apt install git`)
 - [`uv`](https://docs.astral.sh/uv/): `curl -LsSf https://astral.sh/uv/install.sh | sh`
-- [`multi`](https://pypi.org/project/multi-workspace/) 3.2.21 or newer, which setup uses to sync the sub-repos: `uv tool install multi-workspace` (or `uv tool upgrade multi-workspace`)
+- [`multi`](https://pypi.org/project/multi-workspace/) 3.2.21 or newer, which setup uses to sync the sub-repos: `uv tool install multi-workspace && uv tool update-shell`, then open a new terminal (or `uv tool upgrade multi-workspace` to update it)
 - Go: `brew install go` on macOS, or the current toolchain from [go.dev/dl](https://go.dev/dl/). Setup builds the Openbase Direct transport from source, so Go is required whichever transport you pick.
 - Node, the LTS version pinned in the workspace's `.nvmrc` (currently Node 24), installed with nvm as described under [Node](#node) below, and pnpm (`curl -fsSL https://get.pnpm.io/install.sh | sh -`) for building the console from source
 
@@ -31,7 +32,7 @@ development installs need:
 
 If `pnpm --version` already works (for example from `npm install -g pnpm` or Corepack), keep that pnpm and skip installing another. A second copy only conflicts: `brew install pnpm` then stops with a link error because `pnpm` already exists in the Homebrew `bin` directory. That error is harmless, since setup uses whichever pnpm is on your `PATH`; to switch to the Homebrew copy instead, run `brew link --overwrite pnpm`.
 
-`uv tool install` puts `multi` in `~/.local/bin`, which is not on the `PATH` of a fresh Mac. If uv warns about that, run `uv tool update-shell` and open a new terminal, or run `export PATH="$HOME/.local/bin:$PATH"` in the current one. Otherwise setup reports `multi` as missing even though it is installed.
+`uv tool update-shell` adds `~/.local/bin`, where uv installs `multi`, to your shell's `PATH`; a fresh Mac does not have it. Without it, setup reports `multi` as missing even though it is installed. In a terminal that is already open, `export PATH="$HOME/.local/bin:$PATH"` does the same for that session.
 
 Contributors who commit to the repos also need [`gitleaks`](https://github.com/gitleaks/gitleaks) (`brew install gitleaks`). Setup does not need it, but the git hooks that `multi sync` installs refuse commits and pushes without it.
 
@@ -117,8 +118,9 @@ app.
 
 ## After Setup
 
-Authenticate with Openbase Cloud (required for iOS app pairing and cloud
-onboarding):
+Interactive setup already signs you in to Openbase Cloud. If you skipped that
+step, or ran setup with flags, sign in now (required for phone app pairing and
+cloud onboarding):
 
 ```bash
 openbase-coder login
