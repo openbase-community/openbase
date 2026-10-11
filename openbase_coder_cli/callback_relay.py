@@ -46,7 +46,8 @@ def _listener_connections(port: int):
                 for c in process.net_connections(kind="tcp")
                 if c.status == psutil.CONN_LISTEN and c.laddr.port == port
             )
-        except (psutil.AccessDenied, psutil.NoSuchProcess):
+        except (psutil.AccessDenied, psutil.NoSuchProcess, RuntimeError):
+            # RuntimeError: macOS fd listing of a process that exits mid-scan.
             continue
     return matches
 
@@ -129,8 +130,16 @@ class ListenerOwner:
 
 
 class CallbackRelay:
-    def __init__(self, owner: ListenerOwner, token: str, ttl: float):
+    def __init__(
+        self,
+        owner: ListenerOwner,
+        token: str,
+        ttl: float,
+        *,
+        bind_host: str = "127.0.0.1",
+    ):
         self.owner, self.token = owner, token
+        self.bind_host = bind_host
         self.deadline = time.monotonic() + ttl
         self.done = asyncio.Event()
         self.active: set[asyncio.Task] = set()
@@ -138,7 +147,9 @@ class CallbackRelay:
         self.server: asyncio.Server | None = None
 
     async def start(self) -> int:
-        self.server = await asyncio.start_server(self.handle, "127.0.0.1", 0, limit=256)
+        self.server = await asyncio.start_server(
+            self.handle, self.bind_host, 0, limit=256
+        )
         return self.server.sockets[0].getsockname()[1]
 
     async def run(self) -> None:
@@ -244,8 +255,21 @@ class CallbackRelay:
             self.connected.discard(task)
 
 
-def start_relay(port: int, token: str, ttl: int = 600, *, expires_at: int) -> int:
-    """Start an isolated child; acknowledge only once its VPN listener is up."""
+def start_relay(
+    port: int,
+    token: str,
+    ttl: int = 600,
+    *,
+    expires_at: int,
+    bind_host: str | None = None,
+) -> int:
+    """Start an isolated child; acknowledge only once its VPN listener is up.
+
+    ``bind_host`` is this host's own VPN address on a host-VPN computer
+    (desktop or VM backend): the relay listens there directly. Without it the
+    relay listens on loopback and the embedded node (cloud workspace)
+    exposes it through an openbase-tunneld forward.
+    """
     owner = ListenerOwner.find(port)
     child = subprocess.Popen(
         [sys.executable, "-m", "openbase_coder_cli.callback_relay"],
@@ -262,6 +286,7 @@ def start_relay(port: int, token: str, ttl: int = 600, *, expires_at: int) -> in
                     "token": token,
                     "ttl": ttl,
                     "expires_at": expires_at,
+                    "bind_host": bind_host,
                 }
             ).encode()
             + b"\n"
@@ -282,15 +307,20 @@ def start_relay(port: int, token: str, ttl: int = 600, *, expires_at: int) -> in
 
 
 async def _main(config: dict) -> None:
+    from openbase_coder_cli.login_callback import is_tailnet_forward_target
     from openbase_coder_cli.services.tunneld import (
         tunneld_add_forward,
         tunneld_remove_forward,
     )
 
+    bind_host = config.get("bind_host")
+    if bind_host is not None and not is_tailnet_forward_target(bind_host):
+        raise ValueError("the relay binds only to this host's VPN address")
     relay = CallbackRelay(
         ListenerOwner(**config["owner"]),
         config["token"],
         min(600, config["ttl"], config["expires_at"] - time.time()),
+        bind_host=bind_host or "127.0.0.1",
     )
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -301,15 +331,16 @@ async def _main(config: dict) -> None:
     relay.token = relay_capability(port, config["expires_at"], config["token"])
     exposed = False
     try:
-        # The authentication handshake itself carries bytes both ways. Only
-        # this relay can decide when the actual callback has completed.
-        await asyncio.to_thread(
-            tunneld_add_forward,
-            port,
-            ttl_seconds=min(600, config["ttl"]),
-            one_shot=False,
-        )
-        exposed = True
+        if bind_host is None:
+            # The authentication handshake itself carries bytes both ways.
+            # Only this relay can decide when the callback has completed.
+            await asyncio.to_thread(
+                tunneld_add_forward,
+                port,
+                ttl_seconds=min(600, config["ttl"]),
+                one_shot=False,
+            )
+            exposed = True
         print(json.dumps({"port": port}), flush=True)
         sys.stdout.close()
         await relay.run()

@@ -36,6 +36,9 @@ def _no_tailnet_and_no_push(monkeypatch):
         raise RuntimeError("push disabled in tests")
 
     monkeypatch.setattr(tailscale_provider, "is_netmesh_tsnet", lambda: False)
+    monkeypatch.setattr(
+        tailscale_provider, "status_json", lambda: {"error": "no VPN in tests"}
+    )
     monkeypatch.setattr(cloud_notifications, "send_notification_push", no_push)
 
 
@@ -67,7 +70,8 @@ def _patch_tunneld(monkeypatch, *, add_error=None, ipv4="100.64.0.12"):
 
     monkeypatch.setattr(tunneld, "tunneld_add_forward", add_forward)
 
-    def relay(port, token, ttl, *, expires_at):
+    def relay(port, token, ttl, *, expires_at, bind_host=None):
+        assert bind_host is None
         add_forward(49152, ttl_seconds=ttl, one_shot=False)
         return 49152
 
@@ -522,3 +526,36 @@ def test_browser_replay_needs_no_django_settings():
         [sys.executable, "-c", code], env=env, capture_output=True, text=True
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_host_vpn_backend_relays_on_its_own_vpn_address(monkeypatch):
+    """Desktop and VM backends (host VPN, no embedded node) forward too."""
+    from openbase_coder_cli import callback_relay
+    from openbase_coder_cli.services import tailscale_provider
+
+    monkeypatch.setattr(
+        tailscale_provider,
+        "status_json",
+        lambda: {
+            "BackendState": "Running",
+            "Self": {
+                "TailscaleIPs": ["192.168.1.5", "100.64.0.33", "fd7a:115c:a1e0::33"]
+            },
+        },
+    )
+    started = []
+
+    def relay(port, token, ttl, *, expires_at, bind_host=None):
+        started.append((port, bind_host))
+        return 49153
+
+    monkeypatch.setattr(callback_relay, "start_relay", relay)
+    forward = browser_cli._try_arrange_forward(1455)
+    assert started == [(1455, "100.64.0.33")]
+    assert forward.target == "100.64.0.33"
+    assert forward.relay_port == 49153
+
+    monkeypatch.setattr(
+        tailscale_provider, "status_json", lambda: {"BackendState": "Stopped"}
+    )
+    assert browser_cli._try_arrange_forward(1455) is None
