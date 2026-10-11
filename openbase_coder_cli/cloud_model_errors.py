@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from openbase_coder_cli.cloud_environment import configured_web_backend_url
+from openbase_coder_cli.plan_copy import subscribe_pro_line
 
 
 def _proxy_denial_payload(text: str | None) -> dict | None:
@@ -36,10 +37,7 @@ def model_plan_denial_message(text: str | None) -> str | None:
     )
     if payload.get("code") != "model_not_available_on_plan" and not legacy_denial:
         return None
-    return (
-        "This model is not available on your plan. Choose Claude Haiku, "
-        f"or upgrade at {configured_web_backend_url()}."
-    )
+    return f"This model is not available on your plan. {subscribe_pro_line(configured_web_backend_url())}"
 
 
 def model_allowance_exhausted_message(text: str | None) -> str | None:
@@ -54,11 +52,7 @@ def model_allowance_exhausted_message(text: str | None) -> str | None:
         )
     ):
         return None
-    return (
-        "Your monthly Openbase model allowance is used up. "
-        f"Subscribe at {configured_web_backend_url()} to keep going, "
-        "or wait until your allowance resets next month."
-    )
+    return f"Your monthly Openbase model allowance is used up. {subscribe_pro_line(configured_web_backend_url())}"
 
 
 def model_request_budget_message(text: str | None) -> str | None:

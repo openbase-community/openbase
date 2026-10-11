@@ -261,6 +261,7 @@ from openbase_coder_cli.livekit_agent.voices import (  # noqa: F401
 from openbase_coder_cli.livekit_agent.worker_watchdog import (
     install_worker_failure_watchdog,
 )
+from openbase_coder_cli.plan_copy import SUBSCRIBE_PRO_LINE
 from openbase_coder_cli.stt_providers import (
     ASSEMBLYAI_STT_PROVIDER_ID,
     DEEPGRAM_STT_PROVIDER_ID,
@@ -553,8 +554,8 @@ def _agent_error_detail(exc: Exception) -> str:
         return (
             "Openbase Cloud refused the audio connection for this call. This "
             "usually means this account's monthly Openbase audio allowance is "
-            "used up; upgrade your plan at app.openbase.cloud or wait for it to "
-            "reset. If credit remains, sign in to Openbase Cloud again on your "
+            f"used up. {SUBSCRIBE_PRO_LINE} "
+            "If credit remains, sign in to Openbase Cloud again on your "
             "computer and restart the Openbase Coder services, or switch voice "
             "settings to direct provider keys or local audio."
         )
@@ -562,8 +563,8 @@ def _agent_error_detail(exc: Exception) -> str:
         return (
             "The call ended because Openbase Cloud audio was interrupted — "
             "usually a brief service update. Please call again in a minute. "
-            "If your audio credits are used up instead, subscribe or upgrade "
-            "at app.openbase.cloud."
+            "If your audio credits are used up instead: "
+            f"{SUBSCRIBE_PRO_LINE}"
         )
     summary = redact_exception_text(exc)
     return (
