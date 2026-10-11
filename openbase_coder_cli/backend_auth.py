@@ -21,7 +21,9 @@ their auth failures are never reported as a CLI sign-in problem here.
 
 from __future__ import annotations
 
+import contextlib
 import functools
+import json
 import socket
 import subprocess
 import sys
@@ -32,6 +34,7 @@ from openbase_coder_cli.backend_config import (
     OPENBASE_CLOUD_BACKEND,
     OPENBASE_CLOUD_CODEX_BACKEND,
 )
+from openbase_coder_cli.paths import OPENBASE_BASE_DIR
 
 CLI_LOGIN_BACKENDS = (CLAUDE_CODE_BACKEND, CODEX_BACKEND)
 CLOUD_BACKENDS = (OPENBASE_CLOUD_BACKEND, OPENBASE_CLOUD_CODEX_BACKEND)
@@ -144,11 +147,36 @@ def _where(name: str | None) -> str:
     return f"on your computer ({name})" if name else "on your computer"
 
 
-def backend_login_message(backend: str, *, name: str | None = None) -> str:
+@functools.lru_cache(maxsize=1)
+def on_cloud_workspace() -> bool:
+    """Whether this backend is an Openbase Cloud workspace (Maritime).
+
+    There the user has no terminal: a linked Codex or Claude Code account is
+    relinked from the phone (Settings → AI Account), not with a CLI command.
+    """
+    from openbase_coder_cli.sync_pairing import is_cloud_workspace
+
+    return is_cloud_workspace()
+
+
+def _uses_cloud_wording(cloud: bool | None) -> bool:
+    return on_cloud_workspace() if cloud is None else cloud
+
+
+def backend_login_message(
+    backend: str, *, name: str | None = None, cloud: bool | None = None
+) -> str:
     """The one written message for a CLI backend that is not signed in.
 
     ``name`` defaults to this computer's name; pass ``""`` to omit it.
+    ``cloud`` defaults to whether this is a cloud workspace.
     """
+    if _uses_cloud_wording(cloud):
+        label = BACKEND_LABELS.get(backend, "Your AI account")
+        return (
+            f"{label} isn't signed in on your cloud workspace. Relink it in "
+            "Settings → AI Account, or switch back to Openbase Cloud."
+        )
     where = _where(computer_name() if name is None else name)
     if backend == CODEX_BACKEND:
         return (
@@ -162,9 +190,18 @@ def backend_login_message(backend: str, *, name: str | None = None) -> str:
     )
 
 
-def backend_login_spoken_message(backend: str, *, name: str | None = None) -> str:
+def backend_login_spoken_message(
+    backend: str, *, name: str | None = None, cloud: bool | None = None
+) -> str:
     """The same message as a voice call says it: no markdown or punctuation
     that reads badly aloud."""
+    if _uses_cloud_wording(cloud):
+        label = BACKEND_LABELS.get(backend, "Your AI account")
+        return (
+            f"{label} isn't signed in on your cloud workspace. Relink it in "
+            "the app's Settings, under AI Account, or switch back to "
+            "Openbase Cloud."
+        )
     resolved = computer_name() if name is None else name
     where = f"on your computer, {resolved}" if resolved else "on your computer"
     if backend == CODEX_BACKEND:
@@ -189,6 +226,51 @@ def normalize_backend_error_text(text: str, backend: str | None = None) -> str:
     if failed_backend := backend_auth_failure(text, backend):
         return backend_login_message(failed_backend)
     return normalize_model_proxy_error(text)
+
+
+RELINK_STATE_PATH = OPENBASE_BASE_DIR / "ai-account-relink.json"
+
+
+def relink_needed_backends() -> set[str]:
+    """CLI backends whose login failed during a live turn since they were
+    last linked (the AI account card shows them as needing a relink)."""
+    try:
+        data = json.loads(RELINK_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    if not isinstance(data, list):
+        return set()
+    return {b for b in data if b in CLI_LOGIN_BACKENDS}
+
+
+def _write_relink_needed(backends: set[str]) -> None:
+    with contextlib.suppress(OSError):
+        RELINK_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = RELINK_STATE_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(sorted(backends)), encoding="utf-8")
+        tmp.replace(RELINK_STATE_PATH)
+
+
+def mark_relink_needed(backend: str) -> None:
+    current = relink_needed_backends()
+    if backend in CLI_LOGIN_BACKENDS and backend not in current:
+        _write_relink_needed(current | {backend})
+
+
+def clear_relink_needed(backend: str) -> None:
+    current = relink_needed_backends()
+    if backend in current:
+        _write_relink_needed(current - {backend})
+
+
+def normalize_live_backend_error_text(text: str, backend: str | None = None) -> str:
+    """Like :func:`normalize_backend_error_text`, for an error a turn just
+    hit (not one re-rendered from history): a CLI login failure is also
+    remembered, so the AI account card asks for a relink."""
+    if failed_backend := backend_auth_failure(text, backend):
+        mark_relink_needed(failed_backend)
+        return backend_login_message(failed_backend)
+    return normalize_backend_error_text(text, backend)
 
 
 def backend_login_missing(backend: str | None) -> bool:

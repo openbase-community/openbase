@@ -234,6 +234,21 @@ def test_status_reports_whether_the_cli_is_available(monkeypatch):
     assert options["claude_code"]["available"] is True
 
 
+def test_status_reports_accounts_that_need_a_relink(monkeypatch):
+    from openbase_coder_cli import backend_auth
+
+    monkeypatch.setattr(ai_account, "is_linked", lambda p: p != "claude_code")
+    monkeypatch.setattr(ai_account, "linked_account", lambda p: None)
+    monkeypatch.setattr(ai_account, "selected_choice", lambda: "claude_code")
+    backend_auth.mark_relink_needed("codex")
+    options = {o["id"]: o for o in ai_account.status()["options"]}
+    assert options["openbase_cloud"]["needs_relink"] is False
+    # Its login failed during a turn.
+    assert options["codex"]["needs_relink"] is True
+    # In use without a login.
+    assert options["claude_code"]["needs_relink"] is True
+
+
 def test_macos_login_url_is_sent_to_the_phone(manager, monkeypatch, tmp_path):
     cli = _fake_cli(
         tmp_path,

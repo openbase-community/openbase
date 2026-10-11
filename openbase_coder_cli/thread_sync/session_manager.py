@@ -188,7 +188,9 @@ async def _notify_manual_thread_finished(
 
 
 def _turn_failure_message(params: dict[str, Any]) -> str:
-    from openbase_coder_cli.backend_auth import normalize_backend_error_text
+    from openbase_coder_cli.backend_auth import (
+        normalize_live_backend_error_text as normalize_backend_error_text,
+    )
 
     error = params.get("error")
     if isinstance(error, dict):
@@ -420,7 +422,7 @@ class CodexAppServerSessionManager(
             item = params.get("item", {})
             if isinstance(item, dict) and item.get("type") == "agentMessage":
                 from openbase_coder_cli.backend_auth import (
-                    normalize_backend_error_text,
+                    normalize_live_backend_error_text as normalize_backend_error_text,
                 )
 
                 text = item.get("text", "")

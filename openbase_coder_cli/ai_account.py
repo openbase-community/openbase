@@ -339,6 +339,9 @@ class LoginManager:
         linked = is_linked(job.provider)
         with job.lock:
             if returncode == 0 and linked:
+                from openbase_coder_cli.backend_auth import clear_relink_needed
+
+                clear_relink_needed(job.provider)
                 job.state = "succeeded"
                 job.message = f"{LABELS[job.provider]} account linked."
             else:
@@ -464,6 +467,9 @@ def unlink(provider: str) -> None:
         raise ValueError(f"Unknown AI account: {provider}")
     if selected_choice() == provider:
         select(OPENBASE_CLOUD)
+    from openbase_coder_cli.backend_auth import clear_relink_needed
+
+    clear_relink_needed(provider)
     _forget_claude_status()
     with contextlib.suppress(OSError, subprocess.TimeoutExpired):
         subprocess.run(
@@ -477,22 +483,32 @@ def unlink(provider: str) -> None:
 
 
 def status() -> dict:
+    from openbase_coder_cli.backend_auth import relink_needed_backends
+
     selected = selected_choice()
-    return {
-        "selected": selected,
-        "default": OPENBASE_CLOUD,
-        "options": [
+    failed_logins = relink_needed_backends()
+    options = []
+    for choice in CHOICES:
+        linked = True if choice == OPENBASE_CLOUD else is_linked(choice)
+        options.append(
             {
                 "id": choice,
                 "label": LABELS[choice],
                 "available": is_available(choice),
-                "linked": True if choice == OPENBASE_CLOUD else is_linked(choice),
+                "linked": linked,
                 "account": None
-                if choice == OPENBASE_CLOUD
-                else (linked_account(choice) if is_linked(choice) else None),
+                if choice == OPENBASE_CLOUD or not linked
+                else linked_account(choice),
                 "selected": choice == selected,
+                # Its login failed during a turn, or it is in use without a
+                # login: agents cannot run on it until it is relinked.
+                "needs_relink": choice != OPENBASE_CLOUD
+                and (choice in failed_logins or (choice == selected and not linked)),
             }
-            for choice in CHOICES
-        ],
+        )
+    return {
+        "selected": selected,
+        "default": OPENBASE_CLOUD,
+        "options": options,
         "login": LOGINS.current(),
     }

@@ -223,3 +223,38 @@ def test_live_commentary_suppresses_raw_login_errors() -> None:
     assert not _looks_like_raw_backend_error(
         backend_login_spoken_message(CLAUDE_CODE_BACKEND)
     )
+
+
+def test_cloud_workspace_message_points_at_the_ai_account_setting() -> None:
+    assert backend_login_message(CODEX_BACKEND, cloud=True) == (
+        "Codex isn't signed in on your cloud workspace. Relink it in "
+        "Settings → AI Account, or switch back to Openbase Cloud."
+    )
+    spoken = backend_login_spoken_message(CLAUDE_CODE_BACKEND, cloud=True)
+    assert spoken.startswith("Claude Code isn't signed in on your cloud workspace.")
+    assert "→" not in spoken
+
+
+def test_cloud_wording_follows_the_workspace(monkeypatch) -> None:
+    from openbase_coder_cli import backend_auth
+
+    monkeypatch.setattr(backend_auth, "on_cloud_workspace", lambda: True)
+    assert "cloud workspace" in backend_login_message(CLAUDE_CODE_BACKEND)
+
+
+def test_live_login_failure_marks_relink_until_cleared() -> None:
+    from openbase_coder_cli import backend_auth
+    from openbase_coder_cli.thread_sync.session_manager import _turn_failure_message
+
+    assert backend_auth.relink_needed_backends() == set()
+    _turn_failure_message({"error": {"message": CODEX_NOT_LOGGED_IN}})
+    assert backend_auth.relink_needed_backends() == {CODEX_BACKEND}
+    backend_auth.clear_relink_needed(CODEX_BACKEND)
+    assert backend_auth.relink_needed_backends() == set()
+
+
+def test_rendering_history_does_not_mark_relink() -> None:
+    from openbase_coder_cli import backend_auth
+
+    backend_auth.normalize_backend_error_text(CODEX_NOT_LOGGED_IN)
+    assert backend_auth.relink_needed_backends() == set()
