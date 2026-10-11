@@ -322,8 +322,11 @@ def _safe_spoken_answer(
     from openbase_coder_cli.cloud_model_errors import (
         model_allowance_exhausted_spoken_message,
         model_plan_denial_message,
+        model_request_budget_message,
     )
 
+    if request_denial := model_request_budget_message(speech_text):
+        return request_denial
     if plan_denial := model_plan_denial_message(speech_text):
         return plan_denial
     if allowance_denial := model_allowance_exhausted_spoken_message(speech_text):

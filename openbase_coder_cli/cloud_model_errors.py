@@ -61,6 +61,16 @@ def model_allowance_exhausted_message(text: str | None) -> str | None:
     )
 
 
+def model_request_budget_message(text: str | None) -> str | None:
+    payload = _proxy_denial_payload(text)
+    if payload is None or payload.get("code") != "model_request_exceeds_allowance":
+        return None
+    return (
+        "This request may cost more than your remaining model credit. "
+        "Start a shorter conversation or ask for a shorter reply."
+    )
+
+
 # One short, complete sentence for voice: a live call's speech gate cuts the
 # rest of a reply as soon as the caller is heard, so the spoken form must not
 # depend on a second clause to make sense. The thread keeps the full text.
@@ -97,7 +107,8 @@ def provider_credit_exhausted_message(text: str | None) -> str | None:
 
 def model_proxy_denial_message(text: str | None) -> str | None:
     return (
-        model_allowance_exhausted_message(text)
+        model_request_budget_message(text)
+        or model_allowance_exhausted_message(text)
         or model_plan_denial_message(text)
         or provider_credit_exhausted_message(text)
     )
@@ -106,7 +117,8 @@ def model_proxy_denial_message(text: str | None) -> str | None:
 def model_proxy_denial_spoken_message(text: str | None) -> str | None:
     """The denial as the voice agent should say it."""
     return (
-        model_allowance_exhausted_spoken_message(text)
+        model_request_budget_message(text)
+        or model_allowance_exhausted_spoken_message(text)
         or model_plan_denial_message(text)
         or provider_credit_exhausted_message(text)
     )
