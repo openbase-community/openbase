@@ -482,24 +482,10 @@ def load_service_env(config: InstallationConfig) -> dict[str, str]:
     from openbase_coder_cli.codex_control_plane import (
         apply_managed_codex_app_server_endpoint,
     )
-    from openbase_coder_cli.paths import (
-        CODEX_HOME_DIR,
-        CODEX_SUPER_AGENT_INSTRUCTIONS_PATH,
-        OPENBASE_AGENTS_MD_PATH,
-    )
+    from openbase_coder_cli.paths import CODEX_HOME_DIR
 
     env, _endpoint = apply_managed_codex_app_server_endpoint(env)
     env["CODEX_HOME"] = str(CODEX_HOME_DIR)
-    # The Dispatcher's super_agents_start runs in-process in these services,
-    # and super-agents prepends the Super Agent policy to a new worker's
-    # instructions only from this path (else ~/.openbase/instructions, which
-    # is not the data dir on a Cloud workspace). Without it a Dispatcher-
-    # started worker has no policy, is never a managed worker, and never
-    # announces its completion (376, 2026-10-11 05:23Z: three silent agents).
-    env["CODEX_SUPER_AGENT_INSTRUCTIONS_PATH"] = str(
-        CODEX_SUPER_AGENT_INSTRUCTIONS_PATH
-    )
-    env["SUPER_AGENTS_BASE_INSTRUCTIONS_PATH"] = str(OPENBASE_AGENTS_MD_PATH)
     return env
 
 
