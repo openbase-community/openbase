@@ -2570,3 +2570,23 @@ def test_spoken_dispatcher_effort_is_chosen_by_model():
     assert spoken_dispatcher_effort("opus") == "medium"
     assert spoken_dispatcher_effort("gpt-5.5") == "medium"
     assert spoken_dispatcher_effort(None) == "medium"
+
+
+def test_spoken_answer_drops_an_echoed_voice_tag() -> None:
+    """Android 2026-10-11: a Dispatcher reply was captioned as "<voice>I don't
+    see an Apricot agent…" because the model echoed its prompt envelope."""
+    from openbase_coder_cli.livekit_agent.super_agents_speech import (
+        _speech_text_from_progress,
+    )
+
+    progress = {
+        "status": "completed",
+        "turnId": "t1",
+        "turn": {
+            "turnId": "t1",
+            "lastUsefulMessage": "<voice>I don't see an Apricot agent.</voice>",
+        },
+    }
+    assert _speech_text_from_progress(progress, turn_id="t1") == (
+        "I don't see an Apricot agent."
+    )

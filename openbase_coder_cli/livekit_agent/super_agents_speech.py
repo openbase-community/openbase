@@ -244,6 +244,12 @@ def _select_speech_candidate(
             len(text),
             text_hash,
         )
+        # After the ignore check (it recognizes the caller's own tagged
+        # prompt): a <voice> tag the model echoed into its answer would be
+        # spoken and captioned raw, or read as markup (Android, 2026-10-11).
+        from openbase_coder_cli.voice_tags import strip_voice_tags
+
+        text = strip_voice_tags(text)
         return model_proxy_denial_spoken_message(text) or _speech_excerpt(text)
     return ""
 
