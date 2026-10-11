@@ -21,15 +21,13 @@ CODING_BACKEND_ENV_KEY = "OPENBASE_CODING_BACKEND"
 # Unset = the single OPENBASE_CODING_BACKEND rules everything, as before.
 CODING_BACKENDS_ENV_KEY = "OPENBASE_CODING_BACKENDS"
 SUPER_AGENTS_DEFAULT_BACKEND_ENV_KEY = "SUPER_AGENTS_DEFAULT_BACKEND"
+# Canonical names only, accepted with ``_``, ``-`` or space separators. No
+# speech-recognition spellings: models choose from schema enums instead.
 BACKEND_ALIASES = {
     "codex": CODEX_BACKEND,
-    "codecs": CODEX_BACKEND,
     "openbase cloud": OPENBASE_CLOUD_BACKEND,
     "claude code": CLAUDE_CODE_BACKEND,
-    "cloud code": CLAUDE_CODE_BACKEND,
     "openbase cloud codex": OPENBASE_CLOUD_CODEX_BACKEND,
-    "openbase cloud codecs": OPENBASE_CLOUD_CODEX_BACKEND,
-    "codex via openbase cloud": OPENBASE_CLOUD_CODEX_BACKEND,
 }
 
 
