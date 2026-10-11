@@ -736,3 +736,34 @@ async def test_real_announcement_stream_keeps_input_and_restores_after_pcm(
             await controller.close()
             for value in models:
                 await value.aclose()
+
+
+async def test_a_return_after_a_route_change_does_not_greet_again(monkeypatch):
+    """The route announcer says "Back to dispatch." in the Dispatcher's voice
+    (Classic wording Gabe asked for); the character itself stays quiet."""
+    import openbase_coder_cli.livekit_agent.live_characters as module
+
+    current = {"id": "dispatcher"}
+    labels = {"dispatcher": None, "blake": "Blake"}
+    router = Mock()
+    router.route_snapshot.side_effect = lambda: SimpleNamespace(
+        active_thread_id=current["id"]
+    )
+    router.can_deliver_for_snapshot.return_value = True
+    bridge = Mock()
+    bridge.starting_agent_label.side_effect = lambda: labels[current["id"]]
+    monkeypatch.setattr(module, "route_voice_identity", lambda _: Mock())
+    controller = LiveCharacterController(
+        session=Mock(),
+        bridge=bridge,
+        router=router,
+        model_factory=Mock(),
+        instructions=Mock(),
+        on_error=AsyncMock(),
+    )
+    controller._replace = AsyncMock(return_value=SimpleNamespace(duplex_session=Mock()))
+    history = llm.ChatContext()
+    for route, changed in [("blake", True), ("dispatcher", True), ("blake", True)]:
+        current["id"] = route
+        await controller._conversation(history, route_changed=changed)
+    assert [call.args[0] for call in bridge.greet.call_args_list] == ["Hi, I'm Blake."]

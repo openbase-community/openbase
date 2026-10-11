@@ -122,3 +122,24 @@ def test_allowance_detection_does_not_reclassify_other_errors_or_prose(raw):
 
     assert not is_spend_limit_text(raw)
     assert normalize_model_proxy_error(raw) == raw
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "Credit balance is too low",
+        'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."}}',
+    ],
+)
+def test_provider_credit_exhaustion_reads_as_a_temporary_outage(raw):
+    # The platform's provider account, not the user's allowance: the user
+    # cannot act on it, so neither the raw text nor an upgrade prompt fits.
+    from openbase_coder_cli.cloud_model_errors import (
+        PROVIDER_UNAVAILABLE_MESSAGE,
+        model_proxy_denial_spoken_message,
+        normalize_model_proxy_error,
+    )
+
+    assert normalize_model_proxy_error(raw) == PROVIDER_UNAVAILABLE_MESSAGE
+    assert model_proxy_denial_spoken_message(raw) == PROVIDER_UNAVAILABLE_MESSAGE
+    assert "credit" not in PROVIDER_UNAVAILABLE_MESSAGE.lower()

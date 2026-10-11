@@ -24,6 +24,8 @@ from openbase_coder_cli.openbase_coder_cli_app import (  # noqa: E402
     thread_origins,
 )
 
+_REAL_PUSH_IN_BACKGROUND = notification_producers._push_in_background
+
 
 @pytest.fixture(autouse=True)
 def _isolated_data_dir(tmp_path, monkeypatch):
@@ -71,6 +73,96 @@ def _empty_producer_sources(monkeypatch):
         lambda: {"conflicts": []},
     )
     yield
+
+
+# --- web redirect hold ---
+
+
+def test_thread_finish_is_held_after_a_web_redirect(_no_cloud_push):
+    from openbase_coder_cli import web_redirect_hold
+
+    notification_producers.notify_thread_turn_finished("t-1", title="T", body="")
+    assert "alert_after" not in _no_cloud_push[-1]
+
+    web_redirect_hold.record_web_redirect()
+    notification_producers.notify_thread_turn_finished("t-2", title="T", body="")
+    held = _no_cloud_push[-1]
+    hold_until = web_redirect_hold.alert_hold_until()
+    assert held["alert_after"] == web_redirect_hold.iso_utc(hold_until)
+    listed = notification_store.list_notifications()["notifications"]
+    assert {entry["id"]: entry.get("alert_after") for entry in listed} == {
+        "thread:t-1": None,
+        "thread:t-2": held["alert_after"],
+    }
+
+
+def test_redirect_hold_expires_and_ignores_future_or_corrupt_records(tmp_path):
+    from openbase_coder_cli import web_redirect_hold
+
+    now = 1_000_000.0
+    assert web_redirect_hold.alert_hold_until(now) is None
+    web_redirect_hold.record_web_redirect(now)
+    assert (
+        web_redirect_hold.alert_hold_until(now + 1)
+        == now + web_redirect_hold.HOLD_SECONDS
+    )
+    assert (
+        web_redirect_hold.alert_hold_until(now + web_redirect_hold.HOLD_SECONDS) is None
+    )
+    web_redirect_hold.record_web_redirect(now + 3600)
+    assert web_redirect_hold.alert_hold_until(now) is None
+    (tmp_path / web_redirect_hold.REDIRECT_FILE).write_text("not json")
+    assert web_redirect_hold.alert_hold_until(now) is None
+
+
+def test_approvals_are_not_held(monkeypatch, _no_cloud_push):
+    from openbase_coder_cli import web_redirect_hold
+
+    async def pending():
+        return [{"id": "a-1", "params": {"command": "rm -rf build"}}]
+
+    monkeypatch.setattr(
+        "openbase_coder_cli.openbase_coder_cli_app.approvals.pending_approval_requests",
+        pending,
+    )
+    web_redirect_hold.record_web_redirect()
+    notification_producers.sync_notification_producers(force=True)
+    assert "alert_after" not in _no_cloud_push[-1]
+
+
+def test_held_push_waits_and_skips_items_read_meanwhile(monkeypatch):
+    sent: list[dict] = []
+    timers: list[tuple[float, object, tuple]] = []
+
+    class FakeTimer:
+        def __init__(self, delay, function, args=()):
+            timers.append((delay, function, args))
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(notification_producers.threading, "Timer", FakeTimer)
+    monkeypatch.setattr(notification_producers, "_send_push", sent.append)
+    monkeypatch.setattr(
+        notification_producers, "_push_in_background", _REAL_PUSH_IN_BACKGROUND
+    )
+
+    from openbase_coder_cli import web_redirect_hold
+
+    web_redirect_hold.record_web_redirect()
+    for thread_id in ("t-read", "t-unread"):
+        notification_producers.notify_thread_turn_finished(
+            thread_id, title="T", body=""
+        )
+    assert sent == []
+    assert [round(delay) for delay, _, _ in timers] == [
+        web_redirect_hold.HOLD_SECONDS
+    ] * 2
+
+    notification_store.mark_read(kind="thread", entity_id="t-read")
+    for _, function, args in timers:
+        function(*args)
+    assert [entry["id"] for entry in sent] == ["thread:t-unread"]
 
 
 # --- store ---

@@ -68,6 +68,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from openbase_coder_cli.livekit_agent.config import (
+    LIVE_VOICE_ACK_LIMIT_MS,
+    LIVE_VOICE_ACK_TEXT,
     load_direct_livekit_developer_instructions,
 )
 from openbase_coder_cli.livekit_agent.live_call_context import LiveCallContext
@@ -76,7 +78,11 @@ from openbase_coder_cli.livekit_agent.live_gateway_events import (
     log_gateway_event,
 )
 from openbase_coder_cli.livekit_agent.live_speech_gate import LiveSpeechGate
-from openbase_coder_cli.livekit_agent.live_spoken_output import answer_commands
+from openbase_coder_cli.livekit_agent.live_spoken_output import (
+    SPEAK_NOW_ASK,
+    answer_commands,
+    speak_now,
+)
 from openbase_coder_cli.livekit_agent.live_thread_brief import (
     ThreadExchangeFetcher,
     fetch_thread_exchanges,
@@ -97,7 +103,6 @@ from openbase_coder_cli.livekit_agent.super_agents_client import (
 from openbase_coder_cli.livekit_agent.super_agents_speech import (
     _progress_has_pending_requests,
 )
-from openbase_coder_cli.onboarding_reminder import append_onboarding_reminder
 from openbase_coder_cli.voice_tags import wrap_voice_prompt
 
 logger = logging.getLogger(__name__)
@@ -810,18 +815,49 @@ class LiveDelegationBridge:
         self._append("append_commentary", text, delegation_id)
 
     def _append_answer(self, text: str, delegation_id: str | None) -> None:
-        # Commentary is paraphrasable. Backend answers require every part to
-        # survive, including multiple questions answered in the same turn.
-        for command in answer_commands(
-            text, max_chars=int(COMMENTARY_MAX_TOKENS * CHARS_PER_TOKEN_ESTIMATE)
-        ):
+        # Backend answers require every part to survive, including multiple
+        # questions answered in the same turn, so the exact-reading command
+        # stays; it rides in commentary with the plugin's speak-now ask so the
+        # model reads it at once instead of at its next turn boundary.
+        budget = (
+            int(COMMENTARY_MAX_TOKENS * CHARS_PER_TOKEN_ESTIMATE)
+            - len(SPEAK_NOW_ASK)
+            - 2
+        )
+        for command in answer_commands(text, max_chars=budget):
             self._append(
-                "append_instructions",
-                command,
+                "append_commentary",
+                speak_now(command),
                 delegation_id,
                 spoken=True,
                 atomic=True,
             )
+
+    def _acknowledge_request(self, entry: LiveDelegationEntry) -> None:
+        """One short authorised line while the thread works; capped playback."""
+        if not LIVE_VOICE_ACK_TEXT or self._live_session is None:
+            return
+        command = (
+            "Say exactly the following, once, and nothing else; then wait "
+            "silently for the answer. Text to say: " + json.dumps(LIVE_VOICE_ACK_TEXT)
+        )
+        try:
+            self._live_session.append_commentary(
+                speak_now(command), delegation_id=entry.delegation_id
+            )
+        except Exception:
+            self._log.warning(
+                "%s stage=live_ack_failed", DISPATCH_TIMING_LOG, exc_info=True
+            )
+            return
+        self.speech_gate.authorize(limit_ms=LIVE_VOICE_ACK_LIMIT_MS)
+        self._stats["acknowledgments"] += 1
+        self._log.info(
+            "%s stage=live_ack_requested key=%s limit_ms=%d",
+            DISPATCH_TIMING_LOG,
+            entry.key,
+            LIVE_VOICE_ACK_LIMIT_MS,
+        )
 
     def _append_instructions(self, text: str, delegation_id: str | None) -> None:
         self._append("append_instructions", text, delegation_id)
@@ -1657,6 +1693,8 @@ class LiveDelegationBridge:
         )
         self._entries[key] = entry
         self._prune_entries()
+        if source == "transcript" and not replaces_turn:
+            self._acknowledge_request(entry)
         self._log_forced(
             text,
             decision="started",
@@ -1755,15 +1793,24 @@ class LiveDelegationBridge:
                 self._ledger.mark_live_audio_finished(record)
 
     def greet(self, text: str) -> None:
-        """Request one exact greeting, rather than paraphrasable commentary."""
+        """Request one exact greeting, spoken once.
+
+        Sent as speak-now commentary, a one-shot ask. As an instructions
+        append it was a standing rule the model could act on again when the
+        thread brief and resume notes arrived right after it: "Hi, I'm
+        Cooper." twice in a row after a transfer (VM2, 2026-10-11 01:06Z).
+        """
         self._append(
-            "append_instructions",
-            "Immediately say the following greeting exactly once, in full. "
-            "Do not add words or repeat it. Any transfer request in history "
-            "is already handled; do not answer it separately. "
-            "Then pause and listen. Text to read: " + json.dumps(text),
+            "append_commentary",
+            speak_now(
+                "Say the following greeting exactly once, in full. "
+                "Do not add words or repeat it. Any transfer request in history "
+                "is already handled; do not answer it separately. "
+                "Then pause and listen. Text to read: " + json.dumps(text)
+            ),
             None,
             spoken=True,
+            atomic=True,
         )
 
     def announce(self, text: str, *, agent_name: str | None = None) -> None:
@@ -1775,8 +1822,14 @@ class LiveDelegationBridge:
             message = f"{agent_name}: {message}"
         self._append_commentary(message, None)
 
-    def notify_route_changed(self, *, action: str, agent_label: str | None) -> None:
-        """Invalidate old speech and hand the new route to the character owner."""
+    def notify_route_changed(
+        self, *, action: str, agent_label: str | None, announce: bool = True
+    ) -> None:
+        """Invalidate old speech and hand the new route to the character owner.
+
+        ``announce`` follows the route command: False when the agent that
+        asked for the transfer confirms it in its own words.
+        """
         label = (agent_label or "").strip() or DISPATCHER_AGENT_LABEL
         if action == "exit_to_dispatch":
             label = DISPATCHER_AGENT_LABEL
@@ -1787,7 +1840,7 @@ class LiveDelegationBridge:
             for entry in self._entries.values():
                 if not self._voice_router.can_deliver_for_snapshot(entry.route):
                     entry.superseded = True
-            self.character_route_changed()
+            self.character_route_changed(action, announce=announce, agent_label=label)
             return
         instructions = ""
         try:
@@ -1850,9 +1903,9 @@ class LiveDelegationBridge:
     # delegation execution
 
     async def _run_delegation(self, entry: LiveDelegationEntry) -> None:
+        # No onboarding nudge on a spoken turn: it sends the Dispatcher off to
+        # read a skill while the caller waits (typed turns still carry it).
         prompt = wrap_voice_prompt(entry.prompt)
-        if self._voice_router.is_dispatcher_active:
-            prompt = append_onboarding_reminder(prompt)
         prompt = f"{LIVE_TURN_SCOPE_NOTE}\n\n{prompt}"
         prompt = apply_screen_context(self._voice_router, prompt)
         prompt = self._call_context.apply(prompt)
@@ -2079,7 +2132,7 @@ class LiveDelegationBridge:
         )
         self._reset_utterance_state()
         if changed and self.character_route_changed is not None:
-            self.character_route_changed()
+            self.character_route_changed("exit_to_dispatch")
         elif changed or delegation_id is not None:
             self._append_commentary(BACK_TO_DISPATCH_COMMENTARY, delegation_id)
 

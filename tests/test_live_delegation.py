@@ -118,11 +118,20 @@ class FakeGPTLiveSession:
         for method, text, d_id in self.appends:
             if delegation_id is not ... and d_id != delegation_id:
                 continue
-            if method == "commentary":
-                result.append(text)
-            elif method == "instructions" and text.startswith(prefix):
+            if "Text to say: " in text or "greeting exactly once" in text:
+                continue  # acknowledgment and greeting lines are not answer speech
+            if prefix in text:
                 result.append(json.loads(text.split("Text to read: ", 1)[1]))
+            elif method == "commentary":
+                result.append(text)
         return result
+
+    def acks(self) -> list[str]:
+        return [
+            json.loads(text.split("Text to say: ", 1)[1])
+            for _method, text, _d in self.appends
+            if "Text to say: " in text
+        ]
 
     def of(self, kind: str, delegation_id=...) -> list[str]:
         return [
@@ -921,7 +930,7 @@ async def test_a_held_utterance_and_a_redelivered_final_do_not_interleave():
     answer_at = next(
         i
         for i, (kind, text, _) in enumerate(live.appends)
-        if kind == "instructions" and "All tests pass. The build is green." in text
+        if "Text to read: " in text and "All tests pass. The build is green." in text
     )
     taken_at = next(
         i
@@ -1109,7 +1118,7 @@ async def test_pending_approval_is_spoken_once_and_retained_as_instructions():
     dispatcher.progress("turn-1", snapshot)
     dispatcher.progress("turn-1", snapshot)
     assert live.speech("d1") == [LIVE_APPROVAL_PENDING_COMMENTARY]
-    assert len(live.of("instructions", "d1")) == 2
+    assert len(live.of("instructions", "d1")) == 1
     assert "Approvals" in live.of("instructions", "d1")[-1]
     dispatcher.result_gate.set()
     await _settle()
@@ -1610,8 +1619,11 @@ async def test_greeting_is_one_spoken_instruction_not_another_commentary_answer(
     bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
     try:
         bridge.greet("Hi, I'm Jacqueline.")
-        assert len(live.of("instructions", None)) == 1
-        assert live.of("instructions", None)[0].endswith('"Hi, I\'m Jacqueline."')
+        assert live.of("instructions", None) == []
+        greetings = live.of("commentary", None)
+        assert len(greetings) == 1
+        assert greetings[0].startswith("Immediately follow the instruction below.")
+        assert greetings[0].endswith('"Hi, I\'m Jacqueline."')
         assert live.speech() == []
         assert bridge.speech_gate.authorized
         bridge.on_user_state_changed("listening", "speaking")
@@ -2288,7 +2300,7 @@ async def test_every_bridge_line_names_the_call(caplog):
     assert messages, "no bridge log lines"
     assert all(m.endswith(" call=room-abc%1") for m in messages), messages
     assert _lines(caplog, "live_forced_delegation")
-    assert _lines(caplog, "live_append_instructions")
+    assert _lines(caplog, "live_append_commentary")
     for stage in (
         "live_session_dropped",
         "live_commentary_held",
@@ -2375,7 +2387,7 @@ async def test_closing_the_bridge_logs_one_call_summary(caplog):
     assert "decision_started=1" in line
     assert "delegations_created=1" in line
     assert "turns_bound=1" in line
-    assert "append_instructions=1" in line
+    assert "append_commentary=1" in line
     assert "append_thinking=" in line
     assert "superseded=0" in line
     assert line.endswith(" call=room-1")
@@ -2420,12 +2432,13 @@ async def test_complete_backend_answer_uses_one_explicit_speech_command():
     dispatcher.result_gate.set()
     await _settle()
     commands = [
-        text for text in live.of("instructions", "d1") if "Text to read: " in text
+        text for text in live.of("commentary", "d1") if "Text to read: " in text
     ]
     assert len(commands) == 1
     assert "in full" in commands[0]
+    assert commands[0].startswith("Immediately follow the instruction below.")
     assert json.loads(commands[0].split("Text to read: ", 1)[1]) == answer
-    assert live.of("commentary", "d1") == []
+    assert live.of("instructions", "d1") == []
     assert ledger.record_for_turn("turn-1").status == "text_generated"
     await bridge.aclose()
 
@@ -2611,6 +2624,57 @@ async def test_output_transcript_deltas_are_logged_per_burst(caplog):
         ]
         assert len(lines) == 1
         assert "chars=32" in lines[0] and "I'm not in a dispatcher session." in lines[0]
+        assert "audio_ms=0" in lines[0]
+        import base64
+        from array import array
+
+        loud = array("h", [12000, -12000] * 240).tobytes()  # 20 ms at 24 kHz
+        with caplog.at_level(
+            logging.INFO, logger="openbase_coder_cli.livekit_agent.live_delegation"
+        ):
+            for _ in range(10):
+                live.emit(
+                    "openai_server_event_received",
+                    {
+                        "type": "session.output_audio.delta",
+                        "delta": base64.b64encode(loud).decode(),
+                    },
+                )
+            live.emit(
+                "openai_server_event_received",
+                {
+                    "type": "session.output_transcript.delta",
+                    "delta": "Nine plus five is fourteen.",
+                },
+            )
+            live.emit(
+                "openai_server_event_received",
+                {"type": "session.closed", "reason": "done"},
+            )
+        lines = [
+            r.getMessage()
+            for r in caplog.records
+            if "live_output_transcript" in r.getMessage()
+        ]
+        assert "audio_ms=200" in lines[-1] and "peak_dbfs=-8.7" in lines[-1]
+        assert "heard_chars=0" in lines[-1]
+        with caplog.at_level(
+            logging.INFO, logger="openbase_coder_cli.livekit_agent.live_delegation"
+        ):
+            live.emit(
+                "openai_server_event_received",
+                {"type": "session.input_transcript.delta", "delta": "nine plus"},
+            )
+            live.emit(
+                "openai_server_event_received",
+                {"type": "session.closed", "reason": "done"},
+            )
+        lines = [
+            r.getMessage()
+            for r in caplog.records
+            if "live_output_transcript" in r.getMessage()
+        ]
+        assert "heard_chars=9 heard='nine plus'" in lines[-1]
     finally:
         await bridge.aclose()
 
@@ -2634,5 +2698,30 @@ async def test_a_reconnect_after_a_planned_gateway_restart_resumes_silently():
         live.drop()
         live.emit("session_reconnected")
         assert any("re-established" in note for note in live.of("thinking", None))
+    finally:
+        await bridge.aclose()
+
+
+async def test_a_spoken_request_is_acknowledged_once_and_the_answer_is_asked_for_now():
+    """Maritime 2026-10-10: the backend answered in 4.6 s but GPT-Live sat on
+    the appended instruction for 25 s; the answer now rides a speak-now
+    commentary, and the caller hears one bounded acknowledgment meanwhile."""
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    try:
+        live.final("What is nine plus five?")
+        await _settle()
+        assert live.acks() == ["One moment."]
+        assert bridge.speech_gate.authorized
+        assert bridge.speech_gate._pending_limit_ms == 1500
+        dispatcher.result_gate.set()
+        await _settle()
+        assert live.speech() == ["All tests pass. The build is green."]
+        answers = [
+            t for m, t, _ in live.appends if m == "commentary" and "Text to read: " in t
+        ]
+        assert answers and answers[0].startswith(
+            "Immediately follow the instruction below."
+        )
+        assert live.acks() == ["One moment."]
     finally:
         await bridge.aclose()

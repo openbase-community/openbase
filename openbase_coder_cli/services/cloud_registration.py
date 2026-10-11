@@ -36,6 +36,7 @@ from openbase_coder_cli.services.tailnet_devices import tailscale_self_identity
 from openbase_coder_cli.services.tailscale_serve import tailscale_serve_health
 
 DEVICE_REGISTER_PATH = "/api/openbase/devices/register/"
+DEVICE_DEREGISTER_PATH = "/api/openbase/devices/deregister/"
 NETMESH_ENROLL_PATH = "/api/openbase/netmesh/enroll/"
 NETMESH_DEVICES_PATH = "/api/openbase/netmesh/devices/"
 NETMESH_SERVICE_HOSTNAMES_PATH = "/api/openbase/netmesh/service-hostnames/"
@@ -225,6 +226,11 @@ def report_cli_state(
         }
     write_onboarding_cache(cache_update)
     return result
+
+
+def deregister_device_with_cloud() -> CloudReportResult:
+    """Remove this device's registration for the signed-in user. Never raises."""
+    return _post_to_cloud(DEVICE_DEREGISTER_PATH, {"device_id": _device_id()})
 
 
 def register_and_report(

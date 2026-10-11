@@ -67,6 +67,7 @@ func (a *localAPI) handler() http.Handler {
 	mux.HandleFunc("GET /probe", a.handleProbe)
 	mux.HandleFunc("GET /turnprobe", a.handleTurnProbe)
 	mux.HandleFunc("POST /login", a.handleLogin)
+	mux.HandleFunc("POST /logout", a.handleLogout)
 	mux.HandleFunc("GET /forwards", a.handleListForwards)
 	mux.HandleFunc("POST /forwards", a.handleAddForward)
 	mux.HandleFunc("DELETE /forwards/{port}", a.handleRemoveForward)
@@ -146,6 +147,18 @@ func (a *localAPI) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Start only stages the key; the login must be kicked explicitly. With an
 	// auth key staged this redeems it rather than producing a browser URL.
 	if err := a.lc.StartLoginInteractive(r.Context()); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleLogout leaves the network this node is enrolled in and forgets its
+// node key, so the next /login registers a fresh node with the new key instead
+// of resuming the previous account's node (tsnet keeps its login across
+// restarts, which would otherwise ignore a different account's auth key).
+func (a *localAPI) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if err := a.lc.Logout(r.Context()); err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}

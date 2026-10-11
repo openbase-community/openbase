@@ -115,8 +115,12 @@ class LiveCharacterController:
         initial_model=None,
         speech_gate=None,
         start_attempts=2,
+        announce_route=None,
     ):
         self.session = session
+        # Speaks a transfer or return after the handoff, as Classic's announcer
+        # does (``RouteAnnouncer.announce``); None keeps route moves silent.
+        self.announce_route = announce_route
         self.bridge = bridge
         self.router = router
         self.model_factory = model_factory
@@ -133,6 +137,10 @@ class LiveCharacterController:
         self._task = None
         self._closed = False
         self._route_pending = False
+        # The route move the next handoff announces before any greeting:
+        # (action, announce, agent_label); None after a restore, which moves
+        # no route.
+        self._route_announcement = None
         self._wake = asyncio.Event()
         self._announcement_stop = asyncio.Event()
         self._speech_changed = asyncio.Event()
@@ -161,12 +169,13 @@ class LiveCharacterController:
     def start(self):
         self._task = asyncio.create_task(self._run(), name="live-characters")
 
-    def route_changed(self):
+    def route_changed(self, action=None, *, announce=True, agent_label=None):
         # Detach synchronously: no result can enter the old character while
         # the actor waits for the framework to finish its handoff.
         self.bridge.suspend_session()
         self._silence()
         self._route_pending = True
+        self._route_announcement = (action, announce, agent_label) if action else None
         self._announcement_stop.set()
         self._speech_changed.set()
         self._wake.set()
@@ -273,7 +282,7 @@ class LiveCharacterController:
         )
         return assistant
 
-    async def _conversation(self, history):
+    async def _conversation(self, history, *, route_changed=False):
         while not self._closed:
             snapshot = self.router.route_snapshot()
             assistant = await self._replace(
@@ -287,12 +296,35 @@ class LiveCharacterController:
             self.bridge.attach(assistant.duplex_session)
             self.bridge.on_character_session_started()
             self._resume_output()
+            await self._announce_route()
             if snapshot.active_thread_id not in self._introduced_routes:
                 self._introduced_routes.add(snapshot.active_thread_id)
                 self.bridge.greet(
                     live_voice_greeting(self.bridge.starting_agent_label())
                 )
+            # A return says nothing here: the route announcer speaks the
+            # Classic "Back to dispatch." line in the Dispatcher's voice.
             return assistant
+
+    async def _announce_route(self):
+        """Speak the pending route move through the new character's output."""
+        move = self._route_announcement
+        self._route_announcement = None
+        if move is None or self.announce_route is None:
+            return
+        action, announce, agent_label = move
+        try:
+            await self.announce_route(
+                self.session, action, announce=announce, agent_label=agent_label
+            )
+        except Exception:
+            # The call goes on without the announcement; a synthesis failure
+            # must not end the call through the character loop's error path.
+            logger.warning(
+                "dispatch_timing stage=live_route_announcement_failed action=%s",
+                action,
+                exc_info=True,
+            )
 
     async def _run(self):
         try:
@@ -302,7 +334,8 @@ class LiveCharacterController:
                 if self._route_pending:
                     self._route_pending = False
                     await self._conversation(
-                        bounded_history(self.session.current_agent.chat_ctx)
+                        bounded_history(self.session.current_agent.chat_ctx),
+                        route_changed=True,
                     )
                     if not self._queue.empty():
                         self._wake.set()

@@ -1,5 +1,6 @@
 """Routing of the LiveKit voice session between the dispatcher and Super Agents."""
 
+import asyncio
 import logging
 import time
 import uuid
@@ -200,6 +201,7 @@ class LiveKitVoiceRouter:
         self._active_target_voice_id = target_voice_id
         self._active_target_voice_name = target_voice_name
         self._route_version += 1
+        _warm_in_background(target_client)
         self._dispatcher_client.persist_voice_route(
             active_target_thread_id=thread_id,
             active_target_kind="codex_thread",
@@ -286,6 +288,24 @@ class LiveKitVoiceRouter:
         # transcript entries after another worker's turns — the next resume
         # then forks the dispatcher conversation from a stale leaf.
         await self._dispatcher_client.aclose()
+
+
+def _warm_in_background(client) -> None:
+    """Connect the target's backend CLI now, off the route change's path."""
+    warm = getattr(client, "warm", None)
+    if warm is None:
+        return
+
+    async def run() -> None:
+        try:
+            await warm()
+        except Exception:  # noqa: BLE001 - warming is best effort
+            logger.debug("target session warm-up failed", exc_info=True)
+
+    try:
+        asyncio.get_running_loop().create_task(run(), name="voice-target-warm")
+    except RuntimeError:
+        pass
 
 
 async def _transfer_voice_route(

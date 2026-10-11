@@ -141,6 +141,22 @@ class FakeGPTLiveServer:
         await asyncio.wait_for(_wait(), timeout)
         return self.appends(kind)
 
+    def answers(self) -> list[dict]:
+        """Relayed backend answers: speak-now commentary carrying a read command."""
+        return [
+            e
+            for e in self.appends("commentary")
+            if "backend answer segment" in str(e.get("content", ""))
+        ]
+
+    async def wait_for_answers(self, count: int = 1, timeout: float = 5.0):
+        async def _wait():
+            while len(self.answers()) < count:
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(_wait(), timeout)
+        return self.answers()
+
 
 def _credentials(server: FakeGPTLiveServer, token: str = "cloud-token"):
     return LiveVoiceCredentials(base_url=server.base_url, api_key=token)
@@ -682,7 +698,7 @@ async def test_real_gpt_live_session_delegation_flows_through_the_bridge(
 
             greeting = f"Hi, I'm {agent_label or 'Jacqueline'}."
             bridge.greet(greeting)
-            greetings = await server.wait_for_append("instructions")
+            greetings = await server.wait_for_append("commentary")
             assert len(greetings) == 1
             assert greetings[0]["delegation_id"] is None
             assert "exactly once" in greetings[0]["content"]
@@ -716,8 +732,8 @@ async def test_real_gpt_live_session_delegation_flows_through_the_bridge(
             assert "Check whether the build passes" in thinking[0]["content"]
 
             client.gate.set()
-            answers = await server.wait_for_append("instructions", count=2)
-            answer = answers[1]
+            answers = await server.wait_for_answers()
+            answer = answers[0]
             assert answer["delegation_id"] == "item_1"
             assert json.loads(answer["content"].split("Text to read: ", 1)[1]) == (
                 "The build passed. The release is awaiting approval."
@@ -725,7 +741,14 @@ async def test_real_gpt_live_session_delegation_flows_through_the_bridge(
             assert bridge.speech_gate.authorized
 
             bridge.announce("Report ready.", agent_name="Lucy")
-            announcements = await server.wait_for_append("commentary")
+            await server.wait_for_append(
+                "commentary", count=len(server.appends("commentary")) + 1
+            )
+            announcements = [
+                e
+                for e in server.appends("commentary")
+                if "Text to " not in str(e.get("content", ""))
+            ]
             assert (
                 announcements[0]["delegation_id"] is None
                 or "delegation_id" not in announcements[0]
@@ -820,7 +843,7 @@ async def test_real_gpt_live_session_sends_every_closed_utterance_to_the_agent(
                 expected_delegation = "item_1"
 
             client.gate.set()
-            answers = await server.wait_for_append("instructions")
+            answers = await server.wait_for_answers()
             assert len(client.prompts) == 1, "exactly one agent turn"
             assert json.loads(answers[0]["content"].split("Text to read: ", 1)[1]) == (
                 "The build passed. The release is awaiting approval."

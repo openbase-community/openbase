@@ -44,8 +44,13 @@ def test_login_password_stdin_reissues_and_stores_jwts_without_echo(monkeypatch)
     stored = {}
 
     class FakeTokenManager:
+        has_refresh_token = False
+
         def __init__(self, web_backend_url):
             stored["backend"] = web_backend_url
+
+        def get_owner_identity(self):
+            return {}
 
         def store_tokens(self, **kwargs):
             stored.update(kwargs)

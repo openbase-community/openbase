@@ -38,6 +38,7 @@ from openbase_coder_cli.login_callback import (
     relay_capability,
 )
 from openbase_coder_cli.open_url_policy import open_url_error
+from openbase_coder_cli.web_redirect_hold import record_web_redirect
 
 logger = logging.getLogger(__name__)
 
@@ -108,10 +109,12 @@ def browser_open(
 
     receipt = _deliver(url, forward)
     if receipt:
+        _record_redirect()
         click.echo(OPENED_MESSAGE)
         if forward is not None:
             click.echo(_forward_note(receipt))
     elif not no_push and _push(url, forward):
+        _record_redirect()
         click.echo(PUSHED_MESSAGE)
     else:
         click.echo(NOT_DELIVERED_HINT)
@@ -123,6 +126,14 @@ def browser_open(
         )
 
 
+def _record_redirect() -> None:
+    """Hold completion banners while the user is on the page (best effort)."""
+    try:
+        record_web_redirect()
+    except OSError:
+        pass
+
+
 def _arrange_forward(port: int) -> LoopbackForward | None:
     return _bounded_attempt(lambda: _try_arrange_forward(port))
 
@@ -130,23 +141,33 @@ def _arrange_forward(port: int) -> LoopbackForward | None:
 def _try_arrange_forward(port: int) -> LoopbackForward | None:
     """Expose ``port`` on this node's tailnet for the login, if possible.
 
-    Only embedded-node hosts (cloud workspaces) can do this today; elsewhere
-    the printed paste-back guidance is the fallback. Any failure is reported
-    on stdout and never aborts the calling CLI.
+    Cloud workspaces (embedded node) expose the relay through an
+    openbase-tunneld forward; desktop and VM backends on a host VPN (Openbase
+    VPN or Tailscale) have the relay listen on their own VPN address. When
+    neither applies, the printed paste-back guidance is the fallback. Any
+    failure is reported on stdout and never aborts the calling CLI.
     """
     from openbase_coder_cli.callback_relay import start_relay
     from openbase_coder_cli.services import tailscale_provider
-    from openbase_coder_cli.services.tunneld import tunneld_status
 
-    if not tailscale_provider.is_netmesh_tsnet():
-        return None
-    target = _self_tailnet_target(tunneld_status)
+    if tailscale_provider.is_netmesh_tsnet():
+        from openbase_coder_cli.services.tunneld import tunneld_status
+
+        target = _self_tailnet_target(tunneld_status)
+        bind_host = None
+    else:
+        target = _self_tailnet_target(_host_vpn_status)
+        bind_host = target
     if target is None:
         return None
     forward = LoopbackForward.create(port, target)
     expires_at = int(time.time()) + DEFAULT_FORWARD_TTL_SECONDS
     relay_port = start_relay(
-        port, forward.token, DEFAULT_FORWARD_TTL_SECONDS, expires_at=expires_at
+        port,
+        forward.token,
+        DEFAULT_FORWARD_TTL_SECONDS,
+        expires_at=expires_at,
+        bind_host=bind_host,
     )
     return replace(
         forward,
@@ -154,6 +175,16 @@ def _try_arrange_forward(port: int) -> LoopbackForward | None:
         expires_at=expires_at,
         token=relay_capability(relay_port, expires_at, forward.token),
     )
+
+
+def _host_vpn_status() -> tuple[bool, dict | None, str | None]:
+    """The host VPN's status in tunneld_status's (available, payload, error) shape."""
+    from openbase_coder_cli.services import tailscale_provider
+
+    payload = tailscale_provider.status_json()
+    if payload.get("error") or payload.get("BackendState") not in (None, "Running"):
+        return False, None, str(payload.get("error") or "VPN is not running")
+    return True, payload, None
 
 
 def _self_tailnet_target(status_fn) -> str | None:

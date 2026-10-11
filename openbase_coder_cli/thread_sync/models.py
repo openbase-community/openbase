@@ -8,6 +8,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
+from openbase_coder_cli.voice_tags import prompt_for_display
+
 
 class ThreadStatus(str, Enum):
     """Status of a Codex coding thread."""
@@ -29,6 +31,17 @@ class TurnSteerInfo(BaseModel):
     text: str
     created_at: datetime | None = None
 
+    @computed_field
+    @property
+    def display_text(self) -> str:
+        """``text`` without injected system notes or the voice envelope."""
+        return prompt_for_display(self.text)[0]
+
+    @computed_field
+    @property
+    def spoken(self) -> bool:
+        return prompt_for_display(self.text)[1]
+
 
 class QueuedTurnInfo(BaseModel):
     """A user prompt queued to run after the active turn completes."""
@@ -38,6 +51,17 @@ class QueuedTurnInfo(BaseModel):
     queue_id: str | None = None
     prompt: str
     queued_at: datetime | None = None
+
+    @computed_field
+    @property
+    def display_prompt(self) -> str:
+        """``prompt`` without injected system notes or the voice envelope."""
+        return prompt_for_display(self.prompt)[0]
+
+    @computed_field
+    @property
+    def spoken(self) -> bool:
+        return prompt_for_display(self.prompt)[1]
 
 
 class TurnMessageInfo(BaseModel):
@@ -69,6 +93,22 @@ class TurnInfo(BaseModel):
     # order. The console groups these by repo and links to the git diff view.
     file_edits: list[str] = Field(default_factory=list)
     messages: list[TurnMessageInfo] = Field(default_factory=list)
+
+    @computed_field
+    @property
+    def display_prompt(self) -> str:
+        """The prompt as the user said or typed it, for transcript bubbles.
+
+        ``prompt`` stays raw because agents read it back (live briefs, thread
+        delivery); clients render this instead.
+        """
+        return prompt_for_display(self.message)[0]
+
+    @computed_field
+    @property
+    def spoken(self) -> bool:
+        """Whether the prompt arrived as a live speech transcript."""
+        return prompt_for_display(self.message)[1]
 
 
 class ThreadInfo(BaseModel):

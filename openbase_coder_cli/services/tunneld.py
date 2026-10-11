@@ -438,6 +438,19 @@ def tunneld_login(auth_key: str) -> bool:
     return response.status_code == 200
 
 
+def tunneld_logout() -> bool:
+    """Make the running daemon leave its tailnet and forget its node key."""
+    try:
+        response = httpx.post(
+            f"{TUNNELD_LOCAL_API}/logout",
+            headers=_control_headers(),
+            timeout=TUNNELD_TIMEOUT_SECONDS * 3,
+        )
+    except httpx.HTTPError:
+        return False
+    return response.status_code == 200
+
+
 def _managed_service_installed() -> bool:
     """Whether the platform service manager owns the tunneld process."""
     from openbase_coder_cli.services.definitions import TUNNELD_SERVICE

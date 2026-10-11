@@ -122,6 +122,28 @@ async def test_superseded_transfer_does_not_announce_or_replace_character(live):
         sink.enqueue.assert_not_called()
 
 
+async def test_live_transfer_passes_the_announce_flag_to_the_character_owner():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    from openbase_coder_cli.livekit_agent.livekit import _transfer_live_voice_route
+    from openbase_coder_cli.livekit_agent.packets import VoiceRouteCommand
+
+    router = SimpleNamespace(transfer_to_thread=AsyncMock(return_value=True))
+    sink = Mock()
+    command = VoiceRouteCommand(
+        action="transfer_to_thread",
+        thread_id="t",
+        cwd=".",
+        label="Cooper",
+        announce=False,
+    )
+    await _transfer_live_voice_route(router, command, sink)
+    sink.notify_route_changed.assert_called_once_with(
+        action="transfer_to_thread", agent_label="Cooper", announce=False
+    )
+
+
 @pytest.mark.parametrize("next_thread", ["first-thread", "second-thread"])
 async def test_old_call_shutdown_does_not_clear_new_call_route(
     monkeypatch, tmp_path, next_thread
@@ -269,3 +291,49 @@ def test_a_new_call_resumes_the_dispatcher_thread_again():
     client.reload_thread_on_next_use.assert_called_once()
     # Fakes without the hook (older clients) still construct.
     voice_routing.LiveKitVoiceRouter(object())
+
+
+async def test_transfer_warms_the_target_session_in_the_background(
+    monkeypatch, tmp_path
+):
+    """6260ff6 shipped _warm_in_background without importing asyncio; the fake
+    target had no warm(), so every real GPT-Live transfer crashed unseen
+    (Maritime 376, 2026-10-11 01:00Z, NameError)."""
+    import asyncio
+
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    warmed = asyncio.Event()
+
+    class WarmingTarget(TargetClient):
+        async def warm(self):
+            warmed.set()
+            return True
+
+    monkeypatch.setattr(voice_routing, "SuperAgentsLiveKitClient", WarmingTarget)
+    router = voice_routing.LiveKitVoiceRouter(
+        DispatcherClient(tmp_path / "livekit-voice-route.json")
+    )
+    assert await router.transfer_to_thread(
+        thread_id="s_marian", cwd=str(tmp_path), label="Marian", voice_name="Marian"
+    )
+    await asyncio.wait_for(warmed.wait(), 1)
+
+
+async def test_a_failing_warm_up_never_breaks_the_transfer(monkeypatch, tmp_path):
+    import asyncio
+
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+
+    class FailingTarget(TargetClient):
+        async def warm(self):
+            raise RuntimeError("cli not ready")
+
+    monkeypatch.setattr(voice_routing, "SuperAgentsLiveKitClient", FailingTarget)
+    router = voice_routing.LiveKitVoiceRouter(
+        DispatcherClient(tmp_path / "livekit-voice-route.json")
+    )
+    assert await router.transfer_to_thread(
+        thread_id="s_marian", cwd=str(tmp_path), label="Marian"
+    )
+    for _ in range(3):
+        await asyncio.sleep(0)

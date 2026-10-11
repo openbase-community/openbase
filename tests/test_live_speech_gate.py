@@ -4,6 +4,7 @@ import asyncio
 import base64
 from array import array
 
+from livekit import rtc
 from livekit.agents import AgentSession, llm
 from livekit.agents.voice import io
 from livekit.plugins.openai.realtime import GPTLiveModel
@@ -253,3 +254,40 @@ async def test_a_permitted_burst_is_never_reported_starved():
         yield "more"
 
     assert [frame async for frame in gate.filter_audio(reply())] == ["answer", "more"]
+
+
+async def test_a_bounded_permit_covers_one_burst_and_cuts_the_models_continuation():
+    gate = LiveSpeechGate(barge_in_min_seconds=0)
+    gate.authorize(limit_ms=40)
+
+    def frame():
+        return rtc.AudioFrame(
+            data=b"\x00\x00" * 480,
+            sample_rate=24000,
+            num_channels=1,
+            samples_per_channel=480,
+        )
+
+    async def ack_then_self_answer():
+        yield frame()  # 20 ms "One"
+        yield frame()  # 20 ms "moment"
+        yield frame()  # the model keeps going on its own
+        yield frame()
+
+    heard = [f async for f in gate.filter_audio(ack_then_self_answer())]
+    assert len(heard) == 2
+    assert not gate.authorized
+
+    # A spent bounded permit does not carry over to the next burst.
+    gate.authorize(limit_ms=40)
+
+    async def short_ack():
+        yield frame()
+
+    assert len([f async for f in gate.filter_audio(short_ack())]) == 1
+    assert not gate.authorized
+
+    async def self_answer():
+        yield frame()
+
+    assert [f async for f in gate.filter_audio(self_answer())] == []

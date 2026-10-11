@@ -43,6 +43,15 @@ def auth_session(request):
 
 @api_view(["POST"])
 def auth_logout(request):
-    """Clear the locally stored JWT tokens."""
-    get_token_manager().clear()
+    """Sign this machine out of the account, then clear the stored tokens.
+
+    The desktop app and console sign out through here, so this must release
+    the account's VPN node and device record exactly like the CLI logout.
+    """
+    from openbase_coder_cli.services.netmesh_account import sign_out_account
+
+    manager = get_token_manager()
+    if manager.has_refresh_token:
+        sign_out_account()
+    manager.clear()
     return Response({"success": True}, status=status.HTTP_200_OK)

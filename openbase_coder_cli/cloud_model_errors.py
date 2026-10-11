@@ -75,14 +75,40 @@ def model_allowance_exhausted_spoken_message(text: str | None) -> str | None:
     return MODEL_ALLOWANCE_EXHAUSTED_SPOKEN
 
 
+# The provider's own billing refusal (Anthropic: "Your credit balance is too
+# low to access the Anthropic API"; Claude Code shows it as "Credit balance is
+# too low"). It is the platform's provider account, never the user's: nothing
+# the user can do about it, so it reads as a temporary outage.
+PROVIDER_CREDIT_EXHAUSTED_MARKERS = ("credit balance is too low",)
+PROVIDER_UNAVAILABLE_MESSAGE = (
+    "Openbase Cloud's model provider is temporarily unavailable. "
+    "Please try again in a few minutes."
+)
+
+
+def provider_credit_exhausted_message(text: str | None) -> str | None:
+    if not text:
+        return None
+    lowered = text.lower()
+    if not any(marker in lowered for marker in PROVIDER_CREDIT_EXHAUSTED_MARKERS):
+        return None
+    return PROVIDER_UNAVAILABLE_MESSAGE
+
+
 def model_proxy_denial_message(text: str | None) -> str | None:
-    return model_allowance_exhausted_message(text) or model_plan_denial_message(text)
+    return (
+        model_allowance_exhausted_message(text)
+        or model_plan_denial_message(text)
+        or provider_credit_exhausted_message(text)
+    )
 
 
 def model_proxy_denial_spoken_message(text: str | None) -> str | None:
     """The denial as the voice agent should say it."""
-    return model_allowance_exhausted_spoken_message(text) or model_plan_denial_message(
-        text
+    return (
+        model_allowance_exhausted_spoken_message(text)
+        or model_plan_denial_message(text)
+        or provider_credit_exhausted_message(text)
     )
 
 

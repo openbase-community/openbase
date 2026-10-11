@@ -49,11 +49,13 @@ class LiveSpeechGate:
         self._caller_since = 0.0
         self._caller_revoked = False
         self.barge_ins_ignored = 0
+        self._pending_limit_ms = None
 
     def revoke(self):
         self.epoch += 1
         self.authorized = False
         self._starved = None
+        self._pending_limit_ms = None
 
     def _revoke_for_caller(self):
         if not self._caller_revoked:
@@ -96,8 +98,15 @@ class LiveSpeechGate:
                     )
             self._caller_speaking = False
 
-    def authorize(self):
+    def authorize(self, *, limit_ms=None):
+        """Permit the next burst; with ``limit_ms`` only that much of it.
+
+        A bounded permit covers one burst (an acknowledgment line) and is
+        revoked when that burst ends or the cap is reached, so the model's
+        own continuation after it never plays.
+        """
         self.authorized = True
+        self._pending_limit_ms = limit_ms
         unpermitted = [seq for seq, burst in self._open.items() if not burst.permitted]
         if unpermitted:
             self._starved = max(unpermitted)
@@ -112,6 +121,11 @@ class LiveSpeechGate:
 
     def _burst_closed(self, burst):
         self._open.pop(burst.sequence, None)
+        if burst.limit_ms is not None and burst.permitted:
+            # The bounded permit is spent with its burst.
+            if self._pending_limit_ms is None and self.authorized:
+                self.revoke()
+            return
         if self._starved != burst.sequence or burst.permitted:
             return
         self._starved = None
@@ -129,6 +143,10 @@ class _SpeechBurst:
         self.epoch = gate.epoch
         self.permitted = gate.authorized and not gate.speaking
         self.reported = False
+        self.limit_ms = gate._pending_limit_ms if self.permitted else None
+        if self.permitted:
+            gate._pending_limit_ms = None
+        self.forwarded_ms = 0.0
         gate._next_burst += 1
         self.sequence = gate._next_burst
         gate._burst_opened(self)
@@ -139,6 +157,21 @@ class _SpeechBurst:
         try:
             async for frame in self.filter(stream):
                 if isinstance(frame, rtc.AudioFrame):
+                    if self.limit_ms is not None and self.forwarded_ms >= self.limit_ms:
+                        # The acknowledgment is over; whatever follows in this
+                        # burst is the model talking on its own.
+                        logger.info(
+                            "dispatch_timing stage=live_ack_limit_reached burst=%d "
+                            "limit_ms=%d",
+                            self.sequence,
+                            self.limit_ms,
+                        )
+                        self.gate.revoke()
+                        self.permitted = False
+                        continue
+                    self.forwarded_ms += (
+                        frame.samples_per_channel / frame.sample_rate * 1000
+                    )
                     if frames == 0:
                         samples = frame.data
                         rms = math.sqrt(

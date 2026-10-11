@@ -136,6 +136,13 @@ LIVE_VOICE_PRECONNECT = os.getenv(
 # (2026-10-10: a transfer to Cooper hit the 5-second cap and ended the call
 # while a healthy swap takes about 2 seconds). A swap that still fails is
 # retried with a fresh session before the call is given up.
+# While the thread works on a spoken request the caller hears one short line
+# (off with an empty value); its playback is capped so a model that runs on
+# into an answer of its own after it is cut off.
+LIVE_VOICE_ACK_TEXT = os.getenv("LIVEKIT_LIVE_VOICE_ACK_TEXT", "One moment.").strip()
+LIVE_VOICE_ACK_LIMIT_MS = int(
+    os.getenv("LIVEKIT_LIVE_VOICE_ACK_LIMIT_MS", "1500") or 1500
+)
 # Caller speech shorter than this does not count as a barge-in: speakerphone
 # echo of the agent's own words ("...Cooper" heard back as "uper", 2026-10-10)
 # trips the VAD for a few hundred milliseconds and must not cut the answer.

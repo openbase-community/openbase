@@ -29,6 +29,10 @@ development installs need:
 
 `./scripts/setup` checks for all of these before it does anything else and exits with the install command for each one that is missing.
 
+If `pnpm --version` already works (for example from `npm install -g pnpm` or Corepack), keep that pnpm and skip installing another. A second copy only conflicts: `brew install pnpm` then stops with a link error because `pnpm` already exists in the Homebrew `bin` directory. That error is harmless, since setup uses whichever pnpm is on your `PATH`; to switch to the Homebrew copy instead, run `brew link --overwrite pnpm`.
+
+`uv tool install` puts `multi` in `~/.local/bin`, which is not on the `PATH` of a fresh Mac. If uv warns about that, run `uv tool update-shell` and open a new terminal, or run `export PATH="$HOME/.local/bin:$PATH"` in the current one. Otherwise setup reports `multi` as missing even though it is installed.
+
 Contributors who commit to the repos also need [`gitleaks`](https://github.com/gitleaks/gitleaks) (`brew install gitleaks`). Setup does not need it, but the git hooks that `multi sync` installs refuse commits and pushes without it.
 
 Optional developer backends:
@@ -61,11 +65,7 @@ never block: fresh non-interactive installs require `--backend` and default
 the audio provider to `openbase-cloud`. See [setup](../commands/setup.md)
 for the full flag list and the `--interactive` override.
 
-Interactive runs finish by offering `openbase-coder login` (browser OAuth),
-then confirm the device is registered with Openbase Cloud and that the selected
-private-network transport exposes the local API and LiveKit, and print a QR
-code for the [phone app downloads page](https://openbase.cloud/downloads.html).
-Non-interactive runs end with the login hint instead, exactly as before.
+Interactive runs offer `openbase-coder login` (browser OAuth), then confirm the device is registered with Openbase Cloud and that the selected private-network transport exposes the local API and LiveKit. Non-interactive runs print the login hint instead. Either way, `./scripts/setup` then builds and launches the developer app (see below), prints "Setup complete", and finishes with a QR code for the [phone app downloads page](https://openbase.cloud/downloads.html): install the iOS or Android app last.
 
 If a standalone desktop/CLI install, or a different development workspace
 install, already exists, the workspace script stops and links to
@@ -82,8 +82,7 @@ you to clone the workspace or use the standalone install.
 On macOS, `./scripts/setup` always builds the Electron developer app: it
 installs and verifies the Electron runtime, builds the dashboard renderer, and
 installs the Openbase launcher in `/Applications`. Setup fails, rather than
-reporting success, if any of those steps fails. Interactive setup then offers
-to launch it together with the Swift menu-bar UI; you can launch either later:
+reporting success, if any of those steps fails. In a logged-in desktop session, setup then launches the app together with the Swift menu-bar UI automatically. Over SSH, with `OPENBASE_SETUP_NO_LAUNCH=1`, or when a packaged Openbase app already occupies `/Applications`, it only builds them. You can launch either later:
 
 ```bash
 ./scripts/dev-launch --electron  # dashboard/status only; setup is disabled

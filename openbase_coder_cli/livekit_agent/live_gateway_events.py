@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import math
+from array import array
+
 from openbase_coder_cli.livekit_agent.codex_transport import DISPATCH_TIMING_LOG
 
 # Gateway events worth one log line each: how a response began and ended.
@@ -57,10 +62,45 @@ class OutputTranscriptLog:
         self._flush_after = flush_after
         self._parts: list[str] = []
         self._timer = None
+        self._audio_bytes = 0
+        self._audio_peak = 0
+        self._input_parts: list[str] = []
+
+    def input_delta(self, text: str) -> None:
+        """What the model heard from the caller in this window.
+
+        Speaker echo the model takes for a barge-in cancels its own reply
+        server-side, which our VAD never sees; the caller transcript in the
+        same window as a cut reply is the evidence.
+        """
+        if text:
+            self._input_parts.append(text)
+        self._schedule()
 
     def delta(self, text: str) -> None:
         if text:
             self._parts.append(text)
+        self._schedule()
+
+    def audio_delta(self, encoded: str) -> None:
+        """Account for one output audio delta (24 kHz mono 16-bit PCM, base64).
+
+        Whether the gateway sent the whole reply's audio, and how loud, is
+        what separates a reply the gateway cut from one the adapter's silence
+        gate closed early (Maritime, 2026-10-10 23:57Z: a 1.8 s burst for a
+        full sentence, first frame at -45 dBFS).
+        """
+        if not encoded:
+            return
+        try:
+            raw = base64.b64decode(encoded)
+        except (ValueError, binascii.Error):
+            return
+        self._audio_bytes += len(raw)
+        samples = array("h")
+        samples.frombytes(raw[: len(raw) - len(raw) % 2])
+        if samples:
+            self._audio_peak = max(self._audio_peak, max(abs(v) for v in samples))
         self._schedule()
 
     def _schedule(self) -> None:
@@ -79,14 +119,25 @@ class OutputTranscriptLog:
         if self._timer is not None:
             self._timer.cancel()
             self._timer = None
-        if not self._parts:
+        if not self._parts and not self._audio_bytes and not self._input_parts:
             return
         text = "".join(self._parts)
+        heard = "".join(self._input_parts)
+        audio_ms = self._audio_bytes // 48  # 24 kHz mono int16: 48 bytes per ms
+        peak_dbfs = 20 * math.log10(max(self._audio_peak / 32768, 1e-6))
         self._parts = []
+        self._input_parts = []
+        self._audio_bytes = 0
+        self._audio_peak = 0
         self._log.info(
-            "%s stage=live_output_transcript chars=%d text=%r",
+            "%s stage=live_output_transcript chars=%d audio_ms=%d peak_dbfs=%.1f "
+            "heard_chars=%d heard=%r text=%r",
             DISPATCH_TIMING_LOG,
             len(text),
+            audio_ms,
+            peak_dbfs,
+            len(heard),
+            heard[:80],
             text[:160],
         )
 
@@ -101,6 +152,12 @@ def log_gateway_event(
     if transcript is not None:
         if kind == "session.output_transcript.delta":
             transcript.delta(str(event.get("delta") or ""))
+            return
+        if kind == "session.output_audio.delta":
+            transcript.audio_delta(str(event.get("delta") or ""))
+            return
+        if kind == "session.input_transcript.delta":
+            transcript.input_delta(str(event.get("delta") or ""))
             return
         if kind not in _QUIET_GATEWAY_EVENTS:
             transcript.flush()
