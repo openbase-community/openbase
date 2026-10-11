@@ -22,6 +22,7 @@ from openbase_coder_cli.openbase_coder_cli_app import agents_md as _agents_md
 from openbase_coder_cli.openbase_coder_cli_app import diagnostics as _diagnostics
 from openbase_coder_cli.openbase_coder_cli_app import livekit as _livekit
 from openbase_coder_cli.openbase_coder_cli_app import memories as _memories
+from openbase_coder_cli.openbase_coder_cli_app import screen_share as _screen_share
 from openbase_coder_cli.openbase_coder_cli_app import skills as _skills
 from openbase_coder_cli.openbase_coder_cli_app.analytics_identity import (
     analytics_identify,
@@ -259,7 +260,15 @@ def livekit_companion_session(request):
 
 def livekit_companion_start(request):
     _sync_livekit_compat_globals()
-    return _livekit.livekit_companion_start(request)
+    return _screen_share.livekit_companion_start(request)
+
+
+def livekit_companion_stop(request):
+    return _screen_share.livekit_companion_stop(request)
+
+
+def livekit_companion_status(request):
+    return _screen_share.livekit_companion_status(request)
 
 
 def skills_list(request):
@@ -335,6 +344,8 @@ __all__ = [
     "launchctl_service_action",
     "launchctl_services_list",
     "livekit_companion_session",
+    "livekit_companion_status",
+    "livekit_companion_stop",
     "livekit_room_token",
     "livekit_voice_route",
     "livekit_voice_route_exit",

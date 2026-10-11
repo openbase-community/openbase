@@ -923,8 +923,8 @@ def test_livekit_companion_start_api_starts_linux_screen_share(monkeypatch):
     monkeypatch.setenv("LIVEKIT_CLIENT_API_KEY", "clientkey")
     monkeypatch.setenv("LIVEKIT_CLIENT_API_SECRET", "clientsecret")
     monkeypatch.setenv("LIVEKIT_URL", "ws://livekit.local")
-    monkeypatch.setattr(views._livekit.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(views._livekit, "_companion_client_factory", lambda: client)
+    monkeypatch.setattr(views._screen_share.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(views._screen_share, "_companion_client_factory", lambda: client)
 
     request = APIRequestFactory().post(
         "/api/livekit-companion-start/",
@@ -952,25 +952,150 @@ def test_livekit_companion_start_api_starts_linux_screen_share(monkeypatch):
     assert client.calls[1][1]["token"]
 
 
-def test_livekit_companion_start_api_is_noop_on_non_linux(monkeypatch):
-    monkeypatch.setattr(views._livekit.platform, "system", lambda: "Darwin")
+def test_livekit_companion_start_api_is_noop_on_windows(monkeypatch):
+    monkeypatch.setattr(views._screen_share.platform, "system", lambda: "Windows")
 
-    request = APIRequestFactory().post(
-        "/api/livekit-companion-start/",
-        {"room_name": "room-1"},
-        format="json",
+    response = views.livekit_companion_start(_companion_request("start"))
+
+    assert response.status_code == 200
+    assert response.data["supported"] is False
+    assert response.data["started"] is False
+
+
+def _companion_request(action, data=None):
+    factory = APIRequestFactory()
+    path = f"/api/livekit-companion-{action}/"
+    request = (
+        factory.get(path)
+        if action == "status"
+        else factory.post(path, data or {"room_name": "room-1"}, format="json")
     )
     force_authenticate(
         request,
         user=SimpleNamespace(is_authenticated=True),
         token={"email": "gabe@example.com"},
     )
+    return request
 
-    response = views.livekit_companion_start(request)
+
+def _macos_companion_env(monkeypatch):
+    monkeypatch.setenv("LIVEKIT_API_KEY", "devkey")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "devsecret")
+    monkeypatch.setenv("LIVEKIT_CLIENT_API_KEY", "clientkey")
+    monkeypatch.setenv("LIVEKIT_CLIENT_API_SECRET", "clientsecret")
+    monkeypatch.setenv("LIVEKIT_URL", "ws://livekit.local")
+    monkeypatch.setattr(views._screen_share.platform, "system", lambda: "Darwin")
+
+
+def test_livekit_companion_start_api_starts_macos_share_via_desktop_app(monkeypatch):
+    _macos_companion_env(monkeypatch)
+    calls = []
+
+    def fake_request(method, path, *, json=None, launch=True, timeout=15):
+        calls.append((method, path, json))
+        return {"ok": True, "state": "sharing"}
+
+    monkeypatch.setattr(views._screen_share.desktop_control, "request", fake_request)
+
+    response = views.livekit_companion_start(_companion_request("start"))
 
     assert response.status_code == 200
-    assert response.data["supported"] is False
-    assert response.data["started"] is False
+    assert response.data["started"] is True
+    assert response.data["platform"] == "macos"
+    assert response.data["roomName"] == "room-1"
+    method, path, body = calls[0]
+    assert (method, path) == ("POST", "/livekit-companion/start-screen-share")
+    assert body["roomUrl"] == "ws://livekit.local"
+    assert body["companionToken"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        views._screen_share.desktop_control.DesktopControlError(
+            "Allow Screen Recording", code="screen_recording_permission_required"
+        ),
+        # Desktop builds before coded errors pass ScreenCaptureKit's raw text.
+        views._screen_share.desktop_control.DesktopControlError(
+            "The user declined TCCs for application, window, display capture"
+        ),
+    ],
+)
+def test_livekit_companion_start_api_reports_screen_recording_permission(
+    monkeypatch, error
+):
+    _macos_companion_env(monkeypatch)
+
+    def fake_request(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(views._screen_share.desktop_control, "request", fake_request)
+
+    response = views.livekit_companion_start(_companion_request("start"))
+
+    assert response.status_code == 403
+    assert response.data["code"] == "screen_recording_permission_required"
+    assert "Screen Recording" in response.data["detail"]
+
+
+def test_livekit_companion_start_api_reports_missing_desktop_app(monkeypatch):
+    _macos_companion_env(monkeypatch)
+
+    def fake_request(*_args, **_kwargs):
+        raise views._screen_share.desktop_control.DesktopControlError(
+            "unreachable", unreachable=True
+        )
+
+    monkeypatch.setattr(views._screen_share.desktop_control, "request", fake_request)
+
+    response = views.livekit_companion_start(_companion_request("start"))
+
+    assert response.status_code == 503
+    assert response.data["code"] == "desktop_app_unavailable"
+
+
+def test_livekit_companion_stop_api_is_idempotent_without_desktop_app(monkeypatch):
+    monkeypatch.setattr(views._screen_share.platform, "system", lambda: "Darwin")
+
+    def fake_request(*_args, **_kwargs):
+        raise views._screen_share.desktop_control.DesktopControlError(
+            "unreachable", unreachable=True
+        )
+
+    monkeypatch.setattr(views._screen_share.desktop_control, "request", fake_request)
+
+    response = views.livekit_companion_stop(_companion_request("stop", {}))
+
+    assert response.status_code == 200
+    assert response.data["stopped"] is True
+    assert response.data["companion"] == {"state": "off"}
+
+
+def test_livekit_companion_status_api_reports_macos_permissions(monkeypatch):
+    monkeypatch.setattr(views._screen_share.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(
+        views._screen_share.desktop_control,
+        "request",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "companion": {
+                "ok": True,
+                "state": "sharing",
+                "screenRecordingGranted": True,
+                "accessibilityGranted": False,
+            },
+        },
+    )
+
+    response = views.livekit_companion_status(_companion_request("status"))
+
+    assert response.data == {
+        "supported": True,
+        "platform": "macos",
+        "state": "sharing",
+        "screenRecordingGranted": True,
+        "accessibilityGranted": False,
+    }
 
 
 def test_user_say_api_rejects_blank_text():

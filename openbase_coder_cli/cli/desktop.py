@@ -1,18 +1,13 @@
 from __future__ import annotations
 
-import json
 import platform
-import subprocess
-import time
 from typing import Any
 
 import click
-import httpx
 
-from openbase_coder_cli.cli.local_server import local_server_request, response_error
-from openbase_coder_cli.paths import DESKTOP_CONTROL_JSON_PATH
+from openbase_coder_cli import desktop_control
+from openbase_coder_cli.cli.local_server import local_server_request
 
-DESKTOP_APP_NAMES = ("Openbase", "Openbase Coder")
 DESKTOP_NO_LAUNCH_HELP = (
     "Do not launch Openbase.app (or legacy Openbase Coder.app) if the desktop "
     "control server is not reachable."
@@ -124,90 +119,7 @@ def _desktop_control_request(
     json: dict[str, Any] | None = None,
     launch: bool = True,
 ) -> dict[str, Any]:
-    last_error: str | None = None
-    for attempt in range(2 if launch else 1):
-        try:
-            return _desktop_control_request_once(method, path, json=json)
-        except click.ClickException as exc:
-            last_error = str(exc)
-            if not launch or attempt > 0:
-                break
-            _launch_desktop_app()
-            _wait_for_control_file()
-
-    raise click.ClickException(
-        "Unable to reach the Openbase Coder desktop app. Open Openbase.app "
-        "(or legacy Openbase Coder.app) and try again."
-        + (f" Last error: {last_error}" if last_error else "")
-    )
-
-
-def _desktop_control_request_once(
-    method: str,
-    path: str,
-    *,
-    json: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    control = _read_control_file()
-    url = f"http://127.0.0.1:{control['port']}{path}"
-    headers = {"X-Openbase-Desktop-Secret": control["secret"]}
     try:
-        response = httpx.request(method, url, headers=headers, json=json, timeout=15)
-    except httpx.HTTPError as exc:
-        raise click.ClickException(f"Desktop control request failed: {exc}") from None
-
-    if response.status_code >= 400:
-        raise click.ClickException(response_error(response))
-    if not response.content:
-        return {}
-    payload = response.json()
-    return payload if isinstance(payload, dict) else {}
-
-
-def _read_control_file() -> dict[str, Any]:
-    try:
-        payload = json.loads(DESKTOP_CONTROL_JSON_PATH.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        raise click.ClickException(
-            "Openbase Coder desktop control file was not found."
-        ) from None
-    except (OSError, json.JSONDecodeError) as exc:
-        raise click.ClickException(
-            f"Openbase Coder desktop control file is invalid: {exc}"
-        ) from None
-
-    port = payload.get("port")
-    secret = payload.get("secret")
-    if (
-        not isinstance(port, int)
-        or port <= 0
-        or not isinstance(secret, str)
-        or not secret
-    ):
-        raise click.ClickException("Openbase Coder desktop control file is incomplete.")
-    return {"port": port, "secret": secret}
-
-
-def _launch_desktop_app() -> None:
-    for app_name in DESKTOP_APP_NAMES:
-        result = subprocess.run(
-            ["open", "-a", app_name],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        if result.returncode == 0:
-            return
-    raise click.ClickException(
-        "Unable to launch Openbase.app or legacy Openbase Coder.app."
-    )
-
-
-def _wait_for_control_file() -> None:
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        try:
-            _read_control_file()
-            return
-        except click.ClickException:
-            time.sleep(0.25)
+        return desktop_control.request(method, path, json=json, launch=launch)
+    except desktop_control.DesktopControlError as exc:
+        raise click.ClickException(str(exc)) from None
