@@ -111,6 +111,8 @@ class LiveSpeechGate:
         # queued playout (AgentSession.interrupt).
         self.on_barge_in = None
         self._agent_words = deque()
+        self._agent_open_word = False
+        self._agent_transcript_end_ms = None
         self._last_permitted_end = None
         self._agent_state_speaking = False
         self._pending_playouts = 0
@@ -118,6 +120,7 @@ class LiveSpeechGate:
         self._caller_heard = ""
 
     def revoke(self):
+        self.end_agent_utterance()
         self.epoch += 1
         self.authorized = False
         self._starved = None
@@ -149,6 +152,7 @@ class LiveSpeechGate:
         """
         speaking = state == "speaking"
         if self._agent_state_speaking and not speaking:
+            self.end_agent_utterance()
             self._last_permitted_end = self._clock()
         self._agent_state_speaking = speaking
 
@@ -176,11 +180,43 @@ class LiveSpeechGate:
         end = self._last_permitted_end
         return end is not None and self._clock() - end < ECHO_TAIL_SECONDS
 
-    def agent_said(self, text):
-        """Words of the agent's output transcript: what its echo sounds like."""
+    def end_agent_utterance(self):
+        """Keep recent echo evidence, but never join words across utterances."""
+        self._agent_open_word = False
+        self._agent_transcript_end_ms = None
+
+    def agent_said(self, text, *, complete=False, start_ms=None, end_ms=None):
+        """Record streamed transcript deltas, or an independent complete script.
+
+        A delta may split a word anywhere, including around an apostrophe.
+        Keep its trailing word available to echo checks while allowing the next
+        delta to extend it. Whole session.say scripts never join a stream.
+        """
         now = self._clock()
-        for word in _words(text):
-            self._agent_words.append((now, word))
+        if complete or (
+            start_ms is not None
+            and self._agent_transcript_end_ms is not None
+            and start_ms - self._agent_transcript_end_ms > 800
+        ):
+            # Match the provider adapter's 800 ms utterance gap, including
+            # buffered deltas delivered together after a pause on its clock.
+            self.end_agent_utterance()
+        if not text:
+            return
+        words = _words(text)
+        if (
+            self._agent_open_word
+            and self._agent_words
+            and now - self._agent_words[-1][0] <= ECHO_TAIL_SECONDS
+            and _WORD.match(text.lower())
+        ):
+            _, previous = self._agent_words.pop()
+            words[0] = previous + words[0]
+        self._agent_words.extend((now, word) for word in words)
+        self._agent_open_word = not complete and bool(
+            _WORD.fullmatch(text[-1:].lower())
+        )
+        self._agent_transcript_end_ms = None if complete else end_ms
         while self._agent_words and now - self._agent_words[0][0] > (
             AGENT_WORDS_WINDOW_SECONDS
         ):

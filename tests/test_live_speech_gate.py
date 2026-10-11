@@ -489,3 +489,69 @@ def test_single_word_echo_requires_recent_whole_word_evidence():
     assert not gate.is_echo("stop")
     now[0] += 20.0
     assert not gate.is_echo("build is ready")
+
+
+def test_echo_matching_is_independent_of_output_delta_boundaries():
+    gate = LiveSpeechGate(clock=lambda: 10.0)
+    gate.authorize()
+    gate.agent_state_changed("speaking")
+    # The plugin reconstructs these deltas as "Project ready".
+    gate.agent_said("Pro")
+    gate.agent_said("ject ready")
+    gate.user_state_changed("speaking")
+    gate.caller_heard("Project ready")
+    assert gate.authorized, "the exact echoed phrase revoked its own audio"
+
+
+def test_echo_delta_words_do_not_join_scripts_or_later_utterances():
+    gate = LiveSpeechGate(clock=lambda: 10.0)
+    gate.agent_said("Pro")
+    gate.agent_said("ject ready", complete=True)
+    assert not gate.is_echo("Project ready")
+    assert gate.is_echo("ject ready")
+    gate.agent_said("Next job", complete=True)
+    gate.agent_said("done now")
+    assert gate.is_echo("done now")
+    gate.agent_state_changed("speaking")
+    gate.agent_state_changed("listening")
+    gate.agent_said("Start here")
+    assert gate.is_echo("Start here")
+
+
+def test_echo_delta_boundary_uses_provider_time_and_preserves_apostrophes():
+    gate = LiveSpeechGate(clock=lambda: 10.0)
+    for piece in ("I", "'", "m", " ", "rea", "", "dy"):
+        gate.agent_said(piece)
+    assert gate.is_echo("I'm ready")
+    gate.agent_said("Next task", start_ms=1000, end_ms=1500)
+    gate.agent_said("Stop now", start_ms=2500, end_ms=3000)
+    assert gate.is_echo("Stop now")
+
+
+async def test_bridge_reconstructs_split_output_words_for_echo():
+    from test_live_delegation import _make_bridge
+
+    bridge, live, *_ = _make_bridge()
+    try:
+        bridge.speech_gate.authorize()
+        bridge.speech_gate.agent_state_changed("speaking")
+        bridge.on_agent_state_changed("listening", "speaking")
+        for piece in ("Pro", "ject ready"):
+            live.emit(
+                "openai_server_event_received",
+                {
+                    "type": "session.output_transcript.delta",
+                    "delta": piece,
+                },
+            )
+        bridge.speech_gate.user_state_changed("speaking")
+        live.emit(
+            "openai_server_event_received",
+            {
+                "type": "session.input_transcript.delta",
+                "delta": "Project ready",
+            },
+        )
+        assert bridge.speech_gate.authorized
+    finally:
+        await bridge.aclose()

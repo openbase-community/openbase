@@ -459,7 +459,11 @@ class LiveCharacterController:
                 return
             kind = event.get("type")
             if kind == "session.output_transcript.delta":
-                gate.agent_said(str(event.get("delta") or ""))
+                gate.agent_said(
+                    str(event.get("delta") or ""),
+                    start_ms=event.get("start_ms"),
+                    end_ms=event.get("end_ms"),
+                )
             elif kind == "session.input_transcript.delta":
                 gate.caller_heard(str(event.get("delta") or ""))
 
@@ -470,7 +474,7 @@ class LiveCharacterController:
             live.on("input_audio_transcription_completed", caller_input)
             live.on("openai_server_event_received", gateway_event)
             if self._speech_gate is not None:
-                self._speech_gate.agent_said(message.text)
+                self._speech_gate.agent_said(message.text, complete=True)
 
         try:
             assistant = await self._replace(

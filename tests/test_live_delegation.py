@@ -2570,16 +2570,15 @@ async def test_complete_backend_answer_uses_one_explicit_speech_command():
 # --- speakerphone echo and starved answers -----------------------------------
 
 
-async def test_a_lone_short_word_over_the_agents_speech_is_dropped_as_echo():
-    """ "...Cooper" heard back as "uper" must not interrupt with a turn that
-    answers nothing (2026-10-10, Android speakerphone)."""
+async def test_a_recent_exact_short_word_over_the_agents_speech_is_echo():
+    """A whole word just spoken by the agent can explain a short echo."""
     bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
     try:
         bridge.on_agent_state_changed("listening", "speaking")
-        bridge.speech_gate.agent_said("Hi, I'm Cooper")
+        bridge.speech_gate.agent_said("Ready to run")
         bridge.on_user_state_changed("listening", "speaking")
         bridge.on_user_state_changed("speaking", "listening")
-        live.final("uper")
+        live.final("Run")
         await _settle()
         assert dispatcher.prompts == []
         assert bridge._stats["decision_ignored_echo_fragment"] == 1
