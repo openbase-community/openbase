@@ -132,6 +132,19 @@ class SuperAgentsClientThreadsMixin:
         async with self._state_lock:
             if self._state_path is not None:
                 with self._thread_state_file_lock():
+                    if self._fresh_thread:
+                        # Recreation: never adopt or resume whatever Dispatcher
+                        # id is on disk. Between the route reset and this
+                        # warm-up, the restarted services (the phone's
+                        # Dispatcher lookup, the voice worker) can re-adopt and
+                        # write back the old Dispatcher; adopting it here
+                        # silently skipped the recreation ("Dispatcher thread
+                        # will be recreated", but the old id stayed: Gabe's VM,
+                        # 2026-10-11 07:24Z). The id the client loaded at
+                        # construction is the old one too.
+                        self._thread_id = None
+                        self._thread_loaded = False
+                        return await self._start_thread()
                     canonical_thread_id = self._load_thread_id()
                     if canonical_thread_id and canonical_thread_id != self._thread_id:
                         logger.info(

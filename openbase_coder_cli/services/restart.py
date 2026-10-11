@@ -117,14 +117,31 @@ def schedule_restart(
         )
 
     command = _scheduled_restart_command(plan)
-    subprocess.Popen(
-        ["/bin/sh", "-c", command],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    # The restart runs detached after this process exits; keep its output (a
+    # failed Dispatcher recreation, a service that would not install) in a
+    # log instead of discarding it (Gabe's VM, 2026-10-11 07:24Z: a silent
+    # no-op recreation).
+    log_path = restart_log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "a", encoding="utf-8") as log:
+        log.write(
+            f"\n[{time.strftime('%Y-%m-%dT%H:%M:%S%z')}] restart {restart_plan_payload(plan)}\n"
+        )
+        log.flush()
+        subprocess.Popen(
+            ["/bin/sh", "-c", command],
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
     return plan
+
+
+def restart_log_path():
+    from openbase_coder_cli.paths import DEFAULT_LOG_DIR
+
+    return DEFAULT_LOG_DIR / "restart.log"
 
 
 def execute_restart_plan(plan: RestartPlan) -> None:
@@ -133,12 +150,15 @@ def execute_restart_plan(plan: RestartPlan) -> None:
     with service_mutation():
         config = require_installation()
 
+        previous_dispatcher_id = None
         if plan.recreate_dispatcher:
             from openbase_coder_cli.livekit_voice_route import (
                 prepare_livekit_dispatcher_recreation,
             )
 
-            prepare_livekit_dispatcher_recreation()
+            previous_dispatcher_id = (
+                prepare_livekit_dispatcher_recreation() or {}
+            ).get("previous_dispatcher_thread_id")
 
         services = order_services([find_service(name) for name in plan.services])
         # Providers first: installation waits for the old process to exit and
@@ -154,7 +174,18 @@ def execute_restart_plan(plan: RestartPlan) -> None:
                 warm_livekit_dispatcher_thread,
             )
 
-            asyncio.run(warm_livekit_dispatcher_thread(fresh=True))
+            new_dispatcher_id = asyncio.run(warm_livekit_dispatcher_thread(fresh=True))
+            if previous_dispatcher_id and new_dispatcher_id == previous_dispatcher_id:
+                # Loud, never silent: the restart runs detached, so this lands
+                # in the restart log (see _scheduled_restart_command).
+                raise RuntimeError(
+                    "Dispatcher recreation kept the previous Dispatcher thread "
+                    f"{previous_dispatcher_id}; no new Dispatcher was created."
+                )
+            print(
+                f"Dispatcher recreated: {previous_dispatcher_id or '-'} -> {new_dispatcher_id}",
+                flush=True,
+            )
 
 
 def execute_restart_payload(raw_payload: str) -> None:

@@ -2590,3 +2590,36 @@ def test_spoken_answer_drops_an_echoed_voice_tag() -> None:
     assert _speech_text_from_progress(progress, turn_id="t1") == (
         "I don't see an Apricot agent."
     )
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_recreation_ignores_an_old_id_written_back_to_disk(tmp_path):
+    """Gabe's VM, 2026-10-11 07:24Z: between the route reset and the fresh
+    warm-up, the restarted services re-adopted the old Dispatcher and wrote its
+    id back; the fresh client adopted it from disk and no Dispatcher was
+    recreated."""
+    import json
+
+    backend = FakeCodexSuperAgentsBackend()
+    state = tmp_path / "route.json"
+    state.write_text(
+        json.dumps({"dispatcher_thread_id": "old-dispatcher", "updated_at": 1})
+    )
+    resumed: list = []
+
+    async def resume_thread(thread_id, **kwargs):
+        resumed.append(thread_id)
+        return {"thread": {"id": thread_id}}
+
+    backend.resume_thread = resume_thread
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(state),
+        backend_client=backend,
+        fresh_thread=True,
+    )
+    new_id = await client.prepare()
+
+    assert new_id != "old-dispatcher"
+    assert resumed == []
+    assert backend.started_threads[0]["fresh"] is True
