@@ -68,9 +68,9 @@ def model_request_budget_message(text: str | None) -> str | None:
 # One short, complete sentence for voice: a live call's speech gate cuts the
 # rest of a reply as soon as the caller is heard, so the spoken form must not
 # depend on a second clause to make sense. The thread keeps the full text.
-# Said aloud, so the address is spelled for speech (Gabe, 2026-10-11: tell
-# the user to subscribe whenever an allowance runs out).
-SUBSCRIBE_SPOKEN = "You can subscribe at app dot openbase dot cloud."
+# The spoken form of plan_copy.SUBSCRIBE_PRO_LINE (Gabe's wording,
+# 2026-10-11), with the address spelled for speech.
+SUBSCRIBE_SPOKEN = "Subscribe to a Pro plan on app dot openbase dot cloud for expanded access."
 MODEL_ALLOWANCE_EXHAUSTED_SPOKEN = (
     f"You're out of Openbase model credits. {SUBSCRIBE_SPOKEN}"
 )

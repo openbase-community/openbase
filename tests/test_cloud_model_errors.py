@@ -103,7 +103,7 @@ def test_allowance_denial_in_history_voice_and_auth_classification(
     # The voice agent says one short sentence; the thread keeps the full text.
     assert (
         _safe_spoken_answer(raw, auth_failed=False)
-        == "You're out of Openbase model credits. You can subscribe at app dot openbase dot cloud."
+        == "You're out of Openbase model credits. Subscribe to a Pro plan on app dot openbase dot cloud for expanded access."
     )
     assert "try again" not in expected
 
