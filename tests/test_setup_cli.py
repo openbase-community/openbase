@@ -2379,7 +2379,7 @@ def test_interactive_setup_offers_backend_cli_login(monkeypatch, tmp_path, backe
         monkeypatch, "_selected_coding_backend", lambda _env, _requested: backend
     )
     _patch_setup(
-        monkeypatch, "backend_login_missing", lambda _b: not logged_in["value"]
+        monkeypatch, "backend_login_missing", lambda _b, **_kw: not logged_in["value"]
     )
 
     def fake_login(selected):

@@ -1,22 +1,23 @@
 """Coding-backend CLI logins: detect a missing or expired one, and explain it.
 
 Openbase drives the user's own Claude Code or Codex CLI on their computer. When
-that CLI is not signed in, the backend does not raise a clean error:
+that CLI is not signed in, its raw error ("Not logged in · Please run /login",
+or Codex's "unexpected status 401 Unauthorized ...") reads like an Openbase
+app sign-in problem. This module is the single source of truth for
+recognizing that case and for the one plain message every surface shows or
+speaks instead: thread chat, socket errors, voice calls (GPT-Live and
+Classic), the Dispatcher and setup.
 
-* Claude Code answers the turn with ``Not logged in · Please run /login`` (a
-  wiped login) or ``Failed to authenticate ...`` / ``OAuth session expired``
-  (an expired one), then marks the result ``is_error``.
-* Codex retries for ~15 seconds and fails the turn with ``unexpected status
-  401 Unauthorized: Missing bearer or basic authentication in header`` (no
-  login) or a token-refresh error (an expired one).
+Recognition uses structured signals only, never error text:
 
-Shown verbatim, both read like an Openbase app sign-in problem. This module is
-the single source of truth for recognizing them (``backend_auth_failure``) and
-for the one plain message every surface shows or speaks instead: thread chat,
-socket errors, voice calls (GPT-Live and Classic) and setup.
+* the turn's ``errorKind`` (Super Agents records the Claude Agent SDK's
+  ``AssistantMessage.error`` and maps Codex's ``codexErrorInfo`` HTTP 401) is
+  ``authentication_failed``;
+* for a turn failing live, the CLI's own login state (``claude auth status``
+  JSON, Codex ``auth.json``) says it is signed out.
 
 Openbase Cloud backends ride the Openbase Cloud login, not a CLI login, so
-their auth failures are never reported as a CLI sign-in problem here.
+their failures are never reported as a CLI sign-in problem here.
 """
 
 from __future__ import annotations
@@ -27,6 +28,8 @@ import json
 import socket
 import subprocess
 import sys
+import time
+from typing import Any
 
 from openbase_coder_cli.backend_config import (
     CLAUDE_CODE_BACKEND,
@@ -39,41 +42,13 @@ from openbase_coder_cli.paths import OPENBASE_BASE_DIR
 CLI_LOGIN_BACKENDS = (CLAUDE_CODE_BACKEND, CODEX_BACKEND)
 CLOUD_BACKENDS = (OPENBASE_CLOUD_BACKEND, OPENBASE_CLOUD_CODEX_BACKEND)
 
-# Claude Code turn answers that mean "this CLI is not signed in". The first
-# two are shared with the Openbase Cloud proxy path (Claude Code behind the
-# proxy prints the same prefixes), so they only count for Claude Code when the
-# backend is known or the text names /login.
-CLAUDE_LOGIN_FAILURE_PREFIXES = (
-    "Not logged in",
-    "Failed to authenticate",
-    "Invalid API key",
-    "OAuth session expired",
-    "OAuth token has expired",
-)
-# Codex turn errors that mean "this CLI is not signed in" (compared
-# case-insensitively). A 401 from api.openai.com is the no-login answer; the
-# rest are what Codex says when a stored ChatGPT login can no longer refresh.
-CODEX_LOGIN_FAILURE_PREFIXES = (
-    "unexpected status 401",
-    "your access token could not be refreshed",
-    "provided authentication token is expired",
-    "your refresh token",
-    "not logged in",
-)
-# A login failure is the whole message, never a passage inside a longer
-# answer: an agent reply that merely mentions "401 Unauthorized" must stay
-# untouched.
-MAX_LOGIN_FAILURE_TEXT_CHARS = 1000
+AUTHENTICATION_FAILED = "authentication_failed"
+FAILED_TURN_STATUSES = ("failed", "error", "systemerror")
+# A logged-out answer is re-checked after this long; a live failure path asks
+# at most this often per backend.
+LOGIN_STATE_TTL_SECONDS = 5.0
 
 BACKEND_LABELS = {CLAUDE_CODE_BACKEND: "Claude Code", CODEX_BACKEND: "Codex"}
-
-
-def _matches_claude(text: str) -> bool:
-    return text.strip().startswith(CLAUDE_LOGIN_FAILURE_PREFIXES)
-
-
-def _matches_codex(text: str) -> bool:
-    return text.strip().lower().startswith(CODEX_LOGIN_FAILURE_PREFIXES)
 
 
 def _configured_backends() -> list[str]:
@@ -85,40 +60,58 @@ def _configured_backends() -> list[str]:
         return []
 
 
-def backend_auth_failure(text: str | None, backend: str | None = None) -> str | None:
-    """Which CLI backend (``claude_code`` / ``codex``) failed to sign in, or None.
+def cli_login_backend(backend: str | None = None) -> str | None:
+    """The CLI-login backend a turn ran on (``claude_code`` / ``codex``).
 
-    ``backend`` is the backend that produced ``text`` when the caller knows it.
-    Without it, unambiguous wording decides (``/login`` is Claude Code, an
-    api.openai.com 401 is Codex), then the configured coding backend.
+    ``backend`` is the turn's configured backend when the caller knows it;
+    otherwise the install's primary configured backend. None for Openbase
+    Cloud backends, which have no CLI login.
     """
-    if not text or not text.strip() or len(text) > MAX_LOGIN_FAILURE_TEXT_CHARS:
-        return None
-    if backend in CLOUD_BACKENDS:
-        return None
-    from openbase_coder_cli.cloud_model_errors import model_proxy_denial_message
+    if backend is None:
+        configured = _configured_backends()
+        backend = configured[0] if configured else None
+    return backend if backend in CLI_LOGIN_BACKENDS else None
 
-    if model_proxy_denial_message(text) is not None:
+
+def turn_failed(turn: dict[str, Any] | None) -> bool:
+    """Whether a turn payload (or turn notification params) records a failure."""
+    if not isinstance(turn, dict):
+        return False
+    status = turn.get("status")
+    if isinstance(status, dict):
+        status = status.get("type")
+    if isinstance(status, str) and status.lower() in FAILED_TURN_STATUSES:
+        return True
+    return turn.get("error") not in (None, "", {})
+
+
+def turn_reports_authentication_failure(turn: dict[str, Any] | None) -> bool:
+    """Whether a turn's structured error kind says its backend couldn't sign in."""
+    from super_agents.app_protocol import turn_error_kind
+
+    return turn_error_kind(turn) == AUTHENTICATION_FAILED
+
+
+def failed_turn_login_backend(
+    turn: dict[str, Any] | None,
+    backend: str | None = None,
+    *,
+    check_login: bool = False,
+) -> str | None:
+    """The CLI backend whose missing login made ``turn`` fail, or None.
+
+    A failed turn qualifies when its structured error kind is
+    ``authentication_failed``, or, with ``check_login`` (a turn failing now,
+    not one re-rendered from history), when the CLI itself reports it is
+    signed out.
+    """
+    cli_backend = cli_login_backend(backend)
+    if cli_backend is None or not turn_failed(turn):
         return None
-    if backend == CLAUDE_CODE_BACKEND:
-        return CLAUDE_CODE_BACKEND if _matches_claude(text) else None
-    if backend == CODEX_BACKEND:
-        return CODEX_BACKEND if _matches_codex(text) else None
-    configured = _configured_backends()
-    if configured and not any(b in CLI_LOGIN_BACKENDS for b in configured):
-        # A cloud-only install has no CLI login to fix; its proxy failures
-        # keep their own handling.
-        return None
-    lowered = text.lower()
-    if _matches_claude(text) and "/login" in lowered:
-        return CLAUDE_CODE_BACKEND
-    if _matches_codex(text) and "api.openai.com" in lowered:
-        return CODEX_BACKEND
-    for candidate in configured:
-        if candidate == CLAUDE_CODE_BACKEND and _matches_claude(text):
-            return CLAUDE_CODE_BACKEND
-        if candidate == CODEX_BACKEND and _matches_codex(text):
-            return CODEX_BACKEND
+    if turn_reports_authentication_failure(turn):
+        return cli_backend
+    if check_login and backend_login_missing(cli_backend):
+        return cli_backend
     return None
 
 
@@ -215,17 +208,24 @@ def backend_login_spoken_message(
     )
 
 
-def normalize_backend_error_text(text: str, backend: str | None = None) -> str:
-    """Text safe to show a user in place of a raw backend error.
+def login_failure_message(
+    turn: dict[str, Any] | None,
+    backend: str | None = None,
+    *,
+    live: bool = False,
+) -> str | None:
+    """The plain sign-in message for a turn that failed on a signed-out CLI.
 
-    A CLI login failure becomes :func:`backend_login_message`; an Openbase
-    Cloud proxy denial becomes its plain message; anything else is unchanged.
+    ``live`` marks a turn failing now (not one re-rendered from history): its
+    CLI login is checked directly, and the failure is remembered so the AI
+    account card asks for a relink.
     """
-    from openbase_coder_cli.cloud_model_errors import normalize_model_proxy_error
-
-    if failed_backend := backend_auth_failure(text, backend):
-        return backend_login_message(failed_backend)
-    return normalize_model_proxy_error(text)
+    failed_backend = failed_turn_login_backend(turn, backend, check_login=live)
+    if failed_backend is None:
+        return None
+    if live:
+        mark_relink_needed(failed_backend)
+    return backend_login_message(failed_backend)
 
 
 RELINK_STATE_PATH = OPENBASE_BASE_DIR / "ai-account-relink.json"
@@ -263,22 +263,28 @@ def clear_relink_needed(backend: str) -> None:
         _write_relink_needed(current - {backend})
 
 
-def normalize_live_backend_error_text(text: str, backend: str | None = None) -> str:
-    """Like :func:`normalize_backend_error_text`, for an error a turn just
-    hit (not one re-rendered from history): a CLI login failure is also
-    remembered, so the AI account card asks for a relink."""
-    if failed_backend := backend_auth_failure(text, backend):
-        mark_relink_needed(failed_backend)
-        return backend_login_message(failed_backend)
-    return normalize_backend_error_text(text, backend)
+_login_state_cache: dict[str, tuple[float, bool]] = {}
 
 
-def backend_login_missing(backend: str | None) -> bool:
+def backend_login_missing(backend: str | None, *, fresh: bool = False) -> bool:
     """Whether ``backend``'s CLI is definitely not signed in on this computer.
 
     Fails open: an unknown backend, a missing binary or a probe error is not
-    reported as a missing login.
+    reported as a missing login. Answers are reused for
+    ``LOGIN_STATE_TTL_SECONDS`` unless ``fresh``.
     """
+    if backend not in CLI_LOGIN_BACKENDS:
+        return False
+    cached = _login_state_cache.get(backend)
+    now = time.monotonic()
+    if not fresh and cached and now - cached[0] < LOGIN_STATE_TTL_SECONDS:
+        return cached[1]
+    missing = _probe_login_missing(backend)
+    _login_state_cache[backend] = (now, missing)
+    return missing
+
+
+def _probe_login_missing(backend: str) -> bool:
     if backend == CLAUDE_CODE_BACKEND:
         from openbase_coder_cli.claude_auth import claude_auth_status
 

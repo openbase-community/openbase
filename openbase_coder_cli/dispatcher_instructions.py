@@ -50,10 +50,9 @@ CURRENT_STATE_RULES = f"""{CURRENT_STATE_HEADING}
   requirement: do not request introductions, completion speech or notification
   commands for such a task. Do not promise silence merely because no call is
   active: user say can send a phone notification without an active call.
-- A Super Agent turn that failed with "Not logged in · Please run /login"
-  (Claude Code) or "401 Unauthorized" from api.openai.com (Codex) means that
-  coding CLI isn't signed in on the user's computer. Never call it an
-  Openbase sign-in problem.
+- A Super Agent turn whose errorKind is "authentication_failed" on a Claude
+  Code or Codex thread means that coding CLI isn't signed in on the user's
+  computer. Never call it an Openbase sign-in problem.
   Tell the user: "{_CLAUDE_LOGIN}" For Codex: "{_CODEX_LOGIN}"
 - Never say that a file, folder or project does not exist, or that a location
   is empty, without checking in this turn.

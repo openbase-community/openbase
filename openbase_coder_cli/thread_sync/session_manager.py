@@ -189,17 +189,18 @@ async def _notify_manual_thread_finished(
 
 
 def _turn_failure_message(params: dict[str, Any]) -> str:
-    from openbase_coder_cli.backend_auth import (
-        normalize_live_backend_error_text as normalize_backend_error_text,
-    )
+    from openbase_coder_cli.backend_auth import login_failure_message
+    from openbase_coder_cli.cloud_model_errors import normalize_model_proxy_error
 
+    if login_message := login_failure_message(params, live=True):
+        return login_message
     error = params.get("error")
     if isinstance(error, dict):
         message = error.get("message")
         if isinstance(message, str) and message.strip():
-            return normalize_backend_error_text(message.strip())
+            return normalize_model_proxy_error(message.strip())
     if isinstance(error, str) and error.strip():
-        return normalize_backend_error_text(error.strip())
+        return normalize_model_proxy_error(error.strip())
     return "The agent turn failed unexpectedly."
 
 
@@ -427,13 +428,13 @@ class CodexAppServerSessionManager(
         if method == "item/completed":
             item = params.get("item", {})
             if isinstance(item, dict) and item.get("type") == "agentMessage":
-                from openbase_coder_cli.backend_auth import (
-                    normalize_live_backend_error_text as normalize_backend_error_text,
+                from openbase_coder_cli.cloud_model_errors import (
+                    normalize_model_proxy_error,
                 )
 
                 text = item.get("text", "")
                 if turn_id and isinstance(text, str) and text:
-                    text = normalize_backend_error_text(text)
+                    text = normalize_model_proxy_error(text)
                     item_id = _notification_item_id(params)
                     if item_id:
                         delivered = self._delivered_item_text.get(

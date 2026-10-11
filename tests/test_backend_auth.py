@@ -1,4 +1,4 @@
-"""Coding-backend CLI login failures: classification, message, every surface."""
+"""Coding-backend CLI login failures: structured classification, one message."""
 
 from __future__ import annotations
 
@@ -8,33 +8,47 @@ import pytest
 
 from openbase_coder_cli import backend_auth
 from openbase_coder_cli.backend_auth import (
-    backend_auth_failure,
     backend_login_message,
     backend_login_spoken_message,
-    normalize_backend_error_text,
+    failed_turn_login_backend,
+    login_failure_message,
 )
 from openbase_coder_cli.backend_config import (
     CLAUDE_CODE_BACKEND,
     CODEX_BACKEND,
     OPENBASE_CLOUD_BACKEND,
+    OPENBASE_CLOUD_CODEX_BACKEND,
 )
 
-# Captured 2026-10-10: `claude -p` with an empty config dir (Claude Code
-# 2.1.296), and a Codex app-server turn with an empty CODEX_HOME (0.162.1).
-CLAUDE_NOT_LOGGED_IN = "Not logged in · Please run /login"
-CLAUDE_FAILED_TURN_ERROR = (
-    "Not logged in · Please run /login (Claude Code returned an error result; "
-    "task completion is unverified.)"
-)
-CODEX_NOT_LOGGED_IN = (
-    "unexpected status 401 Unauthorized: Missing bearer or basic authentication "
-    "in header, url: https://api.openai.com/v1/responses, cf-ray: "
-    "a48a69b4da6698fc-SJC, request id: req_5b77c009b0b7418eb9d0316b2c42e20a"
-)
-CODEX_REFRESH_FAILED = (
-    "Your access token could not be refreshed because your refresh token was "
-    "already used. Please log out and sign in again."
-)
+# Captured 2026-10-10/11 with each CLI signed out: Claude Code 2.1.296 via the
+# Agent SDK 0.2.93 (AssistantMessage.error="authentication_failed"), and a
+# Codex 0.162.1 app-server turn (codexErrorInfo httpStatusCode 401).
+CLAUDE_TURN = {
+    "turnId": "t1",
+    "status": "failed",
+    "errorKind": "authentication_failed",
+    "lastError": (
+        "Not logged in · Please run /login (Claude Code returned an error "
+        "result; task completion is unverified.)"
+    ),
+    "items": [
+        {"type": "userMessage", "content": [{"type": "text", "text": "hi"}]},
+        {"type": "agentMessage", "text": "Not logged in · Please run /login"},
+    ],
+}
+CODEX_ERROR = {
+    "message": (
+        "unexpected status 401 Unauthorized: Missing bearer or basic "
+        "authentication in header, url: https://api.openai.com/v1/responses"
+    ),
+    "codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": 401}},
+}
+CODEX_TURN = {
+    "id": "t2",
+    "status": "failed",
+    "error": CODEX_ERROR,
+    "items": [{"type": "userMessage", "content": [{"type": "text", "text": "hi"}]}],
+}
 
 
 @pytest.fixture(autouse=True)
@@ -43,53 +57,72 @@ def _computer(monkeypatch):
     monkeypatch.setattr(
         backend_auth, "_configured_backends", lambda: [CLAUDE_CODE_BACKEND]
     )
+    monkeypatch.setattr(backend_auth, "_probe_login_missing", lambda _backend: False)
+    backend_auth._login_state_cache.clear()
 
 
 @pytest.mark.parametrize(
-    ("text", "backend", "expected"),
+    ("turn", "backend", "expected"),
     [
-        (CLAUDE_NOT_LOGGED_IN, None, CLAUDE_CODE_BACKEND),
-        (CLAUDE_FAILED_TURN_ERROR, None, CLAUDE_CODE_BACKEND),
-        (CLAUDE_NOT_LOGGED_IN, CLAUDE_CODE_BACKEND, CLAUDE_CODE_BACKEND),
-        (
-            "Failed to authenticate: OAuth session expired",
-            CLAUDE_CODE_BACKEND,
-            CLAUDE_CODE_BACKEND,
-        ),
-        (CODEX_NOT_LOGGED_IN, None, CODEX_BACKEND),
-        (CODEX_NOT_LOGGED_IN, CODEX_BACKEND, CODEX_BACKEND),
-        (CODEX_REFRESH_FAILED, CODEX_BACKEND, CODEX_BACKEND),
-        # A cloud backend has no CLI login to fix.
-        (CLAUDE_NOT_LOGGED_IN, OPENBASE_CLOUD_BACKEND, None),
-        # Real answers that merely mention an auth error stay untouched.
-        ("The API returned 401 Unauthorized, so I added a token refresh.", None, None),
-        ("Here is how /login works in the app.", None, None),
-        ("", None, None),
-        (None, None, None),
+        (CLAUDE_TURN, CLAUDE_CODE_BACKEND, CLAUDE_CODE_BACKEND),
+        (CLAUDE_TURN, None, CLAUDE_CODE_BACKEND),
+        (CODEX_TURN, CODEX_BACKEND, CODEX_BACKEND),
+        # Openbase Cloud backends have no CLI login to fix.
+        (CLAUDE_TURN, OPENBASE_CLOUD_BACKEND, None),
+        (CODEX_TURN, OPENBASE_CLOUD_CODEX_BACKEND, None),
+        # Not failed, or failed for another structured reason.
+        ({**CLAUDE_TURN, "status": "completed", "errorKind": None}, None, None),
+        ({**CLAUDE_TURN, "errorKind": "rate_limit"}, None, None),
     ],
 )
-def test_backend_auth_failure_classifies(text, backend, expected) -> None:
-    assert backend_auth_failure(text, backend) == expected
+def test_failed_turn_login_backend_uses_structured_error_kind(
+    turn, backend, expected
+) -> None:
+    assert failed_turn_login_backend(turn, backend) == expected
 
 
-def test_proxy_denial_is_not_a_cli_login_failure() -> None:
-    denial = (
-        'Failed to authenticate. API Error: 403 {"detail":"Monthly Openbase model '
-        'proxy spend limit reached."}'
+def test_error_text_alone_never_classifies() -> None:
+    """The sign-in wording without a structured kind is not a login failure."""
+    turn = {**CLAUDE_TURN, "errorKind": None}
+    assert failed_turn_login_backend(turn, CLAUDE_CODE_BACKEND) is None
+    codex = {**CODEX_TURN, "error": {"message": CODEX_ERROR["message"]}}
+    assert failed_turn_login_backend(codex, CODEX_BACKEND) is None
+
+
+def test_live_failure_checks_the_cli_login_state(monkeypatch) -> None:
+    turn = {"turnId": "t3", "status": "failed", "lastError": "anything"}
+    assert failed_turn_login_backend(turn, CLAUDE_CODE_BACKEND) is None
+    assert (
+        failed_turn_login_backend(turn, CLAUDE_CODE_BACKEND, check_login=True) is None
     )
-    assert backend_auth_failure(denial, CLAUDE_CODE_BACKEND) is None
+    monkeypatch.setattr(backend_auth, "_probe_login_missing", lambda _backend: True)
+    backend_auth._login_state_cache.clear()
+    assert (
+        failed_turn_login_backend(turn, CLAUDE_CODE_BACKEND, check_login=True)
+        == CLAUDE_CODE_BACKEND
+    )
+    # A turn that did not fail is never blamed on the login.
+    ok = {"turnId": "t4", "status": "completed"}
+    assert failed_turn_login_backend(ok, CLAUDE_CODE_BACKEND, check_login=True) is None
 
 
-def test_cloud_only_install_never_reports_cli_login(monkeypatch) -> None:
+def test_login_state_is_cached_briefly(monkeypatch) -> None:
+    probes = []
     monkeypatch.setattr(
-        backend_auth, "_configured_backends", lambda: [OPENBASE_CLOUD_BACKEND]
+        backend_auth,
+        "_probe_login_missing",
+        lambda backend: probes.append(backend) or True,
     )
-    assert backend_auth_failure(CLAUDE_NOT_LOGGED_IN) is None
+    assert backend_auth.backend_login_missing(CODEX_BACKEND)
+    assert backend_auth.backend_login_missing(CODEX_BACKEND)
+    assert probes == [CODEX_BACKEND]
+    assert backend_auth.backend_login_missing(CODEX_BACKEND, fresh=True)
+    assert probes == [CODEX_BACKEND, CODEX_BACKEND]
+    assert not backend_auth.backend_login_missing(OPENBASE_CLOUD_BACKEND)
 
 
 def test_messages_name_the_computer_and_the_fix() -> None:
-    claude = backend_login_message(CLAUDE_CODE_BACKEND)
-    assert claude == (
+    assert backend_login_message(CLAUDE_CODE_BACKEND) == (
         "Claude Code isn't signed in on your computer (Gabe's Mac). On that "
         "computer, open a terminal and run `claude`, then type /login (or run "
         "`claude login`). Then try again."
@@ -107,78 +140,67 @@ def test_messages_name_the_computer_and_the_fix() -> None:
     assert "`" not in backend_login_spoken_message(CODEX_BACKEND)
 
 
-def test_normalize_replaces_only_login_failures() -> None:
-    assert normalize_backend_error_text(CLAUDE_NOT_LOGGED_IN) == backend_login_message(
-        CLAUDE_CODE_BACKEND
-    )
-    assert normalize_backend_error_text(CODEX_NOT_LOGGED_IN) == backend_login_message(
-        CODEX_BACKEND
-    )
-    assert normalize_backend_error_text("All done.") == "All done."
-
-
-def test_thread_chat_shows_login_message_instead_of_raw_sentinel() -> None:
+def test_thread_chat_replaces_claude_notice_and_explains_codex(monkeypatch) -> None:
     from openbase_coder_cli.thread_sync.thread_messages import turn_messages
 
-    messages = turn_messages(
-        {
-            "items": [
-                {"type": "userMessage", "content": [{"type": "text", "text": "hi"}]},
-                {"type": "agentMessage", "text": CLAUDE_NOT_LOGGED_IN},
-            ]
-        }
-    )
+    messages = turn_messages(CLAUDE_TURN)
+    assert [m["role"] for m in messages] == ["user", "assistant"]
     assert messages[-1]["text"] == backend_login_message(CLAUDE_CODE_BACKEND)
+
+    monkeypatch.setattr(backend_auth, "_configured_backends", lambda: [CODEX_BACKEND])
+    messages = turn_messages(CODEX_TURN)
+    assert [m["role"] for m in messages] == ["user", "assistant"]
+    assert messages[-1]["text"] == backend_login_message(CODEX_BACKEND)
+
+
+def test_thread_output_is_the_login_message() -> None:
+    from openbase_coder_cli.thread_sync.thread_payloads import _extract_agent_output
+
+    assert _extract_agent_output(CLAUDE_TURN) == backend_login_message(
+        CLAUDE_CODE_BACKEND
+    )
+    unclassified = {**CLAUDE_TURN, "errorKind": None, "status": "completed"}
+    assert _extract_agent_output(unclassified) == "Not logged in · Please run /login"
 
 
 def test_failed_turn_socket_error_is_the_login_message() -> None:
     from openbase_coder_cli.thread_sync.session_manager import _turn_failure_message
 
-    assert _turn_failure_message(
-        {"error": {"message": CODEX_NOT_LOGGED_IN}}
-    ) == backend_login_message(CODEX_BACKEND)
-    assert _turn_failure_message(
-        {"error": {"message": CLAUDE_FAILED_TURN_ERROR}}
-    ) == backend_login_message(CLAUDE_CODE_BACKEND)
+    params = {
+        "threadId": "s1",
+        "turnId": "t1",
+        "error": {
+            "message": CLAUDE_TURN["lastError"],
+            "errorKind": "authentication_failed",
+        },
+    }
+    assert _turn_failure_message(params) == backend_login_message(CLAUDE_CODE_BACKEND)
+    assert _turn_failure_message({"error": {"message": "boom"}}) == "boom"
+    assert login_failure_message({"error": {"message": "boom"}}) is None
 
 
 @pytest.mark.parametrize(
-    ("own", "expected_backend"),
-    [
-        ({"lastUsefulMessage": CLAUDE_NOT_LOGGED_IN}, CLAUDE_CODE_BACKEND),
-        ({"lastError": CODEX_NOT_LOGGED_IN}, CODEX_BACKEND),
-    ],
+    ("backend", "turn"),
+    [(CLAUDE_CODE_BACKEND, CLAUDE_TURN), (CODEX_BACKEND, CODEX_TURN)],
 )
-def test_failed_turn_speech_keeps_its_own_login_error(own, expected_backend) -> None:
-    from openbase_coder_cli.livekit_agent.super_agents_speech import (
-        _speech_text_from_progress,
-    )
-
-    turn = {"turnId": "t1", "status": "failed", **own}
-    text = _speech_text_from_progress(
-        {"status": "failed", "turnId": "t1", "turn": turn}, turn_id="t1"
-    )
-    assert backend_auth_failure(text) == expected_backend
-
-
-@pytest.mark.parametrize(
-    ("backend", "raw"),
-    [
-        (CLAUDE_CODE_BACKEND, CLAUDE_FAILED_TURN_ERROR),
-        (CODEX_BACKEND, CODEX_NOT_LOGGED_IN),
-    ],
-)
-def test_voice_flags_and_speaks_login_failure(backend, raw) -> None:
+def test_voice_speaks_login_failure(backend, turn) -> None:
     from openbase_coder_cli.livekit_agent import super_agents_client as client
 
-    auth_failed = client._flag_backend_auth_failure(raw, backend=backend)
-    assert auth_failed is True
-    spoken = client._safe_spoken_answer(raw, auth_failed=True, backend=backend)
+    turn_id = turn.get("turnId") or turn["id"]
+    progress = {"status": "failed", "turnId": turn_id, "turn": turn}
+    login_backend = client._progress_login_backend(
+        progress, backend=backend, turn_id=turn_id
+    )
+    assert login_backend == backend
+    assert client._flag_backend_auth_failure(login_backend, backend=backend) is True
+    spoken = client._safe_spoken_answer(
+        "Not logged in · Please run /login", login_backend=login_backend
+    )
     assert spoken == backend_login_spoken_message(backend)
 
 
 @pytest.mark.asyncio
-async def test_failed_voice_turn_without_text_uses_login_check(
+async def test_failed_voice_turn_without_error_kind_uses_login_check(
     tmp_path, monkeypatch
 ) -> None:
     """The reported bug: a Claude Code dispatcher turn fails with no speech;
@@ -186,7 +208,7 @@ async def test_failed_voice_turn_without_text_uses_login_check(
     from openbase_coder_cli.livekit_agent import super_agents_client as client
     from tests.test_livekit_agent_super_agents_client import FakeSuperAgentsBackend
 
-    monkeypatch.setattr(client, "backend_login_missing", lambda backend: True)
+    monkeypatch.setattr(backend_auth, "_probe_login_missing", lambda _backend: True)
     monkeypatch.setattr(
         client,
         "verified_claude_auth_status",
@@ -213,18 +235,6 @@ async def test_failed_voice_turn_without_text_uses_login_check(
     )
 
 
-def test_live_commentary_suppresses_raw_login_errors() -> None:
-    from openbase_coder_cli.livekit_agent.super_agents_client import (
-        _looks_like_raw_backend_error,
-    )
-
-    assert _looks_like_raw_backend_error(CODEX_NOT_LOGGED_IN)
-    assert _looks_like_raw_backend_error(CLAUDE_NOT_LOGGED_IN)
-    assert not _looks_like_raw_backend_error(
-        backend_login_spoken_message(CLAUDE_CODE_BACKEND)
-    )
-
-
 def test_cloud_workspace_message_points_at_the_ai_account_setting() -> None:
     assert backend_login_message(CODEX_BACKEND, cloud=True) == (
         "Codex isn't signed in on your cloud workspace. Relink it in "
@@ -236,27 +246,24 @@ def test_cloud_workspace_message_points_at_the_ai_account_setting() -> None:
 
 
 def test_cloud_wording_follows_the_workspace(monkeypatch) -> None:
-    from openbase_coder_cli import backend_auth
-
     monkeypatch.setattr(backend_auth, "on_cloud_workspace", lambda: True)
     assert "cloud workspace" in backend_login_message(CLAUDE_CODE_BACKEND)
 
 
-def test_live_login_failure_marks_relink_until_cleared() -> None:
-    from openbase_coder_cli import backend_auth
+def test_live_login_failure_marks_relink_until_cleared(monkeypatch) -> None:
     from openbase_coder_cli.thread_sync.session_manager import _turn_failure_message
 
+    monkeypatch.setattr(backend_auth, "_configured_backends", lambda: [CODEX_BACKEND])
     assert backend_auth.relink_needed_backends() == set()
-    _turn_failure_message({"error": {"message": CODEX_NOT_LOGGED_IN}})
+    _turn_failure_message({"error": CODEX_ERROR})
     assert backend_auth.relink_needed_backends() == {CODEX_BACKEND}
     backend_auth.clear_relink_needed(CODEX_BACKEND)
     assert backend_auth.relink_needed_backends() == set()
 
 
-def test_rendering_history_does_not_mark_relink() -> None:
-    from openbase_coder_cli import backend_auth
-
-    backend_auth.normalize_backend_error_text(CODEX_NOT_LOGGED_IN)
+def test_rendering_history_does_not_mark_relink(monkeypatch) -> None:
+    monkeypatch.setattr(backend_auth, "_configured_backends", lambda: [CODEX_BACKEND])
+    assert login_failure_message(CODEX_TURN) == backend_login_message(CODEX_BACKEND)
     assert backend_auth.relink_needed_backends() == set()
 
 

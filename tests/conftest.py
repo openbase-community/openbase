@@ -133,6 +133,12 @@ def _isolated_host_state(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "openbase_coder_cli.backend_auth.on_cloud_workspace", lambda: False
     )
+    # Never ask this machine's real Claude Code / Codex CLI whether it is
+    # signed in; tests that need a signed-out CLI patch the probe themselves.
+    monkeypatch.setattr(
+        "openbase_coder_cli.backend_auth._probe_login_missing", lambda _backend: False
+    )
+    monkeypatch.setattr("openbase_coder_cli.backend_auth._login_state_cache", {})
     # Discard inherited backend settings and changes made by other tests.
     # Tests must see only what they set themselves.
     monkeypatch.delenv("OPENBASE_CODER_CLI_WEB_BACKEND_URL", raising=False)

@@ -20,9 +20,9 @@ from super_agents.app_protocol import (
 )
 
 from openbase_coder_cli.backend_auth import (
-    backend_auth_failure,
-    backend_login_missing,
     backend_login_spoken_message,
+    failed_turn_login_backend,
+    turn_failed,
 )
 from openbase_coder_cli.backend_config import (
     CLAUDE_CODE_BACKEND,
@@ -156,35 +156,74 @@ def _auth_failure_remediation(backend: str | None) -> str:
     return "sign the coding backend back in"
 
 
+def _progress_login_backend(
+    progress: dict[str, Any],
+    *,
+    backend: str | None,
+    turn_id: str | None,
+    check_login: bool = False,
+) -> str | None:
+    """The CLI backend whose missing login made this turn fail, or None.
+
+    Structured signals only (see :mod:`openbase_coder_cli.backend_auth`): the
+    turn's ``errorKind``, and with ``check_login`` the CLI's own login state.
+    """
+    views = [
+        view
+        for view in (progress.get("turn"), progress.get("summary"), progress)
+        if isinstance(view, dict)
+        and (
+            not turn_id or (view.get("turnId") or view.get("id") or turn_id) == turn_id
+        )
+    ]
+    for view in views:
+        if found := failed_turn_login_backend(view, backend):
+            return found
+    if check_login:
+        for view in views:
+            if turn_failed(view):
+                return failed_turn_login_backend(view, backend, check_login=True)
+    return None
+
+
+def _progress_auth_failed(progress: dict[str, Any], *, turn_id: str | None) -> bool:
+    """Whether the turn's structured error kind is an authentication failure,
+    on any backend (an Openbase Cloud proxy token too)."""
+    from openbase_coder_cli.backend_auth import turn_reports_authentication_failure
+
+    return any(
+        turn_reports_authentication_failure(view)
+        for view in (progress.get("turn"), progress.get("summary"), progress)
+        if isinstance(view, dict)
+        and (
+            not turn_id or (view.get("turnId") or view.get("id") or turn_id) == turn_id
+        )
+    )
+
+
 def _flag_backend_auth_failure(
-    speech_text: str,
+    failed_backend: str | None,
     *,
     backend: str | None = None,
     turn_id: str | None = None,
 ) -> bool:
-    """Surface a coding-backend auth failure that came back as a turn answer.
+    """Log a turn that failed because ``failed_backend`` couldn't authenticate.
 
-    Returns True when ``speech_text`` is a backend auth-failure sentinel (not a
-    real answer). Always emits a structured ERROR marker so an auth failure can
-    never look like a successful completed turn; additionally logs a debounced,
-    backend-correct human-readable hint.
+    Always emits a structured ERROR marker so an auth failure can never look
+    like a successful turn; additionally logs a debounced, backend-correct
+    human-readable hint.
     """
     global _last_backend_auth_warn_monotonic
-    if not (
-        is_backend_auth_failure_text(speech_text)
-        or backend_auth_failure(speech_text, backend)
-    ):
+    if failed_backend is None:
         return False
-    remediation = _auth_failure_remediation(backend)
+    remediation = _auth_failure_remediation(failed_backend)
     # Never debounced: the structured marker must fire on every failed turn so
     # monitoring and field tests catch it even inside the warning's debounce.
     logger.error(
-        "%s stage=voice_turn_backend_auth_failure backend=%s turn_id=%s "
-        "text_hash=%s remediation=%s",
+        "%s stage=voice_turn_backend_auth_failure backend=%s turn_id=%s remediation=%s",
         DISPATCH_TIMING_LOG,
-        backend or "unknown",
+        backend or failed_backend,
         turn_id or "",
-        hashlib.sha256(speech_text.strip().encode("utf-8")).hexdigest()[:12],
         remediation,
     )
     now = time.monotonic()
@@ -192,8 +231,8 @@ def _flag_backend_auth_failure(
     if last is None or now - last >= BACKEND_AUTH_WARN_DEBOUNCE_SECONDS:
         _last_backend_auth_warn_monotonic = now
         logger.warning(
-            "Coding backend auth failure surfaced in a spoken answer (backend=%s); %s.",
-            backend or "unknown",
+            "Coding backend %s could not authenticate; %s.",
+            failed_backend,
             remediation,
         )
     return True
@@ -212,7 +251,7 @@ BACKEND_ERROR_SPOKEN_FALLBACK = (
 
 def _looks_like_raw_backend_error(text: str | None) -> bool:
     """Whether a turn answer is a raw backend/proxy error that must not be spoken."""
-    if is_backend_auth_failure_text(text) or backend_auth_failure(text):
+    if is_backend_auth_failure_text(text):
         return True
     if not text:
         return False
@@ -224,14 +263,16 @@ def _looks_like_raw_backend_error(text: str | None) -> bool:
 def _safe_spoken_answer(
     speech_text: str,
     *,
-    auth_failed: bool,
+    login_backend: str | None = None,
+    auth_failed: bool = False,
     backend: str | None = None,
     turn_id: str | None = None,
 ) -> str:
     """Return text safe to speak: a graceful line for any backend error answer.
 
-    ``auth_failed`` is the result of :func:`_flag_backend_auth_failure` (already
-    logged). This additionally catches non-auth proxy/API error bodies so the
+    ``login_backend`` names a CLI whose missing login failed the turn (from
+    :func:`_progress_login_backend`, already logged): the caller hears how to
+    sign it back in. This additionally catches proxy/API error bodies so the
     dispatcher never reads a 403/500 payload aloud.
     """
     # A monthly-spend-limit 403 arrives looking like an auth failure ("Failed
@@ -252,9 +293,9 @@ def _safe_spoken_answer(
             turn_id or "",
         )
         return allowance_denial
+    if login_backend:
+        return backend_login_spoken_message(login_backend)
     if auth_failed:
-        if failed_backend := backend_auth_failure(speech_text, backend):
-            return backend_login_spoken_message(failed_backend)
         return BACKEND_ERROR_SPOKEN_FALLBACK
     if not _looks_like_raw_backend_error(speech_text):
         return speech_text
@@ -574,13 +615,24 @@ class SuperAgentsLiveKitClient(
             result = await self._wait_for_turn(thread_id, turn_id)
             speech_text = _speech_text_from_progress(result, turn_id=turn_id)
             backend = getattr(self._backend_client, "backend", None)
+            login_backend = await asyncio.to_thread(
+                _progress_login_backend,
+                result,
+                backend=backend,
+                turn_id=turn_id,
+                check_login=True,
+            )
             auth_failed = _flag_backend_auth_failure(
-                speech_text,
+                login_backend
+                or (
+                    backend if _progress_auth_failed(result, turn_id=turn_id) else None
+                ),
                 backend=backend,
                 turn_id=turn_id,
             )
             spoken_text = _safe_spoken_answer(
                 speech_text,
+                login_backend=login_backend,
                 auth_failed=auth_failed,
                 backend=backend,
                 turn_id=turn_id,
@@ -588,28 +640,10 @@ class SuperAgentsLiveKitClient(
             turn_status = result.get("status") or result.get("summary", {}).get(
                 "status"
             )
-            turn_failed = (
+            status_failed = (
                 isinstance(turn_status, str) and turn_status.lower() == "failed"
             )
-            if (
-                turn_failed
-                and not auth_failed
-                and backend in (CLAUDE_CODE_BACKEND, CODEX_BACKEND)
-                and await asyncio.to_thread(backend_login_missing, backend)
-            ):
-                # The failed turn carried no recognizable login error text
-                # (or a wording we don't know yet), but the CLI itself says it
-                # is signed out: that is the cause, so say so.
-                auth_failed = True
-                spoken_text = backend_login_spoken_message(backend)
-                logger.error(
-                    "%s stage=voice_turn_backend_auth_failure backend=%s "
-                    "turn_id=%s source=login_check",
-                    DISPATCH_TIMING_LOG,
-                    backend,
-                    turn_id,
-                )
-            if turn_failed and not spoken_text and not auth_failed:
+            if status_failed and not spoken_text and not auth_failed:
                 # Failed turns yield no fresh assistant text (cached
                 # lastUsefulMessage candidates are excluded upstream), and
                 # silence here historically fell through to stale speech or
@@ -686,13 +720,26 @@ class SuperAgentsLiveKitClient(
                 wait_task.result(), turn_id=turn_id
             )
             backend = getattr(self._backend_client, "backend", None)
+            progress = wait_task.result()
+            login_backend = _progress_login_backend(
+                progress, backend=backend, turn_id=turn_id
+            )
             auth_failed = _flag_backend_auth_failure(
-                speech_text,
+                login_backend
+                or (
+                    backend
+                    if _progress_auth_failed(progress, turn_id=turn_id)
+                    else None
+                ),
                 backend=backend,
                 turn_id=turn_id,
             )
             spoken_text = _safe_spoken_answer(
-                speech_text, auth_failed=auth_failed, backend=backend, turn_id=turn_id
+                speech_text,
+                login_backend=login_backend,
+                auth_failed=auth_failed,
+                backend=backend,
+                turn_id=turn_id,
             )
             if spoken_text:
                 logger.info(
@@ -759,13 +806,22 @@ class SuperAgentsLiveKitClient(
             return
         speech_text = _speech_text_from_progress(wait_task.result(), turn_id=turn_id)
         backend = getattr(self._backend_client, "backend", None)
+        progress = wait_task.result()
+        login_backend = _progress_login_backend(
+            progress, backend=backend, turn_id=turn_id
+        )
         auth_failed = _flag_backend_auth_failure(
-            speech_text,
+            login_backend
+            or (backend if _progress_auth_failed(progress, turn_id=turn_id) else None),
             backend=backend,
             turn_id=turn_id,
         )
         spoken_text = _safe_spoken_answer(
-            speech_text, auth_failed=auth_failed, backend=backend, turn_id=turn_id
+            speech_text,
+            login_backend=login_backend,
+            auth_failed=auth_failed,
+            backend=backend,
+            turn_id=turn_id,
         )
         if not spoken_text:
             return

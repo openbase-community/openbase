@@ -596,7 +596,7 @@ def _interactive_backend_login(env_file: str) -> None:
         click.echo(click.style(backend_login_message(backend), fg="yellow"))
         return
     run_backend_login(backend)
-    if backend_login_missing(backend):
+    if backend_login_missing(backend, fresh=True):
         click.echo(click.style(backend_login_message(backend), fg="yellow"))
     else:
         click.echo(f"{label} is signed in.")

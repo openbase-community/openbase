@@ -1888,23 +1888,19 @@ def test_backend_auth_failure_warning_debounced_and_backend_specific(
 
     assert (
         super_agents_client_module._flag_backend_auth_failure(
-            "Failed to authenticate: OAuth session expired and could not be refreshed",
-            backend="claude_code",
-            turn_id="t_1",
+            "claude_code", backend="claude_code", turn_id="t_1"
         )
         is True
     )
     # The human-readable WARNING fires once and names the Claude-specific fix.
-    assert caplog.text.count("surfaced in a spoken answer") == 1
+    assert caplog.text.count("could not authenticate") == 1
     assert "claude login" in caplog.text
 
     # Debounced: an immediate repeat must not emit a second WARNING.
     super_agents_client_module._flag_backend_auth_failure(
-        "Failed to authenticate: OAuth session expired and could not be refreshed",
-        backend="claude_code",
-        turn_id="t_2",
+        "claude_code", backend="claude_code", turn_id="t_2"
     )
-    assert caplog.text.count("surfaced in a spoken answer") == 1
+    assert caplog.text.count("could not authenticate") == 1
 
 
 def test_backend_auth_failure_always_emits_error_marker(monkeypatch, caplog) -> None:
@@ -1919,18 +1915,16 @@ def test_backend_auth_failure_always_emits_error_marker(monkeypatch, caplog) -> 
 
     for turn_id in ("t_1", "t_2"):
         super_agents_client_module._flag_backend_auth_failure(
-            "Not logged in · Please run /login.",
-            backend="openbase_cloud",
-            turn_id=turn_id,
+            "openbase_cloud", backend="openbase_cloud", turn_id=turn_id
         )
 
     assert caplog.text.count("stage=voice_turn_backend_auth_failure") == 2
-    # Codex/openbase_cloud remediation must NOT tell the user to run `claude login`.
+    # Openbase Cloud remediation must NOT tell the user to run `claude login`.
     assert "claude login" not in caplog.text
     assert "machine token" in caplog.text
 
 
-def test_backend_auth_failure_ignores_normal_speech(monkeypatch, caplog) -> None:
+def test_backend_auth_failure_ignores_turns_without_one(monkeypatch, caplog) -> None:
     import logging
 
     monkeypatch.setattr(
@@ -1938,28 +1932,37 @@ def test_backend_auth_failure_ignores_normal_speech(monkeypatch, caplog) -> None
     )
     caplog.set_level(logging.WARNING)
 
+    assert super_agents_client_module._flag_backend_auth_failure(None) is False
+    progress = {
+        "status": "completed",
+        "turnId": "t_1",
+        "turn": {"turnId": "t_1", "status": "completed"},
+    }
     assert (
-        super_agents_client_module._flag_backend_auth_failure(
-            "The build passed and I pushed the fix.", backend="codex"
-        )
+        super_agents_client_module._progress_auth_failed(progress, turn_id="t_1")
         is False
     )
-    assert super_agents_client_module._flag_backend_auth_failure("") is False
-
-    assert "auth failure" not in caplog.text
     assert "voice_turn_backend_auth_failure" not in caplog.text
 
 
-def test_safe_spoken_answer_replaces_auth_failure_with_graceful_line() -> None:
-    from openbase_coder_cli.backend_auth import backend_login_spoken_message
-
-    # A dead Claude Code login says how to sign back in on the computer.
-    assert super_agents_client_module._safe_spoken_answer(
-        "Not logged in · Please run /login.",
-        auth_failed=True,
-        backend="claude_code",
-    ) == backend_login_spoken_message("claude_code")
-    # A cloud backend's auth failure has no CLI login to fix.
+def test_cloud_auth_failure_is_structured_and_speaks_the_fallback() -> None:
+    progress = {
+        "status": "failed",
+        "turnId": "t_1",
+        "turn": {
+            "turnId": "t_1",
+            "status": "failed",
+            "errorKind": "authentication_failed",
+        },
+    }
+    assert super_agents_client_module._progress_auth_failed(progress, turn_id="t_1")
+    # No CLI login to fix on an Openbase Cloud backend.
+    assert (
+        super_agents_client_module._progress_login_backend(
+            progress, backend="openbase_cloud", turn_id="t_1"
+        )
+        is None
+    )
     assert (
         super_agents_client_module._safe_spoken_answer(
             "Failed to authenticate. API Error: 401",
