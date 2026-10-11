@@ -140,8 +140,6 @@ class AnnouncementProtocol:
         room_name = await self.resolve_room() if delivery == "audible" else None
 
         def decide(state, task):
-            if task.get("fatal"):
-                raise RuntimeError(task["fatal"])
             if delivery == "quiet":
                 inherited = task.get("quiet_request") or state.get("last_quiet_request")
                 if not quiet or not (
@@ -217,8 +215,6 @@ class AnnouncementProtocol:
                 raise ValueError(
                     "Work is still running. Wait for every tool result before finish."
                 )
-            if task.get("fatal"):
-                raise RuntimeError(task["fatal"])
             task["finish"] = {"summary": summary, "revision": context.revision}
 
         await self._edit(context, finish)
@@ -252,9 +248,18 @@ class AnnouncementProtocol:
                 task["pending"].append(tool_id)
             return None
 
+        # The announcement is never allowed to stand between the worker and
+        # its actual work (orchestrator, 2026-10-11: a worker on a desktop
+        # was denied its first tool calls twice, and on a cloud workspace a
+        # failing introduction failed the whole turn). A missing begin only
+        # earns a reminder, delivered with the tool's result, a bounded
+        # number of times.
         failure = await self._edit(context, check)
         if failure:
-            return self._hook_failure(failure, "PreToolUse")
+            reason, _ = failure
+            await self._edit(
+                context, lambda state, task: task.__setitem__("remind", reason)
+            )
         return {}
 
     async def after_tool(self, thread_id, event):
@@ -263,8 +268,16 @@ class AnnouncementProtocol:
         def settle(state, task):
             if event.get("tool_use_id") in task["pending"]:
                 task["pending"].remove(event["tool_use_id"])
+            return task.pop("remind", None)
 
-        await self._edit(context, settle)
+        reminder = await self._edit(context, settle)
+        if reminder:
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                    "additionalContext": reminder,
+                }
+            }
         return {}
 
     async def stop(self, thread_id):
@@ -285,27 +298,21 @@ class AnnouncementProtocol:
 
     @staticmethod
     def _correction(task, reason):
+        """Count a protocol correction; past the bound the protocol stops
+        insisting. A worker is never failed for its announcements."""
         task["corrections"] += 1
-        if task["corrections"] >= MAX_CORRECTIONS:
-            task["fatal"] = (
-                "Worker announcement protocol was not completed after bounded corrections."
-            )
-        return (reason, task.get("fatal"))
+        if task["corrections"] > MAX_CORRECTIONS:
+            return None
+        return (reason, None)
 
     @staticmethod
     def _hook_failure(failure, event):
-        reason, fatal = failure
-        if fatal:
-            return {"continue_": False, "stopReason": fatal}
+        reason, _ = failure
         if event == "Stop":
+            # Asking once more for the finish announcement keeps completions
+            # spoken; after the bound the worker simply stops.
             return {"decision": "block", "reason": reason}
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": event,
-                "permissionDecision": "deny",
-                "permissionDecisionReason": reason,
-            }
-        }
+        return {}
 
     async def validate_turn_result(self, session, turn, result):
         async with self._locks.setdefault(session.id, asyncio.Lock()):
@@ -318,8 +325,6 @@ class AnnouncementProtocol:
                 return
 
             def validate(state, task):
-                if task.get("fatal"):
-                    raise RuntimeError(task["fatal"])
                 if task["pending"] or not task.get("finish"):
                     raise RuntimeError(
                         "Work returned without a verified announcement protocol receipt."

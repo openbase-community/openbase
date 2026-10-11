@@ -117,7 +117,10 @@ def send_user_say_fallback(
     thread_id: str,
 ) -> None:
     backend_url = web_backend_url()
-    token = get_token_manager(backend_url).get_access_token()
+    # The owner's token on a desktop; the workspace's machine token on a
+    # Cloud workspace, which has no user refresh token (376, 2026-10-11: a
+    # worker's introduction failed with "No refresh token available").
+    token = _notify_bearer_token(backend_url)
     notification_agent_name = _truncate_for_notification(
         agent_name,
         MAX_NOTIFICATION_AGENT_NAME_LENGTH,

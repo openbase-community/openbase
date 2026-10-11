@@ -83,10 +83,15 @@ async def terminal(w):
     )
 
 
-async def test_read_only_skip_is_blocked_then_worker_can_complete_protocol(worker):
+async def test_read_only_skip_is_reminded_not_blocked_then_worker_completes_protocol(
+    worker,
+):
+    """The announcement never stands between the worker and its work: a tool
+    call before begin is allowed and the reminder rides on its result."""
     w = worker
-    denied = await w.protocol.before_tool(w.session.id, event())
-    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert await w.protocol.before_tool(w.session.id, event()) == {}
+    reminded = await w.protocol.after_tool(w.session.id, event())
+    assert "phase=begin" in reminded["hookSpecificOutput"]["additionalContext"]
     assert not w.receipts
     await begin(w)
     assert len(w.receipts) == 1 and "Rowan" in w.receipts[0][1]
@@ -127,8 +132,9 @@ async def test_quiet_requires_user_evidence_and_survives_steer(worker):
     set_prompt(w, "Read this quietly, without announcements.")
     await begin(w, delivery="quiet", quiet_request="without announcements")
     w.store.append_turn_steer(w.turn.id, "Also inspect the second file.")
-    denied = await w.protocol.before_tool(w.session.id, event())
-    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert await w.protocol.before_tool(w.session.id, event()) == {}
+    reminded = await w.protocol.after_tool(w.session.id, event())
+    assert "phase=begin" in reminded["hookSpecificOutput"]["additionalContext"]
     with pytest.raises(ValueError, match="Quiet intent persists"):
         await begin(w)
     await begin(w, delivery="quiet", quiet_request="without announcements")
@@ -212,14 +218,20 @@ async def test_introduction_survives_client_restart_and_later_turn(worker):
     assert len(w.receipts) == 2
 
 
-async def test_missing_protocol_has_bounded_corrections_and_never_succeeds(worker):
+async def test_missing_protocol_has_bounded_corrections_and_never_fails_the_worker(
+    worker,
+):
+    """A worker that never announces is asked a bounded number of times and
+    then simply allowed to stop; its turn is never failed for it."""
     w = worker
     for _ in range(MAX_CORRECTIONS):
         response = await w.protocol.stop(w.session.id)
-    assert response["continue_"] is False
-    with pytest.raises(RuntimeError, match="bounded corrections"):
-        await terminal(w)
+        assert response["decision"] == "block"
+    assert await w.protocol.stop(w.session.id) == {}
     assert not w.receipts
+    for _ in range(MAX_CORRECTIONS + 1):
+        assert await w.protocol.before_tool(w.session.id, event()) == {}
+        await w.protocol.after_tool(w.session.id, event())
 
 
 async def test_ambiguous_failed_intro_is_not_repeated_or_claimed(worker):
@@ -295,7 +307,9 @@ def test_canonical_dispatcher_is_exempt_independent_of_title(worker, monkeypatch
     assert not options.mcp_servers
 
 
-@pytest.mark.parametrize("title", ["dispatcher", "dispatcher (retired)", "Dispatcher (retired 1a2b3c4d)"])
+@pytest.mark.parametrize(
+    "title", ["dispatcher", "dispatcher (retired)", "Dispatcher (retired 1a2b3c4d)"]
+)
 def test_a_dispatcher_by_label_is_exempt_even_when_the_route_id_moved_on(
     worker, monkeypatch, title
 ):
@@ -514,9 +528,13 @@ async def test_managed_factory_real_sdk_tool_and_hooks_complete_same_protocol(
     pre = options.hooks["PreToolUse"][-1].hooks[0]
     post = options.hooks["PostToolUse"][-1].hooks[0]
     stop = options.hooks["Stop"][-1].hooks[0]
-    assert (await pre(event(), "read-1", None))["hookSpecificOutput"][
-        "permissionDecision"
-    ] == "deny"
+    assert await pre(event(), "read-1", None) == {}
+    assert (
+        "phase=begin"
+        in (await post(event(), "read-1", None))["hookSpecificOutput"][
+            "additionalContext"
+        ]
+    )
     assert not (await invoke({"phase": "begin", "delivery": "audible"})).isError
     assert await pre(event(), "read-1", None) == {}
     assert (await invoke({"phase": "finish", "summary": "Premature result."})).isError
