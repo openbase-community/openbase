@@ -30,9 +30,11 @@ from openbase_coder_cli.config.token_manager import (
     TokenManager,
     create_pkce_challenge,
     create_pkce_verifier,
+    decode_jwt_claims_unverified,
 )
 from openbase_coder_cli.paths import AUTH_JSON_PATH, MACHINE_TOKEN_JSON_PATH
 from openbase_coder_cli.services.cloud_registration import register_and_report
+from openbase_coder_cli.services.netmesh_account import sign_out_account
 
 from .login_pages import login_complete_page, stale_login_page
 from .password_auth import exchange_password_for_jwts
@@ -250,6 +252,18 @@ def _complete_login(
     *, web_backend_url: str, access_token: str, refresh_token: str, expires_in: int
 ) -> None:
     manager = TokenManager(web_backend_url)
+    # Only a stored login counts: a workspace's pinned owner identity is not
+    # a session to sign out.
+    previous_sub = (
+        manager.get_owner_identity().get("sub") if manager.has_refresh_token else None
+    )
+    new_sub = str(decode_jwt_claims_unverified(access_token).get("sub") or "")
+    if previous_sub and new_sub and previous_sub != new_sub:
+        # Switching accounts without a logout: release everything this
+        # machine holds for the previous account while its token still works,
+        # so its VPN node and device record cannot follow into the new one.
+        click.echo("Signing out the previous Openbase account on this machine...")
+        sign_out_account(echo=click.echo)
     manager.store_tokens(
         access_token=access_token,
         refresh_token=refresh_token,
@@ -404,8 +418,10 @@ def login(email: str | None, password_stdin: bool) -> None:
 
 @click.command()
 def logout() -> None:
-    """Log out and clear stored tokens."""
+    """Log out, leave the account's Openbase VPN network, and clear tokens."""
     if AUTH_JSON_PATH.is_file():
+        # Needs the account's token, so it runs before the tokens go.
+        sign_out_account(echo=click.echo)
         AUTH_JSON_PATH.unlink()
         if MACHINE_TOKEN_JSON_PATH.is_file():
             MACHINE_TOKEN_JSON_PATH.unlink()

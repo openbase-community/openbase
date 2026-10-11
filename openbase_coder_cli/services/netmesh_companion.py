@@ -483,6 +483,23 @@ class NetmeshCompanion:
         """Stop the VPN tunnel (the root daemon stays registered)."""
         return self._parse_status(self._request("POST", "/disconnect", timeout=30.0))
 
+    def logout(self) -> CompanionStatus:
+        """Leave the network and forget the node login (account switch)."""
+        try:
+            raw = self._request("POST", "/logout", timeout=30.0)
+        except urllib.error.HTTPError as exc:
+            raise NetmeshCompanionError(
+                "the Openbase VPN companion could not sign out "
+                f"(HTTP {exc.code}); update the Openbase desktop app"
+            ) from exc
+        except (urllib.error.URLError, OSError, TimeoutError) as exc:
+            raise NetmeshCompanionError(
+                f"the companion control listener became unavailable: {exc}"
+            ) from exc
+        if raw.get("ok") is False:
+            raise NetmeshCompanionError(str(raw.get("error") or "VPN sign-out failed"))
+        return self._parse_status(raw)
+
     def open_approval_settings(self) -> None:
         try:
             self._request("POST", "/open-approval-settings")

@@ -334,7 +334,11 @@ def prepare_embedded_enrollment(env_path=None) -> dict | None:
     upsert_env_file_values(
         env_path or _env_path(), {TSNET_CONTROL_URL_ENV_KEY: str(control_url)}
     )
-    return {"control_url": str(control_url), "auth_key": str(auth_key)}
+    return {
+        "control_url": str(control_url),
+        "auth_key": str(auth_key),
+        "tailnet_user": str(enrollment.get("tailnet_user") or ""),
+    }
 
 
 def _bring_up_transport(name: str) -> None:
@@ -411,11 +415,47 @@ def _bring_up_transport(name: str) -> None:
     for _attempt in range(2):
         try:
             ensure_tunneld_running(auth_key=auth_key, managed_service=True)
-            click.echo("openbase-tunneld is running and joined the tailnet.")
-            return
+            break
         except RuntimeError as exc:
             last_error = exc
-    raise click.ClickException(f"Openbase Direct did not connect: {last_error}")
+    else:
+        raise click.ClickException(f"Openbase Direct did not connect: {last_error}")
+    _rejoin_embedded_node_for_account(enrollment, auth_key)
+    click.echo("openbase-tunneld is running and joined the tailnet.")
+
+
+def _rejoin_embedded_node_for_account(
+    enrollment: dict | None, auth_key: str | None
+) -> None:
+    """A Running embedded node may still be logged into a previous account.
+
+    tunneld only redeems a key from NeedsLogin, so a persisted login of
+    another account would come up Running in that account's network.
+    """
+    from openbase_coder_cli.services.netmesh_account import (
+        belongs_to_other_account,
+        forget_node_login,
+        netmesh_status,
+    )
+    from openbase_coder_cli.services.tunneld import ensure_tunneld_running
+
+    if not enrollment or not belongs_to_other_account(
+        netmesh_status(tp.PROVIDER_NETMESH_TSNET), enrollment
+    ):
+        return
+    click.echo(
+        "The embedded Openbase node belongs to a different Openbase account; "
+        "signing it out before joining yours."
+    )
+    error = forget_node_login(tp.PROVIDER_NETMESH_TSNET)
+    if error:
+        raise click.ClickException(
+            f"Could not sign the previous account's node out: {error}"
+        )
+    try:
+        ensure_tunneld_running(auth_key=auth_key, managed_service=True)
+    except RuntimeError as exc:
+        raise click.ClickException(f"Openbase Direct did not connect: {exc}") from exc
 
 
 def reconcile_after_login() -> None:
@@ -546,6 +586,7 @@ def _provision_netmesh_companion() -> None:
     connected with a freshly minted netmesh key.
     """
     from openbase_coder_cli.services.cloud_registration import netmesh_enroll
+    from openbase_coder_cli.services.netmesh_account import leave_if_other_account
     from openbase_coder_cli.services.netmesh_companion import (
         NetmeshCompanion,
         NetmeshCompanionError,
@@ -580,15 +621,29 @@ def _provision_netmesh_companion() -> None:
             warn(f"could not update the Openbase VPN helper: {exc}")
             companion.close()
             return
-        if status.running:
-            # Re-apply (e.g. re-running set-provider for serve rules): the tunnel
-            # is already up — don't mint a fresh single-use key or churn the node.
-            click.echo(
-                f"Openbase VPN already connected: {status.dns_name or 'netmesh'} "
-                f"({status.self_ip or '?'})."
-            )
+
+    # The enrollment names the signed-in account's network. The engine keeps
+    # its node login across disconnects and ignores a new key while one is
+    # stored, so a node from a previous account must be signed out first,
+    # whether the tunnel is running or stopped.
+    enrollment = netmesh_enroll()
+    if status.helper_enabled and enrollment:
+        if not leave_if_other_account(tp.PROVIDER_NETMESH, enrollment, echo=warn):
+            warn("not connecting: the VPN would rejoin the previous account's network.")
             companion.close()
             return
+        status = companion.status()
+    if status.running:
+        # Same-account re-apply (e.g. re-running set-provider for serve rules):
+        # keep the node rather than churning it.
+        if enrollment is None:
+            warn("could not confirm which account the running VPN belongs to.")
+        click.echo(
+            f"Openbase VPN already connected: {status.dns_name or 'netmesh'} "
+            f"({status.self_ip or '?'})."
+        )
+        companion.close()
+        return
 
     if not status.helper_enabled:
         try:
@@ -611,7 +666,6 @@ def _provision_netmesh_companion() -> None:
             companion.close()
             return
 
-    enrollment = netmesh_enroll()
     if not enrollment:
         warn("could not mint a netmesh key — sign in to Openbase first.")
         companion.close()
@@ -725,6 +779,18 @@ def enroll(json_: bool) -> None:
             "Could not mint a netmesh key. Run 'openbase-coder login' first "
             "and check that openbase-cloud is reachable."
         )
+    if tp.is_netmesh():
+        from openbase_coder_cli.services.netmesh_account import (
+            leave_if_other_account,
+        )
+
+        if not leave_if_other_account(
+            tp.provider(), enrollment, echo=lambda m: click.echo(m, err=True)
+        ):
+            raise click.ClickException(
+                "Not enrolling: this machine's VPN node is still signed in to "
+                "a different Openbase account."
+            )
     if json_:
         click.echo(
             json_module.dumps(
