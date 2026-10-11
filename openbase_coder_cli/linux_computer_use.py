@@ -20,6 +20,11 @@ import httpx
 DEFAULT_DISPLAY = ":0"
 DEFAULT_STATE = "off"
 REMOTE_CONTROL_PREFIX = "openbase.remote_control."
+SCREEN_SHARE_STOP_TYPE = "openbase.screen_share.stop"
+COMPANION_IDENTITY = "openbase-screen-share-companion"
+# Seconds a share may run with no human viewer (phone hung up, backgrounded
+# or lost its connection) before the companion ends it.
+VIEWERLESS_GRACE_SECONDS = 10.0
 X11_SOCKET_DIR = Path("/tmp/.X11-unix")
 DCV_XAUTH_DIR_TEMPLATE = "/run/user/{uid}/dcv"
 
@@ -584,6 +589,8 @@ class LinuxCompanion:
         self._runner_thread: threading.Thread | None = None
         self._remote_control_enabled = False
         self._authorized_identity: str | None = None
+        self._viewer_watchdog: asyncio.Task | None = None
+        self._ending_share = False
         # (scaled_width, scaled_height, native_width, native_height) of the
         # most recent MCP screenshot; MCP action coordinates arrive in the
         # scaled space and map proportionally back to native pixels.
@@ -752,6 +759,20 @@ class LinuxCompanion:
         def on_data_received(packet: Any) -> None:
             self._handle_data_packet(packet)
 
+        @room.on("participant_connected")
+        def on_participant_connected(_participant: Any) -> None:
+            self._evaluate_viewers()
+
+        @room.on("participant_disconnected")
+        def on_participant_disconnected(_participant: Any) -> None:
+            self._evaluate_viewers()
+
+        @room.on("disconnected")
+        def on_disconnected(*_args: Any) -> None:
+            # Call ended server-side or the link dropped for good.
+            if self._room is room:
+                self._schedule_end_share("room_disconnected")
+
         await room.connect(room_url, token)
         raw, width, height = await asyncio.to_thread(self.desktop.screenshot_rgba)
         source = rtc.VideoSource(width, height, is_screencast=True)
@@ -764,8 +785,63 @@ class LinuxCompanion:
         )
         self._room = room
         self._screen_task = asyncio.create_task(self._capture_loop(source))
+        self._evaluate_viewers()
+
+    def _has_viewers(self) -> bool:
+        from livekit import rtc
+
+        room = self._room
+        if room is None:
+            return False
+        return any(
+            participant.kind != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
+            and participant.identity != COMPANION_IDENTITY
+            for participant in room.remote_participants.values()
+        )
+
+    def _evaluate_viewers(self) -> None:
+        """Arm or cancel the no-viewer timeout (runs on the companion loop)."""
+        if self._room is None or self.state not in {"sharing", "controlling"}:
+            self._cancel_viewer_watchdog()
+            return
+        if self._has_viewers():
+            self._cancel_viewer_watchdog()
+            return
+        if self._viewer_watchdog is None:
+            self._viewer_watchdog = asyncio.ensure_future(self._viewerless_timeout())
+
+    def _cancel_viewer_watchdog(self) -> None:
+        if self._viewer_watchdog is not None:
+            self._viewer_watchdog.cancel()
+            self._viewer_watchdog = None
+
+    async def _viewerless_timeout(self) -> None:
+        await asyncio.sleep(VIEWERLESS_GRACE_SECONDS)
+        self._viewer_watchdog = None
+        if self._room is not None and not self._has_viewers():
+            await self._end_share("no_viewers")
+
+    def _schedule_end_share(self, reason: str) -> None:
+        asyncio.ensure_future(self._end_share(reason))
+
+    async def _end_share(self, reason: str) -> None:
+        """Stop capture, tear down remote input and leave the room."""
+        if self._ending_share or self.state == "off":
+            return
+        self._ending_share = True
+        try:
+            self._remote_control_enabled = False
+            self._authorized_identity = None
+            if self._runner:
+                self._runner.interrupt()
+            await self._stop_livekit()
+            self.state = "off"
+            print(f"[linux-companion] share ended reason={reason}", flush=True)
+        finally:
+            self._ending_share = False
 
     async def _stop_livekit(self) -> None:
+        self._cancel_viewer_watchdog()
         if self._screen_task:
             self._screen_task.cancel()
             try:
@@ -774,8 +850,10 @@ class LinuxCompanion:
                 pass
             self._screen_task = None
         if self._room:
-            await self._room.disconnect()
-            self._room = None
+            # Detach first so the room's own "disconnected" event does not
+            # schedule a second teardown.
+            room, self._room = self._room, None
+            await room.disconnect()
 
     async def _capture_loop(self, source: Any) -> None:
         from livekit import rtc
@@ -796,9 +874,21 @@ class LinuxCompanion:
         if not isinstance(message, dict):
             return
         message_type = str(message.get("type") or "")
+        participant = getattr(packet, "participant", None)
+        if message_type == SCREEN_SHARE_STOP_TYPE:
+            from livekit import rtc
+
+            # A viewer's Stop ends the share on this computer, not just on
+            # the viewer's screen. Agents may not end it this way.
+            if (
+                participant is not None
+                and participant.kind != rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
+            ):
+                self._schedule_end_share("viewer_stop")
+            return
         if not message_type.startswith(REMOTE_CONTROL_PREFIX):
             return
-        sender = getattr(getattr(packet, "participant", None), "identity", None)
+        sender = getattr(participant, "identity", None)
         sender_identity = getattr(sender, "string_value", None) or str(sender or "")
         try:
             if message_type == "openbase.remote_control.set_enabled":

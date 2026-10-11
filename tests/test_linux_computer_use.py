@@ -271,3 +271,129 @@ def test_desktop_control_open_app_activates_existing_window(toolchain):
 
     assert payload["ok"] is True
     assert ["xdotool", "windowactivate", "42"] in commands
+
+
+class _FakeRoom:
+    def __init__(self, participants):
+        self.remote_participants = {p.identity: p for p in participants}
+        self.disconnected = False
+
+    async def disconnect(self):
+        self.disconnected = True
+
+
+def _participant(identity, kind):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(identity=identity, kind=kind)
+
+
+def _viewer():
+    from livekit import rtc
+
+    return _participant(
+        "gabe@example.com", rtc.ParticipantKind.PARTICIPANT_KIND_STANDARD
+    )
+
+
+def _agent():
+    from livekit import rtc
+
+    return _participant("agent-dispatcher", rtc.ParticipantKind.PARTICIPANT_KIND_AGENT)
+
+
+def _companion_with_room(room) -> lcu.LinuxCompanion:
+    companion = lcu.LinuxCompanion(desktop=lcu.LinuxDesktop(display=":7"))
+    companion.state = "sharing"
+    companion._room = room
+    companion._remote_control_enabled = True
+    companion._authorized_identity = "gabe@example.com"
+    return companion
+
+
+def _wait_for(predicate, timeout=2.0):
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return predicate()
+
+
+def _assert_share_ended(companion, room):
+    assert _wait_for(lambda: companion.state == "off")
+    assert room.disconnected
+    assert companion._room is None
+    assert companion._remote_control_enabled is False
+    assert companion._authorized_identity is None
+
+
+def test_viewer_stop_message_ends_share():
+    import json
+    from types import SimpleNamespace
+
+    room = _FakeRoom([_viewer(), _agent()])
+    companion = _companion_with_room(room)
+    packet = SimpleNamespace(
+        data=json.dumps({"type": "openbase.screen_share.stop"}).encode(),
+        participant=_viewer(),
+    )
+
+    companion._loop.call_soon_threadsafe(companion._handle_data_packet, packet)
+
+    _assert_share_ended(companion, room)
+
+
+def test_agent_cannot_end_share_with_stop_message():
+    import json
+    from types import SimpleNamespace
+
+    room = _FakeRoom([_viewer(), _agent()])
+    companion = _companion_with_room(room)
+    packet = SimpleNamespace(
+        data=json.dumps({"type": "openbase.screen_share.stop"}).encode(),
+        participant=_agent(),
+    )
+
+    companion._loop.call_soon_threadsafe(companion._handle_data_packet, packet)
+
+    assert not _wait_for(lambda: companion.state == "off", timeout=0.3)
+    assert room.disconnected is False
+
+
+def test_share_ends_when_only_agents_remain(monkeypatch):
+    monkeypatch.setattr(lcu, "VIEWERLESS_GRACE_SECONDS", 0.05)
+    # The phone hung up, backgrounded or dropped: only the voice agent is left.
+    room = _FakeRoom([_agent()])
+    companion = _companion_with_room(room)
+
+    companion._loop.call_soon_threadsafe(companion._evaluate_viewers)
+
+    _assert_share_ended(companion, room)
+
+
+def test_returning_viewer_cancels_the_timeout(monkeypatch):
+    monkeypatch.setattr(lcu, "VIEWERLESS_GRACE_SECONDS", 0.2)
+    room = _FakeRoom([_agent()])
+    companion = _companion_with_room(room)
+
+    companion._loop.call_soon_threadsafe(companion._evaluate_viewers)
+    viewer = _viewer()
+    room.remote_participants[viewer.identity] = viewer
+    companion._loop.call_soon_threadsafe(companion._evaluate_viewers)
+
+    assert not _wait_for(lambda: companion.state == "off", timeout=0.5)
+    assert room.disconnected is False
+
+
+def test_room_disconnect_ends_share():
+    room = _FakeRoom([_viewer()])
+    companion = _companion_with_room(room)
+
+    companion._loop.call_soon_threadsafe(
+        companion._schedule_end_share, "room_disconnected"
+    )
+
+    _assert_share_ended(companion, room)
