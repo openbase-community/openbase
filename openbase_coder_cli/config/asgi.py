@@ -62,6 +62,13 @@ async def application(scope, receive, send):
                 )
 
                 start_project_metadata_warmer()
+                # Raise the macOS folder-consent dialogs now, at start-up,
+                # rather than under the first agent turn (see folder_access).
+                from openbase_coder_cli.folder_access import (
+                    start_protected_folder_access_request,
+                )
+
+                start_protected_folder_access_request()
                 notification_task = asyncio.create_task(
                     run_notification_sweeps(), name="notification-producers"
                 )

@@ -569,3 +569,122 @@ async def test_stall_watch_loop_lets_the_engine_veto_a_hint_it_already_handled(
     with pytest.raises(asyncio.CancelledError):
         await task
     assert spoken == []
+
+
+def _z(value: dt.datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def _consent_state_db(tmp_path: Path, turns: list[dict]) -> Path:
+    """A store with the ``error_kind`` and ``last_observed_state`` columns."""
+    import sqlite3
+
+    db = tmp_path / "consent-state.sqlite3"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE sessions (id text primary key, name text, agent_name text, "
+        "status text, active_turn_id text, last_observed_state text)"
+    )
+    conn.execute(
+        "CREATE TABLE turns (id text primary key, session_id text, status text, "
+        "last_error text, error_kind text, created_at text, updated_at text, "
+        "finished_at text)"
+    )
+    conn.execute(
+        "INSERT INTO sessions VALUES ('s1','alpha','Cooper','running','t1',"
+        "'macOS is waiting for permission: Openbase Services needs access to your "
+        "Desktop folder. Click Allow in the dialog on your Mac and the agent will continue.')"
+    )
+    conn.execute(
+        "INSERT INTO sessions VALUES ('s2','dispatcher','Dispatcher','idle',NULL,NULL)"
+    )
+    for t in turns:
+        conn.execute(
+            "INSERT INTO turns VALUES (:id,:session_id,:status,:last_error,:error_kind,"
+            ":created_at,:updated_at,:finished_at)",
+            t,
+        )
+    conn.commit()
+    conn.close()
+    return db
+
+
+def test_scan_consent_blocked_turns_reports_running_turn_with_folder_message(tmp_path):
+    now = dt.datetime.now()
+    db = _consent_state_db(
+        tmp_path,
+        [
+            {
+                "id": "t1",
+                "session_id": "s1",
+                "status": "running",
+                "last_error": None,
+                "error_kind": sd.BLOCKED_PERMISSION_DIALOG_KIND,
+                "created_at": now.isoformat(),
+                "updated_at": now.isoformat(),
+                "finished_at": None,
+            },
+            {
+                "id": "t2",
+                "session_id": "s1",
+                "status": "running",
+                "last_error": None,
+                "error_kind": None,
+                "created_at": now.isoformat(),
+                "updated_at": now.isoformat(),
+                "finished_at": None,
+            },
+        ],
+    )
+    found = sd.scan_consent_blocked_turns(state_db_path=db)
+    assert [turn.turn_id for turn in found] == ["t1"]
+    hint = found[0].spoken_hint()
+    assert hint.startswith("Heads up — Cooper is waiting on your Mac.")
+    assert "your Desktop folder" in hint and "Click Allow" in hint
+    assert found[0].packet_payload()["reason"] == "blocked_permission_dialog"
+
+
+def test_scan_consent_blocked_turns_uses_last_error_for_failed_turn_and_since(tmp_path):
+    # Store timestamps are UTC with a Z suffix (super_agents.agent_store.iso_now).
+    now = dt.datetime.now(dt.UTC)
+    old = now - dt.timedelta(minutes=30)
+    db = _consent_state_db(
+        tmp_path,
+        [
+            {
+                "id": "t1",
+                "session_id": "s2",
+                "status": "failed",
+                "last_error": "macOS is waiting for permission: Openbase Services needs access to your Documents folder. Click Allow in the dialog on your Mac and the agent will continue.",
+                "error_kind": sd.BLOCKED_PERMISSION_DIALOG_KIND,
+                "created_at": _z(now),
+                "updated_at": _z(now),
+                "finished_at": _z(now),
+            },
+            {
+                "id": "t0",
+                "session_id": "s2",
+                "status": "failed",
+                "last_error": "stale",
+                "error_kind": sd.BLOCKED_PERMISSION_DIALOG_KIND,
+                "created_at": _z(old),
+                "updated_at": _z(old),
+                "finished_at": _z(old),
+            },
+        ],
+    )
+    found = sd.scan_consent_blocked_turns(
+        since=dt.datetime.now() - dt.timedelta(minutes=1), state_db_path=db
+    )
+    assert [turn.turn_id for turn in found] == ["t1"]
+    # The dispatcher is never named; the message rides through verbatim.
+    assert (
+        found[0].spoken_hint().startswith("Heads up — an agent is waiting on your Mac.")
+    )
+    assert "Documents folder" in found[0].spoken_hint()
+
+
+def test_scan_consent_blocked_turns_tolerates_store_without_error_kind(tmp_path):
+    now = dt.datetime.now().isoformat()
+    db = _subagent_db(tmp_path, last_error="x", ended=now)
+    assert sd.scan_consent_blocked_turns(state_db_path=db) == []
