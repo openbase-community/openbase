@@ -176,6 +176,24 @@ def test_container_routes_browser_logins_to_the_phone(tmp_path):
     assert overridden["GH_BROWSER"] == "custom-gh"
 
 
+def test_container_user_login_shell_sources_maritime_env(tmp_path):
+    # Maritime writes /etc/profile.d/maritime-env.sh as `declare -x K="V"`,
+    # which dash cannot source; the openbase user's login shell must be bash.
+    dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
+    assert "useradd --create-home --uid 1000 --shell /bin/bash openbase" in dockerfile
+
+    profile = tmp_path / "maritime-env.sh"
+    profile.write_text('declare -x OPENBASE_CODER_CLI_PORT="18789"\n')
+    result = subprocess.run(
+        ["bash", "-c", f". {profile} && echo $OPENBASE_CODER_CLI_PORT"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    assert result.stdout.strip() == "18789"
+
+
 def test_container_image_includes_agent_instructions_and_skills():
     dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
 

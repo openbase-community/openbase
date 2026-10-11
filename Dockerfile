@@ -142,8 +142,11 @@ COPY docker/entrypoint.sh /usr/local/bin/openbase-coder-entrypoint
 COPY docker/persist-home-state.sh /usr/local/bin/openbase-coder-persist-home-state
 COPY --chmod=0755 docker/openbase-browser /usr/local/bin/openbase-browser
 # Pre-create the state dir so the named volume inherits openbase ownership.
+# Login shell is bash: Maritime's VM init writes /etc/profile.d/maritime-env.sh
+# as `declare -x`, which dash (useradd's default /bin/sh) cannot source, so sh
+# login shells lost every platform var (OPENBASE_CODER_CLI_PORT, CLAUDE_CONFIG_DIR).
 RUN chmod 0755 /usr/local/bin/openbase-coder-entrypoint /usr/local/bin/openbase-coder-persist-home-state \
-    && useradd --create-home --uid 1000 openbase \
+    && useradd --create-home --uid 1000 --shell /bin/bash openbase \
     && mkdir -p /home/openbase/.openbase /data \
     && chown openbase:openbase /home/openbase/.openbase /data \
     && mkdir -p /opt/openbase-coder/workspace \
