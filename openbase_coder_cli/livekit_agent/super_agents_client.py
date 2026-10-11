@@ -260,14 +260,23 @@ def _looks_like_raw_backend_error(text: str | None) -> bool:
     return "api error:" in text.lower()
 
 
+def _turn_error_containers(progress: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    return tuple(
+        container
+        for container in (
+            progress,
+            progress.get("turn"),
+            progress.get("summary"),
+            progress.get("error"),
+        )
+        if isinstance(container, dict)
+    )
+
+
 def _turn_error_text(progress: dict[str, Any]) -> str:
     """The backend's error for a failed turn, wherever the snapshot carries it."""
-    for container in (
-        progress,
-        progress.get("turn") if isinstance(progress.get("turn"), dict) else {},
-        progress.get("summary") if isinstance(progress.get("summary"), dict) else {},
-    ):
-        for key in ("lastError", "last_error", "error"):
+    for container in _turn_error_containers(progress):
+        for key in ("lastError", "last_error", "error", "message"):
             value = container.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
@@ -275,6 +284,20 @@ def _turn_error_text(progress: dict[str, Any]) -> str:
                 message = value.get("message")
                 if isinstance(message, str) and message.strip():
                     return message.strip()
+    # A Claude session's state line is the failure's human wording (super-agents
+    # 6af0383: "macOS is waiting for permission: ...").
+    state = progress.get("lastObservedState")
+    return state.strip() if isinstance(state, str) else ""
+
+
+def _turn_error_kind(progress: dict[str, Any]) -> str:
+    """super-agents' ``errorKind`` for a failed turn (``blocked_permission_dialog``,
+    ``authentication_failed``, ...), or an empty string."""
+    for container in _turn_error_containers(progress):
+        for key in ("errorKind", "error_kind"):
+            value = container.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
     return ""
 
 
@@ -681,6 +704,9 @@ class SuperAgentsLiveKitClient(
                 # generic line above; the backend's error names the failure.
                 "_livekit_turn_failed": turn_failed,
                 "_livekit_turn_error": _turn_error_text(result) if turn_failed else "",
+                "_livekit_turn_error_kind": _turn_error_kind(result)
+                if turn_failed
+                else "",
                 "progress": result,
             }
             logger.info(

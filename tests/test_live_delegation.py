@@ -2864,3 +2864,63 @@ async def test_a_request_the_model_delegated_is_acknowledged_too():
         assert live.acks() == ["One moment."]
     finally:
         await bridge.aclose()
+
+
+async def test_a_start_held_by_a_consent_dialog_is_spoken_once_and_released_once():
+    """super-agents 6af0383: the turn waits for the macOS dialog; the caller
+    hears what to click once, then that the agent is going ahead."""
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        recovery_window=5.0, recovery_backoff=(0.1,)
+    )
+    live.delegate("d1", "Check the build")
+    await _settle()
+    blocked = {
+        "status": "running",
+        "lastObservedState": (
+            "macOS is waiting for permission: Openbase Services needs access to "
+            "your Desktop folder. Click Allow in the dialog on your Mac and the "
+            "agent will continue."
+        ),
+        "turn": {
+            "turnId": "turn-1",
+            "status": "running",
+            "errorKind": "blocked_permission_dialog",
+        },
+    }
+    dispatcher.progress("turn-1", blocked)
+    dispatcher.progress("turn-1", blocked)
+    assert live.speech("d1") == [blocked["lastObservedState"]]
+    dispatcher.progress(
+        "turn-1",
+        {
+            "status": "running",
+            "lastObservedState": "Folder access granted; Claude Code is starting",
+            "turn": {"turnId": "turn-1", "status": "running"},
+        },
+    )
+    assert live.speech("d1")[-1] == "Thanks, access granted; the agent is starting now."
+    assert len(dispatcher.prompts) == 1, "a held start is never retried"
+    dispatcher.result_gate.set()
+    await _settle()
+    assert live.speech("d1")[-1] == "All tests pass. The build is green."
+    await bridge.aclose()
+
+
+async def test_a_turn_failed_by_an_unanswered_dialog_speaks_the_backend_message_verbatim():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge(
+        recovery_window=5.0, recovery_backoff=(0.1,)
+    )
+    message = (
+        "macOS is waiting for permission: Openbase Services needs access to your "
+        "Desktop folder. Click Allow in the dialog on your Mac and the agent will continue."
+    )
+    dispatcher.result = {
+        **_failed_turn("turn-1", message),
+        "_livekit_turn_error_kind": "blocked_permission_dialog",
+    }
+    dispatcher.result_gate.set()
+    live.delegate("d1", "Check the build")
+    await _wait_for(lambda: live.speech("d1") != [])
+    assert live.speech("d1") == [message]
+    assert len(dispatcher.prompts) == 1, "terminal until the user acts"
+    await bridge.aclose()

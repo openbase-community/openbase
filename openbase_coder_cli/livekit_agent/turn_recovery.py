@@ -86,6 +86,17 @@ _TERMINAL_MARKERS = (
 )
 
 
+#: super-agents' ``errorKind`` values (6af0383) and what they mean for retry.
+BACKEND_ERROR_KINDS = {
+    "blocked_permission_dialog": KIND_TERMINAL,
+    "authentication_failed": KIND_TERMINAL,
+    "backend_unavailable": KIND_BACKEND_DOWN,
+    "start_timeout": KIND_START_TIMEOUT,
+}
+#: Kinds whose backend message is complete and human: spoken as is.
+_SPOKEN_VERBATIM_KINDS = {"blocked_permission_dialog", "authentication_failed"}
+
+
 @dataclass(frozen=True)
 class TurnFailure:
     """One failed attempt to run a voice turn, classified for retry."""
@@ -93,6 +104,8 @@ class TurnFailure:
     kind: str
     detail: str
     turn_id: str | None = None
+    #: A complete line from the backend to say instead of our own wording.
+    say: str | None = None
 
     @property
     def retryable(self) -> bool:
@@ -104,7 +117,9 @@ class TurnFailure:
         """What the caller hears once recovery has truly failed."""
         who = agent_label or "the coding agent"
         seconds = max(1, int(round(elapsed_seconds)))
-        if self.kind == KIND_BACKEND_DOWN:
+        if self.say:
+            line = self.say.strip()
+        elif self.kind == KIND_BACKEND_DOWN:
             line = (
                 f"I couldn't reach the coding backend on your computer for "
                 f"{seconds} seconds; it isn't running or isn't answering. Start "
@@ -213,6 +228,14 @@ def failure_from_result(result: dict[str, Any]) -> TurnFailure | None:
         return None
     detail = str(result.get("_livekit_turn_error") or "")
     turn_id = str(result.get("_livekit_turn_id") or "") or None
+    error_kind = str(result.get("_livekit_turn_error_kind") or "")
+    if error_kind in BACKEND_ERROR_KINDS:
+        return TurnFailure(
+            kind=BACKEND_ERROR_KINDS[error_kind],
+            detail=detail or error_kind,
+            turn_id=turn_id,
+            say=detail if error_kind in _SPOKEN_VERBATIM_KINDS and detail else None,
+        )
     return classify_error_text(detail, turn_id=turn_id)
 
 

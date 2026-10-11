@@ -181,6 +181,12 @@ LIVE_BACKEND_UNRESPONSIVE_COMMENTARY = (
     "The coding backend is not responding right now, so that request could "
     "not be handled. Ask again in a moment."
 )
+BLOCKED_PERMISSION_DIALOG_KIND = "blocked_permission_dialog"
+LIVE_BLOCKED_START_COMMENTARY = (
+    "macOS is waiting for permission before the coding agent can start. "
+    "Click Allow in the dialog on your Mac and it will continue."
+)
+LIVE_UNBLOCKED_START_COMMENTARY = "Thanks, access granted; the agent is starting now."
 LIVE_APPROVAL_PENDING_COMMENTARY = (
     "The agent is waiting for an approval before it can continue."
 )
@@ -608,6 +614,9 @@ class LiveDelegationEntry:
     superseded: bool = False
     completed: bool = False
     approval_notified: bool = False
+    # super-agents 6af0383: the start is held behind a macOS consent dialog.
+    blocked_message: str | None = None
+    unblocked_notified: bool = False
     created_at: float = field(default_factory=time.monotonic)
     task: asyncio.Task[None] | None = None
     heartbeat: asyncio.Task[None] | None = None
@@ -2186,6 +2195,9 @@ class LiveDelegationBridge:
             self._append_instructions(
                 LIVE_APPROVAL_PENDING_INSTRUCTIONS, entry.delegation_id
             )
+        if self._relay_blocked_start(entry, turn_id, progress):
+            # A held start has status to relay, not an answer.
+            return
         # Turn-scoped: a running turn's snapshot still carries the PREVIOUS
         # answer at session level, and relaying it as commentary made GPT-Live
         # speak the last question's answer before the new one.
@@ -2195,6 +2207,43 @@ class LiveDelegationBridge:
         self._deliver(
             entry, self._cursor(turn_id).advance(text, final=False), final=False
         )
+
+    def _relay_blocked_start(
+        self, entry: LiveDelegationEntry, turn_id: str, progress: dict
+    ) -> bool:
+        """Say once that the agent's start waits on a macOS consent dialog,
+        and once that it is going ahead. The turn itself keeps waiting; no
+        retry or re-send is involved (super-agents 6af0383)."""
+        turn = progress.get("turn")
+        if not isinstance(turn, dict) or turn.get("turnId") not in (None, turn_id):
+            return False
+        blocked = turn.get("errorKind") == BLOCKED_PERMISSION_DIALOG_KIND
+        if blocked and entry.blocked_message is None:
+            message = progress.get("lastObservedState")
+            if not isinstance(message, str) or not message.strip():
+                message = LIVE_BLOCKED_START_COMMENTARY
+            entry.blocked_message = message.strip()
+            self._log.info(
+                "%s stage=live_delegation_start_blocked key=%s turn_id=%s",
+                DISPATCH_TIMING_LOG,
+                entry.key,
+                turn_id,
+            )
+            self._deliver(entry, [entry.blocked_message], final=False)
+        elif (
+            not blocked
+            and entry.blocked_message is not None
+            and not entry.unblocked_notified
+        ):
+            entry.unblocked_notified = True
+            self._log.info(
+                "%s stage=live_delegation_start_unblocked key=%s turn_id=%s",
+                DISPATCH_TIMING_LOG,
+                entry.key,
+                turn_id,
+            )
+            self._deliver(entry, [LIVE_UNBLOCKED_START_COMMENTARY], final=False)
+        return blocked
 
     # correlation
 
