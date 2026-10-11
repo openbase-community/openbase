@@ -1,5 +1,6 @@
 """Queued input audio must not replay into a reconnected GPT-Live session."""
 
+import pytest
 from livekit.agents.utils.aio import Chan
 from livekit.plugins.openai.realtime import gpt_live_model
 from livekit.plugins.openai.realtime import gpt_live_types as types
@@ -10,7 +11,9 @@ from openbase_coder_cli.livekit_agent.gpt_live_reconnect_patch import (
 )
 
 
-def test_drain_drops_audio_and_keeps_context_appends_in_order():
+# Chan binds the running event loop, so these run inside one.
+@pytest.mark.asyncio
+async def test_drain_drops_audio_and_keeps_context_appends_in_order():
     channel = Chan()
     channel.send_nowait(types.InputAudioAppendEvent(audio="AAAA"))
     channel.send_nowait(types.ThinkingAppendEvent.model_construct(delegation_id=None, content=[]))
@@ -31,7 +34,8 @@ def test_drain_drops_audio_and_keeps_context_appends_in_order():
     assert drain_stale_input_audio(channel) == 0
 
 
-def test_patch_installs_once_and_drains_before_the_plugin_reset(monkeypatch):
+@pytest.mark.asyncio
+async def test_patch_installs_once_and_drains_before_the_plugin_reset(monkeypatch):
     calls = []
     monkeypatch.setattr(
         gpt_live_model.GPTLiveSession,
