@@ -41,6 +41,32 @@ def test_node_owner_resolves_self_user_login() -> None:
     assert na.node_owner(None) is None
 
 
+def test_signed_out_engine_has_no_owner() -> None:
+    assert na.node_owner(_status("ob-1", state="NeedsLogin")) is None
+    assert na.node_owner(_status("ob-1", state="Stopped")) == "ob-1"
+
+
+def test_companion_logout_errors_name_the_real_cause(monkeypatch) -> None:
+    import io
+    import urllib.error
+
+    def fail(code: int, body: bytes):
+        def request(*_a, **_kw):
+            raise urllib.error.HTTPError("u", code, "x", {}, io.BytesIO(body))
+
+        return request
+
+    companion = nc.NetmeshCompanion.__new__(nc.NetmeshCompanion)
+    monkeypatch.setattr(companion, "_request", fail(404, b""))
+    with pytest.raises(nc.NetmeshCompanionError, match="update the Openbase"):
+        companion.logout()
+    monkeypatch.setattr(companion, "_request", fail(502, b'{"error": "boom"}'))
+    with pytest.raises(nc.NetmeshCompanionError) as raised:
+        companion.logout()
+    assert "boom" in str(raised.value)
+    assert "update" not in str(raised.value)
+
+
 def test_only_a_known_different_owner_is_a_mismatch() -> None:
     assert na.belongs_to_other_account(_status("ob-1"), ENROLL_1806)
     assert not na.belongs_to_other_account(_status("ob-1806"), ENROLL_1806)

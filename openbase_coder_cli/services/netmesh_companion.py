@@ -488,9 +488,17 @@ class NetmeshCompanion:
         try:
             raw = self._request("POST", "/logout", timeout=30.0)
         except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                raise NetmeshCompanionError(
+                    "this Openbase VPN companion cannot sign out (it predates "
+                    "build 19); update the Openbase desktop app"
+                ) from exc
+            try:
+                detail = json.loads(exc.read().decode() or "{}").get("error")
+            except (OSError, ValueError, AttributeError):
+                detail = None
             raise NetmeshCompanionError(
-                "the Openbase VPN companion could not sign out "
-                f"(HTTP {exc.code}); update the Openbase desktop app"
+                f"the Openbase VPN could not sign out: {detail or f'HTTP {exc.code}'}"
             ) from exc
         except (urllib.error.URLError, OSError, TimeoutError) as exc:
             raise NetmeshCompanionError(

@@ -26,6 +26,9 @@ from openbase_coder_cli.services import tailscale_provider as tp
 
 logger = logging.getLogger(__name__)
 
+# Backend states in which the engine holds no node login to reuse.
+LOGGED_OUT_STATES = frozenset({"NeedsLogin", "NoState"})
+
 
 def node_owner(payload: dict[str, Any] | None) -> str | None:
     """Headscale user that owns the local node in a status payload, or None.
@@ -34,6 +37,10 @@ def node_owner(payload: dict[str, Any] | None) -> str | None:
     which is never a reason to keep or to leave a network.
     """
     if not isinstance(payload, dict) or payload.get("error"):
+        return None
+    if payload.get("BackendState") in LOGGED_OUT_STATES:
+        # A signed-out engine may still describe its last node, but it holds
+        # no login a connect could resume.
         return None
     self_node = payload.get("Self")
     users = payload.get("User")
