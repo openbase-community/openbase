@@ -79,6 +79,8 @@ def test_claude_login_takes_a_pasted_code(manager, monkeypatch, tmp_path):
     manager.start(ai_account.CLAUDE_CODE)
     prompted = _wait(manager, lambda s: s["needs_code"])
     assert prompted["url"].startswith("https://claude.ai/oauth/authorize")
+    # The paste field comes with the link, not with any prompt wording.
+    assert "Paste" not in prompted.get("message", "")
 
     with pytest.raises(ValueError):
         manager.submit_code("bad\ncode")

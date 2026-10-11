@@ -56,9 +56,6 @@ MAX_CODE_LENGTH = 512
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)")
 _URL = re.compile(r"https://[^\s\"'<>\x1b]+")
-_CODE_PROMPT = re.compile(
-    r"paste\s+(?:the\s+)?(?:authentication\s+|auth(?:orization)?\s+)?code", re.I
-)
 
 
 def selected_choice() -> str:
@@ -327,8 +324,11 @@ class LoginManager:
                         job.message = "Finish signing in on your phone."
                         if browser_env_ignored():
                             _open_on_phone(job.url)
-                if job.provider == CLAUDE_CODE and _CODE_PROMPT.search(job.output):
-                    job.needs_code = True
+                        # Claude Code takes a pasted code for as long as its
+                        # sign-in page is open, so the paste field is offered
+                        # with the link rather than inferred from the prompt
+                        # wording (which can change and stall the sign-in).
+                        job.needs_code = job.provider == CLAUDE_CODE
         with contextlib.suppress(OSError):
             os.close(job.master_fd)
 
