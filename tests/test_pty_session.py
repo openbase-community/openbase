@@ -196,3 +196,31 @@ def test_login_sessions_do_not_inherit_the_agents_gateway_credentials(monkeypatc
     )
     output, _ = _read_until("env", "base=")
     assert "token=none base=none" in output
+
+
+def test_unfinished_ai_login_restores_the_previous_login(monkeypatch, tmp_path):
+    from openbase_coder_cli import ai_account
+
+    assert pty_session.login_provider_for(["/usr/bin/codex", "login"]) == "codex"
+    assert pty_session.login_provider_for(["codex", "login", "status"]) is None
+    assert (
+        pty_session.login_provider_for(["claude", "auth", "login", "--claudeai"])
+        == "claude_code"
+    )
+    assert pty_session.login_provider_for(["gcloud", "auth", "login"]) is None
+
+    auth = tmp_path / "auth.json"
+    auth.write_text('{"tokens": "old"}')
+    monkeypatch.setattr(ai_account, "_credential_paths", lambda provider: [auth])
+    codex = tmp_path / "codex"
+    codex.write_text(f"#!/bin/sh\nrm -f {auth}\nexit 1\n")
+    codex.chmod(0o755)
+    paths = pty_session.session_paths("relink")
+    paths.root.mkdir(parents=True, mode=0o700)
+    os.mkfifo(paths.input, 0o600)
+    paths.output.touch(mode=0o600)
+    pty_session._write_meta(
+        paths, {"command": [str(codex), "login"], "exit_code": None}
+    )
+    pty_session._hold("relink")
+    assert auth.read_text() == '{"tokens": "old"}'
