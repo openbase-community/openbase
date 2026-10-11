@@ -11,7 +11,13 @@ from livekit import rtc
 
 from openbase_coder_cli import livekit_voice_route as voice_route
 from openbase_coder_cli.host_kind import with_host_section
-from openbase_coder_cli.livekit_agent import audio_scoring, config, livekit, voices
+from openbase_coder_cli.livekit_agent import (
+    audio_scoring,
+    config,
+    livekit,
+    speech_queue,
+    voices,
+)
 from openbase_coder_cli.livekit_agent.codex_app_client import CodexAppServerClient
 from openbase_coder_cli.livekit_agent.livekit import (
     ANNOUNCER_AUDIO_KIND,
@@ -881,12 +887,12 @@ async def test_announcer_queue_plays_audio_file_without_chat_context(
         silence_grace_seconds=0,
     )
 
-    async def fake_audio_file_frames(path):
+    async def fake_audio_file_frames(_session, path):
         assert path == audio_path
         if False:
             yield None
 
-    monkeypatch.setattr(queue, "_audio_file_frames", fake_audio_file_frames)
+    monkeypatch.setattr(speech_queue, "audio_file_frames", fake_audio_file_frames)
 
     await queue._speak(
         AnnouncerAudioMessage(
@@ -918,12 +924,12 @@ async def test_announcer_queue_defers_audio_file_while_user_speaks(
         silence_grace_seconds=0,
     )
 
-    async def fake_audio_file_frames(path):
+    async def fake_audio_file_frames(_session, path):
         assert path == audio_path
         if False:
             yield None
 
-    monkeypatch.setattr(queue, "_audio_file_frames", fake_audio_file_frames)
+    monkeypatch.setattr(speech_queue, "audio_file_frames", fake_audio_file_frames)
 
     speak_task = asyncio.create_task(
         queue._speak(
