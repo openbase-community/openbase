@@ -137,18 +137,29 @@ def heartbeat(interval: int) -> None:
     manager.load()
     local_url = local_server_url()
 
+    click.echo(f"Heartbeat started: backend={url} interval={interval}s", err=True)
     active = _agent_runs_active(local_url, manager)
+    last_status: int | None = None
     while True:
         # A long-running service must survive network blips and token-refresh
         # hiccups: skipping one beat and retrying next interval is the fallback.
         try:
             token = _cloud_bearer_token(manager, url)
-            httpx.post(
+            response = httpx.post(
                 f"{url}{HEARTBEAT_PATH}",
                 json={"active": active},
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=15,
             )
+            # Log status transitions only, so a desktop without a DevSpace
+            # does not repeat the same rejection every interval.
+            if response.status_code != last_status:
+                last_status = response.status_code
+                click.echo(
+                    f"Heartbeat HTTP {response.status_code}"
+                    + (f": {response.text[:200]}" if response.status_code >= 400 else ""),
+                    err=True,
+                )
         except (httpx.HTTPError, RuntimeError) as exc:
             click.echo(f"Heartbeat skipped: {exc}", err=True)
             if interval <= 0:
