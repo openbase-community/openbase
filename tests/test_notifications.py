@@ -223,6 +223,24 @@ def test_later_turn_replaces_an_unread_thread_notification_with_a_new_revision(
     assert (reopened["id"], reopened["revision"]) == ("thread:t-1", 3)
 
 
+def test_push_retries_without_revision_when_cloud_rejects_it(monkeypatch):
+    from openbase_coder_cli.config import cloud_notifications
+
+    sent: list[dict] = []
+
+    def send(*, title, body, user_info):
+        sent.append(dict(user_info))
+        if "notification_revision" in user_info:
+            raise cloud_notifications.NotificationPushError("status 400")
+        return 1
+
+    monkeypatch.setattr(cloud_notifications, "send_notification_push", send)
+    notification_producers._send_push(
+        {"id": "thread:t-1", "kind": "thread", "thread_id": "t-1", "revision": 2}
+    )
+    assert [info.get("notification_revision") for info in sent] == ["2", None]
+
+
 def test_reopen_if_read_false_stays_read():
     notification_store.upsert_notification(
         "approval", "a-1", title="A", reopen_if_read=False

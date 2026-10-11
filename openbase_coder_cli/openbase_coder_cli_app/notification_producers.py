@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 SWEEP_DEBOUNCE_SECONDS = 5.0
 MAX_PUSH_BODY_LENGTH = 140
+REVISION_USER_INFO_KEY = "notification_revision"
 
 _sweep_lock = threading.Lock()
 _last_sweep_monotonic: float | None = None
@@ -313,16 +314,30 @@ def _seconds_until(iso_value: Any) -> float:
 
 
 def _send_push(entry: dict[str, Any]) -> None:
-    from openbase_coder_cli.config.cloud_notifications import send_notification_push
+    from openbase_coder_cli.config.cloud_notifications import (
+        NotificationPushError,
+        send_notification_push,
+    )
 
+    user_info = _push_user_info(entry)
     try:
-        send_notification_push(
-            title=str(entry.get("title") or "Openbase"),
-            body=str(entry.get("body") or ""),
-            user_info=_push_user_info(entry),
-        )
+        try:
+            _send_push_once(send_notification_push, entry, user_info)
+        except NotificationPushError:
+            # A Cloud without notification_revision in its userInfo allowlist
+            # rejects the whole push; the apps fall back to the bare id.
+            user_info.pop(REVISION_USER_INFO_KEY)
+            _send_push_once(send_notification_push, entry, user_info)
     except Exception as exc:
         logger.info("Cloud notification push skipped: %s", exc)
+
+
+def _send_push_once(send, entry: dict[str, Any], user_info: dict[str, str]) -> None:
+    send(
+        title=str(entry.get("title") or "Openbase"),
+        body=str(entry.get("body") or ""),
+        user_info=user_info,
+    )
 
 
 def _push_user_info(entry: dict[str, Any]) -> dict[str, str]:
@@ -331,7 +346,7 @@ def _push_user_info(entry: dict[str, Any]) -> dict[str, str]:
         "notification_id": str(entry.get("id") or ""),
         # Apps dedupe alerts on id plus revision; the id alone tags the
         # tray entry, so a newer revision replaces the older alert.
-        "notification_revision": str(entry.get("revision") or 1),
+        REVISION_USER_INFO_KEY: str(entry.get("revision") or 1),
     }
     if kind == KIND_THREAD:
         user_info["openbase_destination"] = "threads"
