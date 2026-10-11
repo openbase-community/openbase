@@ -3140,7 +3140,7 @@ def test_proxy_denial_live_event_is_normalized_before_broadcast(
     output = events[0]["data"]["line"]
     assert output.startswith(message)
     assert "try again" not in output
-    assert "https://app-staging.openbase.cloud" in output
+    assert "Subscribe to a Pro plan on app-staging.openbase.cloud for expanded access." in output
     assert "authenticate" not in output
 
 
