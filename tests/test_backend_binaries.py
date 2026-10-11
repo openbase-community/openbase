@@ -142,3 +142,28 @@ def test_codex_transfer_timeout_preserves_binary_and_releases_activation_lock(
     assert installed.read_bytes() == before
     with service_mutation(timeout=0):
         pass
+
+
+def test_node_runtime_bin_dir_prefers_path_then_nvm(monkeypatch, tmp_path: Path):
+    nvm_bin = tmp_path / ".nvm" / "versions" / "node" / "v22.23.3" / "bin"
+    nvm_bin.mkdir(parents=True)
+    node = nvm_bin / "node"
+    node.write_text("#!/bin/sh\n")
+    node.chmod(0o755)
+    monkeypatch.setenv("NVM_DIR", str(tmp_path / ".nvm"))
+    monkeypatch.delenv("NVM_BIN", raising=False)
+
+    monkeypatch.setattr(
+        backend_binaries, "which", lambda name: "/opt/homebrew/bin/node"
+    )
+    assert backend_binaries.node_runtime_bin_dir() == Path("/opt/homebrew/bin")
+
+    monkeypatch.setattr(backend_binaries, "which", lambda name: None)
+    assert backend_binaries.node_runtime_bin_dir() == nvm_bin
+
+
+def test_node_runtime_bin_dir_absent(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("NVM_DIR", str(tmp_path / "no-nvm"))
+    monkeypatch.delenv("NVM_BIN", raising=False)
+    monkeypatch.setattr(backend_binaries, "which", lambda name: None)
+    assert backend_binaries.node_runtime_bin_dir() is None
