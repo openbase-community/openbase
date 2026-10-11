@@ -36,6 +36,7 @@ from openbase_coder_cli.openbase_coder_cli_app.thread_cache import (
 from openbase_coder_cli.openbase_coder_cli_app.thread_errors import (
     THREAD_DATA_UNAVAILABLE_CODE,
     is_thread_data_unavailable_error,
+    thread_error_code,
     thread_error_message,
 )
 from openbase_coder_cli.openbase_coder_cli_app.thread_favorites import (
@@ -885,9 +886,14 @@ def thread_start_turn(request, thread_id):
         turn_id = async_to_sync(manager.start_turn)(thread_id, prompt, model=model)
     except (ValueError, RuntimeError) as e:
         # Surface the app-server's human-readable message (e.g. "thread not
-        # loaded: <id>") rather than its raw JSON-RPC error envelope.
+        # loaded: <id>") rather than its raw JSON-RPC error envelope, plus a
+        # stable code when the backend itself was the problem.
         return Response(
-            {"error": thread_error_message(e)}, status=status.HTTP_400_BAD_REQUEST
+            {
+                "error": thread_error_message(e),
+                "code": thread_error_code(e, fallback="turn_start_failed"),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
         )
     invalidate_thread_list_cache()
     return Response(
@@ -927,6 +933,12 @@ def thread_steer_turn(request, thread_id):
     try:
         result = async_to_sync(manager.steer_turn)(thread_id, prompt)
     except (ValueError, RuntimeError) as e:
-        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {
+                "error": thread_error_message(e),
+                "code": thread_error_code(e, fallback="steer_failed"),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     invalidate_thread_list_cache()
     return Response(result)

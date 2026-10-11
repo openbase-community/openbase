@@ -27,3 +27,24 @@ def test_other_thread_errors_keep_their_message_and_fallback_code() -> None:
     assert is_thread_data_unavailable_error(exc) is False
     assert thread_error_message(exc) == "Thread not found"
     assert thread_error_code(exc, fallback="fallback") == "fallback"
+
+
+def test_backend_failures_report_a_stable_code() -> None:
+    from openbase_coder_cli.openbase_coder_cli_app.thread_errors import (
+        thread_error_code,
+    )
+
+    down = RuntimeError(
+        "Codex app-server is not running or not reachable at /tmp/x.sock"
+    )
+    assert thread_error_code(down, fallback="steer_failed") == "backend_unavailable"
+    slow = RuntimeError(
+        "Claude Code did not start in /p: Control request timeout: initialize"
+    )
+    assert thread_error_code(slow, fallback="steer_failed") == "start_timeout"
+    assert (
+        thread_error_code(
+            ValueError("Thread x has no active turn to steer"), fallback="steer_failed"
+        )
+        == "steer_failed"
+    )
