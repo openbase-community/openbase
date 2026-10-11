@@ -2996,3 +2996,23 @@ async def test_an_echoed_agent_tail_does_not_reach_the_agent_as_the_callers_word
         assert "Explain in about five sentences" in dispatcher.prompts[0][0]
     finally:
         await bridge.aclose()
+
+
+async def test_gateway_stop_is_preserved_until_the_call_error_handler_runs():
+    bridge, live, *_ = _make_bridge()
+    live.emit(
+        "openai_server_event_received",
+        {
+            "type": "error",
+            "error": {
+                "code": "billing_hard_limit_reached",
+                "type": "live_voice_idle_timeout",
+                "message": "Call ended after silence.",
+            },
+        },
+    )
+    assert bridge.gateway_stop.code == "live_voice_idle_timeout"
+    assert str(bridge.gateway_stop) == "Call ended after silence."
+    bridge.attach(FakeGPTLiveSession())
+    assert bridge.gateway_stop is None
+    await bridge.aclose()

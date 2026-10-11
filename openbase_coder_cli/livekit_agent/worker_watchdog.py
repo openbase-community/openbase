@@ -66,6 +66,11 @@ class WorkerFailureWatchdog(logging.Handler):
             )
             return
         if _AGENT_SESSION_UNRECOVERABLE_MESSAGE in message:
+            if "GPT-Live returned an error" in message:
+                # The plugin uses this for gateway billing/idle stops too.
+                # Session diagnostics publish the reason and delete only that
+                # room; the registered worker is healthy and can accept calls.
+                return
             # Room-scoped status/lifecycle packets are best-effort from
             # session_diagnostics when AgentSession emits error/close events.
             # This process-global log handler has no room handle; its job is

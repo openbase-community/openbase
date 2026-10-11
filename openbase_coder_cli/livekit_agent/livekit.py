@@ -151,6 +151,7 @@ from openbase_coder_cli.livekit_agent.gpt_live_reconnect_patch import (
     install_gpt_live_reconnect_patch,
 )
 from openbase_coder_cli.livekit_agent.live_delegation import LiveDelegationBridge
+from openbase_coder_cli.livekit_agent.live_gateway_stop import LiveGatewayStop
 from openbase_coder_cli.livekit_agent.live_preconnect import (
     _preconnecting_model_class,
     wait_live_session_started,
@@ -514,6 +515,8 @@ def _diagnostic_vad(vad_model):
 
 
 def _agent_error_code(exc: Exception) -> str:
+    if isinstance(exc, LiveGatewayStop):
+        return exc.code
     if isinstance(exc, LiveVoiceSessionError):
         return LIVE_VOICE_PROVIDER_FAILED_CODE
     if isinstance(exc, OpenbaseCloudAudioSubscriptionError):
@@ -530,6 +533,8 @@ def _agent_error_code(exc: Exception) -> str:
 
 
 def _agent_error_detail(exc: Exception) -> str:
+    if isinstance(exc, LiveGatewayStop):
+        return str(exc)
     if isinstance(exc, LiveVoiceSessionError):
         return (
             "The call ended because the live voice connection was lost: "
@@ -589,6 +594,8 @@ async def _refine_cloud_audio_error(exc: Exception) -> Exception:
     # A live session that died carries no reason either: the GPT-Live plugin
     # raises a bare "GPT-Live returned an error" for the gateway's fatal
     # billing_hard_limit_reached close, so check the live voice credits too.
+    if isinstance(exc, LiveGatewayStop):
+        return exc
     is_live = isinstance(exc, LiveVoiceSessionError)
     if not is_live and not _is_openbase_cloud_audio_provider_error(exc):
         return exc
@@ -1165,7 +1172,9 @@ async def _start_live_voice_session(
 
     async def handle_live_error(exc: Exception) -> None:
         if live_ready:
-            await _end_call_after_agent_error(ctx, LiveVoiceSessionError(exc))
+            await _end_call_after_agent_error(
+                ctx, bridge.gateway_stop or LiveVoiceSessionError(exc)
+            )
 
     session_diagnostic_handlers = _register_session_diagnostics(
         session,

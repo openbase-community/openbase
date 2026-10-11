@@ -215,9 +215,24 @@ def test_worker_watchdog_exits_when_agent_session_closes_unrecoverably(monkeypat
     assert exits == [True]
 
 
-def test_worker_watchdog_rate_limits_agent_session_restart_churn(
-    monkeypatch, tmp_path
-):
+def test_worker_watchdog_keeps_worker_for_gateway_stop(monkeypatch):
+    exits = []
+    monkeypatch.setattr(
+        WorkerFailureWatchdog, "_initiate_exit", lambda self: exits.append(True)
+    )
+    watchdog = WorkerFailureWatchdog()
+    watchdog.emit(
+        _log_record(
+            "AgentSession is closing due to unrecoverable error: GPT-Live returned an error"
+        )
+    )
+    assert exits == []
+    # A later worker-level failure must still recover normally.
+    watchdog.emit(_log_record("Error in _connection_task"))
+    assert exits == [True]
+
+
+def test_worker_watchdog_rate_limits_agent_session_restart_churn(monkeypatch, tmp_path):
     exits: list[bool] = []
     monkeypatch.setattr(
         WorkerFailureWatchdog,
