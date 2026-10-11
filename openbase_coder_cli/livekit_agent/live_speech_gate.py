@@ -6,7 +6,6 @@ import re
 import time
 from collections import deque
 from contextvars import ContextVar
-from difflib import SequenceMatcher
 
 from livekit import rtc
 from livekit.agents import Agent
@@ -29,9 +28,9 @@ AGENT_WORDS_WINDOW_SECONDS = 20.0
 # (376, 2026-10-11: that stop was ignored as echo under a bag-of-words share).
 ECHO_WORD_SHARE = 0.5
 ECHO_MIN_RUN_WORDS = 2
-# How close a lone heard word must be to the start or end of a word the agent
-# said to count as its clipped echo.
-ECHO_CLIP_SIMILARITY = 0.75
+# A lone word needs recent, exact evidence; partial/fuzzy matches can swallow
+# commands ("stop" versus "store"). Prefer delivering a doubtful interruption.
+SINGLE_WORD_ECHO_WINDOW_SECONDS = ECHO_TAIL_SECONDS
 # When the caller starts talking over the agent, the model's transcript of
 # the caller can begin with the tail of the agent's own speech picked up by
 # the speakerphone ("You're Explain in about five sentences...", 376,
@@ -192,31 +191,29 @@ class LiveSpeechGate:
         words = _words(text)
         if not words:
             return True
-        said = [word for _, word in self._agent_words]
         if len(words) == 1:
-            return words[0] in said
+            return self.is_clipped_echo_word(words[0])
+        now = self._clock()
+        said = [
+            word
+            for at, word in self._agent_words
+            if now - at <= AGENT_WORDS_WINDOW_SECONDS
+        ]
         needed = max(ECHO_MIN_RUN_WORDS, math.ceil(len(words) * ECHO_WORD_SHARE))
         return _longest_common_run(words, said) >= needed
 
     def is_clipped_echo_word(self, word):
-        """A lone word heard over the agent that its own speech explains: a
-        word it just said, or (three letters or more) a clipped start or end
-        of one ("uper" from "Cooper"). "Stop", "Wait" or "No" over an agent
-        that did not say them is the caller, not echo."""
+        """A lone word is echo only with a recent whole-word transcript match.
+
+        Clipped and fuzzy matches are ambiguous for short caller commands, so
+        they must reach the agent even while its audio is playing.
+        """
         word = (word or "").lower()
-        if not word:
-            return True
-        for _, said in self._agent_words:
-            if said == word:
-                return True
-            if len(word) < 3 or len(said) <= len(word):
-                continue
-            # Echo is heard, not copied: "Cooper" came back as "uper", so the
-            # clipped start or end only has to sound close.
-            for part in (said[: len(word)], said[-len(word) :]):
-                if SequenceMatcher(None, part, word).ratio() >= ECHO_CLIP_SIMILARITY:
-                    return True
-        return False
+        now = self._clock()
+        return bool(word) and any(
+            said == word and now - at <= SINGLE_WORD_ECHO_WINDOW_SECONDS
+            for at, said in self._agent_words
+        )
 
     def strip_echo_prefix(self, text):
         """``text`` without leading words that repeat, in order, the tail of

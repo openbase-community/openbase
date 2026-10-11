@@ -73,3 +73,22 @@ async def test_short_real_interruptions_are_not_discarded_as_echo(word):
         )
     finally:
         await bridge.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "said,word",
+    [("I will store the file now.", "Stop"), ("The main function is ready.", "Wait")],
+)
+async def test_real_command_is_not_a_fuzzy_clipped_echo(said, word):
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    try:
+        bridge.on_agent_state_changed("listening", "speaking")
+        bridge.speech_gate.agent_said(said)
+        bridge.on_user_state_changed("listening", "speaking")
+        live.final(word)
+        bridge.on_user_state_changed("speaking", "listening")
+        await _settle()
+        assert dispatcher.prompts, f"{word!r} discarded over {said!r}"
+    finally:
+        await bridge.aclose()

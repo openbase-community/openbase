@@ -471,7 +471,21 @@ def test_the_agents_tail_is_stripped_from_a_caller_utterance_spoken_over_it():
 def test_a_lone_word_is_echo_only_when_the_agents_speech_explains_it():
     gate = LiveSpeechGate(clock=lambda: 0.0)
     gate.agent_said("Hi, I'm Cooper. The build is proceeding successfully.")
-    assert gate.is_clipped_echo_word("uper")
+    assert not gate.is_clipped_echo_word("uper")
     assert gate.is_clipped_echo_word("build")
     for word in ("stop", "wait", "undo", "no"):
         assert not gate.is_clipped_echo_word(word), word
+
+
+def test_single_word_echo_requires_recent_whole_word_evidence():
+    now = [10.0]
+    gate = LiveSpeechGate(clock=lambda: now[0])
+    gate.agent_said("Stop waiting. The build is ready.")
+    assert gate.is_clipped_echo_word("stop")
+    assert gate.is_echo("stop")
+    assert not gate.is_clipped_echo_word("wait")
+    now[0] += 2.0
+    assert not gate.is_clipped_echo_word("stop")
+    assert not gate.is_echo("stop")
+    now[0] += 20.0
+    assert not gate.is_echo("build is ready")
