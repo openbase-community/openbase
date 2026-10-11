@@ -470,12 +470,13 @@ _WRAPPER_PATH_DIRS = (
 
 
 def _wrapper_path_prefix() -> str:
-    """PATH entries a wrapper prepends, plus the Node runtime when it lives
+    """PATH entries a wrapper prepends, led by the Node runtime when it lives
     somewhere launchd would not otherwise look (nvm installs in particular).
 
     The console build runs pnpm, whose entry point is ``#!/usr/bin/env node``;
     resolving pnpm by absolute path is not enough when ``node`` itself is
-    off PATH.
+    off PATH. The nvm directory goes first so the workspace's pinned Node
+    (``.nvmrc``) beats a leftover Homebrew ``node`` of another major.
     """
     dirs = list(_WRAPPER_PATH_DIRS)
     node_dir = node_runtime_bin_dir()
@@ -484,7 +485,7 @@ def _wrapper_path_prefix() -> str:
         covered = {d.replace("$HOME", home) for d in _WRAPPER_PATH_DIRS}
         rendered = str(node_dir)
         if rendered not in covered and '"' not in rendered and "$" not in rendered:
-            dirs.append(rendered)
+            dirs.insert(0, rendered)
     return ":".join(dirs)
 
 

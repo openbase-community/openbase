@@ -292,7 +292,7 @@ def test_generate_wrapper_adds_nvm_node_dir_to_path(tmp_path, monkeypatch):
     then fails the console build (fresh-install QA, 2026-10-10)."""
     monkeypatch.setattr(launchd, "LAUNCHD_WRAPPER_DIR", tmp_path / "launchd")
     monkeypatch.setattr(launchd, "OPENBASE_BASE_DIR", tmp_path / "openbase")
-    nvm_bin = tmp_path / ".nvm" / "versions" / "node" / "v22.23.3" / "bin"
+    nvm_bin = tmp_path / ".nvm" / "versions" / "node" / "v24.18.0" / "bin"
     monkeypatch.setattr(launchd, "node_runtime_bin_dir", lambda: nvm_bin)
 
     service = ServiceDefinition(
@@ -308,7 +308,10 @@ def test_generate_wrapper_adds_nvm_node_dir_to_path(tmp_path, monkeypatch):
 
     wrapper = launchd.generate_wrapper(service, config, {"python": "/usr/bin/python3"})
 
-    assert f'/opt/homebrew/bin:/usr/local/bin:{nvm_bin}:$PATH"' in wrapper.read_text()
+    # Ahead of Homebrew, so a stray `brew install node` of another major
+    # cannot shadow the workspace's pinned nvm Node.
+    assert f'export PATH="{nvm_bin}:$HOME/.openbase/bin:' in wrapper.read_text()
+    assert '/opt/homebrew/bin:/usr/local/bin:$PATH"' in wrapper.read_text()
 
 
 def test_generate_wrapper_skips_node_dir_already_on_path(tmp_path, monkeypatch):

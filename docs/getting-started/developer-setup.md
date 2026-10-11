@@ -25,7 +25,7 @@ development installs need:
 - [`uv`](https://docs.astral.sh/uv/): `curl -LsSf https://astral.sh/uv/install.sh | sh`
 - [`multi`](https://pypi.org/project/multi-workspace/) 3.2.21 or newer, which setup uses to sync the sub-repos: `uv tool install multi-workspace` (or `uv tool upgrade multi-workspace`)
 - Go: `brew install go` on macOS, or the current toolchain from [go.dev/dl](https://go.dev/dl/). Setup builds the Openbase Direct transport from source, so Go is required whichever transport you pick.
-- Node 20+ (`brew install node`, or `pnpm env use --global 22`) and pnpm (`curl -fsSL https://get.pnpm.io/install.sh | sh -`) for building the console from source
+- Node, the LTS version pinned in the workspace's `.nvmrc` (currently Node 24), installed with nvm as described under [Node](#node) below, and pnpm (`curl -fsSL https://get.pnpm.io/install.sh | sh -`) for building the console from source
 
 `./scripts/setup` checks for all of these before it does anything else and exits with the install command for each one that is missing.
 
@@ -41,6 +41,17 @@ Optional developer backends:
 - Claude Code (`curl -fsSL https://claude.ai/install.sh | bash`, then `claude login`) for the `claude-code` backend (Openbase uses your own
   `claude login` directly; `openbase-coder claude login` is a thin wrapper)
 
+## Node
+
+The workspace pins one tested Node LTS in `.nvmrc`, and setup refuses any other major version: newer Node releases are not drop-in (Node 26 breaks Electron's install). Install it with [nvm](https://github.com/nvm-sh/nvm) rather than `brew install node`, which tracks the newest release. On a fresh Mac, zsh has no `~/.zshrc` yet, so create it first or the nvm installer cannot add its loader:
+
+```bash
+touch ~/.zshrc
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh | bash
+```
+
+Then open a new terminal (or run `source ~/.nvm/nvm.sh`) so the `nvm` command exists. The clone step below runs `nvm install` and `nvm use` in the workspace, which read `.nvmrc`. The first version nvm installs becomes its default for new terminals; if your nvm default is another version, run `nvm use` in the workspace before each `./scripts/setup`. Setup prints these commands and stops when `node` is the wrong major. If an older `brew install node` is still installed, nvm's Node takes precedence once nvm is loaded.
+
 ## Clone and Run Setup
 
 Clone the workspace repo and run its setup script from the workspace root.
@@ -51,6 +62,7 @@ runs `openbase-coder setup` against your checkout:
 git clone --branch main --single-branch \
   https://github.com/openbase-community/openbase-coder-workspace
 cd openbase-coder-workspace
+nvm install && nvm use   # the Node pinned in .nvmrc
 ./scripts/setup
 ```
 
