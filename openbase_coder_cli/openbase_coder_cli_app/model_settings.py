@@ -77,11 +77,24 @@ def backend_model_settings(request):
     configured_backend = read_backend(DEFAULT_ENV_FILE_PATH)
     location = dispatcher_config.backend_location(configured_backend)
     if not dispatcher_config.is_known_combined_model(model, location):
-        allowed = ", ".join(
-            option["id"]
-            for option in dispatcher_config.combined_model_options(location)
-            if option["available"]
+        options = dispatcher_config.combined_model_options(location)
+        normalized_model = " ".join(model.split()).lower()
+        # A listed-but-unavailable model is rejected with the same reason the
+        # option carries, so the UI and the API tell the user the same thing.
+        unavailable_reason = next(
+            (
+                option.get("unavailable_reason")
+                for option in options
+                if option["id"].lower() == normalized_model
+            ),
+            None,
         )
+        if unavailable_reason:
+            return Response(
+                {"error": unavailable_reason},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        allowed = ", ".join(option["id"] for option in options if option["available"])
         return Response(
             {"error": f"Model must be one of: {allowed}."},
             status=status.HTTP_400_BAD_REQUEST,

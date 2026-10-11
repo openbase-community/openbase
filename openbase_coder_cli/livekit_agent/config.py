@@ -15,10 +15,11 @@ from openbase_coder_cli.codex_session_defaults import (
     DEFAULT_CODEX_SANDBOX,
 )
 from openbase_coder_cli.config.token_manager import DEFAULT_WEB_BACKEND_URL
-from openbase_coder_cli.dispatcher_instructions import with_dispatcher_skill
 from openbase_coder_cli.direct_voice_instructions import (
     DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS,
 )
+from openbase_coder_cli.dispatcher_instructions import with_dispatcher_rules
+from openbase_coder_cli.host_kind import with_host_section
 from openbase_coder_cli.paths import (
     CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH,
     CODEX_DISPATCHER_CONFIG_PATH,
@@ -85,6 +86,99 @@ OPENBASE_CLOUD_AUDIO_CARTESIA_VERSION = os.getenv(
     "OPENBASE_CLOUD_AUDIO_CARTESIA_VERSION",
     "2026-03-01",
 )
+# Live Voice engine (GPT-Live client delegation; see dev-docs/live-voice.md).
+# The Openbase Cloud gateway relays GPT-Live under the account's token; the
+# LiveKit plugin appends ``/live/sessions`` to this base URL. Override it the
+# way OPENBASE_CLOUD_AUDIO_BASE_URL points the audio proxies at staging.
+OPENBASE_CLOUD_LIVE_BASE_URL = os.getenv(
+    "OPENBASE_CLOUD_LIVE_BASE_URL",
+    f"{WEB_BACKEND_URL}/api/openbase/live/openai/v1",
+).rstrip("/")
+LIVE_VOICE_MODEL = os.getenv("LIVEKIT_LIVE_VOICE_MODEL", "gpt-live-1")
+# One voice per call in phase 1 (the voice is fixed at session start); agents
+# are named in speech instead of getting their own voice.
+LIVE_VOICE_DEFAULT_VOICE = os.getenv("LIVEKIT_LIVE_VOICE_VOICE", "marin")
+# Pre-start websocket handshake probe of the live endpoint. A refused
+# connection, an HTTP 401/403/404 handshake, or an immediate 4401/4403 close
+# means the live engine cannot start and the call falls back to the pipeline.
+LIVE_VOICE_PREFLIGHT_TIMEOUT_SECONDS = float(
+    os.getenv("LIVEKIT_LIVE_VOICE_PREFLIGHT_TIMEOUT_SECONDS", "5") or 5
+)
+LIVE_VOICE_PREFLIGHT_CLOSE_WAIT_SECONDS = float(
+    os.getenv("LIVEKIT_LIVE_VOICE_PREFLIGHT_CLOSE_WAIT_SECONDS", "0.75") or 0.75
+)
+# Start-up latency (forensics F6, 2026-10-09: 7 s from room token to GPT-Live
+# session on a cloud workspace). The agent job process probes the live engine
+# (entitlement + handshake) at prewarm and every REFRESH seconds, and a call
+# reuses a result younger than TTL instead of probing; a failed probe retries
+# after RETRY seconds and is never reused.
+LIVE_VOICE_READINESS_TTL_SECONDS = float(
+    os.getenv("LIVEKIT_LIVE_VOICE_READINESS_TTL_SECONDS", "900") or 900
+)
+LIVE_VOICE_READINESS_REFRESH_SECONDS = float(
+    os.getenv("LIVEKIT_LIVE_VOICE_READINESS_REFRESH_SECONDS", "600") or 600
+)
+LIVE_VOICE_READINESS_RETRY_SECONDS = float(
+    os.getenv("LIVEKIT_LIVE_VOICE_READINESS_RETRY_SECONDS", "60") or 60
+)
+# Whether the job process keeps the readiness cache warm in the background.
+LIVE_VOICE_READINESS_PREWARM = os.getenv(
+    "LIVEKIT_LIVE_VOICE_READINESS_PREWARM", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+# Open the GPT-Live websocket while the room connects and the start route is
+# applied, so AgentSession.start finds it open instead of waiting for it.
+LIVE_VOICE_PRECONNECT = os.getenv(
+    "LIVEKIT_LIVE_VOICE_PRECONNECT", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+# A character swap (transfer, return, announcement) opens a fresh GPT-Live
+# session mid-call: a cold gateway handshake plus the plugin's own reconnect
+# backoff. The 5-second preflight bounds the initial probe, not this swap
+# (2026-10-10: a transfer to Cooper hit the 5-second cap and ended the call
+# while a healthy swap takes about 2 seconds). A swap that still fails is
+# retried with a fresh session before the call is given up.
+# While the thread works on a spoken request the caller hears one short line
+# (off with an empty value); its playback is capped so a model that runs on
+# into an answer of its own after it is cut off.
+LIVE_VOICE_ACK_TEXT = os.getenv("LIVEKIT_LIVE_VOICE_ACK_TEXT", "One moment.").strip()
+LIVE_VOICE_ACK_LIMIT_MS = int(
+    os.getenv("LIVEKIT_LIVE_VOICE_ACK_LIMIT_MS", "1500") or 1500
+)
+# Caller speech shorter than this does not count as a barge-in: speakerphone
+# echo of the agent's own words ("...Cooper" heard back as "uper", 2026-10-10)
+# trips the VAD for a few hundred milliseconds and must not cut the answer.
+LIVE_VOICE_BARGE_IN_MIN_SECONDS = float(
+    os.getenv("LIVEKIT_LIVE_VOICE_BARGE_IN_MIN_SECONDS", "0.5") or 0.5
+)
+LIVE_VOICE_CHARACTER_START_TIMEOUT_SECONDS = float(
+    os.getenv("LIVEKIT_LIVE_VOICE_CHARACTER_START_TIMEOUT_SECONDS", "20") or 20
+)
+LIVE_VOICE_CHARACTER_START_ATTEMPTS = max(
+    1, int(os.getenv("LIVEKIT_LIVE_VOICE_CHARACTER_START_ATTEMPTS", "2") or 2)
+)
+# A voice turn that fails to reach or start on the backend is retried with
+# these backoffs (seconds, in order; the last one repeats) inside this window
+# before the caller hears a specific failure line (turn_recovery.py).
+LIVE_TURN_RECOVERY_WINDOW_SECONDS = float(
+    os.getenv("LIVEKIT_TURN_RECOVERY_WINDOW_SECONDS", "90") or 90
+)
+LIVE_TURN_RECOVERY_BACKOFF_SECONDS = tuple(
+    float(part)
+    for part in (
+        os.getenv("LIVEKIT_TURN_RECOVERY_BACKOFF_SECONDS", "3,6,12,20") or "3,6,12,20"
+    ).split(",")
+    if part.strip()
+) or (3.0, 6.0, 12.0, 20.0)
+LIVEKIT_DISPATCHER_WARMUP = os.getenv(
+    "LIVEKIT_DISPATCHER_WARMUP", "1"
+).strip().lower() not in {"0", "false", "no", "off"}
+# The room token view dispatches the agent to the room when the token is
+# issued (explicit dispatch) instead of when the phone joins, so the agent's
+# start-up overlaps the phone's join. A job started that way may sit in the
+# room before anyone joins: it ends itself after this many seconds without a
+# caller so an abandoned token does not keep a billed live session open.
+LIVEKIT_PARTICIPANT_JOIN_TIMEOUT_SECONDS = float(
+    os.getenv("LIVEKIT_PARTICIPANT_JOIN_TIMEOUT_SECONDS", "90") or 90
+)
 
 ANNOUNCER_TOPIC = "openbase.announcer.say"
 VOICE_ROUTE_TOPIC = "openbase.voice.route"
@@ -94,6 +188,11 @@ VOICE_LIFECYCLE_TOPIC = "openbase.voice.lifecycle"
 # be silently lost in transit; attributes are state-synced by LiveKit, so the
 # client always converges on the latest lifecycle state.
 VOICE_LIFECYCLE_ATTRIBUTE = "openbase.voice.lifecycle"
+# Which voice engine serves this call: ``live`` (GPT-Live full duplex; clients
+# keep the microphone open and disable lifecycle auto-mute) or ``pipeline``
+# (STT -> turn -> TTS; clients keep today's auto-mute). Published on join;
+# clients that do not understand it keep today's half-duplex behaviour.
+VOICE_ENGINE_ATTRIBUTE = "openbase.voice.engine"
 ANNOUNCER_AUDIO_KIND = "audio_file"
 SUPPORTED_AUDIO_EXTENSIONS = {".wav", ".mp3", ".m4a", ".aac", ".ogg"}
 ANNOUNCER_MAX_QUEUE_SIZE = int(os.getenv("LIVEKIT_ANNOUNCER_MAX_QUEUE_SIZE", "20"))
@@ -131,6 +230,94 @@ When the user asks to transfer by thread id, run:
 openbase-coder user transfer-to-thread "<thread id>"
 Keep spoken confirmations concise.
 """.strip()
+# Startup persona of each GPT-Live character session. A transfer starts a new
+# session with the new name and mapped voice; reconnect retains this persona.
+# The voice model is the voice of the call, never its brain: the delegation
+# bridge sends every caller utterance to the active Super Agent thread, which
+# has the caller's tools, and the model only voices what comes back.
+LIVE_VOICE_STARTUP_INSTRUCTIONS = """
+You are the voice of a private Openbase coding call, not its brain. Everything
+the caller says goes automatically to their coding agent (the dispatcher
+first, or a specific agent after a transfer), which has their computer, files,
+projects, tools and accounts. Only the agent answers.
+Never answer a question or request yourself, including a question about your
+name: wait for the agent's supplied speech instead of answering and then repeating
+its answer. No facts, no general knowledge,
+no advice, and no guesses about the caller's computer, desktop, files,
+projects, accounts, calendar, messages or anything else, even when you think
+you know. When the caller asks for something, say a brief acknowledgement
+such as "checking" or "one moment", delegate it as usual, and wait: the
+application delivers the agent's answer as spoken-answer instructions with
+quoted text to read. That text is the agent's authoritative answer, not a
+new request for you to solve. Read every sentence and answer component in
+full, in order; do not shorten, summarize, or replace it with your own answer.
+Also relay commentary faithfully when supplied; thinking is context, not
+something to say. A greeting arrives as an explicit speech instruction: speak exactly that one
+short sentence once, without explanation or catch-up. Do not add another
+greeting on your own or repeat an introduction from restored history. You may answer thanks or small talk in a
+few words, and ask them to repeat when you could not understand them. Speak naturally,
+stop when interrupted, and never read code, paths or identifiers character
+by character.
+""".strip()
+
+
+def live_voice_startup_instructions(
+    host: str | None = None, *, agent_label: str | None = None
+) -> str:
+    """The GPT-Live persona plus one line on where the caller's agent runs.
+
+    ``host`` is a ``host_kind`` value; None detects this install's. On a cloud
+    workspace the model otherwise acknowledges "checking your desktop" for a
+    computer that has none (staging demo, 2026-10-08).
+
+    ``agent_label`` names the agent a call started from a project thread is
+    routed to from its first word, so the voice never presents itself as the
+    dispatcher on such a call.
+    """
+    from openbase_coder_cli.host_kind import live_voice_host_note
+
+    text = f"{LIVE_VOICE_STARTUP_INSTRUCTIONS}\n{live_voice_host_note(host)}"
+    label = (agent_label or "").strip()
+    text += f"\n{live_voice_identity_note(live_voice_agent_name(label))}"
+    if label:
+        text += f"\n{live_voice_start_route_note(label)}"
+    return text
+
+
+def live_voice_identity_note(agent_label: str) -> str:
+    return (
+        f"Your name in this call is {agent_label}. "
+        f"Speak in the first person as {agent_label}, including introductions and "
+        "relayed replies. Do not introduce yourself as ChatGPT or as a separate "
+        "assistant speaking for the agent. This is a speaking role, not permission "
+        "to invent answers or claim unverified work. Earlier assistant messages "
+        "may belong to a different agent; they do not change your current name. "
+        "Do not prefix ordinary replies with your name or reintroduce yourself. "
+        "Say your name only in a supplied greeting, announcement, or "
+        "the supplied answer to a caller's name question."
+    )
+
+
+def live_voice_agent_name(agent_label: str | None) -> str:
+    """A spoken character name, independent of the Dispatcher navigation role."""
+    from openbase_coder_cli.voice_identity import current_voice_identity
+
+    return (agent_label or "").strip() or current_voice_identity().voice_name
+
+
+def live_voice_greeting(agent_label: str | None) -> str:
+    return f"Hi, I'm {live_voice_agent_name(agent_label)}."
+
+
+def live_voice_start_route_note(agent_label: str) -> str:
+    return (
+        f"This call started inside {agent_label}'s thread: from the first word, "
+        f"everything the caller says goes to {agent_label}, which answers. "
+        f"Speak as that agent and do not mention the dispatcher unless "
+        f"the caller moves the call back to it."
+    )
+
+
 LIVEKIT_CODEX_THREAD_STATE_PATH = os.getenv("LIVEKIT_CODEX_THREAD_STATE_PATH")
 LIVEKIT_CODEX_FRESH_THREAD_PER_SESSION = os.getenv(
     "LIVEKIT_CODEX_FRESH_THREAD_PER_SESSION", ""
@@ -224,9 +411,9 @@ def _load_dispatcher_developer_instructions() -> str | None:
         )
     else:
         if loaded:
-            return with_dispatcher_skill(loaded)
+            return with_dispatcher_rules(loaded)
 
-    return with_dispatcher_skill(DISPATCHER_BUILTIN_DEVELOPER_INSTRUCTIONS)
+    return with_dispatcher_rules(DISPATCHER_BUILTIN_DEVELOPER_INSTRUCTIONS)
 
 
 def load_direct_livekit_developer_instructions(
@@ -239,19 +426,19 @@ def load_direct_livekit_developer_instructions(
     if explicit_path:
         loaded = _read_instruction_file(Path(explicit_path).expanduser())
         if loaded:
-            return loaded
+            return with_host_section(loaded)
 
     loaded = _read_instruction_file(
         default_path or DEFAULT_DIRECT_LIVEKIT_INSTRUCTIONS_PATH
     )
     if loaded:
-        return loaded
+        return with_host_section(loaded)
 
     text = values.get(DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV, "").strip()
     if text:
-        return text
+        return with_host_section(text)
 
-    return DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS
+    return with_host_section(DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS)
 
 
 def _read_instruction_file(path: Path) -> str | None:

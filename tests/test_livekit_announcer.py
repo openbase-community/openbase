@@ -36,6 +36,11 @@ from openbase_coder_cli.tts_providers import KOKORO_PROVIDER_ID  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def isolate_voice_config(monkeypatch, tmp_path):
+    from openbase_coder_cli.services import livekit_pool_activity
+
+    monkeypatch.setattr(livekit_pool_activity, "_ACTIVITY_DIR", tmp_path / "activity")
+    monkeypatch.delenv("OPENBASE_CODER_SERVICE_SUPERVISOR", raising=False)
+    monkeypatch.setenv("SUPER_AGENTS_CLAUDE_CODE_HOME", str(tmp_path / "claude-store"))
     monkeypatch.setenv(
         "SUPER_AGENTS_STATE_FILE",
         str(tmp_path / "missing-super-agents-state.json"),
@@ -45,6 +50,13 @@ def isolate_voice_config(monkeypatch, tmp_path):
         "selected_tts_provider_id",
         lambda path=None: "cartesia",
     )
+    monkeypatch.setattr(
+        dispatcher_config,
+        "CODEX_DISPATCHER_CONFIG_PATH",
+        tmp_path / "dispatcher-config.json",
+    )
+    monkeypatch.delenv("LIVEKIT_LIVE_VOICE_VOICE", raising=False)
+    monkeypatch.delenv("CARTESIA_VOICE_ID", raising=False)
 
 
 class FakeRoomService:
@@ -73,28 +85,46 @@ class FakeLiveKitClient:
         self.closed = True
 
 
-@pytest.mark.parametrize('audio_file', [False, True])
-def test_retry_after_delivery_loses_ack_but_keeps_message_identity(monkeypatch, audio_file):
+@pytest.mark.parametrize("audio_file", [False, True])
+def test_retry_after_delivery_loses_ack_but_keeps_message_identity(
+    monkeypatch, audio_file
+):
     import aiohttp
+
     from openbase_coder_cli import livekit_announcer
-    participants = {'room-retry': [
-        _participant('agent', kind=livekit_api.ParticipantInfo.Kind.AGENT),
-        _participant('user', kind=livekit_api.ParticipantInfo.Kind.STANDARD)]}
-    first = FakeLiveKitClient([_room('room-retry', 100)], participants)
-    second = FakeLiveKitClient([_room('room-retry', 100)], participants)
+
+    participants = {
+        "room-retry": [
+            _participant("agent", kind=livekit_api.ParticipantInfo.Kind.AGENT),
+            _participant("user", kind=livekit_api.ParticipantInfo.Kind.STANDARD),
+        ]
+    }
+    first = FakeLiveKitClient([_room("room-retry", 100)], participants)
+    second = FakeLiveKitClient([_room("room-retry", 100)], participants)
     original_send = first.room.send_data
+
     async def delivered_without_ack(request):
         await original_send(request)
-        raise aiohttp.ServerDisconnectedError('simulated lost acknowledgment after delivery')
+        raise aiohttp.ServerDisconnectedError(
+            "simulated lost acknowledgment after delivery"
+        )
+
     first.room.send_data = delivered_without_ack
     clients = [first, second]
-    monkeypatch.setattr(livekit_announcer, '_build_livekit_client', lambda: clients.pop(0))
-    result = asyncio.run(publish_announcer_audio_file('controlled.wav') if audio_file
-        else publish_announcer_message('A controlled announcement.'))
-    payloads = [json.loads(request.data) for request in first.room.sent + second.room.sent]
+    monkeypatch.setattr(
+        livekit_announcer, "_build_livekit_client", lambda: clients.pop(0)
+    )
+    result = asyncio.run(
+        publish_announcer_audio_file("controlled.wav")
+        if audio_file
+        else publish_announcer_message("A controlled announcement.")
+    )
+    payloads = [
+        json.loads(request.data) for request in first.room.sent + second.room.sent
+    ]
     assert len(payloads) == 2
     assert payloads[0] == payloads[1]
-    assert payloads[0]['message_id'] == result.message_id
+    assert payloads[0]["message_id"] == result.message_id
     assert first.closed and second.closed
 
 
@@ -107,21 +137,37 @@ def _room(name: str, created: int, participants: int = 2):
     )
 
 
-def _participant(identity: str, *, kind, state=livekit_api.ParticipantInfo.State.ACTIVE):
+def _participant(
+    identity: str, *, kind, state=livekit_api.ParticipantInfo.State.ACTIVE
+):
     return SimpleNamespace(identity=identity, kind=kind, state=state)
 
 
 def test_watchdog_preserves_speaking_agent_while_phone_reconnects(monkeypatch):
     from openbase_coder_cli import livekit_announcer
     from openbase_coder_cli.services import livekit_pool_watchdog as watchdog
-    client = FakeLiveKitClient([_room('retained', 100, participants=1)], {'retained': [
-        _participant('agent-speaking', kind=livekit_api.ParticipantInfo.Kind.AGENT)]})
-    monkeypatch.setattr(livekit_announcer, '_build_livekit_client', lambda: client)
+
+    monkeypatch.setattr(watchdog, "_agent_started_ts", lambda: None)
+    client = FakeLiveKitClient(
+        [_room("retained", 100, participants=1)],
+        {
+            "retained": [
+                _participant(
+                    "agent-speaking", kind=livekit_api.ParticipantInfo.Kind.AGENT
+                )
+            ]
+        },
+    )
+    monkeypatch.setattr(livekit_announcer, "_build_livekit_client", lambda: client)
     # Ordinary automatic announcement selection still requires a present user.
     assert not asyncio.run(livekit_announcer.active_voice_room_exists())
     bounces = []
-    monkeypatch.setattr(watchdog, '_execute_bounce', lambda services: bounces.append(services))
-    assert not watchdog._bounce_idle({'baseline_ts': 1}, watchdog.IDLE_RECYCLE_SECONDS + 2)
+    monkeypatch.setattr(
+        watchdog, "_execute_bounce", lambda services: bounces.append(services)
+    )
+    assert not watchdog._bounce_idle(
+        {"baseline_ts": 1}, watchdog.IDLE_RECYCLE_SECONDS + 2
+    )
     assert not bounces
     assert client.closed
 
@@ -129,29 +175,52 @@ def test_watchdog_preserves_speaking_agent_while_phone_reconnects(monkeypatch):
 def test_watchdog_can_recycle_room_without_a_connected_agent(monkeypatch):
     from openbase_coder_cli import livekit_announcer
     from openbase_coder_cli.services import livekit_pool_watchdog as watchdog
-    client = FakeLiveKitClient([_room('retained', 100, participants=1)], {'retained': [
-        _participant('agent-gone', kind=livekit_api.ParticipantInfo.Kind.AGENT,
-            state=livekit_api.ParticipantInfo.State.DISCONNECTED)]})
-    monkeypatch.setattr(livekit_announcer, '_build_livekit_client', lambda: client)
+
+    monkeypatch.setattr(watchdog, "_agent_started_ts", lambda: None)
+    client = FakeLiveKitClient(
+        [_room("retained", 100, participants=1)],
+        {
+            "retained": [
+                _participant(
+                    "agent-gone",
+                    kind=livekit_api.ParticipantInfo.Kind.AGENT,
+                    state=livekit_api.ParticipantInfo.State.DISCONNECTED,
+                )
+            ]
+        },
+    )
+    monkeypatch.setattr(livekit_announcer, "_build_livekit_client", lambda: client)
     bounces = []
-    monkeypatch.setattr(watchdog, '_execute_bounce', lambda services: bounces.append(services))
-    assert watchdog._bounce_idle({'baseline_ts': 1}, watchdog.IDLE_RECYCLE_SECONDS + 2)
-    assert bounces == [('livekit-agent',)]
+    monkeypatch.setattr(
+        watchdog, "_execute_bounce", lambda services: bounces.append(services)
+    )
+    assert watchdog._bounce_idle({"baseline_ts": 1}, watchdog.IDLE_RECYCLE_SECONDS + 2)
+    assert bounces == [("livekit-agent",)]
 
 
 def test_watchdog_room_query_failure_cannot_authorize_worker_restart(monkeypatch):
     from openbase_coder_cli import livekit_announcer
     from openbase_coder_cli.services import livekit_pool_watchdog as watchdog
+
+    monkeypatch.setattr(watchdog, "_agent_started_ts", lambda: None)
+
     async def unavailable(**kwargs):
-        raise ConnectionError('Local room query unavailable')
-    monkeypatch.setattr(livekit_announcer, 'active_voice_room_exists', unavailable)
+        raise ConnectionError("Local room query unavailable")
+
+    monkeypatch.setattr(livekit_announcer, "active_voice_room_exists", unavailable)
     bounces = []
-    monkeypatch.setattr(watchdog, '_execute_bounce', lambda services: bounces.append(services))
-    assert not watchdog._bounce_idle({'baseline_ts': 1}, watchdog.IDLE_RECYCLE_SECONDS + 2)
+    monkeypatch.setattr(
+        watchdog, "_execute_bounce", lambda services: bounces.append(services)
+    )
+    assert not watchdog._bounce_idle(
+        {"baseline_ts": 1}, watchdog.IDLE_RECYCLE_SECONDS + 2
+    )
     assert not bounces
 
 
-def test_publish_announcer_message_selects_latest_active_room(tmp_path, monkeypatch, caplog):
+def test_publish_announcer_message_selects_latest_active_room(
+    tmp_path, monkeypatch, caplog
+):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     older = _room("room-old", 100)
     newer = _room("room-new", 200)
@@ -160,11 +229,15 @@ def test_publish_announcer_message_selects_latest_active_room(tmp_path, monkeypa
         {
             "room-old": [
                 _participant("agent-old", kind=livekit_api.ParticipantInfo.Kind.AGENT),
-                _participant("user-old", kind=livekit_api.ParticipantInfo.Kind.STANDARD),
+                _participant(
+                    "user-old", kind=livekit_api.ParticipantInfo.Kind.STANDARD
+                ),
             ],
             "room-new": [
                 _participant("agent-new", kind=livekit_api.ParticipantInfo.Kind.AGENT),
-                _participant("user-new", kind=livekit_api.ParticipantInfo.Kind.STANDARD),
+                _participant(
+                    "user-new", kind=livekit_api.ParticipantInfo.Kind.STANDARD
+                ),
             ],
         },
     )
@@ -185,7 +258,9 @@ def test_publish_announcer_message_selects_latest_active_room(tmp_path, monkeypa
     assert any("stage=announcer_send_data_end" in message for message in messages)
 
 
-def test_publish_announcer_message_uses_active_target_voice(tmp_path, monkeypatch):
+def test_publish_announcer_message_uses_voice_identity_not_active_target(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     (tmp_path / "livekit-voice-route.json").write_text(
         json.dumps(
@@ -213,10 +288,56 @@ def test_publish_announcer_message_uses_active_target_voice(tmp_path, monkeypatc
     asyncio.run(publish_announcer_message("hello", livekit_client=client))
 
     payload = json.loads(client.room.sent[0].data.decode("utf-8"))
-    assert payload["voice_id"] == "voice-1"
+    # Default identity: Jacqueline, whatever agent the call is routed to.
+    assert payload["voice_id"] == "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"
 
 
-def test_publish_announcer_message_prefers_explicit_voice_over_active_target(tmp_path, monkeypatch):
+def test_publish_announcer_message_speaks_chosen_dispatcher_voice(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    dispatcher_config.set_dispatcher_voice("47c38ca4-5f35-497b-b1a3-415245fb35e1")
+    client = FakeLiveKitClient(
+        [_room("room-1", 100)],
+        {
+            "room-1": [
+                _participant("agent-1", kind=livekit_api.ParticipantInfo.Kind.AGENT),
+                _participant("user-1", kind=livekit_api.ParticipantInfo.Kind.STANDARD),
+            ],
+        },
+    )
+
+    asyncio.run(
+        publish_announcer_message("hello", agent_name="Dottie", livekit_client=client)
+    )
+
+    payload = json.loads(client.room.sent[0].data.decode("utf-8"))
+    assert payload["voice_id"] == "47c38ca4-5f35-497b-b1a3-415245fb35e1"  # Daniel
+    assert payload["agent_name"] == "Dottie"
+
+
+def test_publish_announcer_message_follows_pinned_live_voice(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("LIVEKIT_LIVE_VOICE_VOICE", "cedar")
+    client = FakeLiveKitClient(
+        [_room("room-1", 100)],
+        {
+            "room-1": [
+                _participant("agent-1", kind=livekit_api.ParticipantInfo.Kind.AGENT),
+                _participant("user-1", kind=livekit_api.ParticipantInfo.Kind.STANDARD),
+            ],
+        },
+    )
+
+    asyncio.run(publish_announcer_message("hello", livekit_client=client))
+
+    payload = json.loads(client.room.sent[0].data.decode("utf-8"))
+    assert payload["voice_id"] == "a167e0f3-df7e-4d52-a9c3-f949145efdab"  # Blake
+
+
+def test_publish_announcer_message_prefers_explicit_voice_over_active_target(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     (tmp_path / "livekit-voice-route.json").write_text(
         json.dumps(
@@ -285,17 +406,23 @@ def test_publish_announcer_message_replaces_non_english_kokoro_voice(
     assert payload["voice_id"] == "af_bella"
 
 
-def test_publish_announcer_message_explicit_voice_preserves_room_targeting(tmp_path, monkeypatch):
+def test_publish_announcer_message_explicit_voice_preserves_room_targeting(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     client = FakeLiveKitClient(
         [_room("room-old", 100), _room("room-explicit", 50)],
         {
             "room-old": [
                 _participant("agent-old", kind=livekit_api.ParticipantInfo.Kind.AGENT),
-                _participant("user-old", kind=livekit_api.ParticipantInfo.Kind.STANDARD),
+                _participant(
+                    "user-old", kind=livekit_api.ParticipantInfo.Kind.STANDARD
+                ),
             ],
             "room-explicit": [
-                _participant("agent-explicit", kind=livekit_api.ParticipantInfo.Kind.AGENT),
+                _participant(
+                    "agent-explicit", kind=livekit_api.ParticipantInfo.Kind.AGENT
+                ),
             ],
         },
     )
@@ -372,10 +499,11 @@ def test_user_say_api_returns_accepted(monkeypatch, tmp_path):
         source="test",
     )
 
-    async def fake_publish(text, *, room_name=None, voice_id=None):
+    async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name is None
         assert voice_id == "voice-dottie"
+        assert agent_name == "Dottie"
         return SimpleNamespace(
             message_id="announcer-1",
             room_name="room-1",
@@ -400,7 +528,9 @@ def test_user_say_api_returns_accepted(monkeypatch, tmp_path):
     }
 
 
-def test_user_say_api_allows_authenticated_local_post_without_csrf_token(monkeypatch, tmp_path):
+def test_user_say_api_allows_authenticated_local_post_without_csrf_token(
+    monkeypatch, tmp_path
+):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     record_voice_assignment(
         thread_id="thread-1",
@@ -412,10 +542,11 @@ def test_user_say_api_allows_authenticated_local_post_without_csrf_token(monkeyp
         source="test",
     )
 
-    async def fake_publish(text, *, room_name=None, voice_id=None):
+    async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name is None
         assert voice_id == "voice-dottie"
+        assert agent_name == "Dottie"
         return SimpleNamespace(
             message_id="announcer-1",
             room_name="room-1",
@@ -447,7 +578,9 @@ def test_user_say_api_allows_authenticated_local_post_without_csrf_token(monkeyp
     }
 
 
-def test_user_say_api_resolves_agent_voice(monkeypatch, tmp_path):
+def test_user_say_api_resolves_agent_thread_and_speaks_agent_voice(
+    monkeypatch, tmp_path
+):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     record_voice_assignment(
         thread_id="thread-1",
@@ -459,7 +592,7 @@ def test_user_say_api_resolves_agent_voice(monkeypatch, tmp_path):
         source="test",
     )
 
-    async def fake_publish(text, *, room_name=None, voice_id=None):
+    async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name == "room-1"
         assert voice_id == "super-agent-voice"
@@ -507,7 +640,7 @@ def test_user_say_api_backfills_agent_voice_from_super_agents_state(
     )
     caplog.set_level(logging.INFO)
 
-    async def fake_publish(text, *, room_name=None, voice_id=None):
+    async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name is None
         assert voice_id
@@ -572,7 +705,7 @@ def test_user_say_api_backfills_agent_voice_from_claude_code_state(
         )
     caplog.set_level(logging.INFO)
 
-    async def fake_publish(text, *, room_name=None, voice_id=None):
+    async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name is None
         assert voice_id
@@ -614,7 +747,9 @@ def test_user_say_api_rejects_unknown_agent(tmp_path, monkeypatch):
     assert "Dottie" in response.data["detail"]
 
 
-def test_user_say_api_logs_unknown_agent_lookup_diagnostics(tmp_path, monkeypatch, caplog):
+def test_user_say_api_logs_unknown_agent_lookup_diagnostics(
+    tmp_path, monkeypatch, caplog
+):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("SUPER_AGENTS_STATE_FILE", str(tmp_path / "missing-state.json"))
     caplog.set_level(logging.WARNING)
@@ -635,8 +770,9 @@ def test_user_say_api_logs_unknown_agent_lookup_diagnostics(tmp_path, monkeypatc
     assert "normalized_agent_name': 'evie'" in messages
 
 
-def test_user_say_api_selects_latest_matching_agent(tmp_path, monkeypatch):
+def test_user_say_api_selects_latest_matching_agent(tmp_path, monkeypatch, caplog):
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    caplog.set_level(logging.INFO)
     for thread_id, voice_id, seen_at in (
         ("thread-1", "voice-1", 10),
         ("thread-2", "voice-2", 20),
@@ -652,10 +788,10 @@ def test_user_say_api_selects_latest_matching_agent(tmp_path, monkeypatch):
             seen_at=seen_at,
         )
 
-    async def fake_publish(text, *, room_name=None, voice_id=None):
+    async def fake_publish(text, *, room_name=None, voice_id=None, agent_name=None):
         assert text == "hello"
         assert room_name is None
-        assert voice_id == "voice-2"
+        assert voice_id
         return SimpleNamespace(
             message_id="announcer-1",
             room_name="room-1",
@@ -674,6 +810,9 @@ def test_user_say_api_selects_latest_matching_agent(tmp_path, monkeypatch):
 
     assert response.status_code == 202
     assert response.data["message_id"] == "announcer-1"
+    assert "stage=user_say_voice_resolved agent_name=Dottie thread_id=thread-2" in (
+        "\n".join(record.message for record in caplog.records)
+    )
 
 
 def test_user_say_api_returns_thread_for_no_active_room(tmp_path, monkeypatch):
@@ -858,8 +997,11 @@ def test_livekit_companion_start_api_starts_linux_screen_share(monkeypatch):
     monkeypatch.setenv("LIVEKIT_CLIENT_API_KEY", "clientkey")
     monkeypatch.setenv("LIVEKIT_CLIENT_API_SECRET", "clientsecret")
     monkeypatch.setenv("LIVEKIT_URL", "ws://livekit.local")
-    monkeypatch.setattr(views._livekit.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(views._livekit, "_companion_client_factory", lambda: client)
+    monkeypatch.setattr(views._screen_share.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(
+        views._screen_share, "_companion_client_factory", lambda: client
+    )
+    monkeypatch.setattr(views._screen_share, "_linux_desktop_check", lambda: None)
 
     request = APIRequestFactory().post(
         "/api/livekit-companion-start/",
@@ -887,25 +1029,197 @@ def test_livekit_companion_start_api_starts_linux_screen_share(monkeypatch):
     assert client.calls[1][1]["token"]
 
 
-def test_livekit_companion_start_api_is_noop_on_non_linux(monkeypatch):
-    monkeypatch.setattr(views._livekit.platform, "system", lambda: "Darwin")
+def test_livekit_companion_start_api_explains_a_linux_host_without_a_desktop(
+    monkeypatch,
+):
+    from openbase_coder_cli.linux_computer_use import LinuxComputerUseError
 
-    request = APIRequestFactory().post(
-        "/api/livekit-companion-start/",
-        {"room_name": "room-1"},
-        format="json",
+    monkeypatch.setenv("LIVEKIT_API_KEY", "devkey")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "devsecret")
+    monkeypatch.setenv("LIVEKIT_CLIENT_API_KEY", "clientkey")
+    monkeypatch.setenv("LIVEKIT_CLIENT_API_SECRET", "clientsecret")
+    monkeypatch.setenv("LIVEKIT_URL", "ws://livekit.local")
+    monkeypatch.setattr(views._screen_share.platform, "system", lambda: "Linux")
+
+    def missing_desktop():
+        raise LinuxComputerUseError(
+            "Linux computer use requires X11 tooling: DISPLAY, xdotool"
+        )
+
+    monkeypatch.setattr(views._screen_share, "_linux_desktop_check", missing_desktop)
+    monkeypatch.setattr(
+        views._screen_share,
+        "_companion_client_factory",
+        lambda: pytest.fail("the companion must not be launched without a desktop"),
+    )
+
+    response = views.livekit_companion_start(_companion_request("start"))
+
+    assert response.status_code == 200
+    assert response.data["supported"] is False
+    assert response.data["code"] == "linux_desktop_unavailable"
+    assert response.data["detail"].startswith("This computer has no desktop to share.")
+    assert "xdotool" in response.data["detail"]
+
+
+def test_livekit_companion_status_api_says_cloud_workspaces_cannot_share(monkeypatch):
+    from openbase_coder_cli.linux_computer_use import LinuxComputerUseError
+
+    monkeypatch.setattr(views._screen_share.platform, "system", lambda: "Linux")
+
+    def missing_desktop():
+        raise LinuxComputerUseError("Linux computer use requires X11 tooling: DISPLAY")
+
+    monkeypatch.setattr(views._screen_share, "_linux_desktop_check", missing_desktop)
+    monkeypatch.setattr(
+        views._screen_share,
+        "_companion_client_factory",
+        lambda: pytest.fail("no companion is consulted without a desktop"),
+    )
+
+    response = views.livekit_companion_status(_companion_request("status"))
+
+    assert response.data["supported"] is False
+    assert response.data["state"] == "unavailable"
+    assert response.data["code"] == "linux_desktop_unavailable"
+    assert response.data["detail"] == (
+        "Screen sharing is available on your Mac, not on cloud workspaces."
+    )
+
+
+def test_livekit_companion_start_api_is_noop_on_windows(monkeypatch):
+    monkeypatch.setattr(views._screen_share.platform, "system", lambda: "Windows")
+
+    response = views.livekit_companion_start(_companion_request("start"))
+
+    assert response.status_code == 200
+    assert response.data["supported"] is False
+    assert response.data["started"] is False
+
+
+def _companion_request(action, data=None):
+    factory = APIRequestFactory()
+    path = f"/api/livekit-companion-{action}/"
+    request = (
+        factory.get(path)
+        if action == "status"
+        else factory.post(path, data or {"room_name": "room-1"}, format="json")
     )
     force_authenticate(
         request,
         user=SimpleNamespace(is_authenticated=True),
         token={"email": "gabe@example.com"},
     )
+    return request
 
-    response = views.livekit_companion_start(request)
+
+def _macos_companion_env(monkeypatch):
+    monkeypatch.setenv("LIVEKIT_API_KEY", "devkey")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "devsecret")
+    monkeypatch.setenv("LIVEKIT_CLIENT_API_KEY", "clientkey")
+    monkeypatch.setenv("LIVEKIT_CLIENT_API_SECRET", "clientsecret")
+    monkeypatch.setenv("LIVEKIT_URL", "ws://livekit.local")
+    monkeypatch.setattr(views._screen_share.platform, "system", lambda: "Darwin")
+
+
+def test_livekit_companion_start_api_starts_macos_share_via_desktop_app(monkeypatch):
+    _macos_companion_env(monkeypatch)
+    calls = []
+
+    def fake_request(method, path, *, json=None, launch=True, timeout=15):
+        calls.append((method, path, json))
+        return {"ok": True, "state": "sharing"}
+
+    monkeypatch.setattr(views._screen_share.desktop_control, "request", fake_request)
+
+    response = views.livekit_companion_start(_companion_request("start"))
 
     assert response.status_code == 200
-    assert response.data["supported"] is False
-    assert response.data["started"] is False
+    assert response.data["started"] is True
+    assert response.data["platform"] == "macos"
+    assert response.data["roomName"] == "room-1"
+    method, path, body = calls[0]
+    assert (method, path) == ("POST", "/livekit-companion/start-screen-share")
+    assert body["roomUrl"] == "ws://livekit.local"
+    assert body["companionToken"]
+
+
+def test_livekit_companion_start_api_reports_screen_recording_permission(monkeypatch):
+    _macos_companion_env(monkeypatch)
+    error = views._screen_share.desktop_control.DesktopControlError(
+        "Allow Screen Recording", code="screen_recording_permission_required"
+    )
+
+    def fake_request(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(views._screen_share.desktop_control, "request", fake_request)
+
+    response = views.livekit_companion_start(_companion_request("start"))
+
+    assert response.status_code == 403
+    assert response.data["code"] == "screen_recording_permission_required"
+    assert "Screen Recording" in response.data["detail"]
+
+
+def test_livekit_companion_start_api_reports_missing_desktop_app(monkeypatch):
+    _macos_companion_env(monkeypatch)
+
+    def fake_request(*_args, **_kwargs):
+        raise views._screen_share.desktop_control.DesktopControlError(
+            "unreachable", unreachable=True
+        )
+
+    monkeypatch.setattr(views._screen_share.desktop_control, "request", fake_request)
+
+    response = views.livekit_companion_start(_companion_request("start"))
+
+    assert response.status_code == 503
+    assert response.data["code"] == "desktop_app_unavailable"
+
+
+def test_livekit_companion_stop_api_is_idempotent_without_desktop_app(monkeypatch):
+    monkeypatch.setattr(views._screen_share.platform, "system", lambda: "Darwin")
+
+    def fake_request(*_args, **_kwargs):
+        raise views._screen_share.desktop_control.DesktopControlError(
+            "unreachable", unreachable=True
+        )
+
+    monkeypatch.setattr(views._screen_share.desktop_control, "request", fake_request)
+
+    response = views.livekit_companion_stop(_companion_request("stop", {}))
+
+    assert response.status_code == 200
+    assert response.data["stopped"] is True
+    assert response.data["companion"] == {"state": "off"}
+
+
+def test_livekit_companion_status_api_reports_macos_permissions(monkeypatch):
+    monkeypatch.setattr(views._screen_share.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(
+        views._screen_share.desktop_control,
+        "request",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "companion": {
+                "ok": True,
+                "state": "sharing",
+                "screenRecordingGranted": True,
+                "accessibilityGranted": False,
+            },
+        },
+    )
+
+    response = views.livekit_companion_status(_companion_request("status"))
+
+    assert response.data == {
+        "supported": True,
+        "platform": "macos",
+        "state": "sharing",
+        "screenRecordingGranted": True,
+        "accessibilityGranted": False,
+    }
 
 
 def test_user_say_api_rejects_blank_text():
@@ -950,7 +1264,9 @@ def test_livekit_api_url_keeps_localhost_and_foreign_urls(monkeypatch):
     assert _livekit_api_url() == "wss://myagent.livekit.cloud"
 
 
-def test_publish_announcer_message_retries_once_on_connection_loss(tmp_path, monkeypatch):
+def test_publish_announcer_message_retries_once_on_connection_loss(
+    tmp_path, monkeypatch
+):
     import aiohttp
 
     from openbase_coder_cli import livekit_announcer
@@ -976,10 +1292,85 @@ def test_publish_announcer_message_retries_once_on_connection_loss(tmp_path, mon
         },
     )
     clients = [DisconnectingClient(), healthy]
-    monkeypatch.setattr(livekit_announcer, "_build_livekit_client", lambda: clients.pop(0))
+    monkeypatch.setattr(
+        livekit_announcer, "_build_livekit_client", lambda: clients.pop(0)
+    )
 
     result = asyncio.run(publish_announcer_message("hello again"))
 
     assert result.room_name == "room-retry"
     assert healthy.closed is True
     assert not clients
+
+
+@pytest.mark.parametrize("milliseconds", [True, False])
+def test_new_empty_room_protects_watchdog_before_agent_join(monkeypatch, milliseconds):
+    from openbase_coder_cli import livekit_announcer
+
+    monkeypatch.setattr(livekit_announcer.time, "time", lambda: 1000.0)
+    room = _room("joining", 999000, participants=0)
+    if not milliseconds:
+        room.creation_time_ms = 0
+    client = FakeLiveKitClient([room], {"joining": []})
+    monkeypatch.setattr(livekit_announcer, "_build_livekit_client", lambda: client)
+    assert asyncio.run(
+        livekit_announcer.active_voice_room_exists(
+            include_agent_only_rooms=True, recent_room_seconds=300
+        )
+    )
+    assert not asyncio.run(livekit_announcer.active_voice_room_exists())
+    monkeypatch.setattr(livekit_announcer.time, "time", lambda: 1300.0)
+    assert not asyncio.run(
+        livekit_announcer.active_voice_room_exists(
+            include_agent_only_rooms=True, recent_room_seconds=300
+        )
+    )
+
+
+def test_managed_say_uses_exact_thread_and_stable_message_id(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    for thread_id, voice_id in [
+        ("worker-one", "voice-one"),
+        ("worker-two", "voice-two"),
+    ]:
+        record_voice_assignment(
+            thread_id=thread_id,
+            agent_name="Rowan",
+            cwd="/project",
+            voice_id=voice_id,
+            voice_name="Rowan",
+            kind="super_agent",
+            source="test",
+        )
+    sent = []
+
+    async def publish(text, **kwargs):
+        sent.append(kwargs)
+        return SimpleNamespace(
+            message_id=kwargs["message_id"], room_name=kwargs["room_name"]
+        )
+
+    monkeypatch.setattr(views, "publish_announcer_message", publish)
+    message_id = "announcer-managed-" + "a" * 32
+    request = APIRequestFactory().post(
+        "/api/user/say/",
+        {
+            "agent_name": "Rowan",
+            "thread_id": "worker-one",
+            "text": "A completed result.",
+            "room_name": "original-room",
+            "message_id": message_id,
+        },
+        format="json",
+    )
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+    response = views.user_say(request)
+    assert response.status_code == 202
+    assert sent == [
+        {
+            "room_name": "original-room",
+            "voice_id": "voice-one",
+            "agent_name": "Rowan",
+            "message_id": message_id,
+        }
+    ]

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Bundle metadata for the Openbase Services launcher (openbase-services.c).
+      CFBundleIdentifier is the stable TCC client identity for every Openbase
+      Coder background service; changing it invalidates every user's existing
+      Desktop/Documents/Local Network grants. CFBundleShortVersionString and
+      CFBundleVersion are stamped by cli/scripts/build_service_launcher.py.
+    -->
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>Openbase Services</string>
+    <key>CFBundleExecutable</key>
+    <string>openbase-services</string>
+    <key>CFBundleIdentifier</key>
+    <string>cloud.openbase.coder.services</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Openbase Services</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>0.0.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>12.0</string>
+    <key>LSBackgroundOnly</key>
+    <true/>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>Openbase coding agents read and edit the project folders you ask them to work on, including folders on your Desktop.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Openbase coding agents read and edit the project folders you ask them to work on, including folders in Documents.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>Openbase coding agents read and edit the project folders you ask them to work on, including folders in Downloads.</string>
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>Openbase coding agents read and edit the project folders you ask them to work on, including folders on external drives.</string>
+    <key>NSNetworkVolumesUsageDescription</key>
+    <string>Openbase coding agents read and edit the project folders you ask them to work on, including folders on network volumes.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Openbase connects your phone and other devices to this computer over your local network for voice calls and the Openbase VPN.</string>
+</dict>
+</plist>

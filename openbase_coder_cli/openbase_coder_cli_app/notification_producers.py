@@ -11,11 +11,12 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 from asgiref.sync import async_to_sync
 
-from openbase_coder_cli import sharing_service
+from openbase_coder_cli import sharing_service, web_redirect_hold
 from openbase_coder_cli.openbase_coder_cli_app import notification_store
 from openbase_coder_cli.openbase_coder_cli_app.notification_store import (
     KIND_APPROVAL,
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 SWEEP_DEBOUNCE_SECONDS = 5.0
 MAX_PUSH_BODY_LENGTH = 140
+REVISION_USER_INFO_KEY = "notification_revision"
 
 _sweep_lock = threading.Lock()
 _last_sweep_monotonic: float | None = None
@@ -69,8 +71,9 @@ def notify_thread_turn_finished(
     """Record a thread-finished notification for a manual thread.
 
     Callers have already checked ``is_manual_thread``. A completion on an
-    already-read thread notification reopens it ("unread again"), which is
-    what makes the notification exist iff the latest result is unread.
+    already-read thread notification reopens it ("unread again"), and one on
+    a still-unread notification replaces it with the newer result, so the
+    notification always describes the latest unread turn and alerts for it.
     """
     entry = notification_store.upsert_notification(
         KIND_THREAD,
@@ -78,6 +81,8 @@ def notify_thread_turn_finished(
         title=title,
         body=_truncate(body),
         thread_id=thread_id,
+        refresh_if_unread=True,
+        alert_after=_held_alert_after(),
     )
     if entry:
         _push_in_background(entry)
@@ -87,16 +92,29 @@ def _sweep_reports() -> None:
     from openbase_coder_cli.reports_service import list_report_items
 
     items = list_report_items()
-    newest_mtime = max(
-        (float(item.get("updated_at") or 0) for item in items), default=0.0
-    )
-    watermark, baselined = notification_store.get_report_watermark()
-    if not baselined:
-        # First run: never flood with pre-existing reports.
-        notification_store.set_report_watermark(newest_mtime)
-        return
-    threshold = watermark or 0.0
-    fresh = [item for item in items if float(item.get("updated_at") or 0) > threshold]
+    observed, initial_cutoff = notification_store.get_report_observations()
+    versions = {
+        str(item["id"]): [
+            float(item.get("updated_at") or 0),
+            int((item.get("file") or {}).get("size") or 0),
+        ]
+        for item in items
+    }
+    if observed is None:
+        # Baseline existing files once; an upgraded store still catches reports
+        # written since its last sweep. No global timestamp gates later arrivals.
+        fresh = [
+            item
+            for item in items
+            if initial_cutoff is not None
+            and versions[str(item["id"])][0] > initial_cutoff
+        ]
+    else:
+        fresh = [
+            item
+            for item in items
+            if observed.get(str(item["id"])) != versions[str(item["id"])]
+        ]
     for item in fresh:
         file_payload = item.get("file") or {}
         project_payload = item.get("project") or {}
@@ -108,11 +126,15 @@ def _sweep_reports() -> None:
             title=str(title),
             body=_truncate(project_path.rsplit("/", 1)[-1] if project_path else ""),
             project_path=project_path or None,
+            alert_after=_held_alert_after(),
         )
         if entry:
             _push_in_background(entry)
-    if newest_mtime > threshold:
-        notification_store.set_report_watermark(newest_mtime)
+    # Retain observations for temporarily unavailable projects so reconnecting
+    # a project does not turn unchanged reports into fresh notifications.
+    next_observed = (observed or {}) | versions
+    if observed != next_observed:
+        notification_store.set_report_observations(next_observed)
 
 
 def _sweep_approvals() -> None:
@@ -229,12 +251,33 @@ def _conflict_summary(conflict: dict[str, Any]) -> str:
     return "A thread diverged across your devices."
 
 
+def _held_alert_after() -> str | None:
+    """``alert_after`` for an informational notification created now.
+
+    Thread finishes and new reports are held while the phone shows a page
+    this computer just sent it to; approvals and sync conflicts still alert
+    at once because an agent or the user is blocked on them.
+    """
+    until = web_redirect_hold.alert_hold_until()
+    return web_redirect_hold.iso_utc(until) if until is not None else None
+
+
 def _push_in_background(entry: dict[str, Any]) -> None:
     """Relay the notification to Openbase Cloud (APNs/FCM) off-thread.
 
     Strictly fire-and-forget: local notification behavior must be identical
     when the cloud is unreachable or the relay endpoint is not deployed.
+    A held entry (``alert_after``) is pushed only once the hold ends, and
+    only if it is still unread then. The hold timer lives in memory, so a
+    server restart drops the deferred push; the feed entry itself remains.
     """
+    delay = _seconds_until(entry.get("alert_after"))
+    if delay > 0:
+        timer = threading.Timer(delay, _send_held_push, args=(dict(entry),))
+        timer.name = "notification-push-held"
+        timer.daemon = True
+        timer.start()
+        return
     thread = threading.Thread(
         target=_send_push,
         args=(dict(entry),),
@@ -244,22 +287,67 @@ def _push_in_background(entry: dict[str, Any]) -> None:
     thread.start()
 
 
-def _send_push(entry: dict[str, Any]) -> None:
-    from openbase_coder_cli.config.cloud_notifications import send_notification_push
+def _send_held_push(entry: dict[str, Any]) -> None:
+    current = notification_store.get_notification(
+        str(entry.get("kind") or ""), str(entry.get("entity_id") or "")
+    )
+    if (
+        current is None
+        or current.get("read_at")
+        or current.get("resolved_at")
+        or current.get("revision") != entry.get("revision")
+    ):
+        # Read, resolved, or superseded by a newer revision (which owns its
+        # own push) while the hold was running.
+        return
+    _send_push(entry)
 
+
+def _seconds_until(iso_value: Any) -> float:
+    if not isinstance(iso_value, str) or not iso_value:
+        return 0.0
     try:
-        send_notification_push(
-            title=str(entry.get("title") or "Openbase"),
-            body=str(entry.get("body") or ""),
-            user_info=_push_user_info(entry),
-        )
+        moment = datetime.fromisoformat(iso_value.replace("Z", "+00:00"))
+    except ValueError:
+        return 0.0
+    return (moment - datetime.now(UTC)).total_seconds()
+
+
+def _send_push(entry: dict[str, Any]) -> None:
+    from openbase_coder_cli.config.cloud_notifications import (
+        NotificationPushError,
+        send_notification_push,
+    )
+
+    user_info = _push_user_info(entry)
+    try:
+        try:
+            _send_push_once(send_notification_push, entry, user_info)
+        except NotificationPushError:
+            # A Cloud without notification_revision in its userInfo allowlist
+            # rejects the whole push; the apps fall back to the bare id.
+            user_info.pop(REVISION_USER_INFO_KEY)
+            _send_push_once(send_notification_push, entry, user_info)
     except Exception as exc:
         logger.info("Cloud notification push skipped: %s", exc)
 
 
+def _send_push_once(send, entry: dict[str, Any], user_info: dict[str, str]) -> None:
+    send(
+        title=str(entry.get("title") or "Openbase"),
+        body=str(entry.get("body") or ""),
+        user_info=user_info,
+    )
+
+
 def _push_user_info(entry: dict[str, Any]) -> dict[str, str]:
     kind = entry.get("kind")
-    user_info: dict[str, str] = {"notification_id": str(entry.get("id") or "")}
+    user_info: dict[str, str] = {
+        "notification_id": str(entry.get("id") or ""),
+        # Apps dedupe alerts on id plus revision; the id alone tags the
+        # tray entry, so a newer revision replaces the older alert.
+        REVISION_USER_INFO_KEY: str(entry.get("revision") or 1),
+    }
     if kind == KIND_THREAD:
         user_info["openbase_destination"] = "threads"
         user_info["thread_id"] = str(entry.get("thread_id") or "")

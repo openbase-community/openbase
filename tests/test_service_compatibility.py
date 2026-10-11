@@ -189,7 +189,7 @@ def test_diagnostics_distinguish_failure_layers(service_fixture, monkeypatch):
         lambda: {"TCP": {"443": {"TCPForward": "127.0.0.1:59443"}}},
     )
     monkeypatch.setattr(
-        diagnostics.socket,
+        diagnostics.service_routes.socket,
         "getaddrinfo",
         lambda *a, **k: [(None, None, None, None, ("100.64.0.1", 443))],
     )

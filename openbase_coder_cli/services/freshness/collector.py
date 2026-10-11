@@ -209,9 +209,12 @@ def collect_freshness(client=None) -> dict:
             components.append(
                 compare_build(client.get("main"), "desktop-main", workspace, current)
             )
+    from openbase_coder_cli.services.freshness.native import coverage_note
+
+    coverage = "Commit-level checks; uncommitted edits and existing agent-session prompts are not checked. Mobile clients are not source-verified."
     return {
         "enabled": True,
         "checked_at": snapshot["checked_at"],
-        "coverage": "Commit-level checks; uncommitted edits and existing agent-session prompts are not checked. Mobile clients are not source-verified.",
+        "coverage": " ".join(filter(None, (coverage, coverage_note(workspace)))),
         "components": components,
     }

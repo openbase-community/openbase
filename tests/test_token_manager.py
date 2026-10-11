@@ -9,7 +9,10 @@ import pytest
 
 from openbase_coder_cli.config import machine_token_manager as mt_module
 from openbase_coder_cli.config import token_manager as tm_module
-from openbase_coder_cli.config.machine_token_manager import MachineTokenManager
+from openbase_coder_cli.config.machine_token_manager import (
+    MachineTokenError,
+    MachineTokenManager,
+)
 from openbase_coder_cli.config.token_manager import (
     AuthLoginRequiredError,
     AuthTransientError,
@@ -322,3 +325,36 @@ def test_ssl_context_failure_does_not_mark_refresh_rejected(manager, auth_path):
         with pytest.raises(AuthTransientError):
             manager.get_access_token()
     assert "refresh_rejected_at" not in json.loads(auth_path.read_text())
+
+
+def test_machine_token_manager_accepts_optional_notify_bootstrap_scope(machine_token_path):
+    manager = MachineTokenManager("https://cloud.example")
+    manager.store_bootstrap_token(
+        token="obmt_notify",
+        token_prefix="obmt_notify",
+        install_id="maritime-devspace-1",
+        scopes=["llm_proxy", "audio_proxy", "notify"],
+    )
+
+    # Callers asking for the base pair still find the broader token usable.
+    assert manager.has_cached_token()
+    assert manager.has_cached_token(scopes=("llm_proxy", "audio_proxy", "notify"))
+    assert manager.get_machine_token() == "obmt_notify"
+    assert not manager.has_cached_token(scopes=("admin",))
+
+
+@pytest.mark.parametrize(
+    "scopes",
+    [
+        ["notify", "llm_proxy", "audio_proxy"],
+        ["llm_proxy", "audio_proxy", "admin"],
+        ["llm_proxy", "audio_proxy", "notify", "notify"],
+        ["llm_proxy"],
+    ],
+)
+def test_machine_token_manager_rejects_unexpected_bootstrap_scopes(machine_token_path, scopes):
+    manager = MachineTokenManager("https://cloud.example")
+    with pytest.raises(MachineTokenError):
+        manager.store_bootstrap_token(
+            token="obmt_x", token_prefix="obmt_x", install_id="i", scopes=scopes
+        )

@@ -1,5 +1,6 @@
 """Routing of the LiveKit voice session between the dispatcher and Super Agents."""
 
+import asyncio
 import logging
 import time
 import uuid
@@ -25,8 +26,8 @@ from openbase_coder_cli.livekit_agent.voice_delivery import (
     VoiceDeliveryLedger,
     VoiceRouteSnapshot,
 )
-from openbase_coder_cli.livekit_agent.voices import stable_super_agent_voice
 from openbase_coder_cli.livekit_agent.voice_input_buffer import VoiceInputBuffer
+from openbase_coder_cli.livekit_agent.voices import stable_super_agent_voice
 
 logger = logging.getLogger(__name__)
 
@@ -40,14 +41,24 @@ class LiveKitVoiceRouter:
     ) -> None:
         self._dispatcher_client = dispatcher_client
         self._active_client = dispatcher_client
+        # A new call: re-assert the Dispatcher's instructions on its thread.
+        reload = getattr(dispatcher_client, "reload_thread_on_next_use", None)
+        if callable(reload):
+            reload()
         self._target_clients: dict[str, SuperAgentsLiveKitClient] = {}
         self._active_target_voice_id: str | None = None
         self._active_target_voice_name: str | None = None
         self._proactive_steer_prompt_hashes: dict[str, float] = {}
         self._orphaned_result_handler = None
         self._route_version = 0
+        self._route_request = 0
+        self._pending_route_request: int | None = None
+        self._route_owner_id = uuid.uuid4().hex
         self.delivery_ledger = delivery_ledger
         self.input_buffer = VoiceInputBuffer()
+        # What the caller has open in the phone app (screen_context); set per
+        # call by the entrypoint once the room is connected.
+        self.focused_thread_tracker = None
 
     def set_orphaned_result_handler(self, handler) -> None:
         """Deliver completed turn answers that no voice dispatch consumed."""
@@ -73,6 +84,10 @@ class LiveKitVoiceRouter:
     def active_target_voice_name(self) -> str | None:
         return self._active_target_voice_name
 
+    @property
+    def has_pending_transfer(self) -> bool:
+        return self._pending_route_request is not None
+
     def route_snapshot(self) -> VoiceRouteSnapshot:
         thread_id = getattr(self._active_client, "_thread_id", "") or ""
         active_route = "dispatcher" if self.is_dispatcher_active else "codex_thread"
@@ -84,18 +99,48 @@ class LiveKitVoiceRouter:
             active_route=active_route,
         )
 
+    def _record_route_events(
+        self, *, action: str, target_thread_id: str, target_label: str | None
+    ) -> None:
+        """Leave the move in both transcripts; never let it break the route."""
+        from openbase_coder_cli.thread_events import record_voice_route_events
+
+        try:
+            record_voice_route_events(
+                action=action,
+                dispatcher_thread_id=getattr(self._dispatcher_client, "_thread_id", "")
+                or "",
+                target_thread_id=target_thread_id,
+                target_label=target_label,
+            )
+        except Exception:  # noqa: BLE001 - a transcript note must not break routing
+            logger.warning("voice route events not recorded", exc_info=True)
+
     def exit_to_dispatch(self) -> bool:
+        # A return also cancels a target still preparing, even when the
+        # dispatcher remains the currently connected route.
+        self._route_request += 1
+        self._pending_route_request = None
         if self.is_dispatcher_active:
             logger.info(
                 "dispatch_timing stage=voice_route_unchanged "
                 "action=exit_to_dispatch reason=dispatcher_already_active"
             )
             return False
+        previous = self._active_client
+        previous_label = self._active_target_voice_name or getattr(
+            previous, "_super_agent_name", None
+        )
         self._active_client = self._dispatcher_client
         self._active_target_voice_id = None
         self._active_target_voice_name = None
         self._route_version += 1
         self._dispatcher_client.reset_voice_route_to_dispatcher()
+        self._record_route_events(
+            action="exit_to_dispatch",
+            target_thread_id=getattr(previous, "_thread_id", "") or "",
+            target_label=previous_label,
+        )
         logger.info(
             "dispatch_timing stage=voice_route_changed action=exit_to_dispatch "
             "route_version=%d active_thread_id=%s",
@@ -112,7 +157,9 @@ class LiveKitVoiceRouter:
         label: str | None,
         voice_id: str | None = None,
         voice_name: str | None = None,
-    ) -> None:
+    ) -> bool:
+        self._route_request += 1
+        request = self._route_request
         target_voice = stable_super_agent_voice(thread_id, label)
         target_voice_id = voice_id or (target_voice.voice_id if target_voice else None)
         target_voice_name = voice_name or (target_voice.name if target_voice else None)
@@ -138,17 +185,35 @@ class LiveKitVoiceRouter:
         else:
             target_client.set_super_agent_name(label)
             target_client.set_super_agent_agent_name(target_voice_name)
-        await target_client.prepare()
+        self._pending_route_request = request
+        try:
+            await target_client.prepare()
+        except Exception:
+            if request != self._route_request:
+                return False
+            raise
+        finally:
+            if self._pending_route_request == request:
+                self._pending_route_request = None
+        if request != self._route_request:
+            return False
         self._active_client = target_client
         self._active_target_voice_id = target_voice_id
         self._active_target_voice_name = target_voice_name
         self._route_version += 1
+        _warm_in_background(target_client)
         self._dispatcher_client.persist_voice_route(
             active_target_thread_id=thread_id,
             active_target_kind="codex_thread",
             active_target_label=label,
             active_target_voice_id=target_voice_id,
             active_target_voice_name=target_voice_name,
+            route_owner_id=self._route_owner_id,
+        )
+        self._record_route_events(
+            action="transfer_to_thread",
+            target_thread_id=thread_id,
+            target_label=target_voice_name or label,
         )
         logger.info(
             "dispatch_timing stage=voice_route_changed action=transfer_to_thread "
@@ -159,6 +224,7 @@ class LiveKitVoiceRouter:
             target_voice_id or "",
             target_voice_name or "",
         )
+        return True
 
     def claim_speech(self, client, turn_id: str) -> bool:
         return self._active_client is client and client.claim_speech(turn_id)
@@ -198,6 +264,22 @@ class LiveKitVoiceRouter:
             self._proactive_steer_prompt_hashes.pop(prompt_hash, None)
 
     async def close(self) -> None:
+        self._route_request += 1
+        self._pending_route_request = None
+        # The call is over: the next one starts on its own route, so a target
+        # left in the route file (a call started from a thread, or a
+        # transfer) must not outlive the call. Otherwise the call page, the
+        # thread list badge and Back to dispatch keep naming that thread
+        # during the next dispatcher call.
+        if not self.is_dispatcher_active:
+            try:
+                self._dispatcher_client.reset_voice_route_to_dispatcher(
+                    expected_route_owner_id=self._route_owner_id
+                )
+            except Exception:
+                logger.warning(
+                    "Unable to reset the voice route at call end", exc_info=True
+                )
         for client in self._target_clients.values():
             await client.aclose()
         # The dispatcher client must close too: the claude_code backend keeps
@@ -208,6 +290,24 @@ class LiveKitVoiceRouter:
         await self._dispatcher_client.aclose()
 
 
+def _warm_in_background(client) -> None:
+    """Connect the target's backend CLI now, off the route change's path."""
+    warm = getattr(client, "warm", None)
+    if warm is None:
+        return
+
+    async def run() -> None:
+        try:
+            await warm()
+        except Exception:  # noqa: BLE001 - warming is best effort
+            logger.debug("target session warm-up failed", exc_info=True)
+
+    try:
+        asyncio.get_running_loop().create_task(run(), name="voice-target-warm")
+    except RuntimeError:
+        pass
+
+
 async def _transfer_voice_route(
     voice_router: LiveKitVoiceRouter,
     route_command: VoiceRouteCommand,
@@ -216,7 +316,7 @@ async def _transfer_voice_route(
     assert route_command.thread_id is not None
     assert route_command.cwd is not None
     try:
-        await voice_router.transfer_to_thread(
+        transferred = await voice_router.transfer_to_thread(
             thread_id=route_command.thread_id,
             cwd=route_command.cwd,
             label=route_command.label,
@@ -234,10 +334,18 @@ async def _transfer_voice_route(
         )
         return
 
+    if transferred is False or not route_command.announce:
+        return
+
+    name = (
+        route_command.active_target_voice_name
+        or voice_router.active_target_voice_name
+        or route_command.label
+    )
     announcer_queue.enqueue(
         AnnouncerMessage(
             message_id=f"voice-route-{uuid.uuid4().hex}",
-            text="Voice route transferred.",
+            text=f"You're now talking with {name}." if name else "Transferred.",
             voice_id=voice_router.active_target_voice_id,
         )
     )

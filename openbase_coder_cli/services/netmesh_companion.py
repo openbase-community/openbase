@@ -30,6 +30,12 @@ from pathlib import Path
 _IPC_SECRET_HEADER = "X-Openbase-Companion-Secret"
 _APP_NAME = "OpenbaseNetmeshCompanion.app"
 HELPER_LAUNCHD_LABEL = "cloud.openbase.netmesh.helper"
+# Code-signing identity of the released netmesh bundles (companion and menu-bar
+# app). Mirrors EXPECTED_CODESIGN_IDENTIFIER / EXPECTED_TEAM_IDENTIFIER in
+# desktop/electron/menu-bar-app.cjs; a downloaded prebuilt that is not signed
+# this way is never treated as a verified Openbase VPN component.
+NETMESH_BUNDLE_IDENTIFIER = "cloud.openbase.netmesh"
+NETMESH_TEAM_IDENTIFIER = "E6GA9X89TN"
 
 
 class NetmeshCompanionError(RuntimeError):
@@ -200,7 +206,7 @@ def netmesh_ctl_path(workspace_dir: str | Path | None = None) -> str | None:
     return str(ctl) if ctl.is_file() else None
 
 
-def _netmesh_source_checkout(workspace_dir: Path) -> Path | None:
+def netmesh_source_checkout(workspace_dir: Path) -> Path | None:
     """The netmesh-macos source checkout the stage script would build from.
 
     Mirrors the candidate order in ``desktop/scripts/stage-netmesh-companion.mjs``
@@ -236,7 +242,7 @@ def _missing_build_tools(workspace_dir: Path) -> list[str]:
     missing: list[str] = []
     if shutil.which("node") is None:
         missing.append("node (https://nodejs.org — or `brew install node`)")
-    source_checkout = _netmesh_source_checkout(workspace_dir)
+    source_checkout = netmesh_source_checkout(workspace_dir)
     if source_checkout is None:
         return missing
     if shutil.which("xcodegen") is None:
@@ -476,6 +482,31 @@ class NetmeshCompanion:
     def disconnect(self) -> CompanionStatus:
         """Stop the VPN tunnel (the root daemon stays registered)."""
         return self._parse_status(self._request("POST", "/disconnect", timeout=30.0))
+
+    def logout(self) -> CompanionStatus:
+        """Leave the network and forget the node login (account switch)."""
+        try:
+            raw = self._request("POST", "/logout", timeout=30.0)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                raise NetmeshCompanionError(
+                    "this Openbase VPN companion cannot sign out (it predates "
+                    "build 19); update the Openbase desktop app"
+                ) from exc
+            try:
+                detail = json.loads(exc.read().decode() or "{}").get("error")
+            except (OSError, ValueError, AttributeError):
+                detail = None
+            raise NetmeshCompanionError(
+                f"the Openbase VPN could not sign out: {detail or f'HTTP {exc.code}'}"
+            ) from exc
+        except (urllib.error.URLError, OSError, TimeoutError) as exc:
+            raise NetmeshCompanionError(
+                f"the companion control listener became unavailable: {exc}"
+            ) from exc
+        if raw.get("ok") is False:
+            raise NetmeshCompanionError(str(raw.get("error") or "VPN sign-out failed"))
+        return self._parse_status(raw)
 
     def open_approval_settings(self) -> None:
         try:

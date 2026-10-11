@@ -1,7 +1,7 @@
 """Retain speech fragments cancelled before the backend receives the user turn."""
-from dataclasses import dataclass
-import time
 import re
+import time
+from dataclasses import dataclass
 
 from openbase_coder_cli.livekit_agent.text_normalization import normalize_spoken_text
 

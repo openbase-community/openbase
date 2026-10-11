@@ -14,7 +14,9 @@ from openbase_coder_cli.backend_config import (
     CLAUDE_CODE_BACKEND,
     DEFAULT_CODING_BACKEND,
     OPENBASE_CLOUD_BACKEND,
+    OPENBASE_THREAD_INTRO_COMMAND,
     SUPER_AGENTS_DEFAULT_BACKEND_ENV_KEY,
+    SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV,
 )
 from openbase_coder_cli.cli.setup.codex import _super_agents_mcp_command
 from openbase_coder_cli.cli.setup.hooks import ensure_claude_session_id_hook
@@ -87,6 +89,31 @@ def _ensure_claude_md_symlink() -> None:
     click.echo(f"Linked Claude CLAUDE.md at {target_path}")
 
 
+def _claude_super_agents_entry(
+    command_path: Path, args: list[str], *, coding_backend: str
+) -> dict[str, object]:
+    """Build the `super-agents` mcpServers entry for a Claude MCP config."""
+    return {
+        "type": "stdio",
+        "command": str(command_path),
+        **({"args": args} if args else {}),
+        "env": {
+            **profile_environment(),
+            "SUPER_AGENTS_DEFAULT_CONFIG_PATH": str(CODEX_DISPATCHER_CONFIG_PATH),
+            "CODEX_SUPER_AGENT_INSTRUCTIONS_PATH": str(
+                CODEX_SUPER_AGENT_INSTRUCTIONS_PATH
+            ),
+            SUPER_AGENTS_BASE_INSTRUCTIONS_ENV: str(OPENBASE_AGENTS_MD_PATH),
+            SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV: OPENBASE_THREAD_INTRO_COMMAND,
+            SUPER_AGENTS_DEFAULT_BACKEND_ENV_KEY: (
+                OPENBASE_CLOUD_BACKEND
+                if coding_backend == OPENBASE_CLOUD_BACKEND
+                else CLAUDE_CODE_BACKEND
+            ),
+        },
+    }
+
+
 def _ensure_claude_mcp(
     workspace_dir: str,
     *,
@@ -104,24 +131,9 @@ def _ensure_claude_mcp(
     mcp_servers = existing.get("mcpServers")
     if not isinstance(mcp_servers, dict):
         mcp_servers = {}
-    entry = {
-        "type": "stdio",
-        "command": str(command_path),
-        **({"args": args} if args else {}),
-        "env": {
-            **profile_environment(),
-            "SUPER_AGENTS_DEFAULT_CONFIG_PATH": str(CODEX_DISPATCHER_CONFIG_PATH),
-            "CODEX_SUPER_AGENT_INSTRUCTIONS_PATH": str(
-                CODEX_SUPER_AGENT_INSTRUCTIONS_PATH
-            ),
-            SUPER_AGENTS_BASE_INSTRUCTIONS_ENV: str(OPENBASE_AGENTS_MD_PATH),
-            SUPER_AGENTS_DEFAULT_BACKEND_ENV_KEY: (
-                OPENBASE_CLOUD_BACKEND
-                if coding_backend == OPENBASE_CLOUD_BACKEND
-                else CLAUDE_CODE_BACKEND
-            ),
-        },
-    }
+    entry = _claude_super_agents_entry(
+        command_path, args, coding_backend=coding_backend
+    )
     if mcp_servers.get("super-agents") == entry:
         click.echo(
             f"Claude profile already has super-agents at {CLAUDE_PROFILE_MCP_PATH}"
@@ -138,8 +150,47 @@ def _ensure_claude_mcp(
     )
 
 
-def _ensure_claude_hooks() -> None:
-    """Configure Openbase's settings layer before removing legacy entries."""
+def _register_shared_claude_super_agents(
+    workspace_dir: str, *, coding_backend: str
+) -> None:
+    """Add super-agents to the default (non-Openbase) Claude Code home if absent.
+
+    Leaves any pre-existing ``super-agents`` entry untouched so a user's own
+    registration is never clobbered.
+    """
+    command_path, args = _super_agents_mcp_command(Path(workspace_dir))
+    existing = _read_json_object(CLAUDE_STATE_PATH)
+    mcp_servers = existing.get("mcpServers")
+    if not isinstance(mcp_servers, dict):
+        mcp_servers = {}
+    if "super-agents" in mcp_servers:
+        click.echo(
+            f"Default Claude home already has super-agents at {CLAUDE_STATE_PATH}"
+        )
+        return
+    entry = _claude_super_agents_entry(
+        command_path, args, coding_backend=coding_backend
+    )
+    updated = {**existing, "mcpServers": {**mcp_servers, "super-agents": entry}}
+    write_if_changed(CLAUDE_STATE_PATH, json.dumps(updated, indent=2) + "\n")
+    click.echo(
+        f"Registered super-agents MCP in default Claude home {CLAUDE_STATE_PATH}"
+    )
+
+
+def _ensure_claude_hooks(
+    *,
+    register_shared_super_agents: bool = True,
+    workspace_dir: str = "",
+    coding_backend: str = DEFAULT_CODING_BACKEND,
+) -> None:
+    """Configure Openbase's settings layer before removing legacy entries.
+
+    By default the super-agents MCP is kept in (and, if absent, added to) the
+    default Claude Code home so plain terminal ``claude`` sessions can use it.
+    With ``register_shared_super_agents`` off it is stripped as a legacy entry
+    instead, leaving only Openbase's own session profile configured.
+    """
     settings = _read_json_object(CLAUDE_PROFILE_SETTINGS_PATH)
     settings.setdefault("model", "sonnet")
     settings.setdefault("effortLevel", "high")
@@ -150,7 +201,15 @@ def _ensure_claude_hooks() -> None:
         CLAUDE_PROFILE_SETTINGS_PATH, json.dumps(settings, indent=2) + "\n"
     )
     ensure_claude_session_id_hook(CLAUDE_PROFILE_SETTINGS_PATH)
-    migrate_claude_user_config(CLAUDE_STATE_PATH, CLAUDE_SETTINGS_PATH)
+    migrate_claude_user_config(
+        CLAUDE_STATE_PATH,
+        CLAUDE_SETTINGS_PATH,
+        strip_super_agents=not register_shared_super_agents,
+    )
+    if register_shared_super_agents:
+        _register_shared_claude_super_agents(
+            workspace_dir, coding_backend=coding_backend
+        )
 
 
 def _read_json_object(path: Path) -> dict[str, object]:

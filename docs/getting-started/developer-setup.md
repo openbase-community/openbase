@@ -21,16 +21,38 @@ option today.)
 In addition to the shared [prerequisites](index.md#prerequisites),
 development installs need:
 
-- Git
-- [`uv`](https://docs.astral.sh/uv/)
-- Node 20+ and pnpm for building the console from source (the setup script
-  checks both and fails fast with install instructions)
+- On macOS, [Homebrew](https://brew.sh), which the `brew install` commands below use
+- Git: `xcode-select --install` on macOS, or your distribution's package on Linux (for example `sudo apt install git`)
+- [`uv`](https://docs.astral.sh/uv/): `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- [`multi`](https://pypi.org/project/multi-workspace/) 3.2.21 or newer, which setup uses to sync the sub-repos: `uv tool install multi-workspace && uv tool update-shell`, then open a new terminal (or `uv tool upgrade multi-workspace` to update it)
+- Go: `brew install go` on macOS, or the current toolchain from [go.dev/dl](https://go.dev/dl/). Setup builds the Openbase Direct transport from source, so Go is required whichever transport you pick.
+- Node, the LTS version pinned in the workspace's `.nvmrc` (currently Node 24), installed with nvm as described under [Node](#node) below, and pnpm (`curl -fsSL https://get.pnpm.io/install.sh | sh -`) for building the console from source
+
+`./scripts/setup` checks for all of these before it does anything else and exits with the install command for each one that is missing.
+
+If `pnpm --version` already works (for example from `npm install -g pnpm` or Corepack), keep that pnpm and skip installing another. A second copy only conflicts: `brew install pnpm` then stops with a link error because `pnpm` already exists in the Homebrew `bin` directory. That error is harmless, since setup uses whichever pnpm is on your `PATH`; to switch to the Homebrew copy instead, run `brew link --overwrite pnpm`.
+
+`uv tool update-shell` adds `~/.local/bin`, where uv installs `multi`, to your shell's `PATH`; a fresh Mac does not have it. Without it, setup reports `multi` as missing even though it is installed. In a terminal that is already open, `export PATH="$HOME/.local/bin:$PATH"` does the same for that session.
+
+Contributors who commit to the repos also need [`gitleaks`](https://github.com/gitleaks/gitleaks) (`brew install gitleaks`). Setup does not need it, but the git hooks that `multi sync` installs refuse commits and pushes without it.
 
 Optional developer backends:
 
-- Codex CLI authenticated in your normal user account when using the `codex` backend
-- Claude Code login for the `claude-code` backend (Openbase uses your own
-  `claude login` directly; `openbase-coder claude login` is a thin wrapper)
+- Codex CLI (`npm install -g @openai/codex`) for the `codex` backend
+- Claude Code (`curl -fsSL https://claude.ai/install.sh | bash`) for the `claude-code` backend
+
+Openbase uses your own Codex or Claude Code login. If the backend you pick in setup isn't signed in yet, interactive setup says so and offers to sign you in (`codex login` or `claude login`). Otherwise sign in yourself before your first call; `openbase-coder claude login` is a thin wrapper around `claude login`.
+
+## Node
+
+The workspace pins one tested Node LTS in `.nvmrc`, and setup refuses any other major version: newer Node releases are not drop-in (Node 26 breaks Electron's install). Install it with [nvm](https://github.com/nvm-sh/nvm) rather than `brew install node`, which tracks the newest release. On a fresh Mac, zsh has no `~/.zshrc` yet, so create it first or the nvm installer cannot add its loader:
+
+```bash
+touch ~/.zshrc
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh | bash
+```
+
+Then open a new terminal (or run `source ~/.nvm/nvm.sh`) so the `nvm` command exists. The clone step below runs `nvm install` and `nvm use` in the workspace, which read `.nvmrc`. The first version nvm installs becomes its default for new terminals; if your nvm default is another version, run `nvm use` in the workspace before each `./scripts/setup`. Setup prints these commands and stops when `node` is the wrong major. If an older `brew install node` is still installed, nvm's Node takes precedence once nvm is loaded.
 
 ## Clone and Run Setup
 
@@ -42,6 +64,7 @@ runs `openbase-coder setup` against your checkout:
 git clone --branch main --single-branch \
   https://github.com/openbase-community/openbase-coder-workspace
 cd openbase-coder-workspace
+nvm install && nvm use   # the Node pinned in .nvmrc
 ./scripts/setup
 ```
 
@@ -56,11 +79,7 @@ never block: fresh non-interactive installs require `--backend` and default
 the audio provider to `openbase-cloud`. See [setup](../commands/setup.md)
 for the full flag list and the `--interactive` override.
 
-Interactive runs finish by offering `openbase-coder login` (browser OAuth),
-then confirm the device is registered with Openbase Cloud and that the selected
-private-network transport exposes the local API and LiveKit, and print a QR
-code for the [phone app downloads page](https://openbase.cloud/downloads.html).
-Non-interactive runs end with the login hint instead, exactly as before.
+Interactive runs offer `openbase-coder login` (browser OAuth), then confirm the device is registered with Openbase Cloud and that the selected private-network transport exposes the local API and LiveKit. Non-interactive runs print the login hint instead. Either way, `./scripts/setup` then builds and launches the developer app (see below), prints "Setup complete" and a short summary of what setup changed on your machine, and finishes with a QR code for the [phone app downloads page](https://openbase.cloud/downloads.html): install the iOS or Android app last.
 
 If a standalone desktop/CLI install, or a different development workspace
 install, already exists, the workspace script stops and links to
@@ -72,11 +91,12 @@ the workspace from the one recorded in `~/.openbase/installation.json`, then
 from the checkout behind an editable CLI install; otherwise it errors and asks
 you to clone the workspace or use the standalone install.
 
-## Optional visual developer apps
+## Visual developer apps
 
-The services and browser console are complete without Electron. On macOS,
-interactive `./scripts/setup` offers to launch two optional visual surfaces;
-you can launch either later:
+On macOS, `./scripts/setup` always builds the Electron developer app: it
+installs and verifies the Electron runtime, builds the dashboard renderer, and
+installs the Openbase launcher in `/Applications`. Setup fails, rather than
+reporting success, if any of those steps fails. In a logged-in desktop session, setup then launches the app together with the Swift menu-bar UI automatically. Over SSH, with `OPENBASE_SETUP_NO_LAUNCH=1`, or when a packaged Openbase app already occupies `/Applications`, it only builds them. You can launch either later:
 
 ```bash
 ./scripts/dev-launch --electron  # dashboard/status only; setup is disabled
@@ -99,8 +119,9 @@ app.
 
 ## After Setup
 
-Authenticate with Openbase Cloud (required for iOS app pairing and cloud
-onboarding):
+Interactive setup already signs you in to Openbase Cloud. If you skipped that
+step, or ran setup with flags, sign in now (required for phone app pairing and
+cloud onboarding):
 
 ```bash
 openbase-coder login

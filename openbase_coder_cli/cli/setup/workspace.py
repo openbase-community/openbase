@@ -36,9 +36,6 @@ from openbase_coder_cli.services.installation import InstallationConfig
 BUNDLED_SOUNDS_PACKAGE = "openbase_coder_cli.resources.sounds"
 BUNDLED_SOUND_FILES = ("deactivate.wav",)
 THREAD_SYNC_EXCHANGE_DIR_NAME = "thread-sync"
-THREAD_SYNC_MARKER_FILE_NAME = "syncthing-folder-openbase-thread-sync.txt"
-THREAD_SYNC_STIGNORE_CONTENT = "#include .stglobalignore\n"
-DEFAULT_SYNCTHING_GLOBAL_STIGNORE_CONTENT = "(?d).DS_Store\n"
 CLI_PACKAGE_DIST_NAME = "openbase-coder"
 UV_TOOL_SHEBANG_MARKER = "/uv/tools/openbase-coder/"
 
@@ -133,40 +130,14 @@ def _build_console(workspace_dir: str) -> None:
 
 
 def _ensure_thread_sync_exchange_dir() -> None:
-    """Create the Syncthing-backed cross-device Codex thread exchange folder."""
+    """Create the cross-device thread exchange folder.
+
+    Openbase Sync mirrors it when it is configured as a root (see
+    ``openbase-coder sync-daemon configure --with-product-folders``).
+    """
     exchange_dir = OPENBASE_BASE_DIR / THREAD_SYNC_EXCHANGE_DIR_NAME
     exchange_dir.mkdir(parents=True, exist_ok=True)
-
-    marker_dir = exchange_dir / ".stfolder"
-    marker_dir.mkdir(exist_ok=True)
-    marker_path = marker_dir / THREAD_SYNC_MARKER_FILE_NAME
-    if not marker_path.exists():
-        marker_path.write_text(
-            "Openbase Coder cross-device Codex thread snapshot exchange.\n",
-            encoding="utf-8",
-        )
-
-    stignore_path = exchange_dir / ".stignore"
-    if not stignore_path.exists():
-        stignore_path.write_text(THREAD_SYNC_STIGNORE_CONTENT, encoding="utf-8")
-
-    global_ignore_path = _syncthing_global_ignore_path()
-    if not global_ignore_path.exists():
-        global_ignore_path.parent.mkdir(parents=True, exist_ok=True)
-        global_ignore_path.write_text(
-            DEFAULT_SYNCTHING_GLOBAL_STIGNORE_CONTENT,
-            encoding="utf-8",
-        )
-
-    stglobal_path = exchange_dir / ".stglobalignore"
-    if stglobal_path.is_symlink():
-        if stglobal_path.resolve() != global_ignore_path.resolve():
-            stglobal_path.unlink()
-            stglobal_path.symlink_to(global_ignore_path)
-    elif not stglobal_path.exists():
-        stglobal_path.symlink_to(global_ignore_path)
-
-    click.echo(f"Prepared Codex thread sync exchange folder at {exchange_dir}")
+    click.echo(f"Prepared thread sync exchange folder at {exchange_dir}")
 
 
 def _ensure_bundled_sounds() -> None:
@@ -209,10 +180,6 @@ def _copy_bundled_sound(*, source_path: Path, target_path: Path) -> None:
     target_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source_path, target_path)
     click.echo(f"Installed bundled sound at {target_path}")
-
-
-def _syncthing_global_ignore_path() -> Path:
-    return Path.home() / ".config" / "syncthing" / "global.stignore"
 
 
 def _init_cli_workspace(

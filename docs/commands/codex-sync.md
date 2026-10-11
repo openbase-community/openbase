@@ -18,7 +18,8 @@ openbase-coder codex-sync devices run
 
 `devices` exports and imports Codex session snapshots through
 `~/.openbase/thread-sync` by default (an exchange directory shared between
-machines, for example via [code sync](../code-sync.md)). Conflicts are not
+machines, for example via [Openbase Sync](../code-sync.md), which must include
+`~/.openbase/thread-sync` as a root). Conflicts are not
 merged; they are recorded in a device-sync ledger and shown by
 `openbase-coder codex-sync devices status`.
 

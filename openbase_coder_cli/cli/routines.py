@@ -10,6 +10,11 @@ from typing import Any
 import click
 from super_agents.app_server_client import CodexAppServerClient
 
+from openbase_coder_cli.routine_projects import (
+    annotate_routines_payload,
+    filter_routines_by_project,
+)
+
 REASONING_EFFORTS = ("low", "medium", "high", "xhigh")
 SANDBOX_TYPES = ("readOnly", "workspaceWrite", "dangerFullAccess")
 MODES = ("default", "plan")
@@ -149,16 +154,30 @@ def routines() -> None:
 
 
 @routines.command("list")
-def list_routines() -> None:
-    """List persisted routines."""
-    _json_echo(_run_client(lambda client: client.list_routines()))
+@click.option(
+    "--project",
+    "project_path",
+    type=click.Path(file_okay=False),
+    default=None,
+    help="Only routines whose cwd falls inside this tracked project.",
+)
+def list_routines(project_path: str | None) -> None:
+    """List persisted routines (each stamped with its tracked projectPath)."""
+    payload = annotate_routines_payload(
+        _run_client(lambda client: client.list_routines())
+    )
+    if project_path:
+        payload = filter_routines_by_project(payload, project_path)
+    _json_echo(payload)
 
 
 @routines.command("show")
 @click.argument("name")
 def show_routine(name: str) -> None:
     """Show one persisted routine."""
-    _json_echo(_run_client(lambda client: client.read_routine(name)))
+    _json_echo(
+        annotate_routines_payload(_run_client(lambda client: client.read_routine(name)))
+    )
 
 
 @routines.command("create")
@@ -460,6 +479,62 @@ def add_webhook_trigger(
     _json_echo(result)
 
 
+@routines.command("add-file-trigger")
+@click.argument("name")
+@click.option(
+    "--path",
+    "watch_path",
+    required=True,
+    help=(
+        "Absolute glob (a leading ~ is expanded) of files to watch, e.g. "
+        "'/path/to/checkouts/*/.signals/ready-for-review.md'. The loop runs once per "
+        "created or modified file; touching a file runs it again."
+    ),
+)
+@click.option("--description", help="What this trigger listens for.")
+@click.option(
+    "--filter",
+    "filters",
+    nargs=3,
+    multiple=True,
+    metavar="PATH OP VALUE",
+    help=(
+        "Event payload filter over path, name, dir, mtime, change, contents, "
+        "e.g. --filter name startsWith ready-for-. Ops: equals, notEquals, "
+        "contains, startsWith, endsWith, exists, regex."
+    ),
+)
+@click.option(
+    "--fire-existing",
+    is_flag=True,
+    help=(
+        "Also run for files that already match when the trigger is added. "
+        "By default existing files are recorded silently and only later "
+        "changes fire."
+    ),
+)
+def add_file_trigger(
+    name: str,
+    watch_path: str,
+    description: str | None,
+    filters: tuple[tuple[str, str, str], ...],
+    fire_existing: bool,
+) -> None:
+    """Add a file (flag) trigger: run the loop when a matching file appears or changes."""
+    trigger_input: dict[str, Any] = {"type": "file", "watchPath": watch_path}
+    if description:
+        trigger_input["description"] = description
+    if filters:
+        trigger_input["filters"] = [
+            {"path": path, "op": op, "value": value} for path, op, value in filters
+        ]
+    if fire_existing:
+        trigger_input["fireExisting"] = True
+    _json_echo(
+        _run_client(lambda client: client.add_routine_trigger(name, trigger_input))
+    )
+
+
 @routines.command("remove-trigger")
 @click.argument("name")
 @click.argument("trigger_id")
@@ -617,7 +692,9 @@ def run_loop(interval: float, verbose: bool) -> None:
     from openbase_coder_cli import skills_autolink
     from openbase_coder_cli.runtime import is_standalone_runtime
     from openbase_coder_cli.self_update import (
+        RetryableUpdateError,
         SelfUpdateError,
+        activation_pending,
         auto_update_enabled,
         check_for_update,
         spawn_detached_self_update,
@@ -633,6 +710,8 @@ def run_loop(interval: float, verbose: bool) -> None:
     next_skills_sync = time.monotonic()
     next_update_check = time.monotonic()
     last_auto_update_attempt: str | None = None
+    auto_update_process = None
+    update_check_retry_delay = 60
     while True:
         started = time.monotonic()
         try:
@@ -664,19 +743,33 @@ def run_loop(interval: float, verbose: bool) -> None:
                         summary["errors"],
                     )
 
-        # The code-sync reconcile tick moved to the consolidated sync-workers
-        # service (openbase_coder_cli.cli.sync_workers).
+        # A signal-killed download did not produce a terminal update result.
+        # Let a new worker recover its scratch files and retry this version.
+        if auto_update_process is not None:
+            exit_code = auto_update_process.poll()
+            if exit_code is not None:
+                auto_update_process = None
+                if exit_code < 0:
+                    last_auto_update_attempt = None
+                    next_update_check = min(next_update_check, time.monotonic() + 60)
 
         # Periodically refresh the update-check cache (standalone installs)
         # so update_available surfaces in status APIs without manual checks,
         # and auto-apply available updates unless opted out.
+        if activation_pending():
+            next_update_check = min(next_update_check, time.monotonic() + 60)
         if is_standalone_runtime() and time.monotonic() >= next_update_check:
             next_update_check = time.monotonic() + UPDATE_CHECK_SECONDS
             try:
                 check = check_for_update()
+            except RetryableUpdateError as exc:
+                next_update_check = time.monotonic() + update_check_retry_delay
+                update_check_retry_delay = min(update_check_retry_delay * 2, 900)
+                logger.warning("update_check transfer failed; retrying: %s", exc)
             except SelfUpdateError as exc:
                 logger.warning("update_check failed: %s", exc)
             else:
+                update_check_retry_delay = 60
                 if check.update_available:
                     logger.info(
                         "update_check update_available current=%s latest=%s",
@@ -686,17 +779,24 @@ def run_loop(interval: float, verbose: bool) -> None:
                     # Retry a given version only for required updates so a
                     # release that health-check-rolled-back does not churn
                     # service restarts every check cycle.
-                    should_apply = auto_update_enabled() and (
-                        check.update_required
-                        or check.latest_version != last_auto_update_attempt
+                    should_apply = (
+                        auto_update_process is None
+                        and auto_update_enabled()
+                        and (
+                            check.update_required
+                            or activation_pending()
+                            or check.latest_version != last_auto_update_attempt
+                        )
                     )
                     if should_apply:
-                        last_auto_update_attempt = check.latest_version
                         try:
-                            spawn_detached_self_update(force=check.update_required)
+                            auto_update_process = spawn_detached_self_update(
+                                force=check.update_required
+                            )
                         except SelfUpdateError as exc:
                             logger.warning("auto_update spawn failed: %s", exc)
                         else:
+                            last_auto_update_attempt = check.latest_version
                             logger.info(
                                 "auto_update spawned target=%s forced=%s",
                                 check.latest_version,

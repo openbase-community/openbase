@@ -27,7 +27,12 @@ routine, developer machine, or one-off deployment.
   (`7881/tcp`) cannot loopback-bind (its TCP mux ignores the bind address),
   so in netmesh mode that one listener is on all container interfaces and
   isolation relies on the provider exposing no non-tunnel interface.
-- The container runs as an unprivileged user and refuses Maritime startup as
+- The container runs as an unprivileged user. Maritime's VM init starts the
+  entrypoint as root (it ignores the image `USER`) and without the image
+  `ENV`, so the entrypoint's first act is to drop privileges with `setpriv`
+  (no inheritable capabilities, empty bounding set, `no_new_privs`) using a
+  fixed system PATH and absolute paths; user-owned directories reach PATH
+  only after the drop, and the entrypoint refuses to continue if it is still
   root. Runtime-created credential files use mode `0600`; the state directory
   uses mode `0700`.
 - Durable runtime state is below `/data`. Image filesystem state is disposable.
@@ -42,9 +47,11 @@ routine, developer machine, or one-off deployment.
 - Bootstrap grants are random, short-lived, single-use values. Cloud stores
   only their SHA-256 hashes. Issuing a replacement revokes any outstanding
   grant for that Workspace.
-- Bootstrap mints one machine identity whose exact scopes are `llm_proxy` and
-  `audio_proxy`, plus a non-reusable, expiring Netmesh enrollment key. The CLI
-  rejects any broader or differently ordered scope set.
+- Bootstrap mints one machine identity whose scopes are `llm_proxy` and
+  `audio_proxy`, optionally followed by `notify` when the CLI requests it in
+  the exchange body (it lets the Workspace push "open this link" notifications
+  to the owner's own phones), plus a non-reusable, expiring Netmesh enrollment
+  key. The CLI rejects any other scope set or order.
 - Owner identity pinning stores only the Openbase subject and normalized email;
   it is not an authentication credential. Inbound user JWTs still require
   signature validation and a matching subject.
@@ -73,7 +80,7 @@ POST /api/openbase/devspaces/bootstrap/exchange/
 The successful response contains:
 
 - one Openbase machine token, display prefix, deterministic Workspace install
-  ID, and the exact two proxy scopes;
+  ID, and the two proxy scopes (plus `notify` when requested);
 - non-secret owner subject/email data for local owner pinning;
 - one non-reusable Netmesh enrollment key and its control-plane metadata.
 
@@ -83,8 +90,13 @@ or non-container grant receives the same generic rejection.
 
 ## Runtime bootstrap sequence
 
-1. Maritime starts the digest-pinned Openbase image as the image's unprivileged
-   user with its durable disk mounted at `/data`.
+1. Maritime starts the digest-pinned Openbase image (passed as `imageName` on
+   agent creation, so no second deploy call is needed) with its durable disk
+   mounted at `/data`; the entrypoint drops from root to the image's
+   unprivileged user before anything else runs. The only work done as root
+   first: reparent root-owned `/data` entries, and repair the VM's name
+   resolution (Maritime's init boots with an empty `/etc/hosts` and no
+   hostname, so `localhost` would not resolve for the LiveKit worker).
 2. `openbase-coder provision --kind container` exchanges the one-time grant.
 3. The CLI atomically persists the machine token and owner pin under `/data`
    with mode `0600`. It stages the one-time Netmesh key there for the supervisor.

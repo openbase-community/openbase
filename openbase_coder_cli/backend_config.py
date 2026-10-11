@@ -136,3 +136,11 @@ def configured_execution_backends(
     if primary in backends:
         backends.remove(primary)
     return [primary, *backends]
+
+
+# Openbase workers own introductions through their installed instructions,
+# where they can honor task-specific silence and direct voice reply ownership.
+# Disable the generic pre-prompt hook: it cannot inspect those constraints and
+# would duplicate the worker's hello. Standalone Super Agents keeps its hook.
+SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV = "SUPER_AGENTS_THREAD_INTRO_COMMAND"
+OPENBASE_THREAD_INTRO_COMMAND = ""

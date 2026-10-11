@@ -4,19 +4,23 @@ import os
 from pathlib import Path
 from typing import Any, Literal
 
-from super_agents.state import read_state_file_locked
+from super_agents.state import as_session_record_map
 
 from openbase_coder_cli.dispatcher_config import selected_tts_provider_id
+from openbase_coder_cli.json_snapshot import JsonFileSnapshot
 from openbase_coder_cli.livekit_voice_history import (
     VoiceHistoryEntry,
     get_voice_history_entry,
 )
 from openbase_coder_cli.livekit_voice_route import (
     get_livekit_voice_route_state,
+    is_dispatcher_label,
     super_agent_voice_for_context,
 )
 from openbase_coder_cli.openbase_coder_cli_app.item_tags import thread_tags
 from openbase_coder_cli.openbase_coder_cli_app.thread_favorites import favorite_payload
+from openbase_coder_cli.thread_model_overrides import get_thread_model_override
+from openbase_coder_cli.thread_sync.thread_moves import moved_to_payload
 from openbase_coder_cli.tts_providers import voice_name_for_id
 
 VoiceRouteRole = Literal["none", "dispatcher", "active_target"]
@@ -32,10 +36,17 @@ def annotate_thread_payload(
     payload: dict[str, Any],
     *,
     thread_id: str | None = None,
+    with_events: bool = False,
 ) -> dict[str, Any]:
+    """Add voice-route roles and names; ``with_events`` adds the transcript's
+    recorded non-turn events (one thread's detail, not a list page)."""
     resolved_thread_id = thread_id or str(
         payload.get("thread_id") or payload.get("session_id") or ""
     )
+    if with_events:
+        from openbase_coder_cli.thread_events import list_thread_events
+
+        payload["events"] = list_thread_events(resolved_thread_id)
     route_state = get_livekit_voice_route_state()
     is_dispatcher = bool(
         resolved_thread_id
@@ -60,14 +71,17 @@ def annotate_thread_payload(
     )
     assignment = None
 
-    if is_dispatcher:
+    if is_dispatcher or is_dispatcher_label(display_name):
+        # The pinned Dispatcher, or a Dispatcher the account switch retired:
+        # both keep the Dispatcher's name and voice; neither is a Super Agent
+        # with a derived human character.
         agent_name = "dispatcher"
         assignment = _voice_assignment_payload(
             thread_id=resolved_thread_id,
             agent_name=agent_name,
             voice_id=route_state.dispatcher_voice_id,
             voice_name=route_state.dispatcher_voice_name,
-            source="route_state",
+            source="route_state" if is_dispatcher else "retired_dispatcher",
         )
     elif is_active_target:
         active_agent_name = route_state.active_target_voice_name or agent_name
@@ -118,6 +132,13 @@ def annotate_thread_payload(
         "display_name": display_name,
         "is_favorite": favorite["is_favorite"],
         "favorited_at": favorite["favorited_at"],
+        "model_override": get_thread_model_override(resolved_thread_id),
+        # Conversation identity survives transfers; voice_route describes
+        # only the current call. Never infer this role from a display title.
+        "conversation_role": "dispatcher" if is_dispatcher else "agent",
+        # Set while the thread is being pushed to (or has moved to) another
+        # computer; this copy is then read-only.
+        "moved_to": moved_to_payload(resolved_thread_id),
         "tags": thread_tags(resolved_thread_id),
         "voice_route": {
             "role": role,
@@ -138,8 +159,8 @@ def _thread_display_name(payload: dict[str, Any]) -> str:
         basename = directory.rstrip("/").rsplit("/", 1)[-1]
         if basename:
             return basename
-    thread_id = payload.get("thread_id") or payload.get("session_id")
-    return str(thread_id or "thread")
+    # Never the thread id: display names are titles, not identifiers.
+    return "Conversation"
 
 
 def _thread_agent_name(payload: dict[str, Any]) -> str | None:
@@ -150,11 +171,29 @@ def _thread_agent_name(payload: dict[str, Any]) -> str | None:
 def _super_agents_agent_name(thread_id: str | None) -> str | None:
     if not thread_id:
         return None
-    state_path = _super_agents_state_path()
-    if not state_path.is_file():
-        return None
-    session = read_state_file_locked(state_path).sessions.get(thread_id)
-    return session.agent_name if session else None
+    return _state_agent_names.get(_super_agents_state_path()).get(thread_id)
+
+
+def _parse_state_agent_names(raw: Any) -> dict[str, str]:
+    """thread id -> agent name, from one version of the Super Agents state file.
+
+    The state file is a few hundred KB and is written atomically, so parsing
+    it once per on-disk version (instead of under its file lock for every
+    thread annotated) keeps thread-list annotation off the parse cost.
+    """
+    sessions = as_session_record_map(
+        raw.get("sessions") if isinstance(raw, dict) else None
+    )
+    return {
+        thread_id: session.agent_name
+        for thread_id, session in sessions.items()
+        if session.agent_name
+    }
+
+
+_state_agent_names: JsonFileSnapshot[dict[str, str]] = JsonFileSnapshot(
+    _parse_state_agent_names
+)
 
 
 def _super_agents_state_path() -> Path:

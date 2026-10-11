@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 from types import SimpleNamespace
@@ -22,6 +23,8 @@ from openbase_coder_cli.openbase_coder_cli_app import (  # noqa: E402
     notifications,
     thread_origins,
 )
+
+_REAL_PUSH_IN_BACKGROUND = notification_producers._push_in_background
 
 
 @pytest.fixture(autouse=True)
@@ -72,6 +75,96 @@ def _empty_producer_sources(monkeypatch):
     yield
 
 
+# --- web redirect hold ---
+
+
+def test_thread_finish_is_held_after_a_web_redirect(_no_cloud_push):
+    from openbase_coder_cli import web_redirect_hold
+
+    notification_producers.notify_thread_turn_finished("t-1", title="T", body="")
+    assert "alert_after" not in _no_cloud_push[-1]
+
+    web_redirect_hold.record_web_redirect()
+    notification_producers.notify_thread_turn_finished("t-2", title="T", body="")
+    held = _no_cloud_push[-1]
+    hold_until = web_redirect_hold.alert_hold_until()
+    assert held["alert_after"] == web_redirect_hold.iso_utc(hold_until)
+    listed = notification_store.list_notifications()["notifications"]
+    assert {entry["id"]: entry.get("alert_after") for entry in listed} == {
+        "thread:t-1": None,
+        "thread:t-2": held["alert_after"],
+    }
+
+
+def test_redirect_hold_expires_and_ignores_future_or_corrupt_records(tmp_path):
+    from openbase_coder_cli import web_redirect_hold
+
+    now = 1_000_000.0
+    assert web_redirect_hold.alert_hold_until(now) is None
+    web_redirect_hold.record_web_redirect(now)
+    assert (
+        web_redirect_hold.alert_hold_until(now + 1)
+        == now + web_redirect_hold.HOLD_SECONDS
+    )
+    assert (
+        web_redirect_hold.alert_hold_until(now + web_redirect_hold.HOLD_SECONDS) is None
+    )
+    web_redirect_hold.record_web_redirect(now + 3600)
+    assert web_redirect_hold.alert_hold_until(now) is None
+    (tmp_path / web_redirect_hold.REDIRECT_FILE).write_text("not json")
+    assert web_redirect_hold.alert_hold_until(now) is None
+
+
+def test_approvals_are_not_held(monkeypatch, _no_cloud_push):
+    from openbase_coder_cli import web_redirect_hold
+
+    async def pending():
+        return [{"id": "a-1", "params": {"command": "rm -rf build"}}]
+
+    monkeypatch.setattr(
+        "openbase_coder_cli.openbase_coder_cli_app.approvals.pending_approval_requests",
+        pending,
+    )
+    web_redirect_hold.record_web_redirect()
+    notification_producers.sync_notification_producers(force=True)
+    assert "alert_after" not in _no_cloud_push[-1]
+
+
+def test_held_push_waits_and_skips_items_read_meanwhile(monkeypatch):
+    sent: list[dict] = []
+    timers: list[tuple[float, object, tuple]] = []
+
+    class FakeTimer:
+        def __init__(self, delay, function, args=()):
+            timers.append((delay, function, args))
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(notification_producers.threading, "Timer", FakeTimer)
+    monkeypatch.setattr(notification_producers, "_send_push", sent.append)
+    monkeypatch.setattr(
+        notification_producers, "_push_in_background", _REAL_PUSH_IN_BACKGROUND
+    )
+
+    from openbase_coder_cli import web_redirect_hold
+
+    web_redirect_hold.record_web_redirect()
+    for thread_id in ("t-read", "t-unread"):
+        notification_producers.notify_thread_turn_finished(
+            thread_id, title="T", body=""
+        )
+    assert sent == []
+    assert [round(delay) for delay, _, _ in timers] == [
+        web_redirect_hold.HOLD_SECONDS
+    ] * 2
+
+    notification_store.mark_read(kind="thread", entity_id="t-read")
+    for _, function, args in timers:
+        function(*args)
+    assert [entry["id"] for entry in sent] == ["thread:t-unread"]
+
+
 # --- store ---
 
 
@@ -102,6 +195,50 @@ def test_mark_read_and_reopen_on_new_completion():
     )
     assert reopened is not None
     assert notification_store.list_notifications()["unread_count"] == 1
+
+
+def test_later_turn_replaces_an_unread_thread_notification_with_a_new_revision(
+    _no_cloud_push,
+):
+    notification_producers.notify_thread_turn_finished("t-1", title="T", body="Hi")
+    notification_producers.notify_thread_turn_finished(
+        "t-1", title="T", body="Apple, banana"
+    )
+    first, second = _no_cloud_push
+    assert (first["id"], first["revision"]) == ("thread:t-1", 1)
+    assert (second["id"], second["revision"]) == ("thread:t-1", 2)
+    assert notification_producers._push_user_info(second) == {
+        "notification_id": "thread:t-1",
+        "notification_revision": "2",
+        "openbase_destination": "threads",
+        "thread_id": "t-1",
+    }
+    listed = notification_store.list_notifications()
+    assert listed["unread_count"] == 1
+    assert [(e["id"], e["body"]) for e in listed["notifications"]] == [
+        ("thread:t-1", "Apple, banana")
+    ]
+    assert notification_store.mark_read(kind="thread", entity_id="t-1") == 1
+    reopened = notification_store.upsert_notification("thread", "t-1", title="T")
+    assert (reopened["id"], reopened["revision"]) == ("thread:t-1", 3)
+
+
+def test_push_retries_without_revision_when_cloud_rejects_it(monkeypatch):
+    from openbase_coder_cli.config import cloud_notifications
+
+    sent: list[dict] = []
+
+    def send(*, title, body, user_info):
+        sent.append(dict(user_info))
+        if "notification_revision" in user_info:
+            raise cloud_notifications.NotificationPushError("status 400")
+        return 1
+
+    monkeypatch.setattr(cloud_notifications, "send_notification_push", send)
+    notification_producers._send_push(
+        {"id": "thread:t-1", "kind": "thread", "thread_id": "t-1", "revision": 2}
+    )
+    assert [info.get("notification_revision") for info in sent] == ["2", None]
 
 
 def test_reopen_if_read_false_stays_read():
@@ -193,6 +330,7 @@ async def test_agent_turn_sweeps_reports_without_a_feed_client(
     monkeypatch, _no_cloud_push, method, has_state
 ):
     from openbase_coder_cli.openbase_coder_cli_app.notification_runtime import (
+        request_notification_sweep,
         run_notification_sweep,
     )
     from openbase_coder_cli.thread_sync import session_manager
@@ -215,12 +353,14 @@ async def test_agent_turn_sweeps_reports_without_a_feed_client(
     await manager._handle_client_event(
         method, {"threadId": "agent-1", "turnId": "turn-1"}
     )
+    await request_notification_sweep()
 
     assert [entry["id"] for entry in _no_cloud_push] == ["report:/proj:first.md"]
     notification_store.mark_all_read()
     await manager._handle_client_event(
         method, {"threadId": "agent-1", "turnId": "turn-1"}
     )
+    await request_notification_sweep()
     assert len(_no_cloud_push) == 1
     assert notification_store.list_notifications()["unread_count"] == 0
 
@@ -254,7 +394,9 @@ async def test_server_lifespan_produces_reports_without_clients(
     await communicator.send_input({"type": "lifespan.startup"})
     assert await communicator.receive_output() == {"type": "lifespan.startup.complete"}
     try:
-        await wait_until(lambda: notification_store.get_report_watermark()[1])
+        await wait_until(
+            lambda: notification_store.get_report_observations()[0] is not None
+        )
         items.append(_report_item("/proj:background.md", time.time()))
         await wait_until(lambda: len(_no_cloud_push) == 1)
         assert _no_cloud_push[0]["id"] == "report:/proj:background.md"
@@ -266,7 +408,8 @@ async def test_server_lifespan_produces_reports_without_clients(
         }
         await communicator.wait()
     assert not any(
-        task.get_name() == "notification-producers" and not task.done()
+        task.get_name() in {"notification-producers", "notification-sweep"}
+        and not task.done()
         for task in asyncio.all_tasks()
     )
 
@@ -296,6 +439,91 @@ async def test_periodic_sweep_retries_after_failure(monkeypatch):
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+
+
+@pytest.mark.parametrize("mtime", [50, 100, 1_000_000])
+def test_new_reports_do_not_depend_on_global_mtime(monkeypatch, _no_cloud_push, mtime):
+    items = [_report_item("/proj:future.md", 1_000_000)]
+    monkeypatch.setattr(
+        "openbase_coder_cli.reports_service.list_report_items", lambda: items
+    )
+    notification_producers.sync_notification_producers(force=True)
+    items.append(_report_item("/proj:arrived.md", mtime))
+    notification_producers.sync_notification_producers(force=True)
+    assert [entry["id"] for entry in _no_cloud_push] == ["report:/proj:arrived.md"]
+    notification_store.mark_all_read()
+    # A project disappearing and returning must not reopen unchanged reports.
+    saved = list(items)
+    items.clear()
+    notification_producers.sync_notification_producers(force=True)
+    items.extend(saved)
+    notification_producers.sync_notification_producers(force=True)
+    assert len(_no_cloud_push) == 1
+
+
+def test_reports_beyond_200_are_discovered(tmp_path, monkeypatch, _no_cloud_push):
+    from openbase_coder_cli import reports_service
+
+    directory = tmp_path / "project" / ".reports"
+    directory.mkdir(parents=True)
+    for index in range(201):
+        (directory / f"a-{index:03}.md").write_text("# Existing report\n")
+    monkeypatch.setattr(reports_service, "_global_reports_projects", lambda: [])
+    monkeypatch.setattr(
+        reports_service,
+        "_get_recent_projects",
+        lambda: [{"path": str(directory.parent)}],
+    )
+    monkeypatch.setattr(
+        reports_service, "list_report_items", reports_service._all_reports_items
+    )
+    notification_producers.sync_notification_producers(force=True)
+    latest = directory / "z-new.md"
+    latest.write_text("# New report\n")
+    os.utime(latest, (1, 1))  # Synced files can arrive with old timestamps.
+    notification_producers.sync_notification_producers(force=True)
+    assert len(reports_service.list_report_items()) == 202
+    assert [entry["title"] for entry in _no_cloud_push] == ["New report"]
+
+
+def test_report_observations_migrate_once_without_replaying_baseline(
+    monkeypatch, _no_cloud_push
+):
+    path = notification_store.notifications_store_path()
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "notifications": {},
+                "watermarks": {
+                    "reports_last_seen_mtime": 100,
+                    "reports_baselined_at": "baseline",
+                },
+            }
+        )
+    )
+    items = [_report_item("/proj:old.md", 50), _report_item("/proj:new.md", 200)]
+    monkeypatch.setattr(
+        "openbase_coder_cli.reports_service.list_report_items", lambda: items
+    )
+    notification_producers.sync_notification_producers(force=True)
+    migrated = json.loads(path.read_text())
+    assert migrated["version"] == 2
+    assert "watermarks" not in migrated
+    assert "initial_cutoff" not in migrated["report_discovery"]
+    assert [entry["id"] for entry in _no_cloud_push] == ["report:/proj:new.md"]
+    notification_store.mark_all_read()
+    notification_producers.sync_notification_producers(force=True)
+    assert len(_no_cloud_push) == 1
+
+
+def test_future_notification_store_is_not_overwritten():
+    path = notification_store.notifications_store_path()
+    original = json.dumps({"version": 99, "notifications": {}})
+    path.write_text(original)
+    with pytest.raises(ValueError, match="update the CLI"):
+        notification_store.mark_all_read()
+    assert path.read_text() == original
 
 
 # --- approval sweep ---
@@ -383,9 +611,51 @@ def _session_state(**overrides):
         preview="All done.",
         status=SimpleNamespace(value="idle"),
         queued_turns=[],
+        agent_name=None,
+        current_run=None,
+        run_history=[_run("All done.")],
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
+
+
+def _run(*replies, output=""):
+    return SimpleNamespace(
+        messages=[
+            SimpleNamespace(role="user", text="Do the thing"),
+            *(SimpleNamespace(role="assistant", text=reply) for reply in replies),
+        ],
+        accumulated_output=output,
+    )
+
+
+def test_finished_alert_names_the_thread_and_quotes_the_latest_reply():
+    from openbase_coder_cli.thread_sync.session_manager import (
+        finished_notification_text,
+    )
+
+    state = _session_state(
+        name=None,
+        title=None,
+        preview="Log me in to Codex on this workspace.",
+        agent_name="Ada",
+        run_history=[
+            _run("Codex is signed in."),
+            _run("Checking Heroku…", "## Heroku\n\n**Logged in** as gabe."),
+        ],
+    )
+    assert finished_notification_text(state, failed=False) == (
+        "Ada: Log me in to Codex on this workspace.",
+        "Heroku",
+    )
+    assert finished_notification_text(
+        _session_state(run_history=[_run(output="Build passed.\nDetails")]),
+        failed=True,
+    ) == ("my-project", "The turn failed: Build passed.")
+    assert finished_notification_text(_session_state(run_history=[]), failed=False) == (
+        "my-project",
+        "The agent finished.",
+    )
 
 
 @pytest.mark.asyncio
@@ -402,7 +672,7 @@ async def test_turn_finished_notifies_only_manual_threads():
     await _notify_manual_thread_finished("manual-1", _session_state(), failed=False)
     payload = notification_store.list_notifications()
     assert [entry["id"] for entry in payload["notifications"]] == ["thread:manual-1"]
-    assert payload["notifications"][0]["title"] == "Fix the login flow"
+    assert payload["notifications"][0]["title"] == "my-project"
     assert payload["notifications"][0]["body"] == "All done."
 
 

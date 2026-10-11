@@ -1,129 +1,123 @@
-"""``openbase-coder sync`` — managed file sync between the user's computers."""
+"""``openbase-coder sync`` — Openbase Sync between the user's computers.
+
+Everyday commands (status, conflicts, resolve) talk to the Openbase Sync
+daemon over its control socket; ``sync-daemon`` holds the setup commands.
+``migrate-from-syncthing`` moves a computer off the previous sync engine.
+"""
 
 from __future__ import annotations
 
 import json
-import logging
-import time
-from pathlib import Path
+from datetime import datetime, timezone
 
 import click
 
-from openbase_coder_cli import sync_config
-from openbase_coder_cli.code_sync import CodeSyncError
-from openbase_coder_cli.code_sync import manager as sync_manager
-from openbase_coder_cli.code_sync.conflicts import (
-    resolve_conflict,
-    unresolved_conflicts,
-)
-from openbase_coder_cli.code_sync.eligibility import current_eligibility
-
-DEFAULT_RECONCILE_INTERVAL_SECONDS = 60.0
+from openbase_coder_cli import sync_daemon, sync_migration, sync_state
 
 
 @click.group()
 def sync() -> None:
-    """Keep code in sync between your computers (managed Syncthing)."""
+    """Keep your computers in sync with Openbase Sync."""
 
 
-@sync.command("install-engine")
-def install_engine() -> None:
-    """Pre-fetch the pinned Syncthing engine without enabling sync.
+def _client() -> sync_daemon.SyncDaemonClient:
+    return sync_daemon.SyncDaemonClient()
 
-    Useful for baking the binary into a DevSpace AMI or warming a laptop so
-    that enabling sync later is instant and needs no network.
-    """
-    from openbase_coder_cli.code_sync.install import ensure_syncthing_installed
 
-    path = ensure_syncthing_installed()
-    click.echo(f"Syncthing engine ready at {path}")
+def _require_configured() -> None:
+    if not sync_daemon.is_configured():
+        raise click.ClickException(
+            "Openbase Sync is not set up on this computer. Run "
+            "'openbase-coder sync-daemon configure' (see 'openbase-coder "
+            "sync migrate-from-syncthing' if this computer used the previous "
+            "sync)."
+        )
 
 
 @sync.command()
-@click.option(
-    "--force",
-    is_flag=True,
-    help="Enable even when the cloud registry does not yet show two devices.",
-)
-def enable(force: bool) -> None:
-    """Enable code sync: identity, config, ignores, and the sync service."""
+@click.option("--json", "as_json", is_flag=True, help="Print the raw status.")
+def status(as_json: bool) -> None:
+    """Show the role, roots, peers and open conflicts of Openbase Sync."""
+    _require_configured()
     try:
-        summary = sync_manager.enable_code_sync(force=force)
-    except CodeSyncError as exc:
-        raise click.ClickException(str(exc)) from None
-    click.echo(f"Code sync enabled. Syncthing device ID: {summary['device_id']}")
-    click.echo(f"Peers configured: {summary['peer_count']}")
-    if not summary["registered"]:
+        payload = _client().status()
+    except sync_daemon.SyncDaemonError as exc:
+        raise click.ClickException(
+            f"{exc}. Start it with 'openbase-coder services start "
+            f"{sync_daemon.SYNC_DAEMON_SERVICE_NAME}'."
+        ) from None
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    click.echo(f"Role:      {payload.get('role') or '?'}")
+    click.echo(f"Device:    {payload.get('device') or '?'}")
+    roots = payload.get("roots") or []
+    click.echo(f"Roots:     {len(roots)}")
+    for root in roots:
+        line = f"  {root.get('path') or root.get('id')}"
+        details = [f"{int(root.get('entries') or 0)} entries"]
+        if root.get("pending_fetches"):
+            details.append(f"{root['pending_fetches']} transferring")
+        if root.get("scanning"):
+            details.append("scanning")
+        if root.get("bytes"):
+            details.append(_size(root["bytes"]))
+        if root.get("only"):
+            details.append("only " + ", ".join(root["only"]))
+        click.echo(f"{line}  ({', '.join(details)})")
+        disk = root.get("disk") if isinstance(root.get("disk"), dict) else None
+        if disk:
+            _echo_disk(disk)
+        held = int(root.get("held_deletes") or 0)
+        if held:
+            click.echo(
+                click.style(
+                    f"    {held} deletion{'s' if held != 1 else ''} held by the "
+                    "mass-delete guard: not sent to your other computers "
+                    "(see 'openbase-coder sync held-deletes')",
+                    fg="yellow",
+                )
+            )
+            for hold in root.get("held_folders") or []:
+                click.echo(
+                    click.style(
+                        f"      {hold.get('count', 0)} under {_hold_name(hold)}",
+                        fg="yellow",
+                    )
+                )
+    peers = payload.get("peers") or []
+    if peers:
+        click.echo("Peers:")
+        for peer in peers:
+            rtt = peer.get("rtt_ms") or 0
+            suffix = f", {rtt:.0f} ms" if rtt else ""
+            click.echo(f"  {peer.get('device')} ({peer.get('role')}{suffix})")
+    else:
         click.echo(
             click.style(
-                "  WARN  Could not advertise sync capabilities to Openbase "
-                "Cloud; run 'openbase-coder login' and re-run sync enable.",
+                "Peers:     none connected (is the other computer on and on "
+                "Openbase VPN?)",
                 fg="yellow",
             )
         )
-    _echo_status()
-
-
-@sync.command()
-def disable() -> None:
-    """Disable code sync and remove the service (local data is kept)."""
-    summary = sync_manager.disable_code_sync()
-    click.echo(
-        "Code sync disabled."
-        + (" Removed code-sync service." if summary["service_removed"] else "")
+    versions = (
+        payload.get("versions") if isinstance(payload.get("versions"), dict) else None
     )
-
-
-@sync.command()
-def status() -> None:
-    """Show code sync eligibility, folders, and conflicts."""
-    _echo_status()
-
-
-def _echo_status() -> None:
-    enabled = sync_config.code_sync_enabled()
-    eligibility = current_eligibility()
-    click.echo()
-    click.echo(f"Enabled:   {'yes' if enabled else 'no'}")
-    click.echo(
-        "Eligible:  "
-        + ("yes" if eligibility.eligible else f"no ({eligibility.reason})")
-    )
-    click.echo(f"Lease:     {sync_config.lease_mode()}")
-    folders = sync_config.sync_folders()
-    click.echo(f"Folders:   {len(folders)}")
-    folder_statuses, engine_errors = _engine_folder_statuses(enabled, folders)
-    for folder in folders:
-        line = f"  {folder.folder_id}  ~/{folder.relpath}"
-        folder_status = folder_statuses.get(folder.folder_id)
-        if folder_status is not None:
-            line += f"  {folder_status.get('state') or 'unknown'}"
-        click.echo(line)
-        error = str((folder_status or {}).get("error") or "")
-        if error:
-            click.echo(click.style(f"    ERROR: {error[:200]}", fg="red"))
-    for engine_error in engine_errors[-2:]:
-        message = str(engine_error.get("message") or "")[:200]
-        if message:
-            click.echo(click.style(f"Engine error: {message}", fg="red"))
-    _echo_last_reconcile()
-    if eligibility.peers:
-        click.echo("Peers:")
-        for peer in eligibility.peers:
-            syncthing_note = (
-                peer.syncthing_device_id[:15] + "…"
-                if peer.syncthing_device_id
-                else "no syncthing identity yet"
-            )
-            click.echo(
-                f"  {peer.name} ({peer.tailscale_magic_dns.rstrip('.')}) "
-                f"[{syncthing_note}]"
-            )
-    conflict_count = len(unresolved_conflicts())
-    if conflict_count:
+    if versions:
+        auto = " (from disk size)" if versions.get("quota_auto") else ""
+        click.echo(
+            f"Versions:  {_size(versions.get('usage_bytes'))} of "
+            f"{_size(versions.get('quota_bytes'))}{auto}, kept "
+            f"{versions.get('retention_days') or 0:.0f} days"
+        )
+    if (payload.get("placement") or {}).get("thin"):
+        click.echo("Placement: large files stay on the other computer until used")
+    _echo_agent_config(payload.get("agent_config"))
+    open_conflicts = int(payload.get("open_conflicts") or 0)
+    if open_conflicts:
         click.echo(
             click.style(
-                f"Conflicts: {conflict_count} (see 'openbase-coder sync conflicts')",
+                f"Conflicts: {open_conflicts} (see 'openbase-coder sync conflicts')",
                 fg="yellow",
             )
         )
@@ -131,330 +125,345 @@ def _echo_status() -> None:
         click.echo("Conflicts: 0")
 
 
-def _engine_folder_statuses(
-    enabled: bool, folders: list[sync_config.SyncFolder]
-) -> tuple[dict[str, dict], list[dict]]:
-    """Per-folder engine status and recent engine errors, or empty on failure."""
-    if not enabled:
-        return {}, []
-    from openbase_coder_cli.code_sync.syncthing import SyncthingClient
-
-    try:
-        client = SyncthingClient()
-        statuses = {
-            folder.folder_id: client.folder_status(folder.folder_id)
-            for folder in folders
-        }
-        return statuses, client.system_errors()
-    except CodeSyncError as exc:
-        click.echo(click.style(f"Engine:    unreachable ({exc})", fg="yellow"))
-        return {}, []
-
-
-def _echo_last_reconcile() -> None:
-    from openbase_coder_cli.code_sync.reconciler import read_reconcile_state
-
-    state = read_reconcile_state()
-    last_at = state.get("last_reconcile_at")
-    if not last_at:
-        return
-    last_summary = state.get("last_summary")
-    if not isinstance(last_summary, dict):
-        click.echo(f"Reconcile: {last_at}")
-        return
-    click.echo(
-        f"Reconcile: {last_at}  repos={last_summary.get('repo_count', 0)} "
-        f"ff={last_summary.get('fast_forwarded', 0)} "
-        f"awaiting={last_summary.get('awaiting_files', 0)} "
-        f"diverged={last_summary.get('diverged', 0)} "
-        f"errors={last_summary.get('errors', 0)}"
-    )
-
-
-@sync.command()
-@click.argument("path", type=click.Path(path_type=Path))
-def add(path: Path) -> None:
-    """Add a directory under $HOME to code sync."""
-    try:
-        relpath = sync_config.relpath_for_path(path)
-        folder = sync_config.add_sync_folder(relpath)
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from None
-    click.echo(f"Added ~/{folder.relpath} (folder id {folder.folder_id}).")
-    _apply_if_enabled()
-
-
-@sync.command()
-@click.argument("path", type=click.Path(path_type=Path))
-def remove(path: Path) -> None:
-    """Remove a directory from code sync (files stay on disk)."""
-    try:
-        relpath = sync_config.relpath_for_path(path, guard=False)
-        removed = sync_config.remove_sync_folder(relpath)
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from None
-    if not removed:
-        raise click.ClickException(f"~/{relpath} is not a synced folder.")
-    click.echo(f"Removed ~/{relpath} from code sync.")
-    _apply_if_enabled()
-
-
-def _apply_if_enabled() -> None:
-    try:
-        summary = sync_manager.apply_settings_change()
-    except CodeSyncError as exc:
-        click.echo(click.style(f"  WARN  {exc}", fg="yellow"))
-        return
-    if summary.get("applied"):
-        click.echo("Re-rendered Syncthing config and managed ignores.")
-
-
-def _resolve_ignore_folder(folder: str | None):
-    """Pick the synced folder to edit ignores for (default: the code folder)."""
-    folders = sync_config.sync_folders()
-    if not folders:
-        raise click.ClickException("No synced folders are configured.")
-    if folder:
-        try:
-            match = sync_config.folder_for_relpath(folder)
-        except ValueError as exc:
-            raise click.ClickException(str(exc)) from None
-        if match is None:
-            raise click.ClickException(f"~/{folder} is not a synced folder.")
-        return match
-    for candidate in folders:
-        if candidate.relpath == "Projects":
-            return candidate
-    if len(folders) == 1:
-        return folders[0]
-    names = ", ".join(f"~/{f.relpath}" for f in folders)
-    raise click.ClickException(
-        f"Multiple synced folders ({names}); pass --folder RELPATH."
-    )
-
-
-@sync.group()
-def ignores() -> None:
-    """Manage custom Syncthing ignore rules for a synced folder.
-
-    Rules are added on top of the managed defaults (.git, node_modules,
-    lockfiles, …) and re-render the folder's .stignore.
-    """
-
-
-@ignores.command("list")
-@click.option(
-    "--folder", default=None, help="Folder relpath (default: the code folder)."
-)
-def ignores_list(folder: str | None) -> None:
-    """Show custom ignore rules for a synced folder."""
-    target = _resolve_ignore_folder(folder)
-    click.echo(f"Custom ignore rules for ~/{target.relpath}:")
-    if not target.extra_ignores:
-        click.echo("  (none)")
-        return
-    for pattern in target.extra_ignores:
-        click.echo(f"  {pattern}")
-
-
-@ignores.command("add")
-@click.argument("pattern")
-@click.option(
-    "--folder", default=None, help="Folder relpath (default: the code folder)."
-)
-def ignores_add(pattern: str, folder: str | None) -> None:
-    """Add a custom ignore PATTERN (Syncthing .stignore syntax)."""
-    target = _resolve_ignore_folder(folder)
-    try:
-        updated = sync_config.add_folder_ignore(target.relpath, pattern)
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from None
-    click.echo(f"Ignoring '{pattern.strip()}' in ~/{updated.relpath}.")
-    _apply_if_enabled()
-
-
-@ignores.command("remove")
-@click.argument("pattern")
-@click.option(
-    "--folder", default=None, help="Folder relpath (default: the code folder)."
-)
-def ignores_remove(pattern: str, folder: str | None) -> None:
-    """Remove a custom ignore PATTERN from a synced folder."""
-    target = _resolve_ignore_folder(folder)
-    removed = sync_config.remove_folder_ignore(target.relpath, pattern)
-    if not removed:
-        raise click.ClickException(
-            f"'{pattern.strip()}' is not a custom ignore rule for ~/{target.relpath}."
+def _echo_agent_config(agents) -> None:
+    """Skills, MCP servers and sign-in of the coding agents (docs: code-sync)."""
+    if not isinstance(agents, dict) or not agents.get("enabled"):
+        click.echo(
+            "Agents:    configuration not synced on this computer "
+            "(openbase-coder sync-daemon agent-config enable)"
         )
-    click.echo(f"Removed '{pattern.strip()}' from ~/{target.relpath}.")
-    _apply_if_enabled()
+        return
+    details = f"{int(agents.get('entries') or 0)} entries"
+    if agents.get("secrets"):
+        details += f", {int(agents['secrets'])} sign-ins"
+    click.echo(f"Agents:    skills, MCP servers and sign-in synced ({details})")
+    for problem in agents.get("errors") or []:
+        click.echo(click.style(f"           could not sync {problem}", fg="yellow"))
+
+
+def _size(value) -> str:
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return "?"
+    if n < 0:
+        return "?"
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1000 or unit == "TB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1000
+    return "?"
+
+
+def _echo_disk(disk: dict) -> None:
+    """Free space, the floor sync never writes below, and what waits for room."""
+    auto = ", from disk size" if disk.get("low_water_auto") else ""
+    line = (
+        f"    disk: {_size(disk.get('free_bytes'))} free of "
+        f"{_size(disk.get('total_bytes'))}; sync keeps "
+        f"{_size(disk.get('low_water_bytes'))} free{auto}"
+    )
+    held = int(disk.get("held_files") or 0)
+    if disk.get("below_low_water") or held:
+        warning = "    low disk: sync writes here are paused until space returns"
+        if held:
+            warning += f" ({held} files, {_size(disk.get('held_bytes'))} waiting)"
+        click.echo(line)
+        click.echo(click.style(warning, fg="yellow"))
+        return
+    click.echo(line)
+
+
+def _conflict_time(conflict: dict) -> str:
+    created_ns = conflict.get("created_ns")
+    if not created_ns:
+        return ""
+    try:
+        moment = datetime.fromtimestamp(int(created_ns) / 1e9, tz=timezone.utc)
+    except (OverflowError, ValueError, OSError):
+        return ""
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @sync.command()
-def conflicts() -> None:
-    """List unresolved sync conflicts."""
-    records = unresolved_conflicts()
+@click.option("--json", "as_json", is_flag=True, help="Print the raw records.")
+def conflicts(as_json: bool) -> None:
+    """List open conflicts."""
+    _require_configured()
+    try:
+        records = _client().conflicts()
+    except sync_daemon.SyncDaemonError as exc:
+        raise click.ClickException(str(exc)) from None
+    if as_json:
+        click.echo(json.dumps(records, indent=2, sort_keys=True))
+        return
     if not records:
-        click.echo("No unresolved sync conflicts.")
+        click.echo("No open sync conflicts.")
         return
     for record in records:
-        if record.get("kind") == "branch":
-            click.echo(
-                f"{record['id']}  branch  {record.get('repo_relpath') or '.'}"
-                f"@{record.get('branch')}  local {str(record.get('local_sha'))[:12]}"
-                f" vs remote {str(record.get('remote_sha'))[:12]}"
-                f"  ({record.get('detected_at')})"
-            )
-        else:
-            click.echo(
-                f"{record['id']}  file    {record.get('path')}"
-                f"  ({record.get('detected_at')})"
-            )
+        when = _conflict_time(record)
+        click.echo(
+            f"{record.get('id')}  {record.get('kind') or '?':<13} "
+            f"{record.get('root') or '?'}:{record.get('path') or ''}"
+            + (f"  ({when})" if when else "")
+        )
+    click.echo(
+        "Resolve with 'openbase-coder sync resolve ID --keep-local' or '--use-remote'."
+    )
 
 
 @sync.command()
-@click.argument("conflict_id")
+@click.argument("conflict_id", type=int)
 @click.option(
     "--keep-local",
     "action",
     flag_value="keep_local",
-    help="Keep this machine's version.",
+    help="Keep this computer's version.",
 )
 @click.option(
     "--use-remote",
     "action",
     flag_value="use_remote",
-    help="Adopt the peer's version (worktree is safety-stashed first).",
+    help="Take the other computer's version.",
 )
-def resolve(conflict_id: str, action: str | None) -> None:
+def resolve(conflict_id: int, action: str | None) -> None:
     """Resolve one conflict by id."""
     if not action:
         raise click.ClickException("Pass --keep-local or --use-remote.")
+    _require_configured()
     try:
-        record = resolve_conflict(conflict_id, action)
-    except CodeSyncError as exc:
+        conflicts = _client().conflicts()
+        refusal = sync_state.branch_refusal(conflicts, conflict_id)
+    except sync_daemon.SyncDaemonError as exc:
         raise click.ClickException(str(exc)) from None
-    click.echo(f"Resolved {record['id']} with {action}.")
+    if refusal:
+        raise click.ClickException(refusal)
+    conflict = sync_state.find_conflict(conflicts, conflict_id)
+    if conflict is None:
+        raise click.ClickException("This conflict is no longer open.")
+    local_device = str(sync_daemon.read_config_summary().get("device_id") or "")
+    choice = sync_state.resolution_choice(conflict, action, local_device)
+    try:
+        _client().resolve(conflict_id, choice)
+    except sync_daemon.SyncDaemonError as exc:
+        raise click.ClickException(str(exc)) from None
+    click.echo(f"Resolved conflict {conflict_id} with {action}.")
 
 
-@sync.command("heal-echoes")
+def _hold_name(hold: dict) -> str:
+    folder = str(hold.get("folder") or "")
+    return folder + "/" if folder else "the whole folder"
+
+
+@sync.command("held-deletes")
+@click.option("--root", "root_id", help="The synced folder's id (see --json).")
 @click.option(
-    "--check",
-    is_flag=True,
-    help="Only report echo state; do not fast-forward anything.",
+    "--folder",
+    help=(
+        "Only the hold on this folder of the synced folder (relative, as listed); "
+        "without it --release and --discard act on every hold of the synced folder."
+    ),
 )
 @click.option(
-    "--no-fetch",
-    is_flag=True,
-    help="Evaluate against cached origin refs instead of fetching.",
+    "--release",
+    "action",
+    flag_value="release",
+    help="Send the held deletions to your other computers (they move the files to their Trash).",
 )
-def heal_echoes(check: bool, no_fetch: bool) -> None:
-    """Fast-forward repos whose dirt is a pure sync echo of pushed commits.
+@click.option(
+    "--discard",
+    "action",
+    flag_value="discard",
+    help="Cancel the held deletions and bring the files back from your other computers.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Print the raw summary.")
+def held_deletes(
+    root_id: str | None, folder: str | None, action: str | None, as_json: bool
+) -> None:
+    """Show, release or discard deletions held by the mass-delete guard.
 
-    A peer's commits arrive twice: as pushed history on origin and as
-    Syncthing file changes. Until the local HEAD catches up, the files look
-    like someone's uncommitted work. This proves the dirty files are
-    byte-identical to origin/<branch> with HEAD strictly behind, and only
-    then fast-forwards; any real local change aborts the heal for that repo.
+    When many files are deleted at once Openbase Sync stops sending deletions
+    to your other computers until you confirm, so an accident (a disk that
+    was unmounted, a wrong folder moved away) cannot empty them too. When the
+    burst sits in one folder only that folder's deletions are held; other
+    deletions keep syncing.
     """
-    from openbase_coder_cli.code_sync.echo_heal import (
-        SILENT_ACTIONS,
-        heal_repo_echo,
-    )
-    from openbase_coder_cli.code_sync.reconciler import discover_git_repos
-
-    folders = sync_config.sync_folders()
-    if not folders:
-        raise click.ClickException("No synced folders are configured.")
-    healed = 0
-    reported = 0
-    for folder in folders:
-        folder_root = folder.absolute_path()
-        for repo in discover_git_repos(folder_root):
-            result = heal_repo_echo(
-                repo,
-                allow_fetch=not no_fetch,
-                min_fetch_interval=0,
-                apply=not check,
+    folder = (folder or "").strip("/") or None
+    _require_configured()
+    client = _client()
+    try:
+        held = sync_state.held_deletes_summary(client, client.status())
+    except sync_daemon.SyncDaemonError as exc:
+        raise click.ClickException(str(exc)) from None
+    held = [entry for entry in held if not root_id or entry["id"] == root_id]
+    if action:
+        targets = held
+        if not targets:
+            raise click.ClickException("No deletions are held.")
+        if len(targets) > 1:
+            ids = ", ".join(entry["id"] for entry in targets)
+            raise click.ClickException(
+                f"Deletions are held in several folders ({ids}); pass --root."
             )
-            action = result["action"]
-            if action in SILENT_ACTIONS:
-                continue
-            reported += 1
-            relpath = repo.relative_to(folder_root)
-            line = f"~/{folder.relpath}/{relpath}  {action}"
-            if result.get("branch"):
-                line += f"  [{result['branch']}]"
-            if result.get("detail"):
-                line += f"  {result['detail']}"
-            if action == "healed":
-                healed += 1
-                click.echo(click.style(line, fg="green"))
-            else:
-                click.echo(line)
-    if not reported:
-        click.echo("No sync echoes detected; nothing to heal.")
-    else:
-        click.echo(f"Healed {healed} repo(s).")
-
-
-@sync.command()
-@click.option("--loop", is_flag=True, help="Run forever (service mode).")
-@click.option(
-    "--interval",
-    default=DEFAULT_RECONCILE_INTERVAL_SECONDS,
-    show_default=True,
-    type=float,
-)
-def reconcile(loop: bool, interval: float) -> None:
-    """Reconcile git branch pointers with peers (one tick or a loop)."""
-    from openbase_coder_cli.code_sync.reconciler import (
-        reconcile_counts,
-        run_tick_if_enabled,
+        target = targets[0]
+        try:
+            done = (
+                client.release_deletes(target["id"], folder)
+                if action == "release"
+                else client.discard_deletes(target["id"], folder)
+            )
+        except sync_daemon.SyncDaemonError as exc:
+            raise click.ClickException(str(exc)) from None
+        verb = "Released" if action == "release" else "Discarded"
+        where = target["path"] + (f" under {folder}/" if folder else "")
+        click.echo(f"{verb} {done} held deletion{'s' if done != 1 else ''} in {where}.")
+        return
+    if folder:
+        scoped = []
+        for entry in held:
+            holds = [
+                hold
+                for hold in entry.get("folders") or []
+                if hold["folder"] == folder or hold["folder"].startswith(folder + "/")
+            ]
+            if holds:
+                scoped.append(
+                    {
+                        **entry,
+                        "folders": holds,
+                        "count": sum(hold["count"] for hold in holds),
+                        "sample": sorted(
+                            path for hold in holds for path in hold.get("sample") or []
+                        )[: sync_state.HELD_DELETE_SAMPLE],
+                    }
+                )
+        held = scoped
+    if as_json:
+        click.echo(json.dumps(held, indent=2, sort_keys=True))
+        return
+    if not held:
+        click.echo("No deletions are held.")
+        return
+    for entry in held:
+        click.echo(f"{entry['path']} ({entry['id']}): {entry['count']} deletions held")
+        holds = entry.get("folders") or [
+            {"folder": "", "count": entry["count"], "sample": entry["sample"]}
+        ]
+        for hold in holds:
+            click.echo(f"  {hold['count']} under {_hold_name(hold)}")
+            for path in hold.get("sample") or []:
+                click.echo(f"    {path}")
+            if hold["count"] > len(hold.get("sample") or []):
+                click.echo(
+                    f"    … and {hold['count'] - len(hold.get('sample') or [])} more"
+                )
+    click.echo(
+        "Release with 'openbase-coder sync held-deletes --release' (your other "
+        "computers move the files to their Trash), or bring the files back with "
+        "--discard; add --folder to act on one hold."
     )
 
-    if not loop:
-        summary = run_tick_if_enabled()
-        if summary is None:
-            raise click.ClickException("Code sync is disabled.")
-        click.echo(json.dumps(summary, indent=2, sort_keys=True))
+
+@sync.command("migrate-from-syncthing")
+@click.option(
+    "--apply",
+    "apply_changes",
+    is_flag=True,
+    help="Make the changes. Without it, only print what would happen.",
+)
+@click.option(
+    "--replace-nested",
+    is_flag=True,
+    help=(
+        "When a migrated folder (e.g. ~/Projects) contains existing Openbase "
+        "Sync roots, replace those inner roots with it instead of skipping it."
+    ),
+)
+@click.option(
+    "--remove-markers",
+    is_flag=True,
+    help=(
+        "Also move the old engine's .stfolder/.stignore markers out of the "
+        "synced folders. Only once the old sync is stopped on every computer."
+    ),
+)
+@click.option(
+    "--no-restart",
+    is_flag=True,
+    help="Do not restart the sync-daemon service after adding roots.",
+)
+def migrate_from_syncthing(
+    apply_changes: bool, replace_nested: bool, remove_markers: bool, no_restart: bool
+) -> None:
+    """Move this computer from the previous (Syncthing-based) sync to Openbase Sync.
+
+    Stops and uninstalls the old code-sync service, moves its engine state,
+    version history and folder list into ~/.openbase/trash/, and turns its
+    folders into Openbase Sync roots. Dry run unless --apply is passed; safe
+    to run again and on computers that never used the old sync.
+    """
+    plan = sync_migration.plan_migration(
+        replace_nested=replace_nested, include_markers=remove_markers
+    )
+    if plan.legacy_config.error:
+        click.echo(click.style(f"  WARN  {plan.legacy_config.error}", fg="yellow"))
+    _echo_plan(plan, verb="Will" if apply_changes else "Would", restart=not no_restart)
+    if plan.nothing_to_do:
+        click.echo("Nothing to migrate.")
+        if not plan.daemon_configured and plan.roots:
+            click.echo(sync_migration.configure_command_hint(plan.roots))
+        return
+    if not apply_changes:
+        click.echo()
+        click.echo("Dry run: nothing was changed. Re-run with --apply to migrate.")
         return
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(levelname)s %(asctime)s %(name)s %(message)s",
-    )
-    logger = logging.getLogger(__name__)
-    poll_interval = max(interval, 5.0)
-    logger.info("code_sync reconcile_loop_started interval=%s", poll_interval)
-    while True:
-        started = time.monotonic()
-        try:
-            summary = run_tick_if_enabled()
-        except Exception:
-            logger.exception("code_sync tick_failed")
-        else:
-            if summary is not None:
-                counts = reconcile_counts(summary)
-                logger.info(
-                    "code_sync tick_complete repos=%s up_to_date=%s "
-                    "fast_forwarded=%s awaiting_files=%s remote_behind=%s "
-                    "diverged=%s skipped=%s fetch_failed=%s converged=%s "
-                    "published=%s conflicts=%s errors=%s",
-                    counts["repo_count"],
-                    counts["up_to_date"],
-                    counts["fast_forwarded"],
-                    counts["awaiting_files"],
-                    counts["remote_behind"],
-                    counts["diverged"],
-                    counts["skipped"],
-                    counts["fetch_failed"],
-                    counts["converged"],
-                    counts["published"],
-                    summary.get("conflicts_count"),
-                    counts["errors"],
-                )
-                if summary.get("errors"):
-                    logger.warning("code_sync tick_errors %s", summary["errors"])
-        elapsed = time.monotonic() - started
-        time.sleep(max(poll_interval - elapsed, 1.0))
+    result = sync_migration.apply_migration(plan, restart=not no_restart)
+    click.echo()
+    if result.service_removed:
+        click.echo("Stopped and uninstalled the code-sync service.")
+    for source, destination in result.moved:
+        click.echo(f"Moved {source} -> {destination}")
+    if result.roots_written:
+        click.echo(f"Updated {sync_daemon.SYNC_DAEMON_CONFIG_PATH}.")
+        if result.daemon_restarted:
+            click.echo("Restarted the sync-daemon service.")
+        elif not no_restart:
+            click.echo(
+                "The sync-daemon service is not installed; start it with "
+                "'openbase-coder services start sync-daemon'."
+            )
+    if not plan.daemon_configured and plan.roots:
+        click.echo()
+        click.echo("Openbase Sync is not set up here yet. Configure it with:")
+        click.echo("  " + sync_migration.configure_command_hint(plan.roots))
+    click.echo("Migration complete.")
+
+
+def _echo_plan(plan: sync_migration.MigrationPlan, *, verb: str, restart: bool) -> None:
+    if plan.service_installed:
+        click.echo(f"{verb} stop and uninstall the code-sync service.")
+    for path in [*plan.trash_paths, *plan.markers]:
+        click.echo(f"{verb} move {path} to {sync_migration.trash_dir()}/")
+    if plan.roots:
+        click.echo("Openbase Sync roots for the old folders:")
+        for root in plan.roots:
+            click.echo(f"  {root}")
+    if plan.dropped_ignore_rules:
+        click.echo(
+            f"{plan.dropped_ignore_rules} custom ignore rule(s) of the old "
+            "folders are not carried over (Openbase Sync skips dependency and "
+            "build folders itself); they stay in the trashed sync-config.json."
+        )
+    if not plan.daemon_configured:
+        return
+    for root in plan.root_change.added:
+        click.echo(f"{verb} add root {root['path']} (id {root['id']})")
+    for root in plan.root_change.replaced:
+        click.echo(f"{verb} replace nested root {root['path']}")
+    for path, reason in plan.root_change.skipped:
+        if reason.startswith("already inside"):
+            continue
+        click.echo(click.style(f"  SKIP  {path}: {reason}", fg="yellow"))
+    if plan.root_change.changed and restart:
+        click.echo(f"{verb} restart the sync-daemon service if it is installed.")

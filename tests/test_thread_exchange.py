@@ -983,3 +983,41 @@ def test_import_prunes_cache_entries_for_removed_snapshots(tmp_path: Path) -> No
     assert (
         json.loads(ledger_path.read_text(encoding="utf-8"))["invalid_snapshots"] == {}
     )
+
+
+def test_export_stages_snapshots_outside_the_synced_exchange(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A snapshot is assembled next to the exchange root and renamed in whole,
+    so Openbase Sync never journals a half-written temp directory."""
+    from openbase_coder_cli.thread_sync import thread_sync_common
+
+    home = tmp_path / "home"
+    exchange_dir = tmp_path / "exchange"
+    _create_state_db(home / "state_5.sqlite")
+    _insert_thread(home, "thread-1", title="Thread title", updated_at=20)
+    moves: list[tuple[Path, Path]] = []
+    real_replace = thread_sync_common.os.replace
+
+    def spy(src, dst):
+        moves.append((Path(src), Path(dst)))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(thread_sync_common.os, "replace", spy)
+    results = export_thread_snapshots(
+        codex_home=home,
+        exchange_dir=exchange_dir,
+        device_identity_path=tmp_path / "device.json",
+        ledger_path=tmp_path / "ledger.json",
+        stability_delay_seconds=0,
+        max_age_days=None,
+    )
+    assert [result.status for result in results] == ["exported"]
+    snapshot_moves = [(src, dst) for src, dst in moves if exchange_dir in dst.parents]
+    assert len(snapshot_moves) == 1
+    src, dst = snapshot_moves[0]
+    assert exchange_dir not in src.parents
+    assert src.parent == tmp_path / "exchange.staging"
+    assert (dst / "metadata.json").is_file() and (dst / "rollout.jsonl").is_file()
+    assert not list(exchange_dir.rglob(".tmp-*"))
+    assert list((tmp_path / "exchange.staging").iterdir()) == []

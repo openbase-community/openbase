@@ -31,10 +31,6 @@ NETMESH_ALLOWED_SUFFIXES = (".net.obs.so", ".net-staging.obs.so")
 # openbase-tunneld service, cleaned up on any provider switch.
 LEGACY_TUNNELD_AGENT = "cloud.openbase.tunneld"
 
-# Services whose behaviour depends on the transport (LiveKit's rtc candidate
-# mode, the backend's serve/status probing, the agent's LiveKit connection).
-_RESTART_SERVICE_NAMES = ("livekit-server", "livekit-agent", "django-cli")
-
 
 def _env_path():
     return get_data_dir() / ".env"
@@ -132,7 +128,7 @@ def _apply_provider(name: str, *, push_cloud: bool) -> None:
                 host_list.append(suffix)
             values[ALLOWED_HOSTS_ENV_KEY] = ",".join(host_list)
         # Both netmesh transports MUST enroll under the same node name: peers
-        # store this machine's MagicDNS name (phone backend host, syncthing
+        # store this machine's MagicDNS name (phone backend host, sync peer
         # addresses), so a name that drifted across a transport switch would
         # strand them on a dead address. tunneld reads this env key; the VPN
         # companion gets the same value passed explicitly on connect.
@@ -169,8 +165,9 @@ def _apply_provider(name: str, *, push_cloud: bool) -> None:
         # name, so the new node never gets a "-1" suffix (which would orphan
         # the DNS name every peer's sync config points at).
         _revoke_old_node(previous, old_node)
-    _bring_up_transport(name)
-    _restart_transport_services()
+    with _transport_lease():
+        _bring_up_transport(name)
+        _restart_transport_services()
     _reregister_device()
 
     if name == tp.PROVIDER_NETMESH:
@@ -189,14 +186,14 @@ def _apply_provider(name: str, *, push_cloud: bool) -> None:
 def _teardown_transport(previous: str) -> None:
     """Best-effort teardown of the transport we're leaving."""
     from openbase_coder_cli.services.definitions import TUNNELD_SERVICE
-    from openbase_coder_cli.services.launchd import launchctl_bootout
+    from openbase_coder_cli.services.launchd import remove_service
 
     if previous == tp.PROVIDER_NETMESH_TSNET:
         try:
-            launchctl_bootout(TUNNELD_SERVICE)
-            click.echo("Stopped openbase-tunneld.")
+            remove_service(TUNNELD_SERVICE)
+            click.echo("Removed openbase-tunneld.")
         except Exception as exc:  # noqa: BLE001 - best-effort teardown
-            click.echo(f"Note: could not stop openbase-tunneld: {exc}")
+            click.echo(f"Note: could not remove openbase-tunneld: {exc}")
     elif previous == tp.PROVIDER_TAILSCALE:
         tailscale_bin = tp.tailscale_bin()
         if tailscale_bin:
@@ -210,7 +207,7 @@ def _teardown_transport(previous: str) -> None:
             # Disconnect the official client: both tailscaleds claim the
             # 100.100.100.100 MagicDNS resolver, and while the official one
             # holds it, netmesh names silently stop resolving system-wide
-            # (syncthing peers, git-pointer fetches, phone-facing serves).
+            # (sync peers, phone-facing serves).
             subprocess.run(  # noqa: S603 - fixed argv, best-effort
                 [tailscale_bin, "down"],
                 capture_output=True,
@@ -337,7 +334,11 @@ def prepare_embedded_enrollment(env_path=None) -> dict | None:
     upsert_env_file_values(
         env_path or _env_path(), {TSNET_CONTROL_URL_ENV_KEY: str(control_url)}
     )
-    return {"control_url": str(control_url), "auth_key": str(auth_key)}
+    return {
+        "control_url": str(control_url),
+        "auth_key": str(auth_key),
+        "tailnet_user": str(enrollment.get("tailnet_user") or ""),
+    }
 
 
 def _bring_up_transport(name: str) -> None:
@@ -414,11 +415,47 @@ def _bring_up_transport(name: str) -> None:
     for _attempt in range(2):
         try:
             ensure_tunneld_running(auth_key=auth_key, managed_service=True)
-            click.echo("openbase-tunneld is running and joined the tailnet.")
-            return
+            break
         except RuntimeError as exc:
             last_error = exc
-    raise click.ClickException(f"Openbase Direct did not connect: {last_error}")
+    else:
+        raise click.ClickException(f"Openbase Direct did not connect: {last_error}")
+    _rejoin_embedded_node_for_account(enrollment, auth_key)
+    click.echo("openbase-tunneld is running and joined the tailnet.")
+
+
+def _rejoin_embedded_node_for_account(
+    enrollment: dict | None, auth_key: str | None
+) -> None:
+    """A Running embedded node may still be logged into a previous account.
+
+    tunneld only redeems a key from NeedsLogin, so a persisted login of
+    another account would come up Running in that account's network.
+    """
+    from openbase_coder_cli.services.netmesh_account import (
+        belongs_to_other_account,
+        forget_node_login,
+        netmesh_status,
+    )
+    from openbase_coder_cli.services.tunneld import ensure_tunneld_running
+
+    if not enrollment or not belongs_to_other_account(
+        netmesh_status(tp.PROVIDER_NETMESH_TSNET), enrollment
+    ):
+        return
+    click.echo(
+        "The embedded Openbase node belongs to a different Openbase account; "
+        "signing it out before joining yours."
+    )
+    error = forget_node_login(tp.PROVIDER_NETMESH_TSNET)
+    if error:
+        raise click.ClickException(
+            f"Could not sign the previous account's node out: {error}"
+        )
+    try:
+        ensure_tunneld_running(auth_key=auth_key, managed_service=True)
+    except RuntimeError as exc:
+        raise click.ClickException(f"Openbase Direct did not connect: {exc}") from exc
 
 
 def reconcile_after_login() -> None:
@@ -433,8 +470,9 @@ def reconcile_after_login() -> None:
         return
     label = "Openbase VPN" if provider == tp.PROVIDER_NETMESH else "Openbase Direct"
     click.echo(f"Connecting {label}...")
-    _bring_up_transport(provider)
-    _restart_transport_services()
+    with _transport_lease():
+        _bring_up_transport(provider)
+        _restart_transport_services()
 
 
 def record_account_provider(name: str) -> bool:
@@ -548,6 +586,7 @@ def _provision_netmesh_companion() -> None:
     connected with a freshly minted netmesh key.
     """
     from openbase_coder_cli.services.cloud_registration import netmesh_enroll
+    from openbase_coder_cli.services.netmesh_account import leave_if_other_account
     from openbase_coder_cli.services.netmesh_companion import (
         NetmeshCompanion,
         NetmeshCompanionError,
@@ -582,15 +621,29 @@ def _provision_netmesh_companion() -> None:
             warn(f"could not update the Openbase VPN helper: {exc}")
             companion.close()
             return
-        if status.running:
-            # Re-apply (e.g. re-running set-provider for serve rules): the tunnel
-            # is already up — don't mint a fresh single-use key or churn the node.
-            click.echo(
-                f"Openbase VPN already connected: {status.dns_name or 'netmesh'} "
-                f"({status.self_ip or '?'})."
-            )
+
+    # The enrollment names the signed-in account's network. The engine keeps
+    # its node login across disconnects and ignores a new key while one is
+    # stored, so a node from a previous account must be signed out first,
+    # whether the tunnel is running or stopped.
+    enrollment = netmesh_enroll()
+    if status.helper_enabled and enrollment:
+        if not leave_if_other_account(tp.PROVIDER_NETMESH, enrollment, echo=warn):
+            warn("not connecting: the VPN would rejoin the previous account's network.")
             companion.close()
             return
+        status = companion.status()
+    if status.running:
+        # Same-account re-apply (e.g. re-running set-provider for serve rules):
+        # keep the node rather than churning it.
+        if enrollment is None:
+            warn("could not confirm which account the running VPN belongs to.")
+        click.echo(
+            f"Openbase VPN already connected: {status.dns_name or 'netmesh'} "
+            f"({status.self_ip or '?'})."
+        )
+        companion.close()
+        return
 
     if not status.helper_enabled:
         try:
@@ -613,7 +666,6 @@ def _provision_netmesh_companion() -> None:
             companion.close()
             return
 
-    enrollment = netmesh_enroll()
     if not enrollment:
         warn("could not mint a netmesh key — sign in to Openbase first.")
         companion.close()
@@ -668,18 +720,20 @@ def _apply_serve_best_effort() -> None:
             click.echo(f"Note: serve rules not applied yet ({reset_exc}).")
 
 
-def _restart_transport_services() -> None:
-    from openbase_coder_cli.services.definitions import SERVICES
-    from openbase_coder_cli.services.launchd import launchctl_kickstart
+def _transport_lease():
+    """The transition job stands back while this command brings the VPN up
+    and restarts the transport services itself."""
+    from openbase_coder_cli.services.tailnet_transition import transport_lease
 
-    for service_name in _RESTART_SERVICE_NAMES:
-        service = next((s for s in SERVICES if s.name == service_name), None)
-        if service is None:
-            continue
-        try:
-            launchctl_kickstart(service)
-        except Exception:  # noqa: BLE001 - service may not be installed
-            pass
+    return transport_lease()
+
+
+def _restart_transport_services() -> None:
+    from openbase_coder_cli.services.tailnet_transition import (
+        kickstart_transport_services,
+    )
+
+    kickstart_transport_services()
     click.echo("Restarted transport-dependent services.")
 
 
@@ -725,6 +779,18 @@ def enroll(json_: bool) -> None:
             "Could not mint a netmesh key. Run 'openbase-coder login' first "
             "and check that openbase-cloud is reachable."
         )
+    if tp.is_netmesh():
+        from openbase_coder_cli.services.netmesh_account import (
+            leave_if_other_account,
+        )
+
+        if not leave_if_other_account(
+            tp.provider(), enrollment, echo=lambda m: click.echo(m, err=True)
+        ):
+            raise click.ClickException(
+                "Not enrolling: this machine's VPN node is still signed in to "
+                "a different Openbase account."
+            )
     if json_:
         click.echo(
             json_module.dumps(

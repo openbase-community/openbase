@@ -3,8 +3,11 @@ from types import SimpleNamespace
 
 import pytest
 from livekit.agents import APIConnectionError, stt
-from livekit.agents.voice.events import ErrorEvent, CloseEvent, CloseReason
-from openbase_coder_cli.livekit_agent.session_diagnostics import _register_session_diagnostics
+from livekit.agents.voice.events import CloseEvent, CloseReason, ErrorEvent
+
+from openbase_coder_cli.livekit_agent.session_diagnostics import (
+    _register_session_diagnostics,
+)
 
 
 @pytest.mark.asyncio

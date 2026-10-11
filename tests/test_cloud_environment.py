@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from openbase_coder_cli import cloud_environment
+from openbase_coder_cli import cloud_environment, runtime
 from openbase_coder_cli.runtime import RuntimePackage, _package_from_root
 
 
@@ -63,7 +63,11 @@ def test_configured_web_backend_url_defaults_without_configured_value(
     )
 
 
-def test_runtime_package_reads_release_channel(tmp_path) -> None:
+def test_runtime_package_reads_release_channel(tmp_path, monkeypatch) -> None:
+    # Only code loaded from the package's own Python tree belongs to it.
+    monkeypatch.setattr(
+        runtime, "__file__", str(tmp_path / "python/lib/openbase_coder_cli/runtime.py")
+    )
     (tmp_path / "openbase-coder-package.json").write_text(
         '{"version":"1.2.3","target":"arm64","channel":"staging"}\n',
         encoding="utf-8",

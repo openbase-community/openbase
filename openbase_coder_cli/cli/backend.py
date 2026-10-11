@@ -62,26 +62,108 @@ def status(env_file: Path) -> None:
     show_default=True,
     help="Openbase .env file to update.",
 )
-def use_backend(backend_name: tuple[str, ...], env_file: Path) -> None:
-    """Persist the selected coding backend."""
+@click.option(
+    "--skip-login-check",
+    is_flag=True,
+    help="Switch even if the target backend has no usable login.",
+)
+@click.option(
+    "--no-restart",
+    is_flag=True,
+    help="Persist the choice without restarting the dispatcher services.",
+)
+def use_backend(
+    backend_name: tuple[str, ...],
+    env_file: Path,
+    skip_login_check: bool,
+    no_restart: bool,
+) -> None:
+    """Switch the coding backend: check its login, persist it, restart the dispatcher."""
     try:
         normalized = normalize_backend(" ".join(backend_name))
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
+    if not skip_login_check:
+        problem = backend_login_problem(normalized)
+        if problem is not None:
+            raise click.ClickException(
+                f"{problem} Backend unchanged; pass --skip-login-check to switch anyway."
+            )
     write_backend(env_file, normalized)
     click.echo(f"Backend set to {normalized} in {env_file}.")
-    if normalized == CODEX_BACKEND:
+    if no_restart:
         click.echo(
-            "Restart or recreate the dispatcher/MCP host for Super Agents to pick up the change."
+            "Restart skipped; the running dispatcher keeps the previous backend "
+            "until 'openbase-coder restart --service codex-app-server-dispatcher "
+            "--recreate-dispatcher' runs."
         )
-    elif normalized in {OPENBASE_CLOUD_BACKEND, CLAUDE_CODE_BACKEND}:
-        click.echo(
-            "Restart or recreate the dispatcher/MCP host for Claude Code to pick up the change; keep Openbase services running."
-        )
+        return
+    plan = schedule_backend_restart()
+    if plan is None:
+        click.echo("Openbase services are not installed; nothing to restart.")
     else:
         click.echo(
-            "Restart or recreate the dispatcher/MCP host for Super Agents to pick up the change."
+            "Dispatcher restart scheduled; a fresh dispatcher thread will come up "
+            f"on {normalized}. Other Openbase services keep running."
         )
+
+
+def backend_login_problem(backend_name: str) -> str | None:
+    """A human-readable reason the backend cannot be used, or None when logged in."""
+    if backend_name == CODEX_BACKEND:
+        from openbase_coder_cli.paths import CODEX_HOME_DIR
+
+        if not (CODEX_HOME_DIR / "auth.json").is_file():
+            return "Not logged in to Codex: run 'codex login' first."
+        return None
+    if backend_name == CLAUDE_CODE_BACKEND:
+        from openbase_coder_cli.claude_auth import claude_auth_status
+
+        status = claude_auth_status()
+        if not status.logged_in:
+            detail = f" ({status.raw_output})" if status.raw_output else ""
+            return (
+                f"Not logged in to Claude Code{detail}: run "
+                "'openbase-coder claude login' first."
+            )
+        return None
+    # openbase_cloud and the internal openbase_cloud_codex proxy both ride the
+    # Openbase Cloud login.
+    from openbase_coder_cli.services.onboarding import cloud_login_status
+
+    login = cloud_login_status()
+    if login["status"] == "logged_in":
+        return None
+    if login["status"] == "login_expired":
+        return (
+            "Openbase Cloud login expired or was revoked: run "
+            "'openbase-coder login' first."
+        )
+    return "Not logged in to Openbase Cloud: run 'openbase-coder login' first."
+
+
+def schedule_backend_restart():
+    """Restart the dispatcher stack so it serves the newly selected backend.
+
+    Restarting the dispatcher app-server cascades to livekit-agent
+    (restart_dependents) and recreates the dispatcher thread, so the next
+    voice turn starts a fresh conversation on the new backend. Returns the
+    scheduled RestartPlan, or None when there is nothing running to restart.
+    """
+    from openbase_coder_cli.services.installation import InstallationConfig
+
+    if not InstallationConfig.exists():
+        return None
+    from openbase_coder_cli.services.launchd import launchctl_status
+    from openbase_coder_cli.services.registry import find_service
+    from openbase_coder_cli.services.restart import RestartRequest, schedule_restart
+
+    for name in ("codex-app-server-dispatcher", "livekit-agent"):
+        if launchctl_status(find_service(name)).get("installed"):
+            return schedule_restart(
+                RestartRequest(services=(name,), recreate_dispatcher=True)
+            )
+    return None
 
 
 def read_backend(env_file: Path) -> str:

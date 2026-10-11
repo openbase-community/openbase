@@ -18,8 +18,14 @@ restart_module = importlib.import_module("openbase_coder_cli.services.restart")
 
 @pytest.fixture(autouse=True)
 def isolate_restart_installation(monkeypatch, tmp_path):
-    monkeypatch.setattr(restart_module, "launchctl_status", lambda _svc: {"installed": False})
-    monkeypatch.setattr(restart_module, "install_tunneld_binary", lambda _config: tmp_path / "openbase-tunneld")
+    monkeypatch.setattr(
+        restart_module, "launchctl_status", lambda _svc: {"installed": False}
+    )
+    monkeypatch.setattr(
+        restart_module,
+        "install_tunneld_binary",
+        lambda _config: tmp_path / "openbase-tunneld",
+    )
     monkeypatch.setattr(
         restart_module,
         "require_installation",
@@ -129,7 +135,7 @@ def test_restart_default_schedules_all_openbase_services(monkeypatch):
     assert "livekit-server" in command
     assert "codex-app-server" in command
     assert "django-cli" in command
-    assert "code-sync" not in command
+    assert "sync-daemon" not in command
     assert "sync-workers" in command
     assert "super-agents-mcp" not in command
     assert warnings == [{"reason": "restart", "emit_cli_warning": True}]
@@ -195,34 +201,54 @@ def test_restart_optional_device_sync_can_be_targeted_explicitly(monkeypatch):
     monkeypatch.setattr(InstallationConfig, "exists", classmethod(lambda cls: True))
     monkeypatch.setattr(restart_module.subprocess, "Popen", FakePopen)
 
-    result = CliRunner().invoke(restart, ["--service", "code-sync"])
+    result = CliRunner().invoke(restart, ["--service", "sync-daemon"])
 
     assert result.exit_code == 0
-    assert "code-sync" in result.output
+    assert "sync-daemon" in result.output
     command = popen_calls[0][0][0][2]
-    assert "code-sync" in command
+    assert "sync-daemon" in command
     assert "sync-workers" not in command
 
 
 def test_full_restart_includes_enabled_optional_daemons_not_oneshots(monkeypatch):
-    enabled = {"code-sync", "openbase-cloud-heartbeat", "openbase-tunneld", "openbase-cloud-auth-rehydrate"}
+    enabled = {
+        "sync-daemon",
+        "openbase-cloud-heartbeat",
+        "openbase-tunneld",
+        "openbase-cloud-auth-rehydrate",
+    }
     monkeypatch.setattr(
-        restart_module, "launchctl_status",
+        restart_module,
+        "launchctl_status",
         lambda svc: {"installed": svc.name in enabled, "pid": None},
     )
     plan = build_restart_plan(RestartRequest())
-    assert {"code-sync", "openbase-cloud-heartbeat", "openbase-tunneld"} <= set(plan.services)
+    assert {"sync-daemon", "openbase-cloud-heartbeat", "openbase-tunneld"} <= set(
+        plan.services
+    )
     assert "openbase-cloud-auth-rehydrate" not in plan.services
     # An explicit target remains narrow, even with other services enabled.
-    assert build_restart_plan(RestartRequest(services=("sync-workers",))).services == ("sync-workers",)
+    assert build_restart_plan(RestartRequest(services=("sync-workers",))).services == (
+        "sync-workers",
+    )
 
 
 @pytest.mark.parametrize("standalone", [False, True])
 def test_tunneld_restart_prepares_dev_build_before_scheduling(monkeypatch, standalone):
     calls = []
-    monkeypatch.setattr(restart_module, "require_installation", lambda: InstallationConfig(standalone=standalone))
-    monkeypatch.setattr(restart_module, "install_tunneld_binary", lambda _config: calls.append("build"))
-    monkeypatch.setattr(restart_module.subprocess, "Popen", lambda *_args, **_kwargs: calls.append("schedule"))
+    monkeypatch.setattr(
+        restart_module,
+        "require_installation",
+        lambda: InstallationConfig(standalone=standalone),
+    )
+    monkeypatch.setattr(
+        restart_module, "install_tunneld_binary", lambda _config: calls.append("build")
+    )
+    monkeypatch.setattr(
+        restart_module.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: calls.append("schedule"),
+    )
     restart_module.schedule_restart(RestartRequest(services=("openbase-tunneld",)))
     assert calls == (["schedule"] if standalone else ["build", "schedule"])
 
@@ -236,7 +262,9 @@ def test_failed_tunneld_build_leaves_services_running(monkeypatch):
 
     monkeypatch.setattr(restart_module, "install_tunneld_binary", fail_build)
     monkeypatch.setattr(restart_module.subprocess, "Popen", unexpected_call)
-    monkeypatch.setattr(restart_module, "warn_before_voice_interruption", unexpected_call)
+    monkeypatch.setattr(
+        restart_module, "warn_before_voice_interruption", unexpected_call
+    )
     result = CliRunner().invoke(restart, ["--service", "openbase-tunneld"])
     assert result.exit_code != 0
     assert "restart was not scheduled" in result.output
@@ -303,14 +331,6 @@ def test_execute_recreate_dispatcher_warms_thread_after_services_start(monkeypat
         ),
     )
     monkeypatch.setattr(
-        restart_module, "launchctl_status", lambda _svc: {"installed": True}
-    )
-    monkeypatch.setattr(
-        restart_module,
-        "launchctl_bootout",
-        lambda svc: calls.append(f"stop:{svc.name}"),
-    )
-    monkeypatch.setattr(
         restart_module,
         "install_service",
         lambda _config, svc: calls.append(f"start:{svc.name}"),
@@ -341,26 +361,17 @@ def test_execute_recreate_dispatcher_warms_thread_after_services_start(monkeypat
 
     assert calls == [
         "prepare",
-        "stop:livekit-agent",
         "start:livekit-agent",
         "warm:fresh=True",
     ]
 
 
-def test_execute_restart_plan_stops_dependents_first(monkeypatch):
+def test_execute_restart_plan_restarts_providers_before_dependents(monkeypatch):
     calls = []
     monkeypatch.setattr(
         restart_module,
         "require_installation",
         lambda: InstallationConfig(workspace_path="workspace", env_file=".env"),
-    )
-    monkeypatch.setattr(
-        restart_module, "launchctl_status", lambda _svc: {"installed": True}
-    )
-    monkeypatch.setattr(
-        restart_module,
-        "launchctl_bootout",
-        lambda svc: calls.append(f"stop:{svc.name}"),
     )
     monkeypatch.setattr(
         restart_module,
@@ -378,9 +389,48 @@ def test_execute_restart_plan_stops_dependents_first(monkeypatch):
         )
     )
 
-    assert calls == [
-        "stop:livekit-agent",
-        "stop:livekit-server",
-        "start:livekit-server",
-        "start:livekit-agent",
-    ]
+    # Each install_service restarts in place and returns once the old process
+    # is gone, so the dependent attaches to the provider's new process.
+    assert calls == ["start:livekit-server", "start:livekit-agent"]
+
+
+@pytest.mark.parametrize(
+    "targets",
+    [
+        ("livekit-server", "codex-app-server", "codex-app-server-dispatcher"),
+        (
+            "livekit-agent",
+            "codex-app-server-dispatcher",
+            "codex-app-server",
+            "livekit-server",
+        ),
+        ("codex-app-server", "codex-app-server-dispatcher"),
+    ],
+)
+def test_shared_consumer_waits_for_every_selected_provider(targets):
+    plan = build_restart_plan(RestartRequest(services=targets))
+    for provider in targets:
+        if provider != "livekit-agent":
+            assert plan.services.index(provider) < plan.services.index("livekit-agent")
+    assert len(plan.services) == len(set(plan.services))
+
+
+def test_dependency_diamond_and_cycles():
+    import click
+
+    from openbase_coder_cli.services.definitions import ServiceDefinition
+    from openbase_coder_cli.services.dependencies import order_services
+
+    def service(name, *dependents):
+        return ServiceDefinition(
+            name=name,
+            description=name,
+            command_template=name,
+            workdir_template="",
+            restart_dependents=dependents,
+        )
+
+    graph = [service("consumer"), service("a", "consumer"), service("b", "consumer")]
+    assert [s.name for s in order_services(graph)] == ["a", "b", "consumer"]
+    with pytest.raises(click.ClickException, match="cycle"):
+        order_services([service("a", "b"), service("b", "a")])

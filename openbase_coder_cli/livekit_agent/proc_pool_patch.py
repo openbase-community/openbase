@@ -30,7 +30,11 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Exact livekit-agents versions whose ProcPool internals this patch matches.
-PATCHED_LIVEKIT_AGENTS_VERSIONS = frozenset({"1.5.17"})
+# 1.8.4 re-verified 2026-10-06: ``_acquire_proc(job_id)``, ``start``,
+# ``_warmed_proc_queue``, ``_executors``, ``_close_tasks`` and the
+# ``process_closed`` event are unchanged, and ``launch_job`` still hands a
+# killed executor to the job (issue 3841 is open), so the patch is still needed.
+PATCHED_LIVEKIT_AGENTS_VERSIONS = frozenset({"1.5.17", "1.8.4"})
 
 # Upper bound on corpses discarded per acquire; past it we fall back to stock
 # behavior so a pathological spawn-then-die loop cannot hang job dispatch.

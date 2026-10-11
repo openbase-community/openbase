@@ -16,6 +16,7 @@ from openbase_coder_cli.backend_config import (
     normalize_backend,
 )
 from openbase_coder_cli.local_audio import local_audio_python_error
+from openbase_coder_cli.model_catalog import CLAUDE_MODEL_OPTIONS, CODEX_MODEL_OPTIONS
 from openbase_coder_cli.paths import CODEX_DISPATCHER_CONFIG_PATH, DEFAULT_ENV_FILE_PATH
 from openbase_coder_cli.stt_providers import (
     DEFAULT_STT_PROVIDER_ID,
@@ -31,6 +32,12 @@ from openbase_coder_cli.tts_providers import (
     OPENBASE_CLOUD_TTS_PROVIDER_ID,
     get_tts_provider,
     normalize_tts_provider_id,
+)
+from openbase_coder_cli.voice_models import (
+    DEFAULT_VOICE_MODEL_ID,
+    VOICE_MODEL_ENV_KEY,
+    normalize_voice_model_id,
+    voice_engine_for_model,
 )
 
 # Bump alongside a forward-only migration; see the workspace AUTO_UPDATE.md.
@@ -58,71 +65,17 @@ AUTO_LINK_PERSONAL_SKILLS_KEY = "auto_link_personal_skills"
 BACKEND_MODELS_KEY = "backend_models"
 DISPATCHER_MODEL_ROLE = "dispatcher"
 SUPER_AGENTS_MODEL_ROLE = "super_agents"
-CLAUDE_CODE_MODEL_OPTIONS = (
-    {
-        "id": "fable",
-        "label": "Claude Fable 5",
-        "description": "Claude Code family alias for claude-fable-5.",
-    },
-    {
-        "id": "opus",
-        "label": "Claude Opus",
-        "description": "Claude Code family alias for the default Opus model.",
-    },
-    {
-        "id": "sonnet",
-        "label": "Claude Sonnet",
-        "description": "Claude Code family alias for the default Sonnet model.",
-    },
-    {
-        "id": "haiku",
-        "label": "Claude Haiku",
-        "description": "Claude Code family alias for the default Haiku model.",
-    },
+# All app surfaces consume these offerings through the catalog API. Legacy
+# model ids remain an execution-resolver concern, never extra picker options.
+CLAUDE_CODE_MODEL_OPTIONS = tuple(
+    {**option, "is_default": False} for option in reversed(CLAUDE_MODEL_OPTIONS)
 )
-# Same family aliases as the local Claude Code backend; on the Cloud backend
-# they are pinned to the proxy's public model ids before reaching the SDK.
-OPENBASE_CLOUD_CLAUDE_MODEL_OPTIONS = (
-    {
-        "id": "haiku",
-        "label": "Claude Haiku",
-        "description": "Default Claude model for Openbase Cloud.",
-        "is_default": True,
-    },
-    {
-        "id": "sonnet",
-        "label": "Claude Sonnet",
-        "description": (
-            "Claude Sonnet through Openbase Cloud. Trial accounts run Claude "
-            "Haiku instead."
-        ),
-        "is_default": False,
-    },
-    {
-        "id": "opus",
-        "label": "Claude Opus",
-        "description": "Claude Opus through the Openbase Cloud proxy.",
-        "is_default": False,
-    },
-    {
-        "id": "fable",
-        "label": "Claude Fable 5",
-        "description": "Claude Fable 5 through the Openbase Cloud proxy.",
-        "is_default": False,
-    },
-)
+OPENBASE_CLOUD_CLAUDE_MODEL_OPTIONS = CLAUDE_MODEL_OPTIONS
 BACKEND_MODEL_OPTIONS = {
     CLAUDE_CODE_BACKEND: CLAUDE_CODE_MODEL_OPTIONS,
     OPENBASE_CLOUD_BACKEND: OPENBASE_CLOUD_CLAUDE_MODEL_OPTIONS,
 }
-CLAUDE_CODE_MODEL_ALIASES = {option["id"] for option in CLAUDE_CODE_MODEL_OPTIONS}
-CODEX_MODEL_OPTIONS = (
-    {
-        "id": "gpt-5.5",
-        "label": "GPT-5.5",
-        "description": "Codex default model (speed is controlled by the service tier setting).",
-    },
-)
+CLAUDE_CODE_MODEL_ALIASES = {"fable", "opus", "sonnet", "haiku"}
 
 # Where code executes; the user-facing backend choice. Locally both engines
 # (Claude Code and Codex) are available and the MODEL picks the engine; on
@@ -134,6 +87,15 @@ CLOUD_BACKENDS = {OPENBASE_CLOUD_BACKEND, OPENBASE_CLOUD_CODEX_BACKEND}
 CLAUDE_ENGINE = "claude"
 CODEX_ENGINE = "codex"
 ROLE_MODELS_KEY = "role_models"
+# Why an engine cannot run on this install; surfaced per model option as
+# ``unavailable_reason`` and echoed back as the PUT rejection error.
+CODEX_CLOUD_UNAVAILABLE_REASON = (
+    "Codex isn't available on Openbase Cloud (Codex threads are read-only there)."
+)
+CODEX_NOT_INSTALLED_REASON = (
+    "Codex isn't set up on this install. Rerun setup with --backend codex."
+)
+CLAUDE_NOT_LOGGED_IN_REASON = "Claude Code isn't logged in. Run `claude login`."
 
 
 def model_engine(model: str | None) -> str | None:
@@ -178,26 +140,90 @@ def identity_for_model(model: str, location: str) -> str:
     return CODEX_BACKEND if engine == CODEX_ENGINE else CLAUDE_CODE_BACKEND
 
 
+def engine_unavailable_reason(engine: str, location: str) -> str | None:
+    """Why `engine` cannot run on this install at `location`, or None if it can.
+
+    Codex needs the Codex app-server services, which setup only installs for
+    a Codex backend (the same backend gating ``services status`` and the
+    doctor report as "not used"); on Openbase Cloud it is read-only. Claude
+    Code runs on the user's own Claude login locally (the check the doctor
+    and backend settings use) and through the Openbase Cloud proxy on cloud.
+    """
+    if engine == CODEX_ENGINE:
+        if location == LOCATION_CLOUD:
+            return CODEX_CLOUD_UNAVAILABLE_REASON
+        from openbase_coder_cli.services.definitions import SERVICES
+        from openbase_coder_cli.services.selection import (
+            service_supports_configured_backends,
+        )
+
+        codex_app_server = next(
+            (svc for svc in SERVICES if svc.name == "codex-app-server"), None
+        )
+        if codex_app_server is not None and not service_supports_configured_backends(
+            codex_app_server
+        ):
+            return CODEX_NOT_INSTALLED_REASON
+        return None
+    if engine == CLAUDE_ENGINE:
+        if location == LOCATION_CLOUD:
+            return None
+        from openbase_coder_cli.claude_auth import claude_auth_status
+
+        # Fail open: only a definite "not logged in" answer from the CLI
+        # marks Claude unavailable. A missing binary on the service's PATH,
+        # a timeout, or any probe error must not block picking Claude
+        # models on an install that otherwise works.
+        try:
+            auth = claude_auth_status(timeout=5)
+        except Exception:
+            return None
+        if auth.returncode == 0 and not auth.logged_in:
+            return CLAUDE_NOT_LOGGED_IN_REASON
+        return None
+    return None
+
+
 def combined_model_options(location: str) -> tuple[dict[str, Any], ...]:
     """Every selectable model across both engines, engine-labeled.
 
     On Openbase Cloud, Codex models are listed but unavailable (Codex threads
-    are read-only there; only Claude Code executes).
+    are read-only there; only Claude Code executes). Locally an engine is
+    unavailable when it cannot run on this install (see
+    :func:`engine_unavailable_reason`); the option then carries
+    ``unavailable_reason`` so the UI can say why. The currently configured
+    model is returned separately; retired models never become picker options.
     """
     claude_options = (
         OPENBASE_CLOUD_CLAUDE_MODEL_OPTIONS
         if location == LOCATION_CLOUD
         else CLAUDE_CODE_MODEL_OPTIONS
     )
+    claude_reason = engine_unavailable_reason(CLAUDE_ENGINE, location)
+    codex_reason = engine_unavailable_reason(CODEX_ENGINE, location)
+    cloud_reasons = {}
+    if location == LOCATION_CLOUD:
+        from openbase_coder_cli.cloud_models import cloud_model_availability
+
+        cloud_reasons = cloud_model_availability()
     combined: list[dict[str, Any]] = []
     for option in claude_options:
-        combined.append({**option, "engine": CLAUDE_ENGINE, "available": True})
+        reason = claude_reason or cloud_reasons.get(option["id"])
+        combined.append(
+            {
+                **option,
+                "engine": CLAUDE_ENGINE,
+                "available": reason is None,
+                "unavailable_reason": reason,
+            }
+        )
     for option in CODEX_MODEL_OPTIONS:
         combined.append(
             {
                 **option,
                 "engine": CODEX_ENGINE,
-                "available": location != LOCATION_CLOUD,
+                "available": codex_reason is None,
+                "unavailable_reason": codex_reason,
             }
         )
     return tuple(combined)
@@ -209,8 +235,13 @@ def is_known_combined_model(model: str, location: str) -> bool:
         normalized == option["id"].lower() and option["available"]
         for option in combined_model_options(location)
     )
+
+
 TTS_PROVIDER_KEY = "tts_provider"
 STT_PROVIDER_KEY = "stt_provider"
+# Which model renders the voice side of a call (see voice_models.py). The
+# default is GPT-Live; "pipeline" keeps the STT/TTS provider settings in play.
+VOICE_MODEL_KEY = "voice_model"
 DISPATCHER_VOICE_ID_KEY = "dispatcher_voice_id"
 DISPATCHER_VOICE_NAME_KEY = "dispatcher_voice_name"
 DEFAULT_DISPATCHER_VOICE_ID = DEFAULT_CARTESIA_VOICE_ID
@@ -455,6 +486,44 @@ def selected_stt_provider_id(path: Path | None = None) -> str:
         except ValueError:
             return DEFAULT_STT_PROVIDER_ID
     return DEFAULT_STT_PROVIDER_ID
+
+
+def selected_voice_model_id(path: Path | None = None) -> str:
+    """The configured voice model id, falling back to the env override, then
+    the default (GPT-Live). Unknown values fall back to the default rather
+    than failing a call."""
+    payload = read_dispatcher_config(path)
+    for candidate in (
+        _optional_str(payload.get(VOICE_MODEL_KEY)),
+        _optional_str(os.getenv(VOICE_MODEL_ENV_KEY)),
+    ):
+        if candidate:
+            try:
+                return normalize_voice_model_id(candidate)
+            except ValueError:
+                return DEFAULT_VOICE_MODEL_ID
+    return DEFAULT_VOICE_MODEL_ID
+
+
+def selected_voice_engine(path: Path | None = None) -> str:
+    """``live`` or ``pipeline``, derived from the selected voice model."""
+    return voice_engine_for_model(selected_voice_model_id(path))
+
+
+def set_voice_model(model_id: str, path: Path | None = None) -> dict[str, str]:
+    normalized_model_id = normalize_voice_model_id(model_id)
+    config_path = path or CODEX_DISPATCHER_CONFIG_PATH
+    _write_dispatcher_config(
+        {
+            **read_dispatcher_config(config_path),
+            VOICE_MODEL_KEY: normalized_model_id,
+        },
+        config_path,
+    )
+    return {
+        "model": normalized_model_id,
+        "engine": voice_engine_for_model(normalized_model_id),
+    }
 
 
 def set_stt_provider(provider_id: str, path: Path | None = None) -> dict[str, str]:

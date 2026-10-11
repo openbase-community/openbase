@@ -61,10 +61,41 @@ def _voice_prompt_transcript(prompt: str) -> str:
     return prompt.strip()
 
 
+# A steer lands inside work the agent is already doing. Say so, and leave
+# stopping, changing course or carrying on to the agent's own judgment (Gabe,
+# 2026-10-11: no keyword matching of "stop"; the agent decides). Thread views
+# strip it like every Openbase system note.
+LIVE_STEER_NOTE = (
+    "[Openbase system note: the caller said this while you were still working "
+    "on their current request. Decide yourself whether to stop, change course "
+    "or continue.]"
+)
+
+
+def frame_steer(prompt: str) -> str:
+    """``prompt`` with the mid-turn note in front (once)."""
+    if prompt.startswith(LIVE_STEER_NOTE):
+        return prompt
+    return f"{LIVE_STEER_NOTE}\n\n{prompt}"
+
+
 def _wrap_transcript(transcript: str) -> str:
     # The transcript came out of an already-wrapped prompt, so it is already
     # HTML-escaped; wrap_voice_prompt would double-escape entities.
     return f"{VOICE_TAG_OPEN}{transcript}{VOICE_TAG_CLOSE}"
+
+
+def _ensure_not_moved(thread_id: str) -> None:
+    """Voice turns must not run on a thread pushed to another computer."""
+    from openbase_coder_cli.thread_sync.thread_moves import (
+        ThreadMovedError,
+        ensure_thread_writable,
+    )
+
+    try:
+        ensure_thread_writable(thread_id)
+    except ThreadMovedError as exc:
+        raise RuntimeError(str(exc)) from exc
 
 
 class SuperAgentsClientTurnsMixin:
@@ -181,6 +212,7 @@ class SuperAgentsClientTurnsMixin:
         developer_instructions: str | None,
         dispatch_id: str,
     ) -> str:
+        _ensure_not_moved(thread_id)
         await self._ensure_claude_auth_ready()
         turn_input = self._turn_input(
             prompt,
@@ -194,6 +226,7 @@ class SuperAgentsClientTurnsMixin:
         ):
             previous_turn_id = await self._latest_real_turn_id(thread_id)
 
+        _ensure_not_moved(thread_id)
         if self._backend_is_codex() and hasattr(self._backend_client, "start_turn"):
             result = await self._backend_client.start_turn(
                 {"threadId": thread_id, **turn_input}
@@ -244,6 +277,24 @@ class SuperAgentsClientTurnsMixin:
         )
         return turn_id
 
+    def _turn_model_fields(self) -> dict[str, Any]:
+        """The model, reasoning effort and service tier every turn is run with.
+
+        Shared with the session warm-up so the backend client it connects
+        matches the first turn and is reused instead of replaced.
+        """
+        fields: dict[str, Any] = {}
+        if self._backend_is_codex():
+            # Service tiers are Codex-only; on Claude a tier would be remapped
+            # to a reasoning-effort downgrade, so never forward it.
+            fields["serviceTier"] = self._service_tier
+            fields["model"] = self._model_name
+        elif self._model_name:
+            fields["model"] = self._model_name
+        if reasoning_effort := self._configured_reasoning_effort():
+            fields["reasoningEffort"] = reasoning_effort
+        return fields
+
     def _turn_input(
         self,
         prompt: str,
@@ -251,7 +302,6 @@ class SuperAgentsClientTurnsMixin:
         developer_instructions: str | None,
         dispatch_id: str,
     ) -> dict[str, Any]:
-        reasoning_effort = self._configured_reasoning_effort()
         turn_input: dict[str, Any] = {
             "prompt": prompt,
             "cwd": self._cwd,
@@ -260,16 +310,8 @@ class SuperAgentsClientTurnsMixin:
             "approvalPolicy": self._approval_policy,
             "sandbox": self._sandbox,
             "_mcpCallId": dispatch_id,
+            **self._turn_model_fields(),
         }
-        if self._backend_is_codex():
-            # Service tiers are Codex-only; on Claude a tier would be remapped
-            # to a reasoning-effort downgrade, so never forward it.
-            turn_input["serviceTier"] = self._service_tier
-            turn_input["model"] = self._model_name
-        elif self._model_name:
-            turn_input["model"] = self._model_name
-        if reasoning_effort:
-            turn_input["reasoningEffort"] = reasoning_effort
         if effective_developer_instructions := self._turn_developer_instructions(
             developer_instructions
         ):
@@ -397,8 +439,18 @@ class SuperAgentsClientTurnsMixin:
         prompt: str,
         *,
         start_when_inactive: bool = True,
+        interrupt_current_work: bool = False,
     ) -> str | None:
+        """Steer the active turn with ``prompt``.
+
+        ``interrupt_current_work`` asks a Claude-compatible backend to stop
+        the turn's running work before applying the prompt, which then
+        replaces that work rather than following it (``run_turn``'s
+        ``replaces_active_turn``). Codex steers mid-turn natively and ignores
+        the flag.
+        """
         assert self._active_turn_id is not None
+        _ensure_not_moved(thread_id)
         await self._ensure_claude_auth_ready()
         prompt_debug = _prompt_debug_fields(prompt)
         turn_input = {
@@ -406,15 +458,63 @@ class SuperAgentsClientTurnsMixin:
             for key, value in {
                 "model": self._model_name,
                 "reasoningEffort": self._configured_reasoning_effort(),
+                "interruptCurrentWork": True if interrupt_current_work else None,
             }.items()
             if value is not None
         }
+        active_turn_id = self._active_turn_id
         try:
             result = await self._backend_client.steer_by_label(
-                self._query(thread_id=thread_id, turn_id=self._active_turn_id),
-                prompt,
+                self._query(thread_id=thread_id, turn_id=active_turn_id),
+                frame_steer(prompt),
                 turn_input,
             )
+        except TimeoutError:
+            # The app-server is too busy to accept the steer right now
+            # (2026-09-18: turn/steer timed out for every mid-churn utterance
+            # and the transcripts were silently dropped). Capture the input
+            # in the local follow-up queue instead of losing it; the queue
+            # drains as soon as the active turn finishes.
+            if interrupt_current_work and active_turn_id:
+                await self._cancel_turn_before_queueing(thread_id, active_turn_id)
+                return await self._queue_rejected_steer(
+                    thread_id, prompt, blocked_by_turn_id=active_turn_id
+                )
+            try:
+                _ensure_not_moved(thread_id)
+                queued = await self._backend_client.queue_turn_by_label(
+                    self._query(thread_id=thread_id),
+                    self._turn_input(
+                        prompt,
+                        developer_instructions=None,
+                        dispatch_id=f"voice-{uuid.uuid4().hex[:12]}",
+                    ),
+                )
+            except Exception:
+                logger.error(
+                    "%s stage=steer_timeout_input_lost thread_id=%s turn_id=%s "
+                    "prompt_hash=%s",
+                    DISPATCH_TIMING_LOG,
+                    thread_id,
+                    active_turn_id,
+                    prompt_debug["hash"],
+                    exc_info=True,
+                )
+                raise
+            logger.warning(
+                "%s stage=steer_timeout_queued_follow_up thread_id=%s turn_id=%s "
+                "queued_id=%s prompt_hash=%s",
+                DISPATCH_TIMING_LOG,
+                thread_id,
+                active_turn_id,
+                _extract_queued_id(queued)
+                if _response_is_queued(queued)
+                else _extract_turn_id(queued),
+                prompt_debug["hash"],
+            )
+            if active_turn_id:
+                self._record_turn_prompt(active_turn_id, prompt_debug["hash"], prompt)
+            return active_turn_id
         except RuntimeError as exc:
             actual_turn_id = _active_turn_id_mismatch(exc)
             if actual_turn_id:
@@ -426,9 +526,10 @@ class SuperAgentsClientTurnsMixin:
                     prompt_debug["hash"],
                 )
                 self._active_turn_id = actual_turn_id
+                active_turn_id = actual_turn_id
                 result = await self._backend_client.steer_by_label(
                     self._query(thread_id=thread_id, turn_id=actual_turn_id),
-                    prompt,
+                    frame_steer(prompt),
                     turn_input,
                 )
             elif _is_turn_cannot_accept_steering_error(exc):
@@ -440,10 +541,12 @@ class SuperAgentsClientTurnsMixin:
                 )
                 if not start_when_inactive:
                     return None
+                if interrupt_current_work:
+                    await self._cancel_turn_before_queueing(thread_id, active_turn_id)
                 return await self._queue_rejected_steer(
                     thread_id,
                     prompt,
-                    blocked_by_turn_id=self._active_turn_id,
+                    blocked_by_turn_id=active_turn_id,
                 )
             elif _is_no_active_turn_error(exc):
                 logger.info(
@@ -468,6 +571,14 @@ class SuperAgentsClientTurnsMixin:
                 return turn_id
             else:
                 raise
+        if interrupt_current_work and _response_is_queued(result):
+            await self._cancel_turn_before_queueing(thread_id, active_turn_id)
+            return await self._wait_for_queued_turn_to_start(
+                thread_id,
+                queued_id=_extract_queued_id(result),
+                blocked_by_turn_id=active_turn_id,
+                dispatch_id=f"voice-{uuid.uuid4().hex[:12]}",
+            )
         turn_id = _extract_turn_id(result) or self._active_turn_id
         self._active_turn_id = turn_id
         self._active_turn_prompt_hash = prompt_debug["hash"]
@@ -479,6 +590,18 @@ class SuperAgentsClientTurnsMixin:
             prompt_debug["length"],
         )
         return turn_id
+
+    async def _cancel_turn_before_queueing(self, thread_id: str, turn_id: str) -> None:
+        """Stop a fragment turn before waiting for its queued replacement."""
+        await self._backend_client.cancel_by_label(
+            self._query(thread_id=thread_id, turn_id=turn_id)
+        )
+        logger.info(
+            "%s stage=steer_timeout_cancelled_replaced_turn thread_id=%s turn_id=%s",
+            DISPATCH_TIMING_LOG,
+            thread_id,
+            turn_id,
+        )
 
     async def _wait_for_turn(self, thread_id: str, turn_id: str) -> dict[str, Any]:
         wait_task = self._active_turn_wait_task
@@ -505,6 +628,38 @@ class SuperAgentsClientTurnsMixin:
         handler: Callable[["SuperAgentsLiveKitClient", str, str], None] | None,
     ) -> None:
         self._on_orphaned_result = handler
+
+    def add_turn_progress_listener(
+        self,
+        listener: Callable[["SuperAgentsLiveKitClient", str, dict[str, Any]], None],
+    ) -> None:
+        """Observe every progress snapshot the turn wait loop fetches.
+
+        Called as ``listener(client, turn_id, progress)`` from the poll loop
+        while a turn is being waited on, before the snapshot is judged final.
+        Listeners must not block; exceptions are logged and swallowed so an
+        observer can never break the wait. The live voice bridge uses this to
+        stream speakable text as commentary while the thread is still working.
+        """
+        self._turn_progress_listeners.append(listener)
+
+    def remove_turn_progress_listener(self, listener) -> None:
+        try:
+            self._turn_progress_listeners.remove(listener)
+        except ValueError:
+            pass
+
+    def _notify_turn_progress(self, turn_id: str, progress: dict[str, Any]) -> None:
+        for listener in tuple(self._turn_progress_listeners):
+            try:
+                listener(self, turn_id, progress)
+            except Exception:
+                logger.warning(
+                    "%s stage=turn_progress_listener_failed turn_id=%s",
+                    DISPATCH_TIMING_LOG,
+                    turn_id,
+                    exc_info=True,
+                )
 
     @property
     def orphaned_result_handler(

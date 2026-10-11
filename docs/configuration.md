@@ -36,7 +36,7 @@ such as backend host and call audio. This page is the underlying reference.
 
 ## Conversation Profiles
 
-Setup installs Openbase profiles for both Codex and Claude Code. Normal terminal sessions retain their own model, reasoning, permissions, hooks, and MCP settings. Openbase may add shared skills, but setup does not create or replace the user's `AGENTS.md` or `CLAUDE.md` instructions.
+Setup installs Openbase profiles for both Codex and Claude Code. Normal terminal sessions retain their own model, reasoning, permissions, hooks, and MCP settings. Openbase may add shared skills and, by default, registers the Super Agents MCP server in the default Codex and Claude Code configurations so plain terminal sessions can dispatch Super Agents (pass `--no-shared-super-agents-mcp` to `setup` or `profiles install` to opt out; an existing entry of your own is never replaced). Setup does not create or replace the user's `AGENTS.md` or `CLAUDE.md` instructions.
 
 Codex's `openbase.config.toml` is also usable with `codex -p openbase`. Codex does not accept `--profile` on `app-server`, so Openbase loads the same TOML file through `thread/start` and `thread/resume` configuration overrides. The shared daemon receives no global model, provider, reasoning, or service-tier overrides, including for the internal Cloud Codex backend. Role-specific model and reasoning choices are applied to the relevant conversation.
 
@@ -57,9 +57,12 @@ Useful keys:
 | --- | --- |
 | `dispatcher_reasoning_effort` | Default dispatcher reasoning effort |
 | `super_agents_reasoning_effort` | Default Super Agents reasoning effort |
-| `backend_models` | Backend-specific default dispatcher and default Super Agents models for `codex`, `openbase_cloud`, and `claude_code` |
+| `backend_models` | Backend-specific default dispatcher and default Super Agents models for `codex`, `openbase_cloud`, and `claude_code`. The picker offers the latest Terra, Luna, Sol, and Astra; legacy model IDs remain valid in stored configuration |
+| `voice_model` | The model that listens and speaks on voice calls: `gpt-live-1` (default, GPT-Live full duplex through Openbase Cloud with your Openbase account) or `pipeline` (the classic speech-to-text, agent turn, text-to-speech path that uses the `stt_provider` and `tts_provider` settings) |
 
-Fresh Openbase Cloud installs write `haiku` for both roles, so the stored configuration, Settings UI, and model actually requested by the runtime agree. The Cloud proxy continues to route older trial configurations that explicitly contain `sonnet` to Haiku for compatibility.
+Fresh Openbase Cloud installs write `haiku` for both roles, so the stored configuration, Settings UI, and model actually requested by the runtime agree. The catalog disables models that a free or trial account cannot run as named, including Sonnet, with the reason “Requires a paid plan.” The Cloud proxy continues to route older trial configurations that explicitly contain `sonnet` to Haiku for compatibility.
+
+The voice model is picked like the agent model: one selectable id whose engine follows from it. `openbase-coder defaults voice-model [MODEL]` shows or sets this key (see [defaults](commands/defaults.md)), as does the **Voice Model** setting in the desktop app, console, and the iOS and Android apps. A change applies to the next voice call; no restart is needed. `LIVEKIT_VOICE_MODEL` in the environment acts as a fallback when the key is absent.
 
 ## Agent/Voice Variables
 
@@ -68,12 +71,15 @@ Fresh Openbase Cloud installs write `haiku` for both roles, so the stored config
 | `LIVEKIT_API_KEY`          | Yes      | LiveKit server auth          |
 | `LIVEKIT_API_SECRET`       | Yes      | LiveKit server auth          |
 | `LIVEKIT_URL`              | Yes      | LiveKit websocket URL        |
+| `LIVEKIT_AGENT_LOAD_THRESHOLD` | Optional | Worker load cutoff; defaults to `inf` (no load-based rejection). Set a positive finite value to enable load shedding. Requires restarting the voice service. |
 | `CODEX_APP_SERVER_URL`     | Yes      | Codex app-server endpoint (`unix://` by default on macOS/Linux; WebSocket compatibility URL on Windows or explicit deployments) |
 | `LIVEKIT_CODEX_THREAD_CWD` | Yes      | Shared Codex thread working directory |
 | `ASSEMBLY_AI_API_KEY`      | Optional | Speech-to-text provider      |
 | `CARTESIA_API_KEY`         | Optional | Text-to-speech provider      |
 | `CARTESIA_VOICE_ID`        | Optional | Text-to-speech voice ID      |
 | `OPENBASE_CODER_TTS_REPLACEMENTS_PATH` | Optional | Override the editable TTS replacements file path |
+
+The voice worker on your computer or Cloud DevSpace accepts calls even when CPU load is high, for both GPT-Live and pipeline voice. This prevents load-based rejection from leaving your phone waiting for an agent; it does not guarantee audio quality on an overloaded machine. Deployments that intentionally share a worker can set `LIVEKIT_AGENT_LOAD_THRESHOLD` explicitly to limit load.
 
 ## TTS Replacements
 

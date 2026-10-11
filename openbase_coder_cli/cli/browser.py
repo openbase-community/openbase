@@ -1,0 +1,370 @@
+"""``openbase-coder browser``: open web pages on the user's phone.
+
+``browser open`` doubles as a ``BROWSER`` / ``GH_BROWSER`` handler in cloud
+workspaces, where no local browser exists: CLIs that "open a browser" for a
+login hand their URL to it, and it forwards the URL to the Openbase app on the
+user's phone. As a handler it must never block or fail the calling CLI, so
+any delivery problem degrades to printing the URL with paste-back guidance.
+
+Delivery order: the app-control socket (the phone app is in front and has
+this computer selected), then an Openbase Cloud push (the app is elsewhere,
+backgrounded or closed; the user taps the notification), then the printed
+URL with paste-back guidance.
+
+When the login URL's ``redirect_uri`` points at ``localhost:<port>`` and this
+host runs the embedded tailnet node (cloud workspaces), the command also
+exposes that port on the tailnet for the duration of the login and asks the
+phone to forward its own loopback port there, so the provider's redirect
+reaches the CLI unchanged.
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import replace
+from urllib.parse import urlsplit
+
+import click
+
+from openbase_coder_cli.cli.app_control import publish_open_url
+from openbase_coder_cli.login_callback import (
+    DEFAULT_FORWARD_TTL_SECONDS,
+    LoopbackForward,
+    is_tailnet_forward_target,
+    loopback_callback_port,
+    relay_capability,
+)
+from openbase_coder_cli.open_url_policy import normalize_open_url, open_url_error
+from openbase_coder_cli.web_redirect_hold import record_web_redirect
+
+logger = logging.getLogger(__name__)
+
+OPENED_MESSAGE = "Sent to the Openbase app on your phone."
+PUSHED_MESSAGE = "Sent a notification to your phone; tap it to open the page."
+BROWSER_DELIVERY_TIMEOUT_SECONDS = 6.0
+NOT_DELIVERED_HINT = (
+    "Could not reach the Openbase app on your phone. Open this URL on any "
+    "device; if the login ends on a localhost page that fails to load, paste "
+    "that final address back here."
+)
+PUSH_TITLE = "Open a link from your workspace"
+
+
+@click.group()
+def browser() -> None:
+    """Open web pages on your phone (usable as a BROWSER handler)."""
+
+
+@browser.command("open")
+@click.argument("url")
+@click.option(
+    "--no-forward",
+    is_flag=True,
+    help=(
+        "Do not expose a localhost login callback port to the phone, even "
+        "when the URL's redirect_uri names one."
+    ),
+)
+@click.option(
+    "--callback-port",
+    type=click.IntRange(1024, 65535),
+    default=None,
+    help=(
+        "Loopback port the login will redirect to, when it cannot be read "
+        "from the URL's redirect_uri."
+    ),
+)
+@click.option(
+    "--no-push",
+    is_flag=True,
+    help="Do not fall back to an Openbase Cloud push notification.",
+)
+def browser_open(
+    url: str, no_forward: bool, callback_port: int | None, no_push: bool
+) -> None:
+    """Open URL on your phone through the Openbase app.
+
+    Always prints URL first, so it stays visible when the phone cannot be
+    reached. Exits 0 unless URL itself is rejected (no scheme, or a data:,
+    file: or javascript: URL).
+    """
+    error = open_url_error(url)
+    if error:
+        raise click.BadParameter(error, param_hint="URL")
+    url = normalize_open_url(url)
+    click.echo(url)
+
+    forward: LoopbackForward | None = None
+    if not no_forward:
+        port = callback_port or loopback_callback_port(url)
+        if port is not None:
+            forward = _arrange_forward(port)
+            if forward is None:
+                click.echo(
+                    f"Could not expose localhost:{port} for this login; "
+                    "paste the final localhost address back here instead."
+                )
+
+    receipt = _deliver(url, forward)
+    if receipt:
+        _record_redirect()
+        click.echo(OPENED_MESSAGE)
+        if forward is not None:
+            click.echo(_forward_note(receipt))
+    elif not no_push and _push(url, forward):
+        _record_redirect()
+        click.echo(PUSHED_MESSAGE)
+    else:
+        click.echo(NOT_DELIVERED_HINT)
+    if forward is not None:
+        click.echo(
+            f"Workspace callback localhost:{forward.port} is exposed on the VPN "
+            f"for up to {forward.ttl_seconds // 60} minutes. If your phone cannot "
+            "forward it, paste the final localhost address back here."
+        )
+
+
+def _record_redirect() -> None:
+    """Hold completion banners while the user is on the page (best effort)."""
+    try:
+        record_web_redirect()
+    except OSError:
+        pass
+
+
+def _arrange_forward(port: int) -> LoopbackForward | None:
+    return _bounded_attempt(lambda: _try_arrange_forward(port))
+
+
+def _try_arrange_forward(port: int) -> LoopbackForward | None:
+    """Expose ``port`` on this node's tailnet for the login, if possible.
+
+    Cloud workspaces (embedded node) expose the relay through an
+    openbase-tunneld forward; desktop and VM backends on a host VPN (Openbase
+    VPN or Tailscale) have the relay listen on their own VPN address. When
+    neither applies, the printed paste-back guidance is the fallback. Any
+    failure is reported on stdout and never aborts the calling CLI.
+    """
+    from openbase_coder_cli.callback_relay import start_relay
+    from openbase_coder_cli.services import tailscale_provider
+
+    if tailscale_provider.is_netmesh_tsnet():
+        from openbase_coder_cli.services.tunneld import tunneld_status
+
+        target = _self_tailnet_target(tunneld_status)
+        bind_host = None
+    else:
+        target = _self_tailnet_target(_host_vpn_status)
+        bind_host = target
+    if target is None:
+        return None
+    forward = LoopbackForward.create(port, target)
+    expires_at = int(time.time()) + DEFAULT_FORWARD_TTL_SECONDS
+    relay_port = start_relay(
+        port,
+        forward.token,
+        DEFAULT_FORWARD_TTL_SECONDS,
+        expires_at=expires_at,
+        bind_host=bind_host,
+    )
+    return replace(
+        forward,
+        relay_port=relay_port,
+        expires_at=expires_at,
+        token=relay_capability(relay_port, expires_at, forward.token),
+    )
+
+
+# Openbase VPN device names; the computer's local API answers on these.
+OPENBASE_DEVICE_ZONES = (".net.obs.so", ".net-staging.obs.so")
+
+
+def self_vpn_hostname() -> str | None:
+    """This computer's Openbase VPN device name, where its local API answers.
+
+    The API (:18080) is a VPN serve route keyed by this name, not a port on
+    the raw VPN address, so a phone must reach it by name.
+    """
+    from openbase_coder_cli.services import tailscale_provider
+
+    if tailscale_provider.is_netmesh_tsnet():
+        from openbase_coder_cli.services.tunneld import tunneld_status
+
+        _available, payload, _error = tunneld_status()
+    else:
+        _available, payload, _error = _host_vpn_status()
+    self_info = payload.get("Self") if isinstance(payload, dict) else None
+    name = str((self_info or {}).get("DNSName") or "").strip().rstrip(".").lower()
+    if name and name.endswith(OPENBASE_DEVICE_ZONES):
+        return name
+    return None
+
+
+def self_vpn_address() -> str | None:
+    """This computer's own Openbase VPN address (cloud workspace or host VPN)."""
+    from openbase_coder_cli.services import tailscale_provider
+
+    if tailscale_provider.is_netmesh_tsnet():
+        from openbase_coder_cli.services.tunneld import tunneld_status
+
+        return _self_tailnet_target(tunneld_status)
+    return _self_tailnet_target(_host_vpn_status)
+
+
+def _host_vpn_status() -> tuple[bool, dict | None, str | None]:
+    """The host VPN's status in tunneld_status's (available, payload, error) shape."""
+    from openbase_coder_cli.services import tailscale_provider
+
+    payload = tailscale_provider.status_json()
+    if payload.get("error") or payload.get("BackendState") not in (None, "Running"):
+        return False, None, str(payload.get("error") or "VPN is not running")
+    return True, payload, None
+
+
+def _self_tailnet_target(status_fn) -> str | None:
+    """A literal VPN address, without resolving sender-controlled DNS names."""
+    _available, payload, _error = status_fn()
+    self_info = payload.get("Self") if isinstance(payload, dict) else None
+    if isinstance(self_info, dict):
+        for raw in self_info.get("TailscaleIPs") or []:
+            if isinstance(raw, str) and is_tailnet_forward_target(raw):
+                return raw
+    return None
+
+
+# A forwarded open waits longer: the phone binds its loopback listener and
+# health-checks the relay (up to four seconds) before it answers, and giving
+# up early sends the push fallback too, so the user gets the page twice.
+FORWARDED_DELIVERY_TIMEOUT_SECONDS = 12
+
+
+def _deliver(url: str, forward: LoopbackForward | None) -> dict | None:
+    """The phone's receipt when it acknowledged delivery, else None; bounded
+    even if authentication or the server stalls."""
+    if forward is None:
+        return _bounded_attempt(lambda: _try_deliver(url, forward))
+    return _bounded_attempt(
+        lambda: _try_deliver(url, forward),
+        timeout=FORWARDED_DELIVERY_TIMEOUT_SECONDS,
+    )
+
+
+def _forward_note(receipt: dict) -> str:
+    """What the phone said about the loopback forward it was asked to run."""
+    status = receipt.get("forward")
+    if status == "started":
+        return "Your phone is forwarding the login callback to this workspace."
+    if status == "vpn_down":
+        return (
+            "Your phone's Openbase VPN is off, so it cannot forward the callback; "
+            "turn it on and retry, or paste the final localhost address back here."
+        )
+    if status in {"failed", "unsupported"}:
+        reason = receipt.get("forward_error") or status
+        return (
+            f"Your phone could not forward the callback ({reason}); paste the "
+            "final localhost address back here instead."
+        )
+    return (
+        "Your phone did not confirm callback forwarding; paste the final localhost "
+        "address back here if the login ends on a localhost page."
+    )
+
+
+def _bounded_attempt[Result](
+    operation: Callable[[], Result], *, timeout: float | None = None
+) -> Result | None:
+    results = []
+
+    def attempt() -> None:
+        try:
+            results.append(operation())
+        except Exception as exc:
+            logger.info(
+                "browser open: delivery step unavailable (%s)", type(exc).__name__
+            )
+
+    worker = threading.Thread(target=attempt, daemon=True)
+    worker.start()
+    worker.join(BROWSER_DELIVERY_TIMEOUT_SECONDS if timeout is None else timeout)
+    return results[0] if results else None
+
+
+def _try_deliver(url: str, forward: LoopbackForward | None) -> dict | None:
+    """The phone app's receipt when it acknowledged; any failure means None."""
+    try:
+        data = publish_open_url(
+            url,
+            loopback_forward=forward.as_app_control() if forward else None,
+            timeout=FORWARDED_DELIVERY_TIMEOUT_SECONDS if forward else 10,
+        )
+    except (click.ClickException, OSError, ValueError):
+        # Server unreachable, rejected, or answered garbage: the printed URL
+        # and hint are the fallback, and the calling CLI must keep going.
+        return None
+    if (
+        isinstance(data, dict)
+        and data.get("delivered") is True
+        and (data.get("opened") is not False or data.get("notified") is True)
+    ):
+        return data
+    return None
+
+
+def _push(url: str, forward: LoopbackForward | None) -> bool:
+    """Ask Openbase Cloud to notify the phone; False on any failure or when
+    the user has no phone registered for notifications."""
+    user_info = {"openbase_destination": "open_url", "url": url}
+    if forward is not None:
+        user_info.update(forward.as_push_user_info())
+    host = urlsplit(url).hostname or url
+
+    def attempt() -> bool:
+        from openbase_coder_cli.config.cloud_notifications import send_notification_push
+
+        device_count = send_notification_push(
+            title=PUSH_TITLE, body=f"Tap to open {host}", user_info=user_info
+        )
+        # No registered phone means nothing will arrive; an older cloud
+        # (None) does not say, so its acceptance still counts.
+        return device_count != 0
+
+    return bool(_bounded_attempt(attempt, timeout=BROWSER_DELIVERY_TIMEOUT_SECONDS * 3))
+
+
+@browser.command("replay")
+@click.argument("url")
+def browser_replay(url: str) -> None:
+    """Replay a login callback the phone pasted back, against this host.
+
+    URL is the http://localhost:<port>/... address the phone's browser ended
+    on. The same request is made here so the waiting CLI receives it. Only
+    loopback addresses are accepted; the single-use code in URL is not
+    printed or logged.
+    """
+    # Plain module on purpose: this command runs from any terminal, where no
+    # Django settings exist, so it must not import the local API view.
+    from openbase_coder_cli.login_callback import replay_loopback_callback
+
+    try:
+        result = replay_loopback_callback(url)
+    except ValueError:
+        raise click.BadParameter(
+            "expected http://localhost:<port>/... (or 127.0.0.1 / [::1]) with a "
+            "port of 1024 or higher",
+            param_hint="URL",
+        ) from None
+    if result["ok"]:
+        click.echo(
+            f"Replayed the callback to localhost:{result['port']} "
+            f"(HTTP {result['status_code']}); the login should now complete."
+        )
+        return
+    detail = result.get("error") or f"HTTP {result.get('status_code')}"
+    raise click.ClickException(
+        f"The callback was not accepted on localhost:{result['port']}: {detail}. "
+        "Is the login still waiting? Codes expire within minutes."
+    )

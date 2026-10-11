@@ -13,13 +13,14 @@ import click
 
 from openbase_coder_cli.livekit_install import ensure_pinned_livekit_server
 from openbase_coder_cli.services.definitions import SERVICES
-from openbase_coder_cli.services.launchd import (
-    install_service,
-    launchctl_bootout,
-    launchctl_status,
-)
+from openbase_coder_cli.services.dependencies import order_services
+from openbase_coder_cli.services.launchd import install_service, launchctl_status
+from openbase_coder_cli.services.mutation_lock import service_mutation
 from openbase_coder_cli.services.registry import find_service, require_installation
-from openbase_coder_cli.services.selection import configured_default_services
+from openbase_coder_cli.services.selection import (
+    configured_default_services,
+    include_installed_optional_services,
+)
 from openbase_coder_cli.services.tunneld import install_tunneld_binary
 from openbase_coder_cli.services.voice_warning import (
     any_service_action_interrupts_voice,
@@ -51,22 +52,16 @@ def restart_target_names() -> list[str]:
 
 def build_restart_plan(request: RestartRequest) -> RestartPlan:
     service_names = [service.name for service in SERVICES]
-    default_service_names = [service.name for service in configured_default_services()]
     valid_targets = set(service_names)
 
     requested_targets = list(request.services)
     if not requested_targets:
-        requested_targets = default_service_names
-        # Optional daemons can already be enabled on this installation. A full
-        # restart must refresh those too, without enabling unused features or
-        # replaying completed one-shot provisioning/auth jobs.
-        for service in SERVICES:
-            if (
-                service.name not in requested_targets
-                and service.service_type != "oneshot"
-                and launchctl_status(service).get("installed")
-            ):
-                requested_targets.append(service.name)
+        requested_targets = [
+            service.name
+            for service in include_installed_optional_services(
+                configured_default_services(), launchctl_status
+            )
+        ]
     unknown = [target for target in requested_targets if target not in valid_targets]
     if unknown:
         valid = ", ".join(restart_target_names())
@@ -131,37 +126,33 @@ def schedule_restart(
 
 
 def execute_restart_plan(plan: RestartPlan) -> None:
-    config = require_installation()
-
     if plan.delay_seconds > 0:
         time.sleep(plan.delay_seconds)
+    with service_mutation():
+        config = require_installation()
 
-    if plan.recreate_dispatcher:
-        from openbase_coder_cli.livekit_voice_route import (
-            prepare_livekit_dispatcher_recreation,
-        )
+        if plan.recreate_dispatcher:
+            from openbase_coder_cli.livekit_voice_route import (
+                prepare_livekit_dispatcher_recreation,
+            )
 
-        prepare_livekit_dispatcher_recreation()
+            prepare_livekit_dispatcher_recreation()
 
-    services = [find_service(name) for name in plan.services]
-    # Stop consumers before the services they depend on, then start providers
-    # first so consumers reconnect to the new process.
-    for service in reversed(services):
-        if launchctl_status(service)["installed"]:
-            launchctl_bootout(service)
+        services = order_services([find_service(name) for name in plan.services])
+        # Providers first: installation waits for the old process to exit and
+        # the provider endpoint to respond before restarting its consumers.
+        # Restarts happen in place
+        # (no bootout/bootstrap) so macOS does not re-announce the background
+        # items on every restart.
+        for service in services:
+            install_service(config, service)
 
-    if services:
-        time.sleep(2)
+        if plan.recreate_dispatcher:
+            from openbase_coder_cli.livekit_voice_route import (
+                warm_livekit_dispatcher_thread,
+            )
 
-    for service in services:
-        install_service(config, service)
-
-    if plan.recreate_dispatcher:
-        from openbase_coder_cli.livekit_voice_route import (
-            warm_livekit_dispatcher_thread,
-        )
-
-        asyncio.run(warm_livekit_dispatcher_thread(fresh=True))
+            asyncio.run(warm_livekit_dispatcher_thread(fresh=True))
 
 
 def execute_restart_payload(raw_payload: str) -> None:
@@ -226,4 +217,7 @@ def _expand_restart_targets(requested_targets: list[str]) -> list[str]:
 
     for target in requested_targets:
         visit(target)
-    return ordered
+    return [
+        service.name
+        for service in order_services([definitions[name] for name in ordered])
+    ]

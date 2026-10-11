@@ -36,6 +36,7 @@ from openbase_coder_cli.services.tailnet_devices import tailscale_self_identity
 from openbase_coder_cli.services.tailscale_serve import tailscale_serve_health
 
 DEVICE_REGISTER_PATH = "/api/openbase/devices/register/"
+DEVICE_DEREGISTER_PATH = "/api/openbase/devices/deregister/"
 NETMESH_ENROLL_PATH = "/api/openbase/netmesh/enroll/"
 NETMESH_DEVICES_PATH = "/api/openbase/netmesh/devices/"
 NETMESH_SERVICE_HOSTNAMES_PATH = "/api/openbase/netmesh/service-hostnames/"
@@ -102,7 +103,24 @@ def device_registration_payload() -> dict[str, Any]:
         payload["capabilities"]["tailscale_ips"] = identity["ips"]
         if identity["ips"]:
             payload["tailscale_ip"] = identity["ips"][0]
+    judgment_enabled = _judgment_enabled()
+    if judgment_enabled is not None:
+        # Top-level, not a capability: the cloud stores it on the device and
+        # gates its conflict-judgment route on it. Omitted (stored value
+        # unchanged) when this computer never opted in or out.
+        payload["judgment_enabled"] = judgment_enabled
     return payload
+
+
+def _judgment_enabled() -> bool | None:
+    """The Openbase Sync ``[judgment]`` opt-in; None without the table. Never raises."""
+    from openbase_coder_cli.sync_daemon import judgment_settings
+
+    try:
+        settings = judgment_settings()
+    except Exception:  # noqa: BLE001 - registration must not fail on sync config
+        return None
+    return None if settings is None else bool(settings["enabled"])
 
 
 def _device_id() -> str:
@@ -121,19 +139,18 @@ def local_device_id() -> str:
 
 
 def _code_sync_capabilities() -> dict[str, Any]:
-    """Advertised code-sync facts; never raises (registration must not fail)."""
-    from openbase_coder_cli.code_sync.syncthing import stored_device_id
-    from openbase_coder_cli.sync_config import code_sync_enabled
+    """Advertised Openbase Sync facts; never raises (registration must not fail)."""
+    from openbase_coder_cli.sync_daemon import read_config_summary
 
-    capabilities: dict[str, Any] = {}
     try:
-        capabilities["code_sync_enabled"] = code_sync_enabled()
-    except ValueError:
-        capabilities["code_sync_enabled"] = False
-    syncthing_device_id = stored_device_id()
-    if syncthing_device_id:
-        capabilities["syncthing_device_id"] = syncthing_device_id
-    return capabilities
+        summary = read_config_summary()
+    except OSError:
+        summary = {"configured": False}
+    role = summary.get("role") if summary.get("configured") else None
+    return {
+        "code_sync_enabled": bool(summary.get("configured")),
+        "sync_role": role if role in {"hub", "edge"} else "none",
+    }
 
 
 def _is_standalone_install() -> bool:
@@ -211,6 +228,11 @@ def report_cli_state(
     return result
 
 
+def deregister_device_with_cloud() -> CloudReportResult:
+    """Remove this device's registration for the signed-in user. Never raises."""
+    return _post_to_cloud(DEVICE_DEREGISTER_PATH, {"device_id": _device_id()})
+
+
 def register_and_report(
     *,
     cli_configured: bool | None = None,
@@ -252,7 +274,12 @@ def revoke_netmesh_device(node_id: str) -> bool:
 
 
 def netmesh_service_hostname_capabilities() -> CloudReportResult:
-    return _post_to_cloud(NETMESH_SERVICE_HOSTNAME_CAPABILITIES_PATH, {}, method="GET")
+    return _post_to_cloud(
+        NETMESH_SERVICE_HOSTNAME_CAPABILITIES_PATH,
+        {},
+        method="GET",
+        machine_scope=NETMESH_PUBLISH_SCOPE,
+    )
 
 
 def allocate_netmesh_service_hostname(
@@ -261,6 +288,7 @@ def allocate_netmesh_service_hostname(
     return _post_to_cloud(
         NETMESH_SERVICE_HOSTNAMES_PATH,
         {"node_id": node_id, "service_name": service_name},
+        machine_scope=NETMESH_PUBLISH_SCOPE,
     )
 
 
@@ -271,6 +299,7 @@ def release_netmesh_service_hostname(
         NETMESH_SERVICE_HOSTNAMES_PATH,
         {"node_id": node_id, "service_name": service_name},
         method="DELETE",
+        machine_scope=NETMESH_PUBLISH_SCOPE,
     )
 
 
@@ -294,12 +323,53 @@ def fetch_tailnet_provider() -> str | None:
     return provider if isinstance(provider, str) and provider else None
 
 
+# Machine-token scope that lets a cloud workspace (no owner login) allocate
+# private service hostnames and answer certificate DNS challenges for its own
+# mesh node; requested at bootstrap, see cli/provision.
+NETMESH_PUBLISH_SCOPE = "netmesh_publish"
+# The node id a workspace token uses for its own node: a container's embedded
+# node knows only its stable id, so Cloud resolves "self" to the headscale
+# node registered under the workspace's hostname.
+WORKSPACE_SELF_NODE_ID = "self"
+
+
+def _cloud_bearer_token(backend_url: str, machine_scope: str | None) -> str:
+    """The owner's access token, or a workspace machine token with ``machine_scope``.
+
+    Cloud workspaces hold no owner login; when an endpoint accepts a scoped
+    machine token instead, fall back to the bootstrap token that carries the
+    scope. Raises ``AuthLoginRequiredError`` when neither is available.
+    """
+    owner_tokens = TokenManager(backend_url)
+    try:
+        return owner_tokens.get_access_token()
+    except AuthLoginRequiredError:
+        if not machine_scope or getattr(owner_tokens, "has_refresh_token", False):
+            raise
+        from openbase_coder_cli.config.machine_token_manager import (
+            MachineTokenError,
+            MachineTokenManager,
+        )
+
+        machine_tokens = MachineTokenManager(backend_url, owner_tokens)
+        if not machine_tokens.has_cached_token(scopes=(machine_scope,)):
+            raise
+        try:
+            return machine_tokens.get_machine_token(scopes=(machine_scope,))
+        except MachineTokenError as exc:
+            raise AuthLoginRequiredError(str(exc)) from exc
+
+
 def _post_to_cloud(
-    path: str, payload: dict[str, Any], *, method: str = "POST"
+    path: str,
+    payload: dict[str, Any],
+    *,
+    method: str = "POST",
+    machine_scope: str | None = None,
 ) -> CloudReportResult:
     backend_url = web_backend_url()
     try:
-        token = TokenManager(backend_url).get_access_token()
+        token = _cloud_bearer_token(backend_url, machine_scope)
     except AuthLoginRequiredError:
         return CloudReportResult(
             ok=False,

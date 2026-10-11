@@ -19,6 +19,11 @@ from super_agents.app_protocol import (
     response_is_queued as _response_is_queued,
 )
 
+from openbase_coder_cli.backend_auth import (
+    backend_login_spoken_message,
+    failed_turn_login_backend,
+    turn_failed,
+)
 from openbase_coder_cli.backend_config import (
     CLAUDE_CODE_BACKEND,
     CODEX_BACKEND,
@@ -30,7 +35,6 @@ from openbase_coder_cli.backend_config import (
 )
 from openbase_coder_cli.claude_auth import (
     is_backend_auth_failure_text,
-    is_spend_limit_text,
     verified_claude_auth_status,
 )
 from openbase_coder_cli.codex_session_defaults import (
@@ -70,6 +74,7 @@ from openbase_coder_cli.livekit_agent.super_agents_speech import (
     _text_content,
     _user_message_texts,
 )
+from openbase_coder_cli.livekit_voice_route import _route_state_path
 from openbase_coder_cli.paths import CODEX_DISPATCHER_CONFIG_PATH
 
 # The speech helpers moved to ``super_agents_speech`` and the Super Agents
@@ -101,6 +106,11 @@ TURN_POLL_INTERVAL_SECONDS = 0.5
 # loop instantly). Kept generous so a running turn produces ~2 progress reads
 # instead of one every 0.5s.
 TURN_PUSH_WAIT_FALLBACK_SECONDS = 5.0
+# How long a logged-in ``claude auth status`` answer is trusted before the
+# per-turn check runs the CLI again.
+CLAUDE_AUTH_RECHECK_SECONDS = float(
+    os.getenv("LIVEKIT_CLAUDE_AUTH_RECHECK_SECONDS", "600") or 600
+)
 # A busy app-server can miss individual progress polls (observed: thread/read
 # timing out after 30s while the backend churned on tool output). Keep polling
 # through transient failures instead of killing the voice generation that is
@@ -146,32 +156,74 @@ def _auth_failure_remediation(backend: str | None) -> str:
     return "sign the coding backend back in"
 
 
+def _progress_login_backend(
+    progress: dict[str, Any],
+    *,
+    backend: str | None,
+    turn_id: str | None,
+    check_login: bool = False,
+) -> str | None:
+    """The CLI backend whose missing login made this turn fail, or None.
+
+    Structured signals only (see :mod:`openbase_coder_cli.backend_auth`): the
+    turn's ``errorKind``, and with ``check_login`` the CLI's own login state.
+    """
+    views = [
+        view
+        for view in (progress.get("turn"), progress.get("summary"), progress)
+        if isinstance(view, dict)
+        and (
+            not turn_id or (view.get("turnId") or view.get("id") or turn_id) == turn_id
+        )
+    ]
+    for view in views:
+        if found := failed_turn_login_backend(view, backend):
+            return found
+    if check_login:
+        for view in views:
+            if turn_failed(view):
+                return failed_turn_login_backend(view, backend, check_login=True)
+    return None
+
+
+def _progress_auth_failed(progress: dict[str, Any], *, turn_id: str | None) -> bool:
+    """Whether the turn's structured error kind is an authentication failure,
+    on any backend (an Openbase Cloud proxy token too)."""
+    from openbase_coder_cli.backend_auth import turn_reports_authentication_failure
+
+    return any(
+        turn_reports_authentication_failure(view)
+        for view in (progress.get("turn"), progress.get("summary"), progress)
+        if isinstance(view, dict)
+        and (
+            not turn_id or (view.get("turnId") or view.get("id") or turn_id) == turn_id
+        )
+    )
+
+
 def _flag_backend_auth_failure(
-    speech_text: str,
+    failed_backend: str | None,
     *,
     backend: str | None = None,
     turn_id: str | None = None,
 ) -> bool:
-    """Surface a coding-backend auth failure that came back as a turn answer.
+    """Log a turn that failed because ``failed_backend`` couldn't authenticate.
 
-    Returns True when ``speech_text`` is a backend auth-failure sentinel (not a
-    real answer). Always emits a structured ERROR marker so an auth failure can
-    never look like a successful completed turn; additionally logs a debounced,
-    backend-correct human-readable hint.
+    Always emits a structured ERROR marker so an auth failure can never look
+    like a successful turn; additionally logs a debounced, backend-correct
+    human-readable hint.
     """
     global _last_backend_auth_warn_monotonic
-    if not is_backend_auth_failure_text(speech_text):
+    if failed_backend is None:
         return False
-    remediation = _auth_failure_remediation(backend)
+    remediation = _auth_failure_remediation(failed_backend)
     # Never debounced: the structured marker must fire on every failed turn so
     # monitoring and field tests catch it even inside the warning's debounce.
     logger.error(
-        "%s stage=voice_turn_backend_auth_failure backend=%s turn_id=%s "
-        "text_hash=%s remediation=%s",
+        "%s stage=voice_turn_backend_auth_failure backend=%s turn_id=%s remediation=%s",
         DISPATCH_TIMING_LOG,
-        backend or "unknown",
+        backend or failed_backend,
         turn_id or "",
-        hashlib.sha256(speech_text.strip().encode("utf-8")).hexdigest()[:12],
         remediation,
     )
     now = time.monotonic()
@@ -179,8 +231,8 @@ def _flag_backend_auth_failure(
     if last is None or now - last >= BACKEND_AUTH_WARN_DEBOUNCE_SECONDS:
         _last_backend_auth_warn_monotonic = now
         logger.warning(
-            "Coding backend auth failure surfaced in a spoken answer (backend=%s); %s.",
-            backend or "unknown",
+            "Coding backend %s could not authenticate; %s.",
+            failed_backend,
             remediation,
         )
     return True
@@ -196,14 +248,6 @@ BACKEND_ERROR_SPOKEN_FALLBACK = (
     "Please try again in a moment."
 )
 
-# A spend-limit 403 is NOT a transient outage — telling the user to "try again
-# in a moment" is misleading (they'll keep failing until next month or until
-# they subscribe). Speak the actual, actionable cause instead (FT-10).
-BACKEND_SPEND_LIMIT_SPOKEN = (
-    "You've reached your monthly Openbase model limit, so coding requests are "
-    "paused. You can raise your limit by subscribing at Openbase Cloud."
-)
-
 
 def _looks_like_raw_backend_error(text: str | None) -> bool:
     """Whether a turn answer is a raw backend/proxy error that must not be spoken."""
@@ -216,30 +260,82 @@ def _looks_like_raw_backend_error(text: str | None) -> bool:
     return "api error:" in text.lower()
 
 
+def _turn_error_containers(progress: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    return tuple(
+        container
+        for container in (
+            progress,
+            progress.get("turn"),
+            progress.get("summary"),
+            progress.get("error"),
+        )
+        if isinstance(container, dict)
+    )
+
+
+def _turn_error_text(progress: dict[str, Any]) -> str:
+    """The backend's error for a failed turn, wherever the snapshot carries it."""
+    for container in _turn_error_containers(progress):
+        for key in ("lastError", "last_error", "error", "message"):
+            value = container.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            if isinstance(value, dict):
+                message = value.get("message")
+                if isinstance(message, str) and message.strip():
+                    return message.strip()
+    # A Claude session's state line is the failure's human wording (super-agents
+    # 6af0383: "macOS is waiting for permission: ...").
+    state = progress.get("lastObservedState")
+    return state.strip() if isinstance(state, str) else ""
+
+
+def _turn_error_kind(progress: dict[str, Any]) -> str:
+    """super-agents' ``errorKind`` for a failed turn (``blocked_permission_dialog``,
+    ``authentication_failed``, ...), or an empty string."""
+    for container in _turn_error_containers(progress):
+        for key in ("errorKind", "error_kind"):
+            value = container.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
 def _safe_spoken_answer(
     speech_text: str,
     *,
-    auth_failed: bool,
+    login_backend: str | None = None,
+    auth_failed: bool = False,
     backend: str | None = None,
     turn_id: str | None = None,
 ) -> str:
     """Return text safe to speak: a graceful line for any backend error answer.
 
-    ``auth_failed`` is the result of :func:`_flag_backend_auth_failure` (already
-    logged). This additionally catches non-auth proxy/API error bodies so the
+    ``login_backend`` names a CLI whose missing login failed the turn (from
+    :func:`_progress_login_backend`, already logged): the caller hears how to
+    sign it back in. This additionally catches proxy/API error bodies so the
     dispatcher never reads a 403/500 payload aloud.
     """
     # A monthly-spend-limit 403 arrives looking like an auth failure ("Failed
     # to authenticate. API Error: 403 {...spend limit...}") but has a distinct,
     # actionable remedy — surface it accurately rather than as a generic outage.
-    if is_spend_limit_text(speech_text):
+    from openbase_coder_cli.cloud_model_errors import (
+        model_allowance_exhausted_spoken_message,
+        model_plan_denial_message,
+    )
+
+    if plan_denial := model_plan_denial_message(speech_text):
+        return plan_denial
+    if allowance_denial := model_allowance_exhausted_spoken_message(speech_text):
         logger.error(
             "%s stage=voice_turn_backend_spend_limit backend=%s turn_id=%s",
             DISPATCH_TIMING_LOG,
             backend or "unknown",
             turn_id or "",
         )
-        return BACKEND_SPEND_LIMIT_SPOKEN
+        return allowance_denial
+    if login_backend:
+        return backend_login_spoken_message(login_backend)
     if auth_failed:
         return BACKEND_ERROR_SPOKEN_FALLBACK
     if not _looks_like_raw_backend_error(speech_text):
@@ -292,7 +388,7 @@ class SuperAgentsLiveKitClient(
     ) -> None:
         self._cwd = cwd
         self._state_path = (
-            Path(state_path or Path.home() / ".openbase" / "livekit-voice-route.json")
+            (Path(state_path) if state_path else _route_state_path())
             if persist_thread
             else None
         )
@@ -314,6 +410,19 @@ class SuperAgentsLiveKitClient(
             or os.getenv("LIVEKIT_DISPATCHER_CONFIG_PATH")
             or CODEX_DISPATCHER_CONFIG_PATH
         )
+        if (
+            persist_thread
+            and (self._super_agent_name or "").casefold()
+            == DEFAULT_DISPATCHER_LABEL.casefold()
+            and self._super_agent_agent_name is None
+        ):
+            from openbase_coder_cli.voice_identity import current_voice_identity
+
+            # Keep the canonical thread label/id. Only its speaking persona
+            # follows the existing configured voice, just like worker agents.
+            self._super_agent_agent_name = current_voice_identity(
+                self._dispatcher_config_path
+            ).voice_name
         self._model_name = model_name or _model_name_for_role(
             self._dispatcher_config_path,
             use_super_agent_model=self._use_super_agent_reasoning,
@@ -336,18 +445,34 @@ class SuperAgentsLiveKitClient(
             Callable[[SuperAgentsLiveKitClient, str, str], None] | None
         ) = None
         self._claimed_speech_turns: set[str] = set()
+        self._turn_progress_listeners: list[
+            Callable[[SuperAgentsLiveKitClient, str, dict[str, Any]], None]
+        ] = []
         self._turn_prompt_hashes: dict[str, set[str]] = {}
         self._turn_submitted_transcripts: dict[str, list[str]] = {}
         self._turn_spoken_at: dict[str, float] = {}
         self._state_lock = asyncio.Lock()
         self._turn_start_lock = asyncio.Lock()
+        self._claude_auth_ok_at: float | None = None
 
     async def run_turn(
         self,
         prompt: str,
         *,
         developer_instructions: str | None = None,
+        replaces_active_turn: bool = False,
     ) -> dict[str, Any]:
+        """Run the caller's utterance as the thread's turn, or join the running one.
+
+        ``replaces_active_turn`` says ``prompt`` is the complete form of the
+        request the active turn started on (the voice bridge merged a split
+        utterance). A backend that steers mid-turn (Codex) absorbs the rest of
+        the request into the running turn as usual. Claude Code cannot: its
+        steer becomes a queued follow-up that re-runs the whole request after
+        the fragment turn finishes, so there the fragment turn is interrupted
+        and the merged request runs in its place. Interruption does not undo
+        actions the fragment turn already performed.
+        """
         dispatch_id = f"voice-{uuid.uuid4().hex[:12]}"
         dispatch_started = time.monotonic()
         prompt_debug = _prompt_debug_fields(prompt)
@@ -424,10 +549,38 @@ class SuperAgentsLiveKitClient(
                         turn_id,
                         prompt_debug["hash"],
                     )
+                elif replaces_active_turn and not self._backend_is_codex():
+                    # The fragment turn must not finish its half of the
+                    # request: interrupt it and send the whole request (no
+                    # remainder trimming; completed actions are not rolled back).
+                    logger.info(
+                        "%s stage=voice_request_replaced_active_turn dispatch_id=%s "
+                        "thread_id=%s turn_id=%s prompt_hash=%s",
+                        DISPATCH_TIMING_LOG,
+                        dispatch_id,
+                        thread_id,
+                        self._active_turn_id,
+                        prompt_debug["hash"],
+                    )
+                    turn_id = await self._steer_turn(
+                        thread_id, prompt, interrupt_current_work=True
+                    )
                 else:
                     remainder = self._unsubmitted_transcript_remainder(
                         self._active_turn_id, prompt
                     )
+                    if replaces_active_turn:
+                        logger.info(
+                            "%s stage=voice_request_merged_into_active_turn "
+                            "dispatch_id=%s thread_id=%s turn_id=%s prompt_hash=%s "
+                            "remainder_len=%d",
+                            DISPATCH_TIMING_LOG,
+                            dispatch_id,
+                            thread_id,
+                            self._active_turn_id,
+                            prompt_debug["hash"],
+                            len(remainder or ""),
+                        )
                     if remainder == "":
                         # A merged utterance whose fragments already reached
                         # the active turn (start prompt + proactive steers);
@@ -471,9 +624,7 @@ class SuperAgentsLiveKitClient(
                         self._active_turn_started_at = time.monotonic()
                         self._active_turn_dispatch_id = dispatch_id
                         self._active_turn_prompt_hash = prompt_debug["hash"]
-                        self._record_turn_prompt(
-                            turn_id, prompt_debug["hash"], prompt
-                        )
+                        self._record_turn_prompt(turn_id, prompt_debug["hash"], prompt)
                         preserve_active_turn = True
                         logger.info(
                             "%s stage=turn_start_cancelled_after_backend_start "
@@ -503,15 +654,26 @@ class SuperAgentsLiveKitClient(
         )
         try:
             result = await self._wait_for_turn(thread_id, turn_id)
-            speech_text = _speech_text_from_progress(result)
+            speech_text = _speech_text_from_progress(result, turn_id=turn_id)
             backend = getattr(self._backend_client, "backend", None)
+            login_backend = await asyncio.to_thread(
+                _progress_login_backend,
+                result,
+                backend=backend,
+                turn_id=turn_id,
+                check_login=True,
+            )
             auth_failed = _flag_backend_auth_failure(
-                speech_text,
+                login_backend
+                or (
+                    backend if _progress_auth_failed(result, turn_id=turn_id) else None
+                ),
                 backend=backend,
                 turn_id=turn_id,
             )
             spoken_text = _safe_spoken_answer(
                 speech_text,
+                login_backend=login_backend,
                 auth_failed=auth_failed,
                 backend=backend,
                 turn_id=turn_id,
@@ -519,12 +681,10 @@ class SuperAgentsLiveKitClient(
             turn_status = result.get("status") or result.get("summary", {}).get(
                 "status"
             )
-            if (
-                isinstance(turn_status, str)
-                and turn_status.lower() == "failed"
-                and not spoken_text
-                and not auth_failed
-            ):
+            status_failed = (
+                isinstance(turn_status, str) and turn_status.lower() == "failed"
+            )
+            if status_failed and not spoken_text and not auth_failed:
                 # Failed turns yield no fresh assistant text (cached
                 # lastUsefulMessage candidates are excluded upstream), and
                 # silence here historically fell through to stale speech or
@@ -540,6 +700,25 @@ class SuperAgentsLiveKitClient(
                 "_livekit_speech_text": spoken_text,
                 "_livekit_turn_id": turn_id,
                 "_livekit_backend_auth_failure": auth_failed,
+                # turn_recovery retries a failed turn instead of speaking the
+                # generic line above; the backend's error names the failure.
+                # ``status_failed`` is the boolean; ``turn_failed`` is the imported
+                # helper, and a function is always truthy (VM2 04:14Z: every
+                # completed turn was retried as "unknown: Claude Code response
+                # completed"). A turn that produced answer text is an answer
+                # whatever the snapshot's status says; only a failed turn with
+                # no text is a recovery case.
+                "_livekit_turn_failed": status_failed and not speech_text,
+                "_livekit_turn_error": (
+                    _turn_error_text(result)
+                    if status_failed and not speech_text
+                    else ""
+                ),
+                "_livekit_turn_error_kind": (
+                    _turn_error_kind(result)
+                    if status_failed and not speech_text
+                    else ""
+                ),
                 "progress": result,
             }
             logger.info(
@@ -597,15 +776,30 @@ class SuperAgentsLiveKitClient(
             and turn_id not in self._claimed_speech_turns
             and handler is not None
         ):
-            speech_text = _speech_text_from_progress(wait_task.result())
+            speech_text = _speech_text_from_progress(
+                wait_task.result(), turn_id=turn_id
+            )
             backend = getattr(self._backend_client, "backend", None)
+            progress = wait_task.result()
+            login_backend = _progress_login_backend(
+                progress, backend=backend, turn_id=turn_id
+            )
             auth_failed = _flag_backend_auth_failure(
-                speech_text,
+                login_backend
+                or (
+                    backend
+                    if _progress_auth_failed(progress, turn_id=turn_id)
+                    else None
+                ),
                 backend=backend,
                 turn_id=turn_id,
             )
             spoken_text = _safe_spoken_answer(
-                speech_text, auth_failed=auth_failed, backend=backend, turn_id=turn_id
+                speech_text,
+                login_backend=login_backend,
+                auth_failed=auth_failed,
+                backend=backend,
+                turn_id=turn_id,
             )
             if spoken_text:
                 logger.info(
@@ -670,15 +864,24 @@ class SuperAgentsLiveKitClient(
         handler = self._on_orphaned_result
         if not turn_id or handler is None or turn_id in self._claimed_speech_turns:
             return
-        speech_text = _speech_text_from_progress(wait_task.result())
+        speech_text = _speech_text_from_progress(wait_task.result(), turn_id=turn_id)
         backend = getattr(self._backend_client, "backend", None)
+        progress = wait_task.result()
+        login_backend = _progress_login_backend(
+            progress, backend=backend, turn_id=turn_id
+        )
         auth_failed = _flag_backend_auth_failure(
-            speech_text,
+            login_backend
+            or (backend if _progress_auth_failed(progress, turn_id=turn_id) else None),
             backend=backend,
             turn_id=turn_id,
         )
         spoken_text = _safe_spoken_answer(
-            speech_text, auth_failed=auth_failed, backend=backend, turn_id=turn_id
+            speech_text,
+            login_backend=login_backend,
+            auth_failed=auth_failed,
+            backend=backend,
+            turn_id=turn_id,
         )
         if not spoken_text:
             return
@@ -690,6 +893,73 @@ class SuperAgentsLiveKitClient(
         )
         handler(self, turn_id, spoken_text)
 
+    async def keep_request_for_later(self, prompt: str) -> bool:
+        """Queue ``prompt`` as the thread's next turn once recovery has failed.
+
+        The caller's request is not lost: Super Agents runs it as a follow-up
+        when the thread next accepts turns. False when even queueing fails.
+        """
+        try:
+            thread_id = await self._ensure_thread()
+            result = await self._backend_client.queue_turn_by_label(
+                self._query(thread_id=thread_id),
+                self._turn_input(
+                    prompt,
+                    developer_instructions=None,
+                    dispatch_id=f"voice-{uuid.uuid4().hex[:12]}",
+                ),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - the spoken line changes
+            logger.info(
+                "%s stage=voice_request_keep_failed error=%s",
+                DISPATCH_TIMING_LOG,
+                exc,
+            )
+            return False
+        kept = bool(_response_is_queued(result) or _extract_turn_id(result))
+        logger.info(
+            "%s stage=voice_request_kept thread_id=%s kept=%s",
+            DISPATCH_TIMING_LOG,
+            thread_id,
+            kept,
+        )
+        return kept
+
+    def backend_appears_busy(self) -> bool:
+        """True when the active turn streamed a backend event recently.
+
+        Distinguishes "the backend is churning and can't answer RPCs" from
+        "the backend is down" so failure UX can say busy instead of broken."""
+        from super_agents.app_time import age_ms, turn_key
+
+        thread_id = self._thread_id
+        turn_id = self._active_turn_id
+        if not thread_id or not turn_id:
+            return False
+        turns = getattr(self._backend_client, "_turns", None)
+        if not isinstance(turns, dict):
+            return False
+        events = getattr(turns.get(turn_key(thread_id, turn_id)), "events", None)
+        if not events:
+            return False
+        age = age_ms(events[-1].get("receivedAt"))
+        return age is not None and age < 30_000
+
+    def _turn_notification_count(self, thread_id: str, turn_id: str) -> int:
+        """Monotonic count of pushed backend notifications for this turn.
+
+        Used as a liveness signal: if this is still advancing while poll RPCs
+        time out, the backend is busy streaming — not down."""
+        from super_agents.app_time import turn_key
+
+        turns = getattr(self._backend_client, "_turns", None)
+        if not isinstance(turns, dict):
+            return 0
+        turn = turns.get(turn_key(thread_id, turn_id))
+        return int(getattr(turn, "notification_count", 0) or 0)
+
     async def _poll_turn_until_ready(
         self,
         thread_id: str,
@@ -697,6 +967,7 @@ class SuperAgentsLiveKitClient(
     ) -> dict[str, Any]:
         consecutive_failures = 0
         empty_answer_started_at: float | None = None
+        last_notification_count = self._turn_notification_count(thread_id, turn_id)
         while True:
             try:
                 progress = await self._backend_client.progress_by_label(
@@ -714,6 +985,26 @@ class SuperAgentsLiveKitClient(
                 raise
             except Exception as exc:
                 consecutive_failures += 1
+                notification_count = self._turn_notification_count(thread_id, turn_id)
+                if notification_count > last_notification_count:
+                    # The backend is still streaming events for this turn
+                    # while failing to answer poll RPCs: it is busy, not
+                    # down (2026-09-18: thread/read timed out 10x in a row
+                    # while ~30 notifications/sec arrived, and the dispatcher
+                    # wrongly declared the backend unresponsive). Keep
+                    # waiting instead of counting toward give-up.
+                    last_notification_count = notification_count
+                    consecutive_failures = 0
+                    logger.warning(
+                        "%s stage=turn_wait_poll_busy_backend turn_id=%s "
+                        "notification_count=%d error=%s",
+                        DISPATCH_TIMING_LOG,
+                        turn_id,
+                        notification_count,
+                        exc,
+                    )
+                    await asyncio.sleep(TURN_POLL_FAILURE_BACKOFF_MAX_SECONDS)
+                    continue
                 if consecutive_failures >= TURN_POLL_MAX_CONSECUTIVE_FAILURES:
                     logger.error(
                         "%s stage=turn_wait_poll_gave_up turn_id=%s "
@@ -740,12 +1031,26 @@ class SuperAgentsLiveKitClient(
                 await asyncio.sleep(backoff)
                 continue
             consecutive_failures = 0
+            if self._turn_progress_listeners:
+                self._notify_turn_progress(turn_id, progress)
             status = str(
                 progress.get("status")
                 or progress.get("summary", {}).get("status")
                 or ""
             ).lower()
             has_pending_requests = _progress_has_pending_requests(progress)
+            response_turn = progress.get("turn")
+            if (
+                status == "running"
+                and not has_pending_requests
+                and isinstance(response_turn, dict)
+                and response_turn.get("turnId") == turn_id
+                and response_turn.get("responseFinishedAt")
+                and _speech_text_from_progress(
+                    progress, turn_scoped=True, turn_id=turn_id
+                )
+            ):
+                return progress
             if status == "waiting" and not has_pending_requests:
                 should_wait, empty_answer_started_at = _should_wait_for_speech_text(
                     progress,
@@ -802,9 +1107,19 @@ class SuperAgentsLiveKitClient(
         """
         if getattr(self._backend_client, "backend", None) != CLAUDE_CODE_BACKEND:
             return
+        # ``claude auth status`` is a CLI subprocess on every turn's critical
+        # path; a login seen recently is trusted for a while. A logged-out
+        # answer is never cached, so recovery is checked on the next turn.
+        checked_at = self._claude_auth_ok_at
+        if (
+            checked_at is not None
+            and time.monotonic() - checked_at < CLAUDE_AUTH_RECHECK_SECONDS
+        ):
+            return
         try:
             status = await asyncio.to_thread(verified_claude_auth_status)
             if status.logged_in:
+                self._claude_auth_ok_at = time.monotonic()
                 return
             logger.warning(
                 "Claude Code login unavailable before thread start; run "

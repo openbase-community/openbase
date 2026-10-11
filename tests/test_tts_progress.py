@@ -2,7 +2,10 @@ import asyncio
 
 import pytest
 
-from openbase_coder_cli.livekit_agent.tts_progress import TTSProgressGuard, TTSStreamStalled
+from openbase_coder_cli.livekit_agent.tts_progress import (
+    TTSProgressGuard,
+    TTSStreamStalled,
+)
 
 
 class ControlledStream:

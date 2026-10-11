@@ -26,9 +26,20 @@ def thread_error_message(exc: Exception) -> str:
 
 
 def thread_error_code(exc: Exception, *, fallback: str) -> str:
+    """A stable code for a failed thread operation.
+
+    Beyond the unreadable-thread case, a turn or steer that could not reach
+    its backend reports super-agents' failure kind (``backend_unavailable``,
+    ``start_timeout``) so clients can retry or hold the request instead of
+    parsing prose.
+    """
     if is_thread_data_unavailable_error(exc):
         return THREAD_DATA_UNAVAILABLE_CODE
-    return fallback
+    try:
+        from super_agents.claude_failure_kinds import classify_turn_failure
+    except ImportError:  # older super-agents without the classifier
+        return fallback
+    return classify_turn_failure(exc) or fallback
 
 
 def _error_message(exc: Exception) -> str:

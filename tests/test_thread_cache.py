@@ -198,3 +198,90 @@ def test_concurrent_misses_same_key_coalesce(monkeypatch) -> None:
 
     assert manager.calls == 1
     assert len(results) == 4
+
+
+def test_single_flight_follower_gives_up_when_the_leader_never_returns() -> None:
+    import threading
+    import time
+
+    from openbase_coder_cli.openbase_coder_cli_app import thread_cache
+
+    cache = thread_cache._SingleFlightCache(60.0, inflight_wait_seconds=0.2)
+    release = threading.Event()
+    leader_started = threading.Event()
+
+    def stuck_leader():
+        leader_started.set()
+        release.wait()
+        return "late"
+
+    leader = threading.Thread(target=lambda: cache.get("k", stuck_leader), daemon=True)
+    leader.start()
+    assert leader_started.wait(1.0)
+
+    started = time.monotonic()
+    try:
+        cache.get("k", lambda: "follower")
+    except thread_cache.ThreadCacheWaitTimeout:
+        pass
+    else:
+        raise AssertionError("expected the follower to time out")
+    assert time.monotonic() - started < 2.0
+    release.set()
+    leader.join(1.0)
+
+
+def test_single_flight_abandons_a_stale_leader_and_computes_afresh() -> None:
+    import threading
+
+    from openbase_coder_cli.openbase_coder_cli_app import thread_cache
+
+    cache = thread_cache._SingleFlightCache(60.0, inflight_wait_seconds=0.2)
+    release = threading.Event()
+    leader_started = threading.Event()
+
+    def stuck_leader():
+        leader_started.set()
+        release.wait()
+        return "late"
+
+    leader = threading.Thread(target=lambda: cache.get("k", stuck_leader))
+    leader.start()
+    assert leader_started.wait(1.0)
+    # Age the in-flight record past the bound: the next caller must not wait on it.
+    cache._inflight["k"].started_at -= 1.0
+
+    assert cache.get("k", lambda: "fresh") == "fresh"
+    release.set()
+    leader.join(1.0)
+
+    assert cache.get("k", lambda: "newer") == "fresh"
+
+
+def test_hard_clear_detaches_inflight_read_and_prevents_stale_republication() -> None:
+    import threading
+
+    from openbase_coder_cli.openbase_coder_cli_app import thread_cache
+
+    cache = thread_cache._SingleFlightCache(60.0, stale_serve_seconds=10.0)
+    started, release = threading.Event(), threading.Event()
+    results = []
+
+    def before_archive():
+        started.set()
+        assert release.wait(2.0)
+        return ["archived-thread", "retained-thread"]
+
+    reader = threading.Thread(target=lambda: results.append(cache.get("list", before_archive)))
+    reader.start()
+    try:
+        assert started.wait(1.0)
+        cache.clear()
+        # A post-archive reader starts a fresh scan instead of joining the old one.
+        assert cache.get("list", lambda: ["retained-thread"]) == ["retained-thread"]
+    finally:
+        release.set()
+        reader.join(2.0)
+    assert not reader.is_alive()
+    assert results == [["archived-thread", "retained-thread"]]
+    assert cache.get("list", lambda: ["unexpected recompute"]) == ["retained-thread"]

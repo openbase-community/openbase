@@ -118,11 +118,26 @@ def _get_validator() -> JWKSValidator | None:
     return _validator
 
 
+class AuthenticationUnavailable(exceptions.APIException):
+    """Validation could not complete; retry without discarding credentials."""
+
+    status_code = 503
+    default_detail = "Sign-in verification is temporarily unavailable. Please retry."
+    default_code = "authentication_unavailable"
+
+
+def _auth_session_unavailable(reason: str) -> AuthenticationUnavailable:
+    # Only controlled categories belong here, never tokens, response bodies,
+    # URLs, or exception messages (which may include request credentials).
+    logger.warning("Auth session validation unavailable: %s", reason)
+    return AuthenticationUnavailable()
+
+
 def _validate_via_auth_session(token: str) -> dict:
     """Fallback validator using the backend auth/session endpoint."""
     web_backend_url = getattr(settings, "WEB_BACKEND_URL", "").rstrip("/")
     if not web_backend_url:
-        raise InvalidTokenError("WEB_BACKEND_URL is not configured")
+        raise _auth_session_unavailable("backend_not_configured")
 
     session_url = getattr(
         settings,
@@ -139,29 +154,31 @@ def _validate_via_auth_session(token: str) -> dict:
             timeout=10,
         )
     except httpx.HTTPError as exc:
-        raise InvalidTokenError(
-            f"Unable to validate JWT via auth session endpoint: {session_url}"
-        ) from exc
+        raise _auth_session_unavailable("transport_error") from exc
 
-    if resp.status_code != 200:
+    if resp.status_code in (401, 403):
         raise InvalidTokenError(f"Auth session rejected token ({resp.status_code})")
+    if resp.status_code != 200:
+        raise _auth_session_unavailable(f"http_{resp.status_code}")
 
     try:
         payload = resp.json()
     except ValueError as exc:
-        raise InvalidTokenError(
-            f"Auth session endpoint returned non-JSON response: {session_url}"
-        ) from exc
+        raise _auth_session_unavailable("invalid_json") from exc
 
     meta = payload.get("meta", {}) if isinstance(payload, dict) else {}
-    if not meta.get("is_authenticated"):
+    if not isinstance(meta, dict) or not isinstance(meta.get("is_authenticated"), bool):
+        raise _auth_session_unavailable("invalid_authentication_state")
+    if not meta["is_authenticated"]:
         raise InvalidTokenError("Auth session reports unauthenticated token")
 
-    data = payload.get("data", {}) if isinstance(payload, dict) else {}
+    data = payload.get("data", {})
     user_data = data.get("user", {}) if isinstance(data, dict) else {}
+    if not isinstance(user_data, dict):
+        raise _auth_session_unavailable("invalid_user_identity")
     sub = user_data.get("id") or user_data.get("email") or user_data.get("username")
     if not sub:
-        raise InvalidTokenError("Auth session response missing user identity")
+        raise _auth_session_unavailable("missing_user_identity")
 
     claims = {"sub": str(sub)}
     if user_data.get("email"):
@@ -241,8 +258,11 @@ class JWTAuthentication(authentication.BaseAuthentication):
             )
             try:
                 claims = _validate_via_auth_session(token)
-            except InvalidTokenError:
-                raise exceptions.AuthenticationFailed(str(exc)) from None
+            except InvalidTokenError as fallback_exc:
+                logger.info(
+                    "Auth session validation rejected credentials: %s", fallback_exc
+                )
+                raise exceptions.AuthenticationFailed(str(fallback_exc)) from None
 
         enforce_owner_identity(claims)
         user = _get_or_create_user(sub=claims["sub"])

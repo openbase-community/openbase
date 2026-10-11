@@ -102,18 +102,56 @@ def test_livekit_server_tailscale_mode_preserves_loopback_for_local_agent(monkey
     assert argv[argv.index("--node-ip") + 1] == "100.64.1.2"
 
 
-def test_livekit_server_tailscale_mode_exits_without_node_ip(monkeypatch):
-    monkeypatch.setattr(runners.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(runners.network, "tailscale_ip", lambda family: None)
-    env = {"LIVEKIT_NETWORK_MODE": "tailscale"}
-    binaries = {"livekit": "/usr/local/bin/livekit-server"}
+def _assert_pre_pairing_loopback(argv, out_env):
+    assert out_env[runners.AWAITING_TAILNET_ENV_KEY] == "1"
+    assert argv[argv.index("--bind") + 1] == "127.0.0.1"
+    assert argv[argv.index("--node-ip") + 1] == "127.0.0.1"
+    config_body = argv[argv.index("--config-body") + 1]
+    assert "tcp_port: 0" in config_body
+    assert "- 127.0.0.1/32" in config_body
+    assert "100." not in config_body
 
-    try:
-        runners.build_livekit_server(env, binaries)
-        raised = False
-    except SystemExit:
-        raised = True
-    assert raised
+
+def test_livekit_server_tailscale_mode_serves_loopback_before_vpn_enrollment(
+    monkeypatch,
+):
+    # Openbase VPN enrolls at pairing, after setup starts every service: the
+    # server must come up (setup waits on its port) rather than exit.
+    monkeypatch.setattr(runners.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(runners.network, "tailscale_ip", lambda family: None)
+
+    argv, out_env = runners.build_livekit_server(
+        {"LIVEKIT_NETWORK_MODE": "tailscale", "LIVEKIT_NODE_IP": ""},
+        {"livekit": "/usr/local/bin/livekit-server"},
+    )
+
+    _assert_pre_pairing_loopback(argv, out_env)
+
+
+def test_livekit_server_tailscale_mode_waits_for_vpn_interface(monkeypatch):
+    monkeypatch.setattr(runners.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(runners.network, "tailscale_ip", lambda family: "100.64.1.2")
+    monkeypatch.setattr(runners.network, "resolve_interface", lambda ip: None)
+
+    argv, out_env = runners.build_livekit_server(
+        {"LIVEKIT_NETWORK_MODE": "tailscale"},
+        {"livekit": "/usr/local/bin/livekit-server"},
+    )
+
+    _assert_pre_pairing_loopback(argv, out_env)
+
+
+def test_livekit_server_tailscale_mode_with_address_is_not_awaiting(monkeypatch):
+    monkeypatch.setattr(runners.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(runners.network, "tailscale_ip", lambda family: "100.64.1.2")
+    monkeypatch.setattr(runners.network, "resolve_interface", lambda ip: "utun4")
+
+    _, out_env = runners.build_livekit_server(
+        {"LIVEKIT_NETWORK_MODE": "tailscale"},
+        {"livekit": "/usr/local/bin/livekit-server"},
+    )
+
+    assert runners.AWAITING_TAILNET_ENV_KEY not in out_env
 
 
 def test_codex_app_server_builds_default_backend_argv(tmp_path, monkeypatch):
@@ -217,7 +255,19 @@ def test_livekit_agent_tailscale_mode_sets_livekit_url(monkeypatch):
     ]
     assert out_env["LIVEKIT_URL"] == "ws://localhost:7880"
     assert out_env["LIVEKIT_NODE_IP"] == "100.64.1.2"
-    assert out_env["LIVEKIT_AGENT_LOAD_THRESHOLD"] == "2.0"
+    assert "LIVEKIT_AGENT_LOAD_THRESHOLD" not in out_env
+
+
+def test_livekit_agent_preserves_explicit_load_threshold(monkeypatch):
+    monkeypatch.setattr(runners.network, "tailscale_ip", lambda family: None)
+    env = {
+        "LIVEKIT_NETWORK_MODE": "local",
+        "LIVEKIT_AGENT_LOAD_THRESHOLD": "0.9",
+    }
+
+    _, out_env = runners.build_livekit_agent(env, {"python": "/opt/openbase/python"})
+
+    assert out_env["LIVEKIT_AGENT_LOAD_THRESHOLD"] == "0.9"
 
 
 def test_livekit_agent_unsupported_mode_exits(monkeypatch):
@@ -289,21 +339,6 @@ def test_django_cli_lan_mode_uses_default_lan_ip(monkeypatch):
     assert out_env["LIVEKIT_URL"] == "ws://192.168.1.20:7880"
 
 
-def test_code_sync_argv(tmp_path, monkeypatch):
-    monkeypatch.setattr(runners, "OPENBASE_BASE_DIR", tmp_path)
-    argv, _ = runners.build_code_sync({}, {"syncthing": "/bin/syncthing"})
-
-    assert argv == [
-        "/bin/syncthing",
-        "serve",
-        "--home",
-        str(tmp_path / "code-sync"),
-        "--no-browser",
-        "--no-restart",
-        "--no-upgrade",
-    ]
-
-
 def test_openbase_cloud_auth_rehydrate_argv():
     argv, _ = runners.build_openbase_cloud_auth_rehydrate(
         {}, {"openbase_coder": "/bin/openbase-coder"}
@@ -349,7 +384,7 @@ def test_load_env_merges_env_file_over_process_env(tmp_path, monkeypatch):
     )
     config = InstallationConfig(env_file=str(env_file))
 
-    env = runners._load_env(config)
+    env = runners.load_service_env(config)
 
     # File values override whatever the parent process already had, matching
     # the bash wrapper's ``set -a; source "$env_file"`` semantics.
@@ -358,19 +393,32 @@ def test_load_env_merges_env_file_over_process_env(tmp_path, monkeypatch):
     assert env["PATH"] == "/bin"
 
 
-def test_load_env_without_env_file_returns_process_env(monkeypatch):
+def test_load_env_without_env_file_returns_process_env(monkeypatch, tmp_path):
     from openbase_coder_cli.agent_profiles import profile_environment
     from openbase_coder_cli.services.installation import InstallationConfig
 
+    codex_home = tmp_path / "codex"
+    monkeypatch.setattr("openbase_coder_cli.paths.CODEX_HOME_DIR", codex_home)
     monkeypatch.setattr(runners.os, "environ", {"PATH": "/bin"})
     config = InstallationConfig(env_file="")
 
-    assert runners._load_env(config) == {
+    assert runners.load_service_env(config) == {
         **profile_environment(),
         "PATH": "/bin",
         "CODEX_APP_SERVER_URL": "unix://",
-        "CODEX_HOME": str(runners.Path.home() / ".codex"),
+        "CODEX_HOME": str(codex_home),
+        "SUPER_AGENTS_THREAD_INTRO_COMMAND": "",
     }
+
+
+def test_managed_service_disables_legacy_intro_before_worker_owns_greeting(tmp_path):
+    from openbase_coder_cli.services.installation import InstallationConfig
+
+    env_file = tmp_path / ".env"
+    env_file.write_text('SUPER_AGENTS_THREAD_INTRO_COMMAND="legacy hello"\nKEEP_ME=1\n')
+    env = runners.load_service_env(InstallationConfig(env_file=str(env_file)))
+    assert env["SUPER_AGENTS_THREAD_INTRO_COMMAND"] == ""
+    assert env["KEEP_ME"] == "1"
 
 
 def test_livekit_server_pins_loopback_stun_in_every_mode(monkeypatch):
@@ -391,3 +439,81 @@ def test_livekit_server_pins_loopback_stun_in_every_mode(monkeypatch):
         argv, _ = runners.build_livekit_server(env, binaries)
         config_body = argv[argv.index("--config-body") + 1]
         assert "stun_servers:\n    - 127.0.0.1:3478\n" in config_body, mode
+
+
+def test_codex_app_server_runner_idles_behind_shared_daemon_before_binding(
+    monkeypatch, tmp_path
+):
+    """The shared Codex daemon owning the socket must never crash-loop us."""
+    from openbase_coder_cli import codex_control_plane
+    from openbase_coder_cli.services import launchd
+    from openbase_coder_cli.services.freshness import runtime as freshness_runtime
+
+    events: list[str] = []
+    monkeypatch.setattr(
+        runners.InstallationConfig, "exists", staticmethod(lambda: False)
+    )
+    monkeypatch.setattr(
+        runners, "_resolve_binaries", lambda name, config: {"codex": "/opt/codex"}
+    )
+    monkeypatch.setattr(runners, "load_service_env", lambda config: {})
+    monkeypatch.setattr(
+        runners,
+        "RUNNERS",
+        {"codex-app-server": (lambda env, binaries: (["codex"], env), ())},
+    )
+    monkeypatch.setattr(
+        launchd, "cap_service_log", lambda name: events.append(f"cap:{name}")
+    )
+    monkeypatch.setattr(
+        codex_control_plane,
+        "managed_codex_app_server_endpoint",
+        lambda env: "managed-endpoint",
+    )
+    monkeypatch.setattr(
+        codex_control_plane,
+        "idle_while_shared_codex_daemon",
+        lambda endpoint: events.append(f"idle:{endpoint}") or True,
+    )
+    monkeypatch.setattr(
+        codex_control_plane,
+        "prepare_codex_app_server_start",
+        lambda endpoint, binary: events.append(f"prepare:{endpoint}:{binary}"),
+    )
+    monkeypatch.setattr(
+        freshness_runtime, "capture_service", lambda name, config, argv: None
+    )
+    monkeypatch.setattr(
+        runners.os, "execvpe", lambda file, argv, env: events.append(f"exec:{file}")
+    )
+
+    runners.run("codex-app-server")
+
+    assert events == [
+        "cap:codex-app-server",
+        "idle:managed-endpoint",
+        "prepare:managed-endpoint:/opt/codex",
+        "exec:codex",
+    ]
+
+
+def test_service_log_cap_trims_only_oversized_logs(monkeypatch, tmp_path):
+    from openbase_coder_cli.services import launchd
+
+    monkeypatch.setattr(launchd, "DEFAULT_LOG_DIR", tmp_path)
+    assert launchd.cap_service_log("missing") is False
+
+    log = tmp_path / "codex-app-server.log"
+    log.write_text("short\n")
+    assert launchd.cap_service_log("codex-app-server", max_bytes=100) is False
+    assert log.read_text() == "short\n"
+
+    log.write_text("".join(f"traceback line {i}\n" for i in range(20)))
+    assert launchd.cap_service_log("codex-app-server", max_bytes=50) is True
+    kept = log.read_text().splitlines()
+    assert kept[-1] == "traceback line 19"
+    # Trimmed to the tail: the cap keeps the newest lines, drops nothing newer.
+    monkeypatch.setattr(
+        launchd, "_truncate_log_file", lambda path, max_lines=5000: None
+    )
+    assert launchd.cap_service_log("codex-app-server", max_bytes=0) is True

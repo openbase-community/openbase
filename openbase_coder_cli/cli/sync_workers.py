@@ -1,15 +1,14 @@
 """``openbase-coder sync-workers`` — all periodic sync jobs in one process.
 
 One launchd/systemd service runs the periodic cross-device thread snapshot
-syncs plus the code-sync reconcile tick that previously hid inside
-``openbase-routines``. Local thread stores are the shared agent homes, so
-there is no home↔home sync job anymore.
+syncs and the other periodic jobs. Local thread stores are the shared agent
+homes, so there is no home↔home sync job anymore.
 
 Each job runs on its own thread with its own interval and per-tick error
 isolation, so one slow or failing job never delays the others. Jobs that only
-apply in certain states gate themselves at runtime (device sync and reconcile
-no-op unless code sync is enabled) instead of being installed and removed as
-separate services.
+apply in certain states gate themselves at runtime (device sync no-ops unless
+Openbase Sync mirrors the thread exchange) instead of being installed and
+removed as separate services.
 
 Log event names are unchanged from the per-service days
 (``codex_thread_sync sweep_complete`` etc.) so existing log greps keep
@@ -35,10 +34,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_INTERVAL_SECONDS = 60.0
 DEFAULT_MAX_AGE_DAYS = 15
 DEFAULT_STABILITY_DELAY_SECONDS = 0.2
-CODE_SYNC_TICK_SECONDS = 60.0
 CLOUD_REGISTER_INTERVAL_SECONDS = 3600.0
 CLOUD_WEBHOOK_POLL_INTERVAL_SECONDS = 30.0
 LIVEKIT_POOL_WATCHDOG_TICK_SECONDS = 30.0
+TAILNET_TRANSITION_TICK_SECONDS = 15.0
+SUPER_AGENTS_STATE_PRUNE_INTERVAL_SECONDS = 21600.0
+CODEX_VERSION_SKEW_TICK_SECONDS = 300.0
 
 
 def _env_float(name: str, default: float) -> float:
@@ -66,12 +67,13 @@ def _env_path(name: str, default: Path) -> Path:
     return Path(raw).expanduser() if raw else default
 
 
-def _code_sync_enabled() -> bool:
-    from openbase_coder_cli.sync_config import code_sync_enabled
+def _thread_exchange_synced(exchange_dir: Path) -> bool:
+    """Whether Openbase Sync mirrors ``exchange_dir`` to the other computers."""
+    from openbase_coder_cli.sync_daemon import path_is_synced
 
     try:
-        return code_sync_enabled()
-    except ValueError:
+        return path_is_synced(exchange_dir)
+    except OSError:
         return False
 
 
@@ -83,22 +85,22 @@ class SyncJob:
 
 
 def _codex_devices_tick() -> None:
-    # Cross-device snapshots ride the code-sync transport (the exchange folder
-    # is a product-state sync folder), so this is a no-op until code sync is
-    # enabled — runtime gating replaces the old install-time companion
-    # services managed by code_sync.manager.
-    if not _code_sync_enabled():
-        return
+    # Cross-device snapshots travel by having Openbase Sync mirror the
+    # exchange folder (a product-folder root), so this is a no-op until that
+    # folder is inside a configured root.
     from openbase_coder_cli.cli.codex_sync import _snapshot_result_summary
     from openbase_coder_cli.thread_sync.thread_exchange import (
         DEFAULT_EXCHANGE_DIR,
         sync_thread_snapshots_once,
     )
 
+    exchange_dir = _env_path(
+        "CODEX_THREAD_DEVICE_SYNC_EXCHANGE_DIR", DEFAULT_EXCHANGE_DIR
+    )
+    if not _thread_exchange_synced(exchange_dir):
+        return
     result = sync_thread_snapshots_once(
-        exchange_dir=_env_path(
-            "CODEX_THREAD_DEVICE_SYNC_EXCHANGE_DIR", DEFAULT_EXCHANGE_DIR
-        ),
+        exchange_dir=exchange_dir,
         stability_delay_seconds=DEFAULT_STABILITY_DELAY_SECONDS,
         max_age_days=max(
             _env_int("CODEX_THREAD_DEVICE_SYNC_MAX_AGE_DAYS", DEFAULT_MAX_AGE_DAYS), 0
@@ -121,18 +123,19 @@ def _codex_devices_tick() -> None:
 
 
 def _claude_devices_tick() -> None:
-    if not _code_sync_enabled():
-        return
     from openbase_coder_cli.cli.claude_sync import _snapshot_result_summary
     from openbase_coder_cli.thread_sync.claude_thread_sync import (
         DEFAULT_DEVICE_EXCHANGE_DIR,
         sync_claude_thread_snapshots_once,
     )
 
+    exchange_dir = _env_path(
+        "CLAUDE_THREAD_DEVICE_SYNC_EXCHANGE_DIR", DEFAULT_DEVICE_EXCHANGE_DIR
+    )
+    if not _thread_exchange_synced(exchange_dir):
+        return
     result = sync_claude_thread_snapshots_once(
-        exchange_dir=_env_path(
-            "CLAUDE_THREAD_DEVICE_SYNC_EXCHANGE_DIR", DEFAULT_DEVICE_EXCHANGE_DIR
-        ),
+        exchange_dir=exchange_dir,
         stability_delay_seconds=DEFAULT_STABILITY_DELAY_SECONDS,
         max_age_days=max(
             _env_int("CLAUDE_THREAD_DEVICE_SYNC_MAX_AGE_DAYS", DEFAULT_MAX_AGE_DAYS), 0
@@ -211,63 +214,12 @@ def _livekit_pool_watchdog_tick() -> None:
     run_tick()
 
 
-def _code_sync_reconcile_tick() -> None:
-    from openbase_coder_cli.code_sync.reconciler import (
-        reconcile_counts,
-        run_tick_if_enabled,
-    )
+def _tailnet_transition_tick() -> None:
+    # A fresh Openbase VPN install starts LiveKit loopback-only until pairing
+    # assigns a tailnet address; restart the transport services once it does.
+    from openbase_coder_cli.services.tailnet_transition import run_tick
 
-    summary = run_tick_if_enabled()
-    if summary is None:
-        return
-    counts = reconcile_counts(summary)
-    logger.info(
-        "code_sync tick_complete repos=%s up_to_date=%s fast_forwarded=%s "
-        "awaiting_files=%s remote_behind=%s diverged=%s skipped=%s "
-        "fetch_failed=%s converged=%s published=%s advertised=%s "
-        "echo_healed=%s conflicts=%s errors=%s lease=%s",
-        counts["repo_count"],
-        counts["up_to_date"],
-        counts["fast_forwarded"],
-        counts["awaiting_files"],
-        counts["remote_behind"],
-        counts["diverged"],
-        counts["skipped"],
-        counts["fetch_failed"],
-        counts["converged"],
-        counts["published"],
-        counts["advertised"],
-        counts["echo_healed"],
-        summary.get("conflicts_count"),
-        counts["errors"],
-        summary.get("lease", {}).get("action"),
-    )
-    for entry in summary.get("trunk_advertisements", []):
-        # One line per branch made visible in (or blocked from) a trunk
-        # repo, so agents can find cross-machine worktree commits.
-        logger.info(
-            "code_sync trunk_advertise repo=%s branch=%s action=%s detail=%s",
-            entry.get("path"),
-            entry.get("branch"),
-            entry.get("action"),
-            entry.get("detail"),
-        )
-    for entry in summary.get("echo_heals", []):
-        event = (
-            "echo_heal_applied"
-            if entry.get("action") == "healed"
-            else "echo_heal_skipped"
-        )
-        logger.info(
-            "code_sync %s repo=%s branch=%s action=%s detail=%s",
-            event,
-            entry.get("path"),
-            entry.get("branch"),
-            entry.get("action"),
-            entry.get("detail"),
-        )
-    if summary.get("errors"):
-        logger.warning("code_sync tick_errors %s", summary["errors"])
+    run_tick()
 
 
 def _cloud_webhook_events_tick() -> None:
@@ -321,6 +273,49 @@ def _cloud_webhook_events_tick() -> None:
     )
 
 
+def _super_agents_state_prune_tick() -> None:
+    """Keep the Super Agents state file small.
+
+    The file is fully rewritten on every session merge, so unbounded
+    session/turn accumulation makes every merge slower (2026-09-18: a 1.7MB
+    file with 431 sessions was rewritten ~30x/sec during a churning turn).
+    """
+    from super_agents.app_server_client import DEFAULT_STATE_FILE
+    from super_agents.state import prune_state_file_sessions
+
+    state_file = _env_path("SUPER_AGENTS_STATE_FILE", DEFAULT_STATE_FILE)
+    if not state_file.exists():
+        return
+    summary = prune_state_file_sessions(state_file)
+    if summary["removedSessions"] or summary["removedTurns"]:
+        logger.info(
+            "super_agents_state_prune removed_sessions=%s removed_turns=%s remaining_sessions=%s",
+            summary["removedSessions"],
+            summary["removedTurns"],
+            summary["remainingSessions"],
+        )
+
+
+def _codex_version_skew_tick() -> None:
+    # A codex-app-server that predates the installed Codex makes every new
+    # Codex CLI launch warn about the stale background service. Restart it
+    # once no agent turn or voice call is in flight; otherwise the console
+    # banner keeps offering a manual restart. A server newer than the CLI
+    # (the shared Codex daemon after its own update) is never restarted;
+    # the tick logs a CLI-upgrade warning once instead.
+    from openbase_coder_cli.services.codex_version_skew import (
+        run_auto_restart_tick,
+    )
+
+    summary = run_auto_restart_tick()
+    if summary["skews"] and not summary["restarted"]:
+        logger.info(
+            "codex_version_skew waiting services=%s blockers=%s",
+            summary["skews"],
+            summary["blockers"],
+        )
+
+
 def build_jobs() -> list[SyncJob]:
     """The full job set; gating happens inside each tick, not here."""
     return [
@@ -346,11 +341,6 @@ def build_jobs() -> list[SyncJob]:
             tick=_claude_app_index_tick,
         ),
         SyncJob(
-            name="code_sync_reconcile",
-            interval=_env_float("CODE_SYNC_TICK_SECONDS", CODE_SYNC_TICK_SECONDS),
-            tick=_code_sync_reconcile_tick,
-        ),
-        SyncJob(
             name="cloud_registration",
             interval=_env_float(
                 "OPENBASE_CLOUD_REGISTER_INTERVAL", CLOUD_REGISTER_INTERVAL_SECONDS
@@ -372,6 +362,28 @@ def build_jobs() -> list[SyncJob]:
                 LIVEKIT_POOL_WATCHDOG_TICK_SECONDS,
             ),
             tick=_livekit_pool_watchdog_tick,
+        ),
+        SyncJob(
+            name="tailnet_transition",
+            interval=_env_float(
+                "TAILNET_TRANSITION_TICK_SECONDS", TAILNET_TRANSITION_TICK_SECONDS
+            ),
+            tick=_tailnet_transition_tick,
+        ),
+        SyncJob(
+            name="super_agents_state_prune",
+            interval=_env_float(
+                "SUPER_AGENTS_STATE_PRUNE_INTERVAL",
+                SUPER_AGENTS_STATE_PRUNE_INTERVAL_SECONDS,
+            ),
+            tick=_super_agents_state_prune_tick,
+        ),
+        SyncJob(
+            name="codex_version_skew",
+            interval=_env_float(
+                "CODEX_VERSION_SKEW_TICK_SECONDS", CODEX_VERSION_SKEW_TICK_SECONDS
+            ),
+            tick=_codex_version_skew_tick,
         ),
     ]
 
@@ -408,7 +420,7 @@ def run_workers(stop: threading.Event | None = None) -> list[threading.Thread]:
 
 @click.group("sync-workers")
 def sync_workers() -> None:
-    """Combined thread/device/code-sync workers (one service process)."""
+    """Combined thread/device sync and periodic workers (one service process)."""
 
 
 @sync_workers.command("run")

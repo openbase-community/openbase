@@ -10,7 +10,14 @@ import pytest
 from livekit import rtc
 
 from openbase_coder_cli import livekit_voice_route as voice_route
-from openbase_coder_cli.livekit_agent import audio_scoring, config, livekit, voices
+from openbase_coder_cli.host_kind import with_host_section
+from openbase_coder_cli.livekit_agent import (
+    audio_scoring,
+    config,
+    livekit,
+    speech_queue,
+    voices,
+)
 from openbase_coder_cli.livekit_agent.codex_app_client import CodexAppServerClient
 from openbase_coder_cli.livekit_agent.livekit import (
     ANNOUNCER_AUDIO_KIND,
@@ -127,36 +134,10 @@ def test_openbase_cloud_audio_token_fails_closed_on_empty_token(monkeypatch):
     assert "empty Openbase machine token" in str(exc_info.value)
 
 
-def test_livekit_agent_capacity_uses_livekit_defaults_for_remote_models(monkeypatch):
+def test_livekit_agent_takes_every_call_however_busy_the_machine(monkeypatch):
+    """A single-user worker never declines its own user's call on CPU load."""
     monkeypatch.delenv(livekit.LIVEKIT_AGENT_LOAD_THRESHOLD_ENV, raising=False)
     monkeypatch.delenv(livekit.LIVEKIT_AGENT_NUM_IDLE_PROCESSES_ENV, raising=False)
-    monkeypatch.setattr(
-        livekit,
-        "selected_stt_provider_id",
-        lambda: livekit.ASSEMBLYAI_STT_PROVIDER_ID,
-    )
-    monkeypatch.setattr(
-        livekit,
-        "selected_tts_provider_id",
-        lambda: livekit.CARTESIA_PROVIDER_ID,
-    )
-
-    assert livekit._livekit_agent_server_options() == {}
-
-
-def test_livekit_agent_capacity_uses_local_friendly_defaults_for_local_stt(monkeypatch):
-    monkeypatch.delenv(livekit.LIVEKIT_AGENT_LOAD_THRESHOLD_ENV, raising=False)
-    monkeypatch.delenv(livekit.LIVEKIT_AGENT_NUM_IDLE_PROCESSES_ENV, raising=False)
-    monkeypatch.setattr(
-        livekit,
-        "selected_stt_provider_id",
-        lambda: livekit.LOCAL_MLX_WHISPER_STT_PROVIDER_ID,
-    )
-    monkeypatch.setattr(
-        livekit,
-        "selected_tts_provider_id",
-        lambda: livekit.CARTESIA_PROVIDER_ID,
-    )
 
     assert livekit._livekit_agent_server_options() == {
         "load_threshold": float("inf"),
@@ -164,61 +145,24 @@ def test_livekit_agent_capacity_uses_local_friendly_defaults_for_local_stt(monke
     }
 
 
-def test_livekit_agent_capacity_uses_local_friendly_defaults_for_local_tts(monkeypatch):
-    monkeypatch.delenv(livekit.LIVEKIT_AGENT_LOAD_THRESHOLD_ENV, raising=False)
-    monkeypatch.delenv(livekit.LIVEKIT_AGENT_NUM_IDLE_PROCESSES_ENV, raising=False)
-    monkeypatch.setattr(
-        livekit,
-        "selected_stt_provider_id",
-        lambda: livekit.ASSEMBLYAI_STT_PROVIDER_ID,
-    )
-    monkeypatch.setattr(
-        livekit,
-        "selected_tts_provider_id",
-        lambda: KOKORO_PROVIDER_ID,
-    )
-
-    assert livekit._livekit_agent_server_options() == {
-        "load_threshold": float("inf"),
-        "num_idle_processes": 1,
-    }
-
-
-def test_livekit_agent_capacity_accepts_env_overrides_for_remote_models(monkeypatch):
-    monkeypatch.setenv(livekit.LIVEKIT_AGENT_LOAD_THRESHOLD_ENV, "1.5")
+def test_livekit_agent_capacity_accepts_env_overrides(monkeypatch):
+    monkeypatch.setenv(livekit.LIVEKIT_AGENT_LOAD_THRESHOLD_ENV, "0.9")
     monkeypatch.setenv(livekit.LIVEKIT_AGENT_NUM_IDLE_PROCESSES_ENV, "3")
-    monkeypatch.setattr(
-        livekit,
-        "selected_stt_provider_id",
-        lambda: livekit.ASSEMBLYAI_STT_PROVIDER_ID,
-    )
-    monkeypatch.setattr(
-        livekit,
-        "selected_tts_provider_id",
-        lambda: livekit.CARTESIA_PROVIDER_ID,
-    )
 
     assert livekit._livekit_agent_server_options() == {
-        "load_threshold": 1.5,
+        "load_threshold": 0.9,
         "num_idle_processes": 3,
     }
 
 
-def test_livekit_agent_capacity_ignores_invalid_env_for_remote_models(monkeypatch):
+def test_livekit_agent_capacity_ignores_invalid_env(monkeypatch):
     monkeypatch.setenv(livekit.LIVEKIT_AGENT_LOAD_THRESHOLD_ENV, "nope")
     monkeypatch.setenv(livekit.LIVEKIT_AGENT_NUM_IDLE_PROCESSES_ENV, "-1")
-    monkeypatch.setattr(
-        livekit,
-        "selected_stt_provider_id",
-        lambda: livekit.ASSEMBLYAI_STT_PROVIDER_ID,
-    )
-    monkeypatch.setattr(
-        livekit,
-        "selected_tts_provider_id",
-        lambda: livekit.CARTESIA_PROVIDER_ID,
-    )
 
-    assert livekit._livekit_agent_server_options() == {}
+    assert livekit._livekit_agent_server_options() == {
+        "load_threshold": float("inf"),
+        "num_idle_processes": 1,
+    }
 
 
 def test_parse_voice_route_packet_reads_exit_action():
@@ -510,37 +454,25 @@ def test_direct_livekit_instruction_loader_priority(tmp_path):
     explicit.write_text("explicit file instructions\n", encoding="utf-8")
     default.write_text("default file instructions\n", encoding="utf-8")
 
-    assert (
-        load_direct_livekit_developer_instructions(
-            env={
-                DIRECT_LIVEKIT_INSTRUCTIONS_PATH_ENV: str(explicit),
-                DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV: "env text instructions",
-            },
-            default_path=default,
-        )
-        == "explicit file instructions"
-    )
-    assert (
-        load_direct_livekit_developer_instructions(
-            env={DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV: "env text instructions"},
-            default_path=default,
-        )
-        == "default file instructions"
-    )
-    assert (
-        load_direct_livekit_developer_instructions(
-            env={DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV: "env text instructions"},
-            default_path=tmp_path / "missing.md",
-        )
-        == "env text instructions"
-    )
-    assert (
-        load_direct_livekit_developer_instructions(
-            env={},
-            default_path=tmp_path / "missing.md",
-        )
-        == DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS
-    )
+    assert load_direct_livekit_developer_instructions(
+        env={
+            DIRECT_LIVEKIT_INSTRUCTIONS_PATH_ENV: str(explicit),
+            DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV: "env text instructions",
+        },
+        default_path=default,
+    ) == with_host_section("explicit file instructions")
+    assert load_direct_livekit_developer_instructions(
+        env={DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV: "env text instructions"},
+        default_path=default,
+    ) == with_host_section("default file instructions")
+    assert load_direct_livekit_developer_instructions(
+        env={DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV: "env text instructions"},
+        default_path=tmp_path / "missing.md",
+    ) == with_host_section("env text instructions")
+    assert load_direct_livekit_developer_instructions(
+        env={},
+        default_path=tmp_path / "missing.md",
+    ) == with_host_section(DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS)
 
 
 def test_super_agent_voices_use_builtin_catalog_pool(monkeypatch):
@@ -697,14 +629,16 @@ class FakeSession:
 @pytest.mark.asyncio
 async def test_retried_packet_plays_only_once_after_lost_ack():
     session = FakeSession()
-    queue = AnnouncerSpeechQueue(session=session, announcer_tts=FakeTTS(),
-        silence_grace_seconds=0)
-    message = AnnouncerMessage(message_id='same-invocation', text='A controlled announcement.',
-        voice_id=None)
+    queue = AnnouncerSpeechQueue(
+        session=session, announcer_tts=FakeTTS(), silence_grace_seconds=0
+    )
+    message = AnnouncerMessage(
+        message_id="same-invocation", text="A controlled announcement.", voice_id=None
+    )
     assert queue.enqueue(message)
     assert queue.enqueue(message)
     queue.start()
-    await asyncio.sleep(.03)
+    await asyncio.sleep(0.03)
     await queue.close()
     assert len(session.say_calls) == 1
 
@@ -742,10 +676,14 @@ def test_voice_selecting_tts_delegates_stream_to_active_voice(monkeypatch):
 
 def test_explicit_announcement_voice_retains_timeout_policy(monkeypatch):
     from livekit.agents.types import APIConnectOptions
+
     RecordingCartesiaTTS.created = []
     monkeypatch.setattr(cartesia, "TTS", RecordingCartesiaTTS)
-    tts = VoiceSelectingCartesiaTTS(default_voice_id="default",
-        active_voice_id=lambda: "foreground", api_key="test-placeholder")
+    tts = VoiceSelectingCartesiaTTS(
+        default_voice_id="default",
+        active_voice_id=lambda: "foreground",
+        api_key="test-placeholder",
+    )
     tts.stream_for_voice("background")
     selected = RecordingCartesiaTTS.created[-1]
     assert selected.voice == "background"
@@ -937,12 +875,12 @@ async def test_announcer_queue_plays_audio_file_without_chat_context(
         silence_grace_seconds=0,
     )
 
-    async def fake_audio_file_frames(path):
+    async def fake_audio_file_frames(_session, path):
         assert path == audio_path
         if False:
             yield None
 
-    monkeypatch.setattr(queue, "_audio_file_frames", fake_audio_file_frames)
+    monkeypatch.setattr(speech_queue, "audio_file_frames", fake_audio_file_frames)
 
     await queue._speak(
         AnnouncerAudioMessage(
@@ -974,12 +912,12 @@ async def test_announcer_queue_defers_audio_file_while_user_speaks(
         silence_grace_seconds=0,
     )
 
-    async def fake_audio_file_frames(path):
+    async def fake_audio_file_frames(_session, path):
         assert path == audio_path
         if False:
             yield None
 
-    monkeypatch.setattr(queue, "_audio_file_frames", fake_audio_file_frames)
+    monkeypatch.setattr(speech_queue, "audio_file_frames", fake_audio_file_frames)
 
     speak_task = asyncio.create_task(
         queue._speak(
@@ -1189,6 +1127,7 @@ async def test_voice_router_transfers_to_prepared_target(monkeypatch, tmp_path):
         "active_target_voice_name": livekit.stable_super_agent_voice(
             "target-1", "Renamed Project"
         ).name,
+        "route_owner_id": router._route_owner_id,
     }
 
 
@@ -1467,7 +1406,9 @@ def test_cloud_audio_handshake_error_is_clear_and_redacted():
 
     assert livekit._agent_error_code(exc) == "cloud_audio_auth_failed"
     detail = livekit._agent_error_detail(exc)
-    assert "Openbase Cloud audio authorization failed" in detail
+    assert "Openbase Cloud refused the audio connection" in detail
+    assert "monthly Openbase audio allowance is used up" in detail
+    assert "sign in to Openbase Cloud again" in detail
     assert "machine-secret" not in detail
     assert "access-secret" not in detail
     assert "secret-token" not in livekit.exception_chain_summary(exc)
@@ -1537,7 +1478,110 @@ def test_verify_cloud_audio_subscription_reports_lapsed_subscription(monkeypatch
     assert payload["type"] == "agent_error"
     assert payload["code"] == "subscription_required"
     assert payload["detail"] == "Subscribe in Openbase Cloud to use managed audio."
-    assert spoken and "Openbase Cloud audio is unavailable" in spoken[0]
+    assert spoken == [livekit.CLOUD_AUDIO_ALLOWANCE_SPOKEN]
+
+
+def _published_status_payload(room) -> dict:
+    assert len(room.local_participant.published) == 1
+    data, _reliable, topic = room.local_participant.published[0]
+    assert topic == config.AGENT_STATUS_TOPIC
+    return json.loads(data.decode("utf-8"))
+
+
+def test_report_agent_error_names_the_allowance_behind_a_bare_audio_403(monkeypatch):
+    # The audio proxy refuses a capped stream with a bodyless 403, the same
+    # shape as a bad token. The usage summary says which it was.
+    class CloudAudioHandshakeError(RuntimeError):
+        status = 403
+
+    exc = CloudAudioHandshakeError(
+        "403, message='Forbidden', url='wss://app.openbase.cloud/api/openbase/audio/assemblyai/v3/ws?token=secret'"
+    )
+    checks: list[dict] = []
+
+    def out_of_credits(**kwargs):
+        checks.append(kwargs)
+        raise livekit.OpenbaseCloudAudioSubscriptionError(
+            "Openbase Cloud audio is out of transcription credits for this month."
+        )
+
+    monkeypatch.setattr(
+        livekit, "ensure_openbase_cloud_audio_subscription", out_of_credits
+    )
+    monkeypatch.setattr(livekit, "selected_tts_provider_id", lambda: "openbase_cloud")
+    monkeypatch.setattr(livekit, "selected_stt_provider_id", lambda: "openbase_cloud")
+    room = _FakeRoom()
+
+    asyncio.run(livekit._report_agent_error(room, exc))
+
+    payload = _published_status_payload(room)
+    assert payload["code"] == "subscription_required"
+    assert payload["detail"] == (
+        "Openbase Cloud audio is out of transcription credits for this month."
+    )
+    assert checks == [
+        {
+            "tts_provider_id": "openbase_cloud",
+            "stt_provider_id": "openbase_cloud",
+            "web_backend_url": livekit.WEB_BACKEND_URL,
+            "live_voice": False,
+        }
+    ]
+
+
+def test_report_agent_error_keeps_the_403_wording_when_credit_remains(monkeypatch):
+    class CloudAudioHandshakeError(RuntimeError):
+        status = 403
+
+    exc = CloudAudioHandshakeError(
+        "403, message='Forbidden', url='wss://app.openbase.cloud/api/openbase/audio/cartesia/tts/websocket'"
+    )
+    monkeypatch.setattr(
+        livekit, "ensure_openbase_cloud_audio_subscription", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(livekit, "selected_tts_provider_id", lambda: "openbase_cloud")
+    monkeypatch.setattr(livekit, "selected_stt_provider_id", lambda: "openbase_cloud")
+    room = _FakeRoom()
+
+    asyncio.run(livekit._report_agent_error(room, exc))
+
+    payload = _published_status_payload(room)
+    assert payload["code"] == "cloud_audio_auth_failed"
+    assert "monthly Openbase audio allowance is used up" in payload["detail"]
+
+
+def test_report_agent_error_checks_live_voice_credits_for_a_dead_live_session(
+    monkeypatch,
+):
+    # The GPT-Live plugin raises a bare "GPT-Live returned an error" for the
+    # gateway's billing close; the live voice credit check supplies the reason.
+    from openbase_coder_cli.livekit_agent.live_voice import LiveVoiceSessionError
+
+    checks: list[dict] = []
+
+    def out_of_live_credits(**kwargs):
+        checks.append(kwargs)
+        raise livekit.OpenbaseCloudAudioSubscriptionError(
+            "Openbase Cloud audio is out of live voice credits for this month."
+        )
+
+    monkeypatch.setattr(
+        livekit, "ensure_openbase_cloud_audio_subscription", out_of_live_credits
+    )
+    monkeypatch.setattr(livekit, "selected_tts_provider_id", lambda: "cartesia")
+    monkeypatch.setattr(livekit, "selected_stt_provider_id", lambda: "assemblyai")
+    room = _FakeRoom()
+
+    asyncio.run(
+        livekit._report_agent_error(
+            room, LiveVoiceSessionError(RuntimeError("GPT-Live returned an error"))
+        )
+    )
+
+    payload = _published_status_payload(room)
+    assert payload["code"] == "subscription_required"
+    assert "out of live voice credits" in payload["detail"]
+    assert checks[0]["live_voice"] is True
 
 
 def test_verify_cloud_audio_subscription_skips_transient_errors(monkeypatch):
@@ -1572,28 +1616,40 @@ async def test_announcer_playout_brackets_voice_lifecycle_events():
     )
 
     session = FakeSession()
+
     class AudioTTS(FakeTTS):
         def stream_for_voice(self, voice_id):
             class Stream(FakeTTSStream):
                 async def __anext__(self):
-                    if getattr(self, 'emitted', False):
+                    if getattr(self, "emitted", False):
                         raise StopAsyncIteration
                     self.emitted = True
-                    return SimpleNamespace(frame=rtc.AudioFrame(
-                        data=bytes(320), sample_rate=16000, num_channels=1,
-                        samples_per_channel=160))
+                    return SimpleNamespace(
+                        frame=rtc.AudioFrame(
+                            data=bytes(320),
+                            sample_rate=16000,
+                            num_channels=1,
+                            samples_per_channel=160,
+                        )
+                    )
+
             return Stream()
+
     fake_tts = AudioTTS()
     original_say = session.say
     original_wait = session.say_handle.wait_for_playout
+
     def consuming_say(text, **kwargs):
         handle = original_say(text, **kwargs)
+
         async def wait():
-            async for _ in kwargs['audio']:
+            async for _ in kwargs["audio"]:
                 pass
             await original_wait()
+
         handle.wait_for_playout = wait
         return handle
+
     session.say = consuming_say
     events: list[tuple[str, str]] = []
     ledger = VoiceDeliveryLedger(
@@ -1646,9 +1702,7 @@ async def test_dropped_utterance_recovered_after_uninterruptible_speech(monkeypa
     """
     from openbase_coder_cli.livekit_agent import session_diagnostics
 
-    monkeypatch.setattr(
-        session_diagnostics, "DROPPED_UTTERANCE_GRACE_SECONDS", 0.05
-    )
+    monkeypatch.setattr(session_diagnostics, "DROPPED_UTTERANCE_GRACE_SECONDS", 0.05)
 
     class FakeSpeech:
         allow_interruptions = False
@@ -1695,12 +1749,60 @@ async def test_dropped_utterance_recovered_after_uninterruptible_speech(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_dropped_utterance_recovery_waits_for_a_quiet_gap_after_the_newest_final(
+    monkeypatch,
+):
+    """Streaming STT splits one sentence into finals at every pause; the
+    recovery must not force a reply after the first fragment while the rest
+    is still coming (376, 2026-10-11: a 13 s sentence closed twice mid-way)."""
+    from openbase_coder_cli.livekit_agent import session_diagnostics
+
+    monkeypatch.setattr(session_diagnostics, "DROPPED_UTTERANCE_GRACE_SECONDS", 0.08)
+
+    class FakeSession:
+        def __init__(self):
+            self.handlers = {}
+            self.current_speech = None
+            self.generated = []
+            self.user_state = "speaking"
+
+        def on(self, event_name, handler):
+            self.handlers[event_name] = handler
+
+        def generate_reply(self, *, user_input):
+            self.generated.append(user_input)
+
+    class FakeClient:
+        async def steer_active_turn(self, prompt):
+            return None
+
+        def has_active_prompt(self, prompt):
+            return False
+
+    session = FakeSession()
+    router = LiveKitVoiceRouter(FakeClient())
+    livekit._register_session_diagnostics(session, router, enable_logging=False)
+
+    for fragment in ("write six files", "named golf", "hotel", "india juliet"):
+        session.handlers["user_input_transcribed"](
+            SimpleNamespace(is_final=True, transcript=fragment)
+        )
+        await asyncio.sleep(0.05)  # shorter than the grace: the sentence goes on
+    await asyncio.sleep(0.2)
+    assert session.generated == [], "still speaking: no recovery"
+    session.user_state = "listening"
+    for _ in range(40):
+        if session.generated:
+            break
+        await asyncio.sleep(0.02)
+    assert session.generated == ["write six files named golf hotel india juliet"]
+
+
+@pytest.mark.asyncio
 async def test_dropped_utterance_not_recovered_when_framework_kept_it(monkeypatch):
     from openbase_coder_cli.livekit_agent import session_diagnostics
 
-    monkeypatch.setattr(
-        session_diagnostics, "DROPPED_UTTERANCE_GRACE_SECONDS", 0.05
-    )
+    monkeypatch.setattr(session_diagnostics, "DROPPED_UTTERANCE_GRACE_SECONDS", 0.05)
 
     class FakeSession:
         def __init__(self):
@@ -1736,3 +1838,36 @@ async def test_dropped_utterance_not_recovered_when_framework_kept_it(monkeypatc
     )
     await asyncio.sleep(0.3)
     assert session.generated == []
+
+
+def test_decode_audio_file_yields_uniform_frames_at_requested_rate(tmp_path):
+    import wave
+
+    from openbase_coder_cli.livekit_agent import speech_queue
+
+    path = tmp_path / "tone.wav"
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(48000)
+        handle.writeframes(b"\x01\x00" * 48000)  # one second at 48 kHz
+
+    frames = speech_queue._decode_audio_file(path, sample_rate=24000)
+    assert frames, "expected decoded frames"
+    assert {frame.sample_rate for frame in frames} == {24000}
+    assert {frame.num_channels for frame in frames} == {1}
+    assert {frame.samples_per_channel for frame in frames} == {480}  # 20 ms
+    total = sum(frame.samples_per_channel for frame in frames) / 24000
+    # Without the plane trim this came out around 1.24 s: PyAV pads every
+    # plane past frame.samples, and the padding used to be played as audio.
+    assert 0.99 <= total <= 1.03
+
+
+def test_pcm_to_frames_pads_the_tail():
+    from openbase_coder_cli.livekit_agent import speech_queue
+
+    frames = speech_queue._pcm_to_frames(
+        b"\x01\x00" * 700, sample_rate=24000, frame_ms=20
+    )
+    assert [frame.samples_per_channel for frame in frames] == [480, 480]
+    assert bytes(frames[1].data)[-4:] == b"\x00\x00\x00\x00"

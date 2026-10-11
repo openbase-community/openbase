@@ -9,7 +9,7 @@ from pathlib import Path
 
 import psutil
 
-from openbase_coder_cli.services.freshness import runtime
+from openbase_coder_cli.services.freshness import prebuilt, runtime
 from openbase_coder_cli.services.freshness.compare import compare_build, detail
 from openbase_coder_cli.services.freshness.source import read_manifest
 
@@ -40,9 +40,17 @@ def helper_record(workspace: Path) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
+def coverage_note(workspace: Path) -> str:
+    return "" if prebuilt.can_rebuild(workspace) else prebuilt.COVERAGE
+
+
 def compare_native(record, name: str, pid: int, workspace: Path, current: dict) -> dict:
     label = NAMES[name]
-    unknown = detail(label, "unknown", "Running native process has no verified startup provenance.", ACTION)
+    # Only a workspace with the netmesh source can act on rebuild advice; a
+    # public checkout runs the downloaded prebuilt and re-downloads to fix it.
+    downloaded = not prebuilt.can_rebuild(workspace)
+    action = prebuilt.ACTION if downloaded else ACTION
+    unknown = detail(label, "unknown", "Running native process has no verified startup provenance.", action)
     if not isinstance(record, dict) or record.get("schema_version") != 1:
         return unknown
     if record.get("component") != name or record.get("pid") != pid:
@@ -62,6 +70,8 @@ def compare_native(record, name: str, pid: int, workspace: Path, current: dict) 
     loaded_uuid = record.get("image_uuid")
     if not isinstance(uuids, list) or not isinstance(loaded_uuid, str) or loaded_uuid not in uuids:
         return unknown
+    if downloaded:
+        return prebuilt.compare_prebuilt(label, name, loaded_uuid, workspace)
     # The native process already matched this manifest against its in-memory
     # LC_UUID at startup. Reading a newly rebuilt on-disk binary here would
     # incorrectly clear a still-running old process.

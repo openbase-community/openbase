@@ -2,7 +2,7 @@
 
 Every netmesh transport (VPN companion tailscaled, embedded tunneld) MUST
 enroll under the same node name: peers store this machine's MagicDNS name
-(phone backend host, syncthing peer addresses, git-pointer fetch URLs), so a
+(phone backend host, sync peer addresses), so a
 transport switch that changed the name would strand every peer on a dead
 address. Anything that supplies a hostname to a netmesh node goes through
 here.

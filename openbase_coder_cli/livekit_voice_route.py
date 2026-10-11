@@ -12,11 +12,10 @@ from pathlib import Path
 import livekit.api as livekit_api
 
 from openbase_coder_cli.cli.utils import get_data_dir
-from openbase_coder_cli.codex_session_defaults import codex_permission_defaults
 from openbase_coder_cli.codex_home_instructions import (
     refresh_openbase_instruction_files_from_installation,
 )
-from openbase_coder_cli.dispatcher_instructions import with_dispatcher_skill
+from openbase_coder_cli.codex_session_defaults import codex_permission_defaults
 from openbase_coder_cli.direct_voice_instructions import (
     DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS,
 )
@@ -24,6 +23,8 @@ from openbase_coder_cli.dispatcher_config import (
     dispatcher_voice,
     selected_tts_provider_id,
 )
+from openbase_coder_cli.dispatcher_instructions import with_dispatcher_rules
+from openbase_coder_cli.host_kind import with_host_section
 from openbase_coder_cli.livekit_agent.codex_thread_state import thread_state_file_lock
 from openbase_coder_cli.livekit_announcer import (
     AnnouncerError,
@@ -141,10 +142,21 @@ SUPER_AGENT_VOICE_IDS = tuple(
 SUPER_AGENT_VOICES = _voices_from_ids(SUPER_AGENT_VOICE_IDS)
 
 
+_super_agent_voices_by_provider: dict[str, tuple[CartesiaVoice, ...]] = {}
+
+
 def _current_super_agent_voices() -> tuple[CartesiaVoice, ...]:
     provider = get_tts_provider(selected_tts_provider_id())
-    if provider.provider_id != CARTESIA_PROVIDER_ID:
-        return tuple(
+    if provider.provider_id == CARTESIA_PROVIDER_ID:
+        voice_ids = tuple(voice.voice_id for voice in SUPER_AGENT_VOICES)
+        if voice_ids == tuple(SUPER_AGENT_VOICE_IDS):
+            return SUPER_AGENT_VOICES
+    # Provider catalogs are static, so the derived tuple is built once per
+    # provider: thread-list annotation derives a voice for every listed
+    # thread and must not rebuild the catalog each time.
+    cached = _super_agent_voices_by_provider.get(provider.provider_id)
+    if cached is None:
+        cached = tuple(
             CartesiaVoice(
                 voice_id=voice.id,
                 name=voice.name,
@@ -152,17 +164,8 @@ def _current_super_agent_voices() -> tuple[CartesiaVoice, ...]:
             )
             for voice in provider.super_agent_voices()
         )
-    voice_ids = tuple(voice.voice_id for voice in SUPER_AGENT_VOICES)
-    if voice_ids == tuple(SUPER_AGENT_VOICE_IDS):
-        return SUPER_AGENT_VOICES
-    return tuple(
-        CartesiaVoice(
-            voice_id=voice.id,
-            name=voice.name,
-            provider=provider.provider_id,
-        )
-        for voice in provider.super_agent_voices()
-    )
+        _super_agent_voices_by_provider[provider.provider_id] = cached
+    return cached
 
 
 def stable_super_agent_voice(
@@ -224,10 +227,28 @@ def super_agent_voice_for_context(
             name=voice["name"],
             provider=voice.get("provider", CARTESIA_PROVIDER_ID),
         )
-    return super_agent_voice_for_agent_name(agent_name) or stable_super_agent_voice(
-        thread_id,
-        label,
+    return (
+        _recorded_super_agent_voice(thread_id)
+        or super_agent_voice_for_agent_name(agent_name)
+        or stable_super_agent_voice(thread_id, label)
     )
+
+
+def _recorded_super_agent_voice(thread_id: str | None) -> CartesiaVoice | None:
+    history = get_voice_history_entry(thread_id)
+    if history is None:
+        return None
+    named = super_agent_voice_for_agent_name(history.voice_name or history.agent_name)
+    if named:
+        return named
+    catalog_voice = _current_super_agent_voice_for_id(history.voice_id)
+    if catalog_voice:
+        return CartesiaVoice(
+            voice_id=catalog_voice.voice_id,
+            name=history.voice_name or history.agent_name or catalog_voice.name,
+            provider=catalog_voice.provider,
+        )
+    return None
 
 
 def super_agent_voice_id_for_context(
@@ -245,6 +266,24 @@ def _normalize_voice_name(value: str | None) -> str:
     return " ".join(value.casefold().split())
 
 
+RETIRED_DISPATCHER_LABEL_PREFIX = "dispatcher (retired"
+
+
+def is_dispatcher_label(label: str | None) -> bool:
+    """Whether ``label`` names the Dispatcher thread, current or retired.
+
+    Recreating the Dispatcher (an AI-account switch) renames the previous
+    session ``dispatcher (retired)``; it is still the Dispatcher's past, not
+    a Super Agent, so it keeps the Dispatcher's name and voice instead of
+    being given a derived human character (376, 2026-10-11: "Hi, I'm
+    Jacqueline" from a retired Dispatcher the phone still had open).
+    """
+    normalized = _normalize_voice_name(label)
+    return normalized in DISPATCHER_THREAD_LABELS or normalized.startswith(
+        RETIRED_DISPATCHER_LABEL_PREFIX
+    )
+
+
 def is_dispatcher_identity(
     thread_id: str | None = None,
     label: str | None = None,
@@ -254,10 +293,7 @@ def is_dispatcher_identity(
     route_state = route_state or get_livekit_voice_route_state()
     if thread_id and route_state.dispatcher_thread_id == thread_id:
         return True
-    return (
-        _normalize_voice_name(label) in DISPATCHER_THREAD_LABELS
-        or _normalize_voice_name(agent_name) == "dispatcher"
-    )
+    return is_dispatcher_label(label) or _normalize_voice_name(agent_name) == "dispatcher"
 
 
 def load_direct_livekit_developer_instructions(
@@ -270,7 +306,7 @@ def load_direct_livekit_developer_instructions(
     if explicit_path:
         loaded = _read_instruction_file(Path(explicit_path).expanduser())
         if loaded:
-            return loaded
+            return with_host_section(loaded)
 
     if default_path is None:
         refresh_openbase_instruction_files_from_installation()
@@ -278,13 +314,13 @@ def load_direct_livekit_developer_instructions(
         default_path or CODEX_DIRECT_LIVEKIT_INSTRUCTIONS_PATH
     )
     if loaded:
-        return loaded
+        return with_host_section(loaded)
 
     text = values.get(DIRECT_LIVEKIT_INSTRUCTIONS_TEXT_ENV, "").strip()
     if text:
-        return text
+        return with_host_section(text)
 
-    return DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS
+    return with_host_section(DIRECT_LIVEKIT_BUILTIN_DEVELOPER_INSTRUCTIONS)
 
 
 async def prepare_target_thread_for_direct_livekit(
@@ -415,7 +451,7 @@ def prepare_livekit_dispatcher_recreation() -> dict:
             updated_at=time.time(),
             instruction_override_supported=instruction_override_supported(),
         )
-        _write_state(preserved_state)
+        _write_state(preserved_state, already_locked=True)
 
     return {
         "previous_dispatcher_thread_id": previous_state.dispatcher_thread_id,
@@ -464,12 +500,24 @@ async def warm_livekit_dispatcher_thread(
             await client.aclose()
 
 
-def _dispatcher_developer_instructions() -> str | None:
+def dispatcher_developer_instructions() -> str | None:
+    """The Dispatcher thread's developer instructions: its file, else the built-in."""
     loaded = _read_instruction_file(CODEX_DISPATCHER_INSTRUCTIONS_PATH)
     if loaded:
-        return with_dispatcher_skill(loaded)
+        return with_dispatcher_rules(loaded)
 
-    return with_dispatcher_skill(DISPATCHER_BUILTIN_DEVELOPER_INSTRUCTIONS)
+    return with_dispatcher_rules(DISPATCHER_BUILTIN_DEVELOPER_INSTRUCTIONS)
+
+
+_dispatcher_developer_instructions = dispatcher_developer_instructions
+
+
+def is_dispatcher_thread(thread_id: str | None) -> bool:
+    """Whether ``thread_id`` is the pinned Dispatcher thread of this install."""
+    if not thread_id:
+        return False
+    dispatcher_thread_id = get_livekit_voice_route_state().dispatcher_thread_id
+    return bool(dispatcher_thread_id) and thread_id == dispatcher_thread_id
 
 
 async def publish_exit_to_dispatch(
@@ -500,15 +548,60 @@ async def publish_exit_to_dispatch(
     return result
 
 
-async def publish_transfer_to_thread(
+@dataclass(frozen=True)
+class VoiceRouteTransfer:
+    """A thread prepared to take the live voice route.
+
+    Built by :func:`prepare_voice_route_transfer`, which resumes the thread
+    with the direct-LiveKit developer instructions and resolves its voice. The
+    same plan is either published into a running call as a
+    ``transfer_to_thread`` data packet ("Transfer call here") or handed to the
+    agent in the room-token dispatch metadata (a call started from that
+    thread), so both paths carry one command shape.
+    """
+
+    thread_id: str
+    directory: str
+    label: str | None
+    agent_name: str | None
+    voice: CartesiaVoice | None
+    state: VoiceRouteState
+
+    def command_payload(self) -> dict:
+        return {
+            "action": "transfer_to_thread",
+            "thread_id": self.thread_id,
+            "cwd": self.directory,
+            "label": self.label,
+            "agent_name": self.agent_name,
+            "state": asdict(self.state),
+        }
+
+    def commit(self) -> None:
+        """Persist the route state and the thread's voice assignment."""
+        _write_state(self.state)
+        record_voice_assignment(
+            thread_id=self.thread_id,
+            agent_name=self.agent_name,
+            cwd=self.directory,
+            voice_id=self.state.active_target_voice_id,
+            voice_name=self.voice.name
+            if self.voice
+            else self.state.active_target_voice_name,
+            kind="codex_thread",
+            source="route_transfer",
+            seen_at=self.state.updated_at,
+        )
+
+
+async def prepare_voice_route_transfer(
     thread_id: str,
     *,
     directory: str,
     label: str | None = None,
     agent_name: str | None = None,
-    room_name: str | None = None,
-    livekit_client: livekit_api.LiveKitAPI | None = None,
-) -> VoiceRoutePublishResult:
+) -> VoiceRouteTransfer:
+    """Resume ``thread_id`` for direct voice and resolve the voice it speaks with."""
     if not instruction_override_supported():
         raise VoiceRouteBlockedError(
             "Live voice transfer to target threads is blocked because this client "
@@ -532,25 +625,7 @@ async def publish_transfer_to_thread(
         or (history_entry.agent_name if history_entry else None)
         or (history_entry.voice_name if history_entry else None)
     )
-    history_named_voice = (
-        super_agent_voice_for_agent_name(
-            history_entry.voice_name or history_entry.agent_name
-        )
-        if history_entry
-        else None
-    )
-    if history_named_voice:
-        voice = history_named_voice
-    elif history_entry and _current_super_agent_voice_for_id(history_entry.voice_id):
-        voice = CartesiaVoice(
-            voice_id=history_entry.voice_id,
-            name=history_entry.voice_name
-            or history_entry.agent_name
-            or resolved_agent_name
-            or "voice",
-        )
-    else:
-        voice = super_agent_voice_for_context(thread_id, label, resolved_agent_name)
+    voice = super_agent_voice_for_context(thread_id, label, resolved_agent_name)
     active_target_voice_name = resolved_agent_name if resolved_agent_name else None
     state = VoiceRouteState(
         dispatcher_thread_id=route_state.dispatcher_thread_id,
@@ -564,30 +639,44 @@ async def publish_transfer_to_thread(
         updated_at=time.time(),
         instruction_override_supported=True,
     )
-    result = await _publish_route_command(
-        {
-            "action": "transfer_to_thread",
-            "thread_id": thread_id,
-            "cwd": directory,
-            "label": label,
-            "agent_name": resolved_agent_name,
-            "state": asdict(state),
-        },
+    return VoiceRouteTransfer(
+        thread_id=thread_id,
+        directory=directory,
+        label=label,
+        agent_name=resolved_agent_name,
+        voice=voice,
         state=state,
+    )
+
+
+async def publish_transfer_to_thread(
+    thread_id: str,
+    *,
+    directory: str,
+    label: str | None = None,
+    agent_name: str | None = None,
+    room_name: str | None = None,
+    livekit_client: livekit_api.LiveKitAPI | None = None,
+    announce: bool = True,
+) -> VoiceRoutePublishResult:
+    """Move a running call's voice route into ``thread_id``.
+
+    ``announce`` False skips the agent's generic spoken confirmation: the
+    agent that requested the transfer already confirms it in its own words.
+    """
+    transfer = await prepare_voice_route_transfer(
+        thread_id,
+        directory=directory,
+        label=label,
+        agent_name=agent_name,
+    )
+    result = await _publish_route_command(
+        {**transfer.command_payload(), "announce": announce},
+        state=transfer.state,
         room_name=room_name,
         livekit_client=livekit_client,
     )
-    _write_state(state)
-    record_voice_assignment(
-        thread_id=thread_id,
-        agent_name=resolved_agent_name,
-        cwd=directory,
-        voice_id=state.active_target_voice_id,
-        voice_name=voice.name if voice else state.active_target_voice_name,
-        kind="codex_thread",
-        source="route_transfer",
-        seen_at=state.updated_at,
-    )
+    transfer.commit()
     return result
 
 
@@ -704,7 +793,15 @@ def _read_instruction_file(path: Path) -> str | None:
     return content or None
 
 
-def _write_state(state: VoiceRouteState) -> None:
+def _write_state(state: VoiceRouteState, *, already_locked: bool = False) -> None:
     path = _route_state_path()
+    if not already_locked:
+        with thread_state_file_lock(path):
+            _write_state(state, already_locked=True)
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(asdict(state), indent=2) + "\n", encoding="utf-8")
+    payload = asdict(state)
+    owner_id = (_read_json(path) or {}).get("route_owner_id")
+    if owner_id and state.active_target_thread_id:
+        payload["route_owner_id"] = owner_id
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")

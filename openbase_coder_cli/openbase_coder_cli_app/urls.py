@@ -7,23 +7,57 @@ from __future__ import annotations
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
+from openbase_coder_cli.openbase_coder_cli_app.ai_account_views import (
+    ai_account_settings,
+)
 from openbase_coder_cli.openbase_coder_cli_app.common import offloaded_view
-from openbase_coder_cli.openbase_coder_cli_app.git_http import git_http_backend
+from openbase_coder_cli.openbase_coder_cli_app.dictation import dictation_session
 from openbase_coder_cli.openbase_coder_cli_app.health_warnings import health_warnings
 from openbase_coder_cli.openbase_coder_cli_app.notifications import (
     notification_list,
     notification_mark_all_read,
     notification_mark_read,
 )
-from openbase_coder_cli.openbase_coder_cli_app.skill_settings import skill_sharing_settings
-from openbase_coder_cli.openbase_coder_cli_app.sync_settings import (
+from openbase_coder_cli.openbase_coder_cli_app.oauth_callback_replay import (
+    oauth_callback_replay,
+)
+from openbase_coder_cli.openbase_coder_cli_app.shown_text import shown_text_fetch
+from openbase_coder_cli.openbase_coder_cli_app.skill_settings import (
+    skill_sharing_settings,
+)
+from openbase_coder_cli.openbase_coder_cli_app.sync_daemon_api import (
     sync_conflicts,
-    sync_conflicts_ignore_containing_folder,
-    sync_conflicts_resolve,
-    sync_peers_remove,
-    sync_settings,
+    sync_daemon_barrier,
+    sync_daemon_conflict_detail,
+    sync_daemon_conflicts,
+    sync_daemon_conflicts_resolve,
+    sync_daemon_held_deletes,
+    sync_daemon_hydrate,
+    sync_daemon_settings,
+    sync_daemon_stale_lock_trash,
+    sync_daemon_stale_locks,
+    sync_daemon_status,
+    sync_daemon_stubs,
     sync_status,
-    sync_versions_purge,
+)
+from openbase_coder_cli.openbase_coder_cli_app.sync_pairing_api import (
+    sync_daemon_available_roots,
+    sync_daemon_roots,
+    sync_pairing_candidates,
+    sync_pairing_folders,
+    sync_pairing_hub,
+    sync_pairing_hub_folders,
+    sync_pairing_join,
+    sync_pairing_leave,
+    sync_pairing_offer,
+)
+from openbase_coder_cli.openbase_coder_cli_app.thread_push_api import (
+    thread_push,
+    thread_push_arrival_detail,
+    thread_push_arrivals,
+    thread_push_cancel,
+    thread_push_release,
+    thread_push_target,
 )
 from openbase_coder_cli.openbase_coder_cli_app.update import (
     update_apply,
@@ -32,6 +66,7 @@ from openbase_coder_cli.openbase_coder_cli_app.update import (
 from openbase_coder_cli.openbase_coder_cli_app.views import (
     agents_md,
     all_project_reports,
+    analytics_identify,
     apple_music_playback_entitlement,
     approval_request_detail,
     approval_requests,
@@ -66,6 +101,8 @@ from openbase_coder_cli.openbase_coder_cli_app.views import (
     launchctl_services_list,
     livekit_companion_session,
     livekit_companion_start,
+    livekit_companion_status,
+    livekit_companion_stop,
     livekit_room_token,
     livekit_voice_route,
     livekit_voice_route_exit,
@@ -124,6 +161,8 @@ from openbase_coder_cli.openbase_coder_cli_app.views import (
     thread_favorite,
     thread_interrupt,
     thread_list,
+    thread_model_settings,
+    thread_name,
     thread_queue_turn,
     thread_start_turn,
     thread_steer_turn,
@@ -137,10 +176,19 @@ from openbase_coder_cli.openbase_coder_cli_app.views import (
     uv_tool_executable_help,
     uv_tools_list,
 )
+from openbase_coder_cli.openbase_coder_cli_app.voice_model_settings import (
+    voice_model_settings,
+    voice_model_usage,
+)
 
 router = DefaultRouter()
 
 urlpatterns = [
+    path(
+        "dictation/session/",
+        offloaded_view(dictation_session),
+        name="dictation-session",
+    ),
     path("auth/session/", auth_session, name="auth-session"),
     path(
         "auth/refresh-jwt/",
@@ -163,8 +211,23 @@ urlpatterns = [
     ),
     path("diagnostics/ios-logs/", ios_logs_upload, name="ios-logs-upload"),
     path("user/ios-app-control/", ios_app_control, name="ios-app-control"),
+    path("settings/ai-account/", ai_account_settings, name="ai-account-settings"),
+    path("user/shown-text/<str:text_id>/", shown_text_fetch, name="shown-text-fetch"),
+    path(
+        "user/oauth-callback-replay/",
+        oauth_callback_replay,
+        name="oauth-callback-replay",
+    ),
     path("devices/", devices_list, name="devices-list"),
     path("onboarding/status/", onboarding_status, name="onboarding-status"),
+    # Desktop reaches Openbase Cloud only through this server; both slash forms
+    # are accepted because clients differ (see the cloud analytics urls).
+    path(
+        "openbase/analytics/identify",
+        analytics_identify,
+        name="analytics-identify",
+    ),
+    path("openbase/analytics/identify/", analytics_identify),
     path(
         "onboarding/cloud-state/",
         onboarding_cloud_state,
@@ -173,7 +236,7 @@ urlpatterns = [
     path("update/status/", update_status, name="update-status"),
     path("update/apply/", update_apply, name="update-apply"),
     path("threads/", offloaded_view(thread_list), name="thread-list"),
-    path("threads/activity/", thread_activity, name="thread-activity"),
+    path("threads/activity/", offloaded_view(thread_activity), name="thread-activity"),
     path(
         "threads/active-voice/",
         offloaded_view(thread_active_voice),
@@ -185,22 +248,62 @@ urlpatterns = [
         name="thread-dispatcher",
     ),
     path(
+        "threads/push/target/",
+        offloaded_view(thread_push_target),
+        name="thread-push-target",
+    ),
+    path(
+        "threads/push/arrivals/",
+        offloaded_view(thread_push_arrivals),
+        name="thread-push-arrivals",
+    ),
+    path(
+        "threads/push/arrivals/<str:operation_id>/",
+        offloaded_view(thread_push_arrival_detail),
+        name="thread-push-arrival-detail",
+    ),
+    path(
         "threads/<str:thread_id>/", offloaded_view(thread_detail), name="thread-detail"
     ),
     path(
         "threads/<str:thread_id>/tags/",
-        thread_tags,
+        offloaded_view(thread_tags),
         name="thread-tags",
     ),
     path(
         "threads/<str:thread_id>/favorite/",
-        thread_favorite,
+        offloaded_view(thread_favorite),
         name="thread-favorite",
+    ),
+    path(
+        "threads/<str:thread_id>/name/",
+        thread_name,
+        name="thread-name",
+    ),
+    path(
+        "threads/<str:thread_id>/push/",
+        offloaded_view(thread_push),
+        name="thread-push",
+    ),
+    path(
+        "threads/<str:thread_id>/push/cancel/",
+        offloaded_view(thread_push_cancel),
+        name="thread-push-cancel",
+    ),
+    path(
+        "threads/<str:thread_id>/push/release/",
+        thread_push_release,
+        name="thread-push-release",
     ),
     path(
         "threads/<str:thread_id>/interrupt/",
         thread_interrupt,
         name="thread-interrupt",
+    ),
+    path(
+        "threads/<str:thread_id>/models/",
+        thread_model_settings,
+        name="thread-model-settings",
     ),
     path("threads/<str:thread_id>/turns/", thread_start_turn, name="thread-start-turn"),
     path(
@@ -213,7 +316,10 @@ urlpatterns = [
         thread_steer_turn,
         name="thread-steer-turn",
     ),
-    path("notifications/", notification_list, name="notifications"),
+    # The console fires these alongside every thread open. They ran on
+    # Django's single thread-sensitive executor, queued behind git-sync and
+    # service-status probes; offloading lets them run concurrently.
+    path("notifications/", offloaded_view(notification_list), name="notifications"),
     path(
         "notifications/mark-read/",
         notification_mark_read,
@@ -224,7 +330,11 @@ urlpatterns = [
         notification_mark_all_read,
         name="notifications-mark-all-read",
     ),
-    path("approval-requests/", approval_requests, name="approval-requests"),
+    path(
+        "approval-requests/",
+        offloaded_view(approval_requests),
+        name="approval-requests",
+    ),
     path(
         "approval-requests/<str:request_id>/",
         approval_request_detail,
@@ -271,7 +381,7 @@ urlpatterns = [
     ),
     path("projects/recent/", offloaded_view(recent_projects), name="recent-projects"),
     path("projects/status/", offloaded_view(project_status), name="project-status"),
-    path("tags/", tag_options, name="tag-options"),
+    path("tags/", offloaded_view(tag_options), name="tag-options"),
     path("projects/reports/", offloaded_view(project_reports), name="project-reports"),
     path(
         "projects/reports/all/",
@@ -450,6 +560,16 @@ urlpatterns = [
         name="backend-model-settings",
     ),
     path(
+        "settings/voice-model/usage/",
+        voice_model_usage,
+        name="voice-model-usage",
+    ),
+    path(
+        "settings/voice-model/",
+        voice_model_settings,
+        name="voice-model-settings",
+    ),
+    path(
         "settings/reasoning/",
         reasoning_settings,
         name="reasoning-settings",
@@ -505,29 +625,95 @@ urlpatterns = [
         name="bootstrap-run",
     ),
     path("git/diff/", git_diff, name="git-diff"),
-    path("sync/settings/", sync_settings, name="sync-settings"),
-    path("sync/peers/remove/", sync_peers_remove, name="sync-peers-remove"),
+    path(
+        "sync/daemon/settings/",
+        offloaded_view(sync_daemon_settings),
+        name="sync-daemon-settings",
+    ),
+    # Pairing and roots can wait on another computer or the service manager,
+    # so they run off the shared executor too.
+    path(
+        "sync/daemon/pairing/candidates/",
+        offloaded_view(sync_pairing_candidates),
+        name="sync-pairing-candidates",
+    ),
+    path(
+        "sync/daemon/pairing/hub/",
+        offloaded_view(sync_pairing_hub),
+        name="sync-pairing-hub",
+    ),
+    path(
+        "sync/daemon/pairing/join/",
+        offloaded_view(sync_pairing_join),
+        name="sync-pairing-join",
+    ),
+    path(
+        "sync/daemon/pairing/leave/",
+        offloaded_view(sync_pairing_leave),
+        name="sync-pairing-leave",
+    ),
+    path(
+        "sync/daemon/pairing/offer/",
+        offloaded_view(sync_pairing_offer),
+        name="sync-pairing-offer",
+    ),
+    path(
+        "sync/daemon/pairing/folders/",
+        offloaded_view(sync_pairing_folders),
+        name="sync-pairing-folders",
+    ),
+    path(
+        "sync/daemon/pairing/hub-folders/",
+        offloaded_view(sync_pairing_hub_folders),
+        name="sync-pairing-hub-folders",
+    ),
+    path(
+        "sync/daemon/roots/available/",
+        offloaded_view(sync_daemon_available_roots),
+        name="sync-daemon-available-roots",
+    ),
+    path(
+        "sync/daemon/roots/",
+        offloaded_view(sync_daemon_roots),
+        name="sync-daemon-roots",
+    ),
+    path("sync/daemon/status/", sync_daemon_status, name="sync-daemon-status"),
+    path("sync/daemon/conflicts/", sync_daemon_conflicts, name="sync-daemon-conflicts"),
+    path(
+        "sync/daemon/conflicts/<int:conflict_id>/",
+        offloaded_view(sync_daemon_conflict_detail),
+        name="sync-daemon-conflict-detail",
+    ),
+    path(
+        "sync/daemon/stale-locks/",
+        offloaded_view(sync_daemon_stale_locks),
+        name="sync-daemon-stale-locks",
+    ),
+    path(
+        "sync/daemon/stale-locks/trash/",
+        offloaded_view(sync_daemon_stale_lock_trash),
+        name="sync-daemon-stale-lock-trash",
+    ),
+    path(
+        "sync/daemon/held-deletes/",
+        offloaded_view(sync_daemon_held_deletes),
+        name="sync-daemon-held-deletes",
+    ),
+    path(
+        "sync/daemon/conflicts/resolve/",
+        offloaded_view(sync_daemon_conflicts_resolve),
+        name="sync-daemon-conflicts-resolve",
+    ),
+    path("sync/daemon/barrier/", sync_daemon_barrier, name="sync-daemon-barrier"),
+    path("sync/daemon/stubs/", sync_daemon_stubs, name="sync-daemon-stubs"),
+    path("sync/daemon/hydrate/", sync_daemon_hydrate, name="sync-daemon-hydrate"),
+    # Daemon-backed routes in the shapes the phone apps decode.
     path("sync/status/", sync_status, name="sync-status"),
     path("sync/conflicts/", sync_conflicts, name="sync-conflicts"),
     path(
         "sync/conflicts/resolve/",
-        sync_conflicts_resolve,
+        sync_daemon_conflicts_resolve,
         name="sync-conflicts-resolve",
-    ),
-    path(
-        "sync/conflicts/ignore-containing-folder/",
-        sync_conflicts_ignore_containing_folder,
-        name="sync-conflicts-ignore-containing-folder",
-    ),
-    path(
-        "sync/versions/purge/",
-        sync_versions_purge,
-        name="sync-versions-purge",
-    ),
-    path(
-        "sync/git/<str:folder_id>/<path:subpath>",
-        git_http_backend,
-        name="sync-git-http",
     ),
     path("status/", offloaded_view(service_status), name="service-status"),
     path(
@@ -539,6 +725,16 @@ urlpatterns = [
         "livekit-companion-start/",
         livekit_companion_start,
         name="livekit-companion-start",
+    ),
+    path(
+        "livekit-companion-stop/",
+        livekit_companion_stop,
+        name="livekit-companion-stop",
+    ),
+    path(
+        "livekit-companion-status/",
+        livekit_companion_status,
+        name="livekit-companion-status",
     ),
     path("livekit-room-token/", livekit_room_token, name="livekit-room-token"),
     path("livekit-voice-route/", livekit_voice_route, name="livekit-voice-route"),

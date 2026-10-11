@@ -24,7 +24,9 @@ openbase-coder [OPTIONS] COMMAND [ARGS]
 | Command | Description |
 |---|---|
 | [`backend`](backend.md) | View or switch the selected coding backend |
-| [`claude`](claude.md) | Inspect the Claude Code login used by Openbase sessions |
+| [`claude`](claude.md) | Start Claude Code with Openbase's profile; inspect its login |
+| [`codex`](codex.md) | Start Codex with Openbase's profile, attached to the managed app-server |
+| [`threads`](threads.md) | List the Codex and Claude Code sessions open in terminals, send one a message, and maintain threads |
 | [`claude-sync`](claude-sync.md) | Synchronize Claude Code session snapshots across devices |
 | [`codex-sync`](codex-sync.md) | Synchronize Codex session snapshots across devices |
 | [`defaults`](defaults.md) | Manage default dispatcher and Super Agents model/reasoning settings |
@@ -32,6 +34,8 @@ openbase-coder [OPTIONS] COMMAND [ARGS]
 | [`server`](server.md) | Run local Django/ASGI server |
 | [`service`](service.md) | Publish a local HTTP service privately over the Openbase VPN |
 | [`restart`](restart.md) | Restart Openbase-managed services |
+| [`sync`](sync.md) | Inspect Openbase Sync, resolve conflicts, and migrate from the previous sync |
+| [`sync-daemon`](sync-daemon.md) | Configure and manage Openbase Sync between two of your computers |
 | [`self-update`](self-update.md) | Update a standalone install to the latest release |
 | [`version`](self-update.md) | Print CLI and package versions plus update availability |
 | [`services`](services.md) | Manage launchd services |
@@ -39,6 +43,7 @@ openbase-coder [OPTIONS] COMMAND [ARGS]
 | [`onboarding`](onboarding.md) | Inspect onboarding state and report it to Openbase cloud |
 | [`login`](login.md) | Email-code login to Openbase cloud |
 | [`loops`](loops.md) | Manage loops: scheduled or event-triggered agent prompts and commands (alias: `routines`) |
+| [`mcp-gateway`](../laptop-tools.md#commands) | Make MCP servers bound to one machine (such as your laptop's screen) available to agents on another |
 | [`logout`](logout.md) | Remove saved auth tokens |
 | [`plugins`](plugins.md) | Install and manage Openbase plugins |
 | [`profiles`](profiles.md) | Install or repair Openbase conversation profiles and session-ID hooks |

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import html
 import json
 import os
 import threading
@@ -31,58 +30,24 @@ from openbase_coder_cli.config.token_manager import (
     TokenManager,
     create_pkce_challenge,
     create_pkce_verifier,
+    decode_jwt_claims_unverified,
 )
 from openbase_coder_cli.paths import AUTH_JSON_PATH, MACHINE_TOKEN_JSON_PATH
 from openbase_coder_cli.services.cloud_registration import register_and_report
+from openbase_coder_cli.services.netmesh_account import sign_out_account
 
+from .login_pages import login_complete_page, stale_login_page
 from .password_auth import exchange_password_for_jwts
 from .tailnet import reconcile_after_login
 
 DESKTOP_LOGIN_COMPLETE_URL = "openbase://open?source=cli-auth&intent=login-complete"
+# Set by the desktop app on every CLI command it spawns. Only then is the
+# openbase:// scheme known to be registered, so only then does the "signed in"
+# page reopen the app; a terminal login just points back to the terminal.
+DESKTOP_APP_ENV_VAR = "OPENBASE_LAUNCHED_BY_DESKTOP"
 # How long the local OAuth callback listener waits for the browser redirect
 # before giving up and releasing the port.
 LOGIN_CALLBACK_TIMEOUT_SECONDS = 300.0
-
-
-def _oauth_success_html(*, desktop_url: str = DESKTOP_LOGIN_COMPLETE_URL) -> bytes:
-    escaped_desktop_url = html.escape(desktop_url, quote=True)
-    script_desktop_url = json.dumps(desktop_url)
-    return f"""<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8">
-    <title>Openbase Coder login complete</title>
-    <style>
-      body {{
-        color: #18181b;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        margin: 0;
-        padding: 48px;
-      }}
-      main {{
-        margin: 0 auto;
-        max-width: 560px;
-      }}
-      a {{
-        color: #2563eb;
-      }}
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>Logged in successfully</h1>
-      <p>Openbase Coder has received your login. You can return to the terminal.</p>
-      <p>If you started from the Mac app, it should reopen automatically.</p>
-      <p><a href="{escaped_desktop_url}">Open the Mac app</a></p>
-    </main>
-    <script>
-      window.setTimeout(function () {{
-        window.location.href = {script_desktop_url};
-      }}, 250);
-    </script>
-  </body>
-</html>
-""".encode("utf-8")
 
 
 def _get_web_backend_url() -> str:
@@ -97,6 +62,12 @@ def _get_oauth_redirect_uri() -> str:
     return os.environ.get(
         "OPENBASE_CODER_CLI_OAUTH_REDIRECT_URI", DEFAULT_OAUTH_REDIRECT_URI
     )
+
+
+def _login_return_desktop_url() -> str | None:
+    if os.environ.get(DESKTOP_APP_ENV_VAR) == "1":
+        return DESKTOP_LOGIN_COMPLETE_URL
+    return None
 
 
 class _OAuthCallbackHandler(BaseHTTPRequestHandler):
@@ -128,18 +99,14 @@ class _OAuthCallbackHandler(BaseHTTPRequestHandler):
             self.send_response(409)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write(
-                b"<html><body><h1>Older login attempt ignored</h1>"
-                b"<p>Please continue in the newest Openbase login tab.</p>"
-                b"</body></html>"
-            )
+            self.wfile.write(stale_login_page())
             return
 
         self.server.result = result
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
-        self.wfile.write(_oauth_success_html())
+        self.wfile.write(login_complete_page(desktop_url=_login_return_desktop_url()))
         self.server.done.set()
 
     def log_message(self, format: str, *args) -> None:  # noqa: A003
@@ -295,6 +262,18 @@ def _complete_login(
     *, web_backend_url: str, access_token: str, refresh_token: str, expires_in: int
 ) -> None:
     manager = TokenManager(web_backend_url)
+    # Only a stored login counts: a workspace's pinned owner identity is not
+    # a session to sign out.
+    previous_sub = (
+        manager.get_owner_identity().get("sub") if manager.has_refresh_token else None
+    )
+    new_sub = str(decode_jwt_claims_unverified(access_token).get("sub") or "")
+    if previous_sub and new_sub and previous_sub != new_sub:
+        # Switching accounts without a logout: release everything this
+        # machine holds for the previous account while its token still works,
+        # so its VPN node and device record cannot follow into the new one.
+        click.echo("Signing out the previous Openbase account on this machine...")
+        sign_out_account(echo=click.echo)
     manager.store_tokens(
         access_token=access_token,
         refresh_token=refresh_token,
@@ -449,8 +428,10 @@ def login(email: str | None, password_stdin: bool) -> None:
 
 @click.command()
 def logout() -> None:
-    """Log out and clear stored tokens."""
+    """Log out, leave the account's Openbase VPN network, and clear tokens."""
     if AUTH_JSON_PATH.is_file():
+        # Needs the account's token, so it runs before the tokens go.
+        sign_out_account(echo=click.echo)
         AUTH_JSON_PATH.unlink()
         if MACHINE_TOKEN_JSON_PATH.is_file():
             MACHINE_TOKEN_JSON_PATH.unlink()

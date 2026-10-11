@@ -90,7 +90,9 @@ def test_openbase_cloud_subscription_entitlement_allows_paid_feature(monkeypatch
     }
 
 
-def test_openbase_cloud_subscription_entitlement_locks_without_subscription(monkeypatch):
+def test_openbase_cloud_subscription_entitlement_locks_without_subscription(
+    monkeypatch,
+):
     monkeypatch.setattr(
         cloud_audio,
         "get_token_manager",
@@ -204,3 +206,74 @@ def test_openbase_cloud_audio_check_treats_unauthorized_as_login_required(monkey
                 stt_provider_id="assemblyai",
                 web_backend_url="https://backend.example",
             )
+
+
+def test_openbase_cloud_audio_check_uses_machine_token_without_user_login(monkeypatch):
+    """Container workspaces hold only a machine token; the check must use it."""
+
+    class LoggedOutTokenManager:
+        def get_access_token(self):
+            raise cloud_audio.AuthLoginRequiredError("no login")
+
+    class CachedMachineTokens:
+        def __init__(self, web_backend_url):
+            self.web_backend_url = web_backend_url
+
+        def has_cached_token(self):
+            return True
+
+        def get_machine_token(self):
+            return "obmt_cached"
+
+    monkeypatch.setattr(
+        cloud_audio,
+        "get_token_manager",
+        lambda web_backend_url: LoggedOutTokenManager(),
+    )
+    monkeypatch.setattr(cloud_audio, "MachineTokenManager", CachedMachineTokens)
+    response = usage_response(
+        monthly_limit_cents=1000,
+        cartesia_remaining_cents=500,
+        assemblyai_remaining_cents=500,
+    )
+
+    with mock.patch.object(httpx, "get", return_value=response) as get:
+        cloud_audio.ensure_openbase_cloud_audio_subscription(
+            tts_provider_id="openbase_cloud",
+            stt_provider_id="openbase_cloud",
+            web_backend_url="https://backend.example",
+        )
+
+    assert get.call_args.kwargs["headers"]["Authorization"] == "Bearer obmt_cached"
+
+
+def test_openbase_cloud_audio_check_still_requires_login_without_machine_token(
+    monkeypatch,
+):
+    class LoggedOutTokenManager:
+        def get_access_token(self):
+            raise cloud_audio.AuthLoginRequiredError("no login")
+
+    class NoMachineTokens:
+        def __init__(self, web_backend_url):
+            pass
+
+        def has_cached_token(self):
+            return False
+
+        def get_machine_token(self):  # pragma: no cover - must not be reached
+            raise AssertionError("must not mint without a login")
+
+    monkeypatch.setattr(
+        cloud_audio,
+        "get_token_manager",
+        lambda web_backend_url: LoggedOutTokenManager(),
+    )
+    monkeypatch.setattr(cloud_audio, "MachineTokenManager", NoMachineTokens)
+
+    with pytest.raises(cloud_audio.AuthLoginRequiredError):
+        cloud_audio.ensure_openbase_cloud_audio_subscription(
+            tts_provider_id="openbase_cloud",
+            stt_provider_id="openbase_cloud",
+            web_backend_url="https://backend.example",
+        )

@@ -82,6 +82,7 @@ def test_transfer_route_resolves_agent_name(monkeypatch):
                 "label": "build-thread",
                 "agent_name": "Build Agent",
                 "room_name": None,
+                "announce": True,
             },
         )
     ]
@@ -160,6 +161,7 @@ def test_transfer_route_selects_latest_matching_agent_name(monkeypatch):
                 "label": "build-thread-two",
                 "agent_name": "BUILD AGENT",
                 "room_name": None,
+                "announce": True,
             },
         )
     ]
@@ -236,6 +238,7 @@ def test_transfer_route_selects_newest_uuidv7_matching_agent_name(monkeypatch):
                 "label": "newer-george",
                 "agent_name": "George",
                 "room_name": None,
+                "announce": True,
             },
         )
     ]
@@ -319,6 +322,7 @@ def test_transfer_route_selects_latest_created_matching_agent_name(monkeypatch):
                 "label": "build-thread-two",
                 "agent_name": "Build Agent",
                 "room_name": None,
+                "announce": True,
             },
         )
     ]
@@ -392,6 +396,7 @@ def test_transfer_route_resolves_derived_agent_name_for_named_thread(monkeypatch
                 "label": "Build Feature",
                 "agent_name": "Dottie",
                 "room_name": None,
+                "announce": True,
             },
         )
     ]
@@ -480,6 +485,7 @@ def test_transfer_route_does_not_match_dispatcher_by_agent_name(monkeypatch):
                 "label": "Build Feature",
                 "agent_name": "Dottie",
                 "room_name": None,
+                "announce": True,
             },
         )
     ]
@@ -543,6 +549,7 @@ def test_transfer_route_passes_thread_agent_name_for_thread_id(monkeypatch):
                 "directory": "/tmp/project",
                 "label": "create-lorem-read-me",
                 "room_name": None,
+                "announce": True,
                 "agent_name": "Dorothy",
             },
         )
@@ -659,6 +666,7 @@ def test_transfer_route_derives_agent_name_for_thread_id_without_metadata(monkey
                 "directory": "/tmp/project",
                 "label": "Build Feature",
                 "room_name": None,
+                "announce": True,
                 "agent_name": "Dottie",
             },
         )

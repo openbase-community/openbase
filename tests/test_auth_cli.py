@@ -7,6 +7,7 @@ import time
 from click.testing import CliRunner
 
 from openbase_coder_cli.cli import main
+from openbase_coder_cli.cli.login_pages import login_complete_page, stale_login_page
 from openbase_coder_cli.config.token_manager import AuthLoginRequiredError
 
 auth_cli = importlib.import_module("openbase_coder_cli.cli.auth")
@@ -43,8 +44,13 @@ def test_login_password_stdin_reissues_and_stores_jwts_without_echo(monkeypatch)
     stored = {}
 
     class FakeTokenManager:
+        has_refresh_token = False
+
         def __init__(self, web_backend_url):
             stored["backend"] = web_backend_url
+
+        def get_owner_identity(self):
+            return {}
 
         def store_tokens(self, **kwargs):
             stored.update(kwargs)
@@ -352,14 +358,52 @@ def test_auth_status_logged_out_exits_nonzero(monkeypatch):
     assert "Not logged in" in result.output
 
 
-def test_oauth_success_page_announces_success_and_returns_to_desktop():
-    html = auth_cli._oauth_success_html().decode("utf-8")
+def _assert_no_paywall(html):
+    for paywall_word in ("subscribe", "plan", "pay", "billing", "dashboard"):
+        assert paywall_word not in html.lower().replace("display", "")
 
-    assert "Logged in successfully" in html
-    assert "Open the Mac app" in html
+
+def test_oauth_success_page_for_desktop_login_reopens_the_app():
+    html = login_complete_page(desktop_url=auth_cli.DESKTOP_LOGIN_COMPLETE_URL).decode(
+        "utf-8"
+    )
+
+    assert "You&#x27;re signed in." in html
+    assert "Return to the Openbase app" in html
+    assert "Open the Openbase app" in html
+    assert "<svg" in html  # inline brand logo, no network fetch from loopback
     assert "openbase://open?source=cli-auth&amp;intent=login-complete" in html
     assert '"openbase://open?source=cli-auth&intent=login-complete"' in html
     assert "window.location.href" in html
+    _assert_no_paywall(html)
+
+
+def test_oauth_success_page_for_terminal_login_never_opens_the_app():
+    """A terminal login (e.g. ./scripts/setup) runs before the app registers
+    openbase://, so the page must not try the scheme at all."""
+    html = login_complete_page(desktop_url=None).decode("utf-8")
+
+    assert "You&#x27;re signed in." in html
+    assert "Return to your terminal" in html
+    assert "openbase://" not in html
+    assert "Open the Openbase app" not in html
+    assert "<script" not in html
+    _assert_no_paywall(html)
+
+
+def test_login_return_target_follows_desktop_env(monkeypatch):
+    monkeypatch.delenv(auth_cli.DESKTOP_APP_ENV_VAR, raising=False)
+    assert auth_cli._login_return_desktop_url() is None
+
+    monkeypatch.setenv(auth_cli.DESKTOP_APP_ENV_VAR, "1")
+    assert auth_cli._login_return_desktop_url() == auth_cli.DESKTOP_LOGIN_COMPLETE_URL
+
+
+def test_stale_login_page_points_to_newest_tab():
+    html = stale_login_page().decode("utf-8")
+
+    assert "newest" in html
+    assert "window.location" not in html
 
 
 def _free_port():

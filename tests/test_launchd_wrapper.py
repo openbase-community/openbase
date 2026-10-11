@@ -1,6 +1,8 @@
 import plistlib
 import subprocess
 
+import pytest
+
 from openbase_coder_cli.runtime import RuntimePackage
 from openbase_coder_cli.services import launchd, process_utils
 from openbase_coder_cli.services.definitions import ServiceDefinition
@@ -25,12 +27,239 @@ def test_standalone_plist_associates_background_item_with_desktop_app(
         env_file=str(tmp_path / ".env"),
         standalone=True,
     )
+    monkeypatch.setattr(launchd, "_installed_desktop_bundle_id", lambda: None)
 
     plist = launchd.generate_plist(service, config)
     payload = plistlib.loads(plist.read_bytes())
 
     assert payload["AssociatedBundleIdentifiers"] == ["tech.openbase.coder.desktop"]
     assert payload["ProgramArguments"] == [str(tmp_path / "launchd" / "sample.sh")]
+
+
+def _sample_service() -> ServiceDefinition:
+    return ServiceDefinition(
+        name="sample",
+        description="Sample",
+        command_template="sample",
+        workdir_template="{runtime_workdir}",
+    )
+
+
+def _patch_launchd_dirs(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(launchd, "LAUNCHD_WRAPPER_DIR", tmp_path / "launchd")
+    monkeypatch.setattr(launchd, "PLIST_DIR", tmp_path / "plists")
+    monkeypatch.setattr(launchd, "DEFAULT_LOG_DIR", tmp_path / "logs")
+    monkeypatch.setattr(launchd, "OPENBASE_BASE_DIR", tmp_path / "openbase")
+
+
+def test_plist_associates_with_installed_desktop_app_outside_standalone(
+    tmp_path, monkeypatch
+):
+    _patch_launchd_dirs(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        launchd, "_installed_desktop_bundle_id", lambda: "cloud.openbase.coder.dev"
+    )
+    config = InstallationConfig(
+        workspace_path=str(tmp_path), env_file=str(tmp_path / ".env")
+    )
+
+    payload = plistlib.loads(
+        launchd.generate_plist(_sample_service(), config).read_bytes()
+    )
+
+    # A developer install with the desktop app present is attributed to that
+    # app (its real bundle id, which differs for dev builds), so background
+    # items are not announced as anonymous shell scripts.
+    assert payload["AssociatedBundleIdentifiers"] == ["cloud.openbase.coder.dev"]
+
+
+def test_plist_has_no_association_without_desktop_app(tmp_path, monkeypatch):
+    _patch_launchd_dirs(tmp_path, monkeypatch)
+    monkeypatch.setattr(launchd, "_installed_desktop_bundle_id", lambda: None)
+    config = InstallationConfig(
+        workspace_path=str(tmp_path), env_file=str(tmp_path / ".env")
+    )
+
+    payload = plistlib.loads(
+        launchd.generate_plist(_sample_service(), config).read_bytes()
+    )
+
+    assert "AssociatedBundleIdentifiers" not in payload
+
+
+def test_installed_desktop_bundle_id_reads_info_plist(tmp_path, monkeypatch):
+    app = tmp_path / "Applications" / "Openbase.app" / "Contents"
+    app.mkdir(parents=True)
+    (app / "Info.plist").write_bytes(
+        plistlib.dumps({"CFBundleIdentifier": "cloud.openbase.coder.dev-dashboard"})
+    )
+    monkeypatch.setattr(launchd.Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(launchd, "_SYSTEM_APPLICATIONS_DIR", tmp_path / "nowhere")
+
+    assert (
+        launchd._installed_desktop_bundle_id() == "cloud.openbase.coder.dev-dashboard"
+    )
+
+
+def test_write_if_changed_leaves_identical_file_untouched(tmp_path):
+    path = tmp_path / "nested" / "sample.plist"
+
+    assert launchd._write_if_changed(path, "content\n", mode=0o755) is True
+    stat_before = path.stat()
+
+    assert launchd._write_if_changed(path, "content\n", mode=0o755) is False
+    stat_after = path.stat()
+    assert stat_after.st_mtime_ns == stat_before.st_mtime_ns
+    assert stat_after.st_mode & 0o777 == 0o755
+
+    assert launchd._write_if_changed(path, "other\n") is True
+    assert path.read_text() == "other\n"
+
+
+def test_write_service_files_reports_reload_only_for_plist_changes(
+    tmp_path, monkeypatch
+):
+    _patch_launchd_dirs(tmp_path, monkeypatch)
+    monkeypatch.setattr(launchd, "_is_macos", lambda: True)
+    monkeypatch.setattr(launchd, "_installed_desktop_bundle_id", lambda: None)
+    service = ServiceDefinition(
+        name="sample",
+        description="Sample",
+        command_template="sample",
+        workdir_template="{workspace}",
+    )
+    config = InstallationConfig(
+        workspace_path=str(tmp_path), env_file=str(tmp_path / ".env")
+    )
+    binaries = {"python": "/usr/bin/python3"}
+
+    # First write creates both files: the plist is new, so a bootstrap is due.
+    assert launchd._write_service_files(service, config, binaries) is True
+    # Nothing changed: an in-place restart is enough.
+    assert launchd._write_service_files(service, config, binaries) is False
+    # A wrapper-only change (new python) is picked up by the next exec of the
+    # wrapper; launchd need not re-read the plist.
+    assert launchd._write_service_files(service, config, {"python": "/opt/py"}) is False
+    # A plist change (different workdir) requires re-registering the job.
+    config_moved = InstallationConfig(
+        workspace_path=str(tmp_path / "elsewhere"), env_file=str(tmp_path / ".env")
+    )
+    assert launchd._write_service_files(service, config_moved, binaries) is True
+
+
+def _restart_harness(monkeypatch, pids):
+    """Fake launchctl where ``pids`` is the sequence of pids ``print`` reports."""
+    calls = []
+    pid_iter = iter(pids)
+    current = {"pid": None}
+
+    def fake_launchctl(*args, check=True):
+        calls.append(args)
+        if args[0] == "print":
+            current["pid"] = next(pid_iter, current["pid"])
+            pid = current["pid"]
+            stdout = f"\tpid = {pid}\n" if pid else ""
+            return subprocess.CompletedProcess(["launchctl", *args], 0, stdout, "")
+        return subprocess.CompletedProcess(["launchctl", *args], 0, "", "")
+
+    monkeypatch.setattr(launchd, "_is_macos", lambda: True)
+    monkeypatch.setattr(launchd, "_uid", lambda: 501)
+    monkeypatch.setattr(launchd, "_launchctl", fake_launchctl)
+    monkeypatch.setattr(launchd, "_truncate_existing_logs", lambda _svc: None)
+    monkeypatch.setattr(
+        launchd, "_cleanup_lingering_processes", lambda _svc, keep=frozenset(): None
+    )
+    monkeypatch.setattr(process_utils, "process_tree_pids", lambda pid: {pid})
+    monkeypatch.setattr(process_utils.time, "sleep", lambda _s: None)
+    return calls
+
+
+def test_launchctl_restart_terminates_and_kickstarts_without_reregistering(
+    monkeypatch,
+):
+    # print: loaded check (111), old pid read (111), poll (111), poll (222),
+    # new pid read (222).
+    calls = _restart_harness(monkeypatch, [111, 111, 111, 222, 222])
+
+    assert launchd.launchctl_restart(_sample_service()) is True
+
+    target = "gui/501/com.openbase.coder.sample"
+    actions = [c for c in calls if c[0] != "print"]
+    assert actions == [("kill", "SIGTERM", target), ("kickstart", target)]
+    assert not any(c[0] in {"bootout", "bootstrap"} for c in calls)
+
+
+def test_launchctl_restart_forces_kickstart_when_sigterm_is_ignored(monkeypatch):
+    monkeypatch.setattr(launchd, "RESTART_EXIT_TIMEOUT_SECONDS", 0.0)
+    calls = _restart_harness(monkeypatch, [111])
+    changes = iter([111, 222])
+    monkeypatch.setattr(
+        process_utils, "wait_for_pid_change", lambda *a, **k: next(changes)
+    )
+
+    assert launchd.launchctl_restart(_sample_service()) is True
+
+    target = "gui/501/com.openbase.coder.sample"
+    actions = [c for c in calls if c[0] != "print"]
+    assert actions == [
+        ("kill", "SIGTERM", target),
+        ("kickstart", "-k", target),
+        ("kickstart", target),
+    ]
+
+
+def test_launchctl_restart_returns_false_when_job_not_loaded(monkeypatch):
+    calls = []
+
+    def fake_launchctl(*args, check=True):
+        calls.append(args)
+        return subprocess.CompletedProcess(["launchctl", *args], 113, "", "not found")
+
+    monkeypatch.setattr(launchd, "_is_macos", lambda: True)
+    monkeypatch.setattr(launchd, "_uid", lambda: 501)
+    monkeypatch.setattr(launchd, "_launchctl", fake_launchctl)
+
+    assert launchd.launchctl_restart(_sample_service()) is False
+    assert [c[0] for c in calls] == ["print"]
+
+
+def test_install_service_restarts_in_place_when_plist_unchanged(monkeypatch):
+    events = []
+    monkeypatch.setattr(launchd, "_ensure_launchd_paths", lambda: None)
+    monkeypatch.setattr(launchd, "_resolve_binaries", lambda _c, _s: {})
+    monkeypatch.setattr(launchd, "_write_service_files", lambda *_a: False)
+    monkeypatch.setattr(
+        launchd, "launchctl_restart", lambda svc: events.append("restart") or True
+    )
+    monkeypatch.setattr(
+        launchd, "launchctl_bootstrap", lambda svc: events.append("bootstrap")
+    )
+
+    launchd.install_service(InstallationConfig(env_file=".env"), _sample_service())
+
+    assert events == ["restart"]
+
+
+def test_install_service_bootstraps_when_plist_changed_or_job_unloaded(monkeypatch):
+    events = []
+    monkeypatch.setattr(launchd, "_ensure_launchd_paths", lambda: None)
+    monkeypatch.setattr(launchd, "_resolve_binaries", lambda _c, _s: {})
+    monkeypatch.setattr(
+        launchd, "launchctl_bootstrap", lambda svc: events.append("bootstrap")
+    )
+
+    monkeypatch.setattr(launchd, "_write_service_files", lambda *_a: True)
+    monkeypatch.setattr(
+        launchd, "launchctl_restart", lambda svc: events.append("restart") or True
+    )
+    launchd.install_service(InstallationConfig(env_file=".env"), _sample_service())
+    assert events == ["bootstrap"]
+
+    events.clear()
+    monkeypatch.setattr(launchd, "_write_service_files", lambda *_a: False)
+    monkeypatch.setattr(launchd, "launchctl_restart", lambda svc: False)
+    launchd.install_service(InstallationConfig(env_file=".env"), _sample_service())
+    assert events == ["bootstrap"]
 
 
 def test_generate_wrapper_includes_user_bin_paths(tmp_path, monkeypatch):
@@ -48,12 +277,64 @@ def test_generate_wrapper_includes_user_bin_paths(tmp_path, monkeypatch):
         env_file=str(tmp_path / ".env"),
     )
 
+    monkeypatch.setattr(launchd, "node_runtime_bin_dir", lambda: None)
+
     wrapper = launchd.generate_wrapper(service, config, {"python": "/usr/bin/python3"})
 
     assert (
         'export PATH="$HOME/.openbase/bin:$HOME/.local/bin:$HOME/bin:'
         '/opt/homebrew/bin:/usr/local/bin:$PATH"' in wrapper.read_text()
     )
+
+
+def test_generate_wrapper_adds_nvm_node_dir_to_path(tmp_path, monkeypatch):
+    """An nvm-only Node is invisible to launchd; pnpm's ``env node`` shebang
+    then fails the console build (fresh-install QA, 2026-10-10)."""
+    monkeypatch.setattr(launchd, "LAUNCHD_WRAPPER_DIR", tmp_path / "launchd")
+    monkeypatch.setattr(launchd, "OPENBASE_BASE_DIR", tmp_path / "openbase")
+    nvm_bin = tmp_path / ".nvm" / "versions" / "node" / "v24.18.0" / "bin"
+    monkeypatch.setattr(launchd, "node_runtime_bin_dir", lambda: nvm_bin)
+
+    service = ServiceDefinition(
+        name="sample",
+        description="Sample",
+        command_template="sample",
+        workdir_template="{workspace}",
+    )
+    config = InstallationConfig(
+        workspace_path=str(tmp_path / "workspace"),
+        env_file=str(tmp_path / ".env"),
+    )
+
+    wrapper = launchd.generate_wrapper(service, config, {"python": "/usr/bin/python3"})
+
+    # Ahead of Homebrew, so a stray `brew install node` of another major
+    # cannot shadow the workspace's pinned nvm Node.
+    assert f'export PATH="{nvm_bin}:$HOME/.openbase/bin:' in wrapper.read_text()
+    assert '/opt/homebrew/bin:/usr/local/bin:$PATH"' in wrapper.read_text()
+
+
+def test_generate_wrapper_skips_node_dir_already_on_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(launchd, "LAUNCHD_WRAPPER_DIR", tmp_path / "launchd")
+    monkeypatch.setattr(launchd, "OPENBASE_BASE_DIR", tmp_path / "openbase")
+    monkeypatch.setattr(
+        launchd, "node_runtime_bin_dir", lambda: launchd.Path("/opt/homebrew/bin")
+    )
+
+    service = ServiceDefinition(
+        name="sample",
+        description="Sample",
+        command_template="sample",
+        workdir_template="{workspace}",
+    )
+    config = InstallationConfig(
+        workspace_path=str(tmp_path / "workspace"),
+        env_file=str(tmp_path / ".env"),
+    )
+
+    wrapper = launchd.generate_wrapper(service, config, {"python": "/usr/bin/python3"})
+
+    assert '/opt/homebrew/bin:/usr/local/bin:$PATH"' in wrapper.read_text()
 
 
 def test_generate_wrapper_execs_runner_module_with_service_name(tmp_path, monkeypatch):
@@ -116,6 +397,94 @@ def test_resolve_binaries_prefers_standalone_paths(tmp_path, monkeypatch):
     resolvers = launchd._binary_resolvers(config)
     assert resolvers["openbase_coder"]() == str(openbase_coder)
     assert resolvers["livekit"]() == str(livekit)
+
+
+def test_dev_livekit_resolver_skips_stale_download(tmp_path, monkeypatch):
+    stale = tmp_path / "openbase" / "bin" / "livekit-server"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("#!/bin/sh\n", encoding="utf-8")
+    stale.chmod(0o755)
+    fallback = tmp_path / "homebrew" / "livekit-server"
+    fallback.parent.mkdir()
+    fallback.write_text("#!/bin/sh\n", encoding="utf-8")
+    fallback.chmod(0o755)
+
+    monkeypatch.setattr(launchd, "stable_runtime_package", lambda: None)
+    monkeypatch.setattr(
+        "openbase_coder_cli.livekit_install.installed_livekit_server_path",
+        lambda: stale,
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.livekit_install.livekit_binary_matches_pin",
+        lambda _binary: False,
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.livekit_install.fallback_livekit_server_path",
+        lambda: fallback,
+    )
+
+    config = InstallationConfig(
+        workspace_path="",
+        env_file=str(tmp_path / ".env"),
+        standalone=False,
+    )
+
+    assert launchd._binary_resolvers(config)["livekit"]() == str(fallback)
+
+
+def test_tunneld_tracks_current_package_despite_old_installed_copy(
+    tmp_path, monkeypatch
+):
+    current = tmp_path / "current"
+    old = tmp_path / "old" / "bin" / "openbase-tunneld"
+    new = tmp_path / "new" / "bin" / "openbase-tunneld"
+    installed = tmp_path / "user-bin" / "openbase-tunneld"
+    for binary, content in ((old, "old"), (new, "new"), (installed, "old")):
+        binary.parent.mkdir(parents=True)
+        binary.write_text(content)
+        binary.chmod(0o755)
+    current.symlink_to(old.parent.parent)
+    monkeypatch.delenv("OPENBASE_TUNNELD_BIN", raising=False)
+    monkeypatch.setattr(launchd, "OPENBASE_BIN_DIR", installed.parent)
+    monkeypatch.setattr(
+        launchd, "stable_runtime_package", lambda: RuntimePackage(root=current)
+    )
+    config = InstallationConfig(standalone=True)
+    resolver = launchd._binary_resolvers(config)["tunneld"]
+    assert resolver() == str(current / "bin" / "openbase-tunneld")
+    current.unlink()
+    current.symlink_to(new.parent.parent)
+    assert resolver() == str(current / "bin" / "openbase-tunneld")
+    assert (current / "bin" / "openbase-tunneld").read_text() == "new"
+    assert installed.read_text() == "old"
+
+
+def test_install_refreshes_enabled_optional_daemons_not_disabled_or_oneshots(
+    monkeypatch,
+):
+    monkeypatch.setattr(launchd.tp, "provider", lambda: "netmesh-tsnet")
+    enabled = {"openbase-tunneld", "sync-daemon", "openbase-cloud-auth-rehydrate"}
+    installed = []
+    monkeypatch.setattr(launchd, "_ensure_launchd_paths", lambda: None)
+    monkeypatch.setattr(launchd, "_selected_backend", lambda _config: "openbase-cloud")
+    monkeypatch.setattr(
+        launchd, "launchctl_status", lambda svc: {"installed": svc.name in enabled}
+    )
+    monkeypatch.setattr(launchd, "_resolve_binaries", lambda _config, _services: {})
+    monkeypatch.setattr(launchd, "remove_service", lambda _svc: False)
+    monkeypatch.setattr(launchd, "_write_service_files", lambda *_args: False)
+    monkeypatch.setattr(
+        launchd,
+        "_activate_service",
+        lambda svc, _reload: installed.append(svc.name) or "Restarted",
+    )
+    launchd.install_all_services(InstallationConfig(standalone=True))
+    assert {"django-cli", "livekit-server", "openbase-tunneld", "sync-daemon"} <= set(
+        installed
+    )
+    assert "openbase-cloud-auth-rehydrate" not in installed
+    assert "openbase-cloud-heartbeat" not in installed
+    assert "codex-app-server" not in installed
 
 
 def test_launchctl_bootstrap_reenables_disabled_label(tmp_path, monkeypatch):
@@ -358,3 +727,170 @@ def test_ensure_launchd_paths_creates_systemd_dir_on_linux(tmp_path, monkeypatch
     launchd._ensure_launchd_paths()
 
     assert systemd_dir.is_dir()
+
+
+@pytest.mark.parametrize("provider", ["netmesh", "tailscale"])
+@pytest.mark.parametrize("loaded", [False, True])
+def test_install_removes_inactive_direct_even_when_unloaded(
+    tmp_path, monkeypatch, provider, loaded
+):
+    from openbase_coder_cli.services.definitions import TUNNELD_SERVICE
+
+    _patch_launchd_dirs(tmp_path, monkeypatch)
+    plist = launchd._plist_path(TUNNELD_SERVICE)
+    wrapper = launchd._wrapper_path(TUNNELD_SERVICE)
+    for path in (plist, wrapper):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("legacy Direct service")
+    removed = []
+    installed = []
+    monkeypatch.setattr(launchd.tp, "provider", lambda: provider)
+    monkeypatch.setattr(launchd, "_ensure_launchd_paths", lambda: None)
+    monkeypatch.setattr(launchd, "_selected_backend", lambda _config: "openbase-cloud")
+    monkeypatch.setattr(
+        launchd,
+        "launchctl_status",
+        lambda svc: {
+            "installed": loaded and svc == TUNNELD_SERVICE and svc not in removed
+        },
+    )
+    monkeypatch.setattr(launchd, "launchctl_bootout", lambda svc: removed.append(svc))
+    monkeypatch.setattr(launchd, "_cleanup_service_endpoint", lambda _svc: None)
+    monkeypatch.setattr(launchd, "_resolve_binaries", lambda *_args: {})
+    monkeypatch.setattr(launchd, "_write_service_files", lambda *_args: False)
+    monkeypatch.setattr(
+        launchd,
+        "_activate_service",
+        lambda svc, _reload: installed.append(svc.name) or "Restarted",
+    )
+
+    launchd.install_all_services(InstallationConfig(standalone=True))
+
+    assert not plist.exists()
+    assert not wrapper.exists()
+    assert (TUNNELD_SERVICE in removed) == loaded
+    assert "openbase-tunneld" not in installed
+    assert "django-cli" in installed
+
+
+@pytest.fixture(autouse=True)
+def isolate_provider_readiness(monkeypatch):
+    # Unit tests never probe the host's real LiveKit/Codex endpoints.
+    monkeypatch.setattr(launchd, "wait_for_provider", lambda _: None)
+
+
+def test_failed_forced_restart_does_not_claim_a_new_provider(monkeypatch):
+    _restart_harness(monkeypatch, [111])
+    monkeypatch.setattr(process_utils, "wait_for_pid_change", lambda *a, **k: 111)
+    import click
+
+    with pytest.raises(click.ClickException, match="Failed to replace the old process"):
+        launchd.launchctl_restart(_sample_service())
+
+
+def _package_with_launcher(
+    tmp_path, *, launcher_present: bool = True
+) -> RuntimePackage:
+    package_dir = tmp_path / "current"
+    relative = "libexec/Openbase Services.app/Contents/MacOS/openbase-services"
+    launcher = package_dir / relative
+    launcher.parent.mkdir(parents=True)
+    if launcher_present:
+        launcher.write_bytes(b"\xcf\xfa\xed\xfe")
+        launcher.chmod(0o755)
+    return RuntimePackage(root=package_dir, service_launcher=relative)
+
+
+def test_standalone_plist_runs_the_wrapper_through_the_service_launcher(
+    tmp_path, monkeypatch
+):
+    # macOS keys TCC grants on the launchd job's executable. Running the
+    # wrapper through the signed launcher bundle gives every service (and
+    # the agents it spawns) one stable identity across self-updates.
+    _patch_launchd_dirs(tmp_path, monkeypatch)
+    monkeypatch.setattr(launchd, "_is_macos", lambda: True)
+    monkeypatch.setattr(launchd, "_installed_desktop_bundle_id", lambda: None)
+    package = _package_with_launcher(tmp_path)
+    monkeypatch.setattr(launchd, "stable_runtime_package", lambda: package)
+    config = InstallationConfig(env_file=str(tmp_path / ".env"), standalone=True)
+
+    payload = plistlib.loads(
+        launchd.generate_plist(_sample_service(), config).read_bytes()
+    )
+
+    assert payload["ProgramArguments"] == [
+        str(package.service_launcher_path),
+        str(tmp_path / "launchd" / "sample.sh"),
+    ]
+    assert payload["WorkingDirectory"] == str(package.root)
+
+
+def test_plist_runs_the_wrapper_directly_when_the_package_has_no_launcher(
+    tmp_path, monkeypatch
+):
+    _patch_launchd_dirs(tmp_path, monkeypatch)
+    monkeypatch.setattr(launchd, "_is_macos", lambda: True)
+    monkeypatch.setattr(launchd, "_installed_desktop_bundle_id", lambda: None)
+    config = InstallationConfig(env_file=str(tmp_path / ".env"), standalone=True)
+    wrapper = str(tmp_path / "launchd" / "sample.sh")
+
+    # An older release that declares no launcher.
+    monkeypatch.setattr(
+        launchd, "stable_runtime_package", lambda: RuntimePackage(root=tmp_path / "pkg")
+    )
+    payload = plistlib.loads(
+        launchd.generate_plist(_sample_service(), config).read_bytes()
+    )
+    assert payload["ProgramArguments"] == [wrapper]
+
+    # A release whose declared launcher is missing on disk never produces a
+    # plist launchd cannot start.
+    package = _package_with_launcher(tmp_path, launcher_present=False)
+    monkeypatch.setattr(launchd, "stable_runtime_package", lambda: package)
+    payload = plistlib.loads(
+        launchd.generate_plist(_sample_service(), config).read_bytes()
+    )
+    assert payload["ProgramArguments"] == [wrapper]
+
+
+def test_developer_install_plist_ignores_the_launcher_off_macos(tmp_path, monkeypatch):
+    _patch_launchd_dirs(tmp_path, monkeypatch)
+    monkeypatch.setattr(launchd, "_is_macos", lambda: False)
+    monkeypatch.setattr(launchd, "_installed_desktop_bundle_id", lambda: None)
+    package = _package_with_launcher(tmp_path)
+    monkeypatch.setattr(launchd, "stable_runtime_package", lambda: package)
+    config = InstallationConfig(env_file=str(tmp_path / ".env"), standalone=True)
+
+    payload = plistlib.loads(
+        launchd.generate_plist(_sample_service(), config).read_bytes()
+    )
+
+    assert payload["ProgramArguments"] == [str(tmp_path / "launchd" / "sample.sh")]
+
+
+def test_adding_the_launcher_changes_the_plist_once_then_stays_stable(
+    tmp_path, monkeypatch
+):
+    # The first install that gains the launcher re-registers the job (one
+    # Background Items notification); later installs on the same layout
+    # restart in place.
+    _patch_launchd_dirs(tmp_path, monkeypatch)
+    monkeypatch.setattr(launchd, "_is_macos", lambda: True)
+    monkeypatch.setattr(launchd, "_installed_desktop_bundle_id", lambda: None)
+    config = InstallationConfig(env_file=str(tmp_path / ".env"), standalone=True)
+    binaries = {
+        "python": str(tmp_path / "current" / "python" / "bin" / "python"),
+        "runtime_workdir": str(tmp_path / "current"),
+    }
+    monkeypatch.setattr(
+        launchd,
+        "stable_runtime_package",
+        lambda: RuntimePackage(root=tmp_path / "current"),
+    )
+    assert launchd._write_service_files(_sample_service(), config, binaries) is True
+    assert launchd._write_service_files(_sample_service(), config, binaries) is False
+
+    package = _package_with_launcher(tmp_path)
+    monkeypatch.setattr(launchd, "stable_runtime_package", lambda: package)
+    assert launchd._write_service_files(_sample_service(), config, binaries) is True
+    assert launchd._write_service_files(_sample_service(), config, binaries) is False

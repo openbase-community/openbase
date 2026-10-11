@@ -40,15 +40,19 @@ dependencies = [
     "langgraph==1.2.2",
     "langgraph-sdk==0.3.15",
     "uv>=0.9.22",
-    "livekit-agents[silero,turn-detector]==1.5.17",
+    "livekit-agents[silero,turn-detector]==1.8.4",
     "livekit-api>=1.1.0",
-    "livekit-plugins-assemblyai==1.5.17",
-    "livekit-plugins-cartesia==1.5.17",
-    "livekit-plugins-deepgram==1.5.4",
+    "livekit-plugins-assemblyai==1.8.4",
+    "livekit-plugins-cartesia==1.8.4",
+    "livekit-plugins-deepgram==1.8.4",
+    "livekit-plugins-openai==1.8.4",
+    "openai>=2.50",
     "livekit-plugins-noise-cancellation>=0.2.5",
     "aiohttp>=3.13.3",
     "psutil>=6.1.0",
-    "super-agents[claude]>=0.1.14",
+    "super-agents[claude]>=0.1.16",
+    # Mutable session policies require snapshot control in the bundled Claude CLI.
+    "claude-agent-sdk==0.2.165",
     "websockets>=16.0",
     "numpy>=2.3.0",
 ]
@@ -85,7 +89,8 @@ exclude-newer = "1 week"
 # our own releases must be installable the moment they publish (a cli floor
 # on a same-week multi-workspace release otherwise breaks Docker/standalone
 # builds until the release ages past the window).
-exclude-newer-package = { multi-workspace = "1 hour", super-agents = "1 hour" }
+# Claude SDK is pinned to the version verified with mutable system policies.
+exclude-newer-package = { claude-agent-sdk = "1 hour", multi-workspace = "1 hour", super-agents = "1 hour", livekit-agents = "3 days", livekit-plugins-assemblyai = "3 days", livekit-plugins-cartesia = "3 days", livekit-plugins-deepgram = "3 days", livekit-plugins-openai = "3 days", livekit-plugins-silero = "3 days", livekit-plugins-turn-detector = "3 days" }
 
 [tool.uv.sources]
 super-agents = { path = "../super-agents", editable = true }

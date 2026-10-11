@@ -7,7 +7,7 @@ from functools import wraps
 
 import click
 
-from openbase_coder_cli.services import service_recovery
+from openbase_coder_cli.services import service_recovery, tailscale_provider
 from openbase_coder_cli.services.published_service_routes import (
     allocate_private_service_hostname,
     apply_route,
@@ -32,6 +32,16 @@ from openbase_coder_cli.services.published_services import (
     validate_local_port,
     validate_name,
 )
+from openbase_coder_cli.services.tunneld import (
+    TunneldForwardError,
+    tunneld_add_forward,
+    tunneld_list_forwards,
+    tunneld_remove_forward,
+    tunneld_self_dns_name,
+)
+
+EXPOSE_DEFAULT_TTL_SECONDS = 600
+EXPOSE_MAX_TTL_SECONDS = 3600
 
 
 @click.group()
@@ -39,16 +49,37 @@ def service() -> None:
     """Publish local HTTP services privately over the Openbase VPN."""
 
 
+def _persistence_label() -> str:
+    """Where a persistent publication is restored: launchd, or the container start."""
+    return "workspace start" if tailscale_provider.is_netmesh_tsnet() else "launchd"
+
+
 def _persistence_choice(persist: bool | None) -> bool:
     if persist is not None:
         return persist
+    where = _persistence_label()
     if sys.stdin.isatty():
         return click.confirm(
-            "Start this published service automatically at login with launchd?",
+            f"Start this published service automatically at {where}?",
             default=False,
         )
-    click.echo("Persistence was not enabled. Use --persist to opt in to launchd.")
+    click.echo(f"Persistence was not enabled. Use --persist to opt in to {where}.")
     return False
+
+
+def _start_gateway(service_entry: PublishedService) -> PublishedService:
+    """Start the service gateway the way this host keeps it alive.
+
+    launchd owns persistent gateways on a Mac. A cloud workspace has no
+    launchd: every gateway is a session process, and `service restore`
+    (run by the container entrypoint) brings persistent ones back after a
+    restart.
+    """
+    if service_entry.persistent and not tailscale_provider.is_netmesh_tsnet():
+        install_launchd_service(service_entry)
+        return service_entry
+    pid = start_ephemeral_gateway(service_entry)
+    return replace(service_entry, pid=pid)
 
 
 def _registry_transaction(function):
@@ -153,11 +184,9 @@ def publish(
         save_registry(
             ServiceRegistry(tuple(desired_services), registry.last_applied_serve_hash)
         )
-        if persistent:
-            install_launchd_service(service_entry)
-        else:
-            pid = start_ephemeral_gateway(service_entry)
-            service_entry = replace(service_entry, pid=pid)
+        started = _start_gateway(service_entry)
+        if started is not service_entry:
+            service_entry = started
             service_recovery.begin(
                 "publish", registry, service_entry, release_hostname=hostname_created
             )
@@ -216,9 +245,99 @@ def publish(
     click.echo("  Mode: account-private hostname")
     click.echo("  Visibility: Openbase VPN/tailnet only (never Funnel/public internet)")
     if persistent:
-        click.echo("  Persistence: launchd enabled by explicit opt-in")
+        click.echo(f"  Persistence: {_persistence_label()} enabled by explicit opt-in")
     else:
         click.echo("  Persistence: current login session only")
+
+
+def _require_tsnet_host() -> None:
+    if not tailscale_provider.is_netmesh_tsnet():
+        raise click.ClickException(
+            "service expose needs the embedded tailnet node (Openbase Direct / "
+            "cloud workspaces). On a Mac with Openbase VPN use `service publish`."
+        )
+
+
+def exposed_url(port: int, dns_name: str | None) -> str:
+    host = dns_name or "<this-node>"
+    return f"http://{host}:{port}/"
+
+
+@service.command()
+@click.argument("port", type=int)
+@click.option(
+    "--ttl",
+    "ttl_seconds",
+    type=click.IntRange(1, EXPOSE_MAX_TTL_SECONDS),
+    default=EXPOSE_DEFAULT_TTL_SECONDS,
+    show_default=True,
+    help="Seconds until the forward closes on its own.",
+)
+@click.option(
+    "--one-shot",
+    is_flag=True,
+    help="Close the forward after its first completed connection (OAuth callbacks).",
+)
+@click.option(
+    "--peer",
+    default=None,
+    help="Only accept connections from this device (tailnet IP or node id).",
+)
+@click.option(
+    "--no-check",
+    "skip_check",
+    is_flag=True,
+    help="Do not require a listener on 127.0.0.1:PORT before exposing it.",
+)
+def expose(
+    port: int,
+    ttl_seconds: int,
+    one_shot: bool,
+    peer: str | None,
+    skip_check: bool,
+) -> None:
+    """Expose loopback PORT on this node's tailnet address for a limited time.
+
+    The forward is reachable only by the devices of this Openbase account
+    (never the public internet) and closes after --ttl seconds. Use it from a
+    cloud workspace to open a dev server or a CLI login callback on the
+    user's phone; `service publish` is the Mac path with a private hostname.
+    """
+    _require_tsnet_host()
+    try:
+        port = validate_local_port(port)
+        if not skip_check and not local_service_available(port):
+            raise ValueError(
+                f"No service is accepting connections on 127.0.0.1:{port} "
+                "(use --no-check to expose it anyway)."
+            )
+        info = tunneld_add_forward(
+            port, ttl_seconds=ttl_seconds, one_shot=one_shot, peer=peer
+        )
+    except (ValueError, TunneldForwardError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    url = exposed_url(port, tunneld_self_dns_name())
+    click.echo(f"Exposed 127.0.0.1:{port}: {url}")
+    click.echo("  Visibility: this Openbase account's devices only, over Openbase VPN")
+    click.echo(f"  Expires: {info.get('expires_at', 'unknown')}")
+    if one_shot:
+        click.echo("  Closes after the first completed connection")
+    if peer:
+        click.echo(f"  Pinned to peer: {peer}")
+
+
+@service.command()
+@click.argument("port", type=int)
+def unexpose(port: int) -> None:
+    """Close the dynamic forward for PORT created by `service expose`."""
+    _require_tsnet_host()
+    try:
+        removed = tunneld_remove_forward(port)
+    except TunneldForwardError as exc:
+        raise click.ClickException(str(exc)) from exc
+    if not removed:
+        raise click.ClickException(f"Port {port} is not exposed.")
+    click.echo(f"Closed the forward for 127.0.0.1:{port}.")
 
 
 @service.command("list")
@@ -228,9 +347,32 @@ def list_command() -> None:
         services = list(load_registry().services)
     except (OSError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
-    if not services:
+    forwards = [
+        forward
+        for forward in (
+            tunneld_list_forwards() if tailscale_provider.is_netmesh_tsnet() else []
+        )
+        # The persistent :443/:80 forwards are the published services' own
+        # plumbing (HTTPS ingress and redirect), not exposed ports.
+        if not (forward.get("persistent") or forward.get("redirect_https"))
+    ]
+    if not services and not forwards:
         click.echo("No local services are published.")
         return
+    if forwards:
+        dns_name = tunneld_self_dns_name()
+        for forward in forwards:
+            port = forward.get("port")
+            flags = []
+            if forward.get("one_shot"):
+                flags.append("one-shot")
+            if forward.get("peer"):
+                flags.append(f"peer {forward['peer']}")
+            flags.append(f"expires {forward.get('expires_at', 'unknown')}")
+            click.echo(
+                f"{'port ' + str(port):<20} {exposed_url(port, dns_name)} -> "
+                f"127.0.0.1:{port} (exposed, {', '.join(flags)})"
+            )
     for item in services:
         try:
             url = service_url(item)
@@ -240,7 +382,7 @@ def list_command() -> None:
                 if item.mode == MODE_HOSTNAME
                 else f"tailnet :{item.tailnet_port}/{item.name}/"
             )
-        mode = "launchd" if item.persistent else "session"
+        mode = _persistence_label() if item.persistent else "session"
         health = "ready" if gateway_healthy(item, timeout=0.1) else "gateway stopped"
         click.echo(
             f"{item.name:<20} {url} -> 127.0.0.1:{item.local_port} "
@@ -275,6 +417,65 @@ def doctor(name: str, as_json: bool) -> None:
             )
     if not result["ready"]:
         raise click.exceptions.Exit(1)
+
+
+@service.command("restore")
+def restore_command() -> None:
+    """Bring persistent publications back after a workspace restart.
+
+    Cloud workspaces have no launchd: the container entrypoint runs this
+    once the embedded node is up. Each persistent hostname publication whose
+    gateway is gone gets its certificate checked and its gateway restarted,
+    then the node's :443/:80 service forwards are reconciled.
+    """
+    from openbase_coder_cli.services.published_service_routes import (
+        reconcile_openbase_routes,
+    )
+    from openbase_coder_cli.services.service_certificates import ensure_certificate
+
+    _require_tsnet_host()
+    with registry_lock():
+        try:
+            if service_recovery.recover():
+                click.echo("Removed an interrupted publication first.")
+            registry = load_registry()
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise click.ClickException(str(exc)) from exc
+        services = list(registry.services)
+        restored = []
+        failures = []
+        for index, item in enumerate(services):
+            if item.mode != MODE_HOSTNAME or not item.persistent:
+                continue
+            if gateway_healthy(item, timeout=0.2):
+                continue
+            try:
+                ensure_certificate(item)
+                started = replace(item, pid=start_ephemeral_gateway(item))
+                if not gateway_healthy(started):
+                    stop_gateway(started)
+                    raise RuntimeError("the gateway did not become healthy")
+            except (OSError, ValueError, RuntimeError) as exc:
+                failures.append(f"{item.name}: {exc}")
+                continue
+            services[index] = started
+            restored.append(item.name)
+        try:
+            save_registry(
+                ServiceRegistry(tuple(services), registry.last_applied_serve_hash)
+            )
+            applied_hash = reconcile_openbase_routes(
+                services, services, registry.last_applied_serve_hash
+            )
+            save_registry(ServiceRegistry(tuple(services), applied_hash))
+        except (OSError, ValueError, RuntimeError) as exc:
+            failures.append(f"routes: {exc}")
+    for name in restored:
+        click.echo(f"Restored {name}.")
+    if not restored and not failures:
+        click.echo("Nothing to restore.")
+    if failures:
+        raise click.ClickException("; ".join(failures))
 
 
 @service.command("recover")

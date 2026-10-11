@@ -17,11 +17,14 @@ from rest_framework.test import APIClient  # noqa: E402
 django.setup()
 
 from openbase_coder_cli.config import authentication  # noqa: E402
+from openbase_coder_cli.openbase_coder_cli_app import (
+    analytics_identity,  # noqa: E402
+    plugins_tools,  # noqa: E402
+)
 from openbase_coder_cli.openbase_coder_cli_app import auth as auth_views  # noqa: E402
 from openbase_coder_cli.openbase_coder_cli_app import (
     onboarding as onboarding_views,  # noqa: E402
 )
-from openbase_coder_cli.openbase_coder_cli_app import plugins_tools  # noqa: E402
 
 CAPABILITY = "local-capability-with-at-least-forty-characters-123"
 
@@ -133,6 +136,23 @@ def test_adjacent_owner_state_and_logout_are_not_anonymous(monkeypatch):
         "get_console_registry_payload",
         lambda: calls.append("plugins"),
     )
+    monkeypatch.setattr(
+        analytics_identity,
+        "web_backend_url",
+        lambda: "https://cloud.example",
+    )
+    monkeypatch.setattr(
+        analytics_identity,
+        "get_token_manager",
+        lambda backend_url: SimpleNamespace(
+            get_access_token=lambda: calls.append("analytics-token") or "token"
+        ),
+    )
+    monkeypatch.setattr(
+        analytics_identity.httpx,
+        "post",
+        lambda *args, **kwargs: calls.append("analytics-cloud"),
+    )
     client = _client(remote_addr="100.64.0.20")
 
     responses = [
@@ -141,6 +161,11 @@ def test_adjacent_owner_state_and_logout_are_not_anonymous(monkeypatch):
         client.get("/api/onboarding/status/"),
         client.get("/api/onboarding/cloud-state/"),
         client.get("/api/plugins/console-registry/"),
+        client.post(
+            "/api/openbase/analytics/identify",
+            {"amplitude_device_id": "device-1"},
+            format="json",
+        ),
     ]
 
     assert all(response.status_code in {401, 403} for response in responses)

@@ -68,10 +68,6 @@ TASK_SCHEDULER_FOLDER = r"\OpenbaseCoder"
 LAUNCHD_DOMAIN = "com.openbase.coder"
 AUTH_JSON_PATH = OPENBASE_BASE_DIR / "auth.json"
 OWNER_IDENTITY_JSON_PATH = OPENBASE_BASE_DIR / "owner-identity.json"
-SYNC_CONFIG_PATH = OPENBASE_BASE_DIR / "sync-config.json"
-CODE_SYNC_DIR = OPENBASE_BASE_DIR / "code-sync"
-CODE_SYNC_CONFLICTS_PATH = CODE_SYNC_DIR / "conflicts.json"
-SYNC_VERSIONS_DIR = OPENBASE_BASE_DIR / "sync-versions"
 MACHINE_TOKEN_JSON_PATH = OPENBASE_BASE_DIR / "machine-token.json"
 CONSOLE_SETTINGS_JSON_PATH = OPENBASE_BASE_DIR / "console-settings.json"
 ONBOARDING_JSON_PATH = OPENBASE_BASE_DIR / "onboarding.json"
@@ -109,3 +105,9 @@ PLUGIN_SKILLS_OWNERSHIP_PATH = PLUGIN_BASE_DIR / "skills_ownership.json"
 # User-published, tailnet-only development services. The registry contains
 # names and local ports, never credentials.
 PUBLISHED_SERVICES_PATH = OPENBASE_BASE_DIR / "published-services.json"
+
+# Diagnostics "problems" datastore. `openbase-coder report issue` captures the
+# most recent user interaction of a thread here so problematic interactions can
+# be reviewed later. One JSON file per recorded problem — the directory listing
+# is the source of truth, so there is no separate index to keep in sync.
+PROBLEMS_DIR = OPENBASE_BASE_DIR / "problems"

@@ -8,6 +8,8 @@ In the apps: **Settings → Openbase Services** in the
 [desktop app](../desktop-app.md) and [console](../console.md) offers the same
 restart controls.
 
+Restart batches and runtime activation share a process-wide and cross-process lock, so a watchdog restart, manual restart, and CLI update cannot change services at the same time. Providers run before every selected dependent, including when several providers share a consumer. Before proceeding, LiveKit must accept connections and managed Codex must answer its version handshake at the installed version. A readiness timeout stops the batch. An old packaged process cannot rewrite service definitions after another update changes the active runtime.
+
 ## Usage
 
 ```bash
@@ -15,7 +17,7 @@ openbase-coder restart [OPTIONS]
 openbase-coder self-restart [OPTIONS]
 ```
 
-With no options, this schedules a detached restart of the default services plus optional daemons already enabled on this installation, including code sync, the Cloud heartbeat, and Openbase Direct. It does not enable unused optional features or rerun completed one-shot authentication/provisioning jobs. The Openbase Coder API/MCP host restarts through `django-cli`.
+With no options, this schedules a detached restart of the default services plus optional daemons already enabled on this installation, including Openbase Sync (`sync-daemon`), the Cloud heartbeat, and Openbase Direct. It does not enable unused optional features or rerun completed one-shot authentication/provisioning jobs. The Openbase Coder API/MCP host restarts through `django-cli`.
 
 In a developer install, a restart that includes `openbase-tunneld` rebuilds and installs Openbase Direct from the configured checkout before scheduling the restart. A failed build leaves the running services alone. The new binary receives a build stamp so runtime freshness can verify it after startup.
 

@@ -6,12 +6,12 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from openbase_coder_cli.runtime import is_standalone_runtime
 from openbase_coder_cli.self_update import (
     SELF_UPDATE_LOG_PATH,
     SelfUpdateError,
     check_for_update,
     spawn_detached_self_update,
+    updatable_runtime_package,
     version_info,
 )
 
@@ -40,7 +40,7 @@ def update_apply(request):
     Detached because the update restarts the very services serving this
     request; progress lands in the self-update log.
     """
-    if not is_standalone_runtime():
+    if updatable_runtime_package() is None:
         return Response(
             {
                 "error": "Development workspace installs are git-managed; no auto-update."

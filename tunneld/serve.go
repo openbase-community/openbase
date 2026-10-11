@@ -161,6 +161,14 @@ func runServe(args []string) error {
 	}
 	api.turnCreds = turnCreds
 
+	// Dynamic forwards may now be added through the control API; the fixed
+	// ports above stay reserved so a request cannot shadow them.
+	forwards := newForwardManager(
+		srv, lc, openbaseTailnetPort, livekitTailnetPort, livekitICETCPPort, turnTailnetPort,
+	)
+	api.forwards.Store(forwards)
+	defer forwards.CloseAll()
+
 	api.markForwardsUp()
 	log.Printf("forwarding tailnet :%d -> %s, :%d -> %s, :%d -> %s; turn on tailnet :%d (user %s)",
 		openbaseTailnetPort, openbaseLocalAddr, livekitTailnetPort, livekitLocalAddr,

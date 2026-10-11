@@ -23,6 +23,7 @@ import base64
 import binascii
 import json
 import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -47,6 +48,14 @@ FLEET_SCOPE_VALUE = "fleet"
 PEER_TIMEOUT_SECONDS = 2.5
 PEER_LIST_CACHE_SECONDS = 30.0
 PEER_FAILURE_CACHE_SECONDS = 60.0
+# Peer thread pages are served stale-while-revalidate: a page younger than
+# the fresh window is returned as-is; an older one is returned immediately
+# while a background fetch replaces it; only a never-fetched (or expired)
+# page blocks on the peer. The console polls the fleet list every 15s, and
+# a reachable-but-slow peer was otherwise a fixed multi-second tax on every
+# poll.
+PEER_PAGE_FRESH_SECONDS = 10.0
+PEER_PAGE_STALE_SECONDS = 120.0
 # Cap on refetch rounds while filling one aggregate page, so a pathological
 # interleaving can't turn one request into an unbounded crawl of peer pages.
 MAX_FILL_ROUNDS = 5
@@ -62,6 +71,8 @@ class FleetPeer(NamedTuple):
     key: str
     name: str
     base_url: str
+    ip: str | None = None
+    os: str | None = None
 
 
 class SourcePage(NamedTuple):
@@ -87,12 +98,13 @@ _peer_cache: dict[str, Any] = {"expires": 0.0, "peers": []}
 _peer_failures: dict[str, float] = {}
 
 
-def fleet_peers() -> list[FleetPeer]:
+def fleet_peers(*, include_failed: bool = False) -> list[FleetPeer]:
     """Online tailnet peers, addressed at the Openbase tailnet port.
 
     Cached briefly so list polling doesn't shell out to ``tailscale status``
     on every page. Peers recently seen unreachable are excluded until their
-    failure entry expires.
+    failure entry expires, unless ``include_failed`` is set (callers acting on
+    an explicit user choice, such as sync pairing, want every online peer).
     """
     now = time.monotonic()
     if now < _peer_cache["expires"]:
@@ -109,10 +121,18 @@ def fleet_peers() -> list[FleetPeer]:
                     f":{OPENBASE_CODER_TAILNET_PORT}"
                 )
                 peers.append(
-                    FleetPeer(key=device.host, name=device.name, base_url=base)
+                    FleetPeer(
+                        key=device.host,
+                        name=device.name,
+                        base_url=base,
+                        ip=device.ip,
+                        os=device.os,
+                    )
                 )
         _peer_cache["peers"] = peers
         _peer_cache["expires"] = now + PEER_LIST_CACHE_SECONDS
+    if include_failed:
+        return list(peers)
     return [peer for peer in peers if _peer_failures.get(peer.key, 0.0) <= now]
 
 
@@ -197,7 +217,80 @@ def _cursor_from_next_url(next_url: str | None) -> str | None:
     return values[0] if values else None
 
 
+_peer_page_cache: dict[tuple[str, int, int, str | None], tuple[float, SourcePage]] = {}
+_peer_page_refreshing: set[tuple[str, int, int, str | None]] = set()
+_peer_page_lock = threading.Lock()
+
+
 def _fetch_peer_thread_page(
+    peer: FleetPeer,
+    token: str,
+    *,
+    page: int,
+    page_size: int,
+    cursor: str | None,
+) -> SourcePage | None:
+    key = (peer.key, page, page_size, cursor)
+    now = time.monotonic()
+    with _peer_page_lock:
+        cached = _peer_page_cache.get(key)
+        if cached is not None and now - cached[0] < PEER_PAGE_STALE_SECONDS:
+            age = now - cached[0]
+            refresh = (
+                age >= PEER_PAGE_FRESH_SECONDS and key not in _peer_page_refreshing
+            )
+            if refresh:
+                _peer_page_refreshing.add(key)
+        else:
+            cached = None
+            refresh = False
+    if cached is not None:
+        if refresh:
+            threading.Thread(
+                target=_refresh_peer_thread_page,
+                args=(peer, token, key),
+                name="fleet-peer-page-refresh",
+                daemon=True,
+            ).start()
+        # Items are handed to a merge that mutates windows in place.
+        return SourcePage(
+            items=[dict(item) for item in cached[1].items],
+            next_cursor=cached[1].next_cursor,
+        )
+    fetched = _fetch_peer_thread_page_uncached(
+        peer, token, page=page, page_size=page_size, cursor=cursor
+    )
+    if fetched is not None:
+        _store_peer_thread_page(key, fetched)
+        return SourcePage(
+            items=[dict(item) for item in fetched.items],
+            next_cursor=fetched.next_cursor,
+        )
+    return None
+
+
+def _refresh_peer_thread_page(
+    peer: FleetPeer, token: str, key: tuple[str, int, int, str | None]
+) -> None:
+    try:
+        fetched = _fetch_peer_thread_page_uncached(
+            peer, token, page=key[1], page_size=key[2], cursor=key[3]
+        )
+        if fetched is not None:
+            _store_peer_thread_page(key, fetched)
+    finally:
+        with _peer_page_lock:
+            _peer_page_refreshing.discard(key)
+
+
+def _store_peer_thread_page(
+    key: tuple[str, int, int, str | None], page: SourcePage
+) -> None:
+    with _peer_page_lock:
+        _peer_page_cache[key] = (time.monotonic(), page)
+
+
+def _fetch_peer_thread_page_uncached(
     peer: FleetPeer,
     token: str,
     *,
@@ -272,6 +365,14 @@ def decode_fleet_cursor(cursor: str | None) -> dict[str, _SourceState] | None:
     return states
 
 
+def _moved_to_active_peer(item: dict[str, Any], peers: dict[str, FleetPeer]) -> bool:
+    moved = item.get("moved_to")
+    if not isinstance(moved, dict) or moved.get("state") != "moved":
+        return False
+    host = str(moved.get("host") or "")
+    return bool(host) and host in peers
+
+
 class FleetThreadPage(NamedTuple):
     threads: list[dict[str, Any]]
     next_cursor: str | None
@@ -339,8 +440,31 @@ def fleet_thread_page(
         ]
         if not pending:
             return
-        with ThreadPoolExecutor(max_workers=max(1, min(8, len(pending)))) as pool:
-            list(pool.map(fetch_window, pending))
+        # The local window stays on the calling thread. Its reads go through
+        # async_to_sync, which reaches the server's event loop only via
+        # asgiref's thread-local on the request thread; a pool thread has no
+        # such loop, so asgiref spins up a private one, the session manager's
+        # loop-bound primitives get used across loops, and the call either
+        # raises or never wakes. Every later request then queued behind it
+        # and the whole API stalled (2026-10-08). Only peers, plain HTTP,
+        # fetch concurrently.
+        peer_keys = [key for key in pending if key != LOCAL_SOURCE_KEY]
+        pool = (
+            ThreadPoolExecutor(max_workers=max(1, min(8, len(peer_keys))))
+            if peer_keys
+            else None
+        )
+        futures = [pool.submit(fetch_window, key) for key in peer_keys] if pool else []
+        try:
+            if LOCAL_SOURCE_KEY in pending:
+                fetch_window(LOCAL_SOURCE_KEY)
+        finally:
+            if pool is not None:
+                try:
+                    for future in futures:
+                        future.result()
+                finally:
+                    pool.shutdown(wait=True)
         # An empty page with a continuation is possible in principle; advance
         # past it here so the merge below only ever sees real windows.
         for key in pending:
@@ -393,6 +517,10 @@ def fleet_thread_page(
             item = state.window.pop(0)
             state.offset += 1
             _advance_if_consumed(state)
+            if best_key == LOCAL_SOURCE_KEY and _moved_to_active_peer(item, peers):
+                # The thread was pushed to that peer and continues there; its
+                # live copy comes from the peer, not this read-only one.
+                continue
             thread_id = str(item.get("thread_id") or "")
             if thread_id and thread_id in seen_ids:
                 continue

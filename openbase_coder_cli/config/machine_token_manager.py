@@ -20,6 +20,11 @@ from openbase_coder_cli.file_lock import LOCK_EX, LOCK_UN, flock
 from openbase_coder_cli.paths import MACHINE_TOKEN_JSON_PATH
 
 DEFAULT_MACHINE_TOKEN_SCOPES = ("llm_proxy", "audio_proxy")
+# Extra scopes a cloud workspace may request at bootstrap (see provision):
+# notify = push "open this URL" notifications to the owner's own phones;
+# netmesh_publish = private service hostnames and certificate DNS challenges
+# for the workspace's own mesh node (`service publish`).
+OPTIONAL_BOOTSTRAP_SCOPES = ("notify", "netmesh_publish")
 
 
 class MachineTokenError(RuntimeError):
@@ -66,10 +71,7 @@ class MachineTokenManager:
         required_scopes = tuple(dict.fromkeys(scopes))
         with self._file_lock():
             cached = self._load()
-            return (
-                self._cached_token_matches(cached, required_scopes)
-                and tuple(cached.get("scopes") or ()) == required_scopes
-            )
+            return self._cached_token_matches(cached, required_scopes)
 
     def clear(self) -> None:
         with self._file_lock():
@@ -88,9 +90,16 @@ class MachineTokenManager:
             raise MachineTokenError(
                 "Bootstrap response did not include a machine token."
             )
-        if tuple(scopes) != DEFAULT_MACHINE_TOKEN_SCOPES:
+        granted = tuple(scopes)
+        allowed = (*DEFAULT_MACHINE_TOKEN_SCOPES, *OPTIONAL_BOOTSTRAP_SCOPES)
+        if (
+            granted[: len(DEFAULT_MACHINE_TOKEN_SCOPES)] != DEFAULT_MACHINE_TOKEN_SCOPES
+            or len(set(granted)) != len(granted)
+            or any(scope not in allowed for scope in granted)
+        ):
             raise MachineTokenError(
-                "Bootstrap machine token scopes must be llm_proxy and audio_proxy."
+                "Bootstrap machine token scopes must be llm_proxy and audio_proxy, "
+                f"optionally followed by {' and/or '.join(OPTIONAL_BOOTSTRAP_SCOPES)}."
             )
         if not install_id:
             raise MachineTokenError("Bootstrap response did not include an install ID.")

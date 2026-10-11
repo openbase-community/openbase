@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import socket
 from datetime import UTC, datetime
 
 from cryptography.x509 import ExtensionNotFound
 
+from openbase_coder_cli.services import published_service_routes as service_routes
 from openbase_coder_cli.services import published_services as published
 from openbase_coder_cli.services import service_certificates as certificates
 from openbase_coder_cli.services import service_recovery
@@ -34,10 +34,7 @@ def diagnose(service):
         "VPN connected" if running else "VPN disconnected or helper unavailable",
     )
     try:
-        addresses = {
-            a[4][0]
-            for a in socket.getaddrinfo(service.hostname, 443, type=socket.SOCK_STREAM)
-        }
+        addresses = service_routes.resolve_private_hostname(service.hostname, 443)
         own = set(status.get("Self", {}).get("TailscaleIPs") or [])
         ok = bool(addresses) and addresses <= own
         add(
@@ -47,7 +44,7 @@ def diagnose(service):
             if ok
             else "Hostname does not resolve exclusively to this device",
         )
-    except OSError:
+    except (OSError, RuntimeError):
         add("dns", False, "Private hostname DNS lookup failed")
     try:
         # Do not call certificate_directory(): it creates/chmods directories.

@@ -49,10 +49,28 @@ flow ("Link Your Computer") that waits for your Mac to sign in and pair. See
 
 ## The Dashboard
 
-After setup the app shows a sidebar with **Workspace** and **System**
-sections. Any item except Settings can be hidden via
-**Settings → Sidebar Items**. The footer shows the CLI version and an update
-indicator; the top bar shows the connected backend host.
+After setup the app shows two columns on the left:
+
+- **The rail** — a narrow strip of icons for each destination (Dispatch,
+  Threads, Projects, Reports, Approvals, Configure, plus any plugin pages).
+  System pages (Status, Devices, Sync, Instructions, Tools, Services) sit
+  behind the **⋯ More** menu, which also shows the service-health summary;
+  **Cloud** and **Settings** are pinned at the bottom. Any item except
+  Settings can be hidden via **Settings → Sidebar Items**.
+- **The threads sidebar** — a **New thread** entry, then a collapsible
+  **Projects** section listing every project. Exactly one project is expanded
+  at a time (the active project); click a project to expand it and collapse
+  the previous one, or click it again to collapse it. Under the active project
+  are the threads you have open in the sidebar, which work like terminal tabs:
+  viewing a thread anywhere (the Threads page, a project page, a notification)
+  adds it, **New thread** starts one in that project, **Open thread…** picks a
+  recent thread of the project, and the **×** that appears on hover removes
+  the row without archiving the thread. A running thread shows a green dot.
+  Right-click a thread or project row to open it in a new tab or split pane.
+  The toggle in the top bar (or **Cmd/Ctrl+B**) hides the threads sidebar; the
+  rail stays. Which threads are open and which project is active are
+  remembered per backend on this device. The footer shows the CLI version
+  and an update indicator.
 
 ### Overview
 
@@ -118,9 +136,7 @@ A shared chat view of the voice dispatcher thread — the routing agent that
 answers voice calls and hands them to Super Agents. Use it to read what the
 dispatcher is doing and to type to it directly.
 
-**On iPhone:** the Dispatch tab shows the same dispatcher thread, and the
-Call tab is where you actually speak to it. See
-[Voice Routing](voice-routing.md).
+**On iPhone:** the Dispatch screen shows the same dispatcher thread, and the waveform button on the new-chat screen starts the call where you actually speak to it. See [Voice Routing](voice-routing.md).
 
 ### Approvals
 
@@ -242,10 +258,11 @@ The Settings page groups configuration into sections:
   Cloud (same setting as `openbase-coder backend use ...`). The app warns
   before changing it, then restarts Openbase services and recreates the
   dispatcher automatically.
-- **Backend Model**, **Service Tier**, **Reasoning** — model and reasoning defaults for agents (same as `openbase-coder defaults ...`). Service tiers (Fast mode) apply to the Codex backend only; on Claude Code the tier cannot be set and turns always run at the standard tier. Reasoning levels apply to both backends and are the Claude speed/quality knob. Fresh Openbase Cloud installs show Claude Haiku as the default for both dispatcher and Super Agents. Existing Sonnet selections remain visible; trial accounts explain that their requests run on Haiku.
+- **Backend Model**, **Service Tier**, **Reasoning** — model and reasoning defaults for agents (same as `openbase-coder defaults ...`). Service tiers (Fast mode) apply to the Codex backend only; on Claude Code the tier cannot be set and turns always run at the standard tier. Reasoning levels apply to both backends and are the Claude speed/quality knob. Fresh Openbase Cloud installs show Claude Haiku as the default for both dispatcher and Super Agents. The model catalog disables models that the account cannot run as named. Free and trial accounts can select Haiku; Sonnet, Opus, and Fable require a paid plan. Older Sonnet configurations retain a Haiku compatibility fallback.
 - **LiveKit Companion Screen Sharing** (desktop app only) — see below.
+- **Voice Model** — which model listens and speaks on calls, picked like the agent model: **GPT-Live 1** (the default; a full-duplex model that listens and speaks at the same time while Super Agents do the work) or **Classic pipeline** (speech-to-text, then the agent's turn, then text-to-speech). GPT-Live runs through Openbase Cloud with your Openbase account; no API key is needed. Changes apply to the next call. Same setting as `openbase-coder defaults voice-model`.
 - **Dispatcher Voice** — TTS/STT provider and voice selection, voice API
-  keys, local model downloads, and a "Recreate LiveKit thread" action.
+  keys, local model downloads, and a "Recreate LiveKit thread" action. These providers drive the Classic pipeline only; when GPT-Live is the voice model they stay editable but are marked "Classic pipeline only".
 - **Ignored Launchctl** — services to hide from the Launchctl page.
 - **Authentication** — login status and sign out.
 - **Agent Instructions** — auto-generation options for instruction files.
@@ -261,15 +278,13 @@ concurrent-agent threshold), and diagnostics log upload.
 
 ## Screen Sharing (LiveKit Companion)
 
-The desktop app bundles a small companion app that can share your Mac's
-display into the active LiveKit voice room, so the agent (and your phone) can
-see your screen. Toggle it from **Settings → LiveKit Companion Screen
-Sharing → Test Share Screen**. The first run may prompt for macOS Screen
-Recording permission. When enabled, the companion can also accept remote
-mouse/keyboard input sent from the iOS app over LiveKit data messages.
+The desktop app bundles a small companion app that shares your Mac's display into the active voice call, so the agent, your phone and the console can see your screen. You start it by asking the agent during a call ("share my screen", "show me the screen"): the agent runs `openbase-coder desktop screen-share start`, and the live screen appears on your phone or in the console on its own. Settings → LiveKit Companion Screen Sharing keeps a **Test Share Screen** button for checking the companion on its own.
 
-**On iPhone:** the shared screen is visible in the call, and the phone can
-send remote-control input to the Mac.
+macOS asks for two permissions the first time, both for **OpenbaseScreenShareCompanion** under System Settings → Privacy & Security: **Screen & System Audio Recording** to share the display, and **Accessibility** to accept clicks and typing. If sharing fails, the phone or console shows which one to grant; grant it and tap Share screen again. The companion needs a fresh launch after a Screen Recording grant, which the next start does for you.
+
+**Stopping is real.** **Stop** on the phone or console, hanging up, the app going to the background, or a dropped connection all end the capture on the Mac: the companion stops recording, remote control is torn down, and the purple recording indicator in the menu bar goes away. The Mac also ends a share on its own about ten seconds after the last viewer leaves. You can also ask the agent to stop sharing.
+
+**On iPhone and Android:** the shared screen appears as a card in the call with a **Stop** button; tap the card for full screen, pinch to zoom, and tap **Remote** for a trackpad, keyboard and scroll strip that control the Mac. **In the console:** the Call page shows the screen with **Stop sharing**; **Remote control** lets you click, type and scroll on the video directly.
 
 ## Auto-Update
 
@@ -279,6 +294,10 @@ button; failures show a similar dismissible error notice. Development builds
 never auto-update. The CLI runtime updates separately via
 [self-update](commands/self-update.md), and the dashboard footer shows a
 yellow dot when a CLI update is available (red when required).
+
+The desktop checks again every six hours while it stays open. Failed checks or downloads retry after one minute with increasing delays capped at fifteen minutes; a downloaded update remains ready for a guarded restart or quit. Incomplete cached archives are discarded and downloaded again. Checks and retries remain disabled for developer installations.
+
+Locally packaged developer builds and desktops serving a developer workspace also disable manual release checks, release installation on quit, bundled CLI activation, and automatic VPN-helper replacement. A missing workspace CLI is reported instead of falling back to an older standalone installation.
 
 **On your phone:** iOS updates arrive through TestFlight/App Store; Android
 updates arrive as a new APK from [Downloads](downloads.md).

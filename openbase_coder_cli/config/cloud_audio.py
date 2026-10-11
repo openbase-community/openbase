@@ -6,6 +6,7 @@ from collections.abc import Iterable
 
 import httpx
 
+from openbase_coder_cli.config.machine_token_manager import MachineTokenManager
 from openbase_coder_cli.config.token_manager import (
     DEFAULT_WEB_BACKEND_URL,
     AuthLoginRequiredError,
@@ -14,6 +15,11 @@ from openbase_coder_cli.config.token_manager import (
 )
 from openbase_coder_cli.stt_providers import OPENBASE_CLOUD_STT_PROVIDER_ID
 from openbase_coder_cli.tts_providers import OPENBASE_CLOUD_TTS_PROVIDER_ID
+
+# The GPT-Live relay (dev-docs/live-voice.md) is metered as its own Cloud
+# audio provider next to Cartesia and AssemblyAI. The live engine always runs
+# through Openbase Cloud: an OpenAI key never lives on a user's device.
+LIVE_VOICE_CLOUD_PROVIDER = "live_voice"
 
 OPENBASE_CLOUD_AUDIO_SUBSCRIBE_DETAIL = (
     "Openbase Cloud audio requires an active Openbase subscription with "
@@ -29,20 +35,37 @@ class OpenbaseCloudAudioSubscriptionError(RuntimeError):
     """Openbase Cloud audio is selected, but the account cannot use it."""
 
 
+class OpenbaseCloudLiveVoiceUnavailableError(RuntimeError):
+    """The Cloud account check does not know the live voice provider yet.
+
+    The usage summary carries no ``live_voice_*`` fields when the live voice
+    gateway is not deployed on the backend this install talks to. That is a
+    rollout gap, not a subscription problem: the caller falls back to the
+    pipeline engine instead of telling the user to subscribe.
+    """
+
+
 def ensure_openbase_cloud_audio_subscription(
     *,
     tts_provider_id: str,
     stt_provider_id: str,
     web_backend_url: str = DEFAULT_WEB_BACKEND_URL,
+    live_voice: bool = False,
 ) -> None:
     providers = _required_cloud_audio_providers(
         tts_provider_id=tts_provider_id,
         stt_provider_id=stt_provider_id,
+        live_voice=live_voice,
     )
     if not providers:
         return
 
     usage = _audio_usage_summary(web_backend_url.rstrip("/"))
+    if LIVE_VOICE_CLOUD_PROVIDER in providers and not _usage_knows_live_voice(usage):
+        raise OpenbaseCloudLiveVoiceUnavailableError(
+            "Openbase Cloud does not offer live voice on this backend yet "
+            "(the audio usage summary has no live_voice fields)."
+        )
     monthly_limit_cents = _numeric_usage_value(usage, "monthly_limit_cents")
     if monthly_limit_cents <= 0:
         raise OpenbaseCloudAudioSubscriptionError(OPENBASE_CLOUD_AUDIO_SUBSCRIBE_DETAIL)
@@ -88,7 +111,7 @@ def openbase_cloud_subscription_entitlement(
     }
 
 
-def _audio_usage_summary(
+def audio_usage_summary(
     web_backend_url: str,
     *,
     access_token: str | None = None,
@@ -98,6 +121,27 @@ def _audio_usage_summary(
         "/api/openbase/audio/usage/",
         access_token=access_token,
     )
+
+
+# Retain the internal name for existing subscription callers and integrations.
+_audio_usage_summary = audio_usage_summary
+
+
+def _workspace_cloud_token(web_backend_url: str) -> str:
+    """Bearer token this installation uses for Cloud account checks.
+
+    Desktop installs hold a user login. Container workspaces (Maritime) never
+    do: bootstrap leaves them only the scoped machine token, which Cloud
+    accepts for the audio usage check. Fall back to that cached token rather
+    than reporting "login required" for a workspace that cannot log in.
+    """
+    try:
+        return get_token_manager(web_backend_url).get_access_token()
+    except AuthLoginRequiredError:
+        machine_tokens = MachineTokenManager(web_backend_url)
+        if not machine_tokens.has_cached_token():
+            raise
+        return machine_tokens.get_machine_token()
 
 
 def _cloud_user_profile(web_backend_url: str, *, access_token: str | None) -> dict:
@@ -111,13 +155,7 @@ def _cloud_json_get(
     access_token: str | None = None,
 ) -> dict:
     if access_token is None:
-        token_manager = get_token_manager(web_backend_url)
-        try:
-            access_token = token_manager.get_access_token()
-        except AuthLoginRequiredError:
-            raise
-        except AuthTransientError:
-            raise
+        access_token = _workspace_cloud_token(web_backend_url)
 
     try:
         response = httpx.get(
@@ -166,13 +204,22 @@ def _required_cloud_audio_providers(
     *,
     tts_provider_id: str,
     stt_provider_id: str,
+    live_voice: bool = False,
 ) -> set[str]:
+    if live_voice:
+        return {LIVE_VOICE_CLOUD_PROVIDER}
     providers: set[str] = set()
     if tts_provider_id == OPENBASE_CLOUD_TTS_PROVIDER_ID:
         providers.add("cartesia")
     if stt_provider_id == OPENBASE_CLOUD_STT_PROVIDER_ID:
         providers.add("assemblyai")
     return providers
+
+
+def _usage_knows_live_voice(usage: dict) -> bool:
+    return f"{LIVE_VOICE_CLOUD_PROVIDER}_limit_cents" in usage or (
+        f"{LIVE_VOICE_CLOUD_PROVIDER}_remaining_cents" in usage
+    )
 
 
 def _numeric_usage_value(payload: dict, key: str) -> float:
@@ -196,10 +243,16 @@ def _has_active_subscription_value(value: object) -> bool:
     return value is not None
 
 
+_PROVIDER_DISPLAY_NAMES = {
+    "assemblyai": "AssemblyAI",
+    "cartesia": "Cartesia",
+    LIVE_VOICE_CLOUD_PROVIDER: "live voice",
+}
+
+
 def _provider_names(providers: Iterable[str]) -> str:
     names = [
-        "AssemblyAI" if provider == "assemblyai" else "Cartesia"
-        for provider in providers
+        _PROVIDER_DISPLAY_NAMES.get(provider, "Cartesia") for provider in providers
     ]
     return " and ".join(sorted(names))
 

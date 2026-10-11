@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from asgiref.sync import async_to_sync
@@ -21,7 +22,12 @@ from openbase_coder_cli.openbase_coder_cli_app.item_tags import (
     set_thread_tags,
     thread_tags_payload,
 )
+from openbase_coder_cli.openbase_coder_cli_app.livekit_activity import (
+    count_active_voice_calls,
+)
 from openbase_coder_cli.openbase_coder_cli_app.thread_cache import (
+    clear_thread_cache,
+    get_cached_thread_history_page,
     get_cached_thread_list,
     get_cached_thread_page,
     get_cached_thread_state,
@@ -30,6 +36,7 @@ from openbase_coder_cli.openbase_coder_cli_app.thread_cache import (
 from openbase_coder_cli.openbase_coder_cli_app.thread_errors import (
     THREAD_DATA_UNAVAILABLE_CODE,
     is_thread_data_unavailable_error,
+    thread_error_code,
     thread_error_message,
 )
 from openbase_coder_cli.openbase_coder_cli_app.thread_favorites import (
@@ -40,6 +47,9 @@ from openbase_coder_cli.openbase_coder_cli_app.thread_favorites import (
 from openbase_coder_cli.openbase_coder_cli_app.thread_metadata import (
     annotate_thread_payload,
     get_livekit_shared_thread_id,
+)
+from openbase_coder_cli.openbase_coder_cli_app.thread_models import (
+    validate_model_for_thread,
 )
 from openbase_coder_cli.openbase_coder_cli_app.thread_origins import (
     MANUAL_ORIGIN,
@@ -54,6 +64,11 @@ from openbase_coder_cli.services.fleet_aggregation import (
     fleet_thread_page,
     thread_payload_sort_key,
 )
+from openbase_coder_cli.services.thread_push import moved_thread_detail
+from openbase_coder_cli.thread_model_overrides import (
+    get_thread_model_override,
+    set_thread_model_override,
+)
 from openbase_coder_cli.thread_sync.models import ThreadStatus
 from openbase_coder_cli.thread_sync.projects import (
     refresh_projects_from_thread_directories as _refresh_projects_from_threads,
@@ -67,6 +82,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_THREAD_PAGE_SIZE = 25
 MAX_THREAD_PAGE_SIZE = 100
+MAX_THREAD_NAME_LENGTH = 200
 RUN_ACTIVITY_FRESHNESS = timedelta(minutes=5)
 DISPATCHER_THREAD_WARM_TIMEOUT_SECONDS = 20.0
 
@@ -293,9 +309,13 @@ def thread_activity(request):
         if thread.status == ThreadStatus.running
         and _aware_datetime(thread.updated_at) >= activity_cutoff
     )
+    # A live voice call keeps a workspace busy even with no coding run.
+    active_call_count = count_active_voice_calls()
     return Response(
         {
             "active_run_count": active_run_count,
+            "active_call_count": active_call_count,
+            "active": active_run_count > 0 or active_call_count > 0,
             "thread_count": len(threads),
         }
     )
@@ -305,6 +325,52 @@ def _aware_datetime(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _resolve_new_thread_model(
+    manager, requested: object, backend: str | None
+) -> tuple[str, str | None]:
+    """Validate a new thread's model and pick the backend that runs it.
+
+    Returns ``(model, backend)``; ``backend`` is set only when the mixed
+    backend facade must be pointed at a non-primary backend. Raises
+    ValueError with a user-facing message for unknown models, models whose
+    engine cannot run here, or a model that contradicts an explicit backend.
+    """
+    from openbase_coder_cli import dispatcher_config
+
+    from .thread_models import thread_engine
+
+    if not isinstance(requested, str) or not requested.strip():
+        raise ValueError("model must be a non-empty string")
+    model = requested.strip()
+    location = dispatcher_config.backend_location()
+    options = dispatcher_config.combined_model_options(location)
+    selected = next(
+        (option for option in options if option["id"].lower() == model.lower()), None
+    )
+    if selected is None or not selected["available"]:
+        if selected and selected.get("unavailable_reason"):
+            raise ValueError(selected["unavailable_reason"])
+        known = ", ".join(option["id"] for option in options if option["available"])
+        raise ValueError(
+            f"Unknown or unavailable model {model!r}. Choose one of: {known}."
+        )
+    engine = dispatcher_config.model_engine(model)
+    if backend:
+        if thread_engine(backend) != engine:
+            raise ValueError(f"model {model!r} does not run on backend {backend!r}")
+        return model, None
+    primary = getattr(manager, "_execution_backend", None)
+    primary_runs_model = primary is None or thread_engine(primary) == engine
+    manager_for_backend = getattr(manager, "manager_for_backend", None)
+    if manager_for_backend is not None:
+        identity = dispatcher_config.identity_for_model(model, location)
+        if manager_for_backend(identity) is not None:
+            return model, identity
+    if not primary_runs_model:
+        raise ValueError(f"model {model!r} is not available on this computer")
+    return model, None
 
 
 @api_view(["GET", "POST"])
@@ -320,7 +386,7 @@ def thread_list(request):
 
     if request.method == "POST":
         directory = request.data.get("directory")
-        if not directory:
+        if not isinstance(directory, str) or not directory.strip():
             return Response(
                 {"error": "directory is required"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -342,7 +408,45 @@ def thread_list(request):
                     {"error": f"backend {backend!r} is not configured"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-        thread = async_to_sync(manager.create_thread)(directory, **create_kwargs)
+        requested_model = request.data.get("model")
+        if requested_model is not None:
+            try:
+                model, model_backend = _resolve_new_thread_model(
+                    manager, requested_model, backend
+                )
+            except ValueError as exc:
+                return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            if model_backend is not None:
+                create_kwargs["backend"] = model_backend
+        else:
+            model = None
+        try:
+            thread = async_to_sync(manager.create_thread)(directory, **create_kwargs)
+        except ValueError as exc:
+            # Validation can race the recent-project listing (temporary folders
+            # may disappear). Return a recoverable contract before any origin
+            # or model override is stored; unexpected runtime failures still raise.
+            unavailable = not Path(directory).expanduser().is_dir()
+            detail = (
+                "This project folder is unavailable on this computer. "
+                "Choose another project or restore the folder, then resend."
+                if unavailable
+                else str(exc)
+            )
+            return Response(
+                {
+                    "code": "project_unavailable"
+                    if unavailable
+                    else "invalid_thread_request",
+                    "detail": detail,
+                    "error": detail,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if model:
+            # The new-chat composer's model choice sticks to the thread like
+            # the in-thread model dropdown does.
+            set_thread_model_override(thread.session_id, model)
         # This endpoint is the only manual-entry chokepoint (console, desktop,
         # and mobile new-thread UIs all POST here); threads created any other
         # way (Super Agents MCP, dispatcher, voice) get no origin record and
@@ -362,6 +466,7 @@ def thread_list(request):
                 "thread_id": thread.session_id,
                 "directory": thread.directory,
                 "backend": thread.backend,
+                "model": model,
             },
             status=status.HTTP_201_CREATED,
         )
@@ -543,7 +648,9 @@ def thread_dispatcher(request):
             {"error": error or "Unable to create LiveKit dispatcher thread"},
             status=status.HTTP_502_BAD_GATEWAY,
         )
-    return Response(annotate_thread_payload(thread.model_dump(mode="json")))
+    return Response(
+        annotate_thread_payload(thread.model_dump(mode="json"), with_events=True)
+    )
 
 
 @api_view(["GET"])
@@ -558,7 +665,9 @@ def thread_active_voice(request):
             {"error": "Unable to create LiveKit dispatcher thread"},
             status=status.HTTP_502_BAD_GATEWAY,
         )
-    return Response(annotate_thread_payload(thread.model_dump(mode="json")))
+    return Response(
+        annotate_thread_payload(thread.model_dump(mode="json"), with_events=True)
+    )
 
 
 @api_view(["GET", "DELETE"])
@@ -573,7 +682,9 @@ def thread_detail(request, thread_id):
                 {"error": f"Thread {thread_id} not found"},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        invalidate_thread_list_cache()
+        # Archive changes list membership; do not serve the mutation-churn
+        # stale floor or join a list read that began before the archive.
+        clear_thread_cache()
         return Response({"success": True})
 
     try:
@@ -586,9 +697,13 @@ def thread_detail(request, thread_id):
         # keeps live-streamed turns that post-date the snapshot.
         history_cursor = request.query_params.get("history_cursor")
         if history_cursor:
-            thread = async_to_sync(manager.get_thread_state)(
+            # Older pages cache too: a not-loaded thread's page read can force
+            # a full rollout-file parse, so re-reading a scrolled-back page
+            # must not repeat that work within the TTL.
+            thread = get_cached_thread_history_page(
+                manager,
                 thread_id,
-                history_cursor=history_cursor,
+                history_cursor,
             )
         else:
             thread = get_cached_thread_state(manager, thread_id)
@@ -603,6 +718,16 @@ def thread_detail(request, thread_id):
             },
             status=status.HTTP_409_CONFLICT,
         )
+    if (
+        thread is not None
+        and not history_cursor
+        and request.query_params.get(FLEET_SCOPE_PARAM) == FLEET_SCOPE_VALUE
+    ):
+        # A thread pushed to another computer continues there: serve that
+        # live copy (tagged with its origin) so the client follows it.
+        moved_payload = moved_thread_detail(thread_id)
+        if moved_payload is not None:
+            return Response(moved_payload)
     if thread is None:
         # A fleet-scoped client may hold a thread that only exists on a peer
         # device (older than the sync window, or not yet exchanged) — serve
@@ -616,7 +741,9 @@ def thread_detail(request, thread_id):
             status=status.HTTP_404_NOT_FOUND,
         )
     return Response(
-        annotate_thread_payload(thread.model_dump(mode="json"), thread_id=thread_id)
+        annotate_thread_payload(
+            thread.model_dump(mode="json"), thread_id=thread_id, with_events=True
+        )
     )
 
 
@@ -638,6 +765,43 @@ def thread_favorite(request, thread_id):
         return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
     invalidate_thread_list_cache()
     return Response(payload)
+
+
+@api_view(["PATCH"])
+def thread_name(request, thread_id):
+    """Rename a thread on its coding backend."""
+    name = request.data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return Response(
+            {"error": "name must be a non-empty string"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if len(name) > MAX_THREAD_NAME_LENGTH:
+        return Response(
+            {"error": f"name must be at most {MAX_THREAD_NAME_LENGTH} characters"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    manager = get_session_manager()
+    try:
+        thread = async_to_sync(manager.rename_thread)(thread_id, name)
+    except ValueError as exc:
+        return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    except RuntimeError as exc:
+        return Response(
+            {"error": thread_error_message(exc)},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+    invalidate_thread_list_cache()
+    if thread is None:
+        return Response(
+            {"error": f"Thread {thread_id} not found"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    return Response(
+        annotate_thread_payload(
+            thread.model_dump(mode="json"), thread_id=thread_id, with_events=True
+        )
+    )
 
 
 @api_view(["GET", "PATCH"])
@@ -678,6 +842,31 @@ def thread_interrupt(request, thread_id):
     return Response({"success": True})
 
 
+def _requested_turn_model(request, manager, thread_id) -> str | None:
+    """Validate and persist an optional per-turn model switch.
+
+    A `model` in a turn payload is the composer's model dropdown: it must stay
+    on the thread's own backend, and it sticks — later turns without a model
+    keep using it (stored as the thread's model override).
+
+    Raises ValueError with a user-facing message on unknown or cross-backend
+    models.
+    """
+    model = request.data.get("model")
+    if not model or not isinstance(model, str):
+        return None
+    thread = async_to_sync(manager.get_thread_state)(thread_id)
+    if thread is None:
+        raise ValueError(f"Thread {thread_id} not found")
+    model = validate_model_for_thread(
+        thread.backend,
+        model,
+        current_model=get_thread_model_override(thread_id) or thread.model,
+    )
+    set_thread_model_override(thread_id, model)
+    return model
+
+
 @api_view(["POST"])
 def thread_start_turn(request, thread_id):
     """Start a new turn on a thread (non-blocking).
@@ -693,12 +882,18 @@ def thread_start_turn(request, thread_id):
             status=status.HTTP_400_BAD_REQUEST,
         )
     try:
-        turn_id = async_to_sync(manager.start_turn)(thread_id, prompt)
+        model = _requested_turn_model(request, manager, thread_id)
+        turn_id = async_to_sync(manager.start_turn)(thread_id, prompt, model=model)
     except (ValueError, RuntimeError) as e:
         # Surface the app-server's human-readable message (e.g. "thread not
-        # loaded: <id>") rather than its raw JSON-RPC error envelope.
+        # loaded: <id>") rather than its raw JSON-RPC error envelope, plus a
+        # stable code when the backend itself was the problem.
         return Response(
-            {"error": thread_error_message(e)}, status=status.HTTP_400_BAD_REQUEST
+            {
+                "error": thread_error_message(e),
+                "code": thread_error_code(e, fallback="turn_start_failed"),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
         )
     invalidate_thread_list_cache()
     return Response(
@@ -717,7 +912,8 @@ def thread_queue_turn(request, thread_id):
             status=status.HTTP_400_BAD_REQUEST,
         )
     try:
-        result = async_to_sync(manager.queue_turn)(thread_id, prompt)
+        model = _requested_turn_model(request, manager, thread_id)
+        result = async_to_sync(manager.queue_turn)(thread_id, prompt, model=model)
     except (ValueError, RuntimeError) as e:
         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
     invalidate_thread_list_cache()
@@ -737,6 +933,12 @@ def thread_steer_turn(request, thread_id):
     try:
         result = async_to_sync(manager.steer_turn)(thread_id, prompt)
     except (ValueError, RuntimeError) as e:
-        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {
+                "error": thread_error_message(e),
+                "code": thread_error_code(e, fallback="steer_failed"),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
     invalidate_thread_list_cache()
     return Response(result)

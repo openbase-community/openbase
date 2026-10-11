@@ -92,7 +92,7 @@ def test_start_action_bootstraps_unloaded_launch_agent(
     ]
 
 
-def test_restart_action_boots_out_loaded_launch_agent_before_bootstrap(
+def test_restart_action_restarts_loaded_launch_agent_in_place(
     tmp_path: Path, monkeypatch
 ) -> None:
     launch_agents_dir = tmp_path / "Library" / "LaunchAgents"
@@ -107,6 +107,50 @@ def test_restart_action_boots_out_loaded_launch_agent_before_bootstrap(
 
     monkeypatch.setattr(launchctl_tools, "LAUNCH_AGENTS_DIR", launch_agents_dir)
     monkeypatch.setattr(launchctl_tools.os, "getuid", lambda: 501)
+    monkeypatch.setattr(launchctl_tools.process_utils.time, "sleep", lambda _s: None)
+
+    calls: list[tuple[str, ...]] = []
+    state = {"pid": 456}
+
+    def fake_run(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+        calls.append(args)
+        if args[0] == "kill":
+            # KeepAlive respawns the job under a new pid once the old one exits.
+            state["pid"] = 789
+        if args == ("list",):
+            return subprocess.CompletedProcess(
+                ["launchctl", *args],
+                0,
+                f"PID\tStatus\tLabel\n{state['pid']}\t0\tcom.example.worker\n",
+                "",
+            )
+        return subprocess.CompletedProcess(["launchctl", *args], 0, "", "")
+
+    monkeypatch.setattr(launchctl_tools, "_run_launchctl", fake_run)
+
+    launchctl_tools.run_launchctl_service_action("com.example.worker", "restart")
+
+    # Never bootout + bootstrap: that re-registers the background item and
+    # macOS announces it again. Terminate, wait for the pid to change, then
+    # kickstart (a no-op for the already-respawned job).
+    actions = [c for c in calls if c != ("list",)]
+    assert actions == [
+        ("kill", "SIGTERM", "gui/501/com.example.worker"),
+        ("kickstart", "gui/501/com.example.worker"),
+    ]
+
+
+def test_restart_action_force_kickstarts_when_sigterm_is_ignored(
+    tmp_path: Path, monkeypatch
+) -> None:
+    launch_agents_dir = tmp_path / "Library" / "LaunchAgents"
+    _write_plist(
+        launch_agents_dir / "com.example.worker.plist",
+        {"Label": "com.example.worker", "ProgramArguments": ["/usr/bin/true"]},
+    )
+    monkeypatch.setattr(launchctl_tools, "LAUNCH_AGENTS_DIR", launch_agents_dir)
+    monkeypatch.setattr(launchctl_tools.os, "getuid", lambda: 501)
+    monkeypatch.setattr(launchctl_tools, "RESTART_EXIT_TIMEOUT_SECONDS", 0.0)
 
     calls: list[tuple[str, ...]] = []
 
@@ -125,10 +169,10 @@ def test_restart_action_boots_out_loaded_launch_agent_before_bootstrap(
 
     launchctl_tools.run_launchctl_service_action("com.example.worker", "restart")
 
-    assert calls == [
-        ("list",),
-        ("bootout", "gui/501/com.example.worker"),
-        ("bootstrap", "gui/501", str(plist_path)),
+    actions = [c for c in calls if c != ("list",)]
+    assert actions == [
+        ("kill", "SIGTERM", "gui/501/com.example.worker"),
+        ("kickstart", "-k", "gui/501/com.example.worker"),
     ]
 
 

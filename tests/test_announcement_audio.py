@@ -6,10 +6,14 @@ from livekit import rtc
 from livekit.agents import APIError
 
 from openbase_coder_cli.livekit_agent.announcement_audio import (
-    AnnouncementSynthesisOutcome, announcement_audio,
+    AnnouncementSynthesisOutcome,
+    announcement_audio,
 )
 from openbase_coder_cli.livekit_agent.speech_queue import AnnouncerSpeechQueue
-from openbase_coder_cli.livekit_agent.voice_delivery import VoiceDeliveryLedger, VoiceRouteSnapshot
+from openbase_coder_cli.livekit_agent.voice_delivery import (
+    VoiceDeliveryLedger,
+    VoiceRouteSnapshot,
+)
 
 
 @pytest.mark.asyncio

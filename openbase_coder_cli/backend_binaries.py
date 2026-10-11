@@ -30,6 +30,7 @@ from openbase_coder_cli.backend_config import (
     OPENBASE_CLOUD_CODEX_BACKEND,
 )
 from openbase_coder_cli.paths import OPENBASE_BIN_DIR
+from openbase_coder_cli.services.mutation_lock import service_mutation
 
 CODEX_LATEST_RELEASE_URL = "https://api.github.com/repos/openai/codex/releases/latest"
 CLAUDE_INSTALLER_URL = "https://claude.ai/install.sh"
@@ -58,6 +59,24 @@ def nvm_binary_candidates(name: str) -> list[Path]:
     return candidates
 
 
+def node_runtime_bin_dir() -> Path | None:
+    """Directory of the ``node`` the login shell would run, if any.
+
+    Background services start without the login shell's PATH, so an nvm-only
+    Node (the documented developer install) is invisible to them. pnpm's
+    ``#!/usr/bin/env node`` entry point then dies with "env: node: No such
+    file or directory" even though setup resolved pnpm itself by absolute
+    path. Service wrappers put this directory on PATH to close that gap.
+    """
+    found = which("node")
+    if found:
+        return Path(found).parent
+    for candidate in nvm_binary_candidates("node"):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate.parent
+    return None
+
+
 def backend_binary_candidates(name: str) -> list[Path]:
     """Places a backend CLI may live, beyond PATH lookup."""
     return [
@@ -73,6 +92,17 @@ def find_backend_binary(name: str) -> Path | None:
             return candidate
     found = which(name)
     return Path(found) if found else None
+
+
+BACKEND_INSTALL_ERRORS = (
+    OSError,
+    subprocess.CalledProcessError,
+    subprocess.TimeoutExpired,
+    urllib.error.URLError,
+    tarfile.TarError,
+    json.JSONDecodeError,
+    RuntimeError,
+)
 
 
 def ensure_backend_binary(coding_backend: str) -> Path | None:
@@ -96,14 +126,7 @@ def ensure_backend_binary(coding_backend: str) -> Path | None:
         if name == "codex":
             return _install_codex()
         return _install_claude()
-    except (
-        OSError,
-        subprocess.CalledProcessError,
-        urllib.error.URLError,
-        tarfile.TarError,
-        json.JSONDecodeError,
-        RuntimeError,
-    ) as exc:
+    except BACKEND_INSTALL_ERRORS as exc:
         click.echo(
             click.style(
                 f"  WARN  Could not install the {name} CLI automatically: {exc}",
@@ -140,6 +163,7 @@ def _codex_release_target() -> str:
     raise RuntimeError(f"Unsupported platform for codex install: {system}")
 
 
+@service_mutation()
 def _install_codex() -> Path:
     target = _codex_release_target()
     asset_name = f"codex-{target}.tar.gz"
@@ -162,15 +186,31 @@ def _install_codex() -> Path:
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
         archive_path = tmp_dir / asset_name
-        urllib.request.urlretrieve(asset_url, archive_path)
+        with urllib.request.urlopen(asset_url, timeout=30) as response:
+            with archive_path.open("wb") as handle:
+                shutil.copyfileobj(response, handle, length=1024 * 1024)
         with tarfile.open(archive_path, "r:gz") as archive:
             archive.extractall(tmp_dir, filter="data")
         binary = _find_extracted_binary(tmp_dir, "codex")
         if binary is None:
             raise RuntimeError(f"No codex binary found inside {asset_name}")
         installed = OPENBASE_BIN_DIR / "codex"
-        shutil.copy2(binary, installed)
-        installed.chmod(0o755)
+        # Stage on the destination filesystem so failed copies or validation
+        # leave the working binary intact, including while it is executing.
+        with tempfile.TemporaryDirectory(
+            prefix=".codex-update-", dir=OPENBASE_BIN_DIR
+        ) as staging:
+            candidate = Path(staging) / "codex"
+            shutil.copy2(binary, candidate)
+            candidate.chmod(0o755)
+            subprocess.run(
+                [str(candidate), "--version"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            os.replace(candidate, installed)
 
     click.echo(f"Installed codex CLI at {installed}")
     return installed

@@ -317,12 +317,14 @@ def test_recent_projects_get_returns_paginated_lazy_metadata(monkeypatch) -> Non
     assert response.data["projects"] == [
         {
             "path": "/tmp/project-1",
+            "available": False,
             "git_status": "unknown",
             "stack": None,
             "worktrees": [],
         },
         {
             "path": "/tmp/project-2",
+            "available": False,
             "git_status": "unknown",
             "stack": None,
             "worktrees": [],
@@ -378,6 +380,7 @@ def test_recent_projects_get_derives_multi_worktree_children(
     assert response.data["projects"] == [
         {
             "path": str(workspace),
+            "available": True,
             "git_status": "unknown",
             "stack": None,
             "worktrees": [
@@ -488,3 +491,73 @@ def test_project_metadata_git_status_reports_missing_directory() -> None:
 
     metadata = project_views._project_metadata("/tmp/definitely-missing-project")
     assert metadata["git_status"] == "missing"
+
+
+def test_load_projects_treats_an_empty_cache_as_no_projects(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # A zero-byte cache carried over from an older install made every thread
+    # listing fail with a 500 (staging, 2026-10-09). The cache is derived
+    # state, so an empty or unreadable file is simply no projects yet.
+    projects_file = tmp_path / "coder-projects.json"
+    monkeypatch.setattr(projects, "PROJECTS_FILE", projects_file)
+    for content in ("", "   \n", "{", "{}", "null", "42"):
+        projects_file.write_text(content, encoding="utf-8")
+        assert projects._load_projects() == []
+        assert projects.get_recent_projects() == []
+
+
+def test_track_project_recovers_from_an_empty_cache(
+    tmp_path: Path, monkeypatch
+) -> None:
+    projects_file = tmp_path / "coder-projects.json"
+    projects_file.write_text("", encoding="utf-8")
+    monkeypatch.setattr(projects, "PROJECTS_FILE", projects_file)
+    monkeypatch.setattr(projects, "IGNORED_PROJECT_ROOTS", ())
+    project = tmp_path / "real-project"
+    project.mkdir()
+    projects.track_project(str(project))
+    assert [item["path"] for item in projects._load_projects()] == [str(project)]
+
+
+def test_load_projects_tolerates_invalid_utf8(tmp_path: Path, monkeypatch) -> None:
+    projects_file = tmp_path / "coder-projects.json"
+    projects_file.write_bytes(b"\xff")
+    monkeypatch.setattr(projects, "PROJECTS_FILE", projects_file)
+    assert projects._load_projects() == []
+
+
+def test_load_projects_tolerates_read_failure(tmp_path: Path, monkeypatch) -> None:
+    projects_file = tmp_path / "coder-projects.json"
+    projects_file.write_text("[]")
+    monkeypatch.setattr(projects, "PROJECTS_FILE", projects_file)
+
+    def unreadable(*args, **kwargs):
+        raise PermissionError("unreadable cache")
+
+    monkeypatch.setattr(Path, "read_text", unreadable)
+    assert projects._load_projects() == []
+
+
+def test_recent_project_availability_is_fresh_without_removing_registration(
+    tmp_path, monkeypatch
+):
+    os.environ.setdefault("OPENBASE_CODER_CLI_SECRET_KEY", "test-secret")
+    os.environ.setdefault(
+        "DJANGO_SETTINGS_MODULE", "openbase_coder_cli.config.settings"
+    )
+    import django
+
+    django.setup()
+    from openbase_coder_cli.openbase_coder_cli_app import projects as views
+
+    monkeypatch.setattr(views, "_cached_metadata", lambda _: None)
+    monkeypatch.setattr(views, "_worktree_children", lambda _: [])
+    folder = tmp_path / "restorable"
+    registration = {"path": str(folder)}
+    assert views._project_payload(registration)["available"] is False
+    folder.mkdir()
+    assert views._project_payload(registration)["available"] is True
+    folder.rmdir()
+    assert views._project_payload(registration)["available"] is False
+    assert registration == {"path": str(folder)}

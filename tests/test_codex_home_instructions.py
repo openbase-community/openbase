@@ -289,3 +289,99 @@ def test_ensure_rendered_instruction_file_standalone_overwrites_user_edits(
         source, target, document_label="dispatcher instructions"
     )
     assert "Packaged rule v2" in target.read_text(encoding="utf-8")
+
+
+def _fake_installation(monkeypatch, workspace) -> None:
+    class FakeInstallationConfig:
+        workspace_path = str(workspace)
+
+        @classmethod
+        def exists(cls) -> bool:
+            return True
+
+        @classmethod
+        def load(cls):
+            return cls()
+
+    monkeypatch.setattr(codex_home_instructions, "InstallationConfig", FakeInstallationConfig)
+
+
+def _upgraded_workspace(tmp_path, monkeypatch):
+    """A new image's instruction sources over a persisted data dir that an
+    older image left with only AGENTS.md rendered."""
+    workspace = tmp_path / "workspace"
+    sources = workspace / "instructions"
+    sources.mkdir(parents=True)
+    (sources / "AGENTS.md").write_text("- Base rule\n", encoding="utf-8")
+    for name, _target in codex_home_instructions.OPENBASE_DEFAULT_INSTRUCTION_FILES:
+        (sources / name).write_text(f"- {name} rule\n", encoding="utf-8")
+    rendered = tmp_path / "data" / "instructions"
+    rendered.mkdir(parents=True)
+    agents = rendered / "AGENTS.md"
+    agents.write_text("## Openbase Coder Instructions\n\n- Old base rule\n", encoding="utf-8")
+    monkeypatch.setattr(codex_home_instructions, "OPENBASE_AGENTS_MD_PATH", agents)
+    monkeypatch.setattr(
+        codex_home_instructions,
+        "OPENBASE_DEFAULT_INSTRUCTION_FILES",
+        tuple((name, rendered / name) for name, _target in codex_home_instructions.OPENBASE_DEFAULT_INSTRUCTION_FILES),
+    )
+    _fake_installation(monkeypatch, workspace)
+    return rendered
+
+
+def test_refresh_completes_a_persisted_data_dir_holding_only_agents_md(tmp_path, monkeypatch) -> None:
+    # Regression (2026-10-09 staging promotion): DevSpaces 374 and 369 were
+    # redeployed in place onto an image that newly shipped instructions/ and
+    # came back with only AGENTS.md; the dispatcher, Super Agent and voice
+    # instructions appeared only after a manual refresh.
+    rendered = _upgraded_workspace(tmp_path, monkeypatch)
+
+    assert codex_home_instructions.refresh_openbase_instruction_files_from_installation()
+
+    assert sorted(path.name for path in rendered.iterdir()) == [
+        "AGENTS.md",
+        "DISPATCHER_INSTRUCTIONS.md",
+        "SUPER_AGENT_INSTRUCTIONS.md",
+        "VOICE_INSTRUCTIONS.md",
+    ]
+    assert "- Base rule" in (rendered / "AGENTS.md").read_text(encoding="utf-8")
+    for name, _target in codex_home_instructions.OPENBASE_DEFAULT_INSTRUCTION_FILES:
+        assert f"- {name} rule" in (rendered / name).read_text(encoding="utf-8")
+    # A second boot changes nothing and leaves no temporary files behind.
+    assert not codex_home_instructions.refresh_openbase_instruction_files_from_installation()
+    assert not [path for path in rendered.iterdir() if path.name.startswith(".")]
+
+
+def test_refresh_updates_stale_generated_files_after_an_upgrade(tmp_path, monkeypatch) -> None:
+    rendered = _upgraded_workspace(tmp_path, monkeypatch)
+    codex_home_instructions.refresh_openbase_instruction_files_from_installation()
+    source = tmp_path / "workspace" / "instructions" / "DISPATCHER_INSTRUCTIONS.md"
+    source.write_text("- Dispatcher rule v2\n", encoding="utf-8")
+
+    assert codex_home_instructions.refresh_openbase_instruction_files_from_installation()
+    assert "- Dispatcher rule v2" in (rendered / "DISPATCHER_INSTRUCTIONS.md").read_text(encoding="utf-8")
+
+
+def test_django_startup_renders_instruction_files(monkeypatch) -> None:
+    from openbase_coder_cli.openbase_coder_cli_app.apps import OpenbaseCoderCliAppConfig
+
+    calls = []
+    monkeypatch.setattr(
+        codex_home_instructions,
+        "refresh_openbase_instruction_files_from_installation",
+        lambda **_kwargs: calls.append("instructions") or False,
+    )
+    monkeypatch.setattr(
+        importlib.import_module("openbase_coder_cli.cli.setup.codex"),
+        "relink_workspace_skills_from_installation",
+        lambda **_kwargs: calls.append("skills") or False,
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.skills_autolink.sync_auto_linked_skills",
+        lambda: calls.append("autolink"),
+    )
+
+    # Runs the real ready() without a configured Django registry.
+    OpenbaseCoderCliAppConfig.ready(object.__new__(OpenbaseCoderCliAppConfig))
+
+    assert calls == ["autolink", "skills", "instructions"]

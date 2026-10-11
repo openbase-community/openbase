@@ -1,12 +1,16 @@
 """Voice delivery state and diagnostics for LiveKit spoken turns.
 
-Mute semantics (intended behavior — do not "fix"): once the user goes quiet
-and their utterance is accepted, ``safe_to_mute_user`` tells the client to
-mute its microphone, and it stays muted until ``safe_to_unmute`` after the
-agent's spoken reply. A slow coding-backend turn extends that muted window
-for however long the turn runs; the sustained mute is deliberate, not a
-stuck state. When a call looks deaf during a long pending turn, investigate
-backend turn latency (see dev-docs/TROUBLESHOOTING.md), not the mute.
+Mute semantics: once the user goes quiet and their utterance is accepted,
+``safe_to_mute_user`` tells the client to mute its microphone. As soon as
+the request is committed to the coding backend the mic is released again
+(``safe_to_unmute`` with reason ``backend_working``,
+:meth:`VoiceDeliveryLedger.release_mic_for_backend_wait`): the caller must be
+able to steer the running turn by voice (Gabe, 2026-10-11; before, the mute
+lasted the whole backend turn and a mid-turn "also add a NOTES file" never
+reached STT). The mute returns with the reply's ``agent_audio_started`` (a
+``safe_to_mute_user`` is sent alongside it so the keepalive covers long
+replies) and the mic reopens on ``safe_to_unmute`` after the agent's spoken
+reply. So the mic is closed only around the agent's own audio.
 
 ``safe_to_unmute`` is a mic-release, not a status update: it is only sent
 when a lifecycle mute is actually outstanding (or after real agent audio),
@@ -19,7 +23,6 @@ on their own.
 from __future__ import annotations
 
 import asyncio
-from .provisional_mute_recovery import ProvisionalMuteRecovery
 import difflib
 import hashlib
 import logging
@@ -33,11 +36,13 @@ from typing import Any
 
 from openbase_coder_cli.livekit_agent.turn_detection import (
     MAX_PRE_ACCEPT_QUIET_CREDIT_SECONDS,
-    VAD_ONLY_USER_TURN_QUIET_GRACE_SECONDS,
     VAD_ONLY_MIN_SPEECH_SECONDS,
+    VAD_ONLY_USER_TURN_QUIET_GRACE_SECONDS,
     UserTurnClosureDecision,
     UserTurnClosureSignals,
 )
+
+from .provisional_mute_recovery import ProvisionalMuteRecovery
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +113,9 @@ class VoiceDeliveryRecord:
     audio_seconds: float = 0.0
     reserved_for_tts: bool = False
     delivered: bool = False
+    # The mic was reopened while the backend worked on this request; the
+    # reply's audio start must close it again.
+    mic_released_for_backend: bool = False
     terminal_reason: str | None = None
     user_turn_closed: bool = False
     user_turn_closure_confidence: float | None = None
@@ -134,8 +142,20 @@ class VoiceDeliveryLedger:
         vad_quiet_grace_seconds: float = VAD_ONLY_USER_TURN_QUIET_GRACE_SECONDS,
         vad_transcript_timeout_seconds: float = 15,
         vad_min_speech_seconds: float = VAD_ONLY_MIN_SPEECH_SECONDS,
+        live_mode: bool = False,
+        mute_only_around_playback: bool = False,
     ) -> None:
         self._route_snapshot = route_snapshot
+        # Pipeline engine: the mic is shut only while the agent's own audio
+        # plays. The quiet-floor mute that used to follow every accepted
+        # utterance is not published (it was immediately undone by the
+        # backend-wait release and read as a mute/unmute flap on the phone,
+        # Gabe 2026-10-11); the user-turn closure itself is unchanged.
+        self._mute_only_around_playback = mute_only_around_playback
+        # Live Voice engine: the microphone stays open for full duplex, so the
+        # ledger never emits a mute or unmute release, whatever path asks for
+        # one. Everything else (utterance_accepted, agent_audio_*) still flows.
+        self._live_mode = live_mode
         self._room_name = room_name
         self._room_id = room_id
         self._user_speaking_poll_seconds = user_speaking_poll_seconds
@@ -144,9 +164,13 @@ class VoiceDeliveryLedger:
         self._vad_speech_started_at: float | None = None
         self._vad_last_speech_seconds = 0.0
         self._vad_quiet_task: asyncio.Task[None] | None = None
-        self._provisional_mute_recovery = ProvisionalMuteRecovery(vad_transcript_timeout_seconds)
+        self._provisional_mute_recovery = ProvisionalMuteRecovery(
+            vad_transcript_timeout_seconds
+        )
         self._provisional_record: VoiceDeliveryRecord | None = None
-        self._transcript_timeout_sink: Callable[[VoiceDeliveryRecord], None] | None = None
+        self._transcript_timeout_sink: Callable[[VoiceDeliveryRecord], None] | None = (
+            None
+        )
         # True while a safe_to_mute_user has been emitted and neither renewed
         # user speech nor a safe_to_unmute has reopened the mic since.
         self._mute_covers_current_quiet = False
@@ -181,6 +205,88 @@ class VoiceDeliveryLedger:
         sink: Callable[[str, VoiceDeliveryRecord, str], None] | None,
     ) -> None:
         self._lifecycle_sink = sink
+
+    @property
+    def live_mode(self) -> bool:
+        return self._live_mode
+
+    def track_live_speech(self, *, text: str = "") -> VoiceDeliveryRecord:
+        """Synthetic record for voice-model speech no delegation asked for.
+
+        Under the live engine the model may speak on its own (small talk,
+        acknowledgements, announcer commentary). Playout still has to be
+        bracketed by ``agent_audio_started`` / ``agent_audio_finished`` for
+        diagnostics and the Call tab, so give it a record of its own.
+        """
+        record = VoiceDeliveryRecord(
+            delivery_id=f"voice-live-{uuid.uuid4().hex[:12]}",
+            message_id="",
+            prompt_hash="",
+            prompt_len=0,
+            room_name=self._room_name,
+            room_id=self._room_id,
+            route_at_acceptance=self._route_snapshot(),
+            status="tts_flushed",
+        )
+        if text:
+            record.speech_hash = short_text_hash(text)
+            record.speech_len = len(text)
+        record.reserved_for_tts = True
+        self._records[record.delivery_id] = record
+        self._log(record, "live_speech_tracked")
+        return record
+
+    def mark_live_audio_started(self, record: VoiceDeliveryRecord) -> None:
+        """Model audio playout began for ``record`` (live engine)."""
+        if record.status in _TERMINAL_STATUSES:
+            return
+        self._cancel_user_turn_closure_task(record.delivery_id)
+        record.status = "audio_started"
+        record.audio_started_at = time.monotonic()
+        record.delivered = True
+        if record.turn_id and record.client is not None:
+            claim = getattr(record.client, "claim_speech", None)
+            if callable(claim):
+                claim(record.turn_id)
+        self._log(record, "audio_started", role="live")
+        self._emit_lifecycle("agent_audio_started", record)
+
+    def mark_live_audio_finished(
+        self, record: VoiceDeliveryRecord, *, interrupted: bool = False
+    ) -> None:
+        """Model audio playout ended for ``record`` (live engine).
+
+        Never emits ``safe_to_unmute``: the live engine keeps the mic open.
+        """
+        if record.status in _TERMINAL_STATUSES:
+            return
+        if record.audio_started_at is not None:
+            record.audio_seconds = max(0.0, time.monotonic() - record.audio_started_at)
+            record.audio_events = max(record.audio_events, 1)
+        record.status = "audio_delivered"
+        record.delivered = True
+        if interrupted:
+            record.terminal_reason = "live_playout_interrupted"
+        self._log(
+            record, "audio_delivered", role="live", reason=record.terminal_reason or ""
+        )
+        self._emit_lifecycle(
+            "agent_audio_finished", record, reason=record.terminal_reason or ""
+        )
+
+    def live_record_awaiting_audio(self) -> VoiceDeliveryRecord | None:
+        """The newest live delegation record whose answer has not played yet."""
+        candidates = [
+            record
+            for record in self._records.values()
+            if record.message_id.startswith("live-")
+            and record.status
+            in {"utterance_accepted", "answer_owed", "text_generated", "tts_reserved"}
+            and not record.delivered
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda record: record.accepted_at)
 
     def set_user_speaking_provider(self, provider: Callable[[], bool] | None) -> None:
         self._user_speaking_provider = provider
@@ -225,7 +331,8 @@ class VoiceDeliveryLedger:
         if old_state == "speaking":
             self._vad_last_speech_seconds = (
                 max(0.0, time.monotonic() - self._vad_speech_started_at)
-                if self._vad_speech_started_at is not None else 0.0
+                if self._vad_speech_started_at is not None
+                else 0.0
             )
             self._vad_speech_started_at = None
             self._start_vad_quiet_closure_task()
@@ -272,9 +379,12 @@ class VoiceDeliveryLedger:
                 break
             await asyncio.sleep(self._user_speaking_poll_seconds)
         if self._vad_last_speech_seconds < self._vad_min_speech_seconds:
-            logger.info("dispatch_timing stage=vad_brief_trigger_no_provisional_mute "
-                        "speech_ms=%d room=%s", int(self._vad_last_speech_seconds * 1000),
-                        self._room_name)
+            logger.info(
+                "dispatch_timing stage=vad_brief_trigger_no_provisional_mute "
+                "speech_ms=%d room=%s",
+                int(self._vad_last_speech_seconds * 1000),
+                self._room_name,
+            )
             return
         self._emit_vad_quiet_mute()
 
@@ -300,26 +410,43 @@ class VoiceDeliveryLedger:
         self._log_user_turn_closure(record, "safe_to_mute_user")
         self._emit_lifecycle("safe_to_mute_user", record, reason="vad_quiet_floor")
         self._provisional_record = record
-        self._provisional_mute_recovery.start(lambda: self._recover_provisional_mute(record))
+        self._provisional_mute_recovery.start(
+            lambda: self._recover_provisional_mute(record)
+        )
 
     def notify_final_transcript(self) -> None:
         """Bound the STT-to-LLM handoff without reopening the mic mid-adoption."""
         record = self._provisional_record
-        if record is None or record.status != "vad_quiet_closure" or not self._lifecycle_mute_outstanding:
+        if (
+            record is None
+            or record.status != "vad_quiet_closure"
+            or not self._lifecycle_mute_outstanding
+        ):
             return
-        logger.info("dispatch_timing stage=vad_transcript_handoff_extended delivery_id=%s room=%s",
-            record.delivery_id, self._room_name)
-        self._provisional_mute_recovery.start(lambda: self._recover_provisional_mute(
-            record, reason="vad_transcript_handoff_timeout"))
+        logger.info(
+            "dispatch_timing stage=vad_transcript_handoff_extended delivery_id=%s room=%s",
+            record.delivery_id,
+            self._room_name,
+        )
+        self._provisional_mute_recovery.start(
+            lambda: self._recover_provisional_mute(
+                record, reason="vad_transcript_handoff_timeout"
+            )
+        )
 
-    def _recover_provisional_mute(self, record: VoiceDeliveryRecord, *, reason: str = "vad_transcript_timeout") -> bool:
+    def _recover_provisional_mute(
+        self, record: VoiceDeliveryRecord, *, reason: str = "vad_transcript_timeout"
+    ) -> bool:
         if record.status != "vad_quiet_closure" or not self._lifecycle_mute_outstanding:
             return True
         if not self._may_release_unmute():
             return False
         self._provisional_record = None
         self.mark_cancelled(record, reason=reason)
-        if reason == "vad_transcript_timeout" and self._transcript_timeout_sink is not None:
+        if (
+            reason == "vad_transcript_timeout"
+            and self._transcript_timeout_sink is not None
+        ):
             self._transcript_timeout_sink(record)
         return True
 
@@ -485,7 +612,9 @@ class VoiceDeliveryLedger:
             )
         return True
 
-    async def wait_for_user_turn_closed_before_tts(self, record: VoiceDeliveryRecord) -> bool:
+    async def wait_for_user_turn_closed_before_tts(
+        self, record: VoiceDeliveryRecord
+    ) -> bool:
         return await self.wait_for_user_turn_closed(record)
 
     def mark_user_turn_closed(
@@ -611,6 +740,29 @@ class VoiceDeliveryLedger:
         record.status = "answer_owed"
         self._records_by_turn_id[turn_id] = record
         self._log(record, "answer_owed")
+        return True
+
+    def release_mic_for_backend_wait(self, record: VoiceDeliveryRecord) -> bool:
+        """Reopen the caller's mic while the backend works on ``record``.
+
+        The lifecycle mute closed the mic for the quiet floor; the request is
+        now with the coding backend, and what the caller says next must be
+        transcribed and steered into that turn. Nothing happens in live mode,
+        when no lifecycle mute is outstanding, or while agent audio is still
+        pending or playing (an announcement keeps the mic shut until it ends).
+        """
+        if self._live_mode or not self._lifecycle_mute_outstanding:
+            return False
+        if self._announcement_pending() or any(
+            self._remaining_playout_seconds(other) > MIN_PLAYOUT_DEFER_SECONDS
+            for other in self._records.values()
+            if other.delivery_id in self._playout_release_tasks
+        ):
+            self._log(record, "mic_release_deferred", reason="agent_audio_pending")
+            return False
+        record.mic_released_for_backend = True
+        self._log(record, "mic_released_for_backend")
+        self._emit_lifecycle("safe_to_unmute", record, reason="backend_working")
         return True
 
     def mark_text_generated(
@@ -766,6 +918,13 @@ class VoiceDeliveryLedger:
         only mutes right before the eventual TTS. The user reads the mute
         transition as "message received"; give steers the same receipt.
         """
+        # A steer means a final transcript WAS captured and used, so any
+        # outstanding VAD-only provisional mute is no longer waiting on a lost
+        # transcript. Retire it exactly as ``accept_utterance`` does, or its
+        # recovery timer later fires "speech recognition is having trouble" for
+        # speech that was in fact received.
+        self._provisional_mute_recovery.cancel()
+        self._provisional_record = None
         if self._mute_covers_current_quiet and not self._user_is_speaking():
             return
         record = VoiceDeliveryRecord(
@@ -876,16 +1035,27 @@ class VoiceDeliveryLedger:
             voice_id=voice_id,
             voice_name=voice_name,
         )
+        if (
+            not self._live_mode
+            and not self._lifecycle_mute_outstanding
+            and (record.mic_released_for_backend or self._mute_only_around_playback)
+        ):
+            # The mic was open during the backend wait: close it for the
+            # reply, and keep the mute keepalive running through a long one.
+            self._emit_lifecycle("safe_to_mute_user", record, reason="agent_playback")
         self._emit_lifecycle("agent_audio_started", record)
 
-    def mark_audio_frame_queued(self, record: VoiceDeliveryRecord, *, audio_seconds: float, queued_at: float) -> None:
+    def mark_audio_frame_queued(
+        self, record: VoiceDeliveryRecord, *, audio_seconds: float, queued_at: float
+    ) -> None:
         """Track the local playout queue without counting stream stalls as speech."""
         if audio_seconds <= 0:
             return
         previous_end = record.queued_audio_playout_end_at
-        record.queued_audio_playout_end_at = max(
-            queued_at, previous_end if previous_end is not None else queued_at
-        ) + audio_seconds
+        record.queued_audio_playout_end_at = (
+            max(queued_at, previous_end if previous_end is not None else queued_at)
+            + audio_seconds
+        )
 
     def mark_tts_completed(
         self,
@@ -936,7 +1106,14 @@ class VoiceDeliveryLedger:
                 "safe_to_unmute", record, reason=record.terminal_reason
             )
 
-    def mark_tts_failed(self, record: VoiceDeliveryRecord, *, audio_events: int, audio_seconds: float, reason: str | None = None) -> None:
+    def mark_tts_failed(
+        self,
+        record: VoiceDeliveryRecord,
+        *,
+        audio_events: int,
+        audio_seconds: float,
+        reason: str | None = None,
+    ) -> None:
         """Release a failed synthesis hold after any partial audio has played."""
         if record.status in _TERMINAL_STATUSES:
             return
@@ -944,7 +1121,11 @@ class VoiceDeliveryLedger:
         record.audio_events = audio_events
         record.audio_seconds = audio_seconds
         record.status = "failed"
-        record.terminal_reason = reason or ("tts_provider_failed_after_partial_audio" if audio_events else "tts_provider_failed_without_audio")
+        record.terminal_reason = reason or (
+            "tts_provider_failed_after_partial_audio"
+            if audio_events
+            else "tts_provider_failed_without_audio"
+        )
         record.reserved_for_tts = False
         self._log(record, "tts_failed", reason=record.terminal_reason)
         # Preserve failure instead of recording a successful, full delivery.
@@ -960,7 +1141,9 @@ class VoiceDeliveryLedger:
             task.cancel()
         self._cancel_user_turn_closure_task(record.delivery_id)
         now = time.monotonic()
-        record.audio_seconds = min(record.audio_seconds, max(0, now - (record.audio_started_at or now)))
+        record.audio_seconds = min(
+            record.audio_seconds, max(0, now - (record.audio_started_at or now))
+        )
         record.queued_audio_playout_end_at = now
         record.status = "cancelled"
         record.terminal_reason = "sdk_playout_interrupted"
@@ -979,9 +1162,7 @@ class VoiceDeliveryLedger:
             return 0.0
         if record.queued_audio_playout_end_at is not None:
             return record.queued_audio_playout_end_at - time.monotonic()
-        return (
-            record.audio_started_at + record.audio_seconds - time.monotonic()
-        )
+        return record.audio_started_at + record.audio_seconds - time.monotonic()
 
     def _schedule_playout_release(self, record: VoiceDeliveryRecord) -> None:
         """Emit ``agent_audio_finished``/``safe_to_unmute`` at playout end."""
@@ -1078,7 +1259,10 @@ class VoiceDeliveryLedger:
                 "delivery_id=%s room=%s scheduling_delay_ms=%.1f",
                 record.delivery_id,
                 self._room_name,
-                max(0, time.monotonic() - scheduled_at - MUTE_KEEPALIVE_INTERVAL_SECONDS) * 1000,
+                max(
+                    0, time.monotonic() - scheduled_at - MUTE_KEEPALIVE_INTERVAL_SECONDS
+                )
+                * 1000,
             )
             # A distinct event name, NOT a repeated safe_to_mute_user: clients
             # refresh their stuck-muted staleness clock on any lifecycle
@@ -1322,8 +1506,16 @@ class VoiceDeliveryLedger:
         *,
         reason: str = "",
     ) -> None:
+        if self._live_mode and event in _LIVE_MODE_SUPPRESSED_EVENTS:
+            self._log(record, "lifecycle_suppressed_live_mode", reason=event)
+            return
         if event == "safe_to_mute_user":
             self._mute_covers_current_quiet = True
+            if self._mute_only_around_playback and reason != "agent_playback":
+                # The closure is recorded (no second quiet-floor mute for this
+                # quiet), but the phone's mic stays open until agent audio.
+                self._log(record, "lifecycle_mute_deferred_to_playback", reason=reason)
+                return
             self._lifecycle_mute_outstanding = True
             self._ensure_mute_keepalive_task(record)
         elif event == "safe_to_unmute":
@@ -1343,6 +1535,11 @@ class VoiceDeliveryLedger:
                 exc_info=True,
             )
 
+
+# The live engine never drives the client's microphone.
+_LIVE_MODE_SUPPRESSED_EVENTS = frozenset(
+    {"safe_to_mute_user", "safe_to_unmute", "mute_keepalive"}
+)
 
 _TERMINAL_STATUSES = {
     "audio_delivered",

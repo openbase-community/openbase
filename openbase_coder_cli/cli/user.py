@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import json
+import sys
 from pathlib import Path
 
 import click
 
+from openbase_coder_cli.cli.app_control import (
+    publish_app_control as _publish_ios_app_control,
+)
+from openbase_coder_cli.cli.browser import browser_open
 from openbase_coder_cli.cli.local_server import local_server_request
 from openbase_coder_cli.config.cloud_notifications import (
     UserSayNotificationError,
@@ -18,7 +24,10 @@ from openbase_coder_cli.livekit_announcer import (
     SUPPORTED_AUDIO_EXTENSIONS,
 )
 from openbase_coder_cli.paths import OPENBASE_SOUNDS_DIR
-from openbase_coder_cli.skill_approvals import request_approval
+from openbase_coder_cli.skill_approvals import (
+    create_approval_request_via_server,
+    wait_for_approval_via_server,
+)
 
 
 @click.group()
@@ -86,7 +95,11 @@ def say(
         payload["room_name"] = room_name.strip()
 
     response = local_server_request(
-        "POST", "/api/user/say/", json=payload, ok_statuses=(502,), timeout=60,
+        "POST",
+        "/api/user/say/",
+        json=payload,
+        ok_statuses=(502,),
+        timeout=60,
     )
 
     try:
@@ -191,15 +204,53 @@ def approval_request(
 ) -> None:
     """Ask the user to approve a skill action and wait for the answer."""
     details = _parse_approval_details(detail_items)
-    decision = request_approval(
+    request_id = create_approval_request_via_server(
         skill=skill,
         action=action,
         description=description,
         details=details,
         command=command_text.strip() or None,
         timeout_seconds=timeout_seconds,
+    )
+    # Flush before blocking: if this process is killed while waiting (tool
+    # timeouts routinely do that), the caller still learns how to re-attach.
+    click.echo(f"Approval request {request_id} is pending in the approvals dashboard.")
+    click.echo(
+        "If this command exits before the user answers, run "
+        f"`openbase-coder user approval wait {request_id}` to keep waiting "
+        "and pick up the decision."
+    )
+    sys.stdout.flush()
+    decision = wait_for_approval_via_server(
+        request_id,
+        timeout_seconds=timeout_seconds,
         poll_interval_seconds=poll_interval,
     )
+    _report_approval_decision(decision)
+
+
+@approval.command("wait")
+@click.argument("request_id")
+@click.option("--timeout", "timeout_seconds", default=300.0, show_default=True)
+@click.option("--poll-interval", default=1.0, show_default=True)
+def approval_wait(
+    request_id: str, timeout_seconds: float, poll_interval: float
+) -> None:
+    """Resume waiting on an approval request created earlier.
+
+    Picks up a decision the user recorded while no process was waiting (for
+    example after the original `approval request` call was killed by a tool
+    timeout).
+    """
+    decision = wait_for_approval_via_server(
+        request_id,
+        timeout_seconds=timeout_seconds,
+        poll_interval_seconds=poll_interval,
+    )
+    _report_approval_decision(decision)
+
+
+def _report_approval_decision(decision: dict) -> None:
     decision_value = decision.get("decision")
     if decision.get("accepted"):
         click.echo("Approval accepted.")
@@ -291,17 +342,132 @@ def voice_route() -> None:
         click.echo(f"Target transfer blocked: {data.get('blocked_reason')}")
 
 
+@user.group("phone")
+def phone() -> None:
+    """Control the Openbase app on the user's phone (iOS or Android)."""
+
+
+@phone.command("open-url")
+@click.argument("url")
+@click.pass_context
+def phone_open_url(ctx: click.Context, url: str) -> None:
+    """Open a URL on the phone, with push fallback and no callback forward."""
+    ctx.invoke(
+        browser_open, url=url, no_forward=True, callback_port=None, no_push=False
+    )
+
+
+@phone.command("copy")
+@click.option(
+    "--text-stdin",
+    "text_stdin",
+    is_flag=True,
+    required=True,
+    help="Read the text from stdin, so it stays out of the command line and logs.",
+)
+@click.option("--label", default=None, help='What it is, e.g. "GitHub code".')
+@click.option(
+    "--open",
+    "open_url",
+    default=None,
+    help="Open this page on the phone right after copying (e.g. the device-code page).",
+)
+def phone_copy(text_stdin: bool, label: str | None, open_url: str | None) -> None:
+    """Put a short code on the phone's clipboard (and optionally open a page).
+
+    For device-code logins: the user then only has to paste the code on the
+    page. The phone keeps it on this device only and clears it after two
+    minutes. Needs the Openbase app connected (in front); otherwise tell the
+    user the code in the chat.
+    """
+    text = sys.stdin.readline().rstrip("\r\n")
+    if not text:
+        raise click.ClickException("No text on stdin.")
+    payload = {"action": "copy_text", "text": text}
+    if label:
+        payload["label"] = label
+    if open_url:
+        payload["url"] = open_url
+    data = _publish_ios_app_control(payload)
+    if data.get("copied"):
+        opened = " and opened the page" if data.get("opened") else ""
+        click.echo(
+            f"Copied to the phone's clipboard{opened}. The user can paste it now."
+        )
+        return
+    if data.get("delivered") and "copied" not in data:
+        raise click.ClickException(
+            "The phone app is too old to copy text; tell the user the code instead."
+        )
+    raise click.ClickException(
+        "The phone did not copy it (app not connected or in the background); "
+        "tell the user the code in the chat instead."
+    )
+
+
+@phone.command("show-text")
+@click.option(
+    "--text-stdin",
+    "text_stdin",
+    is_flag=True,
+    required=True,
+    help="Read the text from stdin, so it stays out of the command line and logs.",
+)
+@click.option("--label", default=None, help='What it is, e.g. "GitHub code".')
+@click.option(
+    "--open",
+    "open_url",
+    default=None,
+    help="Offer an Open button for this page (e.g. the device-code page).",
+)
+def phone_show_text(text_stdin: bool, label: str | None, open_url: str | None) -> None:
+    """Show text on the phone in a large sheet the user can select and copy.
+
+    For sign-in codes and short values the user must type elsewhere. With the
+    app in the background, the phone posts a notification that opens the
+    sheet. When the phone cannot be reached, give the text in the chat.
+    """
+    text = sys.stdin.readline().rstrip("\r\n")
+    if not text:
+        raise click.ClickException("No text on stdin.")
+    payload = {"action": "show_text", "text": text}
+    if label:
+        payload["label"] = label
+    if open_url:
+        payload["url"] = open_url
+    data = _publish_ios_app_control(payload)
+    if data.get("shown"):
+        click.echo("Shown on the phone.")
+        return
+    if data.get("notified"):
+        click.echo("Sent a notification to the phone; tapping it shows the text.")
+        return
+    if data.get("delivered") and "shown" not in data:
+        raise click.ClickException(
+            "The phone app is too old to show text; give it in the chat instead."
+        )
+    raise click.ClickException(
+        "The phone could not show it (app not connected); give it in the chat instead."
+    )
+
+
+@phone.command("mute")
+def phone_mute() -> None:
+    """Mute the active voice call on the phone."""
+    data = _publish_ios_app_control({"action": "set_call_muted", "muted": True})
+    _report_app_command_result(data, "mute", device="phone")
+
+
+@phone.command("unmute")
+def phone_unmute() -> None:
+    """Unmute the active voice call on the phone."""
+    data = _publish_ios_app_control({"action": "set_call_muted", "muted": False})
+    _report_app_command_result(data, "unmute", device="phone")
+
+
 @user.group("ios")
 def ios() -> None:
     """Control the foreground Openbase iOS app."""
-
-
-@ios.command("open-url")
-@click.argument("url")
-def ios_open_url(url: str) -> None:
-    """Ask the foreground iOS app to open a URL or deep link."""
-    data = _publish_ios_app_control({"action": "open_url", "url": url})
-    _report_ios_command_result(data, "open-url")
 
 
 @ios.command("mute")
@@ -332,6 +498,45 @@ def ios_start_developer_call() -> None:
     _report_ios_command_result(data, "developer call")
 
 
+@ios.command("set-speaker")
+@click.argument("mode", type=click.Choice(["on", "off"]))
+def ios_set_speaker(mode: str) -> None:
+    """Set the connected iOS call's speaker route and report observed state."""
+    _run_ios_call_control({"action": "set_speaker", "speaker": mode == "on"})
+
+
+@ios.command("end-call")
+def ios_end_call() -> None:
+    """End normal/debug calls, including a pending app-control start."""
+    _run_ios_call_control({"action": "end_call"})
+
+
+@ios.command("start-call")
+@click.argument("thread_id")
+def ios_start_call(thread_id: str) -> None:
+    """Start a call on THREAD_ID, or use dispatcher for a developer call."""
+    _run_ios_call_control({"action": "start_call", "thread_id": thread_id})
+
+
+def _run_ios_call_control(payload: dict[str, object]) -> None:
+    data = _publish_ios_app_control(payload, timeout=60)
+    click.echo(json.dumps(data, sort_keys=True))
+    state = data.get("call_state")
+    if (
+        not data.get("delivered")
+        or data.get("applied") is not True
+        or not isinstance(state, dict)
+        or not all(
+            type(state.get(key)) is bool
+            for key in ("connected", "muted", "speaker", "active")
+        )
+    ):
+        raise click.ClickException(
+            data.get("error")
+            or "Call command unconfirmed; do not assume it was applied. Use end-call to clean up before retrying a start."
+        )
+
+
 @ios.command("upload-logs")
 @click.option(
     "--limit",
@@ -348,25 +553,27 @@ def ios_upload_logs(limit: int | None) -> None:
     _report_ios_command_result(data, "diagnostics upload")
 
 
-def _publish_ios_app_control(payload: dict[str, object]) -> dict:
-    response = local_server_request("POST", "/api/user/ios-app-control/", json=payload)
-    return response.json()
-
-
 def _report_ios_command_result(data: dict, label: str) -> None:
+    _report_app_command_result(data, label, device="iOS")
+
+
+def _report_app_command_result(data: dict, label: str, *, device: str) -> None:
     command_id = data.get("command_id")
     if data.get("delivered"):
-        click.echo(f"iOS {label} command delivered: {command_id}")
+        click.echo(f"{device} {label} command delivered: {command_id}")
         return
-    click.echo(f"iOS {label} command published (unconfirmed): {command_id}")
+    click.echo(f"{device} {label} command published (unconfirmed): {command_id}")
     raise click.ClickException(
-        "No iOS app confirmed receipt before the timeout. The command may already "
+        f"No {device} app confirmed receipt before the timeout. The command may already "
         "have executed; inspect the phone before retrying. Check its connection, "
         "foreground state, and sign-in if it did not execute."
     )
 
 
-ios.add_command(ios_open_url, "open-link")
+phone.add_command(phone_open_url, "open-link")
+# Older iOS-only spellings, kept for agents and scripts that still use them.
+ios.add_command(phone_open_url, "open-url")
+ios.add_command(phone_open_url, "open-link")
 ios.add_command(ios_start_livekit_voice_test, "debug-livekit-call")
 ios.add_command(ios_start_developer_call, "developer-call")
 
@@ -409,7 +616,8 @@ def transfer_to_thread(
     thread_id: str, room_name: str, label: str, agent_name: str
 ) -> None:
     """Route the active voice session to a Codex thread if instruction-safe."""
-    payload: dict[str, str] = {"thread_id": thread_id}
+    # The agent running this command tells the caller itself.
+    payload: dict[str, str | bool] = {"thread_id": thread_id, "announce": False}
     if room_name.strip():
         payload["room_name"] = room_name.strip()
     if label.strip():
@@ -434,7 +642,7 @@ def transfer_to_thread(
 )
 def transfer_to_agent(agent_name: str, room_name: str) -> None:
     """Route the active voice session to a named Super Agent."""
-    payload: dict[str, str] = {"agent_name": agent_name}
+    payload: dict[str, str | bool] = {"agent_name": agent_name, "announce": False}
     if room_name.strip():
         payload["room_name"] = room_name.strip()
     response = local_server_request(

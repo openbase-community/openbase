@@ -48,8 +48,33 @@ Differences in a browser:
   appear in the sidebar when installed. See
   [plugins](commands/plugins.md).
 
-Useful shortcuts: **Cmd/Ctrl+B** toggles the sidebar; in a thread,
+Useful shortcuts: **Cmd/Ctrl+B** toggles the threads sidebar (the icon rail
+stays); in a thread,
 **Enter** sends the prompt and **Shift+Enter** inserts a newline.
+
+To rename a thread, double-click its title in the thread view, choose
+**Rename thread** from the thread's **⋯** menu, or use the pencil that appears
+when hovering a row on the Threads page. The name is stored on the thread's
+coding backend, so it also shows in voice sessions and the native CLI.
+
+## Thread Terminal
+
+Turn on **Settings > Interface > Thread terminal** to add a **Terminal** tab
+next to **Chat** in thread views (it is off by default and saved per device).
+The tab runs the thread's native coding CLI — the full Codex or Claude Code
+TUI — on the computer that owns the thread, with the conversation already
+loaded:
+
+- Codex threads open `codex resume <thread>` attached to the same Codex
+  app-server Openbase uses, so turns started from the terminal, from chat, or
+  by voice all appear in one live conversation.
+- Claude Code threads open `claude --resume <session>` in the thread's
+  directory.
+
+Switching between Chat and Terminal, or reloading the page, keeps the same
+TUI running. With no viewer attached, the TUI is closed after 15 minutes;
+**Restart** starts a fresh one. The Dispatcher's own chat has no Terminal tab,
+and the terminal is not yet available on Windows hosts.
 
 ## Tabs and Panes
 

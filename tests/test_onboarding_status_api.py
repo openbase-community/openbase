@@ -200,7 +200,8 @@ def test_onboarding_cloud_state_proxies_live_state(monkeypatch) -> None:
 
     state = {"devices": [{"kind": "desktop"}], "desktop_count": 1, "mobile_count": 0}
     monkeypatch.setattr(
-        "openbase_coder_cli.code_sync.eligibility.fetch_cloud_state", lambda: state
+        "openbase_coder_cli.services.cloud_device_registry.fetch_cloud_state",
+        lambda: state,
     )
 
     request = APIRequestFactory().get("/api/onboarding/cloud-state/")
@@ -221,7 +222,7 @@ def test_onboarding_cloud_state_reports_login_required(monkeypatch) -> None:
         raise AuthLoginRequiredError("Login required.")
 
     monkeypatch.setattr(
-        "openbase_coder_cli.code_sync.eligibility.fetch_cloud_state",
+        "openbase_coder_cli.services.cloud_device_registry.fetch_cloud_state",
         raise_login_required,
     )
 
@@ -243,7 +244,8 @@ def test_onboarding_cloud_state_reports_unreachable_cloud(monkeypatch) -> None:
         raise AuthTransientError("connection refused")
 
     monkeypatch.setattr(
-        "openbase_coder_cli.code_sync.eligibility.fetch_cloud_state", raise_transient
+        "openbase_coder_cli.services.cloud_device_registry.fetch_cloud_state",
+        raise_transient,
     )
 
     request = APIRequestFactory().get("/api/onboarding/cloud-state/")

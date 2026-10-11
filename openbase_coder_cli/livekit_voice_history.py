@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from openbase_coder_cli.cli.utils import get_data_dir
+from openbase_coder_cli.json_snapshot import JsonFileSnapshot
 
 VOICE_HISTORY_FILE = "openbase-voice-assignments.json"
 
@@ -138,7 +139,7 @@ def record_voice_assignment(
         return None
 
     timestamp = seen_at or time.time()
-    payload = _read_history()
+    payload = _read_history_fresh()
     threads = payload.setdefault("threads", {})
     previous = _entry_from_payload(threads.get(thread_id))
     entry = VoiceHistoryEntry(
@@ -250,18 +251,26 @@ def _history_path() -> Path:
 
 
 def _read_history() -> dict[str, Any]:
-    path = _history_path()
-    if not path.is_file():
-        return {"threads": {}}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"threads": {}}
+    """Read-only snapshot shared across callers; never mutate the result."""
+    return _history_snapshot.get(_history_path())
+
+
+def _read_history_fresh() -> dict[str, Any]:
+    """Private, freshly parsed copy for read-modify-write paths."""
+    return _history_snapshot.read_fresh(_history_path())
+
+
+def _parse_history_payload(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {"threads": {}}
     if not isinstance(payload.get("threads"), dict):
         payload["threads"] = {}
     return payload
+
+
+_history_snapshot: JsonFileSnapshot[dict[str, Any]] = JsonFileSnapshot(
+    _parse_history_payload
+)
 
 
 def _thread_agent_entries(
@@ -301,6 +310,7 @@ def _write_history(payload: dict[str, Any]) -> None:
     path.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    _history_snapshot.invalidate(path)
 
 
 def _thread_agent_name_summary(payload: dict[str, Any]) -> list[dict[str, Any]]:

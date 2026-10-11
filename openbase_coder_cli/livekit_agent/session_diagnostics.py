@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 
 from livekit.agents import AgentSession
@@ -42,12 +43,23 @@ def _register_session_diagnostics(
     *,
     enable_logging: bool,
     on_unrecoverable_error: Callable[[Exception], Awaitable[None]] | None = None,
+    proactive_steering: bool = True,
 ):
+    """Register the session handlers.
+
+    ``proactive_steering`` is the pipeline behaviour: final transcripts steer
+    the active thread turn and dropped utterances are recovered with
+    ``generate_reply``. The live engine passes ``False`` because the GPT-Live
+    delegation bridge owns every thread submission there (steering the same
+    transcript twice would make the thread answer twice, and ``generate_reply``
+    on a duplex model makes it speak).
+    """
     proactive_steer_tasks: set[asyncio.Task[None]] = set()
     recovery_tasks: set[asyncio.Task[None]] = set()
     # normalized final transcript -> raw transcript, pending until steered,
     # observed as a user conversation item, or recovered.
     pending_final_transcripts: dict[str, str] = {}
+    last_final_at = {"at": 0.0}
     error_reported = False
 
     def _mark_transcript_handled(text: str) -> None:
@@ -61,9 +73,22 @@ def _register_session_diagnostics(
                 pending_final_transcripts.pop(key, None)
 
     async def _recover_dropped_utterance(key: str) -> None:
-        await asyncio.sleep(DROPPED_UTTERANCE_GRACE_SECONDS)
-        if key not in pending_final_transcripts:
-            return
+        # The grace runs from the NEWEST final, and never while the caller is
+        # still speaking: streaming STT splits one sentence into finals at
+        # every natural pause, and recovering after the first fragment forced
+        # a reply mid-sentence that the next fragment then cancelled (376,
+        # 2026-10-11: a 13 s sentence closed twice before its real end).
+        while True:
+            await asyncio.sleep(DROPPED_UTTERANCE_GRACE_SECONDS)
+            if key not in pending_final_transcripts:
+                return
+            since_final = time.monotonic() - last_final_at["at"]
+            if since_final < DROPPED_UTTERANCE_GRACE_SECONDS:
+                await asyncio.sleep(DROPPED_UTTERANCE_GRACE_SECONDS - since_final)
+                continue
+            if getattr(session, "user_state", "") == "speaking":
+                continue
+            break
         # Wait out the uninterruptible speech that swallowed the reply.
         waited = 0.0
         while waited < DROPPED_UTTERANCE_SPEECH_WAIT_SECONDS:
@@ -100,6 +125,7 @@ def _register_session_diagnostics(
         if not key:
             return
         pending_final_transcripts[key] = transcript
+        last_final_at["at"] = time.monotonic()
         task = asyncio.create_task(
             _recover_dropped_utterance(key),
             name="openbase-dropped-utterance-recovery",
@@ -185,7 +211,7 @@ def _register_session_diagnostics(
                 _event_text_hash(transcript),
                 transcript[:160],
             )
-        if is_final and transcript.strip():
+        if proactive_steering and is_final and transcript.strip():
             stripped = transcript.strip()
             if not _is_exit_to_dispatch_command(stripped):
                 _watch_for_dropped_utterance(stripped)
@@ -231,7 +257,9 @@ def _register_session_diagnostics(
                 "dispatch_timing stage=session_error source=%s error_type=%s error=%s",
                 type(getattr(event, "source", None)).__name__,
                 type(error).__name__,
-                exception_chain_summary(exception) if exception is not None else type(error).__name__,
+                exception_chain_summary(exception)
+                if exception is not None
+                else type(error).__name__,
             )
         if (
             not error_reported
@@ -249,7 +277,9 @@ def _register_session_diagnostics(
             "dispatch_timing stage=session_close reason=%s error_type=%s error=%s",
             getattr(event, "reason", ""),
             type(error).__name__,
-            exception_chain_summary(exception) if exception is not None else type(error).__name__,
+            exception_chain_summary(exception)
+            if exception is not None
+            else type(error).__name__,
         )
         if (
             not error_reported

@@ -2,7 +2,10 @@ import logging
 
 from uvicorn.logging import AccessFormatter
 
-from openbase_coder_cli.logging_redaction import CredentialRedactionFilter, install_uvicorn_credential_redaction
+from openbase_coder_cli.logging_redaction import (
+    CredentialRedactionFilter,
+    install_uvicorn_credential_redaction,
+)
 
 
 def test_websocket_accept_log_redacts_query_credential():

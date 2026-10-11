@@ -22,7 +22,11 @@ from openbase_coder_cli.openbase_coder_cli_app import agents_md as _agents_md
 from openbase_coder_cli.openbase_coder_cli_app import diagnostics as _diagnostics
 from openbase_coder_cli.openbase_coder_cli_app import livekit as _livekit
 from openbase_coder_cli.openbase_coder_cli_app import memories as _memories
+from openbase_coder_cli.openbase_coder_cli_app import screen_share as _screen_share
 from openbase_coder_cli.openbase_coder_cli_app import skills as _skills
+from openbase_coder_cli.openbase_coder_cli_app.analytics_identity import (
+    analytics_identify,
+)
 from openbase_coder_cli.openbase_coder_cli_app.approvals import (
     approval_request_detail,
     approval_requests,
@@ -133,6 +137,9 @@ from openbase_coder_cli.openbase_coder_cli_app.sharing import (
 )
 from openbase_coder_cli.openbase_coder_cli_app.skills import _home_skills_dir
 from openbase_coder_cli.openbase_coder_cli_app.tags import tag_options
+from openbase_coder_cli.openbase_coder_cli_app.thread_models import (
+    thread_model_settings,  # noqa: F401
+)
 from openbase_coder_cli.openbase_coder_cli_app.threads import (
     thread_active_voice,  # noqa: F401
     thread_activity,  # noqa: F401
@@ -141,6 +148,7 @@ from openbase_coder_cli.openbase_coder_cli_app.threads import (
     thread_favorite,
     thread_interrupt,
     thread_list,
+    thread_name,
     thread_queue_turn,
     thread_start_turn,
     thread_steer_turn,
@@ -252,7 +260,15 @@ def livekit_companion_session(request):
 
 def livekit_companion_start(request):
     _sync_livekit_compat_globals()
-    return _livekit.livekit_companion_start(request)
+    return _screen_share.livekit_companion_start(request)
+
+
+def livekit_companion_stop(request):
+    return _screen_share.livekit_companion_stop(request)
+
+
+def livekit_companion_status(request):
+    return _screen_share.livekit_companion_status(request)
 
 
 def skills_list(request):
@@ -296,6 +312,7 @@ def memory_detail(request, memory_name):
 
 
 __all__ = [
+    "analytics_identify",
     "agents_md",
     "all_project_reports",
     "approval_request_detail",
@@ -327,6 +344,8 @@ __all__ = [
     "launchctl_service_action",
     "launchctl_services_list",
     "livekit_companion_session",
+    "livekit_companion_status",
+    "livekit_companion_stop",
     "livekit_room_token",
     "livekit_voice_route",
     "livekit_voice_route_exit",
@@ -386,6 +405,8 @@ __all__ = [
     "thread_favorite",
     "thread_interrupt",
     "thread_list",
+    "thread_model_settings",
+    "thread_name",
     "thread_queue_turn",
     "thread_start_turn",
     "thread_steer_turn",

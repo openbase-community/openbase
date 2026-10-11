@@ -19,6 +19,7 @@ from typing import Any
 from openbase_coder_cli.cli.utils import get_data_dir
 
 NOTIFICATIONS_FILE = "notifications.json"
+STORE_VERSION = 2
 
 KIND_THREAD = "thread"
 KIND_REPORT = "report"
@@ -73,12 +74,22 @@ def upsert_notification(
     thread_id: str | None = None,
     project_path: str | None = None,
     reopen_if_read: bool = True,
+    refresh_if_unread: bool = False,
+    alert_after: str | None = None,
 ) -> dict[str, Any] | None:
     """Create a notification, or reopen the existing one for this entity.
 
-    Returns the entry when it was newly created or newly reopened (callers
-    use that as the "fire a push" signal); returns None when the entity
-    already has a live unread notification.
+    Returns the entry when it was newly created, reopened or refreshed
+    (callers use that as the "fire a push" signal); returns None when the
+    entity already has a live unread notification, unless
+    ``refresh_if_unread`` replaces it with the new title and body (a
+    thread's later turn finishing). ``alert_after`` (ISO UTC) asks clients
+    to hold the banner until then (see ``web_redirect_hold``).
+
+    Every rewrite of an existing entity bumps its ``revision``. ``id``
+    stays ``kind:entity`` so tray entries (tagged by id) replace each other,
+    while clients dedupe alerts on id plus revision, so a newer revision
+    alerts once.
     """
     if kind not in VALID_KINDS:
         raise ValueError(f"invalid notification kind {kind!r}")
@@ -90,12 +101,17 @@ def upsert_notification(
     with _lock:
         state = _read_state_unlocked()
         existing = state["notifications"].get(note_id)
-        if existing and not existing.get("read_at") and not existing.get("resolved_at"):
+        unread = (
+            existing and not existing.get("read_at") and not existing.get("resolved_at")
+        )
+        if unread and not refresh_if_unread:
             return None
-        if existing and not reopen_if_read:
+        if existing and not unread and not reopen_if_read:
             return None
+        revision = int(existing.get("revision") or 1) + 1 if existing else 1
         entry = {
             "id": note_id,
+            "revision": revision,
             "kind": kind,
             "entity_id": entity,
             "thread_id": thread_id,
@@ -106,9 +122,19 @@ def upsert_notification(
             "read_at": None,
             "resolved_at": None,
         }
+        if alert_after:
+            entry["alert_after"] = alert_after
         state["notifications"][note_id] = entry
         _write_state_unlocked(state)
         return dict(entry)
+
+
+def get_notification(kind: str, entity_id: str) -> dict[str, Any] | None:
+    with _lock:
+        entry = _read_state_unlocked()["notifications"].get(
+            notification_id(kind, entity_id.strip())
+        )
+    return dict(entry) if entry else None
 
 
 def mark_read(
@@ -123,11 +149,13 @@ def mark_read(
         targets.add(notification_id(kind, entity_id.strip()))
     if not targets:
         return 0
-    return _set_read_unlocked_for(lambda entry: entry["id"] in targets)
+    return _set_read_unlocked_for(
+        lambda key, entry: key in targets or entry["id"] in targets
+    )
 
 
 def mark_all_read() -> int:
-    return _set_read_unlocked_for(lambda _entry: True)
+    return _set_read_unlocked_for(lambda _key, _entry: True)
 
 
 def resolve_notification(kind: str, entity_id: str) -> bool:
@@ -161,22 +189,19 @@ def unresolved_ids(kind: str) -> set[str]:
     }
 
 
-def get_report_watermark() -> tuple[float | None, bool]:
-    """Return (last seen report mtime, whether the baseline has been taken)."""
+def get_report_observations() -> tuple[
+    dict[str, list[float | int]] | None, float | None
+]:
+    """Return per-report versions and a one-time cutoff for migrating an old baseline."""
     with _lock:
-        watermarks = _read_state_unlocked()["watermarks"]
-    mtime = watermarks.get("reports_last_seen_mtime")
-    return (
-        float(mtime) if isinstance(mtime, (int, float)) else None,
-        bool(watermarks.get("reports_baselined_at")),
-    )
+        discovery = _read_state_unlocked()["report_discovery"]
+    return discovery["observations"], discovery.get("initial_cutoff")
 
 
-def set_report_watermark(mtime: float) -> None:
+def set_report_observations(observations: dict[str, list[float | int]]) -> None:
     with _lock:
         state = _read_state_unlocked()
-        state["watermarks"]["reports_last_seen_mtime"] = mtime
-        state["watermarks"].setdefault("reports_baselined_at", _utc_now())
+        state["report_discovery"] = {"observations": observations}
         _write_state_unlocked(state)
 
 
@@ -185,10 +210,10 @@ def _set_read_unlocked_for(matcher) -> int:
     changed = 0
     with _lock:
         state = _read_state_unlocked()
-        for entry in state["notifications"].values():
+        for key, entry in state["notifications"].items():
             if entry.get("read_at") or entry.get("resolved_at"):
                 continue
-            if matcher(entry):
+            if matcher(key, entry):
                 entry["read_at"] = now
                 changed += 1
         if changed:
@@ -225,11 +250,17 @@ def _read_state_unlocked() -> dict[str, Any]:
     except (FileNotFoundError, OSError, json.JSONDecodeError):
         payload = None
     if not isinstance(payload, dict):
-        return {"version": 1, "notifications": {}, "watermarks": {}}
+        return {
+            "version": STORE_VERSION,
+            "notifications": {},
+            "report_discovery": {"observations": None},
+        }
+    version = payload.get("version", 1)
+    if version not in (1, STORE_VERSION):
+        raise ValueError("Unsupported notification store version; update the CLI")
     notifications = payload.get("notifications")
-    watermarks = payload.get("watermarks")
-    return {
-        "version": 1,
+    state = {
+        "version": STORE_VERSION,
         "notifications": {
             note_id: entry
             for note_id, entry in (
@@ -237,8 +268,24 @@ def _read_state_unlocked() -> dict[str, Any]:
             )
             if isinstance(entry, dict) and isinstance(note_id, str)
         },
-        "watermarks": watermarks if isinstance(watermarks, dict) else {},
+        "report_discovery": payload.get("report_discovery", {"observations": None}),
     }
+    if version == 1:
+        watermarks = payload.get("watermarks")
+        if not isinstance(watermarks, dict):
+            watermarks = {}
+        cutoff = watermarks.get("reports_last_seen_mtime")
+        state["report_discovery"] = {
+            "observations": None,
+            "initial_cutoff": (
+                float(cutoff)
+                if watermarks.get("reports_baselined_at")
+                and isinstance(cutoff, (int, float))
+                else None
+            ),
+        }
+        _write_state_unlocked(state)
+    return state
 
 
 def _write_state_unlocked(state: dict[str, Any]) -> None:

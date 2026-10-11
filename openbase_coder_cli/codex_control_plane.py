@@ -9,13 +9,16 @@ import socket
 import stat
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 
 from super_agents.app_endpoint import (
     DEFAULT_WEBSOCKET_ENDPOINT,
     AppServerEndpoint,
+    codex_home,
     parse_app_server_endpoint,
 )
 from super_agents.app_server_client import CodexAppServerClient
@@ -23,6 +26,8 @@ from super_agents.app_server_client import CodexAppServerClient
 LEGACY_CODEX_APP_SERVER_ENDPOINT = DEFAULT_WEBSOCKET_ENDPOINT
 LEGACY_CODEX_READINESS_URL = "http://127.0.0.1:4500/readyz"
 CODEX_APP_SERVER_ENDPOINT_ENV = "CODEX_APP_SERVER_URL"
+DISPATCHER_APP_SERVER_ENDPOINT_ENV = "OPENBASE_DISPATCHER_APP_SERVER_URL"
+DISPATCHER_WEBSOCKET_ENDPOINT = "ws://127.0.0.1:4501"
 
 
 def managed_codex_app_server_endpoint(
@@ -47,6 +52,38 @@ def managed_codex_app_server_endpoint(
     elif not configured:
         configured = LEGACY_CODEX_APP_SERVER_ENDPOINT
     return parse_app_server_endpoint(configured, env=values, source="openbase-managed")
+
+
+def dispatcher_codex_app_server_endpoint(
+    env: dict[str, str] | None = None,
+    *,
+    platform: str | None = None,
+) -> AppServerEndpoint:
+    """The voice dispatcher's dedicated app-server endpoint.
+
+    The dispatcher's own conversational thread runs on a second app-server
+    instance so a churning worker turn on the shared instance can never
+    starve the dispatcher's RPCs (2026-09-18: one busy turn made thread/read
+    and turn/steer time out and took the whole call down). Worker threads
+    stay on the shared managed endpoint.
+    """
+    values = env if env is not None else os.environ
+    current_platform = platform or sys.platform
+    configured = values.get(DISPATCHER_APP_SERVER_ENDPOINT_ENV, "").strip()
+    if configured:
+        return parse_app_server_endpoint(
+            configured, env=values, source="dispatcher-explicit"
+        )
+    if current_platform == "win32":
+        return parse_app_server_endpoint(
+            DISPATCHER_WEBSOCKET_ENDPOINT, env=values, source="dispatcher-default"
+        )
+    path = (
+        codex_home(values) / "app-server-control-dispatcher" / "app-server-control.sock"
+    )
+    return parse_app_server_endpoint(
+        f"unix://{path}", env=values, source="dispatcher-default"
+    )
 
 
 def apply_managed_codex_app_server_endpoint(
@@ -99,11 +136,21 @@ def _socket_accepts_connections(path: Path, timeout: float = 0.25) -> bool:
 
 
 def recover_stale_codex_control_socket(path: Path) -> bool:
-    """Remove only a proven-stale socket; never disturb a live or non-socket path."""
+    """Remove only a proven-stale socket or Codex daemon link."""
     try:
         mode = path.lstat().st_mode
     except FileNotFoundError:
         return False
+    if stat.S_ISLNK(mode):
+        try:
+            mode = path.stat().st_mode
+        except FileNotFoundError:
+            path.unlink(missing_ok=True)
+            return True
+        except OSError as exc:
+            raise RuntimeError(
+                f"Could not verify Codex control socket link {path}; refusing to remove it: {exc}"
+            ) from exc
     if not stat.S_ISSOCK(mode):
         raise RuntimeError(
             f"Codex control path {path} exists but is not a Unix socket; refusing to replace it."
@@ -116,6 +163,9 @@ def recover_stale_codex_control_socket(path: Path) -> bool:
         ) from exc
     except OSError as exc:
         if exc.errno == errno.ENOENT:
+            if path.is_symlink():
+                path.unlink(missing_ok=True)
+                return True
             return False
         if exc.errno != errno.ECONNREFUSED:
             raise RuntimeError(
@@ -172,3 +222,73 @@ def codex_app_server_ready(
         return asyncio.run(_codex_app_server_ready_async(resolved))
     except (OSError, RuntimeError):
         return False
+
+
+def endpoint_is_shared_codex_daemon(endpoint: AppServerEndpoint) -> bool:
+    """Whether Codex's own managed daemon owns ``endpoint``'s socket path.
+
+    Codex's managed daemon (``codex app-server --managed-daemon``) publishes
+    the standard control socket as a symlink into its private runtime
+    directory, while an Openbase-run app-server binds a plain socket. The
+    link is therefore the discriminator: a daemon behind it is not an
+    Openbase service, so Openbase must neither replace it nor restart it.
+    """
+    socket_path = getattr(endpoint, "socket_path", None)
+    return bool(
+        getattr(endpoint, "is_unix", False)
+        and socket_path is not None
+        and socket_path.is_symlink()
+    )
+
+
+def shared_codex_daemon_ready(endpoint: AppServerEndpoint | None = None) -> bool:
+    """Recognize Codex's live managed-daemon link as a valid shared server."""
+    resolved = endpoint or managed_codex_app_server_endpoint()
+    return endpoint_is_shared_codex_daemon(resolved) and codex_app_server_ready(
+        resolved
+    )
+
+
+# How often the idle ``codex-app-server`` runner re-checks the shared daemon,
+# and how many consecutive misses mean it is gone rather than restarting.
+# Codex's updater restarts the daemon in place on each release; a single
+# missed probe during that swap must not make Openbase grab the socket.
+SHARED_DAEMON_POLL_SECONDS = 15.0
+SHARED_DAEMON_HANDOVER_POLLS = 4
+
+
+def idle_while_shared_codex_daemon(
+    endpoint: AppServerEndpoint,
+    *,
+    ready: Callable[[AppServerEndpoint], bool] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    log: Callable[[str], None] = print,
+    poll_seconds: float = SHARED_DAEMON_POLL_SECONDS,
+    handover_polls: int = SHARED_DAEMON_HANDOVER_POLLS,
+) -> bool:
+    """Block while Codex's managed daemon serves ``endpoint``.
+
+    Returns ``False`` immediately when no shared daemon is live, so the
+    caller starts its own server. Otherwise logs one line and sleeps,
+    re-probing every ``poll_seconds``; it returns ``True`` only once the
+    daemon has been unreachable for ``handover_polls`` consecutive probes,
+    at which point the caller may take the socket over. Launchd keeps the
+    runner alive regardless of exit status, so exiting instead of idling
+    would turn into the very crash loop this exists to prevent.
+    """
+    probe = ready or shared_codex_daemon_ready
+    if not probe(endpoint):
+        return False
+    log(
+        f"codex-app-server: the shared Codex daemon owns {endpoint.socket_path}; "
+        "idling until it goes away instead of binding a second server"
+    )
+    misses = 0
+    while misses < handover_polls:
+        sleep(poll_seconds)
+        misses = 0 if probe(endpoint) else misses + 1
+    log(
+        f"codex-app-server: the shared Codex daemon left {endpoint.socket_path}; "
+        "starting the Openbase-managed app-server"
+    )
+    return True

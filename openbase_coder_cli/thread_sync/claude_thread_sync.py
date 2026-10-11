@@ -50,6 +50,7 @@ from .thread_sync_common import (
     device_snapshot_dirs,
     file_content_relation,
     get_or_create_device_identity,
+    ledger_lock,
     prune_exchange_snapshots,
     read_device_identity,
     run_snapshot_export,
@@ -123,34 +124,39 @@ def export_claude_thread_snapshots(
     max_age_days: int | None = DEFAULT_SYNC_MAX_AGE_DAYS,
     active_session_ids: set[str] | None = None,
     source_user_home: Path | None = None,
+    session_ids: set[str] | None = None,
+    ledger_lock_timeout: float | None = None,
 ) -> list[ClaudeThreadSnapshotResult]:
+    """Export changed sessions (only ``session_ids`` when given)."""
     claude_home = claude_home.expanduser()
     claude_home.mkdir(parents=True, exist_ok=True)
     identity = get_or_create_device_identity(device_identity_path)
     active_ids = set(active_session_ids or set()) | _active_claude_session_ids(
         super_agents_db_path
     )
-    ledger = _read_device_ledger(ledger_path)
     sessions = _discover_sessions(
         claude_home,
         stability_delay_seconds=stability_delay_seconds,
+        session_ids=session_ids,
     )
-    results = run_snapshot_export(
-        candidates=_export_candidates(
-            sessions,
-            exchange_dir=exchange_dir,
-            identity=identity,
-            claude_home=claude_home,
-            active_ids=active_ids,
-            cutoff_ms=sync_cutoff_ms(max_age_days),
-            source_user_home=source_user_home or Path.home(),
-        ),
-        device_id=identity.device_id,
-        ledger=ledger,
-        scope_key="sessions",
-        result_factory=ClaudeThreadSnapshotResult,
-    )
-    _write_device_ledger(ledger_path, ledger)
+    with ledger_lock(ledger_path, timeout_seconds=ledger_lock_timeout):
+        ledger = _read_device_ledger(ledger_path)
+        results = run_snapshot_export(
+            candidates=_export_candidates(
+                sessions,
+                exchange_dir=exchange_dir,
+                identity=identity,
+                claude_home=claude_home,
+                active_ids=active_ids,
+                cutoff_ms=sync_cutoff_ms(max_age_days),
+                source_user_home=source_user_home or Path.home(),
+            ),
+            device_id=identity.device_id,
+            ledger=ledger,
+            scope_key="sessions",
+            result_factory=ClaudeThreadSnapshotResult,
+        )
+        _write_device_ledger(ledger_path, ledger)
     return results
 
 
@@ -223,26 +229,31 @@ def import_claude_thread_snapshots(
     ledger_path: Path = DEFAULT_DEVICE_LEDGER_PATH,
     super_agents_db_path: Path | None = None,
     target_user_home: Path | None = None,
+    session_ids: set[str] | None = None,
+    ledger_lock_timeout: float | None = None,
 ) -> list[ClaudeThreadSnapshotResult]:
+    """Import other devices' snapshots (only ``session_ids`` when given)."""
     claude_home = claude_home.expanduser()
     claude_home.mkdir(parents=True, exist_ok=True)
     target_home = target_user_home or Path.home()
     _translate_super_agent_session_cwds(super_agents_db_path, target_home)
     identity = get_or_create_device_identity(device_identity_path)
-    ledger = _read_device_ledger(ledger_path)
-    results = run_snapshot_import(
-        exchange_dir=exchange_dir,
-        device_id=identity.device_id,
-        ledger=ledger,
-        source=_device_import_source(
-            claude_home=claude_home,
-            active_ids=_active_claude_session_ids(super_agents_db_path),
-            super_agents_db_path=super_agents_db_path,
-            target_user_home=target_home,
-        ),
-        result_factory=ClaudeThreadSnapshotResult,
-    )
-    _write_device_ledger(ledger_path, ledger)
+    with ledger_lock(ledger_path, timeout_seconds=ledger_lock_timeout):
+        ledger = _read_device_ledger(ledger_path)
+        results = run_snapshot_import(
+            exchange_dir=exchange_dir,
+            device_id=identity.device_id,
+            ledger=ledger,
+            source=_device_import_source(
+                claude_home=claude_home,
+                active_ids=_active_claude_session_ids(super_agents_db_path),
+                super_agents_db_path=super_agents_db_path,
+                target_user_home=target_home,
+            ),
+            result_factory=ClaudeThreadSnapshotResult,
+            entity_ids=session_ids,
+        )
+        _write_device_ledger(ledger_path, ledger)
     return results
 
 

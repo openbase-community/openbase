@@ -89,18 +89,31 @@ async def publish_announcer_message(
     *,
     room_name: str | None = None,
     voice_id: str | None = None,
+    agent_name: str | None = None,
+    message_id: str | None = None,
     livekit_client: livekit_api.LiveKitAPI | None = None,
 ) -> AnnouncerPublishResult:
     normalized_text = validate_announcer_text(text)
-    message_id = f"announcer-{uuid.uuid4().hex}"
+    message_id = message_id or f"announcer-{uuid.uuid4().hex}"
 
     async def operation(client) -> AnnouncerPublishResult:
         return await _publish_announcer_message_with(
             client, normalized_text, room_name=room_name, voice_id=voice_id,
-            message_id=message_id,
+            message_id=message_id, agent_name=agent_name,
         )
 
     return await _run_with_livekit_client(operation, livekit_client)
+
+
+async def resolve_announcer_room() -> str | None:
+    """Snapshot a task's destination so its completion cannot follow a new call."""
+    async def operation(client):
+        try:
+            return (await _resolve_target_room(client, room_name=None)).room_name
+        except NoActiveLiveKitRoomError:
+            return None
+
+    return await _run_with_livekit_client(operation, None)
 
 
 async def _publish_announcer_message_with(
@@ -110,6 +123,7 @@ async def _publish_announcer_message_with(
     room_name: str | None,
     voice_id: str | None,
     message_id: str,
+    agent_name: str | None = None,
 ) -> AnnouncerPublishResult:
     import livekit.api as livekit_api
 
@@ -132,8 +146,12 @@ async def _publish_announcer_message_with(
         "message_id": message_id,
         "text": normalized_text,
     }
+    normalized_agent_name = " ".join((agent_name or "").split())
+    if normalized_agent_name:
+        # Both engines preserve the speaking agent and its assigned voice.
+        payload["agent_name"] = normalized_agent_name
     target_voice_id = _safe_announcer_voice_id(
-        (voice_id or "").strip() or _active_target_voice_id()
+        (voice_id or "").strip() or _identity_voice_id()
     )
     if target_voice_id:
         payload["voice_id"] = target_voice_id
@@ -222,11 +240,23 @@ async def _publish_announcer_audio_file_with(
     )
 
 
-def _active_target_voice_id() -> str | None:
-    from openbase_coder_cli.livekit_voice_route import get_livekit_voice_route_state
+def _identity_voice_id() -> str:
+    """Announcements speak with the user's one voice identity, whichever
+    agent announces: the chosen voice, or the Cartesia match of a pinned
+    live voice (voice_identity.py)."""
+    from openbase_coder_cli.voice_identity import current_voice_identity
 
-    state = get_livekit_voice_route_state()
-    return state.active_target_voice_id if state.active_target_thread_id else None
+    identity = current_voice_identity()
+    logger.info(
+        "dispatch_timing stage=announcer_identity_voice provider=%s voice_id=%s "
+        "voice_name=%s gpt_live_voice=%s source=%s",
+        identity.provider,
+        identity.voice_id,
+        identity.voice_name,
+        identity.gpt_live_voice,
+        identity.source,
+    )
+    return identity.voice_id
 
 
 def _safe_announcer_voice_id(voice_id: str | None) -> str | None:
@@ -259,13 +289,16 @@ class _TargetRoom:
     agent_identities: tuple[str, ...]
 
 
-async def active_voice_room_exists(*, include_agent_only_rooms: bool = False) -> bool:
+async def active_voice_room_exists(
+    *, include_agent_only_rooms: bool = False, recent_room_seconds: float = 0.0,
+) -> bool:
     """Detect active calls, optionally retaining an agent while its user reconnects."""
 
     async def operation(client) -> bool:
         try:
             await _resolve_target_room(client, room_name=None,
-                require_user=not include_agent_only_rooms)
+                require_user=not include_agent_only_rooms,
+                recent_room_seconds=recent_room_seconds)
         except NoActiveLiveKitRoomError:
             return False
         return True
@@ -312,6 +345,7 @@ async def _resolve_target_room(
     *,
     room_name: str | None,
     require_user: bool = True,
+    recent_room_seconds: float = 0.0,
 ) -> _TargetRoom:
     import livekit.api as livekit_api
 
@@ -334,8 +368,14 @@ async def _resolve_target_room(
         reverse=True,
     )
     for room in rooms:
-        if int(getattr(room, "num_participants", 0) or 0) <= 0:
-            continue
+        created = (getattr(room, "creation_time_ms", 0) or 0) / 1000.0
+        created = created or getattr(room, "creation_time", 0) or 0
+        if recent_room_seconds > 0 and created > 0 and time.time() - created < recent_room_seconds:
+            # Room creation precedes participant/agent registration. Watchdogs
+            # must protect that gap; ordinary announcement routing stays strict.
+            return _TargetRoom(room_name=room.name, agent_identities=())
+        # Room summary counts lag newly connected participants. Query the
+        # current membership even when the summary still says zero.
         participant_response = await client.room.list_participants(
             livekit_api.ListParticipantsRequest(room=room.name)
         )

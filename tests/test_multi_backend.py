@@ -35,13 +35,19 @@ class FakeManager:
     async def get_session_state(self, session_id: str) -> ThreadInfo | None:
         return self.threads.get(session_id)
 
-    async def start_turn(self, thread_id: str, prompt: str) -> str:
+    async def start_turn(
+        self, thread_id: str, prompt: str, model: str | None = None
+    ) -> str:
         self.calls.append(("start_turn", thread_id))
         return f"turn-{self.backend}"
 
     async def interrupt_turn(self, thread_id: str) -> bool:
         self.calls.append(("interrupt_turn", thread_id))
         return True
+
+    async def rename_thread(self, thread_id: str, name: str) -> ThreadInfo | None:
+        self.calls.append(("rename_thread", thread_id, name))
+        return self.threads.get(thread_id)
 
     async def list_approval_requests(self):
         return self.approval_payloads
@@ -128,6 +134,10 @@ async def test_thread_scoped_calls_route_to_owner(managers):
 
     assert await facade.interrupt_turn("c1") is True
     assert codex.calls == [("interrupt_turn", "c1")]
+
+    assert await facade.rename_thread("c1", "renamed") is codex.threads["c1"]
+    assert codex.calls[-1] == ("rename_thread", "c1", "renamed")
+    assert claude.calls == [("start_turn", "k1")]
 
 
 async def test_unknown_thread_falls_back_to_primary(managers):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import urllib.error
+from contextlib import nullcontext
 from pathlib import Path
 
 import click
@@ -45,6 +46,7 @@ def quiet_orchestration(monkeypatch):
         "_restart_transport_services",
         lambda: calls.__setitem__("restart", calls["restart"] + 1),
     )
+    monkeypatch.setattr(tailnet_cli, "_transport_lease", nullcontext)
     monkeypatch.setattr(
         tailnet_cli,
         "_reregister_device",
@@ -95,7 +97,20 @@ def test_set_provider_back_to_tailscale_restores_livekit_mode(
     assert quiet_orchestration["teardown"][-1] == "netmesh-tsnet"
 
 
-def test_set_provider_no_cloud_skips_push(env_path, quiet_orchestration):
+def test_set_provider_no_cloud_skips_push(
+    env_path, quiet_orchestration, tmp_path, monkeypatch
+):
+    # The macOS netmesh capability check looks for an installed companion app
+    # or a dev workspace to build it from; pin both so the test passes on a
+    # clean machine as well as inside a developer workspace.
+    from openbase_coder_cli.services import netmesh_companion
+
+    monkeypatch.setattr(tailnet_cli, "_dev_workspace_dir_or_none", lambda: None)
+    monkeypatch.setattr(
+        netmesh_companion,
+        "_find_companion_app",
+        lambda _workspace: tmp_path / "Openbase VPN.app",
+    )
     result = CliRunner().invoke(
         tailnet_cli.tailnet, ["set-provider", "netmesh", "--no-cloud"]
     )
@@ -365,3 +380,21 @@ def test_provider_reads_env_file_as_single_source_of_truth(
     assert tp.provider() == "netmesh-tsnet"
     monkeypatch.delenv("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", raising=False)
     assert tp.provider() == "tailscale"
+
+
+def test_leaving_direct_removes_persistent_service(monkeypatch, capsys):
+    from openbase_coder_cli.services import launchd
+    from openbase_coder_cli.services.definitions import TUNNELD_SERVICE
+
+    removed = []
+    monkeypatch.setattr(launchd, "remove_service", lambda svc: removed.append(svc))
+    monkeypatch.setattr(
+        launchd,
+        "launchctl_bootout",
+        lambda _svc: pytest.fail("bootout alone leaves a login-time service"),
+    )
+
+    tailnet_cli._teardown_transport("netmesh-tsnet")
+
+    assert removed == [TUNNELD_SERVICE]
+    assert "Removed openbase-tunneld" in capsys.readouterr().out

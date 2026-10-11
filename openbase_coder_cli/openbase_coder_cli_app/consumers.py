@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import shlex
 import time
+import uuid
 from pathlib import Path
+from urllib.parse import parse_qs
 
-from channels.generic.websocket import AsyncJsonWebsocketConsumer
+from channels.generic.websocket import (
+    AsyncJsonWebsocketConsumer,
+    AsyncWebsocketConsumer,
+)
 from super_agents.app_permissions import DEFAULT_APPROVAL_REQUESTS_FILE
 from watchfiles import awatch
 
+from openbase_coder_cli import mcp_gateway
 from openbase_coder_cli.openbase_coder_cli_app.approvals import (
     pending_approval_requests,
 )
@@ -29,6 +37,25 @@ from openbase_coder_cli.openbase_coder_cli_app.thread_errors import (
 from openbase_coder_cli.openbase_coder_cli_app.thread_metadata import (
     annotate_thread_payload,
 )
+from openbase_coder_cli.openbase_coder_cli_app.thread_models import (
+    validate_model_for_thread,
+)
+from openbase_coder_cli.openbase_coder_cli_app.thread_terminal import (
+    AGENT_TERMINAL_KEY_PREFIX,
+    DEFAULT_COLS,
+    DEFAULT_ROWS,
+    TerminalSession,
+    TerminalUnavailableError,
+    display_command,
+    get_terminal_registry,
+    resolve_agent_terminal_launch,
+    resolve_terminal_launch,
+    terminal_supported,
+)
+from openbase_coder_cli.thread_model_overrides import (
+    get_thread_model_override,
+    set_thread_model_override,
+)
 from openbase_coder_cli.thread_sync.session_manager import get_session_manager
 
 logger = logging.getLogger(__name__)
@@ -37,6 +64,28 @@ logger = logging.getLogger(__name__)
 def _friendly_error(exc: Exception) -> str:
     """Extract a safe human-readable message from manager errors."""
     return thread_error_message(exc)
+
+
+async def _apply_turn_model(manager, thread_id: str, content: dict) -> str | None:
+    """Validate and persist an optional per-turn model switch.
+
+    Mirrors the HTTP turn endpoints: a `model` in the payload must stay on the
+    thread's own backend and is stored as the thread's model override so later
+    turns keep using it. Raises ValueError on unknown or cross-backend models.
+    """
+    model = content.get("model")
+    if not model or not isinstance(model, str):
+        return None
+    thread = await manager.get_thread_state(thread_id)
+    if thread is None:
+        raise ValueError(f"Thread {thread_id} not found")
+    model = validate_model_for_thread(
+        thread.backend,
+        model,
+        current_model=get_thread_model_override(thread_id) or thread.model,
+    )
+    set_thread_model_override(thread_id, model)
+    return model
 
 
 class ThreadConsumer(AsyncJsonWebsocketConsumer):
@@ -80,6 +129,7 @@ class ThreadConsumer(AsyncJsonWebsocketConsumer):
                     "data": annotate_thread_payload(
                         thread.model_dump(mode="json"),
                         thread_id=self.thread_id,
+                        with_events=True,
                     ),
                 }
             )
@@ -100,7 +150,8 @@ class ThreadConsumer(AsyncJsonWebsocketConsumer):
                 )
                 return
             try:
-                await manager.start_turn(self.thread_id, prompt)
+                model = await _apply_turn_model(manager, self.thread_id, content)
+                await manager.start_turn(self.thread_id, prompt, model=model)
             except (ValueError, RuntimeError) as exc:
                 logger.warning(
                     "start_turn failed for thread %s: %s", self.thread_id, exc
@@ -118,7 +169,8 @@ class ThreadConsumer(AsyncJsonWebsocketConsumer):
                 return
             try:
                 # queue_turn broadcasts refreshed thread_state to the group.
-                result = await manager.queue_turn(self.thread_id, prompt)
+                model = await _apply_turn_model(manager, self.thread_id, content)
+                result = await manager.queue_turn(self.thread_id, prompt, model=model)
                 await self.send_json({"type": "turn_queued", "data": result})
             except (ValueError, RuntimeError) as exc:
                 logger.warning(
@@ -179,6 +231,7 @@ class ThreadConsumer(AsyncJsonWebsocketConsumer):
                 "data": annotate_thread_payload(
                     event["data"],
                     thread_id=self.thread_id,
+                    with_events=True,
                 ),
             }
         )
@@ -190,12 +243,252 @@ class ThreadConsumer(AsyncJsonWebsocketConsumer):
                 "data": annotate_thread_payload(
                     event["data"],
                     thread_id=self.thread_id,
+                    with_events=True,
                 ),
             }
         )
 
     async def error(self, event):
         await self.send_json({"type": "error", "data": event["data"]})
+
+
+def _as_int(value: object, default: int) -> int:
+    try:
+        return int(value)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        return default
+
+
+class ThreadTerminalConsumer(AsyncWebsocketConsumer):
+    """A thread's native backend TUI (Codex / Claude Code) over a PTY.
+
+    Binary frames carry raw terminal bytes both ways. Text frames are JSON
+    control messages: client ``resize`` / ``restart``; server ``ready`` /
+    ``exit`` / ``error``. The PTY outlives the socket (see thread_terminal),
+    so reconnecting resumes the same TUI instead of relaunching it.
+    """
+
+    session: TerminalSession | None = None
+
+    async def connect(self):
+        if self.scope.get("user") != "authenticated":
+            await self.close(code=4001)
+            return
+        self.thread_id = self.scope["url_route"]["kwargs"]["thread_id"]
+        await self._accept_viewer()
+        await self._attach(restart=False)
+
+    async def _accept_viewer(self) -> None:
+        params = parse_qs(self.scope.get("query_string", b"").decode("utf-8"))
+        self._cols = _as_int(params.get("cols", [None])[0], DEFAULT_COLS)
+        self._rows = _as_int(params.get("rows", [None])[0], DEFAULT_ROWS)
+        # A reconnecting client that still shows the screen asks for no
+        # replay (`replay=0`); the forced redraw repaints it instead.
+        self._send_replay = params.get("replay", ["1"])[0] != "0"
+        self._outbox: asyncio.Queue[tuple[str, object] | None] = asyncio.Queue()
+        await self.accept()
+        self._sender = asyncio.create_task(self._drain_outbox())
+
+    async def _attach(self, *, restart: bool) -> None:
+        registry = get_terminal_registry()
+        session = None if restart else registry.get(self.thread_id)
+        reattached = session is not None and session.running
+        if not reattached:
+            try:
+                launch = await self._resolve_launch()
+                session = registry.open(self.thread_id, launch, self._cols, self._rows)
+            except TerminalUnavailableError as exc:
+                await self._send_control("error", {"message": str(exc)})
+                return
+            except OSError as exc:
+                logger.exception(
+                    "thread_terminal launch failed thread=%s", self.thread_id
+                )
+                await self._send_control(
+                    "error", {"message": f"Unable to start the terminal: {exc}"}
+                )
+                return
+        assert session is not None
+        self.session = session
+        replay = session.attach(self._on_session_event)
+        await self._send_control("ready", self._ready_payload(session, reattached))
+        if replay and self._send_replay:
+            self._outbox.put_nowait(("bytes", replay))
+        # A reattached TUI repaints at this viewer's size.
+        session.resize(self._cols, self._rows, force_redraw=reattached)
+
+    def _ready_payload(self, session: TerminalSession, reattached: bool) -> dict:
+        launch = session.launch
+        return {
+            "backend": launch.backend,
+            "target": launch.target,
+            "command": shlex.join([Path(launch.argv[0]).name, *launch.argv[1:]]),
+            "cwd": launch.cwd,
+            "reattached": reattached,
+        }
+
+    async def _resolve_launch(self):
+        if not terminal_supported():
+            raise TerminalUnavailableError(
+                "The thread terminal is not available on Windows yet."
+            )
+        manager = get_session_manager()
+        try:
+            thread = await manager.get_thread_state(self.thread_id)
+        except (ValueError, RuntimeError) as exc:
+            raise TerminalUnavailableError(_friendly_error(exc)) from exc
+        if thread is None:
+            raise TerminalUnavailableError("Thread not found.")
+        return resolve_terminal_launch(
+            thread_id=self.thread_id,
+            backend=thread.backend,
+            backend_session_id=thread.backend_session_id,
+            directory=thread.directory,
+        )
+
+    def _on_session_event(self, kind: str, payload: object) -> None:
+        if kind == "output":
+            self._outbox.put_nowait(("bytes", payload))
+        elif kind == "exit":
+            self._outbox.put_nowait(("exit", payload))
+
+    async def _drain_outbox(self) -> None:
+        while True:
+            item = await self._outbox.get()
+            if item is None:
+                return
+            kind, payload = item
+            if kind == "bytes":
+                await self.send(bytes_data=payload)
+            elif kind == "exit":
+                await self._send_control("exit", {"code": payload})
+            else:
+                await self.send(text_data=payload)
+
+    async def _send_control(self, kind: str, data: dict) -> None:
+        self._outbox.put_nowait(("text", json.dumps({"type": kind, "data": data})))
+
+    async def receive(self, text_data=None, bytes_data=None):
+        if bytes_data is not None:
+            if self.session is not None:
+                self.session.write(bytes_data)
+            return
+        if not text_data:
+            return
+        try:
+            message = json.loads(text_data)
+        except json.JSONDecodeError:
+            return
+        kind = message.get("type") if isinstance(message, dict) else None
+        if kind == "input" and isinstance(message.get("data"), str):
+            if self.session is not None:
+                self.session.write(message["data"].encode("utf-8"))
+        elif kind == "resize":
+            self._cols = _as_int(message.get("cols"), self._cols)
+            self._rows = _as_int(message.get("rows"), self._rows)
+            if self.session is not None:
+                self.session.resize(self._cols, self._rows)
+        elif kind == "restart":
+            self._detach()
+            await self._attach(restart=True)
+
+    def _detach(self) -> None:
+        if self.session is not None:
+            self.session.detach(self._on_session_event)
+            self.session = None
+
+    async def disconnect(self, close_code):
+        self._detach()
+        if hasattr(self, "_outbox"):
+            self._outbox.put_nowait(None)
+
+
+class AgentTerminalConsumer(ThreadTerminalConsumer):
+    """A NEW Codex / Claude Code session in a PTY, for a remote terminal.
+
+    An Openbase Sync edge's ``openbase-coder codex|claude`` runs the session
+    on this hub: it connects to ``ws/agent-terminals/``, sends ``start``
+    (agent, home-relative cwd, args, cols, rows), and gets ``ready`` with the
+    session ``id``. The session is launched here with this computer's
+    Openbase profile (``agent_launch``), so it is as visible and steerable as
+    one started locally. The PTY outlives the socket: a dropped client
+    reattaches with ``ws/agent-terminals/<id>/``. Other frames are those of
+    ``ThreadTerminalConsumer``.
+    """
+
+    _launch = None
+    _notices: tuple[str, ...] = ()
+
+    async def connect(self):
+        if self.scope.get("user") != "authenticated":
+            await self.close(code=4001)
+            return
+        session_id = self.scope["url_route"]["kwargs"].get("session_id")
+        await self._accept_viewer()
+        if not session_id:
+            self.thread_id = None  # waits for the client's ``start``
+            return
+        self.thread_id = session_id
+        if not session_id.startswith(AGENT_TERMINAL_KEY_PREFIX):
+            await self._send_control("error", {"message": "Unknown session."})
+            return
+        existing = get_terminal_registry().get(session_id)
+        if existing is not None and existing.running:
+            self._launch = existing.launch
+        await self._attach(restart=False)
+
+    async def _resolve_launch(self):
+        if self._launch is None:
+            raise TerminalUnavailableError("This session has ended.")
+        return self._launch
+
+    async def receive(self, text_data=None, bytes_data=None):
+        if self.thread_id is None:
+            if text_data:
+                await self._start(text_data)
+            return
+        await super().receive(text_data=text_data, bytes_data=bytes_data)
+
+    async def _start(self, text_data: str) -> None:
+        try:
+            message = json.loads(text_data)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(message, dict) or message.get("type") != "start":
+            return
+        if not terminal_supported():
+            await self._send_control(
+                "error", {"message": "Remote sessions are not available on Windows."}
+            )
+            return
+        self._cols = _as_int(message.get("cols"), self._cols)
+        self._rows = _as_int(message.get("rows"), self._rows)
+        try:
+            launch, notices = await asyncio.to_thread(
+                resolve_agent_terminal_launch,
+                agent=message.get("agent"),
+                cwd=message.get("cwd"),
+                args=message.get("args", []),
+            )
+        except TerminalUnavailableError as exc:
+            await self._send_control("error", {"message": str(exc)})
+            return
+        self._launch = launch
+        self._notices = notices
+        self.thread_id = f"{AGENT_TERMINAL_KEY_PREFIX}{uuid.uuid4().hex}"
+        await self._attach(restart=True)
+
+    def _ready_payload(self, session: TerminalSession, reattached: bool) -> dict:
+        launch = session.launch
+        return {
+            "id": self.thread_id,
+            "backend": launch.backend,
+            "target": launch.target,
+            "command": display_command(launch.argv),
+            "cwd": launch.cwd,
+            "notices": list(self._notices),
+            "reattached": reattached,
+        }
 
 
 class AllThreadsConsumer(AsyncJsonWebsocketConsumer):
@@ -306,8 +599,9 @@ class _ApprovalStoreWatcher:
         try:
             async for _changes in awatch(
                 store_path.parent,
-                watch_filter=lambda _change, changed_path: Path(changed_path)
-                == store_path,
+                watch_filter=lambda _change, changed_path: (
+                    Path(changed_path) == store_path
+                ),
                 debounce=50,
                 step=25,
             ):
@@ -430,8 +724,9 @@ class _NotificationStoreWatcher:
         try:
             async for _changes in awatch(
                 store_path.parent,
-                watch_filter=lambda _change, changed_path: Path(changed_path)
-                == store_path,
+                watch_filter=lambda _change, changed_path: (
+                    Path(changed_path) == store_path
+                ),
                 debounce=50,
                 step=25,
             ):
@@ -525,12 +820,138 @@ class IOSAppControlConsumer(AsyncJsonWebsocketConsumer):
         command_id = content.get("command_id")
         if not isinstance(command_id, str) or not COMMAND_ID_RE.match(command_id):
             return
-        logger.info('dispatch_timing stage=ios_control_ack_received command_id=%s server_received_unix_ms=%.3f',
-            command_id, time.time()*1000)
-        await self.channel_layer.group_send(
-            ack_group_name(command_id),
-            {"type": "ios_app_control_ack", "command_id": command_id},
+        logger.info(
+            "dispatch_timing stage=ios_control_ack_received command_id=%s server_received_unix_ms=%.3f",
+            command_id,
+            time.time() * 1000,
         )
+        ack = {"type": "ios_app_control_ack", "command_id": command_id}
+        # copy_text / show_text outcomes (the text itself never comes back).
+        for key in ("copied", "shown"):
+            if type(content.get(key)) is bool:
+                ack[key] = content[key]
+        if ("copied" in ack or "shown" in ack) and type(
+            content.get("notified")
+        ) is bool:
+            ack["notified"] = content["notified"]
+        if ("copied" in ack or "shown" in ack) and isinstance(
+            content.get("error"), str
+        ):
+            ack["error"] = content["error"][:1024]
+        if type(content.get("opened")) is bool:
+            # open_url acks report whether the URL actually opened.
+            ack["opened"] = content["opened"]
+            if type(content.get("notified")) is bool:
+                ack["notified"] = content["notified"]
+            # Loopback-forward outcome (step 4 phones): started|vpn_down|failed|unsupported.
+            if isinstance(content.get("forward"), str):
+                ack["forward"] = content["forward"][:32]
+                if isinstance(content.get("forward_error"), str):
+                    ack["forward_error"] = content["forward_error"][:1024]
+            if isinstance(content.get("error"), str):
+                ack["error"] = content["error"][:1024]
+        state = content.get("call_state")
+        if (
+            isinstance(state, dict)
+            and all(
+                type(state.get(key)) is bool
+                for key in ("connected", "muted", "speaker", "active")
+            )
+            and type(content.get("applied")) is bool
+        ):
+            ack["call_state"] = {
+                key: state[key] for key in ("connected", "muted", "speaker", "active")
+            }
+            ack["applied"] = content["applied"]
+            if isinstance(content.get("error"), str):
+                ack["error"] = content["error"][:1024]
+        await self.channel_layer.group_send(ack_group_name(command_id), ack)
 
     async def ios_app_control(self, event):
         await self.send_json({"type": "ios_app_control", "data": event["data"]})
+
+
+class McpGatewayConsumer(AsyncWebsocketConsumer):
+    """Bridge to a stdio MCP server this machine serves (see ``mcp_gateway``).
+
+    One JSON-RPC message per text frame each way. Only servers listed in the
+    gateway config are reachable, only by the owner, and each socket gets its
+    own process, ended when the socket closes.
+    """
+
+    bridge: mcp_gateway.GatewayBridge | None = None
+    _inbox: asyncio.Queue[str | None] | None = None
+    _tasks: tuple[asyncio.Task, ...] = ()
+
+    async def connect(self):
+        if self.scope.get("user") != "authenticated":
+            await self.close(code=mcp_gateway.CLOSE_UNAUTHENTICATED)
+            return
+        name = self.scope["url_route"]["kwargs"]["name"]
+        server = mcp_gateway.served_servers().get(name)
+        await self.accept()
+        if server is None:
+            await self.close(
+                code=mcp_gateway.CLOSE_UNKNOWN_SERVER,
+                reason=f"{name} is not served on this machine",
+            )
+            return
+        bridge = mcp_gateway.GatewayBridge(server, self._send_text)
+        try:
+            await bridge.start()
+        except OSError as exc:
+            logger.warning("mcp-gateway %s failed to start: %s", name, exc)
+            await self.close(
+                code=mcp_gateway.CLOSE_START_FAILED,
+                reason=f"{name} could not be started",
+            )
+            return
+        self.bridge = bridge
+        self._inbox = asyncio.Queue()
+        self._tasks = (
+            asyncio.create_task(self._write_inbox()),
+            asyncio.create_task(self._close_when_process_exits()),
+        )
+        logger.info("mcp-gateway %s: bridge opened", name)
+
+    async def _send_text(self, text: str) -> None:
+        await self.send(text_data=text)
+
+    async def _write_inbox(self) -> None:
+        # Writes happen off the receive path so a process that stops reading
+        # stdin cannot stall this consumer's disconnect handling.
+        assert self._inbox is not None and self.bridge is not None
+        while True:
+            text = await self._inbox.get()
+            if text is None:
+                return
+            if not await self.bridge.to_process(text):
+                return
+
+    async def _close_when_process_exits(self) -> None:
+        assert self.bridge is not None
+        await self.bridge.wait_stdout_closed()
+        await self.close(
+            code=mcp_gateway.CLOSE_PROCESS_EXITED,
+            reason=f"{self.bridge.server.name} exited",
+        )
+
+    async def receive(self, text_data=None, bytes_data=None):
+        if self._inbox is None:
+            return
+        if text_data is None and bytes_data is not None:
+            text_data = bytes_data.decode("utf-8", errors="replace")
+        if text_data:
+            self._inbox.put_nowait(text_data)
+
+    async def disconnect(self, close_code):
+        current = asyncio.current_task()
+        for task in self._tasks:
+            if task is not current and not task.done():
+                task.cancel()
+        self._tasks = ()
+        self._inbox = None
+        bridge, self.bridge = self.bridge, None
+        if bridge is not None:
+            await bridge.stop()
+            logger.info("mcp-gateway %s: bridge closed", bridge.server.name)

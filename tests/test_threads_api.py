@@ -3,6 +3,7 @@ from __future__ import annotations
 # ruff: noqa: E402, I001
 
 import os
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -258,6 +259,52 @@ def test_thread_dispatcher_returns_cached_dispatcher_thread(monkeypatch) -> None
     assert manager.thread_state_calls == [dispatcher_thread.session_id]
 
 
+def test_dispatcher_api_and_catalog_keep_canonical_identity_after_transfer(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    canonical, distinct, active = [_thread(index) for index in (1, 2, 3)]
+    canonical.name = "Dispatcher"
+    distinct.name = "dispatcher"
+    active.name = "Agent"
+    (tmp_path / "livekit-voice-route.json").write_text(
+        json.dumps(
+            {
+                "dispatcher_thread_id": canonical.session_id,
+                "active_target_thread_id": active.session_id,
+            }
+        )
+    )
+    thread_cache.clear_thread_cache()
+    manager = FakeThreadManager([canonical, distinct, active])
+    monkeypatch.setattr(thread_views, "get_session_manager", lambda: manager)
+    monkeypatch.setattr(thread_views, "_refresh_projects_from_threads", lambda _: None)
+    factory = APIRequestFactory()
+
+    def get(view, path):
+        request = factory.get(path)
+        force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+        response = view(request)
+        assert response.status_code == 200
+        return response.data
+
+    catalog = get(thread_views.thread_list, "/api/threads/")
+    by_id = {thread["thread_id"]: thread for thread in catalog["threads"]}
+    pinned = get(thread_views.thread_dispatcher, "/api/threads/dispatcher/")
+    call = get(thread_views.thread_active_voice, "/api/threads/active-voice/")
+
+    assert set(by_id) == {canonical.session_id, distinct.session_id, active.session_id}
+    assert pinned["thread_id"] == canonical.session_id
+    assert pinned["conversation_role"] == "dispatcher"
+    assert by_id[canonical.session_id]["conversation_role"] == "dispatcher"
+    assert pinned["voice_route"]["active"] is False
+    assert by_id[distinct.session_id]["conversation_role"] == "agent"
+    assert by_id[distinct.session_id]["display_name"] == "dispatcher"
+    assert call["thread_id"] == active.session_id
+    assert call["conversation_role"] == "agent"
+    assert call["voice_route"] == {"role": "active_target", "active": True}
+
+
 def test_thread_dispatcher_warms_missing_dispatcher(monkeypatch) -> None:
     thread_cache.clear_thread_cache()
     dispatcher_thread = _thread(1)
@@ -333,7 +380,9 @@ def test_thread_active_voice_returns_active_target_with_turn_text(monkeypatch) -
     ]
 
 
-def test_thread_active_voice_warms_dispatcher_without_active_thread(monkeypatch) -> None:
+def test_thread_active_voice_warms_dispatcher_without_active_thread(
+    monkeypatch,
+) -> None:
     thread_cache.clear_thread_cache()
     dispatcher_thread = _thread(1)
     manager = FakeThreadManager([dispatcher_thread])
@@ -513,10 +562,13 @@ def test_thread_tags_endpoint_rejects_non_list(monkeypatch, tmp_path):
     assert response.data["error"] == "tags must be a list"
 
 
-def _activity_response(monkeypatch, threads: list[ThreadInfo]):
+def _activity_response(
+    monkeypatch, threads: list[ThreadInfo], *, active_calls: int = 0
+):
     thread_cache.clear_thread_cache()
     manager = FakeThreadManager(threads)
     monkeypatch.setattr(thread_views, "get_session_manager", lambda: manager)
+    monkeypatch.setattr(thread_views, "count_active_voice_calls", lambda: active_calls)
 
     factory = APIRequestFactory()
     request = factory.get("/api/threads/activity/")
@@ -543,9 +595,77 @@ def test_thread_activity_counts_only_recently_progressing_runs(monkeypatch) -> N
     assert response.data["thread_count"] == 4
 
 
+def test_thread_activity_counts_a_live_voice_call_as_activity(monkeypatch) -> None:
+    response = _activity_response(monkeypatch, [_thread(0)], active_calls=1)
+
+    assert response.status_code == 200
+    assert response.data["active_run_count"] == 0
+    assert response.data["active_call_count"] == 1
+    assert response.data["active"] is True
+
+
 def test_thread_activity_reports_zero_when_no_runs_active(monkeypatch) -> None:
     response = _activity_response(monkeypatch, [_thread(0), _thread(1)])
 
     assert response.status_code == 200
     assert response.data["active_run_count"] == 0
     assert response.data["thread_count"] == 2
+
+
+class RenamingThreadManager(FakeThreadManager):
+    def __init__(self, threads: list[ThreadInfo]) -> None:
+        super().__init__(threads)
+        self.renames: list[tuple[str, str]] = []
+
+    async def rename_thread(self, thread_id: str, name: str) -> ThreadInfo | None:
+        self.renames.append((thread_id, name))
+        thread = await self.get_thread_state(thread_id)
+        return thread.model_copy(update={"name": name}) if thread else None
+
+
+def _rename(monkeypatch, manager, thread_id: str, body: dict):
+    thread_cache.clear_thread_cache()
+    monkeypatch.setattr(thread_views, "get_session_manager", lambda: manager)
+    factory = APIRequestFactory()
+    request = factory.patch(f"/api/threads/{thread_id}/name/", body, format="json")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+    return thread_views.thread_name(request, thread_id)
+
+
+def test_thread_name_endpoint_renames_on_backend(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    manager = RenamingThreadManager([_thread(1)])
+
+    response = _rename(monkeypatch, manager, "thread-001", {"name": "  Fix login  "})
+
+    assert response.status_code == 200
+    assert response.data["thread_id"] == "thread-001"
+    assert response.data["name"] == "  Fix login  "
+    assert manager.renames == [("thread-001", "  Fix login  ")]
+
+
+def test_thread_name_endpoint_rejects_blank_and_unknown(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    manager = RenamingThreadManager([_thread(1)])
+
+    blank = _rename(monkeypatch, manager, "thread-001", {"name": "   "})
+    assert blank.status_code == 400
+    assert manager.renames == []
+
+    missing = _rename(monkeypatch, manager, "thread-404", {"name": "x"})
+    assert missing.status_code == 404
+
+
+def test_thread_name_endpoint_reports_backend_failure(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+
+    class FailingManager(RenamingThreadManager):
+        async def rename_thread(self, thread_id: str, name: str):
+            raise RuntimeError("app-server unavailable")
+
+    response = _rename(
+        monkeypatch, FailingManager([_thread(1)]), "thread-001", {"name": "x"}
+    )
+
+    assert response.status_code == 502
+    assert "app-server unavailable" in response.data["error"]

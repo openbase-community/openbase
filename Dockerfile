@@ -26,6 +26,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
+# Head SHAs of the cloned repos (set by docker-image.yml). Declaring it here
+# makes the clone below a cache miss whenever a remote moved; without it the
+# layer cache served a stale clone.
+ARG SIBLING_REVS=
 RUN git clone --depth 1 --branch "$CONSOLE_REF" "$CONSOLE_REPO" console \
     && git clone --depth 1 --branch "$CODER_REACT_REF" "$CODER_REACT_REPO" coder-react \
     && git clone --depth 1 --branch "$MULTI_REACT_REF" "$MULTI_REACT_REPO" multi-react \
@@ -60,6 +64,18 @@ FROM python:3.13-slim-bookworm
 # --build-arg OPENBASE_CODER_VERSION=x.y.z to stamp a real version.
 ARG OPENBASE_CODER_VERSION=0.0.0.dev0
 ARG SUPER_AGENTS_REPO=https://github.com/montaguegabe/super-agents
+ARG SUPER_AGENTS_REF=develop
+# The dispatcher's full instructions, the Super Agent base instructions and
+# the bundled skills (dispatcher procedure included) come from the workspace
+# root repo's instructions/ folder and the skills repo. Without them the
+# container ran the dispatcher on the short built-in fallback with no
+# dispatch procedure, and Super Agents with no base instructions (a voice
+# demo on 2026-10-08 created a thread and never started its turn). Refs track
+# the remotes, like the console stage's.
+ARG WORKSPACE_REPO=https://github.com/openbase-community/openbase-coder-workspace
+ARG WORKSPACE_REF=develop
+ARG SKILLS_REPO=https://github.com/openbase-community/openbase-coder-skills
+ARG SKILLS_REF=develop
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -67,6 +83,7 @@ RUN apt-get update \
         ca-certificates \
         curl \
         git \
+        gh \
         iproute2 \
         openssh-client \
         procps \
@@ -85,27 +102,14 @@ RUN curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.noarmor.gpg \
     && apt-get install -y --no-install-recommends tailscale \
     && rm -rf /var/lib/apt/lists/*
 
-# Syncthing powers the code-sync feature; the on-demand installer
-# (code_sync/install.py) honors a PATH binary, so bake the same pinned
-# release it would download. Keep version + sha256 in sync with install.py.
-ARG SYNCTHING_VERSION=v2.1.1
-ARG SYNCTHING_SHA256_AMD64=0b960a67a0391156c2ca45943ed1ceaad9ae1fc3772d967e6aafc5a7c662565d
-ARG SYNCTHING_SHA256_ARM64=2c831e27c73a5c9217bdbbfcdb695d41b027f9d8bf8303f55590881e7b907f7f
+# The Openbase Sync engine (closed-source binaries: openbase-syncd,
+# openbase-sync, edge), pinned with per-arch sha256 in sync_engine.json.
 ARG TARGETARCH
+COPY sync_engine.json scripts/fetch_sync_engine.py /tmp/sync-engine/
 RUN set -eux; \
-    case "$TARGETARCH" in \
-        amd64) sha="$SYNCTHING_SHA256_AMD64" ;; \
-        arm64) sha="$SYNCTHING_SHA256_ARM64" ;; \
-        *) echo "unsupported arch $TARGETARCH" >&2; exit 1 ;; \
-    esac; \
-    asset="syncthing-linux-$TARGETARCH-$SYNCTHING_VERSION"; \
-    curl -fsSL -o /tmp/syncthing.tar.gz \
-        "https://github.com/syncthing/syncthing/releases/download/$SYNCTHING_VERSION/$asset.tar.gz"; \
-    echo "$sha  /tmp/syncthing.tar.gz" | sha256sum -c -; \
-    tar -xzf /tmp/syncthing.tar.gz -C /tmp "$asset/syncthing"; \
-    install -m 0755 "/tmp/$asset/syncthing" /usr/local/bin/syncthing; \
-    rm -rf /tmp/syncthing.tar.gz "/tmp/$asset"; \
-    syncthing --version
+    python3 /tmp/sync-engine/fetch_sync_engine.py --target "linux-$TARGETARCH" --pin /tmp/sync-engine/sync_engine.json --out /usr/local/bin; \
+    openbase-syncd --version; \
+    rm -rf /tmp/sync-engine
 
 # Node for coding agents working on mounted JS/TS projects (the console
 # itself is served as static files and does not need it). Reuse the console
@@ -117,14 +121,28 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack \
     && node --version && npm --version
 
+# The coding-agent CLIs, so a workspace can run (and the phone can link) a
+# Codex or Claude Code account without a first-boot download. Pinned like
+# the other tools; bump deliberately. Setup's own installer only runs when
+# neither is found (backend_binaries.find_backend_binary falls back to PATH).
+ARG CODEX_VERSION=0.162.1
+ARG CLAUDE_CODE_VERSION=2.1.296
+RUN npm install -g --no-fund --no-audit \
+        "@openai/codex@${CODEX_VERSION}" \
+        "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+    && codex --version && claude --version \
+    && npm cache clean --force
+
 # Pinned (not :latest) so a bad or compromised uv release can't ride into the
 # next image build unreviewed; bump deliberately.
 COPY --from=ghcr.io/astral-sh/uv:0.12.14 /uv /usr/local/bin/uv
 COPY --from=tunneld-build /out/openbase-tunneld /usr/local/bin/openbase-tunneld
 
 COPY docker/entrypoint.sh /usr/local/bin/openbase-coder-entrypoint
+COPY docker/persist-home-state.sh /usr/local/bin/openbase-coder-persist-home-state
+COPY --chmod=0755 docker/openbase-browser /usr/local/bin/openbase-browser
 # Pre-create the state dir so the named volume inherits openbase ownership.
-RUN chmod 0755 /usr/local/bin/openbase-coder-entrypoint \
+RUN chmod 0755 /usr/local/bin/openbase-coder-entrypoint /usr/local/bin/openbase-coder-persist-home-state \
     && useradd --create-home --uid 1000 openbase \
     && mkdir -p /home/openbase/.openbase /data \
     && chown openbase:openbase /home/openbase/.openbase /data \
@@ -134,9 +152,18 @@ RUN chmod 0755 /usr/local/bin/openbase-coder-entrypoint \
 USER openbase
 WORKDIR /opt/openbase-coder/workspace
 
-# A minimal multi workspace: setup only requires multi.json plus a cli/ repo.
+# A minimal multi workspace: setup requires multi.json plus a cli/ repo, and
+# reads instructions/ and skills/ beside them (setup/codex.py renders the
+# instruction files into the data dir and links the skills into both agent
+# homes; Django startup and each voice call refresh them from here).
+# SIBLING_REVS: see the console stage.
+ARG SIBLING_REVS=
 RUN printf '{\n  "repos": []\n}\n' > multi.json \
-    && git clone --depth 1 "$SUPER_AGENTS_REPO" super-agents
+    && git clone --depth 1 --branch "$SUPER_AGENTS_REF" "$SUPER_AGENTS_REPO" super-agents \
+    && git clone --depth 1 --branch "$SKILLS_REF" "$SKILLS_REPO" skills \
+    && git clone --depth 1 --branch "$WORKSPACE_REF" "$WORKSPACE_REPO" /tmp/workspace-root \
+    && cp -R /tmp/workspace-root/instructions instructions \
+    && rm -rf /tmp/workspace-root
 
 COPY --chown=openbase:openbase pyproject.toml uv.lock README.md LICENSE manage.py cli/
 COPY --chown=openbase:openbase openbase_coder_cli cli/openbase_coder_cli
@@ -169,10 +196,14 @@ COPY --from=console-build --chown=openbase:openbase \
 WORKDIR /home/openbase
 # ~/.openbase/bin leads so the entrypoint's tailscale CLI shim (which targets
 # the in-container tailscaled socket) also wins in `docker exec` shells.
+# Maritime's VM init drops this ENV, so docker/entrypoint.sh re-asserts the
+# same defaults at runtime — change both together.
 ENV PATH="/home/openbase/.openbase/bin:/opt/openbase-coder/workspace/cli/.venv/bin:${PATH}" \
     OPENBASE_CODER_WORKSPACE_DIR=/opt/openbase-coder/workspace \
     OPENBASE_CODER_CLI_CONSOLE_BUILD_DIR=/opt/openbase-coder/console-dist \
-    OPENBASE_CODER_SERVICE_SUPERVISOR=external
+    OPENBASE_CODER_SERVICE_SUPERVISOR=external \
+    BROWSER="openbase-browser" \
+    GH_BROWSER="openbase-browser"
 
 # All state (env file, sqlite DB, downloaded backend binaries, logs) lives in
 # ~/.openbase; keep it on a volume so logins and setup survive restarts.

@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -54,6 +55,7 @@ type localAPI struct {
 	openbaseAddr string
 	turnCreds    *turnCredentials
 	forwardsUp   atomic.Bool
+	forwards     atomic.Pointer[forwardManager]
 }
 
 func (a *localAPI) markForwardsUp() { a.forwardsUp.Store(true) }
@@ -65,6 +67,11 @@ func (a *localAPI) handler() http.Handler {
 	mux.HandleFunc("GET /probe", a.handleProbe)
 	mux.HandleFunc("GET /turnprobe", a.handleTurnProbe)
 	mux.HandleFunc("POST /login", a.handleLogin)
+	mux.HandleFunc("POST /logout", a.handleLogout)
+	mux.HandleFunc("GET /forwards", a.handleListForwards)
+	mux.HandleFunc("POST /forwards", a.handleAddForward)
+	mux.HandleFunc("DELETE /forwards/{port}", a.handleRemoveForward)
+	mux.HandleFunc("GET /resolve", a.handleResolve)
 	return a.requireToken(mux)
 }
 
@@ -104,6 +111,9 @@ func (a *localAPI) handleHealth(w http.ResponseWriter, r *http.Request) {
 			strconv.Itoa(livekitTailnetPort):  "tcp://" + livekitLocalAddr,
 		},
 	}
+	if forwards := a.forwards.Load(); forwards != nil {
+		payload["dynamic_forwards"] = forwards.List()
+	}
 	st, err := a.lc.Status(r.Context())
 	if err != nil {
 		payload["backend_state"] = "Unknown"
@@ -137,6 +147,18 @@ func (a *localAPI) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Start only stages the key; the login must be kicked explicitly. With an
 	// auth key staged this redeems it rather than producing a browser URL.
 	if err := a.lc.StartLoginInteractive(r.Context()); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleLogout leaves the network this node is enrolled in and forgets its
+// node key, so the next /login registers a fresh node with the new key instead
+// of resuming the previous account's node (tsnet keeps its login across
+// restarts, which would otherwise ignore a different account's auth key).
+func (a *localAPI) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if err := a.lc.Logout(r.Context()); err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}
@@ -256,4 +278,95 @@ func statusContainsProbePeer(status *ipnstate.Status, host string) bool {
 		}
 	}
 	return false
+}
+
+// Dynamic forwards (see forwards.go). They exist only once the node is up,
+// because a tailnet listener needs the node's addresses.
+
+func (a *localAPI) handleListForwards(w http.ResponseWriter, r *http.Request) {
+	forwards := a.forwards.Load()
+	if forwards == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"forwards": []forwardInfo{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"forwards": forwards.List()})
+}
+
+func (a *localAPI) handleAddForward(w http.ResponseWriter, r *http.Request) {
+	forwards := a.forwards.Load()
+	if forwards == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "tailnet node is not up yet"})
+		return
+	}
+	var req forwardRequest
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 4<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+		return
+	}
+	info, err := forwards.Add(req)
+	if err != nil {
+		status := http.StatusInternalServerError
+		var fe *forwardError
+		if errors.As(err, &fe) {
+			status = fe.status
+		}
+		writeJSON(w, status, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, info)
+}
+
+func (a *localAPI) handleRemoveForward(w http.ResponseWriter, r *http.Request) {
+	port, err := strconv.Atoi(r.PathValue("port"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid port"})
+		return
+	}
+	forwards := a.forwards.Load()
+	if forwards == nil || !forwards.Remove(port) {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no such forward"})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleResolve answers GET /resolve?name=<host> with the addresses the
+// node's own resolver returns for name: tailnet MagicDNS and the account's
+// private service records, which the container's system resolver never
+// sees. The CLI uses it to confirm a freshly allocated private hostname
+// points at this node before it publishes a service there.
+func (a *localAPI) handleResolve(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(r.URL.Query().Get("name"))), ".")
+	if name == "" || len(name) > 253 || strings.ContainsAny(name, " \t\r\n/\\@") {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "name must be a DNS name"})
+		return
+	}
+	if a.lc == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "tailnet node is not up yet"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	addresses := []string{}
+	var lastErr error
+	for _, queryType := range []string{"A", "AAAA"} {
+		raw, _, err := a.lc.QueryDNS(ctx, name+".", queryType)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		found, err := dnsAnswerAddresses(raw)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		addresses = append(addresses, found...)
+	}
+	if len(addresses) == 0 && lastErr != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": lastErr.Error(), "name": name})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"name": name, "addresses": addresses})
 }

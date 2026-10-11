@@ -13,6 +13,7 @@ import pytest
 from click.testing import CliRunner
 
 from openbase_coder_cli.cli.setup.hooks import session_start_hook_trusted_hash
+from openbase_coder_cli.env_file import env_file_values
 from openbase_coder_cli.paths import (
     INJECT_SESSION_ID_HOOK_PATH,
     OPENBASE_AGENTS_MD_PATH,
@@ -562,6 +563,27 @@ def test_symlink_codex_home_skills_replaces_existing_symlink(
     assert target.resolve() == skill.resolve()
 
 
+def test_symlink_codex_home_skills_removes_dangling_retired_links(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    skill = workspace / "skills" / "skills" / "phone-app-control"
+    codex_home, claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text("# Phone\n", encoding="utf-8")
+    retired = codex_home / "skills" / "ios-app-control"
+    retired.parent.mkdir(parents=True)
+    retired.symlink_to(workspace / "skills" / "skills" / "ios-app-control")
+    users_copy = claude_config / "skills" / "ios-app-control"
+    users_copy.mkdir(parents=True)
+
+    setup_cli._symlink_codex_home_skills(str(workspace))
+
+    assert not retired.is_symlink()
+    assert users_copy.is_dir()
+    assert (codex_home / "skills" / "phone-app-control").resolve() == skill.resolve()
+
+
 def test_symlink_codex_home_skills_preserves_real_directories(
     tmp_path, monkeypatch
 ) -> None:
@@ -613,7 +635,7 @@ def test_ensure_codex_config_registers_super_agents_mcp(tmp_path, monkeypatch) -
     command.parent.mkdir(parents=True)
     command.write_text("#!/bin/sh\n", encoding="utf-8")
 
-    setup_cli._ensure_codex_config(str(workspace))
+    setup_cli._ensure_codex_config(str(workspace), register_shared_super_agents=False)
 
     config_path = codex_home / "openbase.config.toml"
     config = tomllib.loads(config_path.read_text())
@@ -621,6 +643,135 @@ def test_ensure_codex_config_registers_super_agents_mcp(tmp_path, monkeypatch) -
     assert config["model_reasoning_effort"] == "high"
     assert config["hooks"]["SessionStart"]
     assert not (codex_home / "config.toml").exists()
+
+
+def test_ensure_codex_config_registers_shared_super_agents(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    command = workspace / ".venv" / "bin" / "super-agents-mcp"
+    codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    command.parent.mkdir(parents=True)
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    setup_cli._ensure_codex_config(str(workspace), register_shared_super_agents=True)
+
+    shared = tomllib.loads((codex_home / "config.toml").read_text())
+    assert shared["mcp_servers"]["super-agents"]["command"] == str(command)
+
+
+def test_ensure_codex_config_shared_preserves_existing_super_agents(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    command = workspace / ".venv" / "bin" / "super-agents-mcp"
+    codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    command.parent.mkdir(parents=True)
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+    shared_path = codex_home / "config.toml"
+    shared_path.parent.mkdir(parents=True, exist_ok=True)
+    shared_path.write_text(
+        '[mcp_servers.super-agents]\ncommand = "my-own-super-agents"\n',
+        encoding="utf-8",
+    )
+
+    setup_cli._ensure_codex_config(str(workspace), register_shared_super_agents=True)
+
+    shared = tomllib.loads(shared_path.read_text())
+    assert shared["mcp_servers"]["super-agents"]["command"] == "my-own-super-agents"
+
+
+def test_setup_shares_super_agents_mcp_by_default() -> None:
+    """Plain terminal codex/claude sessions get the Super Agents MCP unless
+    the installer opts out explicitly."""
+    ctx = setup_cli.setup.make_context("setup", ["--non-interactive"])
+    assert ctx.params["shared_super_agents_mcp"] is True
+
+    ctx = setup_cli.setup.make_context(
+        "setup", ["--non-interactive", "--no-shared-super-agents-mcp"]
+    )
+    assert ctx.params["shared_super_agents_mcp"] is False
+
+
+def test_ensure_codex_config_shares_super_agents_by_default(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    command = workspace / ".venv" / "bin" / "super-agents-mcp"
+    codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    command.parent.mkdir(parents=True)
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    setup_cli._ensure_codex_config(str(workspace))
+
+    shared = tomllib.loads((codex_home / "config.toml").read_text())
+    assert shared["mcp_servers"]["super-agents"]["command"] == str(command)
+
+
+def test_ensure_codex_config_opt_out_strips_shared_super_agents(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    command = workspace / ".venv" / "bin" / "super-agents-mcp"
+    codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    command.parent.mkdir(parents=True)
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+    setup_cli._ensure_codex_config(str(workspace))
+
+    setup_cli._ensure_codex_config(str(workspace), register_shared_super_agents=False)
+
+    shared = tomllib.loads((codex_home / "config.toml").read_text())
+    assert "super-agents" not in shared.get("mcp_servers", {})
+
+
+def test_ensure_claude_hooks_shares_super_agents_by_default(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    command = workspace / ".venv" / "bin" / "super-agents-mcp"
+    _codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    command.parent.mkdir(parents=True)
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    setup_cli._ensure_claude_hooks(workspace_dir=str(workspace))
+
+    payload = json.loads((tmp_path / ".claude.json").read_text(encoding="utf-8"))
+    assert payload["mcpServers"]["super-agents"]["command"] == str(command)
+
+
+def test_ensure_claude_hooks_opt_out_strips_shared_super_agents(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    command = workspace / ".venv" / "bin" / "super-agents-mcp"
+    _codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    command.parent.mkdir(parents=True)
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+    setup_cli._ensure_claude_hooks(workspace_dir=str(workspace))
+
+    setup_cli._ensure_claude_hooks(
+        register_shared_super_agents=False, workspace_dir=str(workspace)
+    )
+
+    payload = json.loads((tmp_path / ".claude.json").read_text(encoding="utf-8"))
+    assert "super-agents" not in payload.get("mcpServers", {})
+
+
+def test_ensure_claude_hooks_registers_shared_super_agents(
+    tmp_path, monkeypatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    command = workspace / ".venv" / "bin" / "super-agents-mcp"
+    _codex_home, _claude_config = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    command.parent.mkdir(parents=True)
+    command.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    setup_cli._ensure_claude_hooks(
+        register_shared_super_agents=True, workspace_dir=str(workspace)
+    )
+
+    payload = json.loads((tmp_path / ".claude.json").read_text(encoding="utf-8"))
+    assert payload["mcpServers"]["super-agents"]["command"] == str(command)
 
 
 def test_ensure_codex_config_preserves_user_config_values(
@@ -686,6 +837,7 @@ def test_ensure_codex_config_preserves_cloud_codex_child_default(
     setup_cli._ensure_codex_config(
         str(workspace),
         coding_backend="openbase_cloud_codex",
+        register_shared_super_agents=False,
     )
 
     cloud = tomllib.loads((codex_home / "openbase-cloud.config.toml").read_text())
@@ -782,6 +934,7 @@ def test_ensure_claude_mcp_installs_super_agents(tmp_path, monkeypatch) -> None:
                 instructions / "SUPER_AGENT_INSTRUCTIONS.md"
             ),
             "SUPER_AGENTS_BASE_INSTRUCTIONS_PATH": str(instructions / "AGENTS.md"),
+            "SUPER_AGENTS_THREAD_INTRO_COMMAND": "",
             "SUPER_AGENTS_DEFAULT_BACKEND": "claude_code",
         },
     }
@@ -858,6 +1011,7 @@ def test_ensure_env_file_documents_coding_backend_default(tmp_path) -> None:
     assert "SUPER_AGENTS_CODEX_APPROVAL_POLICY=never" in content
     assert "SUPER_AGENTS_CODEX_SANDBOX_POLICY=danger-full-access" in content
     assert f"SUPER_AGENTS_BASE_INSTRUCTIONS_PATH={OPENBASE_AGENTS_MD_PATH}" in content
+    assert env_file_values(env_file)["SUPER_AGENTS_THREAD_INTRO_COMMAND"] == ""
     assert "CLAUDE_CODE_ENABLE_TELEMETRY=0" in content
     assert "CODEX_MODEL=" not in content
     assert "CODEX_APP_SERVER_URL=unix://" in content
@@ -977,6 +1131,7 @@ def test_ensure_env_file_migrates_existing_env_to_shared_homes(tmp_path) -> None
     assert "SUPER_AGENTS_CODEX_APPROVAL_POLICY=never" in content
     assert "SUPER_AGENTS_CODEX_SANDBOX_POLICY=danger-full-access" in content
     assert f"SUPER_AGENTS_BASE_INSTRUCTIONS_PATH={OPENBASE_AGENTS_MD_PATH}" in content
+    assert env_file_values(env_file)["SUPER_AGENTS_THREAD_INTRO_COMMAND"] == ""
     assert "SUPER_AGENTS_DEFAULT_CONFIG_PATH=" in content
     assert "CODEX_APP_SERVER_URL=unix://" in content
     assert env_file.stat().st_mode & 0o777 == 0o600
@@ -1136,54 +1291,18 @@ def test_ensure_env_file_updates_existing_backend_only_when_requested(tmp_path) 
     assert "OPENBASE_CODING_BACKEND=claude_code" in content
 
 
-def test_ensure_thread_sync_exchange_dir_creates_syncthing_files(
+def test_ensure_thread_sync_exchange_dir_creates_only_the_folder(
     tmp_path, monkeypatch
 ) -> None:
     openbase_dir = tmp_path / "openbase"
-    global_ignore = tmp_path / "syncthing" / "global.stignore"
     _patch_setup(monkeypatch, "OPENBASE_BASE_DIR", openbase_dir)
-    _patch_setup(
-        monkeypatch,
-        "_syncthing_global_ignore_path",
-        lambda: global_ignore,
-    )
 
     setup_cli._ensure_thread_sync_exchange_dir()
 
     exchange_dir = openbase_dir / "thread-sync"
     assert exchange_dir.is_dir()
-    assert (
-        exchange_dir / ".stfolder" / setup_cli.THREAD_SYNC_MARKER_FILE_NAME
-    ).is_file()
-    assert (exchange_dir / ".stignore").read_text(encoding="utf-8") == (
-        "#include .stglobalignore\n"
-    )
-    assert global_ignore.read_text(encoding="utf-8") == "(?d).DS_Store\n"
-    assert (exchange_dir / ".stglobalignore").is_symlink()
-    assert (exchange_dir / ".stglobalignore").resolve() == global_ignore.resolve()
-
-
-def test_ensure_thread_sync_exchange_dir_replaces_stale_global_ignore_symlink(
-    tmp_path, monkeypatch
-) -> None:
-    openbase_dir = tmp_path / "openbase"
-    exchange_dir = openbase_dir / "thread-sync"
-    stale_global_ignore = tmp_path / "stale" / "global.stignore"
-    global_ignore = tmp_path / "syncthing" / "global.stignore"
-    exchange_dir.mkdir(parents=True)
-    stale_global_ignore.parent.mkdir()
-    stale_global_ignore.write_text("stale\n", encoding="utf-8")
-    (exchange_dir / ".stglobalignore").symlink_to(stale_global_ignore)
-    _patch_setup(monkeypatch, "OPENBASE_BASE_DIR", openbase_dir)
-    _patch_setup(
-        monkeypatch,
-        "_syncthing_global_ignore_path",
-        lambda: global_ignore,
-    )
-
-    setup_cli._ensure_thread_sync_exchange_dir()
-
-    assert (exchange_dir / ".stglobalignore").resolve() == global_ignore.resolve()
+    # No markers or ignore files of the previous sync engine.
+    assert sorted(path.name for path in exchange_dir.iterdir()) == []
 
 
 def test_ensure_bundled_sounds_installs_deactivate(tmp_path, monkeypatch) -> None:
@@ -1226,11 +1345,7 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
     _patch_setup(monkeypatch, "current_runtime_package", lambda: None)
     _patch_setup(monkeypatch, "ensure_backend_binary", lambda _backend: None)
     _patch_setup(monkeypatch, "ensure_pinned_livekit_server", lambda: None)
-    _patch_setup(
-        monkeypatch,
-        "claude_auth_status",
-        lambda: SimpleNamespace(logged_in=False, raw_output="{}", returncode=0),
-    )
+    _patch_setup(monkeypatch, "backend_login_missing", lambda _backend: True)
     _patch_setup(
         monkeypatch,
         "_ensure_thread_sync_exchange_dir",
@@ -1277,13 +1392,17 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
         lambda _workspace_dir, **_kwargs: None,
     )
     _patch_setup(monkeypatch, "_ensure_session_id_hook_script", lambda: None)
+    hook_calls = []
+    monkeypatch.setattr(
+        setup_cli, "ensure_default_session_id_hooks", lambda: hook_calls.append("hooks")
+    )
     monkeypatch.setattr(
         setup_cli, "_ensure_codex_config", lambda *_args, **_kwargs: None
     )
     _patch_setup(
         monkeypatch, "_ensure_claude_mcp", lambda _workspace_dir, **_kwargs: None
     )
-    _patch_setup(monkeypatch, "_ensure_claude_hooks", lambda: None)
+    _patch_setup(monkeypatch, "_ensure_claude_hooks", lambda **_kwargs: None)
     _patch_setup(monkeypatch, "_install_cli_shim", lambda _workspace_dir: None)
     _patch_setup(monkeypatch, "_build_console", lambda _workspace_dir: None)
     _patch_setup(monkeypatch, "install_all_services", lambda _config: None)
@@ -1352,7 +1471,8 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
 
     assert result.exit_code == 0, result.output
     assert calls == ["thread-sync", "sounds", "configure"]
-    assert "Claude Code is not logged in" in result.output
+    assert hook_calls == ["hooks"]
+    assert "Claude Code isn't signed in on your computer" in result.output
 
     calls.clear()
     monkeypatch.setattr(
@@ -1381,10 +1501,12 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
             "claude-code",
             "--tailnet-provider",
             "netmesh",
+            "--no-include-default-hooks",
         ],
     )
 
     assert result.exit_code == 0, result.output
+    assert hook_calls == ["hooks"]
     assert "Setup complete." in result.output
     assert "networking choice was saved" in result.output
     assert calls == [
@@ -1834,6 +1956,40 @@ def test_relink_workspace_skills_noop_without_installation(monkeypatch) -> None:
     assert codex_setup.relink_workspace_skills_from_installation() is False
 
 
+def test_standalone_startup_links_skills_added_by_package_update(tmp_path, monkeypatch):
+    from openbase_coder_cli import runtime
+    from openbase_coder_cli.cli.setup import codex as codex_setup
+    from openbase_coder_cli.services.installation import InstallationConfig
+
+    old = tmp_path / "releases" / "old"
+    new = tmp_path / "releases" / "new"
+    for root, names in ((old, ("existing",)), (new, ("existing", "added"))):
+        for name in names:
+            skill = root / "skills" / name
+            skill.mkdir(parents=True)
+            (skill / "SKILL.md").write_text(root.name)
+    current = tmp_path / "current"
+    current.symlink_to(old)
+    monkeypatch.setattr(runtime, "STANDALONE_CURRENT_DIR", current)
+    homes = _patch_openbase_agent_paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(codex_setup, "packaged_skills_dir", lambda: current / "skills")
+    monkeypatch.setattr(InstallationConfig, "exists", classmethod(lambda cls: True))
+    monkeypatch.setattr(
+        InstallationConfig,
+        "load",
+        classmethod(lambda cls: InstallationConfig(standalone=True, workspace_path="")),
+    )
+    assert codex_setup.relink_workspace_skills_from_installation()
+    current.unlink()
+    current.symlink_to(new)
+    assert codex_setup.relink_workspace_skills_from_installation()
+    for home in homes:
+        for name in ("existing", "added"):
+            target = home / "skills" / name
+            assert target.readlink() == current / "skills" / name
+            assert (target / "SKILL.md").read_text() == "new"
+
+
 def _fake_tty_stdin(monkeypatch, text: str) -> None:
     import io
     import sys
@@ -1863,6 +2019,24 @@ def test_require_backend_choice_keeps_existing_env(tmp_path, monkeypatch) -> Non
     assert (
         setup_cli._require_backend_choice(str(env_file), None, interactive=True) is None
     )
+
+
+@pytest.mark.parametrize("tailscale_binary", [None, "/usr/local/bin/tailscale"])
+def test_require_tailnet_provider_choice_enter_uses_vpn_default(
+    tmp_path, monkeypatch, capsys, tailscale_binary
+) -> None:
+    from openbase_coder_cli.services import tailscale_provider as tp
+
+    monkeypatch.setattr(tp, "tailscale_bin", lambda: tailscale_binary)
+    _fake_tty_stdin(monkeypatch, "\n")
+
+    assert (
+        setup_cli._require_tailnet_provider_choice(
+            str(tmp_path / ".env"), None, interactive=True
+        )
+        == tp.PROVIDER_NETMESH
+    )
+    assert "Choose an option [1]" in capsys.readouterr().out
 
 
 def test_require_tailnet_provider_choice_restores_existing_netmesh(
@@ -2055,25 +2229,9 @@ def test_resolve_interactive_mode_non_tty_disables_prompts(monkeypatch) -> None:
         assert setup_cli._resolve_interactive_mode(None, False) is False
 
 
-def test_interactive_login_checks_skip_when_declined(tmp_path, monkeypatch) -> None:
-    class _LoggedOut:
-        def __init__(self, url):
-            self.has_refresh_token = False
-
-    calls = []
-    monkeypatch.setattr(setup_cli, "TokenManager", _LoggedOut)
-    monkeypatch.setattr(setup_cli, "register_and_report", lambda **kw: calls.append(kw))
-    _fake_tty_stdin(monkeypatch, "n\n")
-
-    setup_cli._interactive_cloud_login_and_checks(
-        str(tmp_path / ".env"), cli_configured=True
-    )
-
-    assert calls == []
-
-
-def test_interactive_login_checks_run_login_when_accepted(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("ready_input", ["\n", "n\n"])
+def test_interactive_login_checks_run_login_after_enter(
+    tmp_path, monkeypatch, capsys, ready_input
 ) -> None:
     class _LoggedOut:
         def __init__(self, url):
@@ -2103,10 +2261,12 @@ def test_interactive_login_checks_run_login_when_accepted(
     monkeypatch.setattr(
         setup_cli,
         "register_and_report",
-        lambda **kwargs: reports.append(kwargs)
-        or SimpleNamespace(ok=True, supported=True, error=None),
+        lambda **kwargs: (
+            reports.append(kwargs)
+            or SimpleNamespace(ok=True, supported=True, error=None)
+        ),
     )
-    _fake_tty_stdin(monkeypatch, "y\n")
+    _fake_tty_stdin(monkeypatch, ready_input)
 
     ctx = setup_cli.setup.make_context("setup", [])
     with ctx:
@@ -2117,6 +2277,10 @@ def test_interactive_login_checks_run_login_when_accepted(
     assert login_calls == [True]
     assert reports == [{"cli_configured": True, "serve_healthy": True}]
     assert providers == ["tailscale"]
+    output = capsys.readouterr().out
+    assert "Press Enter when you're ready to log in to Openbase Cloud" in output
+    assert "[Y/n]" not in output
+    assert "Skipping login" not in output
 
 
 def test_interactive_login_checks_report_when_logged_in(tmp_path, monkeypatch) -> None:
@@ -2205,3 +2369,45 @@ def test_ensure_env_file_defaults_to_tailscale_when_detected(
 
     content = env_file.read_text(encoding="utf-8")
     assert "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER=tailscale\n" in content
+
+
+@pytest.mark.parametrize("backend", ["claude_code", "codex"])
+def test_interactive_setup_offers_backend_cli_login(monkeypatch, tmp_path, backend):
+    logged_in = {"value": False}
+    logins = []
+    _patch_setup(
+        monkeypatch, "_selected_coding_backend", lambda _env, _requested: backend
+    )
+    _patch_setup(
+        monkeypatch, "backend_login_missing", lambda _b, **_kw: not logged_in["value"]
+    )
+
+    def fake_login(selected):
+        logins.append(selected)
+        logged_in["value"] = True
+        return 0
+
+    _patch_setup(monkeypatch, "run_backend_login", fake_login)
+    monkeypatch.setattr(click, "confirm", lambda *_args, **_kwargs: True)
+    echoed = []
+    monkeypatch.setattr(
+        click, "echo", lambda message="", **_kwargs: echoed.append(message)
+    )
+
+    setup_cli._interactive_backend_login(str(tmp_path / ".env"))
+
+    assert logins == [backend]
+    assert echoed[-1].endswith("is signed in.")
+
+
+def test_interactive_setup_skips_login_when_backend_signed_in(monkeypatch, tmp_path):
+    _patch_setup(
+        monkeypatch, "_selected_coding_backend", lambda _env, _requested: "claude_code"
+    )
+    _patch_setup(monkeypatch, "backend_login_missing", lambda _b: False)
+    _patch_setup(
+        monkeypatch,
+        "run_backend_login",
+        lambda _b: pytest.fail("login must not run when already signed in"),
+    )
+    setup_cli._interactive_backend_login(str(tmp_path / ".env"))

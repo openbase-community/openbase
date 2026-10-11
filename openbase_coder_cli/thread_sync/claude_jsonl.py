@@ -20,53 +20,56 @@ def _parse_claude_jsonl(root: Path, session_id: str) -> dict[str, Any] | None:
     first_timestamp_ms: int | None = None
     latest_timestamp_ms: int | None = None
     cwd: str | None = None
+    session_ids: set[str] = set()
 
+    # Stream the transcript line by line: transcripts can run to hundreds of
+    # MB, and read_text().splitlines() held the whole file plus a line list in
+    # memory on every sync-workers sweep.
     try:
-        lines = root.read_text(encoding="utf-8").splitlines()
+        with root.open(encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    return None
+                if not isinstance(payload, dict):
+                    return None
+                event_type = _string(payload.get("type"))
+                if event_type in CLAUDE_EVENT_TYPES:
+                    seen_event = True
+                payload_session_id = _string(payload.get("sessionId"))
+                if payload_session_id:
+                    session_ids.add(payload_session_id)
+                if payload_session_id == session_id:
+                    seen_matching_session = True
+                cwd = cwd or _string(payload.get("cwd"))
+                if timestamp_ms := _timestamp_ms(_string(payload.get("timestamp"))):
+                    first_timestamp_ms = min(
+                        first_timestamp_ms or timestamp_ms, timestamp_ms
+                    )
+                    latest_timestamp_ms = max(latest_timestamp_ms or 0, timestamp_ms)
+                role = (
+                    _string((payload.get("message") or {}).get("role"))
+                    if isinstance(payload.get("message"), dict)
+                    else None
+                )
+                text = _message_text(payload.get("message"))
+                if role == "user" and text and first_user is None:
+                    # Claude Code transcripts often open with harness-injected
+                    # markup (<local-command-caveat>, <command-name>,
+                    # <system-reminder>); skip it so session names come from
+                    # real user text.
+                    first_user = _meaningful_user_text(text)
+                elif role == "assistant" and text:
+                    latest_assistant = text
     except UnicodeDecodeError:
         return None
-    for line in lines:
-        if not line.strip():
-            continue
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(payload, dict):
-            return None
-        event_type = _string(payload.get("type"))
-        if event_type in CLAUDE_EVENT_TYPES:
-            seen_event = True
-        payload_session_id = _string(payload.get("sessionId"))
-        if payload_session_id == session_id:
-            seen_matching_session = True
-        cwd = cwd or _string(payload.get("cwd"))
-        if timestamp_ms := _timestamp_ms(_string(payload.get("timestamp"))):
-            first_timestamp_ms = min(first_timestamp_ms or timestamp_ms, timestamp_ms)
-            latest_timestamp_ms = max(latest_timestamp_ms or 0, timestamp_ms)
-        role = (
-            _string((payload.get("message") or {}).get("role"))
-            if isinstance(payload.get("message"), dict)
-            else None
-        )
-        text = _message_text(payload.get("message"))
-        if role == "user" and text and first_user is None:
-            # Claude Code transcripts often open with harness-injected markup
-            # (<local-command-caveat>, <command-name>, <system-reminder>);
-            # skip it so session names come from real user text.
-            first_user = _meaningful_user_text(text)
-        elif role == "assistant" and text:
-            latest_assistant = text
     if not seen_event:
         return None
-    if session_id and not seen_matching_session:
-        session_ids = {
-            _string(json.loads(line).get("sessionId"))
-            for line in lines
-            if line.strip() and line.lstrip().startswith("{")
-        }
-        if any(value for value in session_ids):
-            return None
+    if session_id and not seen_matching_session and session_ids:
+        return None
     return {
         "cwd": cwd,
         "name": _preview(first_user),

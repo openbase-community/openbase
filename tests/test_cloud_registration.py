@@ -322,3 +322,53 @@ def test_service_hostname_cloud_contract_uses_authenticated_bounded_endpoints(
     assert release_calls[0]["method"] == "DELETE"
     assert release_calls[0]["json"] == {"node_id": "7", "service_name": "crm"}
     assert release_calls[0]["headers"]["Authorization"] == "Bearer jwt.token"
+
+
+def test_publish_endpoints_fall_back_to_a_scoped_workspace_machine_token(
+    monkeypatch,
+) -> None:
+    from openbase_coder_cli.config import machine_token_manager as mt_module
+    from openbase_coder_cli.config.token_manager import AuthLoginRequiredError
+
+    class NoOwnerLogin:
+        has_refresh_token = False
+
+        def __init__(self, web_backend_url):
+            pass
+
+        def get_access_token(self):
+            raise AuthLoginRequiredError("no owner login")
+
+    class FakeMachineTokens:
+        def __init__(self, web_backend_url, token_manager=None):
+            self.scopes = None
+
+        def has_cached_token(self, *, scopes):
+            return "netmesh_publish" in scopes
+
+        def get_machine_token(self, *, scopes, rotate=False):
+            return "obmt_workspace"
+
+    monkeypatch.setattr(cloud_registration, "TokenManager", NoOwnerLogin)
+    monkeypatch.setattr(mt_module, "MachineTokenManager", FakeMachineTokens)
+    calls = []
+
+    def fake_request(method, url, **kwargs):
+        calls.append((method, url, kwargs))
+        return httpx.Response(
+            200, json={"hostname": "crm.abcdefghijkl.vpn.obs.so", "node_id": "7"}
+        )
+
+    monkeypatch.setattr(cloud_registration.httpx, "request", fake_request)
+
+    result = cloud_registration.allocate_netmesh_service_hostname(
+        node_id="self", service_name="crm"
+    )
+    assert result.ok is True
+    assert calls[-1][2]["headers"] == {"Authorization": "Bearer obmt_workspace"}
+    assert calls[-1][2]["json"] == {"node_id": "self", "service_name": "crm"}
+
+    # Endpoints that take no machine scope still require the owner login.
+    devices = cloud_registration.list_netmesh_devices()
+    assert devices == []
+    assert len(calls) == 1

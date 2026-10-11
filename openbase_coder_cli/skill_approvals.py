@@ -18,6 +18,12 @@ from super_agents.app_server_client import (
 APPROVAL_METHOD = "openbaseSkill/requestApproval"
 APPROVAL_DECISIONS = {"accept", "decline", "cancel"}
 TERMINAL_DECISIONS = APPROVAL_DECISIONS | {"timeout"}
+# Answered requests linger when the waiting process was killed before the
+# user decided (nobody consumes the decision); unanswered ones linger when
+# that killed waiter's request is never answered at all. Sweep both after a
+# generous grace so re-attached waits still find fresh decisions.
+STALE_ANSWERED_SECONDS = 24 * 3600
+STALE_UNANSWERED_SECONDS = 48 * 3600
 
 
 def create_skill_approval_request(
@@ -44,8 +50,42 @@ def create_skill_approval_request(
         ),
         received_at=_now_iso(),
     )
+    sweep_stale_skill_approvals(path)
     record_shared_permission_request(request, path)
     return normalize_shared_approval_request(request.to_json())
+
+
+def sweep_stale_skill_approvals(path: Path | str | None = None) -> int:
+    """Drop skill approvals whose waiter is long gone; other sources keep
+    their own lifecycle (gate requests are swept by their owning gate)."""
+    from super_agents.app_time import parse_iso_ms
+
+    now_ms = int(time.time() * 1000)
+    removed = 0
+    store = read_permission_store(path)
+    requests = store.get("requests")
+    decisions = store.get("decisions")
+    requests = requests if isinstance(requests, dict) else {}
+    decisions = decisions if isinstance(decisions, dict) else {}
+    for request_id, request in list(requests.items()):
+        if not isinstance(request, dict) or not is_skill_approval_request(request):
+            continue
+        decision = decisions.get(request_id)
+        if isinstance(decision, dict):
+            decided_ms = parse_iso_ms(str(decision.get("decidedAt") or "") or None)
+            stale = (
+                decided_ms > 0 and now_ms - decided_ms > STALE_ANSWERED_SECONDS * 1000
+            )
+        else:
+            received_ms = parse_iso_ms(str(request.get("receivedAt") or "") or None)
+            stale = (
+                received_ms > 0
+                and now_ms - received_ms > STALE_UNANSWERED_SECONDS * 1000
+            )
+        if stale:
+            clear_shared_permission_request(request_id, path)
+            removed += 1
+    return removed
 
 
 def list_skill_approval_requests(
@@ -174,7 +214,7 @@ def wait_for_skill_approval(
         time.sleep(interval)
 
 
-def request_approval(
+def create_approval_request_via_server(
     *,
     skill: str,
     action: str,
@@ -182,9 +222,8 @@ def request_approval(
     details: dict[str, Any] | None = None,
     command: str | None = None,
     timeout_seconds: float = 300,
-    poll_interval_seconds: float = 1,
-) -> dict[str, Any]:
-    """Request user approval through the local Openbase Coder server."""
+) -> str:
+    """Create an approval request through the local Openbase Coder server."""
     from openbase_coder_cli.cli.local_server import local_server_request
 
     payload: dict[str, Any] = {
@@ -202,7 +241,24 @@ def request_approval(
         "/api/skill-approval-requests/",
         json=payload,
     )
-    request_id = response.json()["request"]["id"]
+    return response.json()["request"]["id"]
+
+
+def wait_for_approval_via_server(
+    request_id: str,
+    *,
+    timeout_seconds: float = 300,
+    poll_interval_seconds: float = 1,
+) -> dict[str, Any]:
+    """Wait on an already-created request; safe to re-attach after a kill.
+
+    The waiting process is routinely killed before the user answers (tool-call
+    timeouts in agent harnesses), so this loop must be re-runnable: a fresh
+    process polling the same request id picks up a decision recorded while
+    nobody was waiting.
+    """
+    from openbase_coder_cli.cli.local_server import local_server_request
+
     deadline = time.monotonic() + max(timeout_seconds, 0)
     interval = max(poll_interval_seconds, 0.1)
     while True:
@@ -233,6 +289,32 @@ def request_approval(
             return {**decision, "decision": "timeout", "accepted": False}
 
         time.sleep(interval)
+
+
+def request_approval(
+    *,
+    skill: str,
+    action: str,
+    description: str,
+    details: dict[str, Any] | None = None,
+    command: str | None = None,
+    timeout_seconds: float = 300,
+    poll_interval_seconds: float = 1,
+) -> dict[str, Any]:
+    """Request user approval through the local Openbase Coder server."""
+    request_id = create_approval_request_via_server(
+        skill=skill,
+        action=action,
+        description=description,
+        details=details,
+        command=command,
+        timeout_seconds=timeout_seconds,
+    )
+    return wait_for_approval_via_server(
+        request_id,
+        timeout_seconds=timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds,
+    )
 
 
 def _skill_approval_params(

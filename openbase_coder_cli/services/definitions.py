@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from openbase_coder_cli.backend_config import (
@@ -63,14 +64,27 @@ SERVICES: list[ServiceDefinition] = [
         restart_dependents=("openbase-routines", "livekit-agent", "django-cli"),
     ),
     ServiceDefinition(
+        name="codex-app-server-dispatcher",
+        freshness_kind="binary",
+        freshness_packages=(),
+        # Dedicated instance for the voice dispatcher's own thread: a
+        # churning worker turn on the shared instance must never starve the
+        # dispatcher's RPCs (2026-09-18 voice-call failure).
+        description="Codex App Server (dispatcher)",
+        command_template="codex-app-server-dispatcher",
+        workdir_template="{workspace}",
+        backends=(CODEX_BACKEND, OPENBASE_CLOUD_CODEX_BACKEND),
+        restart_dependents=("livekit-agent",),
+    ),
+    ServiceDefinition(
         name="sync-workers",
-        description="Sync Workers (thread, device, and code-sync reconcile)",
+        description="Sync Workers (thread and device sync, periodic jobs)",
         # One process runs every periodic sync job on its own thread — the
         # jobs read their historical interval/max-age env overrides
         # (CODEX_THREAD_SYNC_INTERVAL etc.) from the wrapper-sourced env file
-        # themselves, and state-dependent jobs (device sync, reconcile) gate
-        # at runtime on code-sync enablement instead of being installed and
-        # removed as companion services.
+        # themselves, and state-dependent jobs (device thread sync) gate at
+        # runtime on Openbase Sync mirroring the thread exchange instead of
+        # being installed and removed as companion services.
         command_template="sync-workers",
         workdir_template="{data_dir}",
     ),
@@ -85,7 +99,9 @@ SERVICES: list[ServiceDefinition] = [
         description="LiveKit Agent Worker",
         command_template="livekit-agent",
         workdir_template="{runtime_workdir}",
-        cleanup_ports=(8081,),
+        # The worker's health server port follows LIVEKIT_AGENT_PORT (container
+        # runtimes move it off 8081, which Maritime's own VM services hold).
+        cleanup_ports=(int(os.environ.get("LIVEKIT_AGENT_PORT", "8081")),),
         cleanup_command_substrings=("openbase_coder_cli.livekit_agent.livekit",),
     ),
     ServiceDefinition(
@@ -96,16 +112,15 @@ SERVICES: list[ServiceDefinition] = [
         port=7999,
     ),
     ServiceDefinition(
-        name="code-sync",
+        name="sync-daemon",
         freshness_kind="binary",
         freshness_packages=(),
-        description="Code Sync (managed Syncthing)",
-        command_template="code-sync",
+        description="Openbase Sync daemon (hub/edge mirror)",
+        command_template="sync-daemon",
         workdir_template="{data_dir}",
-        # Installed only when code sync is enabled (openbase-coder sync
-        # enable or the sync settings API); never on plain installs.
+        # Installed only after ``openbase-coder sync-daemon configure``.
         install_by_default=False,
-        cleanup_command_substrings=("syncthing",),
+        cleanup_command_substrings=("openbase-syncd",),
     ),
     ServiceDefinition(
         name="openbase-cloud-auth-rehydrate",
@@ -154,13 +169,17 @@ def default_services(coding_backend: str | None = None) -> list[ServiceDefinitio
 
 
 # Services that no longer exist; installs remove any leftover units/plists so
-# upgrades don't strand old processes running retired commands. Their periodic
-# jobs now run inside the consolidated ``sync-workers`` service.
+# upgrades don't strand old processes running retired commands. The thread
+# sync jobs now run inside the consolidated ``sync-workers`` service;
+# ``code-sync`` was the Syncthing-based file sync that Openbase Sync
+# (``sync-daemon``) replaced — its data is archived by
+# ``openbase-coder sync migrate-from-syncthing``.
 RETIRED_SERVICE_NAMES: tuple[str, ...] = (
     "codex-thread-sync",
     "claude-thread-sync",
     "codex-thread-device-sync",
     "claude-thread-device-sync",
+    "code-sync",
 )
 
 

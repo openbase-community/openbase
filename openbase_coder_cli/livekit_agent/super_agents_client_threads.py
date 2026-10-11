@@ -10,6 +10,7 @@ through ``self``.
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 
@@ -50,6 +51,21 @@ def _is_super_agents_mcp_server(name: str) -> bool:
     return normalized in {"super-agents", "mcp-super-agents"}
 
 
+# Spoken Dispatcher turns run at a model-dependent effort (Gabe, 2026-10-11):
+# medium on capable models, to cut the backend share of a spoken answer
+# (+10.9 s, 9.1 s of it the backend); high on Haiku, which needs the reasoning.
+# Chosen by model, not backend. Typed Dispatcher turns do not use this client.
+SPOKEN_DISPATCHER_EFFORT = "medium"
+SPOKEN_DISPATCHER_SMALL_MODEL_EFFORT = "high"
+
+
+def spoken_dispatcher_effort(model: str | None) -> str:
+    """The reasoning effort a spoken Dispatcher turn runs at, by model."""
+    if model and "haiku" in model.lower():
+        return SPOKEN_DISPATCHER_SMALL_MODEL_EFFORT
+    return SPOKEN_DISPATCHER_EFFORT
+
+
 class SuperAgentsClientThreadsMixin:
     """Thread lifecycle, backend selection, config and persistence."""
 
@@ -73,6 +89,34 @@ class SuperAgentsClientThreadsMixin:
 
     async def prepare(self) -> str:
         return await self._ensure_thread()
+
+    def reload_thread_on_next_use(self) -> None:
+        """Resume the thread again before its next turn.
+
+        A shared, already-loaded client keeps whatever developer instructions
+        the backend session last got. Another writer can change them between
+        calls (a typed turn's generic resume did, Maritime 2026-10-10 22:16Z,
+        and the Dispatcher then refused to transfer); resuming once per call
+        re-asserts this client's own instructions.
+        """
+        self._thread_loaded = False
+
+    async def warm(self) -> bool:
+        """Get the thread's backend session ready for its first turn.
+
+        Runs the Claude auth check (its result is reused by the first turn)
+        and asks a backend that supports it to connect the session's client
+        now; Codex threads are already loaded by ``prepare``. Returns whether
+        a backend session was warmed. Meant to run concurrently with the call
+        start-up, never on a turn's critical path.
+        """
+        thread_id = await self._ensure_thread()
+        await self._ensure_claude_auth_ready()
+        warm = getattr(self._backend_client, "warm_session_by_label", None)
+        if warm is None or self._backend_is_codex():
+            return False
+        result = await warm(self._query(thread_id=thread_id), self._turn_model_fields())
+        return bool(result.get("warmed")) if isinstance(result, dict) else False
 
     async def _ensure_thread(self) -> str:
         async with self._state_lock:
@@ -104,6 +148,20 @@ class SuperAgentsClientThreadsMixin:
                             self._thread_id = None
                             self._thread_loaded = False
 
+                    if not self._fresh_thread:
+                        existing = await self._find_existing_dispatcher()
+                        if existing:
+                            try:
+                                return await self._resume_thread(existing)
+                            except Exception:
+                                logger.warning(
+                                    "Failed to resume discovered Dispatcher thread %s; "
+                                    "creating a new one",
+                                    existing,
+                                    exc_info=True,
+                                )
+                                self._thread_id = None
+                                self._thread_loaded = False
                     return await self._start_thread()
 
             if self._thread_loaded and self._thread_id:
@@ -120,6 +178,32 @@ class SuperAgentsClientThreadsMixin:
                     self._thread_id = None
                     self._thread_loaded = False
             return await self._start_thread()
+
+    async def _find_existing_dispatcher(self) -> str | None:
+        """Adopt an existing Dispatcher after route-state loss, without deleting history.
+
+        Persisted exact IDs always win. Only discovery is case insensitive;
+        distinct historical conversations remain distinct backend records.
+        """
+        sessions = getattr(self._backend_client, "sessions", None)
+        if not callable(sessions):
+            return None
+        candidates = []
+        for item in await sessions():
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name") or item.get("label")
+            thread_id = item.get("threadId") or item.get("id")
+            if (
+                isinstance(name, str)
+                and name.strip().casefold() == DEFAULT_DISPATCHER_LABEL.casefold()
+                and isinstance(thread_id, str)
+                and thread_id
+                and not item.get("archived")
+                and item.get("cwd") == self._cwd
+            ):
+                candidates.append((str(item.get("updatedAt") or ""), thread_id))
+        return max(candidates)[1] if candidates else None
 
     async def _start_thread(self) -> str:
         params: dict[str, Any] = {
@@ -161,6 +245,18 @@ class SuperAgentsClientThreadsMixin:
                 developer_instructions=self._thread_developer_instructions(),
             )
         else:
+            # Claude rebuilds identity instructions from its stored agent_name
+            # on resume and on every turn. A role label left by an older
+            # runtime must not override the call's resolved speaking persona.
+            store = getattr(self._backend_client, "store", None)
+            if store is not None and self._super_agent_agent_name:
+                record = store.get_session(thread_id)
+                if record.agent_name != self._super_agent_agent_name:
+                    store.update_session(
+                        thread_id,
+                        agent_name=self._super_agent_agent_name,
+                        updated_at=record.updated_at,
+                    )
             resume_kwargs: dict[str, Any] = {}
             if developer_instructions := self._thread_developer_instructions():
                 # The dispatcher instruction file is the single source of
@@ -218,15 +314,65 @@ class SuperAgentsClientThreadsMixin:
         )
 
         if execution_backend == CLAUDE_CODE_BACKEND:
-            from super_agents.claude_sdk import ClaudeAgentSdkClient
+            from openbase_coder_cli.agent_announcements.claude import (
+                managed_claude_client,
+            )
 
             from .dispatcher_task_context import dispatcher_disallowed_tools
 
-            return ClaudeAgentSdkClient(
+            return managed_claude_client(
                 backend_identity=identity,
                 disallowed_tools_for_session=dispatcher_disallowed_tools,
             )
+        endpoint = self._dispatcher_dedicated_endpoint()
+        if endpoint is not None:
+            logger.info(
+                "Dispatcher route using dedicated app-server endpoint %s", endpoint
+            )
+            return CodexAppServerClient(backend_identity=identity, endpoint=endpoint)
         return CodexAppServerClient(backend_identity=identity)
+
+    def _dispatcher_dedicated_endpoint(self) -> str | None:
+        """Endpoint of the dispatcher's dedicated app-server, when usable.
+
+        Only the persistent dispatcher route moves to the dedicated
+        instance; transferred Super Agent threads keep the shared endpoint
+        so each thread has exactly one owning app-server. Falls back to the
+        shared endpoint when the dedicated instance isn't up yet."""
+        if self._state_path is None:
+            return None
+        if os.getenv(
+            "OPENBASE_DISPATCHER_DEDICATED_APP_SERVER", ""
+        ).strip().lower() in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }:
+            return None
+        try:
+            from openbase_coder_cli.codex_control_plane import (
+                dispatcher_codex_app_server_endpoint,
+            )
+
+            endpoint = dispatcher_codex_app_server_endpoint()
+        except Exception:
+            logger.warning(
+                "Could not resolve the dispatcher app-server endpoint", exc_info=True
+            )
+            return None
+        if endpoint.source == "dispatcher-explicit":
+            return endpoint.value
+        if (
+            endpoint.is_unix
+            and endpoint.socket_path is not None
+            and endpoint.socket_path.exists()
+        ):
+            return f"unix://{endpoint.socket_path}"
+        logger.info(
+            "Dispatcher dedicated app-server socket absent; using shared endpoint"
+        )
+        return None
 
     def _dispatcher_execution_backend(self) -> str | None:
         """The engine the dispatcher's configured MODEL requires, if any.
@@ -340,7 +486,7 @@ class SuperAgentsClientThreadsMixin:
     def _configured_reasoning_effort(self) -> str | None:
         if self._use_super_agent_reasoning:
             return self._super_agents_reasoning_effort() or "high"
-        return self._dispatcher_reasoning_effort()
+        return spoken_dispatcher_effort(self._model_name)
 
     def _dispatcher_voice(self) -> dict[str, str]:
         return dispatcher_voice(self._dispatcher_config_path)
@@ -366,6 +512,8 @@ class SuperAgentsClientThreadsMixin:
         active_target_label: str | None,
         active_target_voice_id: str | None,
         active_target_voice_name: str | None,
+        route_owner_id: str | None = None,
+        expected_route_owner_id: str | None = None,
     ) -> None:
         persist_voice_route_state(
             self._state_path,
@@ -376,15 +524,20 @@ class SuperAgentsClientThreadsMixin:
             active_target_label=active_target_label,
             active_target_voice_id=active_target_voice_id,
             active_target_voice_name=active_target_voice_name,
+            route_owner_id=route_owner_id,
+            expected_route_owner_id=expected_route_owner_id,
         )
 
-    def reset_voice_route_to_dispatcher(self) -> None:
+    def reset_voice_route_to_dispatcher(
+        self, *, expected_route_owner_id: str | None = None
+    ) -> None:
         self.persist_voice_route(
             active_target_thread_id=None,
             active_target_kind=None,
             active_target_label=None,
             active_target_voice_id=None,
             active_target_voice_name=None,
+            expected_route_owner_id=expected_route_owner_id,
         )
 
     def persist_voice_route(
@@ -395,6 +548,8 @@ class SuperAgentsClientThreadsMixin:
         active_target_label: str | None,
         active_target_voice_id: str | None,
         active_target_voice_name: str | None,
+        route_owner_id: str | None = None,
+        expected_route_owner_id: str | None = None,
     ) -> None:
         self._persist_voice_route_state(
             active_target_thread_id=active_target_thread_id,
@@ -402,4 +557,6 @@ class SuperAgentsClientThreadsMixin:
             active_target_label=active_target_label,
             active_target_voice_id=active_target_voice_id,
             active_target_voice_name=active_target_voice_name,
+            route_owner_id=route_owner_id,
+            expected_route_owner_id=expected_route_owner_id,
         )

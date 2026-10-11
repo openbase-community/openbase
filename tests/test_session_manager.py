@@ -4,6 +4,9 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
+
+import pytest
 
 import openbase_coder_cli.thread_sync.session_manager as session_manager_module
 from openbase_coder_cli.thread_sync.session_manager import (
@@ -214,7 +217,13 @@ class FakeSuperAgentsClient:
         self.calls.append(("get_session", {"thread_id": thread_id}))
         if "get_session" not in self.responses:
             return None
-        return self._pop("get_session")
+        if self.responses["get_session"]:
+            self.last_session = self._pop("get_session")
+            if self.last_session is not None and not hasattr(
+                self.last_session, "agent_name"
+            ):
+                self.last_session.agent_name = None
+        return self.last_session
 
     async def start_thread(self, input_data: dict[str, Any]) -> dict[str, Any]:
         self.calls.append(("start_thread", input_data))
@@ -1376,7 +1385,7 @@ def test_create_session_omits_missing_super_agent_instructions_for_backend_sessi
     ]
 
 
-def test_create_thread_requests_fresh_backend_session_when_directory_exists(
+def test_create_thread_uses_unique_internal_name_when_directory_exists(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1412,17 +1421,13 @@ def test_create_thread_requests_fresh_backend_session_when_directory_exists(
     thread = asyncio.run(_manager(client).create_thread(str(project_dir)))
 
     assert thread.session_id == "s_new"
-    assert client.calls == [
-        ("sessions", {}),
-        (
-            "start_thread",
-            {
-                "name": "project",
-                "cwd": str(project_dir.resolve()),
-                "fresh": True,
-            },
-        ),
-    ]
+    assert client.calls[0] == ("sessions", {})
+    method, request = client.calls[1]
+    assert method == "start_thread"
+    assert request["name"].startswith("thread-")
+    assert request["cwd"] == str(project_dir.resolve())
+    assert request["autoTitle"] is True
+    assert "fresh" not in request
 
 
 def test_send_message_starts_claude_code_backend_turn(tmp_path: Path) -> None:
@@ -1466,6 +1471,53 @@ def test_send_message_starts_claude_code_backend_turn(tmp_path: Path) -> None:
                 "model": "gpt-dispatcher",
             },
         },
+    )
+
+
+def test_send_message_on_dispatcher_thread_carries_the_live_dispatcher_rules(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """376, 2026-10-11 04:42Z: the typed Dispatcher chat kept the rules
+    stored at thread creation and started a new worker for "Have Marian
+    write…"; typed turns now pass the current rules like voice turns do."""
+    from openbase_coder_cli import dispatcher_instructions
+    from openbase_coder_cli.thread_sync import session_manager_threads
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    client = FakeBackendSessionClient(
+        {
+            "read_by_label": [
+                {
+                    "threadId": "s_dispatcher",
+                    "session": {
+                        "id": "s_dispatcher",
+                        "name": "dispatcher",
+                        "cwd": str(project_dir),
+                        "status": "waiting",
+                        "createdAt": "2026-06-19T20:00:00.000Z",
+                        "updatedAt": "2026-06-19T21:00:00.000Z",
+                    },
+                }
+            ],
+            "start_turn_by_label": [{"turnId": "t_2"}],
+        }
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.livekit_voice_route.is_dispatcher_thread",
+        lambda thread_id: thread_id == "s_dispatcher",
+    )
+    assert session_manager_threads.dispatcher_turn_instructions("s_other") is None
+
+    manager = CodexAppServerSessionManager(
+        client=client, model_for_role=lambda role: None
+    )
+    asyncio.run(manager.send_message("s_dispatcher", "Have Marian write files"))
+
+    turn_input = client.calls[-1][1]["turn_input"]
+    assert dispatcher_instructions.START_HEADING in turn_input["developerInstructions"]
+    assert (
+        "continue that agent on its own thread" in turn_input["developerInstructions"]
     )
 
 
@@ -1780,7 +1832,10 @@ def test_create_session_reuses_existing_thread_for_directory(tmp_path: Path) -> 
     thread = asyncio.run(_manager(client).create_session(str(project_dir)))
 
     assert thread.session_id == "thr-existing"
-    assert client.calls == [
+    assert thread.agent_name
+    assert client.calls[-1][0] == "merge_session"
+    assert client.calls[-1][1]["patch"]["agentName"] == thread.agent_name
+    assert client.calls[:1] == [
         (
             "list_threads",
             {
@@ -1814,7 +1869,10 @@ def test_create_thread_starts_new_thread_even_when_directory_has_existing_thread
     thread = asyncio.run(_manager(client).create_thread(str(project_dir)))
 
     assert thread.session_id == "thr-new"
-    assert client.calls == [
+    assert thread.agent_name
+    assert client.calls[-1][0] == "merge_session"
+    assert client.calls[-1][1]["patch"]["agentName"] == thread.agent_name
+    assert client.calls[:1] == [
         (
             "start_thread",
             {
@@ -1845,7 +1903,10 @@ def test_create_thread_starts_new_thread_when_none_exist(
     thread = asyncio.run(_manager(client).create_thread(str(project_dir)))
 
     assert thread.session_id == "thr-new"
-    assert client.calls == [
+    assert thread.agent_name
+    assert client.calls[-1][0] == "merge_session"
+    assert client.calls[-1][1]["patch"]["agentName"] == thread.agent_name
+    assert client.calls[:1] == [
         (
             "start_thread",
             {
@@ -1875,7 +1936,10 @@ def test_create_thread_includes_super_agent_instructions(
     thread = asyncio.run(_manager(client).create_thread(str(project_dir)))
 
     assert thread.session_id == "thr-new"
-    assert client.calls == [
+    assert thread.agent_name
+    assert client.calls[-1][0] == "merge_session"
+    assert client.calls[-1][1]["patch"]["agentName"] == thread.agent_name
+    assert client.calls[:1] == [
         (
             "start_thread",
             {
@@ -2031,7 +2095,7 @@ def test_steer_turn_sends_prompt_to_active_super_agents_turn(
             # the post-steer thread_state broadcast, and the fourth the final
             # get_session_state assertion below.
             "read_thread": [active_thread, active_thread, active_thread, active_thread],
-            "steer_by_label": [{"turnId": "turn-1"}],
+            "steer_by_label": [{"turnId": "turn-1", "steered": True}],
         }
     )
 
@@ -2212,6 +2276,75 @@ def test_turn_started_notification_announces_externally_started_turn(
     assert events[1][1]["data"]["current_turn"]["turn_id"] == "turn-2"
 
 
+@pytest.mark.parametrize("finish_during_read", [False, True])
+def test_late_turn_started_never_reannounces_a_finished_turn(
+    monkeypatch, tmp_path: Path, finish_during_read: bool
+) -> None:
+    """Each notification runs in its own task, so a turn's turn/started can be
+    handled after (or while) its turn/completed is: clients must not see the
+    finished turn come back as running."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    events: list[dict[str, Any]] = []
+
+    async def fake_broadcast(_session_id: str, event: dict[str, Any]) -> None:
+        events.append(event)
+
+    monkeypatch.setattr(
+        "openbase_coder_cli.thread_sync.session_manager._broadcast",
+        fake_broadcast,
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.openbase_coder_cli_app.notification_runtime.request_notification_sweep",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.thread_sync.session_manager._notify_manual_thread_finished",
+        AsyncMock(),
+    )
+    done_thread = {
+        "thread": _thread(
+            "thr-1",
+            str(project_dir),
+            turns=[
+                _turn(
+                    "turn-1",
+                    message="Hi",
+                    output="Hello",
+                    started_at=10,
+                    completed_at=11,
+                    status="completed",
+                )
+            ],
+        )
+    }
+    client = FakeSuperAgentsClient({"read_thread": [done_thread] * 4})
+    manager = _manager(client)
+    started = {"threadId": "thr-1", "turn": {"id": "turn-1", "startedAt": 10}}
+    completed = {"threadId": "thr-1", "turnId": "turn-1"}
+
+    async def run() -> None:
+        if not finish_during_read:
+            await manager._handle_client_event("turn/completed", completed)
+            await manager._handle_client_event("turn/started", started)
+            return
+        read_state = manager.get_session_state
+        finished: list[bool] = []
+
+        async def finishing_read(thread_id: str):
+            if not finished:
+                finished.append(True)
+                await manager._handle_client_event("turn/completed", completed)
+            return await read_state(thread_id)
+
+        monkeypatch.setattr(manager, "get_session_state", finishing_read)
+        await manager._handle_client_event("turn/started", started)
+
+    asyncio.run(run())
+
+    assert "turn_started" not in [event["type"] for event in events]
+
+
 def test_interrupt_turn_uses_active_turn_id(tmp_path: Path) -> None:
     project_dir = tmp_path / "project"
     project_dir.mkdir()
@@ -2385,11 +2518,9 @@ def test_resume_thread_without_explicit_instructions_uses_super_agent_instructio
 
 
 def test_turn_failed_broadcasts_error_envelope(monkeypatch, tmp_path: Path) -> None:
-    from unittest.mock import AsyncMock
-
     monkeypatch.setattr(
-        "openbase_coder_cli.openbase_coder_cli_app.notification_runtime.run_notification_sweep",
-        AsyncMock(),
+        "openbase_coder_cli.openbase_coder_cli_app.notification_runtime.request_notification_sweep",
+        lambda: None,
     )
     project_dir = tmp_path / "project"
     project_dir.mkdir()
@@ -2618,6 +2749,8 @@ def test_steer_turn_delivers_to_terminal_inbox_and_fires_hint(
 
     # The steer reached steer_by_label despite there being no store active turn.
     assert result["delivery"] == "inbox"
+    assert result["steered"] is False
+    assert result["turn_id"] is None
     assert (
         "steer_by_label",
         {
@@ -2664,3 +2797,358 @@ def test_steer_turn_without_active_turn_or_inbox_still_raises(
     except ValueError as exc:
         raised = exc
     assert raised is not None and "no active turn to steer" in str(raised)
+
+
+def test_model_for_thread_prefers_same_backend_override(monkeypatch, tmp_path) -> None:
+    from openbase_coder_cli.thread_model_overrides import set_thread_model_override
+    from openbase_coder_cli.thread_sync.models import ThreadInfo
+
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    manager = CodexAppServerSessionManager(
+        client=FakeBackendSessionClient({}),
+        model_for_role=lambda _role: "fable",
+        execution_backend="claude_code",
+    )
+    thread = ThreadInfo(session_id="s1", directory="/tmp/p", model="fable")
+
+    set_thread_model_override("s1", "opus")
+    assert manager._model_for_thread(thread) == "opus"
+
+    # A stale cross-backend override never leaks into this backend's turns.
+    set_thread_model_override("s1", "gpt-5.5")
+    assert manager._model_for_thread(thread) == "fable"
+
+
+def test_resolve_turn_model_explicit_switch_must_match_backend(
+    monkeypatch, tmp_path
+) -> None:
+    import pytest as _pytest
+
+    from openbase_coder_cli.thread_sync.models import ThreadInfo
+
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    manager = CodexAppServerSessionManager(
+        client=FakeBackendSessionClient({}),
+        model_for_role=lambda _role: "gpt-5.5",
+        execution_backend="codex",
+    )
+    thread = ThreadInfo(session_id="s1", directory="/tmp/p")
+
+    assert manager._resolve_turn_model(thread, None) == "gpt-5.5"
+    assert manager._resolve_turn_model(thread, "gpt-5.5") == "gpt-5.5"
+    with _pytest.raises(ValueError, match="same backend"):
+        manager._resolve_turn_model(thread, "opus")
+
+
+def test_rename_thread_uses_backend_label_api_and_broadcasts(
+    monkeypatch, tmp_path: Path
+) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    events: list[tuple[str, dict[str, Any]]] = []
+
+    async def fake_broadcast(session_id: str, event: dict[str, Any]) -> None:
+        events.append((session_id, event))
+
+    monkeypatch.setattr(
+        "openbase_coder_cli.thread_sync.session_manager._broadcast",
+        fake_broadcast,
+    )
+    renamed_thread = {
+        "thread": {
+            **_thread("thr-1", str(project_dir), status="idle"),
+            "name": "Fix login",
+        }
+    }
+
+    class RenamingClient(FakeBackendSessionClient):
+        async def rename_by_label(self, input_data, new_name: str) -> dict[str, Any]:
+            self.calls.append(
+                (
+                    "rename_by_label",
+                    {"thread_id": input_data.thread_id, "name": new_name},
+                )
+            )
+            return {"renamed": True, "name": new_name}
+
+    client = RenamingClient({"read_by_label": [renamed_thread, renamed_thread]})
+
+    result = asyncio.run(_manager(client).rename_thread("thr-1", "  Fix   login "))
+
+    assert (
+        "rename_by_label",
+        {"thread_id": "thr-1", "name": "Fix login"},
+    ) in client.calls
+    assert result is not None and result.name == "Fix login"
+    assert [event["type"] for _, event in events] == ["thread_state"]
+
+
+def test_rename_thread_rejects_blank_names(tmp_path: Path) -> None:
+    client = FakeBackendSessionClient({})
+
+    with pytest.raises(ValueError):
+        asyncio.run(_manager(client).rename_thread("thr-1", "   "))
+    assert client.calls == []
+
+
+def test_rename_thread_sets_codex_thread_name(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+
+    async def fake_broadcast(session_id: str, event: dict[str, Any]) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "openbase_coder_cli.thread_sync.session_manager._broadcast",
+        fake_broadcast,
+    )
+    thread = {"thread": _thread("thr-1", str(project_dir), status="idle")}
+
+    class CodexClient(FakeSuperAgentsClient):
+        async def set_thread_name(self, thread_id: str, name: str) -> dict[str, Any]:
+            self.calls.append(
+                ("set_thread_name", {"thread_id": thread_id, "name": name})
+            )
+            return {}
+
+    client = CodexClient({"read_thread": [thread, thread]})
+
+    asyncio.run(_manager(client).rename_thread("thr-1", "Renamed"))
+
+    assert (
+        "set_thread_name",
+        {"thread_id": "thr-1", "name": "Renamed"},
+    ) in client.calls
+
+
+def test_backend_sessions_single_flight_lock_is_safe_across_event_loops() -> None:
+    """Regression for the 2026-10-08 fleet thread-list 500s.
+
+    The single-flight ``asyncio.Lock`` bound itself to the first event loop
+    that waited on it; a caller on another loop (asgiref spins one up for an
+    ``async_to_sync`` call made off the request thread) hit
+    ``RuntimeError: ... bound to a different event loop`` while the first
+    scan was in flight.
+    """
+    import threading
+
+    gate = threading.Event()
+    inside: list[int] = []
+    entered = threading.Semaphore(0)
+
+    class Client:
+        async def sessions(self):
+            inside.append(threading.get_ident())
+            entered.release()
+            while not gate.is_set():
+                await asyncio.sleep(0.01)
+            return []
+
+    manager = _manager(Client())
+    errors: list[BaseException] = []
+
+    def run_on_own_loop():
+        try:
+            asyncio.run(manager._backend_sessions())
+        except BaseException as error:  # noqa: BLE001 - reported by the test
+            errors.append(error)
+
+    first = threading.Thread(target=run_on_own_loop, daemon=True)
+    second = threading.Thread(target=run_on_own_loop, daemon=True)
+    try:
+        first.start()
+        assert entered.acquire(timeout=2.0)
+        second.start()
+        # The second loop must reach the scan too, instead of raising on the
+        # first loop's lock.
+        assert entered.acquire(timeout=2.0), errors
+    finally:
+        # Always release the scans so a failed assertion cannot leave a
+        # thread parked on the gate and keep the pytest process alive.
+        gate.set()
+    first.join(3.0)
+    second.join(3.0)
+    assert errors == []
+    assert len(inside) == 2
+
+
+def test_backend_sessions_keeps_single_flight_per_event_loop() -> None:
+    import threading
+
+    first_loop_release = threading.Event()
+    first_loop_entered = threading.Semaphore(0)
+    foreign_loop_release = threading.Event()
+    foreign_loop_entered = threading.Semaphore(0)
+    duplicate_entered = threading.Semaphore(0)
+    sessions_calls = 0
+
+    class Client:
+        async def sessions(self):
+            nonlocal sessions_calls
+            sessions_calls += 1
+            if sessions_calls == 1:
+                first_loop_entered.release()
+                while not first_loop_release.is_set():
+                    await asyncio.sleep(0.01)
+            elif sessions_calls == 2:
+                foreign_loop_entered.release()
+                while not foreign_loop_release.is_set():
+                    await asyncio.sleep(0.01)
+            else:
+                duplicate_entered.release()
+            return []
+
+    manager = _manager(Client())
+
+    async def run_two_on_one_loop():
+        first = asyncio.create_task(manager._backend_sessions())
+        assert await asyncio.to_thread(first_loop_entered.acquire, True, 2.0)
+        foreign = asyncio.create_task(
+            asyncio.to_thread(run_once_on_foreign_loop, manager)
+        )
+        assert await asyncio.to_thread(foreign_loop_entered.acquire, True, 2.0)
+        second = asyncio.create_task(manager._backend_sessions())
+        assert not await asyncio.to_thread(duplicate_entered.acquire, True, 0.2)
+        first_loop_release.set()
+        foreign_loop_release.set()
+        await asyncio.gather(first, second)
+        await foreign
+
+    asyncio.run(run_two_on_one_loop())
+
+    assert sessions_calls == 2
+
+
+def run_once_on_foreign_loop(manager: Any) -> None:
+    asyncio.run(manager._backend_sessions())
+
+
+def test_backend_sessions_locks_do_not_keep_finished_event_loops_alive() -> None:
+    import gc
+    import threading
+
+    class Client:
+        async def sessions(self):
+            first_entered.release()
+            await asyncio.to_thread(release.wait, 2.0)
+            return []
+
+    first_entered = threading.Semaphore(0)
+    release = threading.Event()
+    manager = _manager(Client())
+
+    async def run_contended_scan():
+        first = asyncio.create_task(manager._backend_sessions())
+        assert await asyncio.to_thread(first_entered.acquire, True, 2.0)
+        second = asyncio.create_task(manager._backend_sessions())
+        await asyncio.sleep(0)
+        release.set()
+        await asyncio.gather(first, second)
+
+    asyncio.run(run_contended_scan())
+    gc.collect()
+    assert len(manager.__dict__["_backend_sessions_locks"]) == 0
+
+
+@pytest.mark.parametrize(
+    "payload, message",
+    [
+        (
+            '{"code":"model_not_available_on_plan"}',
+            "This model is not available on your plan.",
+        ),
+        (
+            '{"detail":"Monthly Openbase model proxy spend limit reached. Model requests are blocked until next month."}',
+            "Your monthly Openbase model allowance is used up.",
+        ),
+    ],
+)
+def test_proxy_denial_live_event_is_normalized_before_broadcast(
+    monkeypatch, payload, message
+):
+    monkeypatch.setenv(
+        "OPENBASE_CODER_CLI_WEB_BACKEND_URL", "https://app-staging.openbase.cloud"
+    )
+    events = []
+
+    async def broadcast(thread_id, event):
+        events.append(event)
+
+    monkeypatch.setattr(session_manager_module, "_broadcast", broadcast)
+    manager = _manager(FakeSuperAgentsClient({}))
+    asyncio.run(
+        manager._handle_client_event(
+            "item/completed",
+            {
+                "threadId": "thr-1",
+                "turnId": "turn-1",
+                "item": {
+                    "id": "item-1",
+                    "type": "agentMessage",
+                    "text": "Failed to authenticate. API Error: 403 " + payload,
+                },
+            },
+        )
+    )
+    output = events[0]["data"]["line"]
+    assert output.startswith(message)
+    assert "try again" not in output
+    assert "https://app-staging.openbase.cloud" in output
+    assert "authenticate" not in output
+
+
+def test_default_resume_keeps_the_dispatcher_threads_own_instructions(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """2026-10-10 Maritime: a typed turn resumed the Dispatcher thread with the
+    generic Super Agent instructions, which replaced the Claude session's
+    system prompt; the next voice turn said it was not in a dispatcher session."""
+    from types import SimpleNamespace
+
+    from openbase_coder_cli import livekit_voice_route
+    from openbase_coder_cli.thread_sync import session_manager_threads
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    monkeypatch.setattr(
+        livekit_voice_route,
+        "get_livekit_voice_route_state",
+        lambda: SimpleNamespace(dispatcher_thread_id="s_dispatch"),
+    )
+    monkeypatch.setattr(
+        livekit_voice_route,
+        "dispatcher_developer_instructions",
+        lambda: "dispatcher rules",
+    )
+    monkeypatch.setattr(
+        session_manager_threads,
+        "load_super_agent_developer_instructions",
+        lambda: "generic super agent rules",
+    )
+
+    def resumed(thread_id: str):
+        return FakeBackendSessionClient(
+            {
+                "resume_by_label": [
+                    {
+                        "threadId": thread_id,
+                        "backend": "claude_code",
+                        "session": {
+                            "id": thread_id,
+                            "name": "x",
+                            "agentName": "Grace",
+                            "cwd": str(project_dir),
+                            "status": "waiting",
+                        },
+                    }
+                ]
+            }
+        )
+
+    dispatcher = resumed("s_dispatch")
+    asyncio.run(_manager(dispatcher)._resume_thread("s_dispatch", str(project_dir)))
+    assert dispatcher.calls[0][1]["developer_instructions"] == "dispatcher rules"
+
+    worker = resumed("s_grace")
+    asyncio.run(_manager(worker)._resume_thread("s_grace", str(project_dir)))
+    assert worker.calls[0][1]["developer_instructions"] == "generic super agent rules"

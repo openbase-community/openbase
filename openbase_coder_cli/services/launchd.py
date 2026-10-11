@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import platform
+import plistlib
 import shlex
 import shutil
 import subprocess
@@ -14,7 +15,10 @@ from string import Formatter
 
 import click
 
-from openbase_coder_cli.backend_binaries import backend_binary_candidates
+from openbase_coder_cli.backend_binaries import (
+    backend_binary_candidates,
+    node_runtime_bin_dir,
+)
 from openbase_coder_cli.env_file import selected_backend_from_env_file
 from openbase_coder_cli.paths import (
     DEFAULT_ENV_FILE_PATH,
@@ -24,18 +28,26 @@ from openbase_coder_cli.paths import (
     OPENBASE_BASE_DIR,
     OPENBASE_BIN_DIR,
     PLIST_DIR,
+    STANDALONE_CURRENT_DIR,
     TASK_SCHEDULER_DIR,
 )
 from openbase_coder_cli.runtime import stable_runtime_package
 from openbase_coder_cli.services import process_utils
+from openbase_coder_cli.services import tailscale_provider as tp
+from openbase_coder_cli.services.container_log_sink import SERVICE_LOG_CAP_BYTES
 from openbase_coder_cli.services.definitions import (
     RETIRED_SERVICE_NAMES,
     SERVICES,
+    TUNNELD_SERVICE,
     ServiceDefinition,
     default_services,
     retired_service_stub,
 )
+from openbase_coder_cli.services.dependencies import order_services
 from openbase_coder_cli.services.installation import InstallationConfig
+from openbase_coder_cli.services.mutation_lock import service_mutation
+from openbase_coder_cli.services.readiness import wait_for_provider
+from openbase_coder_cli.services.selection import include_installed_optional_services
 
 
 def _is_macos() -> bool:
@@ -94,10 +106,31 @@ def _resolve_binary_with_preferred_paths(
     return _resolve_binary(name, homebrew_fallback)
 
 
-def _resolve_syncthing() -> str:
-    from openbase_coder_cli.code_sync.syncthing import resolve_syncthing_binary
+def _resolve_livekit_server(package) -> str:
+    if package is not None:
+        return _resolve_binary_with_preferred_paths(
+            "livekit-server",
+            [package.livekit_server_path],
+            "/opt/homebrew/bin/livekit-server",
+        )
 
-    return resolve_syncthing_binary()
+    from openbase_coder_cli.livekit_install import (
+        fallback_livekit_server_path,
+        installed_livekit_server_path,
+        livekit_binary_matches_pin,
+    )
+
+    downloaded = installed_livekit_server_path()
+    if (
+        downloaded.is_file()
+        and os.access(downloaded, os.X_OK)
+        and livekit_binary_matches_pin(downloaded)
+    ):
+        return str(downloaded)
+    fallback = fallback_livekit_server_path()
+    if fallback is not None:
+        return str(fallback)
+    return _resolve_binary("livekit-server", "/opt/homebrew/bin/livekit-server")
 
 
 def _runtime_workdir(config: InstallationConfig) -> str:
@@ -132,20 +165,29 @@ def _binary_resolvers(config: InstallationConfig) -> dict[str, Callable[[], str]
             "claude",
             backend_binary_candidates("claude"),
         ),
-        "livekit": lambda: _resolve_binary_with_preferred_paths(
-            "livekit-server",
-            [package.livekit_server_path]
-            if package is not None
-            else [OPENBASE_BIN_DIR / "livekit-server"],
-            "/opt/homebrew/bin/livekit-server",
-        ),
+        "livekit": lambda: _resolve_livekit_server(package),
         "python": lambda: _resolve_service_python(package),
-        "syncthing": _resolve_syncthing,
         "openbase_coder": lambda: _resolve_binary_with_preferred_paths(
             "openbase-coder",
             [
                 *([package.openbase_coder_path] if package is not None else []),
                 *_workspace_binary_candidates(config, "openbase-coder"),
+            ],
+        ),
+        "openbase_syncd": lambda: _resolve_binary_with_preferred_paths(
+            "openbase-syncd",
+            [
+                *(
+                    [Path(os.environ["OPENBASE_SYNCD_BIN"])]
+                    if os.environ.get("OPENBASE_SYNCD_BIN")
+                    else []
+                ),
+                # The packaged engine follows self-update; a manual
+                # `sync-daemon install-binary` copy is the fallback for
+                # development installs, which carry no package.
+                STANDALONE_CURRENT_DIR / "bin" / "openbase-syncd",
+                OPENBASE_BIN_DIR / "openbase-syncd",
+                *_workspace_binary_candidates(config, "openbase-syncd"),
             ],
         ),
         "tunneld": lambda: _resolve_binary_with_preferred_paths(
@@ -156,6 +198,7 @@ def _binary_resolvers(config: InstallationConfig) -> dict[str, Callable[[], str]
                     if os.environ.get("OPENBASE_TUNNELD_BIN")
                     else []
                 ),
+                *([package.root / "bin" / "openbase-tunneld"] if package else []),
                 OPENBASE_BIN_DIR / "openbase-tunneld",
                 *_workspace_binary_candidates(config, "openbase-tunneld"),
             ],
@@ -241,6 +284,31 @@ def _truncate_existing_logs(svc: ServiceDefinition) -> None:
     _truncate_log_file(_log_path(svc))
 
 
+# A service log is trimmed on every start, so it only grows unbounded when
+# the supervisor respawns a failing runner faster than anyone restarts it
+# (2026-10-07: 12,080 identical tracebacks, 14.6 MB). Each runner start
+# therefore also caps its own log once it passes SERVICE_LOG_CAP_BYTES (owned
+# by the container log sink, which applies the same cap continuously).
+
+
+def cap_service_log(
+    service_name: str, *, max_bytes: int = SERVICE_LOG_CAP_BYTES
+) -> bool:
+    """Trim ``<logs>/<service>.log`` to its tail once it exceeds ``max_bytes``.
+
+    Returns whether the log was trimmed. Best-effort: a missing or
+    unreadable log never blocks a service start.
+    """
+    path = DEFAULT_LOG_DIR / f"{service_name}.log"
+    try:
+        if path.stat().st_size <= max_bytes:
+            return False
+        _truncate_log_file(path)
+    except OSError:
+        return False
+    return True
+
+
 def _matches_cleanup_signature(svc: ServiceDefinition, pid: int) -> bool:
     if not svc.cleanup_command_substrings:
         return True
@@ -258,8 +326,11 @@ def _cleanup_candidate_pids(svc: ServiceDefinition) -> set[int]:
     return candidates
 
 
-def _cleanup_lingering_processes(svc: ServiceDefinition) -> None:
-    lingering_pids = _cleanup_candidate_pids(svc)
+def _cleanup_lingering_processes(
+    svc: ServiceDefinition, keep: frozenset[int] = frozenset()
+) -> None:
+    """Kill leftover listeners on the service's ports, sparing ``keep`` pids."""
+    lingering_pids = _cleanup_candidate_pids(svc) - keep
 
     if not lingering_pids:
         return
@@ -269,24 +340,30 @@ def _cleanup_lingering_processes(svc: ServiceDefinition) -> None:
 
     time.sleep(1)
 
-    stubborn_pids = _cleanup_candidate_pids(svc)
+    stubborn_pids = _cleanup_candidate_pids(svc) - keep
 
     for pid in stubborn_pids:
         process_utils.terminate(pid, force=True)
 
 
 def _cleanup_service_endpoint(svc: ServiceDefinition) -> None:
-    if svc.name != "codex-app-server" or _is_windows():
+    if (
+        svc.name not in ("codex-app-server", "codex-app-server-dispatcher")
+        or _is_windows()
+    ):
         return
     from openbase_coder_cli.codex_control_plane import (
         cleanup_stale_codex_app_server_socket,
+        dispatcher_codex_app_server_endpoint,
         managed_codex_app_server_endpoint,
     )
     from openbase_coder_cli.paths import CODEX_HOME_DIR
 
-    endpoint = managed_codex_app_server_endpoint(
-        {"CODEX_HOME": str(CODEX_HOME_DIR)},
-        platform=sys.platform,
+    endpoint_env = {"CODEX_HOME": str(CODEX_HOME_DIR)}
+    endpoint = (
+        managed_codex_app_server_endpoint(endpoint_env, platform=sys.platform)
+        if svc.name == "codex-app-server"
+        else dispatcher_codex_app_server_endpoint(endpoint_env, platform=sys.platform)
     )
     cleanup_stale_codex_app_server_socket(endpoint)
 
@@ -308,22 +385,32 @@ def _write_service_files(
     svc: ServiceDefinition,
     config: InstallationConfig,
     binaries: dict[str, str],
-) -> None:
+) -> bool:
+    """Generate the service's wrapper and unit files.
+
+    Returns True when the job must be re-registered for the change to take
+    effect: on macOS only a changed plist (launchd execs the wrapper fresh on
+    every start, so wrapper edits are picked up by an in-place restart); always
+    on Windows/Linux, where re-registration is harmless.
+    """
     if not _is_macos() and _is_windows():
         # Windows has no shell, so it skips the bash wrapper entirely —
         # Task Scheduler execs python -m ...runners directly.
         from openbase_coder_cli.services.windows import generate_task_xml
 
         generate_task_xml(svc, config, binaries["python"])
-        return
+        return True
 
-    generate_wrapper(svc, config, binaries)
+    _write_if_changed(
+        _wrapper_path(svc), render_wrapper(svc, config, binaries), mode=0o755
+    )
     if _is_macos():
-        generate_plist(svc, config)
-    else:
-        from openbase_coder_cli.services.systemd import generate_unit
+        return _write_if_changed(_plist_path(svc), render_plist(svc, config))
 
-        generate_unit(svc, config)
+    from openbase_coder_cli.services.systemd import generate_unit
+
+    generate_unit(svc, config)
+    return True
 
 
 def _prepare_service_start(svc: ServiceDefinition) -> None:
@@ -331,11 +418,11 @@ def _prepare_service_start(svc: ServiceDefinition) -> None:
     _cleanup_lingering_processes(svc)
 
 
-def generate_wrapper(
+def render_wrapper(
     svc: ServiceDefinition,
     config: InstallationConfig,
     binaries: dict[str, str],
-) -> Path:
+) -> str:
     # In standalone mode there is no workspace checkout; fall back so
     # workdirs never render as an empty string.
     workspace = config.workspace_path or _runtime_workdir(config)
@@ -353,10 +440,7 @@ def generate_wrapper(
         workspace=workspace, data_dir=data_dir, **binaries
     )
 
-    wrapper = _wrapper_path(svc)
-    wrapper.parent.mkdir(parents=True, exist_ok=True)
-    wrapper.write_text(
-        textwrap.dedent(f"""\
+    return textwrap.dedent(f"""\
         #!/bin/bash
         # Auto-generated wrapper for {svc.name}
 
@@ -368,18 +452,122 @@ def generate_wrapper(
             set +a
         fi
 
-        export PATH="$HOME/.openbase/bin:$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+        export PATH="{_wrapper_path_prefix()}:$PATH"
 
         {cmd}
     """)
-    )
-    wrapper.chmod(0o755)
+
+
+# Login-shell directories launchd does not provide. Order is deliberate:
+# Openbase's own tools first, then user installs, then Homebrew/system.
+_WRAPPER_PATH_DIRS = (
+    "$HOME/.openbase/bin",
+    "$HOME/.local/bin",
+    "$HOME/bin",
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+)
+
+
+def _wrapper_path_prefix() -> str:
+    """PATH entries a wrapper prepends, led by the Node runtime when it lives
+    somewhere launchd would not otherwise look (nvm installs in particular).
+
+    The console build runs pnpm, whose entry point is ``#!/usr/bin/env node``;
+    resolving pnpm by absolute path is not enough when ``node`` itself is
+    off PATH. The nvm directory goes first so the workspace's pinned Node
+    (``.nvmrc``) beats a leftover Homebrew ``node`` of another major.
+    """
+    dirs = list(_WRAPPER_PATH_DIRS)
+    node_dir = node_runtime_bin_dir()
+    if node_dir is not None:
+        home = str(Path.home())
+        covered = {d.replace("$HOME", home) for d in _WRAPPER_PATH_DIRS}
+        rendered = str(node_dir)
+        if rendered not in covered and '"' not in rendered and "$" not in rendered:
+            dirs.insert(0, rendered)
+    return ":".join(dirs)
+
+
+def generate_wrapper(
+    svc: ServiceDefinition,
+    config: InstallationConfig,
+    binaries: dict[str, str],
+) -> Path:
+    wrapper = _wrapper_path(svc)
+    _write_if_changed(wrapper, render_wrapper(svc, config, binaries), mode=0o755)
     return wrapper
 
 
-def generate_plist(svc: ServiceDefinition, config: InstallationConfig) -> Path:
+DESKTOP_APP_BUNDLE_ID = "tech.openbase.coder.desktop"
+_DESKTOP_APP_NAMES = ("Openbase.app", "Openbase Coder.app")
+_SYSTEM_APPLICATIONS_DIR = Path("/Applications")
+
+
+def _installed_desktop_bundle_id() -> str | None:
+    """Bundle id of an installed Openbase desktop app, or None when absent.
+
+    Dev builds carry their own bundle id, so read it from the bundle rather
+    than assuming the release id.
+    """
+    roots = (_SYSTEM_APPLICATIONS_DIR, Path.home() / "Applications")
+    for root in roots:
+        for name in _DESKTOP_APP_NAMES:
+            info = root / name / "Contents" / "Info.plist"
+            if not info.is_file():
+                continue
+            try:
+                bundle_id = plistlib.loads(info.read_bytes()).get("CFBundleIdentifier")
+            except (OSError, plistlib.InvalidFileException, ValueError):
+                continue
+            if isinstance(bundle_id, str) and bundle_id:
+                return bundle_id
+    return None
+
+
+def _associated_bundle_id(config: InstallationConfig) -> str | None:
+    installed = _installed_desktop_bundle_id()
+    if installed:
+        return installed
+    if config.standalone:
+        return DESKTOP_APP_BUNDLE_ID
+    return None
+
+
+def _service_launcher_path() -> Path | None:
+    """The runtime package's Openbase Services launcher, when it ships one.
+
+    macOS attributes TCC decisions (Desktop/Documents folders, Local Network)
+    to the launchd job's own process and keys the grant on that executable's
+    code identity. Running the wrapper through the launcher — a Developer
+    ID-signed app bundle with a fixed bundle identifier — makes every service
+    (and every agent process they spawn) present the same stable identity to
+    TCC across self-updates, instead of the ad-hoc-signed Python binary of
+    the current release. Routed through ``current`` like every other package
+    path. Development installs carry no package and run the wrapper directly.
+    """
+    if not _is_macos():
+        return None
+    package = stable_runtime_package()
+    if package is None:
+        return None
+    launcher = package.service_launcher_path
+    if launcher is None or not launcher.is_file():
+        return None
+    return launcher
+
+
+def render_plist(svc: ServiceDefinition, config: InstallationConfig) -> str:
     label = _service_label(svc)
     wrapper = _wrapper_path(svc)
+    launcher = _service_launcher_path()
+    # Indented so the dedented plist keeps the exact layout of earlier
+    # releases: a byte-identical plist is what lets install_service restart
+    # in place instead of re-registering the background item.
+    program_arguments = "\n".join(
+        f"    <string>{argument}</string>"
+        for argument in ([launcher, wrapper] if launcher else [wrapper])
+    )
     workdir = svc.workdir_template.format(
         workspace=config.workspace_path or _runtime_workdir(config),
         data_dir=str(OPENBASE_BASE_DIR),
@@ -387,22 +575,20 @@ def generate_plist(svc: ServiceDefinition, config: InstallationConfig) -> Path:
     )
     log_dir = DEFAULT_LOG_DIR
     associated_bundle = ""
-    if config.standalone:
-        # Legacy LaunchAgents installed by the signed desktop app otherwise
-        # appear as generic `bash` background items in notifications and
-        # System Settings. Associate them with the owning app so macOS can
-        # present a trustworthy Openbase identity.
-        associated_bundle = textwrap.dedent("""\
+    bundle_id = _associated_bundle_id(config)
+    if bundle_id:
+        # Legacy LaunchAgents otherwise appear as anonymous `<name>.sh` items
+        # from an unknown developer in macOS background-item notifications and
+        # System Settings. Associate them with the installed desktop app so
+        # macOS presents them under the Openbase identity and groups them.
+        associated_bundle = textwrap.dedent(f"""\
             <key>AssociatedBundleIdentifiers</key>
             <array>
-                <string>tech.openbase.coder.desktop</string>
+                <string>{bundle_id}</string>
             </array>
         """)
 
-    plist = _plist_path(svc)
-    plist.parent.mkdir(parents=True, exist_ok=True)
-    plist.write_text(
-        textwrap.dedent(f"""\
+    return textwrap.dedent(f"""\
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         <plist version="1.0">
@@ -412,7 +598,7 @@ def generate_plist(svc: ServiceDefinition, config: InstallationConfig) -> Path:
 {textwrap.indent(associated_bundle, "            ")}
             <key>ProgramArguments</key>
             <array>
-                <string>{wrapper}</string>
+{textwrap.indent(program_arguments, "            ")}
             </array>
             <key>WorkingDirectory</key>
             <string>{workdir}</string>
@@ -429,8 +615,34 @@ def generate_plist(svc: ServiceDefinition, config: InstallationConfig) -> Path:
         </dict>
         </plist>
     """)
-    )
+
+
+def generate_plist(svc: ServiceDefinition, config: InstallationConfig) -> Path:
+    plist = _plist_path(svc)
+    _write_if_changed(plist, render_plist(svc, config))
     return plist
+
+
+def _write_if_changed(path: Path, text: str, mode: int | None = None) -> bool:
+    """Write ``text`` to ``path`` only when its content differs.
+
+    Returns True when the file was created or rewritten. Leaving an unchanged
+    file untouched matters on macOS: Background Task Management treats a
+    modified LaunchAgent plist as a new background item and notifies the
+    user ("Background Items Added") every time.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        changed = path.read_text() != text
+    except (OSError, UnicodeDecodeError):
+        changed = True
+    if changed:
+        path.write_text(text)
+    if mode is not None and (
+        not path.exists() or (path.stat().st_mode & 0o777) != mode
+    ):
+        path.chmod(mode)
+    return changed
 
 
 def _launchctl(*args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -442,7 +654,13 @@ def _launchctl(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     )
 
 
+@service_mutation()
 def launchctl_bootstrap(svc: ServiceDefinition) -> None:
+    if _external_supervisor():
+        # Nothing to register: the supervisor already runs the wrapper in a
+        # restart loop, so (re)loading a service means restarting it.
+        _external_supervisor_restart(svc)
+        return
     if not _is_macos():
         if _is_windows():
             from openbase_coder_cli.services.windows import windows_bootstrap
@@ -475,7 +693,11 @@ def launchctl_bootstrap(svc: ServiceDefinition) -> None:
     raise click.ClickException(f"Failed to bootstrap {label}: {result.stderr.strip()}")
 
 
+@service_mutation()
 def launchctl_bootout(svc: ServiceDefinition) -> bool:
+    if _external_supervisor():
+        # The supervisor relaunches the wrapper; a stop is only ever a bounce.
+        return _external_supervisor_restart(svc)
     if not _is_macos():
         if _is_windows():
             from openbase_coder_cli.services.windows import windows_bootout
@@ -492,6 +714,7 @@ def launchctl_bootout(svc: ServiceDefinition) -> bool:
     return result.returncode == 0
 
 
+@service_mutation()
 def launchctl_kickstart(svc: ServiceDefinition) -> bool:
     if not _is_macos():
         if _is_windows():
@@ -508,7 +731,75 @@ def launchctl_kickstart(svc: ServiceDefinition) -> bool:
     return result.returncode == 0
 
 
+# How long an in-place restart waits for the old process to exit on SIGTERM
+# before falling back to launchd's forced kickstart.
+RESTART_EXIT_TIMEOUT_SECONDS = 15.0
+
+
+def _job_pid(svc: ServiceDefinition) -> int | None:
+    pid = launchctl_status(svc).get("pid")
+    try:
+        return int(pid) if pid else None
+    except (TypeError, ValueError):
+        return None
+
+
+@service_mutation()
+def launchctl_restart(svc: ServiceDefinition) -> bool:
+    """Restart an already-loaded launchd job without unloading it.
+
+    Bootout + bootstrap re-registers the job with Background Task Management,
+    which makes macOS post a "Background Items Added" notification on every
+    restart. Keeping the job loaded and only replacing its process avoids
+    that: SIGTERM the running instance (launchd's KeepAlive respawns it), wait
+    for the old pid to go away, and kickstart in case the job is a one-shot
+    or still throttled.
+
+    Returns False when the job is not loaded (the caller must bootstrap) or
+    on a non-macOS platform (where re-registration is harmless).
+    """
+    if _external_supervisor():
+        return _external_supervisor_restart(svc)
+    if not _is_macos():
+        return False
+
+    status = launchctl_status(svc)
+    if not status.get("installed"):
+        return False
+
+    label = _service_label(svc)
+    target = f"gui/{_uid()}/{label}"
+    _truncate_existing_logs(svc)
+
+    old_pid = _job_pid(svc)
+    if old_pid is not None:
+        _launchctl("kill", "SIGTERM", target, check=False)
+        pid = process_utils.wait_for_pid_change(
+            lambda: _job_pid(svc), old_pid, timeout=RESTART_EXIT_TIMEOUT_SECONDS
+        )
+        if pid == old_pid:
+            # The process ignored SIGTERM; let launchd kill and relaunch it.
+            forced = _launchctl("kickstart", "-k", target, check=False)
+            pid = process_utils.wait_for_pid_change(
+                lambda: _job_pid(svc), old_pid, timeout=RESTART_EXIT_TIMEOUT_SECONDS
+            )
+            if forced.returncode != 0 or pid == old_pid:
+                raise click.ClickException(
+                    f"Failed to replace the old process for {svc.name}."
+                )
+
+    new_pid = _job_pid(svc)
+    keep = process_utils.process_tree_pids(new_pid) if new_pid else set()
+    _cleanup_lingering_processes(svc, keep=frozenset(keep))
+    # No-op when launchd already respawned the job; starts it otherwise.
+    _launchctl("kickstart", target, check=False)
+    return True
+
+
+@service_mutation()
 def launchctl_kill(svc: ServiceDefinition) -> bool:
+    if _external_supervisor():
+        return _external_supervisor_restart(svc)
     if not _is_macos():
         if _is_windows():
             from openbase_coder_cli.services.windows import windows_kill
@@ -549,12 +840,47 @@ def _external_supervisor_status(svc: ServiceDefinition) -> dict:
         except OSError:
             pid = None
     if not svc.install_by_default and pid is None:
-        # Wrapper regeneration writes files for optional services (code-sync,
+        # Wrapper regeneration writes files for optional services (sync-daemon,
         # cloud heartbeat) regardless of whether their feature is on; under
         # an external supervisor "installed" means actually supervised, so a
         # disabled feature doesn't warn as an unexpectedly installed service.
         return {"installed": False}
     return {"installed": True, "pid": str(pid) if pid else None}
+
+
+def _external_supervisor_pid(svc: ServiceDefinition) -> int | None:
+    pid = _external_supervisor_status(svc).get("pid")
+    try:
+        return int(pid) if pid else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _external_supervisor_restart(svc: ServiceDefinition) -> bool:
+    """Restart ``svc`` under an external supervisor (the container entrypoint).
+
+    There is no launchd or systemd job to kick: the only primitive is making
+    the current process exit, after which the supervisor relaunches the
+    wrapper a few seconds later. Terminate the pidfile's process, wait for the
+    supervisor to drop the pidfile, then clear any orphans still holding the
+    service's ports so the relaunch can bind them (2026-10-07: a Maritime
+    workspace fell through to ``systemctl`` here, which does not exist in the
+    container, so every watchdog bounce killed the agent and then raised).
+    """
+    old_pid = _external_supervisor_pid(svc)
+    if old_pid is not None:
+        process_utils.terminate(old_pid)
+        pid = process_utils.wait_for_pid_change(
+            lambda: _external_supervisor_pid(svc),
+            old_pid,
+            timeout=RESTART_EXIT_TIMEOUT_SECONDS,
+        )
+        if pid == old_pid:
+            process_utils.terminate(old_pid, force=True)
+    new_pid = _external_supervisor_pid(svc)
+    keep = process_utils.process_tree_pids(new_pid) if new_pid else set()
+    _cleanup_lingering_processes(svc, keep=frozenset(keep))
+    return True
 
 
 def launchctl_status(svc: ServiceDefinition) -> dict:
@@ -591,10 +917,19 @@ def launchctl_status(svc: ServiceDefinition) -> dict:
     }
 
 
+@service_mutation()
 def install_all_services(config: InstallationConfig) -> None:
     _ensure_launchd_paths()
     coding_backend = _selected_backend(config)
-    services = default_services(coding_backend)
+    # A stopped legacy Direct job can still have a login-time LaunchAgent.
+    # Remove it before selecting optional daemons so an upgrade cannot revive
+    # the outgoing transport alongside the selected VPN.
+    if tp.provider() != tp.PROVIDER_NETMESH_TSNET and remove_service(TUNNELD_SERVICE):
+        click.echo("  Removed openbase-tunneld (Openbase Direct is not selected).")
+    services = include_installed_optional_services(
+        default_services(coding_backend), launchctl_status
+    )
+    services = order_services(services)
     binaries = _resolve_binaries(config, services)
 
     for svc in default_services():
@@ -610,17 +945,43 @@ def install_all_services(config: InstallationConfig) -> None:
         if remove_service(retired_service_stub(name)):
             click.echo(f"  Removed retired service {name}.")
 
+    # A provider that does not become ready blocks only its own dependents
+    # (they would attach to a stale or missing endpoint). Everything else
+    # still installs — above all the API on 7999 that sign-in and pairing
+    # need (2026-10-09: livekit-server held back every later service on a
+    # fresh Openbase VPN setup).
+    not_ready: list[str] = []
+    blocked: set[str] = set()
     for svc in services:
+        if svc.name in blocked:
+            click.echo(f"  Skipping {svc.name} (a service it needs is not ready).")
+            blocked.update(svc.restart_dependents)
+            continue
         click.echo(f"  Installing {svc.name}...")
-        _write_service_files(svc, config, binaries)
-        launchctl_bootstrap(svc)
-        click.echo(f"    Loaded {_service_label(svc)}")
+        reload_required = _write_service_files(svc, config, binaries)
+        verb = _activate_service(svc, reload_required)
+        try:
+            wait_for_provider(svc)
+        except click.ClickException:
+            click.echo(
+                click.style(f"    WARN  {svc.name} did not become ready.", fg="yellow")
+            )
+            not_ready.append(svc.name)
+            blocked.update(svc.restart_dependents)
+            continue
+        click.echo(f"    {verb} {_service_label(svc)}")
 
+    if not_ready:
+        raise click.ClickException(
+            f"Services did not become ready: {', '.join(not_ready)}; services "
+            f"that depend on them were not started. See {DEFAULT_LOG_DIR}/."
+        )
     click.echo()
     click.echo("All services installed and started.")
     click.echo(f"Logs: {DEFAULT_LOG_DIR}/")
 
 
+@service_mutation()
 def remove_service(svc: ServiceDefinition) -> bool:
     """Unload a service and delete its generated files. True if any existed."""
     existed = False
@@ -637,19 +998,38 @@ def remove_service(svc: ServiceDefinition) -> bool:
     return existed
 
 
+def _activate_service(svc: ServiceDefinition, reload_required: bool) -> str:
+    """Start or restart ``svc`` after its files were (re)generated.
+
+    A loaded job whose plist did not change is restarted in place, so routine
+    restarts never re-register the background item with macOS. Only a changed
+    plist (or an unloaded job) goes through bootout + bootstrap, since that is
+    the only way launchd re-reads the plist. Returns the verb for user output.
+    """
+    if not reload_required and launchctl_restart(svc):
+        return "Restarted"
+    launchctl_bootstrap(svc)
+    return "Loaded"
+
+
+@service_mutation()
 def install_service(config: InstallationConfig, svc: ServiceDefinition) -> None:
+    """Install ``svc`` if needed and (re)start it."""
     _ensure_launchd_paths()
     binaries = _resolve_binaries(config, [svc])
-    _write_service_files(svc, config, binaries)
-    launchctl_bootstrap(svc)
+    reload_required = _write_service_files(svc, config, binaries)
+    _activate_service(svc, reload_required)
+    wait_for_provider(svc)
 
 
+@service_mutation()
 def regenerate_service(config: InstallationConfig, svc: ServiceDefinition) -> None:
     _ensure_launchd_paths()
     binaries = _resolve_binaries(config, [svc])
     _write_service_files(svc, config, binaries)
 
 
+@service_mutation()
 def regenerate_all_services(config: InstallationConfig) -> None:
     _ensure_launchd_paths()
     coding_backend = _selected_backend(config)

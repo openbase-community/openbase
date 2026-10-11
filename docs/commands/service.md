@@ -11,6 +11,18 @@ openbase-coder service unpublish crm
 
 Publication has one supported shape: a dedicated hostname serving the application at its root. An illustrative URL is `https://crm.abcd2345efgh.vpn.obs.so/`. Use the actual URL printed by the command, never an invented name. There is no explicit port, service-name path, personal name, or device name.
 
+## Expose a port from a cloud workspace
+
+Cloud workspaces publish the same way: the workspace's bootstrap credential carries the `netmesh_publish` scope, so `service publish` allocates the hostname for the workspace's own mesh node and the embedded node routes `:443` and `:80` itself. `--persist` restores the publication when the workspace starts again (the container entrypoint runs `openbase-coder service restore` once the node is up); without it the publication ends with the workspace. Other hosts that run the embedded tailnet node without a cloud credential (Openbase Direct on a Mac) cannot publish hostnames. Any embedded-node host can also expose a loopback port directly on the node's tailnet address for a limited time:
+
+```bash
+openbase-coder service expose 3000             # http://<workspace-name>.net.obs.so:3000/ for 10 minutes
+openbase-coder service expose 1455 --one-shot  # closes after the first two-way exchange (a login callback)
+openbase-coder service unexpose 3000
+```
+
+An exposed port is reachable only by the devices of your account over Openbase VPN, expires after `--ttl` seconds (one hour at most), and is plain HTTP inside the encrypted VPN. `--peer` limits it to one device and `--one-shot` closes it after its first completed connection that transferred bytes in both directions. Empty browser preconnects do not consume the forward; the TTL still closes the listener and active connections. `service list` shows exposed ports next to published services. For automatic login callback forwarding and the paste-back fallback, see [sign in from your phone](../docker.md#sign-in-from-your-phone).
+
 ## Account namespace and private DNS
 
 Production device names use `net.obs.so`; private service names use the sibling `vpn.obs.so` zone. Staging uses `net-staging.obs.so` and `vpn-staging.obs.so`. Service DNS must not be beneath the device MagicDNS zone: the VPN client's authoritative local resolver would return NXDOMAIN before consulting the split DNS route. Neither private device nor private service records are published in public DNS.
@@ -49,7 +61,7 @@ The upstream app needs its own lifecycle management. Persisting the gateway does
 
 ## Provider boundary
 
-This feature requires Openbase VPN and its authenticated Cloud allocator. Openbase Direct carries only Openbase app traffic and cannot publish arbitrary host services. Official Tailscale and unknown providers cannot allocate Openbase private service names. `.local` is reserved for multicast DNS.
+This feature requires Openbase VPN (or a cloud workspace's embedded node) and its authenticated Cloud allocator. Openbase Direct on a Mac carries only Openbase app traffic and cannot publish arbitrary host services. Official Tailscale and unknown providers cannot allocate Openbase private service names. `.local` is reserved for multicast DNS.
 
 The helper uses typed, atomic Serve rules, preserves the built-in console and LiveKit routes, and refuses to overwrite unexpected configuration. It accepts only root-mounted account hostnames resolving to this node and loopback proxy ports; callers cannot supply arbitrary targets, paths, or Funnel settings.
 

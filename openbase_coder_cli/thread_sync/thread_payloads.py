@@ -33,7 +33,12 @@ DEFAULT_THREAD_HISTORY_LIMIT = 25
 
 RUNNING_STATUSES = {"active", "inProgress", "in_progress", "running", "pending"}
 COMPLETED_STATUSES = {"completed", "success"}
-ERROR_STATUSES = {"failed", "error", "cancelled", "canceled", "interrupted"}
+ERROR_STATUSES = {"failed", "error"}
+STOPPED_STATUSES = {
+    "cancelled": SessionStatus.cancelled,
+    "canceled": SessionStatus.cancelled,
+    "interrupted": SessionStatus.interrupted,
+}
 THREAD_IDLE_STATUSES = {"notLoaded", "not_loaded", "idle", "unknown"}
 WAITING_FLAGS = {"waitingOnUserInput", "waiting_on_user_input"}
 WAITING_STATUSES = {"waiting", "waitingOnUserInput", "waiting_on_user_input"}
@@ -93,9 +98,11 @@ def _is_waiting_status(status: Any) -> bool:
 
 
 def _thread_status(status: Any) -> SessionStatus:
+    status_type = _status_type(status)
+    if status_type in STOPPED_STATUSES:
+        return STOPPED_STATUSES[status_type]
     if _is_waiting_status(status):
         return SessionStatus.waiting
-    status_type = _status_type(status)
     if status_type in ERROR_STATUSES:
         return SessionStatus.error
     if status_type in RUNNING_STATUSES:
@@ -110,9 +117,11 @@ def _thread_status(status: Any) -> SessionStatus:
 def _turn_status(status: Any, error: Any) -> SessionStatus:
     if error not in (None, ""):
         return SessionStatus.error
+    status_type = _status_type(status)
+    if status_type in STOPPED_STATUSES:
+        return STOPPED_STATUSES[status_type]
     if _is_waiting_status(status):
         return SessionStatus.waiting
-    status_type = _status_type(status)
     if status_type in COMPLETED_STATUSES:
         return SessionStatus.completed
     if status_type in RUNNING_STATUSES:
@@ -123,10 +132,10 @@ def _turn_status(status: Any, error: Any) -> SessionStatus:
 
 
 def _turn_sort_key(turn: dict[str, Any]) -> int:
-    for key in ("completedAt", "finishedAt", "updatedAt", "startedAt", "createdAt"):
+    for key in ("startedAt", "createdAt", "completedAt", "finishedAt", "updatedAt"):
         value = turn.get(key)
         if isinstance(value, (int, float)):
-            return int(value)
+            return int(value * 1000)
         if isinstance(value, str) and value:
             try:
                 return int(
@@ -187,19 +196,24 @@ def _file_edit_paths(turn: dict[str, Any]) -> list[str]:
 
 
 def _extract_agent_output(turn: dict[str, Any]) -> str:
+    from openbase_coder_cli.backend_auth import login_failure_message
+    from openbase_coder_cli.cloud_model_errors import normalize_model_proxy_error
+
+    if login_message := login_failure_message(turn):
+        return login_message
     final_parts: list[str] = []
     fallback_parts: list[str] = []
     for item in turn.get("items", []):
         if item.get("type") != "agentMessage":
             continue
-        text = item.get("text", "").strip()
+        text = normalize_model_proxy_error(item.get("text", "").strip())
         if not text:
             continue
         fallback_parts.append(text)
         phase = item.get("phase")
         if isinstance(phase, str) and phase.startswith("final"):
             final_parts.append(text)
-    return (
+    return normalize_model_proxy_error(
         "\n\n".join(final_parts or fallback_parts)
         or _optional_turn_string(
             turn,
@@ -271,6 +285,10 @@ def _thread_payload(result: dict[str, Any]) -> dict[str, Any] | None:
 def _normalize_backend_thread_payload(payload: dict[str, Any]) -> dict[str, Any]:
     session = payload.get("session") if isinstance(payload.get("session"), dict) else {}
     normalized = {**session, **payload}
+    # Claude-compatible sessions can carry a display title independently of
+    # their unique internal lookup name. All app surfaces use this snapshot.
+    if title := _optional_thread_string(normalized, "title"):
+        normalized["name"] = title
     if "threadId" not in normalized and isinstance(normalized.get("id"), str):
         normalized["threadId"] = normalized["id"]
     return normalized
@@ -310,12 +328,19 @@ def _run_from_turn(
         else _optional_turn_string(turn, "prompt", "promptPreview") or ""
     )
 
+    from .thread_messages import turn_messages
+
     return RunInfo(
         run_id=turn_id,
         started_at=started_at,
         completed_at=completed_at,
         status=status,
         accumulated_output=_extract_agent_output(turn),
+        response_finished_at=(
+            _timestamp_to_datetime(turn["responseFinishedAt"])
+            if turn.get("responseFinishedAt")
+            else None
+        ),
         accumulated_stderr=stderr,
         return_code={SessionStatus.completed: 0, SessionStatus.error: -1}.get(status),
         message=message,
@@ -325,9 +350,40 @@ def _run_from_turn(
             "reasoningEffort",
             "reasoning_effort",
         ),
-        steers=[SteerInfo(text=text) for text in user_texts[1:]],
+        steers=(
+            [SteerInfo(text=text) for text in user_texts[1:]]
+            or _recorded_turn_steers(turn)
+        ),
         file_edits=_file_edit_paths(turn),
+        messages=turn_messages(turn),
     )
+
+
+def _recorded_turn_steers(turn: dict[str, Any]) -> list[SteerInfo]:
+    """Steers recorded on the backend turn row (Claude Code turns).
+
+    Codex turns carry steering input as extra userMessage items instead; the
+    Claude store cannot, so its thread reads list the delivered steering
+    texts alongside the prompt.
+    """
+    raw = turn.get("steers")
+    if not isinstance(raw, list):
+        return []
+    steers: list[SteerInfo] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        created_at = item.get("createdAt")
+        steers.append(
+            SteerInfo(
+                text=text,
+                created_at=_timestamp_to_datetime(created_at) if created_at else None,
+            )
+        )
+    return steers
 
 
 def _session_sort_key(session: SessionInfo) -> datetime:
@@ -399,6 +455,8 @@ def _session_from_thread(
     active_turn_id = _optional_thread_string(thread, "activeTurnId", "active_turn_id")
     turns = sorted(thread.get("turns", []), key=_turn_sort_key)
     for turn in turns:
+        if _status_type(turn.get("status")) == "queued":
+            continue
         turn_id = extract_turn_id(turn)
         if not isinstance(turn, dict) or not turn_id:
             continue

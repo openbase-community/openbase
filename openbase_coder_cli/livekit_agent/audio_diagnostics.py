@@ -1,6 +1,7 @@
 """Diagnostic STT and VAD wrappers that log audio ingress and speech events."""
 
 import logging
+import time
 
 from livekit import rtc
 from livekit.agents import (
@@ -18,6 +19,14 @@ from openbase_coder_cli.livekit_agent.logging_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# When no inbound audio frame is pushed into the STT stream for at least this
+# long, log an explicit gap event. A gap is the desktop-side smoking gun for a
+# dropped/chopped user utterance: the phone kept capturing speech locally, but
+# its uplink stalled (Wi-Fi roam, ICE/TURN path change, packet loss) so the
+# server's transcriber never received those words. LiveKit pushes ~20-50ms
+# frames continuously while a track is live, so a sub-second gap is anomalous.
+INBOUND_AUDIO_GAP_LOG_THRESHOLD_SECONDS = 0.4
 
 
 class LoggingSTT(livekit_stt.STT):
@@ -139,6 +148,7 @@ class LoggingRecognizeStream:
         self._sample_count = 0
         self._flush_count = 0
         self._event_count = 0
+        self._last_frame_monotonic: float | None = None
 
     @property
     def start_time_offset(self) -> float:
@@ -157,6 +167,27 @@ class LoggingRecognizeStream:
         self._stream.start_time = value
 
     def push_frame(self, frame: rtc.AudioFrame) -> None:
+        now = time.monotonic()
+        if self._last_frame_monotonic is not None:
+            gap_seconds = now - self._last_frame_monotonic
+            if gap_seconds >= INBOUND_AUDIO_GAP_LOG_THRESHOLD_SECONDS:
+                sample_rate = getattr(frame, "sample_rate", 0) or 0
+                total_audio_ms = (
+                    int(self._sample_count / sample_rate * 1000) if sample_rate else 0
+                )
+                # WARNING level: a starved transcriber input is exactly the
+                # condition that silently drops or chops a spoken utterance.
+                logger.warning(
+                    "dispatch_timing stage=stt_audio_gap stream_id=%s provider=%s "
+                    "model=%s gap_ms=%d frames_before_gap=%d total_audio_ms=%d",
+                    self._stream_id,
+                    self._provider,
+                    self._model,
+                    int(gap_seconds * 1000),
+                    self._frame_count,
+                    total_audio_ms,
+                )
+        self._last_frame_monotonic = now
         self._frame_count += 1
         self._sample_count += getattr(frame, "samples_per_channel", 0) or 0
         if _should_log_audio_frame(self._frame_count):

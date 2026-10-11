@@ -196,7 +196,20 @@ stage="$RELEASES_DIR/.staging.$$"
 rm -rf "$stage"
 mkdir -p "$stage"
 tar -xzf "$tarball" -C "$stage"
-chmod 0755 "$stage/bin/openbase-coder" "$stage/bin/livekit-server" "$stage/bin/openbase-tunneld"
+chmod 0755 \
+  "$stage/bin/openbase-coder" \
+  "$stage/bin/livekit-server" \
+  "$stage/bin/openbase-tunneld" \
+  "$stage/bin/openbase-syncd" \
+  "$stage/bin/openbase-sync" \
+  "$stage/bin/edge"
+# The Openbase Services launcher (macOS launchd job process; see
+# dev-docs/MACOS_SERVICE_IDENTITY.md). Its signed app bundle must stay intact,
+# so only the mode is touched.
+service_launcher="$stage/libexec/Openbase Services.app/Contents/MacOS/openbase-services"
+if [ -f "$service_launcher" ]; then
+  chmod 0755 "$service_launcher"
+fi
 
 if [ -z "$version" ]; then
   version="$(package_metadata_version "$stage/openbase-coder-package.json")"

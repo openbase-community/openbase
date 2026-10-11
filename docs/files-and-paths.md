@@ -47,6 +47,8 @@ resets onboarding. Remove both when fully uninstalling (see
 | `~/.openbase/instructions/VOICE_INSTRUCTIONS.md` | `openbase-coder setup` | Generated default direct voice-session instructions |
 | `~/.openbase/instructions/DISPATCHER_INSTRUCTIONS.md` | `openbase-coder setup` | Generated default dispatcher-only instructions |
 | `~/.openbase/instructions/SUPER_AGENT_INSTRUCTIONS.md` | `openbase-coder setup` | Generated default Super Agent thread instructions |
+| `~/.openbase/sync/` | Openbase Sync (`sync-daemon`) | Daemon configuration (`config.toml`: role, peer, roots, placement), state and control socket; never synced |
+| `~/.openbase/trash/` | `sync migrate-from-syncthing` | Dated folders holding state moved aside instead of deleted (for example the previous sync's state) |
 | `~/.openbase/skill-sync.json` | Skills settings | Versioned device skill-sharing preference and the source-folder shares it owns; never synced |
 | `~/.openbase/dispatcher-config.json` | `openbase-coder setup`, `openbase-coder defaults`, settings API | Dispatcher runtime settings, including default reasoning and backend-specific model defaults |
 | `~/.openbase/hooks/inject-session-id.sh` | `openbase-coder setup` | Bundled SessionStart hook script, registered in the Openbase profiles; supplies session attribution for commits and agent-aware commands |
@@ -58,6 +60,7 @@ resets onboarding. Remove both when fully uninstalling (see
 | `~/.openbase/claude-app-index-ledger.json` | `sync-workers` (Claude app index sync, macOS) | Ledger of Openbase Claude sessions injected into the Claude desktop app's private session index so they appear in the app (best-effort) |
 | `<workspace>/cli/.venv/` | `openbase-coder setup` (development mode) | CLI and bundled LiveKit worker environment |
 | `~/.openbase/bin/codex` | `openbase-coder setup` | Codex CLI installed on demand from GitHub release binaries |
+| Global Git ignore (`core.excludesFile`, or `~/.config/git/ignore`) | `openbase-coder setup` | Setup appends `.signals/` if missing so agent-to-agent signal messages are never committed; a read-only file only produces a warning |
 | `~/.local/bin/openbase-coder` | `openbase-coder setup` | User CLI shim; points at the standalone package launcher or the workspace CLI venv (never overwrites a `uv tool install`-managed script) |
 
 Generated instruction files are rendered from the workspace or bundled
@@ -73,7 +76,7 @@ Workspace skills are symlink-installed, not copied, so edits to source skills
 are visible to agents immediately. In the console and skills API, skill scopes
 are `home` (personal skills under `~/.agents/skills`), `codex`
 (`~/.codex/skills`), and `claude` (`~/.claude/skills`).
-**Settings → Agents → Skills** controls backend symlinking and device skill sharing independently. Backend symlinking adds missing links across `~/.agents/skills`, `~/.codex/skills`, and `~/.claude/skills`; it never overwrites existing skills. Turning it off leaves existing links intact. The routines service scans for new links roughly every five minutes. Device skill sharing registers the personal skill folder and linked source folders with code sync; the sync worker discovers new linked sources on later ticks. Turning it off keeps all files and unrelated folder shares. An explicit opt-out prevents peer offers from restoring the skill shares.
+**Settings → Agents → Skills** controls backend symlinking and device skill sharing independently. Backend symlinking adds missing links across `~/.agents/skills`, `~/.codex/skills`, and `~/.claude/skills`; it never overwrites existing skills. Turning it off leaves existing links intact. The routines service scans for new links roughly every five minutes. Device skill sharing adds the personal skill folder and linked source folders as [Openbase Sync](code-sync.md) roots. Turning it off keeps all files and unrelated roots.
 
 Openbase never keeps a separate agent credential: Codex sessions read
 `~/.codex/auth.json` and Claude Code sessions use your own Claude Code login.
@@ -82,6 +85,15 @@ available; otherwise setup records the resolved absolute `uv` path for the
 current machine. Openbase's permission posture is not written into
 `~/.codex/config.toml` or `~/.claude/settings.json`; super-agents passes it
 per session via profiles and role overrides. The shared Codex app-server has no Openbase model or provider launch overrides.
+
+## Project Artifact Directories
+
+Agents create these inside a project, workspace, or worktree root. Neither is product state; they are conventions the CLI, console, and loops understand.
+
+| Path | Purpose |
+|---|---|
+| `<project>/.reports/` | Markdown (or image/PDF) reports written for people; discovered by `openbase-coder reports` and the console Reports page |
+| `<project>/.signals/` | Messages written for other agents and loops (requests and responses, questions); watched by loop file triggers, never committed (see [loops](commands/loops.md#the-signals-convention)) |
 
 ## Service Artifacts
 
@@ -92,6 +104,7 @@ per session via profiles and role overrides. The shared Codex app-server has no 
 | `~/.config/systemd/user/com.openbase.coder.<service>.service` | `services install/regenerate` (Linux) | systemd user unit definitions |
 | `~/.openbase/logs/<service>.stdout.log` | launchd services | Service stdout logs |
 | `~/.openbase/logs/<service>.stderr.log` | launchd services | Service stderr logs |
+| `<data dir>/logs/<service>.log` | container entrypoint (Docker image, cloud DevSpace) | Service output mirrored from the container console, trimmed to its tail past 4 MiB |
 
 Wrappers for `codex-app-server`, `livekit-agent`, and `django-cli` prefer binaries from
 `<workspace>/.venv/bin/`, then `<workspace>/cli/.venv/bin/`, then
@@ -102,6 +115,7 @@ Managed services:
 
 - `livekit-server`
 - `codex-app-server`
+- `codex-app-server-dispatcher`
 - `livekit-agent`
 - `django-cli`
 
@@ -110,6 +124,15 @@ On macOS and Linux, `codex-app-server` listens at
 managed server and clients to the shared `~/.codex` home; the socket is runtime
 state and is never committed. A stale socket is removed only after it is
 confirmed not to have a live owner.
+
+`codex-app-server-dispatcher` is a second instance of the same server,
+listening at `$CODEX_HOME/app-server-control-dispatcher/app-server-control.sock`
+(override with `OPENBASE_DISPATCHER_APP_SERVER_URL`). Only the voice
+dispatcher's own conversational thread runs there, so a long-running coding
+turn on the shared instance can never make the dispatcher unresponsive.
+Super Agent threads stay on the shared instance. If the dispatcher instance
+is not running, the dispatcher falls back to the shared socket; setting
+`OPENBASE_DISPATCHER_DEDICATED_APP_SERVER=0` forces that fallback.
 
 ## Runtime Data
 

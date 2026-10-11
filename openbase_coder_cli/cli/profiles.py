@@ -10,15 +10,14 @@ from openbase_coder_cli.agent_profiles import profile_environment
 from openbase_coder_cli.cli.setup.claude import _ensure_claude_hooks, _ensure_claude_mcp
 from openbase_coder_cli.cli.setup.codex import _ensure_codex_config
 from openbase_coder_cli.cli.setup.hooks import (
-    ensure_claude_session_id_hook,
-    ensure_codex_session_id_hook,
+    ensure_default_session_id_hooks,
     ensure_session_id_hook_script,
+    include_default_hooks_option,
 )
 from openbase_coder_cli.env_file import (
     selected_backend_from_env_file,
     upsert_env_file_values,
 )
-from openbase_coder_cli.paths import CLAUDE_SETTINGS_PATH, CODEX_CONFIG_PATH
 from openbase_coder_cli.services.registry import require_installation
 
 
@@ -28,23 +27,37 @@ def profiles() -> None:
 
 
 @profiles.command("install")
+@include_default_hooks_option
 @click.option(
-    "--include-default-hooks",
-    is_flag=True,
-    help="Also register the session-ID hook in the default Codex and Claude Code configurations.",
+    "--shared-super-agents-mcp/--no-shared-super-agents-mcp",
+    "shared_super_agents_mcp",
+    default=True,
+    show_default=True,
+    help=(
+        "Also register the Super Agents MCP in the default (non-Openbase) "
+        "Codex and Claude Code homes so plain terminal codex/claude sessions "
+        "can dispatch Super Agents (a pre-existing entry is left untouched). "
+        "Pass --no-shared-super-agents-mcp to strip it from those homes."
+    ),
 )
-def install(include_default_hooks: bool) -> None:
+def install(include_default_hooks: bool, shared_super_agents_mcp: bool) -> None:
     """Install profiles and migrate identifiable legacy user-config entries."""
     config = require_installation()
     backend = selected_backend_from_env_file(Path(config.env_file))
+    workspace_dir = config.workspace_path or ""
     ensure_session_id_hook_script()
-    _ensure_codex_config(config.workspace_path or "", coding_backend=backend)
-    _ensure_claude_mcp(config.workspace_path or "", coding_backend=backend)
-    _ensure_claude_hooks()
+    _ensure_codex_config(
+        workspace_dir,
+        coding_backend=backend,
+        register_shared_super_agents=shared_super_agents_mcp,
+    )
+    _ensure_claude_mcp(workspace_dir, coding_backend=backend)
+    _ensure_claude_hooks(
+        register_shared_super_agents=shared_super_agents_mcp,
+        workspace_dir=workspace_dir,
+        coding_backend=backend,
+    )
     upsert_env_file_values(Path(config.env_file), profile_environment())
     if include_default_hooks:
-        # Profile installation migrates legacy Openbase hooks out of the shared
-        # configs, so explicitly requested default hooks must be added afterward.
-        ensure_codex_session_id_hook(CODEX_CONFIG_PATH, backup=True)
-        ensure_claude_session_id_hook(CLAUDE_SETTINGS_PATH, backup=True)
+        ensure_default_session_id_hooks()
     click.echo("Installed Openbase profiles. Restart Openbase services to load them.")

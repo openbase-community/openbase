@@ -1,9 +1,23 @@
 from __future__ import annotations
 
+import importlib
+
+import pytest
 from click.testing import CliRunner
 
 from openbase_coder_cli.cli import main
 from openbase_coder_cli.codex_backend_config import codex_backend_profile_config
+
+# The cli package re-exports the click group under the same name, so reach the
+# module itself for monkeypatching.
+backend_cli = importlib.import_module("openbase_coder_cli.cli.backend")
+
+
+@pytest.fixture
+def logged_in_no_services(monkeypatch):
+    """Pass the login check and suppress the restart for env-file-only tests."""
+    monkeypatch.setattr(backend_cli, "backend_login_problem", lambda name: None)
+    monkeypatch.setattr(backend_cli, "schedule_backend_restart", lambda: None)
 
 
 def test_backend_status_defaults_when_env_file_missing(tmp_path) -> None:
@@ -17,7 +31,9 @@ def test_backend_status_defaults_when_env_file_missing(tmp_path) -> None:
     assert "missing" in result.output
 
 
-def test_backend_use_writes_canonical_backend_and_preserves_file(tmp_path) -> None:
+def test_backend_use_writes_canonical_backend_and_preserves_file(
+    tmp_path, logged_in_no_services
+) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text("KEEP_ME=1\nOPENBASE_CODEX_BACKEND=codex\n", encoding="utf-8")
 
@@ -33,7 +49,7 @@ def test_backend_use_writes_canonical_backend_and_preserves_file(tmp_path) -> No
     assert "OPENBASE_CODEX_BACKEND=codex" in content
 
 
-def test_backend_use_creates_env_file(tmp_path) -> None:
+def test_backend_use_creates_env_file(tmp_path, logged_in_no_services) -> None:
     env_file = tmp_path / "nested" / ".env"
 
     result = CliRunner().invoke(
@@ -48,7 +64,9 @@ def test_backend_use_creates_env_file(tmp_path) -> None:
     assert not (tmp_path / "nested" / "codex_home" / "config.toml").exists()
 
 
-def test_backend_use_internal_openbase_cloud_codex_keeps_codex_proxy(tmp_path) -> None:
+def test_backend_use_internal_openbase_cloud_codex_keeps_codex_proxy(
+    tmp_path, logged_in_no_services
+) -> None:
     env_file = tmp_path / "nested" / ".env"
 
     result = CliRunner().invoke(
@@ -144,3 +162,91 @@ def test_backend_use_rejects_unsupported_backend(tmp_path) -> None:
     assert result.exit_code != 0
     assert "Unsupported backend" in result.output
     assert not env_file.exists()
+
+
+def test_backend_use_fails_when_target_login_missing(tmp_path, monkeypatch) -> None:
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(
+        backend_cli,
+        "backend_login_problem",
+        lambda name: "Not logged in to Claude Code: run 'openbase-coder claude login' first.",
+    )
+
+    result = CliRunner().invoke(
+        main, ["backend", "use", "claude-code", "--env-file", str(env_file)]
+    )
+
+    assert result.exit_code != 0
+    assert "Not logged in to Claude Code" in result.output
+    assert "--skip-login-check" in result.output
+    assert not env_file.exists()
+
+
+def test_backend_use_skip_login_check_bypasses_probe(tmp_path, monkeypatch) -> None:
+    env_file = tmp_path / ".env"
+    probed: list[str] = []
+    monkeypatch.setattr(
+        backend_cli, "backend_login_problem", lambda name: probed.append(name)
+    )
+    monkeypatch.setattr(backend_cli, "schedule_backend_restart", lambda: None)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backend",
+            "use",
+            "claude-code",
+            "--skip-login-check",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert probed == []
+    assert "OPENBASE_CODING_BACKEND=claude_code" in env_file.read_text(encoding="utf-8")
+
+
+def test_backend_use_schedules_dispatcher_restart(tmp_path, monkeypatch) -> None:
+    env_file = tmp_path / ".env"
+    restarts: list[bool] = []
+    monkeypatch.setattr(backend_cli, "backend_login_problem", lambda name: None)
+    monkeypatch.setattr(
+        backend_cli,
+        "schedule_backend_restart",
+        lambda: restarts.append(True) or object(),
+    )
+
+    result = CliRunner().invoke(
+        main, ["backend", "use", "claude-code", "--env-file", str(env_file)]
+    )
+
+    assert result.exit_code == 0
+    assert restarts == [True]
+    assert "Dispatcher restart scheduled" in result.output
+
+
+def test_backend_use_no_restart_skips_restart(tmp_path, monkeypatch) -> None:
+    env_file = tmp_path / ".env"
+    monkeypatch.setattr(backend_cli, "backend_login_problem", lambda name: None)
+
+    def _unexpected_restart() -> None:
+        raise AssertionError("restart must not be scheduled with --no-restart")
+
+    monkeypatch.setattr(backend_cli, "schedule_backend_restart", _unexpected_restart)
+
+    result = CliRunner().invoke(
+        main,
+        ["backend", "use", "codex", "--no-restart", "--env-file", str(env_file)],
+    )
+
+    assert result.exit_code == 0
+    assert "Restart skipped" in result.output
+
+
+def test_schedule_backend_restart_without_installation(monkeypatch) -> None:
+    from openbase_coder_cli.services.installation import InstallationConfig
+
+    monkeypatch.setattr(InstallationConfig, "exists", classmethod(lambda cls: False))
+
+    assert backend_cli.schedule_backend_restart() is None

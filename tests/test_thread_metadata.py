@@ -360,3 +360,68 @@ def test_voice_history_tie_breaks_matching_agent_name_by_thread_id(
 
     assert entry.thread_id == "thread-2"
     assert entry.voice_id == "voice-2"
+
+
+def test_display_name_falls_back_to_project_then_a_label_never_the_id(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    thread_id = "s_0123456789abcdef"
+
+    in_project = annotate_thread_payload(
+        {"thread_id": thread_id, "directory": "/work/tic-tac-toe/"}
+    )
+    bare = annotate_thread_payload({"thread_id": thread_id})
+
+    assert in_project["display_name"] == "tic-tac-toe"
+    assert bare["display_name"] == "Conversation"
+
+
+def test_conversation_role_survives_transfer_without_collapsing_title(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    (tmp_path / "livekit-voice-route.json").write_text(
+        json.dumps(
+            {
+                "dispatcher_thread_id": "canonical",
+                "active_target_thread_id": "agent",
+            }
+        )
+    )
+    canonical = annotate_thread_payload(
+        {"thread_id": "canonical", "name": "Dispatcher"}
+    )
+    old = annotate_thread_payload({"thread_id": "historical", "name": "dispatcher"})
+    assert canonical["conversation_role"] == "dispatcher"
+    assert canonical["voice_route"]["active"] is False
+    assert old["conversation_role"] == "agent"
+    assert old["thread_id"] == "historical"
+
+
+def test_a_retired_dispatcher_keeps_the_dispatcher_identity(tmp_path: Path, monkeypatch):
+    """Recreating the Dispatcher renames the old session "dispatcher (retired)";
+    it must not become a Super Agent with a derived character (376, 2026-10-11:
+    "Hi, I'm Jacqueline" from the retired Dispatcher)."""
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    (tmp_path / "livekit-voice-route.json").write_text(
+        json.dumps(
+            {
+                "dispatcher_thread_id": "dispatcher-2",
+                "dispatcher_voice_id": "dispatcher-voice",
+                "dispatcher_voice_name": "Cory",
+                "updated_at": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    retired = annotate_thread_payload(
+        {"thread_id": "dispatcher-1", "name": "dispatcher (retired)"}
+    )
+    assert retired["agent_name"] == "dispatcher"
+    assert retired["voice_route"]["role"] == "none"
+    assert retired["voice_assignment"]["voice_name"] == "Cory"
+    assert retired["voice_assignment"]["source"] == "retired_dispatcher"
+    assert voice_route.is_dispatcher_label("Dispatcher (retired 1a2b3c4d)")
+    assert not voice_route.is_dispatcher_label("dispatcher helper")

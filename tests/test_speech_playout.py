@@ -5,7 +5,10 @@ from livekit.agents.voice.agent_activity import _SpeechHandleContextVar
 from livekit.agents.voice.speech_handle import SpeechHandle
 
 from openbase_coder_cli.livekit_agent.speech_playout import bind_interruption
-from openbase_coder_cli.livekit_agent.voice_delivery import VoiceDeliveryLedger, VoiceRouteSnapshot
+from openbase_coder_cli.livekit_agent.voice_delivery import (
+    VoiceDeliveryLedger,
+    VoiceRouteSnapshot,
+)
 
 
 def test_interrupted_sdk_handle_cancels_only_its_old_playout_hold():
@@ -45,7 +48,8 @@ def test_normal_sdk_completion_does_not_cancel_delivery():
     async def run():
         calls = []
         class Ledger:
-            mark_playout_interrupted = lambda self, record: calls.append(record)
+            def mark_playout_interrupted(self, record):
+                calls.append(record)
         handle = SpeechHandle.create()
         token = _SpeechHandleContextVar.set(handle)
         try:

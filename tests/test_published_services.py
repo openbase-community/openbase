@@ -370,12 +370,24 @@ def test_remove_serve_uses_exact_listener_flags(monkeypatch):
     assert commands == [["/usr/bin/tailscale", "serve", "--http=52807", "off"]]
 
 
-def test_openbase_direct_is_rejected_without_applying_a_route(monkeypatch):
+def test_openbase_direct_routes_only_https_hostnames(monkeypatch, isolated_registry):
     provider = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
     monkeypatch.setattr(provider, "is_netmesh_tsnet", lambda: True)
+    monkeypatch.setattr(provider, "serve_capability", lambda: {"supported": True})
+    monkeypatch.setattr(
+        provider, "serve_snapshot", lambda: {"etag": "t", "hash": "unit-test-plan"}
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.services.tunneld.ensure_tunneld_running", lambda: None
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.services.tunneld.tunneld_list_forwards", list
+    )
 
-    with pytest.raises(RuntimeError, match="Openbase Direct"):
-        routes.apply_route(PublishedService("docs", 3000, 52807, 52808))
+    # A legacy dynamic publication has no route on the embedded node.
+    legacy = PublishedService("docs", 3000, 52807, 52808)
+    with pytest.raises(RuntimeError, match="HTTPS hostname"):
+        routes.apply_route(legacy, desired_services=[legacy])
 
 
 def test_portless_path_mode_is_retired(isolated_registry):
@@ -870,11 +882,54 @@ def test_reconcile_accepts_fresh_helper_empty_config_as_initial_base(monkeypatch
     assert applied[0][1] == {"expected_etag": "v1", "expected_hash": "empty"}
 
 
-def test_reconcile_keeps_drift_guard_once_a_hash_was_recorded(monkeypatch):
+def test_reconcile_accepts_empty_config_after_node_change(monkeypatch):
+    """A re-enrolled node starts empty while the recorded hash is the old node's."""
     provider = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
     applied = []
     monkeypatch.setattr(
         provider, "serve_snapshot", lambda: {"etag": "v1", "hash": "empty"}
+    )
+    monkeypatch.setattr(
+        provider,
+        "plan_serve",
+        lambda rules: {"hash": "empty" if rules == [] else "baseline"},
+    )
+    monkeypatch.setattr(
+        provider,
+        "apply_serve",
+        lambda rules, **kwargs: applied.append((rules, kwargs)) or {"hash": "next"},
+    )
+
+    assert routes.reconcile_openbase_routes([], [], "old-node") == "next"
+    assert applied[0][1] == {"expected_etag": "v1", "expected_hash": "empty"}
+
+
+def test_reconcile_accepts_own_rules_for_this_node(monkeypatch):
+    provider = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
+    applied = []
+    monkeypatch.setattr(
+        provider, "serve_snapshot", lambda: {"etag": "v1", "hash": "baseline"}
+    )
+    monkeypatch.setattr(
+        provider,
+        "plan_serve",
+        lambda rules: {"hash": "empty" if rules == [] else "baseline"},
+    )
+    monkeypatch.setattr(
+        provider,
+        "apply_serve",
+        lambda rules, **kwargs: applied.append((rules, kwargs)) or {"hash": "next"},
+    )
+
+    assert routes.reconcile_openbase_routes([], [], "old-node") == "next"
+    assert applied[0][1]["expected_hash"] == "baseline"
+
+
+def test_reconcile_keeps_drift_guard_for_unknown_routes(monkeypatch):
+    provider = importlib.import_module("openbase_coder_cli.services.tailscale_provider")
+    applied = []
+    monkeypatch.setattr(
+        provider, "serve_snapshot", lambda: {"etag": "v1", "hash": "someone-else"}
     )
     monkeypatch.setattr(
         provider,

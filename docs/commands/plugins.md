@@ -111,10 +111,11 @@ Routes must start with `/dashboard`.
 
 ### Removed capabilities
 
-React component console pages (`render: "component"`, `import_module`,
-`export`), `project_views`, and `console_npm_packages` are no longer
-supported. Plugins that declare them fail validation with clear errors;
-expose plugin UI as iframe `console_pages` instead.
+React component console pages (`render: "component"`) and `project_views` are
+no longer supported. Plugins that declare them fail validation with clear
+errors; expose plugin UI as iframe `console_pages` instead. Legacy registry
+fields from older component pages, such as `import_module`, `export`, and
+`console_npm_packages`, are ignored when existing plugin registry records load.
 
 ## Collision Rules
 

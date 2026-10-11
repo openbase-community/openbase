@@ -31,7 +31,7 @@ Core workflows are:
 * Start and steer coding work by voice through a dispatcher agent.
 * Route an active voice call between the dispatcher and individual Super Agents.
 * Track running, waiting, completed, and failed coding threads.
-* Continue threads from the Mac app, browser console, iOS app, Android app, or CLI.
+* Continue threads from the Mac app, browser console, iOS app, or Android app.
 * Approve or deny agent permission requests without babysitting a terminal.
 * Review live output, generated Markdown reports, and git diffs.
 * Browse projects, reports, routines, skills, templates, devices, service
@@ -93,7 +93,8 @@ on Windows). See [Run in Docker](docs/docker.md).
 On Windows you can also run the runtime natively (beta): `./scripts/setup`
 works from a Windows checkout, and services are supervised without launchd or
 systemd through the Windows service backend, with Task Scheduler starting them
-at login. The Docker image remains the most battle-tested Windows path.
+at login. Native Windows is the supported Windows host path; use Docker when
+you want the containerized Linux runtime.
 
 ### 🛠️ Developer Setup
 
@@ -143,7 +144,11 @@ uv run pytest
 If you want a persistent `openbase-coder` command backed by your checkout:
 
 ```bash
+# From the workspace root:
 uv tool install -e ./cli
+
+# Or, from inside cli/:
+uv tool install -e .
 ```
 
 ### 📘 Documentation

@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import importlib
 
-import click
 import pytest
 from click.testing import CliRunner
 
 from openbase_coder_cli.cli import main
 
 desktop_cli = importlib.import_module("openbase_coder_cli.cli.desktop")
+desktop_control = importlib.import_module("openbase_coder_cli.desktop_control")
 
 
 def test_desktop_screen_share_start_posts_session(monkeypatch):
@@ -87,9 +87,9 @@ def test_desktop_launch_prefers_current_app_name(monkeypatch):
         calls.append(args)
         return type("Result", (), {"returncode": 0})()
 
-    monkeypatch.setattr(desktop_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(desktop_control.subprocess, "run", fake_run)
 
-    desktop_cli._launch_desktop_app()
+    desktop_control.launch_desktop_app()
 
     assert calls == [["open", "-a", "Openbase"]]
 
@@ -101,9 +101,9 @@ def test_desktop_launch_falls_back_to_legacy_app_name(monkeypatch):
         calls.append(args)
         return type("Result", (), {"returncode": 0 if len(calls) == 2 else 1})()
 
-    monkeypatch.setattr(desktop_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(desktop_control.subprocess, "run", fake_run)
 
-    desktop_cli._launch_desktop_app()
+    desktop_control.launch_desktop_app()
 
     assert calls == [
         ["open", "-a", "Openbase"],
@@ -113,12 +113,35 @@ def test_desktop_launch_falls_back_to_legacy_app_name(monkeypatch):
 
 def test_desktop_launch_error_names_current_and_legacy_apps(monkeypatch):
     monkeypatch.setattr(
-        desktop_cli.subprocess,
+        desktop_control.subprocess,
         "run",
         lambda *_args, **_kwargs: type("Result", (), {"returncode": 1})(),
     )
 
-    with pytest.raises(click.ClickException) as exc_info:
-        desktop_cli._launch_desktop_app()
+    with pytest.raises(desktop_control.DesktopControlError) as exc_info:
+        desktop_control.launch_desktop_app()
 
     assert "Openbase.app or legacy Openbase Coder.app" in str(exc_info.value)
+
+
+def test_desktop_control_request_relaunches_only_when_unreachable(monkeypatch):
+    attempts = []
+
+    def fake_once(method, path, *, json=None, timeout=15):
+        attempts.append(path)
+        raise desktop_control.DesktopControlError(
+            "Allow Screen Recording", code="screen_recording_permission_required"
+        )
+
+    monkeypatch.setattr(desktop_control, "request_once", fake_once)
+    monkeypatch.setattr(
+        desktop_control,
+        "launch_desktop_app",
+        lambda: pytest.fail("an app-reported error must not relaunch the app"),
+    )
+
+    with pytest.raises(desktop_control.DesktopControlError) as exc_info:
+        desktop_control.request("POST", "/livekit-companion/start-screen-share")
+
+    assert exc_info.value.code == "screen_recording_permission_required"
+    assert attempts == ["/livekit-companion/start-screen-share"]

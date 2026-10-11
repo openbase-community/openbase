@@ -234,6 +234,27 @@ def test_production_does_not_capture_or_collect(workspace, monkeypatch):
     }
 
 
+@pytest.mark.parametrize("config", [
+    InstallationConfig(workspace_path="", standalone=True),
+    InstallationConfig(workspace_path="", standalone=False),
+])
+def test_non_developer_installation_never_collects(workspace, monkeypatch, config):
+    """A DMG install writes standalone/no workspace; the API must stay disabled
+    even when runtime-package detection misses."""
+    monkeypatch.setattr(
+        "openbase_coder_cli.runtime.is_standalone_runtime", lambda: False
+    )
+    monkeypatch.setattr(InstallationConfig, "exists", classmethod(lambda cls: True))
+    monkeypatch.setattr(InstallationConfig, "load", classmethod(lambda cls: config))
+    monkeypatch.setattr(
+        collector, "_collect", lambda *_: pytest.fail("non-developer install scanned source")
+    )
+    assert collector.collect_freshness({"component": "desktop"}) == {
+        "enabled": False,
+        "components": [],
+    }
+
+
 def test_stopped_and_inactive_services_are_not_freshness_failures(
     workspace, monkeypatch
 ):

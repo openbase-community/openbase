@@ -7,17 +7,24 @@ and native clients still require explicit mocks; this is not an OS sandbox.
 """
 
 import ipaddress
-import os
 import socket
 import tempfile
+from pathlib import Path
 
 import pytest
 
 # Set this before collecting test modules: many runtime paths are computed at
 # import time, and a per-test fixture is too late to protect those imports.
 _test_data_dir = tempfile.TemporaryDirectory(prefix="openbase-unit-tests-")
-_original_data_dir = os.environ.get("OPENBASE_CODER_CLI_DATA_DIR")
-os.environ["OPENBASE_CODER_CLI_DATA_DIR"] = _test_data_dir.name
+_test_environment = pytest.MonkeyPatch()
+_test_environment.setenv("OPENBASE_CODER_CLI_DATA_DIR", _test_data_dir.name)
+# Setup also writes to the shared agent homes, outside Openbase's data dir.
+# Override inherited homes before imports cache paths; deleting the temporary
+# hook script alone would leave broken hook registrations in the user's config.
+for variable, directory in (("CODEX_HOME", ".codex"), ("CLAUDE_CONFIG_DIR", ".claude")):
+    home = Path(_test_data_dir.name) / directory
+    home.mkdir()
+    _test_environment.setenv(variable, str(home))
 _network_guard = pytest.MonkeyPatch()
 
 
@@ -71,10 +78,7 @@ def pytest_configure(config):
 
 def pytest_unconfigure(config):
     _network_guard.undo()
-    if _original_data_dir is None:
-        os.environ.pop("OPENBASE_CODER_CLI_DATA_DIR", None)
-    else:
-        os.environ["OPENBASE_CODER_CLI_DATA_DIR"] = _original_data_dir
+    _test_environment.undo()
     _test_data_dir.cleanup()
 
 
@@ -111,10 +115,30 @@ def _isolated_host_state(monkeypatch, tmp_path):
     env_path = tmp_path / "openbase-test.env"
     env_path.write_text("")
     monkeypatch.setattr("openbase_coder_cli.paths.DEFAULT_ENV_FILE_PATH", env_path)
+    # Never read or dial this machine's real Openbase Sync daemon.
     monkeypatch.setattr(
-        "openbase_coder_cli.code_sync.conflicts.CODE_SYNC_CONFLICTS_PATH",
-        tmp_path / "code-sync-conflicts.json",
+        "openbase_coder_cli.sync_daemon.SYNC_DAEMON_CONFIG_PATH",
+        tmp_path / "openbase-sync" / "config.toml",
     )
+    monkeypatch.setattr(
+        "openbase_coder_cli.sync_daemon.SYNC_DAEMON_SOCKET_PATH",
+        tmp_path / "openbase-sync" / "syncd.sock",
+    )
+    # A live CLI login failure is remembered for the AI account card; keep it
+    # (and the cloud-workspace wording switch) off this machine's real state.
+    monkeypatch.setattr(
+        "openbase_coder_cli.backend_auth.RELINK_STATE_PATH",
+        tmp_path / "ai-account-relink.json",
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.backend_auth.on_cloud_workspace", lambda: False
+    )
+    # Never ask this machine's real Claude Code / Codex CLI whether it is
+    # signed in; tests that need a signed-out CLI patch the probe themselves.
+    monkeypatch.setattr(
+        "openbase_coder_cli.backend_auth._probe_login_missing", lambda _backend: False
+    )
+    monkeypatch.setattr("openbase_coder_cli.backend_auth._login_state_cache", {})
     # Discard inherited backend settings and changes made by other tests.
     # Tests must see only what they set themselves.
     monkeypatch.delenv("OPENBASE_CODER_CLI_WEB_BACKEND_URL", raising=False)
@@ -125,3 +149,34 @@ def _isolated_host_state(monkeypatch, tmp_path):
     for key in profile_environment():
         monkeypatch.delenv(key, raising=False)
     return env_path
+
+
+@pytest.fixture(autouse=True)
+def _no_explicit_agent_dispatch(monkeypatch):
+    """The room-token view dispatches the agent through the LiveKit server
+    API; tests have no server (and must never reach a real one), so the
+    feature is switched off unless a test turns it on."""
+    monkeypatch.setenv("LIVEKIT_EXPLICIT_AGENT_DISPATCH", "0")
+
+
+@pytest.fixture(autouse=True)
+def _livekit_agent_worker_ready(monkeypatch):
+    """The room-token view refuses rooms while the agent worker is down; tests
+    have no worker, so treat it as ready unless a test says otherwise."""
+    import sys
+
+    # Only patch when a test already imported the views (importing them here
+    # would pull Django settings into every unrelated test).
+    livekit_views = sys.modules.get("openbase_coder_cli.openbase_coder_cli_app.livekit")
+    if livekit_views is not None:
+        monkeypatch.setattr(livekit_views, "livekit_agent_worker_ready", lambda: True)
+
+
+@pytest.fixture
+def volume(tmp_path, monkeypatch):
+    """A container's durable data directory (Maritime's /data/openbase) for the
+    docker home-state scripts (test_container_home_state*.py)."""
+    monkeypatch.delenv("SUPER_AGENTS_CLAUDE_CODE_HOME", raising=False)
+    data_dir = tmp_path / "data" / "openbase"
+    data_dir.mkdir(parents=True)
+    return data_dir

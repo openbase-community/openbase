@@ -40,6 +40,19 @@ from .setup import setup
 WEB_BACKEND_ENV_KEY = "OPENBASE_CODER_CLI_WEB_BACKEND_URL"
 BOOTSTRAP_TOKEN_ENV_KEY = "OPENBASE_CODER_BOOTSTRAP_TOKEN"
 BOOTSTRAP_EXCHANGE_PATH = "/api/openbase/devspaces/bootstrap/exchange/"
+REQUESTED_OPTIONAL_SCOPES = ("notify", "netmesh_publish")
+# What Cloud may hand back: the base pair plus any subset of the optional
+# scopes, in Cloud's canonical order.
+ACCEPTED_BOOTSTRAP_SCOPES = (
+    ["llm_proxy", "audio_proxy"],
+    ["llm_proxy", "audio_proxy", "notify"],
+    ["llm_proxy", "audio_proxy", "netmesh_publish"],
+    ["llm_proxy", "audio_proxy", "notify", "netmesh_publish"],
+)
+# A Cloud that predates a scope rejects the whole request; retry with the
+# scopes it knows, newest first dropped.
+_SCOPE_REQUEST_FALLBACKS = (REQUESTED_OPTIONAL_SCOPES, ("notify",), ())
+UNKNOWN_SCOPES_MARKER = "Unknown machine token scopes"
 NETMESH_AUTHKEY_FILE = DEFAULT_ENV_FILE_PATH.parent / "bootstrap-netmesh-authkey"
 
 
@@ -119,19 +132,41 @@ def _stage_single_use_netmesh_key(auth_key: str) -> None:
 def _exchange_bootstrap(bootstrap_token: str, web_backend_url: str) -> dict:
     if urlsplit(web_backend_url).scheme != "https":
         raise click.ClickException("Workspace bootstrap requires an HTTPS backend.")
-    try:
-        response = httpx.post(
-            f"{web_backend_url.rstrip('/')}{BOOTSTRAP_EXCHANGE_PATH}",
-            headers={"Authorization": f"Openbase-Bootstrap {bootstrap_token}"},
-            timeout=30,
-        )
-    except httpx.HTTPError as exc:
-        raise click.ClickException(
-            f"Workspace bootstrap request failed: {exc}"
-        ) from exc
+    for attempt, requested in enumerate(_SCOPE_REQUEST_FALLBACKS):
+        try:
+            response = httpx.post(
+                f"{web_backend_url.rstrip('/')}{BOOTSTRAP_EXCHANGE_PATH}",
+                headers={"Authorization": f"Openbase-Bootstrap {bootstrap_token}"},
+                # Opt in to the optional scopes (notify: push "open this URL"
+                # to the owner's phones; netmesh_publish: private service
+                # hostnames for this node). The oldest Cloud versions ignore
+                # the body and grant the base pair; a Cloud that knows some
+                # but not all of the scopes rejects the request, so retry
+                # with fewer (the grant is single-use only once consumed).
+                json={"scopes": list(requested)},
+                timeout=30,
+            )
+        except httpx.HTTPError as exc:
+            raise click.ClickException(
+                f"Workspace bootstrap request failed: {exc}"
+            ) from exc
+        if (
+            response.status_code == 400
+            and UNKNOWN_SCOPES_MARKER in response.text
+            and attempt + 1 < len(_SCOPE_REQUEST_FALLBACKS)
+        ):
+            continue
+        break
     if response.status_code >= 400:
+        # Say who answered: a 403 from Cloud is a JSON "detail", while an
+        # upstream proxy or WAF answers with HTML/text. Never echo secrets
+        # (the request carried the grant; the response never does).
+        body = " ".join(response.text.split())[:200]
+        server = response.headers.get("server", "")
         raise click.ClickException(
-            f"Workspace bootstrap was rejected with HTTP {response.status_code}."
+            f"Workspace bootstrap was rejected with HTTP {response.status_code} "
+            f"from {urlsplit(web_backend_url).hostname}"
+            f"{f' (server: {server})' if server else ''}: {body or '<empty body>'}"
         )
     try:
         payload = response.json()
@@ -142,7 +177,7 @@ def _exchange_bootstrap(bootstrap_token: str, web_backend_url: str) -> dict:
     if not isinstance(payload, dict):
         raise click.ClickException("Workspace bootstrap returned an invalid response.")
     scopes = payload.get("machine_token_scopes")
-    if scopes != ["llm_proxy", "audio_proxy"]:
+    if scopes not in ACCEPTED_BOOTSTRAP_SCOPES:
         raise click.ClickException("Bootstrap returned invalid machine token scopes.")
     owner = payload.get("owner")
     netmesh = payload.get("netmesh")
@@ -315,6 +350,10 @@ def provision(
         tailnet_provider="netmesh-tsnet" if kind == "container" else None,
         skip_services=kind == "container",
         json_progress=False,
+        # ctx.invoke passes no command-line flags, so setup's interactivity
+        # check falls through to isatty(); on Maritime the VM console is a tty
+        # and the "Log in to Openbase Cloud now?" prompt blocked boot forever.
+        interactive_mode=False,
     )
     if post_setup_env:
         # Setup must create the complete env file on a new volume before we
@@ -326,9 +365,13 @@ def provision(
     if kind != "container":
         _install_cloud_workspace_services()
 
-    # 6. Optional code sync (bundles may omit the field entirely).
+    # 6. Code sync needs a hub/edge pairing the bundle cannot carry; point at
+    # the setup command instead of arming anything (bundles may omit it).
     if bundle.get("code_sync") is True:
-        _enable_code_sync()
+        click.echo(
+            "Code sync requested: pair this workspace with Openbase Sync via "
+            "'openbase-coder sync-daemon configure'."
+        )
 
     click.echo(f"Provisioned {kind} workspace against {web_backend_url}.")
 
@@ -340,85 +383,3 @@ def _install_cloud_workspace_services() -> None:
     config = require_installation()
     install_service(config, find_service("openbase-cloud-auth-rehydrate"))
     install_service(config, find_service("openbase-cloud-heartbeat"))
-
-
-SYNCTHING_RELEASES_API = (
-    "https://api.github.com/repos/syncthing/syncthing/releases/latest"
-)
-_SYNCTHING_ARCHES = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64"}
-
-
-def _ensure_syncthing_linux() -> None:
-    """Install syncthing on a Linux workspace via the managed installer."""
-    from openbase_coder_cli.code_sync.install import ensure_syncthing_installed
-
-    ensure_syncthing_installed()
-
-
-def _download_syncthing_release() -> None:
-    """Download the latest static syncthing binary into ~/.openbase/bin."""
-    import tarfile
-    import tempfile
-
-    import httpx
-
-    from openbase_coder_cli.paths import OPENBASE_BIN_DIR
-
-    machine = platform.machine().lower()
-    arch = _SYNCTHING_ARCHES.get(machine)
-    if arch is None:
-        raise click.ClickException(f"Unsupported syncthing architecture: {machine}")
-
-    release = httpx.get(SYNCTHING_RELEASES_API, timeout=30).json()
-    version = str(release.get("tag_name", "")).strip()
-    if not version:
-        raise click.ClickException("Could not determine the latest syncthing release.")
-    archive_name = f"syncthing-linux-{arch}-{version}.tar.gz"
-    url = (
-        "https://github.com/syncthing/syncthing/releases/download/"
-        f"{version}/{archive_name}"
-    )
-
-    OPENBASE_BIN_DIR.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        archive_path = Path(tmp_dir) / archive_name
-        with httpx.stream("GET", url, timeout=120, follow_redirects=True) as response:
-            response.raise_for_status()
-            with archive_path.open("wb") as handle:
-                for chunk in response.iter_bytes():
-                    handle.write(chunk)
-        with tarfile.open(archive_path) as archive:
-            member = next(
-                (
-                    item
-                    for item in archive.getmembers()
-                    if item.isfile() and Path(item.name).name == "syncthing"
-                ),
-                None,
-            )
-            if member is None:
-                raise click.ClickException(
-                    f"No syncthing binary found in {archive_name}."
-                )
-            member.name = "syncthing"
-            archive.extract(member, OPENBASE_BIN_DIR)
-    (OPENBASE_BIN_DIR / "syncthing").chmod(0o755)
-
-
-def _enable_code_sync() -> None:
-    """Best-effort code-sync arming for provisioned workspaces.
-
-    Forced because the user's other devices may register their sync
-    capabilities after this workspace boots; the rendered config is refreshed
-    on every settings change and reconcile tick.
-    """
-    from openbase_coder_cli.code_sync import CodeSyncError
-    from openbase_coder_cli.code_sync.manager import enable_code_sync
-
-    try:
-        _ensure_syncthing_linux()
-        enable_code_sync(force=True)
-    except (click.ClickException, CodeSyncError) as exc:
-        click.echo(click.style(f"  WARN  code sync not enabled: {exc}", fg="yellow"))
-    else:
-        click.echo("Enabled code sync.")

@@ -21,11 +21,10 @@ TAILNET_EXPERIENCES: tuple[dict[str, Any], ...] = (
         "electron_onboarding": True,
         "electron_platforms": ["darwin"],
         "summary": (
-            "Bundled Netmesh networking uses Openbase-operated Headscale and "
-            "Tailscale-compatible open-source clients. It does not require a "
-            "Tailscale account. Openbase VPN collects no VPN traffic or usage "
-            "analytics and sends no VPN analytics to Tailscale. It gives "
-            "full network access including websites created on your computer."
+            "Recommended. No telemetry. Based on Headscale OSS + Tailscale DERP "
+            "servers. Openbase VPN collects no VPN traffic or usage analytics "
+            "and sends no VPN analytics to Tailscale. Allows seamless handoff "
+            "between phone and computer."
         ),
     },
     {
@@ -37,9 +36,9 @@ TAILNET_EXPERIENCES: tuple[dict[str, Any], ...] = (
         "electron_onboarding": True,
         "electron_platforms": ["darwin", "linux", "win32"],
         "summary": (
-            "An embedded connection for environments that cannot support a VPN. "
-            "Openbase app traffic stays available, but other apps and browsers "
-            "cannot use it to open websites created on your computer."
+            "Fallback only. An embedded connection for environments that cannot "
+            "support a VPN. Openbase app traffic stays available, but created "
+            "web apps and CLI authentication will not be available from your phone."
         ),
     },
     {
@@ -51,8 +50,8 @@ TAILNET_EXPERIENCES: tuple[dict[str, Any], ...] = (
         "electron_onboarding": False,
         "electron_platforms": [],
         "summary": (
-            "Compatibility transport for developer and headless CLI installs. "
-            "The Electron onboarding flow does not offer this transport."
+            "Beta. Try it if you are already using Tailscale. Compatibility "
+            "transport for developer and headless CLI installs."
         ),
     },
 )

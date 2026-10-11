@@ -28,6 +28,7 @@ from .models import ThreadStatus as SessionStatus
 from .models import TurnInfo as RunInfo
 from .session_manager_approvals import SessionManagerApprovalsMixin
 from .session_manager_base import (
+    _TRACKED_TURN_TEXT_LIMIT,
     ThreadListPage,
     _configured_model_for_role,
     _default_client_for_execution_backend,
@@ -40,9 +41,14 @@ from .session_manager_base import (
     logger,
     resolve_super_agent_instructions_path,
 )
+from .session_manager_claude_events import ClaudeEventsMixin
 from .session_manager_routines import SessionManagerRoutinesMixin
-from .session_manager_threads import SessionManagerThreadsMixin
+from .session_manager_threads import (
+    SessionManagerThreadsMixin,
+    dispatcher_turn_instructions,
+)
 from .session_manager_turns import SessionManagerTurnsMixin
+from .thread_moves import ensure_thread_writable
 from .thread_payloads import (
     _optional_turn_string,
     _timestamp_to_datetime,
@@ -88,6 +94,57 @@ async def _broadcast(session_id: str, event: dict[str, Any]) -> None:
         )
 
 
+def finished_notification_text(session_state: Any, *, failed: bool) -> tuple[str, str]:
+    """Title and body for a thread-finished alert.
+
+    The title is the thread's label as the apps show it (its name, else its
+    title or first prompt), so two threads that began alike stay apart; the
+    body is the start of the reply that just finished, so a later turn's
+    alert never reads like the first request finishing.
+    """
+    label = _first_line(
+        session_state.name or session_state.title or session_state.preview or ""
+    ) or (Path(session_state.directory).name if session_state.directory else "")
+    agent_name = (getattr(session_state, "agent_name", None) or "").strip()
+    if agent_name and label and agent_name != label:
+        title = f"{agent_name}: {label}"
+    else:
+        title = agent_name or label or "Thread finished"
+    reply = _latest_reply_line(session_state)
+    if failed:
+        body = f"The turn failed: {reply}" if reply else "The turn failed."
+    else:
+        body = reply or "The agent finished."
+    return title, body
+
+
+def _latest_reply_line(session_state: Any) -> str:
+    """First line of the agent's reply in the turn that just finished."""
+    run = session_state.current_run or (
+        session_state.run_history[-1] if session_state.run_history else None
+    )
+    if run is None:
+        return ""
+    replies = [
+        message.text
+        for message in run.messages
+        if message.role == "assistant" and message.text.strip()
+    ]
+    return _first_line(replies[-1] if replies else run.accumulated_output)
+
+
+def _first_line(text: str) -> str:
+    """First line with readable text, minus Markdown markers."""
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("```"):
+            continue
+        line = line.lstrip("#>*-+ ").replace("**", "").replace("`", "").strip()
+        if line:
+            return line
+    return ""
+
+
 async def _notify_manual_thread_finished(
     thread_id: str,
     session_state: Any,
@@ -120,16 +177,7 @@ async def _notify_manual_thread_finished(
         if not await sync_to_async(is_manual_thread, thread_sensitive=False)(thread_id):
             return
 
-        title = (
-            session_state.title
-            or session_state.name
-            or Path(session_state.directory).name
-            or "Thread finished"
-        )
-        if failed:
-            body = "The turn failed."
-        else:
-            body = (session_state.preview or "").strip() or "The agent finished."
+        title, body = finished_notification_text(session_state, failed=failed)
         await sync_to_async(notify_thread_turn_finished, thread_sensitive=False)(
             thread_id,
             title=title,
@@ -144,13 +192,18 @@ async def _notify_manual_thread_finished(
 
 
 def _turn_failure_message(params: dict[str, Any]) -> str:
+    from openbase_coder_cli.backend_auth import login_failure_message
+    from openbase_coder_cli.cloud_model_errors import normalize_model_proxy_error
+
+    if login_message := login_failure_message(params, live=True):
+        return login_message
     error = params.get("error")
     if isinstance(error, dict):
         message = error.get("message")
         if isinstance(message, str) and message.strip():
-            return message.strip()
+            return normalize_model_proxy_error(message.strip())
     if isinstance(error, str) and error.strip():
-        return error.strip()
+        return normalize_model_proxy_error(error.strip())
     return "The agent turn failed unexpectedly."
 
 
@@ -176,6 +229,7 @@ def _agent_message_boundary(previous_text: str, next_text: str) -> str:
 
 
 class CodexAppServerSessionManager(
+    ClaudeEventsMixin,
     SessionManagerThreadsMixin,
     SessionManagerTurnsMixin,
     SessionManagerRoutinesMixin,
@@ -207,7 +261,13 @@ class CodexAppServerSessionManager(
         self._delivered_item_text: dict[tuple[str, str], str] = {}
         self._turn_prompt: dict[str, str] = {}
         self._turn_steers: dict[str, list[Any]] = {}
+        # Each backend notification is handled in its own task, so a turn's
+        # turn/started can be processed after its turn/completed. Finished
+        # turns are remembered (bounded) so that late start is ignored instead
+        # of re-announcing a finished turn as running.
+        self._finished_turns: dict[str, None] = {}
         self._state_lock = asyncio.Lock()
+        self._claude_watchers: dict[str, asyncio.Task[None]] = {}
 
     def _default_client(self, execution_backend: str) -> _SuperAgentsClient:
         return _default_client_for_execution_backend(
@@ -216,8 +276,12 @@ class CodexAppServerSessionManager(
             execution_backend=execution_backend,
         )
 
-    async def send_message(self, session_id: str, message: str) -> str:
+    async def send_message(
+        self, session_id: str, message: str, model: str | None = None
+    ) -> str:
         """Start a turn on a Codex app-server thread."""
+        # A thread pushed to another computer continues there only.
+        ensure_thread_writable(session_id)
         thread = await self.get_session_state(session_id)
         if thread is None:
             raise ValueError(f"Thread {session_id} not found")
@@ -233,7 +297,7 @@ class CodexAppServerSessionManager(
 
         message = _with_dispatcher_onboarding_reminder(session_id, message)
 
-        model = self._model_for_thread(thread)
+        model = self._resolve_turn_model(thread, model)
         role_turn_input = {
             "prompt": message,
             "cwd": thread.directory,
@@ -242,7 +306,10 @@ class CodexAppServerSessionManager(
         if model:
             role_turn_input["model"] = model
 
+        ensure_thread_writable(session_id)
         if self._uses_backend_session_api():
+            if dispatcher_rules := dispatcher_turn_instructions(session_id):
+                role_turn_input["developerInstructions"] = dispatcher_rules
             started = await self._client.start_turn_by_label(
                 LabelQueryInput(thread_id=session_id, cwd=thread.directory),
                 role_turn_input,
@@ -252,6 +319,7 @@ class CodexAppServerSessionManager(
                 raise RuntimeError("Super Agents did not return a turn id")
             async with self._state_lock:
                 self._remember_turn_prompt_locked(turn_id, message)
+            self._watch_legacy_claude_thread(session_id)
             return turn_id
 
         turn_input = {
@@ -259,11 +327,13 @@ class CodexAppServerSessionManager(
             **role_turn_input,
         }
         try:
+            ensure_thread_writable(session_id)
             started = await self._client.start_turn(turn_input)
         except RuntimeError as exc:
             if not _is_thread_unavailable_error(exc):
                 raise
             await self._resume_thread(session_id, thread.directory)
+            ensure_thread_writable(session_id)
             started = await self._client.start_turn(turn_input)
         turn_id = extract_turn_id(started)
         if not turn_id:
@@ -313,6 +383,7 @@ class CodexAppServerSessionManager(
         return turn_id
 
     async def _broadcast_thread_state(self, thread_id: str) -> None:
+        self._watch_legacy_claude_thread(thread_id)
         session_state = await self.get_session_state(thread_id)
         if session_state is not None:
             await _broadcast(
@@ -339,7 +410,7 @@ class CodexAppServerSessionManager(
         if not thread_id:
             return
 
-        if method == "server_request":
+        if method in {"server_request", "turn/updated"}:
             await self._broadcast_thread_state(thread_id)
             return
 
@@ -362,8 +433,13 @@ class CodexAppServerSessionManager(
         if method == "item/completed":
             item = params.get("item", {})
             if isinstance(item, dict) and item.get("type") == "agentMessage":
+                from openbase_coder_cli.cloud_model_errors import (
+                    normalize_model_proxy_error,
+                )
+
                 text = item.get("text", "")
                 if turn_id and isinstance(text, str) and text:
+                    text = normalize_model_proxy_error(text)
                     item_id = _notification_item_id(params)
                     if item_id:
                         delivered = self._delivered_item_text.get(
@@ -384,15 +460,18 @@ class CodexAppServerSessionManager(
 
         if method in {"turn/completed", "turn/failed"}:
             from openbase_coder_cli.openbase_coder_cli_app.notification_runtime import (
-                run_notification_sweep,
+                request_notification_sweep,
             )
 
             if turn_id:
                 async with self._state_lock:
                     self._forget_turn_locked(turn_id)
+                    self._finished_turns[turn_id] = None
+                    while len(self._finished_turns) > _TRACKED_TURN_TEXT_LIMIT:
+                        self._finished_turns.pop(next(iter(self._finished_turns)))
             # Agent turns can write reports too, even when another turn is queued
             # or the completed thread is no longer available to read.
-            await run_notification_sweep(force=True)
+            request_notification_sweep()
             if method == "turn/failed":
                 failure_message = _turn_failure_message(params)
                 logger.error(
@@ -440,6 +519,8 @@ class CodexAppServerSessionManager(
         (with a new prompt) replaced the previous one.
         """
         async with self._state_lock:
+            if turn_id in self._finished_turns:
+                return
             already_known = turn_id in self._turn_to_session
             self._turn_to_session[turn_id] = thread_id
             self._delivered_text.setdefault(turn_id, "")
@@ -472,6 +553,10 @@ class CodexAppServerSessionManager(
                     turn, "reasoningEffort", "reasoning_effort"
                 ),
             )
+        async with self._state_lock:
+            # The turn may have finished while its state was being read.
+            if turn_id in self._finished_turns:
+                return
         await _broadcast(
             thread_id,
             {"type": "turn_started", "data": run.model_dump(mode="json")},

@@ -17,7 +17,9 @@ from openbase_coder_cli.thread_sync.thread_payloads import (
         ("inProgress", ThreadStatus.waiting, ThreadStatus.waiting, None),
         ("completed", None, ThreadStatus.completed, 0),
         ("failed", None, ThreadStatus.error, -1),
-        ("interrupted", None, ThreadStatus.error, -1),
+        ("interrupted", None, ThreadStatus.interrupted, None),
+        ("cancelled", None, ThreadStatus.cancelled, None),
+        ("canceled", None, ThreadStatus.cancelled, None),
     ],
 )
 def test_turn_exit_code_is_unset_until_terminal(
@@ -152,3 +154,150 @@ def test_session_from_thread_backfills_model_and_effort_from_newest_turn() -> No
     payload = session.model_dump(mode="json")
     assert payload["turn_history"][-1]["model"] == "claude-fable-5"
     assert payload["turn_history"][-1]["reasoning_effort"] == "high"
+
+
+def test_run_from_turn_maps_recorded_steers() -> None:
+    # Claude Code turns record steering texts on the turn row (there are no
+    # userMessage items); every steer must render in thread views, in order.
+    run = _run_from_turn(
+        {
+            "id": "turn_1",
+            "status": "inProgress",
+            "prompt": "<voice>start the fix</voice>",
+            "steers": [
+                {
+                    "text": "<voice>also update docs</voice>",
+                    "createdAt": "2026-09-22T12:00:00.000Z",
+                },
+                {
+                    "text": "<voice>and push it</voice>",
+                    "createdAt": "2026-09-22T12:01:00.000Z",
+                },
+                {"text": "   "},
+                "bogus",
+            ],
+        }
+    )
+
+    assert run.message == "<voice>start the fix</voice>"
+    assert [steer.text for steer in run.steers] == [
+        "<voice>also update docs</voice>",
+        "<voice>and push it</voice>",
+    ]
+    assert run.steers[0].created_at is not None
+
+
+def test_run_from_turn_prefers_user_message_items_over_recorded_steers() -> None:
+    # Codex turns carry steering input as extra userMessage items; recorded
+    # steers must not double them.
+    run = _run_from_turn(
+        {
+            "id": "turn_1",
+            "status": "inProgress",
+            "items": [
+                {"type": "userMessage", "content": [{"type": "text", "text": "start"}]},
+                {
+                    "type": "userMessage",
+                    "content": [{"type": "text", "text": "steer via item"}],
+                },
+            ],
+            "steers": [{"text": "recorded steer"}],
+        }
+    )
+
+    assert [steer.text for steer in run.steers] == ["steer via item"]
+
+
+@pytest.mark.parametrize("backend", [None, "claude_code", "codex"])
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize(
+    ("native_status", "expected"),
+    [
+        ("cancelled", "cancelled"),
+        ("canceled", "cancelled"),
+        ("interrupted", "interrupted"),
+    ],
+)
+def test_stopped_turn_survives_thread_payload_serialization(
+    backend, wrapped, native_status, expected
+):
+    # Terminal state must win over a leftover waiting flag and never become a
+    # failed turn or an active turn in the mobile history payload.
+    status = (
+        {"type": native_status, "activeFlags": ["waitingOnUserInput"]}
+        if wrapped
+        else native_status
+    )
+    thread = {
+        "threadId": "s_stopped",
+        "cwd": "/tmp/project",
+        "status": status,
+        "activeTurnId": None,
+        "turns": [
+            {
+                "id": "t_stopped",
+                "status": status,
+                "error": None,
+                "prompt": "Create the files",
+                "completedAt": "2026-10-10T13:05:23Z",
+            }
+        ],
+    }
+    if backend:
+        thread["backend"] = backend
+    for include_turns in (False, True):
+        payload = _session_from_thread(thread, include_turns=include_turns).model_dump(
+            mode="json"
+        )
+        assert payload["status"] == expected
+        assert payload["current_turn"] is None
+        if include_turns:
+            turn = payload["turn_history"][0]
+            assert turn["status"] == expected
+            assert turn["return_code"] is None
+            assert turn["accumulated_stderr"] == ""
+            assert turn["prompt"] == "Create the files"
+
+
+@pytest.mark.parametrize(
+    "status", ["cancelled", "canceled", "interrupted", "completed", "failed"]
+)
+def test_real_turn_error_is_preserved_even_with_stopped_or_completed_status(status):
+    turn = _run_from_turn(
+        {"id": "t_failed", "status": status, "error": {"message": "Backend failed"}}
+    )
+    assert turn.status == ThreadStatus.error
+    assert turn.return_code == -1
+    assert "Backend failed" in turn.accumulated_stderr
+
+
+def test_turn_messages_preserve_interleaved_input_and_output():
+    run = _run_from_turn(
+        {
+            "id": "turn",
+            "status": "inProgress",
+            "items": [
+                {
+                    "type": "userMessage",
+                    "id": "p",
+                    "content": [{"type": "text", "text": "Hello"}],
+                },
+                {"type": "agentMessage", "id": "a", "text": "First answer"},
+                {
+                    "type": "userMessage",
+                    "id": "s",
+                    "content": [{"type": "text", "text": "Follow up"}],
+                },
+                {"type": "agentMessage", "id": "b", "text": "Second answer"},
+            ],
+        }
+    )
+    assert [(item.role, item.text) for item in run.messages] == [
+        ("user", "Hello"),
+        ("assistant", "First answer"),
+        ("user", "Follow up"),
+        ("assistant", "Second answer"),
+    ]
+    assert run.message == "Hello"
+    assert [steer.text for steer in run.steers] == ["Follow up"]
+    assert run.accumulated_output == "First answer\n\nSecond answer"

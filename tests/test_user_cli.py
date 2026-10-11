@@ -266,7 +266,8 @@ def test_user_say_rejects_blank_agent_name():
     assert "Agent name is required and cannot be blank" in result.output
 
 
-def test_user_ios_open_url_posts_control_command(monkeypatch):
+@pytest.mark.parametrize("group", ["phone", "ios"])
+def test_user_open_url_posts_control_command(monkeypatch, group):
     calls = []
 
     def fake_request(method, url, **kwargs):
@@ -285,11 +286,11 @@ def test_user_ios_open_url_posts_control_command(monkeypatch):
 
     result = CliRunner().invoke(
         user_cli.user,
-        ["ios", "open-url", "openbase://threads/123"],
+        [group, "open-url", "openbase://threads/123"],
     )
 
     assert result.exit_code == 0
-    assert "delivered: ios-app-control-1" in result.output
+    assert "Sent to the Openbase app on your phone." in result.output
     assert calls == [
         (
             "http://127.0.0.1:7999/api/user/ios-app-control/",
@@ -298,7 +299,11 @@ def test_user_ios_open_url_posts_control_command(monkeypatch):
     ]
 
 
-def test_user_ios_open_url_fails_when_no_app_confirms_receipt(monkeypatch):
+def test_user_ios_open_url_pushes_when_no_app_confirms_receipt(monkeypatch):
+    from openbase_coder_cli.config import cloud_notifications
+
+    pushes = []
+    monkeypatch.setattr(cloud_notifications, "send_notification_push", lambda **kwargs: pushes.append(kwargs))
     def fake_request(method, url, **kwargs):
         return httpx.Response(
             202,
@@ -316,12 +321,13 @@ def test_user_ios_open_url_fails_when_no_app_confirms_receipt(monkeypatch):
         ["ios", "open-url", "openbase://threads/123"],
     )
 
-    assert result.exit_code != 0
-    assert "published (unconfirmed): ios-app-control-1" in result.output
-    assert "No iOS app confirmed receipt" in result.output
+    assert result.exit_code == 0
+    assert "Sent a notification to your phone" in result.output
+    assert pushes[0]["user_info"] == {"openbase_destination": "open_url", "url": "openbase://threads/123"}
 
 
-def test_user_ios_mute_and_unmute_post_control_commands(monkeypatch):
+@pytest.mark.parametrize("group", ["phone", "ios"])
+def test_user_mute_and_unmute_post_control_commands(monkeypatch, group):
     calls = []
 
     def fake_request(method, url, **kwargs):
@@ -338,8 +344,8 @@ def test_user_ios_mute_and_unmute_post_control_commands(monkeypatch):
 
     patch_local_server_request(monkeypatch, fake_request)
 
-    mute_result = CliRunner().invoke(user_cli.user, ["ios", "mute"])
-    unmute_result = CliRunner().invoke(user_cli.user, ["ios", "unmute"])
+    mute_result = CliRunner().invoke(user_cli.user, [group, "mute"])
+    unmute_result = CliRunner().invoke(user_cli.user, [group, "unmute"])
 
     assert mute_result.exit_code == 0
     assert unmute_result.exit_code == 0
@@ -692,7 +698,7 @@ def test_voice_route_reports_blocker(monkeypatch):
 def test_transfer_to_thread_reports_blocker(monkeypatch):
     def fake_request(method, url, **kwargs):
         assert method == "POST"
-        assert kwargs["json"] == {"thread_id": "thread-1"}
+        assert kwargs["json"] == {"thread_id": "thread-1", "announce": False}
         return httpx.Response(409, json={"detail": "transfer blocked"})
 
     patch_local_server_request(monkeypatch, fake_request)
@@ -727,7 +733,7 @@ def test_transfer_to_agent_posts_agent_name(monkeypatch):
     assert calls == [
         (
             "http://127.0.0.1:7999/api/livekit-voice-route/transfer/",
-            {"agent_name": "Build Agent"},
+            {"agent_name": "Build Agent", "announce": False},
         )
     ]
 
@@ -831,6 +837,24 @@ def test_default_dispatcher_model_sets_config_file(monkeypatch, tmp_path):
     )
 
 
+def test_default_dispatcher_model_accepts_other_codex_models(monkeypatch, tmp_path):
+    config_path = tmp_path / "dispatcher-config.json"
+    monkeypatch.setenv("OPENBASE_CODING_BACKEND", "codex")
+    monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
+
+    for model in ("gpt-5", "sol", "astra"):
+        result = CliRunner().invoke(defaults_cli.defaults, ["dispatcher-model", model])
+
+        assert result.exit_code == 0, result.output
+        assert f"Default dispatcher model set to {model}" in result.output
+        assert (
+            json.loads(config_path.read_text(encoding="utf-8"))["backend_models"][
+                "codex"
+            ]["dispatcher"]
+            == model
+        )
+
+
 def test_default_super_agents_model_sets_config_file(monkeypatch, tmp_path):
     config_path = tmp_path / "dispatcher-config.json"
     monkeypatch.setenv("OPENBASE_CODING_BACKEND", "codex")
@@ -916,3 +940,77 @@ def test_user_say_publish_failure_without_thread_still_errors(monkeypatch):
 
     assert result.exit_code != 0
     assert "No agent thread was available" in result.output
+
+
+def test_default_voice_model_shows_options_with_default_marked(monkeypatch, tmp_path):
+    config_path = tmp_path / "dispatcher-config.json"
+    monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
+    monkeypatch.delenv("LIVEKIT_VOICE_MODEL", raising=False)
+
+    result = CliRunner().invoke(defaults_cli.defaults, ["voice-model"])
+
+    assert result.exit_code == 0, result.output
+    assert "Voice model: gpt-live-1 (live)" in result.output
+    assert "* gpt-live-1" in result.output
+    assert "GPT-Live 1 (default)" in result.output
+    assert "  pipeline" in result.output
+    assert "Classic pipeline" in result.output
+    assert not config_path.exists()
+
+
+def test_default_voice_model_sets_config_file(monkeypatch, tmp_path):
+    config_path = tmp_path / "dispatcher-config.json"
+    monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
+    monkeypatch.delenv("LIVEKIT_VOICE_MODEL", raising=False)
+
+    result = CliRunner().invoke(defaults_cli.defaults, ["voice-model", "classic"])
+
+    assert result.exit_code == 0, result.output
+    assert "Voice model set to pipeline (pipeline engine)." in result.output
+    assert "applies to the next voice call" in result.output
+    assert json.loads(config_path.read_text(encoding="utf-8"))["voice_model"] == "pipeline"
+
+    result = CliRunner().invoke(defaults_cli.defaults, ["voice-model"])
+    assert "Voice model: pipeline (pipeline)" in result.output
+    assert "* pipeline" in result.output
+
+
+def test_default_voice_model_rejects_unknown_model(monkeypatch, tmp_path):
+    config_path = tmp_path / "dispatcher-config.json"
+    monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
+
+    result = CliRunner().invoke(defaults_cli.defaults, ["voice-model", "gemini-live"])
+
+    assert result.exit_code != 0
+    assert "Voice model must be one of: gpt-live-1, pipeline." in result.output
+    assert not config_path.exists()
+
+
+@pytest.mark.parametrize("args,payload", [
+    (["set-speaker", "on"], {"action": "set_speaker", "speaker": True}),
+    (["set-speaker", "off"], {"action": "set_speaker", "speaker": False}),
+    (["end-call"], {"action": "end_call"}),
+    (["start-call", "dispatcher"], {"action": "start_call", "thread_id": "dispatcher"}),
+    (["start-call", "thread-1"], {"action": "start_call", "thread_id": "thread-1"}),
+])
+def test_call_control_cli_prints_state(monkeypatch, args, payload):
+    calls = []
+    def publish(value, **kwargs):
+        calls.append((value, kwargs))
+        return {"delivered": True, "applied": True, "call_state": {
+            "connected": True, "muted": False, "speaker": True, "active": True}}
+    monkeypatch.setattr(user_cli, "_publish_ios_app_control", publish)
+    result = CliRunner().invoke(user_cli.user, ["ios", *args])
+    assert result.exit_code == 0, result.output
+    assert '"speaker": true' in result.output
+    assert calls == [(payload, {"timeout": 60})]
+
+
+@pytest.mark.parametrize("data", [
+    {"delivered": False}, {"delivered": True},
+    {"delivered": True, "applied": False, "error": "failed", "call_state": {}},
+])
+def test_call_control_cli_fails_without_applied_state(monkeypatch, data):
+    monkeypatch.setattr(user_cli, "_publish_ios_app_control", lambda *a, **k: data)
+    result = CliRunner().invoke(user_cli.user, ["ios", "end-call"])
+    assert result.exit_code != 0

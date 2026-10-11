@@ -96,17 +96,22 @@ The first call should request a room token from the Linux instance, connect to
 LiveKit over Tailscale, and dispatch the `livekit-agent` worker running in the
 cloud desktop.
 
-After one successful connection identifies the backend as an Openbase Cloud
-Workspace, later calls automatically resume that Workspace when idle shutdown
-has stopped its EC2 instance. The Call screen shows whether it is checking,
-starting, or waiting for the Workspace, and lets you cancel the pending call.
-Cancelling the call does not stop an EC2 startup that Openbase Cloud has already
-accepted.
+After one successful connection identifies the backend as an Openbase Cloud Workspace, later calls automatically resume that Workspace when idle shutdown has stopped its EC2 instance. The phone app's voice view and call settings show whether it is checking, starting, or waiting for the Workspace, and let you cancel the pending call. Cancelling the call does not stop an EC2 startup that Openbase Cloud has already accepted.
 
 Openbase deliberately does not attempt this recovery for an unrecognized or
 ordinary Mac/Linux backend. An existing saved DevSpace that has never reported
 its Cloud identity to the current iOS app therefore needs one successful manual
 start and call before automatic resume is available.
+
+## Sign CLIs In from Your Phone
+
+A headless workspace has no browser of its own. Your agent checks existing authentication, installs a missing CLI when needed, then uses the provider's device-code or verification-code flow where available. GitHub uses `gh auth login --web`; Heroku prints a remote browser link; prefer `gcloud auth login --no-launch-browser` for Google Cloud on headless Linux. Setting `BROWSER` does not force gcloud to use a localhost callback, even with `--launch-browser`; follow the flow it actually prints. The agent promptly gives you the current URL, any device code, and the next action, then waits for your authorization without leaving a silent running turn.
+
+For browser logins, `openbase-coder browser open <url>` opens the page in the iPhone or Android browser, or posts a notification to tap. If the URL or its redirect names localhost, an embedded-VPN workspace creates an authenticated callback relay. The phone binds its own localhost port and forwards the unchanged browser traffic through Openbase VPN to the original CLI listener. The iOS listener runs in the packet-tunnel extension, so switching to Safari does not suspend it. Only a `started` acknowledgement confirms listener readiness and relay health. Older apps can report `unsupported`; a failed or unconfirmed forward still offers paste-back of the final localhost address. Paste it back with the app's "Paste login link" action, which sends the address straight to the workspace, or into the agent's thread, where the agent replays it with `openbase-coder browser replay <url>`; both accept only loopback addresses and never follow redirects.
+
+The CLI callback listener must be loopback-only and owned by the workspace user. Its port is never exposed directly: the VPN exposes a separate capability-protected relay that checks the original process/listener, stops accepting new connections when that listener disappears, and expires within ten minutes. An accepted callback may finish while its original process is alive, within the same deadline. The phone retains a health connection to detect workspace closure, stop its local listeners and release the port after accepted responses finish. Phone requests carry the original absolute deadline, so a late notification cannot extend access. Forward targets accept only literal VPN addresses in `100.64.0.0/10` or `fd7a:115c:a1e0::/48`, with active VPN authentication and owner-only peer ACLs. Multi-page localhost login flows retain their listener until completion or expiry.
+
+Use `--callback-port <port>` when the port is not in the URL. `--no-forward` disables relay setup; `--no-push` disables Cloud fallback. Setup and socket delivery each wait at most six seconds, followed by at most eighteen seconds for push fallback. `openbase-coder user phone open-url <url>` opens a URL without callback setup. Agents follow the bundled `openbase-cli-logins` skill; external login completion is verified through the provider CLI's status command, never inferred from a page opening.
 
 ## Quick Recovery
 

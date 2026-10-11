@@ -51,20 +51,60 @@ def _web_backend_url() -> str:
     return DEFAULT_WEB_BACKEND_URL
 
 
+def _cloud_bearer_token(manager: TokenManager, web_backend_url: str) -> str:
+    """Cloud credential for this installation: the owner's login on a desktop
+    or EC2 workspace; the cached scoped machine token on a container
+    workspace, which never holds a login."""
+    try:
+        return manager.get_access_token()
+    except AuthLoginRequiredError:
+        from openbase_coder_cli.config.machine_token_manager import MachineTokenManager
+
+        machine_tokens = MachineTokenManager(web_backend_url)
+        if not machine_tokens.has_cached_token():
+            raise
+        return machine_tokens.get_machine_token()
+
+
+def _local_api_auth(manager: TokenManager):
+    """Credential for the local coder server. Without an owner login (container
+    workspaces) the installation's own local capability token is used."""
+    try:
+        manager.get_access_token()
+    except AuthLoginRequiredError:
+        from openbase_coder_cli.config.local_api_token import get_local_api_token
+
+        token = get_local_api_token()
+        return httpx.Auth() if not token else _BearerAuth(token)
+    except AuthTransientError:
+        pass
+    return CloudAccessTokenAuth(manager)
+
+
+class _BearerAuth(httpx.Auth):
+    def __init__(self, token: str) -> None:
+        self._token = token
+
+    def auth_flow(self, request):
+        request.headers["Authorization"] = f"Bearer {self._token}"
+        yield request
+
+
 def _agent_runs_active(local_url: str, manager: TokenManager) -> bool:
-    """True when any coder thread reports recent productive run activity.
+    """True when the workspace is busy: a coder thread reports recent
+    productive run activity, or a voice call is live.
 
     The local coder server is the source of truth for Super Agents / Codex /
-    Claude Code runs. Any failure here (server down, auth hiccup) just means
-    "no run activity" for this sample; the next sample retries.
+    Claude Code runs and for LiveKit rooms. Any failure here (server down,
+    auth hiccup) just means "not busy" for this sample; the next sample retries.
     """
     try:
         response = httpx.get(
             f"{local_url}{THREAD_ACTIVITY_PATH}",
-            auth=CloudAccessTokenAuth(manager),
+            auth=_local_api_auth(manager),
             timeout=10,
         )
-    except (httpx.HTTPError, RuntimeError):
+    except (httpx.HTTPError, RuntimeError, AuthLoginRequiredError):
         return False
     if response.status_code != 200:
         return False
@@ -72,6 +112,8 @@ def _agent_runs_active(local_url: str, manager: TokenManager) -> bool:
         data = response.json()
     except ValueError:
         return False
+    if "active" in data:
+        return bool(data["active"])
     return int(data.get("active_run_count", 0)) > 0
 
 
@@ -100,7 +142,7 @@ def heartbeat(interval: int) -> None:
         # A long-running service must survive network blips and token-refresh
         # hiccups: skipping one beat and retrying next interval is the fallback.
         try:
-            token = manager.get_access_token()
+            token = _cloud_bearer_token(manager, url)
             httpx.post(
                 f"{url}{HEARTBEAT_PATH}",
                 json={"active": active},

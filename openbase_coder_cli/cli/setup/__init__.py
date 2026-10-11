@@ -17,6 +17,13 @@ from shutil import which  # noqa: F401
 import click
 from click.core import ParameterSource
 
+from openbase_coder_cli.backend_auth import (
+    BACKEND_LABELS,
+    CLI_LOGIN_BACKENDS,
+    backend_login_message,
+    backend_login_missing,
+    run_backend_login,
+)
 from openbase_coder_cli.backend_binaries import ensure_backend_binary
 from openbase_coder_cli.backend_config import (
     CLAUDE_CODE_BACKEND,
@@ -81,16 +88,23 @@ from openbase_coder_cli.cli.setup.env import (
     _selected_coding_backend,
     _upsert_env_file_values,  # noqa: F401
 )
+from openbase_coder_cli.cli.setup.git_ignore import ensure_global_git_ignore
+from openbase_coder_cli.cli.setup.hooks import (
+    ensure_default_session_id_hooks,
+    include_default_hooks_option,
+)
 from openbase_coder_cli.cli.setup.hooks import (
     ensure_session_id_hook_script as _ensure_session_id_hook_script,
+)
+from openbase_coder_cli.cli.setup.summary import agent_setup_summary
+from openbase_coder_cli.cli.setup.system_summary import (
+    SystemSetupSnapshot,
+    system_setup_summary,
 )
 from openbase_coder_cli.cli.setup.workspace import (
     BUNDLED_SOUND_FILES,  # noqa: F401
     BUNDLED_SOUNDS_PACKAGE,  # noqa: F401
-    DEFAULT_SYNCTHING_GLOBAL_STIGNORE_CONTENT,  # noqa: F401
     THREAD_SYNC_EXCHANGE_DIR_NAME,  # noqa: F401
-    THREAD_SYNC_MARKER_FILE_NAME,  # noqa: F401
-    THREAD_SYNC_STIGNORE_CONTENT,  # noqa: F401
     _build_console,
     _copy_bundled_sound,  # noqa: F401
     _ensure_bundled_sounds,
@@ -98,7 +112,6 @@ from openbase_coder_cli.cli.setup.workspace import (
     _init_cli_workspace,
     _init_standalone_runtime,
     _install_cli_shim,
-    _syncthing_global_ignore_path,  # noqa: F401
     resolve_dev_workspace_dir,
 )
 from openbase_coder_cli.codex_home_instructions import (
@@ -234,6 +247,7 @@ class _SetupProgress:
                 "ok": False,
                 "cli_configured": False,
                 "tailscale_serve_healthy": False,
+                "error": detail,
             }
         )
 
@@ -342,6 +356,20 @@ class _SetupProgress:
         "human-readable output moves to stderr."
     ),
 )
+@include_default_hooks_option
+@click.option(
+    "--shared-super-agents-mcp/--no-shared-super-agents-mcp",
+    "shared_super_agents_mcp",
+    default=True,
+    show_default=True,
+    help=(
+        "Also register the Super Agents MCP in the default (non-Openbase) "
+        "Codex and Claude Code homes so plain terminal codex/claude sessions "
+        "can dispatch Super Agents (a pre-existing entry is left untouched). "
+        "Pass --no-shared-super-agents-mcp to keep it out of those homes; "
+        "Openbase's own session profiles are always configured."
+    ),
+)
 @click.option(
     "--interactive/--non-interactive",
     "interactive_mode",
@@ -355,6 +383,26 @@ class _SetupProgress:
         "--backend and default the audio provider to openbase-cloud."
     ),
 )
+@click.option(
+    "--defer-app-qr",
+    is_flag=True,
+    hidden=True,
+    help=(
+        "Skip the phone-app QR code; ./scripts/setup prints it with "
+        "'openbase-coder app-download-qr' as its last step, after the "
+        "developer app is built and launched."
+    ),
+)
+@click.option(
+    "--deferred-notes-file",
+    type=click.Path(dir_okay=False),
+    hidden=True,
+    help=(
+        "Write the closing ℹ️ setup summaries to this file instead of printing "
+        "them; ./scripts/setup prints them after the developer app is built, "
+        "right before the phone-app QR code."
+    ),
+)
 def setup(
     workspace_dir: str | None,
     env_file: str,
@@ -366,7 +414,11 @@ def setup(
     audio_provider: str | None,
     tailnet_provider: str | None,
     json_progress: bool,
+    shared_super_agents_mcp: bool,
+    include_default_hooks: bool,
     interactive_mode: bool | None,
+    defer_app_qr: bool,
+    deferred_notes_file: str | None,
 ) -> None:
     """Full install flow for Openbase Coder.
 
@@ -402,6 +454,11 @@ def setup(
         interactive=interactive,
     )
 
+    system_before = (
+        SystemSetupSnapshot.capture(Path(env_file))
+        if interactive and current_runtime_package() is None
+        else None
+    )
     progress = _SetupProgress(json_progress)
     try:
         serve_healthy = _run_setup_phases(
@@ -415,6 +472,8 @@ def setup(
             coding_backend=coding_backend,
             audio_provider=audio_provider,
             tailnet_provider=tailnet_provider,
+            register_shared_super_agents=shared_super_agents_mcp,
+            include_default_hooks=include_default_hooks,
         )
     except Exception as exc:
         progress.abort(str(exc))
@@ -425,11 +484,38 @@ def setup(
     )
 
     click.echo()
-    click.echo("Setup complete.")
+    # The workspace wrapper still builds the developer app after this step
+    # and prints its own completion line.
+    click.echo("Services set up." if defer_app_qr else "Setup complete.")
     click.echo()
     if interactive:
-        _interactive_cloud_login_and_checks(env_file, cli_configured=cli_configured)
-        _print_app_download_qr()
+        _interactive_backend_login(env_file)
+        post_login_health = _interactive_cloud_login_and_checks(
+            env_file, cli_configured=cli_configured
+        )
+        if not defer_app_qr:
+            _print_app_download_qr()
+        if system_before is not None:
+            _emit_notes(
+                [
+                    agent_setup_summary(
+                        include_default_hooks=include_default_hooks,
+                        shared_super_agents_mcp=shared_super_agents_mcp,
+                    ),
+                    system_setup_summary(
+                        system_before,
+                        SystemSetupSnapshot.capture(Path(env_file)),
+                        service_manager=service_manager_name(),
+                        skip_services=skip_services,
+                        serve_healthy=(
+                            serve_healthy
+                            if post_login_health is None
+                            else post_login_health
+                        ),
+                    ),
+                ],
+                deferred_notes_file,
+            )
     else:
         web_backend_url = (
             _env_file_values(Path(env_file)).get("OPENBASE_CODER_CLI_WEB_BACKEND_URL")
@@ -488,7 +574,37 @@ def _report_cloud_readiness(
         )
 
 
-def _interactive_cloud_login_and_checks(env_file: str, *, cli_configured: bool) -> None:
+def _warn_if_backend_login_missing(backend: str) -> None:
+    """Say up front when the selected Claude Code / Codex CLI isn't signed in,
+    instead of letting the first call fail with the CLI's own cryptic error."""
+    if backend not in CLI_LOGIN_BACKENDS or not backend_login_missing(backend):
+        return
+    click.echo(click.style(backend_login_message(backend), fg="yellow"))
+
+
+def _interactive_backend_login(env_file: str) -> None:
+    """Offer to sign the selected Claude Code / Codex CLI in during setup."""
+    backend = _selected_coding_backend(Path(env_file), None)
+    if backend not in CLI_LOGIN_BACKENDS or not backend_login_missing(backend):
+        return
+    label = BACKEND_LABELS[backend]
+    click.echo(
+        f"{label} isn't signed in on this computer. Openbase uses your own "
+        f"{label} login for coding sessions and calls."
+    )
+    if not click.confirm(f"Sign in to {label} now?", default=True):
+        click.echo(click.style(backend_login_message(backend), fg="yellow"))
+        return
+    run_backend_login(backend)
+    if backend_login_missing(backend, fresh=True):
+        click.echo(click.style(backend_login_message(backend), fg="yellow"))
+    else:
+        click.echo(f"{label} is signed in.")
+
+
+def _interactive_cloud_login_and_checks(
+    env_file: str, *, cli_configured: bool
+) -> bool | None:
     """Interactive setup tail: login, then verify cloud registration and Serve.
 
     Only ever called on interactive runs; non-interactive runs (including the
@@ -501,18 +617,13 @@ def _interactive_cloud_login_and_checks(env_file: str, *, cli_configured: bool) 
     )
     if TokenManager(web_backend_url).has_refresh_token:
         click.echo("Already logged in to Openbase Cloud.")
-    elif click.confirm(
-        "Log in to Openbase Cloud now? (required for iPhone pairing and "
-        "cloud onboarding)",
-        default=True,
-    ):
-        click.get_current_context().invoke(login_command)
     else:
-        click.echo(
-            "Skipping login. Run 'openbase-coder login' later; iPhone pairing "
-            "and cloud onboarding need it."
+        click.prompt(
+            "Press Enter when you're ready to log in to Openbase Cloud",
+            default="",
+            show_default=False,
         )
-        return
+        click.get_current_context().invoke(login_command)
 
     # Login already registers the device; re-report with the freshest facts
     # so the cloud sees this install as configured, and surface the result.
@@ -525,6 +636,22 @@ def _interactive_cloud_login_and_checks(env_file: str, *, cli_configured: bool) 
         serve_healthy=serve_health.healthy,
         tailnet_provider=provider,
     )
+    return serve_health.healthy
+
+
+def _emit_notes(notes: list[str], deferred_notes_file: str | None) -> None:
+    """Print the ℹ️ summaries, or leave them for ./scripts/setup to print last."""
+    text = "".join(f"\n{note}\n" for note in notes)
+    if deferred_notes_file:
+        Path(deferred_notes_file).write_text(text, encoding="utf-8")
+    else:
+        click.echo(text, nl=False)
+
+
+@click.command("app-download-qr", hidden=True)
+def app_download_qr() -> None:
+    """Print the phone-app download QR code (the last step of ./scripts/setup)."""
+    _print_app_download_qr()
 
 
 def _print_app_download_qr() -> None:
@@ -590,18 +717,17 @@ _BACKEND_PICKER_OPTIONS = (
     (
         CODEX_BACKEND,
         "codex",
-        "native Codex app-server with OpenAI models, using your Codex CLI login",
+        "Make sure the codex CLI is installed and logged in.",
     ),
     (
         CLAUDE_CODE_BACKEND,
         "claude-code",
-        "Claude Code using your local Claude login and billing",
+        "Make sure the claude CLI is installed and logged in.",
     ),
     (
         OPENBASE_CLOUD_BACKEND,
         "openbase-cloud",
-        "Cloud-proxied Claude Code with only an Openbase login; no personal "
-        "Anthropic account needed",
+        "No personal AI accounts needed.",
     ),
 )
 
@@ -609,19 +735,17 @@ _AUDIO_PROVIDER_PICKER_OPTIONS = (
     (
         AUDIO_PROVIDER_OPENBASE_CLOUD,
         "Cloud TTS/STT",
-        "managed speech-to-text and text-to-speech through Openbase Cloud "
-        "(recommended)",
+        "recommended, easy, generous free usage",
     ),
     (
         AUDIO_PROVIDER_CARTESIA,
         "Bring your own keys",
-        "AssemblyAI speech-to-text and Cartesia text-to-speech with your own API keys",
+        "AssemblyAI + Cartesia keys required",
     ),
     (
         AUDIO_PROVIDER_LOCAL,
         "Local models",
-        "on-device Kokoro TTS and MLX Whisper STT; Apple Silicon with Python "
-        "3.12 only (not recommended)",
+        "beta, not recommended (Apple Silicon, Python 3.12 only)",
     ),
 )
 
@@ -655,14 +779,10 @@ def _require_tailnet_provider_choice(
         )
         return configured if configured in PROVIDER_VALUES else PROVIDER_TAILSCALE
     if interactive:
-        from openbase_coder_cli.services.tailscale_provider import (
-            default_tailnet_provider,
-        )
-
         return _prompt_pick(
             "Tailnet transport:",
             _TAILNET_PROVIDER_PICKER_OPTIONS,
-            default=default_tailnet_provider(),
+            default=PROVIDER_NETMESH,
         )
     return None
 
@@ -774,11 +894,14 @@ def _run_setup_phases(
     coding_backend: str | None,
     audio_provider: str | None,
     tailnet_provider: str | None = None,
+    register_shared_super_agents: bool = True,
+    include_default_hooks: bool = True,
 ) -> bool:
     """Run the setup phases, returning whether Tailscale Serve is healthy."""
     progress.step("workspace", "start")
     OPENBASE_BASE_DIR.mkdir(parents=True, exist_ok=True)
     _ensure_thread_sync_exchange_dir()
+    ensure_global_git_ignore()
     _ensure_bundled_sounds()
     runtime_package = current_runtime_package()
     use_dev_workspace = runtime_package is None
@@ -849,22 +972,24 @@ def _run_setup_phases(
 
     # --- Install scoped profiles for both backends ---
     _ensure_session_id_hook_script()
+    shared_workspace_dir = workspace_dir if use_dev_workspace else ""
     _ensure_codex_config(
-        workspace_dir if use_dev_workspace else "",
+        shared_workspace_dir,
         coding_backend=selected_coding_backend,
+        register_shared_super_agents=register_shared_super_agents,
     )
     _ensure_claude_mcp(
-        workspace_dir if use_dev_workspace else "",
+        shared_workspace_dir,
         coding_backend=selected_coding_backend,
     )
-    _ensure_claude_hooks()
-    if selected_coding_backend == CLAUDE_CODE_BACKEND:
-        status = claude_auth_status()
-        if not status.logged_in:
-            click.echo(
-                "Claude Code is not logged in. Run `claude login` before using "
-                "the Claude Code backend."
-            )
+    _ensure_claude_hooks(
+        register_shared_super_agents=register_shared_super_agents,
+        workspace_dir=shared_workspace_dir,
+        coding_backend=selected_coding_backend,
+    )
+    if include_default_hooks:
+        ensure_default_session_id_hooks()
+    _warn_if_backend_login_missing(selected_coding_backend)
 
     # --- Install/update user-facing CLI shim ---
     _install_cli_shim(workspace_dir if use_dev_workspace else "")

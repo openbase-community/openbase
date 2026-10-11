@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from openbase_coder_cli.services import cloud_registration
 from openbase_coder_cli.services import netmesh_companion as nc
 
 
@@ -303,6 +304,7 @@ def test_netmesh_provisioning_replaces_stale_enabled_helper(
 
     monkeypatch.setattr(t, "_dev_workspace_dir_or_none", lambda: "/workspace")
     monkeypatch.setattr(nc, "NetmeshCompanion", Companion)
+    monkeypatch.setattr(cloud_registration, "netmesh_enroll", lambda: None)
 
     t._provision_netmesh_companion()
 
@@ -347,6 +349,7 @@ def test_netmesh_provisioning_repairs_unreachable_enabled_helper(
 
     monkeypatch.setattr(t, "_dev_workspace_dir_or_none", lambda: "/workspace")
     monkeypatch.setattr(nc, "NetmeshCompanion", Companion)
+    monkeypatch.setattr(cloud_registration, "netmesh_enroll", lambda: None)
 
     t._provision_netmesh_companion()
 

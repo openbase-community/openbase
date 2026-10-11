@@ -31,6 +31,16 @@ def _reset_tailnet_status_cache():
     services_views._tailnet_snapshot["monotonic"] = 0.0
 
 
+@pytest.fixture(autouse=True)
+def _mock_codex_daemon_probes(monkeypatch):
+    from openbase_coder_cli import codex_control_plane
+
+    monkeypatch.setattr(codex_control_plane, "shared_codex_daemon_ready", lambda: False)
+    monkeypatch.setattr(
+        codex_control_plane, "codex_app_server_ready", lambda _endpoint: True
+    )
+
+
 def test_service_status_caches_tailnet_probe_across_polls(monkeypatch) -> None:
     """Repeated /api/status/ polls must not re-run the (possibly wedged)
     netmesh-ctl probes; the first poll computes, later polls serve the cache."""
@@ -135,7 +145,7 @@ def test_service_status_includes_background_openbase_services(monkeypatch) -> No
 
     assert response.status_code == 200
     assert response.data["services"]["sync_workers"] == {
-        "name": "Sync Workers (thread, device, and code-sync reconcile)",
+        "name": "Sync Workers (thread and device sync, periodic jobs)",
         "port": None,
         "running": True,
         "installed": True,
@@ -179,7 +189,8 @@ def test_service_status_includes_background_openbase_services(monkeypatch) -> No
             {"flag": "-d", "label": "Prevent display sleep"},
         ],
     }
-    assert len(response.data["services"]) == 11
+    assert response.data["services"]["codex_app_server_dispatcher"]["running"] is False
+    assert len(response.data["services"]) == 12
 
 
 def test_service_status_reports_each_serve_route_independently(monkeypatch) -> None:
@@ -275,6 +286,48 @@ def test_service_status_omits_codex_app_server_on_claude_code_backend(
     assert "codex_app_server" not in response.data["services"]
     assert "sync_workers" in response.data["services"]
     assert len(response.data["services"]) == 10
+
+
+def test_service_status_distinguishes_shared_daemon_from_stopped_dispatcher(
+    monkeypatch,
+) -> None:
+    from openbase_coder_cli import codex_control_plane
+
+    monkeypatch.setattr(
+        services_views, "service_supports_configured_backends", lambda service: True
+    )
+    monkeypatch.setattr(services_views, "_check_port", lambda port: True)
+    monkeypatch.setattr(services_views, "_check_web_backend", lambda: True)
+    monkeypatch.setattr(services_views, "_check_codex_app_server", lambda: True)
+    monkeypatch.setattr(codex_control_plane, "shared_codex_daemon_ready", lambda: True)
+    monkeypatch.setattr(
+        services_views,
+        "launchctl_status",
+        lambda service: {"installed": True, "pid": None, "last_exit_code": 1},
+    )
+    monkeypatch.setattr(
+        services_views,
+        "tailscale_serve_status",
+        lambda: SimpleNamespace(
+            tailscale_running=True,
+            host="mac.tailnet.ts.net",
+            openbase_url="http://mac.tailnet.ts.net:18080",
+            openbase_configured=True,
+            livekit_configured=True,
+        ),
+    )
+    monkeypatch.setattr(
+        services_views,
+        "keep_awake_status_payload",
+        lambda: {"name": "Keep Awake", "running": True, "optional": False},
+    )
+
+    request = APIRequestFactory().get("/api/status/")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+    response = views.service_status(request)
+
+    assert response.data["services"]["codex_app_server"]["running"] is True
+    assert response.data["services"]["codex_app_server_dispatcher"]["running"] is False
 
 
 def test_thread_device_sync_status_returns_snapshot_payload(monkeypatch) -> None:
@@ -476,3 +529,143 @@ def test_thread_device_sync_conflict_resolve_reports_claude_errors(
 
     assert response.status_code == 400
     assert response.data["error"] == "conflict_not_found"
+
+
+def test_service_status_probes_the_configured_api_port(monkeypatch) -> None:
+    """A container workspace serves on OPENBASE_CODER_CLI_PORT, not 7999."""
+    monkeypatch.setenv("OPENBASE_CODER_CLI_PORT", "18789")
+    monkeypatch.delenv("OPENBASE_CODER_CLI_TAILSCALE_PROVIDER", raising=False)
+    monkeypatch.setattr(
+        services_views, "service_supports_configured_backends", lambda service: False
+    )
+    probed: list[int] = []
+
+    def fake_check_port(port: int) -> bool:
+        probed.append(port)
+        return port == 18789
+
+    monkeypatch.setattr(services_views, "_check_port", fake_check_port)
+    monkeypatch.setattr(services_views, "_check_web_backend", lambda: True)
+    monkeypatch.setattr(services_views, "_check_codex_app_server", lambda: True)
+    monkeypatch.setattr(
+        services_views,
+        "keep_awake_status_payload",
+        lambda: {"name": "Keep Awake", "port": None, "running": True, "optional": True},
+    )
+    monkeypatch.setattr(
+        services_views,
+        "tailscale_serve_status",
+        lambda: SimpleNamespace(
+            tailscale_running=True,
+            host="devspace.net.example",
+            openbase_url="http://devspace.net.example:18080",
+            openbase_configured=True,
+            livekit_configured=True,
+        ),
+    )
+    monkeypatch.setattr(
+        services_views,
+        "launchctl_status",
+        lambda service: {"installed": True, "pid": "1", "last_exit_code": None},
+    )
+
+    request = APIRequestFactory().get("/api/status/")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+
+    response = views.service_status(request)
+
+    assert response.status_code == 200
+    django = response.data["services"]["django"]
+    assert django["port"] == 18789
+    assert django["running"] is True
+    assert 7999 not in probed
+
+
+@pytest.mark.parametrize("codex_linked", [False, True])
+def test_codex_services_on_an_openbase_cloud_workspace_are_not_an_outage(
+    monkeypatch, codex_linked
+) -> None:
+    """Cloud mode keeps local Codex configured only so earlier threads stay
+    visible; its stopped app servers must not read as "degraded"."""
+    from openbase_coder_cli.services import onboarding
+
+    monkeypatch.setattr(
+        services_views, "service_supports_configured_backends", lambda service: True
+    )
+    monkeypatch.setattr(services_views, "configured_coding_backend", lambda: "openbase_cloud")
+    monkeypatch.setattr(onboarding, "codex_auth_present", lambda: codex_linked)
+    monkeypatch.setattr(services_views, "_check_port", lambda port: True)
+    monkeypatch.setattr(services_views, "_check_web_backend", lambda: True)
+    monkeypatch.setattr(services_views, "_check_codex_app_server", lambda: False)
+    monkeypatch.setattr(
+        services_views,
+        "launchctl_status",
+        lambda service: {"installed": True, "pid": None, "last_exit_code": 1},
+    )
+    monkeypatch.setattr(
+        services_views,
+        "tailscale_serve_status",
+        lambda: SimpleNamespace(
+            tailscale_running=True,
+            host="ws.tailnet.ts.net",
+            openbase_url="http://ws.tailnet.ts.net:18080",
+            openbase_configured=True,
+            livekit_configured=True,
+        ),
+    )
+    monkeypatch.setattr(
+        services_views,
+        "keep_awake_status_payload",
+        lambda: {"name": "Keep Awake", "running": True, "optional": False},
+    )
+
+    request = APIRequestFactory().get("/api/status/")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+    services = views.service_status(request).data["services"]
+
+    for key in ("codex_app_server", "codex_app_server_dispatcher"):
+        assert services[key]["running"] is False
+        assert services[key]["optional"] is True
+        assert services[key]["status_note"].startswith("Not in use")
+    assert ("isn't linked" in services["codex_app_server"]["status_note"]) is not codex_linked
+
+
+def test_a_selected_codex_without_a_login_stays_required_and_says_why(monkeypatch) -> None:
+    from openbase_coder_cli.services import onboarding
+
+    monkeypatch.setattr(
+        services_views, "service_supports_configured_backends", lambda service: True
+    )
+    monkeypatch.setattr(services_views, "configured_coding_backend", lambda: "codex")
+    monkeypatch.setattr(onboarding, "codex_auth_present", lambda: False)
+    monkeypatch.setattr(services_views, "_check_port", lambda port: True)
+    monkeypatch.setattr(services_views, "_check_web_backend", lambda: True)
+    monkeypatch.setattr(services_views, "_check_codex_app_server", lambda: False)
+    monkeypatch.setattr(
+        services_views,
+        "launchctl_status",
+        lambda service: {"installed": True, "pid": None, "last_exit_code": 1},
+    )
+    monkeypatch.setattr(
+        services_views,
+        "tailscale_serve_status",
+        lambda: SimpleNamespace(
+            tailscale_running=True,
+            host="mac.tailnet.ts.net",
+            openbase_url="http://mac.tailnet.ts.net:18080",
+            openbase_configured=True,
+            livekit_configured=True,
+        ),
+    )
+    monkeypatch.setattr(
+        services_views,
+        "keep_awake_status_payload",
+        lambda: {"name": "Keep Awake", "running": True, "optional": False},
+    )
+
+    request = APIRequestFactory().get("/api/status/")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+    services = views.service_status(request).data["services"]
+
+    assert services["codex_app_server"]["optional"] is False
+    assert "isn't signed in" in services["codex_app_server"]["status_note"]

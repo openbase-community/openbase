@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
-import platform
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -66,6 +66,7 @@ from openbase_coder_cli.livekit_voice_route import (
     get_livekit_voice_route_state,
     is_dispatcher_identity,
     live_target_transfer_blocker,
+    prepare_voice_route_transfer,
     publish_exit_to_dispatch,
     publish_transfer_to_thread,
     super_agent_voice_for_context,
@@ -75,6 +76,9 @@ from openbase_coder_cli.local_audio_readiness import local_audio_readiness
 from openbase_coder_cli.openbase_coder_cli_app.common import (
     ExactFieldsSerializer,
     _request_identity,
+)
+from openbase_coder_cli.openbase_coder_cli_app.livekit_agent_health import (
+    livekit_agent_worker_ready,
 )
 from openbase_coder_cli.services.cloud_workspace import cloud_workspace_id
 from openbase_coder_cli.stt_providers import (
@@ -105,11 +109,22 @@ class LiveKitRoomTokenSerializer(ExactFieldsSerializer):
     inbound_invitation_id = serializers.RegexField(
         r"^[A-Za-z0-9_-]{43}$", required=False
     )
+    # The thread the call is started from: the call talks to that thread from
+    # its first word. Absent (or the dispatcher's own id) for a dispatcher call.
+    thread_id = serializers.CharField(required=False, allow_blank=True)
+    # The name the phone shows for that thread, spoken when the thread cannot
+    # be reached and used as the Super Agent label, like a transfer's label.
+    thread_label = serializers.CharField(required=False, allow_blank=True)
 
     def validate(self, attrs):
         invitation_id = attrs.get("inbound_invitation_id")
         if invitation_id:
-            if attrs.get("room_name") or attrs.get("livekit_dispatch_agent_name"):
+            if (
+                attrs.get("room_name")
+                or attrs.get("livekit_dispatch_agent_name")
+                or attrs.get("thread_id")
+                or attrs.get("thread_label")
+            ):
                 raise serializers.ValidationError(
                     "Inbound invitations cannot override room or agent routing."
                 )
@@ -125,6 +140,10 @@ class LiveKitCompanionSessionSerializer(serializers.Serializer):
 
 
 class AnnouncerSaySerializer(serializers.Serializer):
+    thread_id = serializers.CharField(required=False, max_length=256)
+    message_id = serializers.RegexField(
+        r"^announcer-(?:managed-)?[0-9a-f]{32}$", required=False,
+    )
     agent_name = serializers.CharField(
         trim_whitespace=True,
         max_length=256,
@@ -217,6 +236,9 @@ class VoiceRouteTransferSerializer(VoiceRouteCommandSerializer):
         allow_blank=True,
         trim_whitespace=True,
     )
+    # The dispatcher confirms its own transfers aloud; a transfer started
+    # from a thread's menu has no such confirmation and keeps the default.
+    announce = serializers.BooleanField(required=False, default=True)
 
     def validate(self, attrs):
         if not attrs.get("thread_id") and not attrs.get("agent_name"):
@@ -262,7 +284,14 @@ def user_say(request):
     )
     voice_entry = None
     try:
-        voice_entry = get_voice_history_entry_for_agent_name(agent_name)
+        if thread_id := input_serializer.validated_data.get("thread_id"):
+            from openbase_coder_cli.livekit_voice_history import get_voice_history_entry
+
+            voice_entry = get_voice_history_entry(thread_id)
+            if voice_entry is None or voice_entry.agent_name != agent_name:
+                raise UnknownAgentVoiceError("The requested thread has no matching speaking identity.")
+        else:
+            voice_entry = get_voice_history_entry_for_agent_name(agent_name)
         logger.info(
             "dispatch_timing stage=user_say_voice_resolved agent_name=%s "
             "thread_id=%s voice_id=%s voice_name=%s source=%s",
@@ -275,7 +304,10 @@ def user_say(request):
         result = async_to_sync(publish_announcer_message)(
             input_serializer.validated_data["text"],
             room_name=room_name,
+            agent_name=agent_name,
             voice_id=voice_entry.voice_id,
+            **({"message_id": input_serializer.validated_data["message_id"]}
+               if "message_id" in input_serializer.validated_data else {}),
         )
     except UnknownAgentVoiceError as exc:
         catalog_voice = get_tts_provider(selected_tts_provider_id()).voice_for_name(
@@ -645,6 +677,7 @@ def livekit_voice_route_transfer(request):
         "directory": thread.directory,
         "label": label,
         "room_name": input_serializer.validated_data.get("room_name") or None,
+        "announce": input_serializer.validated_data.get("announce", True),
     }
     if agent_name:
         transfer_kwargs["agent_name"] = agent_name
@@ -925,9 +958,35 @@ def livekit_room_token(request):
             "livekit_dispatch_agent_name"
         ]
 
-    metadata = {
+    if not livekit_agent_worker_ready():
+        # Retryable for the apps (code agent_not_ready): the worker is
+        # starting, typically on a Cloud Workspace that just woke up.
+        return Response(
+            {
+                "detail": "The voice agent is still starting. Please try again in a moment.",
+                "code": "agent_not_ready",
+            },
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    metadata: dict[str, Any] = {
         "user_identity": identity,
     }
+    start_thread_id = (
+        (input_serializer.validated_data.get("thread_id") or "").strip()
+        if not inbound_invitation_id
+        else ""
+    )
+    if start_thread_id:
+        started = _prepare_call_start_route(
+            start_thread_id,
+            label=(input_serializer.validated_data.get("thread_label") or "").strip()
+            or None,
+        )
+        if "response" in started:
+            return started["response"]
+        if started.get("voice_route") is not None:
+            metadata["voice_route"] = started["voice_route"]
 
     display_name = (
         request.user.get_full_name().strip()
@@ -937,7 +996,17 @@ def livekit_room_token(request):
     if not display_name:
         display_name = identity
 
-    token = (
+    dispatch_metadata = json.dumps(metadata)
+    dispatched_at_token = (
+        False
+        if inbound_invitation_id
+        else dispatch_agent_before_join(
+            room_name=room_name,
+            agent_name=livekit_dispatch_agent_name,
+            metadata=dispatch_metadata,
+        )
+    )
+    access_token = (
         livekit_api.AccessToken(api_key=api_key, api_secret=api_secret)
         .with_identity(identity)
         .with_name(display_name)
@@ -948,22 +1017,34 @@ def livekit_room_token(request):
                 can_publish=True,
                 can_subscribe=True,
                 can_publish_data=True,
+                # The phone publishes the thread open on its screen as a
+                # participant attribute (openbase.ui.focused_thread) so the
+                # dispatcher knows what "this thread" means (BUG 18). Without
+                # this grant LiveKit drops the update silently.
+                can_update_own_metadata=True,
             )
         )
-        .with_room_config(
-            livekit_api.RoomConfiguration(
-                agents=[
-                    livekit_api.RoomAgentDispatch(
-                        agent_name=livekit_dispatch_agent_name,
-                        metadata=json.dumps(metadata),
-                    )
-                ]
-            )
-        )
-        .with_ttl(timedelta(hours=1))
-        .to_jwt()
     )
+    access_token = access_token.with_room_config(
+        livekit_api.RoomConfiguration(
+            agents=[
+                livekit_api.RoomAgentDispatch(
+                    agent_name=livekit_dispatch_agent_name,
+                    metadata=dispatch_metadata,
+                )
+            ]
+        )
+    )
+    token = access_token.with_ttl(timedelta(hours=1)).to_jwt()
 
+    from openbase_coder_cli.services.livekit_pool_activity import record_activity
+
+    record_activity("token")
+    logger.info(
+        "dispatch_timing stage=room_token_issued room_name=%s dispatch=%s",
+        room_name,
+        "explicit" if dispatched_at_token else "room_config",
+    )
     payload: dict[str, Any] = {"token": token, "room_name": room_name}
     if inbound_invitation_id:
         payload.update(
@@ -979,6 +1060,127 @@ def livekit_room_token(request):
             "id": workspace_id,
         }
     return Response(payload)
+
+
+def _prepare_call_start_route(thread_id: str, *, label: str | None = None) -> dict:
+    """Resolve and prepare the thread a call is started from.
+
+    Returns ``{"voice_route": payload}`` for a project thread (the prepared
+    ``transfer_to_thread`` command the agent applies before the first word),
+    ``{"voice_route": None}`` when the id is the dispatcher's own thread (a
+    dispatcher call), or ``{"response": Response}`` when the call must not
+    start: an unknown thread or a transfer this install cannot make. Silently
+    falling back to the dispatcher is the very bug this exists to fix.
+    """
+    manager = get_session_manager()
+    resolved = async_to_sync(_resolve_voice_transfer_target)(
+        manager, thread_id=thread_id, agent_name=None
+    )
+    if resolved["status"] == status.HTTP_409_CONFLICT:
+        return {"voice_route": None}
+    if resolved["status"] != status.HTTP_200_OK:
+        data = dict(resolved["data"])
+        data.setdefault("code", "thread_not_found")
+        return {"response": Response(data, status=resolved["status"])}
+    thread = resolved["thread"]
+    try:
+        transfer = async_to_sync(prepare_voice_route_transfer)(
+            thread.session_id,
+            directory=thread.directory,
+            label=label or _thread_label(thread),
+            agent_name=_thread_agent_name(thread)
+            or _derived_thread_agent_name(thread)
+            or None,
+        )
+    except VoiceRouteBlockedError as exc:
+        return {
+            "response": Response(
+                {"detail": str(exc), "code": "voice_route_blocked"},
+                status=status.HTTP_409_CONFLICT,
+            )
+        }
+    except VoiceRouteError as exc:
+        return {
+            "response": Response(
+                {"detail": str(exc), "code": "voice_route_error"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        }
+    return {"voice_route": transfer.command_payload()}
+
+
+EXPLICIT_AGENT_DISPATCH_TIMEOUT_SECONDS = 3.0
+
+
+def explicit_agent_dispatch_enabled() -> bool:
+    return os.environ.get(
+        "LIVEKIT_EXPLICIT_AGENT_DISPATCH", "1"
+    ).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def dispatch_agent_before_join(
+    *, room_name: str, agent_name: str, metadata: str
+) -> bool:
+    """Create the room and dispatch the agent into it now.
+
+    Room creation carries the initial agent configuration atomically, so
+    concurrent requests cannot append duplicate dispatches. An existing
+    room keeps its original configuration. The token also retains that
+    configuration in case the room expires before the caller joins.
+    Returns False on failure so token issuance can proceed normally.
+    """
+    if not explicit_agent_dispatch_enabled():
+        return False
+    started = time.monotonic()
+    try:
+        created = async_to_sync(_create_agent_dispatch)(
+            room_name=room_name, agent_name=agent_name, metadata=metadata
+        )
+    except Exception:
+        logger.warning(
+            "dispatch_timing stage=agent_dispatch_at_token_failed room_name=%s "
+            "elapsed_ms=%d",
+            room_name,
+            int((time.monotonic() - started) * 1000),
+            exc_info=True,
+        )
+        return False
+    logger.info(
+        "dispatch_timing stage=agent_dispatch_at_token room_name=%s dispatched=%s "
+        "elapsed_ms=%d",
+        room_name,
+        created,
+        int((time.monotonic() - started) * 1000),
+    )
+    return created
+
+
+async def _create_agent_dispatch(
+    *, room_name: str, agent_name: str, metadata: str
+) -> bool:
+    from openbase_coder_cli.livekit_announcer import _build_livekit_client
+
+    client = _build_livekit_client()
+    try:
+        async with asyncio.timeout(EXPLICIT_AGENT_DISPATCH_TIMEOUT_SECONDS):
+            await client.room.create_room(
+                livekit_api.CreateRoomRequest(
+                    name=room_name,
+                    agents=[
+                        livekit_api.RoomAgentDispatch(
+                            agent_name=agent_name, metadata=metadata
+                        )
+                    ],
+                )
+            )
+    finally:
+        await client.aclose()
+    return True
 
 
 @api_view(["GET"])
@@ -1077,12 +1279,6 @@ def _build_companion_session_payload(
     }
 
 
-def _companion_client_factory():
-    from openbase_coder_cli.cli.computer_use import CompanionClient
-
-    return CompanionClient()
-
-
 @api_view(["GET", "POST"])
 def livekit_companion_session(request):
     """Mint a screen-share companion token for the current LiveKit voice room."""
@@ -1115,63 +1311,3 @@ def livekit_companion_session(request):
         )
 
     return Response(payload)
-
-
-@api_view(["POST"])
-def livekit_companion_start(request):
-    """Start the Linux screen-share companion for the current LiveKit room."""
-    input_serializer = LiveKitCompanionSessionSerializer(data=request.data)
-    input_serializer.is_valid(raise_exception=True)
-
-    if not isinstance(request.auth, dict):
-        raise serializers.ValidationError(
-            {"detail": "A JWT-authenticated caller is required to share the screen."}
-        )
-
-    if platform.system() != "Linux":
-        return Response(
-            {
-                "supported": False,
-                "started": False,
-                "detail": "The Linux screen-share companion is only available on Linux.",
-            }
-        )
-
-    room_name = input_serializer.validated_data.get("room_name") or None
-    try:
-        payload = _build_companion_session_payload(
-            room_name=room_name,
-            require_active_target=not bool(room_name),
-        )
-        client = _companion_client_factory()
-        client.ensure_running()
-        companion_response = client.start_screen_share(
-            {
-                "roomUrl": payload["roomUrl"],
-                "token": payload["companionToken"],
-                "identity": LIVEKIT_COMPANION_IDENTITY,
-                "name": LIVEKIT_COMPANION_NAME,
-                "companionTokenExpiresAt": payload["companionTokenExpiresAt"],
-            }
-        )
-    except serializers.ValidationError:
-        raise
-    except AnnouncerValidationError as exc:
-        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-    except NoActiveLiveKitRoomError as exc:
-        return Response({"detail": str(exc)}, status=status.HTTP_404_NOT_FOUND)
-    except Exception as exc:
-        logger.exception("Unable to start LiveKit companion")
-        return Response(
-            {"detail": f"Unable to start the Linux screen-share companion: {exc}"},
-            status=status.HTTP_502_BAD_GATEWAY,
-        )
-
-    return Response(
-        {
-            "supported": True,
-            "started": True,
-            "roomName": payload["roomName"],
-            "companion": companion_response,
-        }
-    )

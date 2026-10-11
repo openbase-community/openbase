@@ -20,14 +20,114 @@
 set -euo pipefail
 umask 077
 
+# --- Page-cache writeback window ----------------------------------------------
+# A Maritime stop or idle sleep halts the VM without flushing the page cache,
+# and /data's ext4 keeps dirty data up to vm.dirty_expire_centisecs (kernel
+# default 30 s) before writing it back: a file written just before a stop came
+# back 0 bytes (2026-10-09). Shorten the window so dirty data reaches disk
+# within a few seconds. Needs root (Maritime runs this before the privilege
+# drop); best-effort everywhere else, since /proc/sys is usually read-only in
+# a plain Docker container. Builtins only: this runs as root with a fixed PATH.
+tune_writeback() {
+    local vm_dir="${1:-/proc/sys/vm}"
+    local expire="${OPENBASE_DIRTY_EXPIRE_CENTISECS:-500}"
+    local writeback="${OPENBASE_DIRTY_WRITEBACK_CENTISECS:-100}"
+    case "$expire$writeback" in
+        *[!0-9]*)
+            echo "[entrypoint] Ignoring non-numeric dirty writeback settings ($expire/$writeback); kernel defaults kept." >&2
+            return 0
+            ;;
+    esac
+    if { printf '%s\n' "$expire" >"$vm_dir/dirty_expire_centisecs" \
+        && printf '%s\n' "$writeback" >"$vm_dir/dirty_writeback_centisecs"; } 2>/dev/null; then
+        echo "[entrypoint] Page-cache writeback window set: dirty_expire_centisecs=$expire dirty_writeback_centisecs=$writeback." >&2
+    else
+        echo "[entrypoint] Could not fully set the page-cache writeback window; keeping current kernel settings." >&2
+    fi
+}
+
+# --- Privilege drop (Maritime) ----------------------------------------------
+# Maritime's VM init launches the image entrypoint as root regardless of the
+# Dockerfile USER and without the image ENV (observed 2026-09-28; without
+# this the root guard below exited PID 1 and the VM kernel-panicked). The
+# image's own bin directories (~/.openbase/bin, the cli venv) are owned by
+# the unprivileged user, so they must never be searched while we are root: a
+# binary planted there would run as root at the next boot. Keep a fixed
+# system PATH and absolute paths until the drop is done, then re-exec this
+# script as the image user with no inheritable capabilities, an empty
+# bounding set and no_new_privs, environment otherwise intact.
+if [ "${OPENBASE_CODER_RUNTIME:-}" = "maritime" ] && [ "$(/usr/bin/id -u)" = "0" ]; then
+    export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    if ! /usr/bin/id openbase >/dev/null 2>&1; then
+        echo "[entrypoint] Refusing to run the Maritime workspace as root (no 'openbase' user)." >&2
+        exit 1
+    fi
+    /bin/mkdir -p /data
+    # Maritime's VM init boots with an empty /etc/hosts and no hostname, so
+    # "localhost" does not resolve and the LiveKit worker can never reach its
+    # server. Repair both here, the only point where we still hold root.
+    if ! /usr/bin/getent hosts localhost >/dev/null 2>&1; then
+        /usr/bin/printf '127.0.0.1\tlocalhost\n::1\tlocalhost\n' >>/etc/hosts 2>/dev/null \
+            || echo "[entrypoint] Could not add localhost to /etc/hosts." >&2
+    fi
+    case "$(/bin/hostname 2>/dev/null)" in
+        ""|"(none)"|localhost)
+            /bin/hostname "${OPENBASE_TSNET_HOSTNAME:-openbase-workspace}" 2>/dev/null || true
+            ;;
+    esac
+    # Reparent only root-owned entries (the platform-created mount and
+    # first-boot directories); never rewrite a user's existing files, and
+    # never follow links (-h) so nothing under /data can redirect the chown.
+    /usr/bin/find /data -maxdepth 2 -user root \
+        -exec /bin/chown -h openbase:openbase {} + 2>/dev/null || true
+    tune_writeback
+    echo "[entrypoint] Started as root; re-executing as 'openbase'." >&2
+    exec /usr/bin/setpriv --reuid=openbase --regid=openbase --init-groups \
+        --inh-caps=-all --bounding-set=-all --no-new-privs \
+        /usr/bin/env HOME=/home/openbase USER=openbase LOGNAME=openbase \
+        "$0" "$@"
+fi
+
+# The Dockerfile ENV is not guaranteed to reach us: Maritime's VM init rebuilds
+# the environment from its own store and drops the image's ENV, so the cli
+# venv fell off PATH ("openbase-coder: command not found", 2026-09-28).
+# Re-assert the image defaults here (mirrors the Dockerfile ENV block; keep
+# the two in sync); explicit platform values still win. This runs only after
+# the privilege drop above, so the user-owned directories it puts on PATH are
+# never searched by root.
+case ":${PATH:-}:" in
+    *":/opt/openbase-coder/workspace/cli/.venv/bin:"*) ;;
+    *)
+        export PATH="/home/openbase/.openbase/bin:/opt/openbase-coder/workspace/cli/.venv/bin:${PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
+        ;;
+esac
+export OPENBASE_CODER_WORKSPACE_DIR="${OPENBASE_CODER_WORKSPACE_DIR:-/opt/openbase-coder/workspace}"
+export OPENBASE_CODER_CLI_CONSOLE_BUILD_DIR="${OPENBASE_CODER_CLI_CONSOLE_BUILD_DIR:-/opt/openbase-coder/console-dist}"
+export UV_PYTHON_DOWNLOADS="${UV_PYTHON_DOWNLOADS:-never}"
+# No browser runs in the container: CLIs that open one for a login hand the
+# URL to `openbase-coder browser open`, which sends it to the user's phone
+# (or prints it with paste-back guidance). Agents and supervised services
+# inherit these from here.
+export BROWSER="${BROWSER:-openbase-browser}"
+export GH_BROWSER="${GH_BROWSER:-openbase-browser}"
+
 if [ "$#" -gt 0 ]; then
     exec "$@"
+fi
+
+# Maritime already tuned writeback as root, before the privilege drop.
+if [ "${OPENBASE_CODER_RUNTIME:-}" != "maritime" ]; then
+    tune_writeback
 fi
 
 DATA_DIR="${OPENBASE_CODER_CLI_DATA_DIR:-$HOME/.openbase}"
 ENV_FILE="$DATA_DIR/.env"
 WRAPPER_DIR="$DATA_DIR/launchd"
 RUN_DIR="$DATA_DIR/run"
+# Service logs: the same <logs>/<service>.log the launchd and systemd installs
+# keep. PID 1's stdout is the VM serial console under Maritime, which nothing
+# retains (2026-10-09: no LiveKit agent log survived a buggy staging call).
+LOG_DIR="$DATA_DIR/logs"
 NETWORK_MODE="${OPENBASE_CODER_NETWORK_MODE:-tailscale}"
 MARITIME_MODE=0
 if [ "${OPENBASE_CODER_RUNTIME:-}" = "maritime" ]; then
@@ -36,6 +136,12 @@ if [ "${OPENBASE_CODER_RUNTIME:-}" = "maritime" ]; then
     # tunneld) is the only mode that works there. Default to it so a missing
     # env value can never silently boot the tailscale path.
     NETWORK_MODE="${OPENBASE_CODER_NETWORK_MODE:-netmesh}"
+    # Maritime's VM init keeps its exec/command servers on 8081/8082, the
+    # LiveKit worker's default health port; Cloud passes the port explicitly,
+    # and this default covers a hand-launched workspace.
+    export LIVEKIT_AGENT_PORT="${LIVEKIT_AGENT_PORT:-18081}"
+    # The privilege drop at the top of this script already re-executed us as
+    # the image user; nothing past this point may run as root.
     if [ "$(id -u)" = "0" ]; then
         echo "[entrypoint] Refusing to run the Maritime workspace as root." >&2
         exit 1
@@ -106,12 +212,31 @@ if [ ! -e "$HOME/.claude.json" ]; then
     ln -s "$CLAUDE_CONFIG_DIR/.claude.json" "$HOME/.claude.json"
 fi
 
+# Super Agents keeps its thread registry and Claude Code store under $HOME;
+# link them into the volume so thread ids, the Dispatcher's thread and Super
+# Agent names survive an image upgrade, not just a container restart.
+/usr/local/bin/openbase-coder-persist-home-state "$HOME" "$DATA_DIR"
+
+# Mirror a service's output stream into $LOG_DIR/<name>.log (size-capped, see
+# services/container_log_sink.py) while passing every line through. Without a
+# LOG_DIR, or if the sink cannot start, the stream passes through untouched:
+# the log file is a convenience, the service's stdout pipe must never break.
+service_log_sink() {
+    trap '' TERM
+    if [ -z "${LOG_DIR:-}" ] || ! mkdir -p "$LOG_DIR" 2>/dev/null; then
+        exec cat
+    fi
+    python -m openbase_coder_cli.services.container_log_sink "$LOG_DIR/$1.log" \
+        || exec cat
+}
+
 # Run a command under a restart-on-exit loop, prefixing its output and
 # maintaining the service pidfile the runtime's status checks read.
 start_supervised() {
     name="$1"
     shift
     (
+        trap 'trap "" TERM INT; wait || true; exit 0' TERM INT
         while :; do
             "$@" 2>&1 &
             svc_pid=$!
@@ -122,13 +247,21 @@ start_supervised() {
             echo "[supervisor] exited with status $rc; restarting in 5s"
             sleep 5
         done
-    ) 2>&1 | sed -u "s/^/[$name] /" &
+    ) 2>&1 | service_log_sink "$name" | (trap '' TERM; exec sed -u "s/^/[$name] /") &
 }
 
+# Stop every service, then flush the page cache so a VM halted right after
+# the stop keeps what the services last wrote (see tune_writeback). TERM/INT
+# are ignored, not reset: `kill 0` signals this shell too, and with the
+# default action it died there, before `wait` (or any flush) could run.
 shutdown() {
-    trap - TERM INT
+    trap '' TERM INT
     kill 0 2>/dev/null || true
+    echo "[entrypoint] Flushing filesystem buffers before waiting for services." >&2
+    sync || true
     wait || true
+    echo "[entrypoint] Services stopped; flushing filesystem buffers." >&2
+    sync || true
     exit 0
 }
 trap shutdown TERM INT
@@ -257,6 +390,14 @@ awk '/^# BEGIN docker overrides/{skip=1} !skip{print} /^# END docker overrides/{
 } >>"$tmp_env"
 mv "$tmp_env" "$ENV_FILE"
 
+# Render every managed instruction file before any service starts. First-run
+# setup does this once; an image upgrade on a persisted /data does not re-run
+# setup, and workspaces redeployed in place came back with only AGENTS.md
+# until something rendered the rest (2026-10-09). Idempotent, and it leaves
+# user-authored files alone; non-fatal so a template problem cannot block boot.
+python -c "from openbase_coder_cli.codex_home_instructions import refresh_openbase_instruction_files_from_installation as refresh; refresh(report=print)" \
+    || echo "[entrypoint] warning: instruction refresh failed" >&2
+
 # Setup only auto-installs the pinned livekit-server for dev workspaces with
 # uv project state; install it explicitly here (idempotent: checks version).
 python -c "from openbase_coder_cli.livekit_install import ensure_pinned_livekit_server; ensure_pinned_livekit_server()"
@@ -290,14 +431,19 @@ default_services="livekit-server livekit-agent django-cli sync-workers openbase-
 if [ "$NETWORK_MODE" = "netmesh-tsnet" ]; then
     default_services="openbase-tunneld $default_services"
 fi
+# Cloud workspaces report activity so Cloud (and, for Maritime, the provider)
+# can tell a busy workspace from an idle one; provision installs the wrapper.
+if [ "${MARITIME_MODE:-0}" = "1" ] && [ -f "$WRAPPER_DIR/openbase-cloud-heartbeat.sh" ]; then
+    default_services="$default_services openbase-cloud-heartbeat"
+fi
 if [ -f "$WRAPPER_DIR/codex-app-server.sh" ]; then
     default_services="$default_services codex-app-server"
 fi
-# code-sync is conditional: supervise it only when the feature is enabled
-# (enabling it from the console requires a container restart to take effect).
-if [ -f "$WRAPPER_DIR/code-sync.sh" ] \
-    && python -c "from openbase_coder_cli.sync_config import code_sync_enabled; import sys; sys.exit(0 if code_sync_enabled() else 1)" 2>/dev/null; then
-    default_services="$default_services code-sync"
+# Openbase Sync is conditional: supervise the daemon only once it is
+# configured (configuring it requires a container restart to take effect).
+if [ -f "$WRAPPER_DIR/sync-daemon.sh" ] \
+    && python -c "from openbase_coder_cli.sync_daemon import is_configured; import sys; sys.exit(0 if is_configured() else 1)" 2>/dev/null; then
+    default_services="$default_services sync-daemon"
 fi
 services="${OPENBASE_CODER_SERVICES:-$default_services}"
 # The staged single-use netmesh key must survive failed enrollments (egress
@@ -333,11 +479,23 @@ done
 if [ "$netmesh_key_staged" = "1" ]; then
     (
         while :; do
+            # The daemon tries TS_AUTHKEY once at start. On Maritime, egress
+            # can still be down at that moment, and a failed first login
+            # parks the node in NeedsLogin for good — so while the staged key
+            # is still here, resubmit it through the daemon's local login
+            # API until the node reports enrolled and forwarding.
             if python -c "
 import sys
-from openbase_coder_cli.services.tunneld import tunneld_health
+from pathlib import Path
+from openbase_coder_cli.services.tunneld import tunneld_health, tunneld_login
 h = tunneld_health()
-sys.exit(0 if h.get('backend_state') == 'Running' and h.get('forwards_up') else 1)
+if h.get('backend_state') == 'Running' and h.get('forwards_up'):
+    sys.exit(0)
+if h.get('backend_state') == 'NeedsLogin':
+    key = Path('$NETMESH_AUTHKEY_FILE').read_text().strip()
+    if key and tunneld_login(key):
+        print('resubmitted the staged enrollment key')
+sys.exit(1)
 " 2>/dev/null; then
                 rm -f "$NETMESH_AUTHKEY_FILE"
                 echo "enrollment confirmed; staged auth key removed"
@@ -346,6 +504,26 @@ sys.exit(0 if h.get('backend_state') == 'Running' and h.get('forwards_up') else 
             sleep 10
         done
     ) 2>&1 | sed -u "s/^/[netmesh-enroll] /" &
+fi
+
+# Published services (`service publish --persist`) have no launchd here:
+# once the embedded node forwards, restore their gateways and the node's
+# :443/:80 service forwards. One pass; the command is idempotent.
+if [ "$NETWORK_MODE" = "netmesh-tsnet" ]; then
+    (
+        while :; do
+            if python -c "
+import sys
+from openbase_coder_cli.services.tunneld import tunneld_health
+h = tunneld_health()
+sys.exit(0 if h.get('backend_state') == 'Running' and h.get('forwards_up') else 1)
+" 2>/dev/null; then
+                openbase-coder service restore 2>&1 || echo "WARN: published services were not fully restored"
+                break
+            fi
+            sleep 15
+        done
+    ) 2>&1 | sed -u "s/^/[service-restore] /" &
 fi
 
 echo "[entrypoint] Supervising services: $services"

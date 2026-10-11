@@ -3,13 +3,14 @@
 import hashlib
 
 from livekit import rtc
-from openbase_coder_cli.logging_redaction import redact_exception_text
 
 from openbase_coder_cli.livekit_agent.config import (
     LIVEKIT_AUDIO_FRAME_LOG_EVERY,
     LIVEKIT_AUDIO_FRAME_LOG_FIRST,
     LIVEKIT_VERBOSE_LOGGING,
 )
+from openbase_coder_cli.logging_redaction import redact_exception_text
+
 
 def exception_chain_summary(exc: BaseException) -> str:
     """Compact, redacted summary of an exception and its causal chain."""

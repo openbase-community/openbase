@@ -7,8 +7,11 @@ unchanged and reaches sibling state through ``self``.
 
 from __future__ import annotations
 
+import asyncio
 import os
+import time
 import uuid
+import weakref
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -26,6 +29,11 @@ from openbase_coder_cli.dispatcher_config import (
     DISPATCHER_MODEL_ROLE,
     SUPER_AGENTS_MODEL_ROLE,
 )
+from openbase_coder_cli.thread_archives import (
+    archive_backend_thread,
+    archived_thread_ids,
+)
+from openbase_coder_cli.thread_model_overrides import get_thread_model_override
 
 from .models import ThreadInfo as SessionInfo
 from .session_manager_base import (
@@ -38,6 +46,7 @@ from .session_manager_base import (
     load_super_agent_developer_instructions,
     logger,
 )
+from .speaking_identity import ensure_speaking_identity
 from .thread_payloads import (
     _datetime_to_iso,
     _merge_tracked_turn_details,
@@ -49,6 +58,45 @@ from .thread_payloads import (
     _thread_history_limit,
     _thread_payload,
 )
+
+
+def _default_developer_instructions(thread_id: str) -> str | None:
+    """What a resume without explicit instructions gives the thread.
+
+    The pinned Dispatcher keeps its own instructions. Resuming it with the
+    generic Super Agent instructions (a typed turn after the backend session
+    went away) replaced the Claude session's system prompt, and the next
+    voice turn answered "I'm not in a dispatcher session, so I can't transfer
+    you" (Maritime, 2026-10-10 22:16Z).
+    """
+    from openbase_coder_cli.livekit_voice_route import (
+        dispatcher_developer_instructions,
+        is_dispatcher_thread,
+    )
+
+    if is_dispatcher_thread(thread_id):
+        return dispatcher_developer_instructions()
+    return load_super_agent_developer_instructions()
+
+
+def dispatcher_turn_instructions(thread_id: str) -> str | None:
+    """The current Dispatcher rules for a typed turn on the Dispatcher thread.
+
+    A session's stored developer instructions are captured when it is
+    created, so a typed Dispatcher turn kept following rules from that day
+    (376, 2026-10-11: "Have Marian write…" started a new worker long after
+    the rule to continue a named agent shipped). Voice turns already pass the
+    live rules per turn; typed turns now do the same, and super-agents folds
+    identical text in without duplicating it.
+    """
+    from openbase_coder_cli.livekit_voice_route import (
+        dispatcher_developer_instructions,
+        is_dispatcher_thread,
+    )
+
+    if not is_dispatcher_thread(thread_id):
+        return None
+    return dispatcher_developer_instructions()
 
 
 class SessionManagerThreadsMixin:
@@ -70,6 +118,15 @@ class SessionManagerThreadsMixin:
         return codex_permission_defaults()
 
     def _model_for_thread(self, thread: SessionInfo) -> str | None:
+        override = get_thread_model_override(thread.session_id)
+        if override:
+            family = execution_backend_for_model(override)
+            if family is None or family == self._execution_backend:
+                # The thread's model switcher selection (console/iOS/Android
+                # composer dropdown) wins over role defaults. A stale
+                # cross-backend override (e.g. left behind by a backend
+                # continuation) falls through to the ordinary resolution.
+                return override
         role = (
             DISPATCHER_MODEL_ROLE
             if thread.name and thread.name.casefold() == "dispatcher"
@@ -86,6 +143,21 @@ class SessionManagerThreadsMixin:
             return thread.model or None
         return model
 
+    def _resolve_turn_model(
+        self, thread: SessionInfo, explicit_model: str | None
+    ) -> str | None:
+        """The model for one turn: an explicit per-turn switch, else defaults."""
+        if not explicit_model:
+            return self._model_for_thread(thread)
+        family = execution_backend_for_model(explicit_model)
+        if family is not None and family != self._execution_backend:
+            raise ValueError(
+                f"Model {explicit_model} runs on the {family} backend; thread "
+                f"{thread.session_id} runs on {self._execution_backend}. Threads "
+                "can only switch between models of the same backend."
+            )
+        return explicit_model
+
     async def create_thread(
         self,
         directory: str,
@@ -101,6 +173,20 @@ class SessionManagerThreadsMixin:
     async def archive_thread(self, thread_id: str) -> bool:
         """Archive a Codex app-server thread."""
         return await self.close_session(thread_id)
+
+    async def rename_thread(self, thread_id: str, name: str) -> SessionInfo | None:
+        """Rename a thread on its backend and broadcast the new snapshot."""
+        cleaned = " ".join(name.split())
+        if not cleaned:
+            raise ValueError("Thread name cannot be empty")
+        if self._uses_backend_session_api():
+            await self._client.rename_by_label(
+                LabelQueryInput(thread_id=thread_id), cleaned
+            )
+        else:
+            await self._client.set_thread_name(thread_id, cleaned)
+        await self._broadcast_thread_state(thread_id)
+        return await self.get_thread_state(thread_id)
 
     async def get_thread_state(
         self,
@@ -147,7 +233,9 @@ class SessionManagerThreadsMixin:
         developer_instructions: str | None | object = _USE_SUPER_AGENT_INSTRUCTIONS,
     ) -> None:
         if developer_instructions is _USE_SUPER_AGENT_INSTRUCTIONS:
-            effective_developer_instructions = load_super_agent_developer_instructions()
+            effective_developer_instructions = _default_developer_instructions(
+                thread_id
+            )
         elif isinstance(developer_instructions, str):
             effective_developer_instructions = developer_instructions
         else:
@@ -236,6 +324,8 @@ class SessionManagerThreadsMixin:
         sessions = [
             _session_from_thread(thread, include_turns=False) for thread in raw_threads
         ]
+        for session in sessions:
+            await ensure_speaking_identity(self._client, session)
         return sorted(sessions, key=_session_sort_key, reverse=True)
 
     async def _backend_thread_page(
@@ -256,19 +346,63 @@ class SessionManagerThreadsMixin:
             next_cursor=str(end) if end < len(sorted_sessions) else None,
         )
 
+    # The full session listing (a Claude-home sweep plus every store row) is
+    # the same call behind list_thread_page and list_threads; a thread-open
+    # burst asks for both at once, so briefly share one result.
+    BACKEND_SESSIONS_SHARE_SECONDS = 2.0
+
     async def _backend_sessions(self) -> list[SessionInfo]:
         sessions_method = getattr(self._client, "sessions", None)
         if not callable(sessions_method):
             return []
-        raw_sessions = await sessions_method()
-        return [
-            _session_from_thread(
-                _normalize_backend_thread_payload(session),
-                include_turns=False,
-            )
-            for session in raw_sessions
-            if isinstance(session, dict)
-        ]
+        # Single-flight: concurrent callers wait for one scan instead of
+        # each starting their own. An asyncio.Lock binds to the loop that
+        # first waits on it and raises for any other, so a caller on another
+        # loop gets its own lock rather than a RuntimeError (2026-10-08).
+        loop = asyncio.get_running_loop()
+        # Weak keys: a private loop asgiref spins up for one call must not be
+        # kept alive (with its lock) for the life of the manager.
+        locks = self.__dict__.setdefault(
+            "_backend_sessions_locks", weakref.WeakKeyDictionary()
+        )
+        lock = locks.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            locks[loop] = lock
+        try:
+            async with lock:
+                now = time.monotonic()
+                cached = getattr(self, "_backend_sessions_cache", None)
+                if (
+                    cached is not None
+                    and now - cached[0] < self.BACKEND_SESSIONS_SHARE_SECONDS
+                ):
+                    return await self._unarchived_backend_sessions(cached[1])
+                raw_sessions = await sessions_method()
+                sessions = [
+                    _session_from_thread(
+                        _normalize_backend_thread_payload(session),
+                        include_turns=False,
+                    )
+                    for session in raw_sessions
+                    if isinstance(session, dict)
+                ]
+                for session in sessions:
+                    await ensure_speaking_identity(self._client, session)
+                self._backend_sessions_cache = (time.monotonic(), sessions)
+                return await self._unarchived_backend_sessions(sessions)
+        finally:
+            waiters = getattr(lock, "_waiters", None)
+            if not lock.locked() and not waiters:
+                locks.pop(loop, None)
+
+    async def _unarchived_backend_sessions(
+        self, sessions: list[SessionInfo]
+    ) -> list[SessionInfo]:
+        # Apply after the shared scan cache: another API process may archive
+        # a thread while this manager still has a warm backend listing.
+        archived = await asyncio.to_thread(archived_thread_ids, self._execution_backend)
+        return [session for session in sessions if session.session_id not in archived]
 
     async def _list_thread_page_result(
         self,
@@ -348,17 +482,21 @@ class SessionManagerThreadsMixin:
                 **self._codex_permission_defaults(),
             }
             if not reuse_existing:
-                thread_input["fresh"] = True
+                # Manual conversations never compete for the reusable agent
+                # label. Keep the unique lookup name out of display titles.
+                thread_input["name"] = f"thread-{uuid.uuid4().hex}"
+                thread_input["autoTitle"] = True
             if model := self._model_for_role(SUPER_AGENTS_MODEL_ROLE):
                 thread_input["model"] = model
             developer_instructions = load_super_agent_developer_instructions()
             if developer_instructions is not None:
                 thread_input["developerInstructions"] = developer_instructions
             started = await self._client.start_thread(thread_input)
-            return _session_from_thread(
+            session = _session_from_thread(
                 _normalize_backend_thread_payload(started),
                 include_turns=False,
             )
+            return await ensure_speaking_identity(self._client, session)
 
         if reuse_existing:
             result = await self._client.list_threads(
@@ -368,7 +506,10 @@ class SessionManagerThreadsMixin:
             )
             existing = extract_threads(result)
             if existing:
-                return _session_from_thread(existing[0], include_turns=False)
+                return await ensure_speaking_identity(
+                    self._client,
+                    _session_from_thread(existing[0], include_turns=False),
+                )
 
         thread_input = {"cwd": expanded_dir, **self._codex_permission_defaults()}
         if model := self._model_for_role(SUPER_AGENTS_MODEL_ROLE):
@@ -381,13 +522,20 @@ class SessionManagerThreadsMixin:
         thread = _thread_payload(started)
         if thread is None:
             raise RuntimeError("Super Agents did not return a thread")
-        return _session_from_thread(thread, include_turns=False)
+        return await ensure_speaking_identity(
+            self._client, _session_from_thread(thread, include_turns=False)
+        )
 
     async def close_session(self, session_id: str) -> bool:
         """Archive a persisted thread."""
         await self.interrupt_run(session_id)
         if self._uses_backend_session_api():
-            return await self.get_session_state(session_id) is not None
+            if await self.get_session_state(session_id) is None:
+                return False
+            await asyncio.to_thread(
+                archive_backend_thread, self._execution_backend, session_id
+            )
+            return True
         try:
             await self._client.ensure_connected()
             await self._client.request("thread/archive", {"threadId": session_id})
@@ -420,6 +568,7 @@ class SessionManagerThreadsMixin:
         if result is None:
             return None
         session = _session_from_thread(result, include_turns=True)
+        await ensure_speaking_identity(self._client, session)
         await self._apply_local_turn_state(session_id, session)
         return session
 
@@ -452,6 +601,8 @@ class SessionManagerThreadsMixin:
         sessions = [
             _session_from_thread(thread, include_turns=False) for thread in raw_threads
         ]
+        for session in sessions:
+            await ensure_speaking_identity(self._client, session)
         return sorted(sessions, key=_session_sort_key, reverse=True)
 
     async def _read_thread(

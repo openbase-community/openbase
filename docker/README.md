@@ -16,11 +16,9 @@ docs.openbase.cloud); this file is the deeper image/development reference.
 
 ## Publishing
 
-CI publishes `openbaseai/openbase` (linux/amd64 + linux/arm64) via
-`.github/workflows/docker-image.yml` on pushes to `main` that touch the
-image inputs, tagging `latest` plus a version derived from the newest `v*`
-tag. It needs the `DOCKERHUB_TOKEN` repo secret (a Docker Hub access token
-for the `openbaseai` account); without it the workflow warns and skips.
+CI publishes `openbaseai/openbase` (linux/amd64 + linux/arm64) via `.github/workflows/docker-image.yml` on pushes to `main` that touch the image inputs, tagging `latest` plus a version derived from the newest `v*` tag (`.github/scripts/release-version.sh stamp`). It needs the `DOCKERHUB_TOKEN` repo secret (a Docker Hub access token for the `openbaseai` account); without it the workflow warns and skips.
+
+Staging promotions dispatch the workflow on `staging` with a custom `maritime-<sha>` tag and `platforms=amd64` (Maritime runs x86_64), right after the push. The stamp uses an existing tag at HEAD or computes the next staging version, so the build does not wait for the release. Independently started release and image builds can observe different tag baselines during concurrent releases. The workflow clones the sibling repos (console, coder-react, super-agents, skills, workspace root) at the branch being built (`main` and `staging` use their own branch, anything else `develop`) and passes their head SHAs as `SIBLING_REVS` to invalidate cached clones when siblings change. These SHAs invalidate the cache; they do not pin clones against a branch moving during the build.
 
 ## Build
 
@@ -33,6 +31,8 @@ docker build --build-arg OPENBASE_CODER_VERSION=1.2.3 -t openbase-coder:1.2.3 .
 ```
 
 Or with compose: `docker compose up --build`.
+
+The build clones the bundled skills and copies `instructions/` from the workspace root repository beside `cli/`. `SKILLS_REPO` / `SKILLS_REF` and `WORKSPACE_REPO` / `WORKSPACE_REF` select those sources (`SUPER_AGENTS_REPO` / `SUPER_AGENTS_REF` the super-agents sibling); the refs default to `develop`. Like the console inputs, these are remote refs, so local sibling changes are not included automatically, and a local rebuild reuses a cached clone unless you pass a changing `--build-arg SIBLING_REVS=...` (or `--no-cache`).
 
 ## Run
 
@@ -113,6 +113,12 @@ Do not set the bootstrap variable manually or copy credential files into a
 Maritime volume. The complete control-plane contract, threat model, and safe
 migration procedure are in `docker/maritime-security.md`.
 
+## State that must survive an image upgrade
+
+On Maritime only `/data` persists across an in-place image redeploy; the image layer, `$HOME` included, is replaced. Tools that keep state under `$HOME` are therefore linked into the data dir at every boot: `~/.codex`, `~/.claude` and `~/.claude.json` as before, and (since 2026-10-09) GitHub CLI’s default `~/.config/gh` directory (`github-cli` on the volume), the Super Agents registry `~/.super-agents` and Claude Code store `~/.local/share/super-agents-claude-code`, via `persist-home-state.sh`. A real directory or a directory behind a different symlink in `$HOME` is adopted into the data dir; an older volume copy is set aside in `*.replaced-<unique suffix>/state`, never deleted. Copies use fresh staging directories so interrupted copies cannot contaminate retries. The original home entry is retained in `*.migrated-<unique suffix>/state` until the image layer is replaced. Migration errors abort boot before services can write to unpersisted state.
+
+A workspace still running an image from before that change cannot adopt on the new image, because the redeploy has already replaced its home directory. Before its first in-place redeploy onto a newer image, run `bash pre-upgrade-copy-home-state.sh --refresh /home/openbase /data/openbase` inside the running workspace (for example through the Maritime exec API, passing the script body with `bash -c`). The explicit paths avoid using root's `$HOME`. It copies the registry onto the volume, SQLite through the online backup API into a fresh database, preserves modes, and assigns ownership to the home directory's owner. With `--refresh`, existing copies are retained under unique `<dest>.replaced-<stamp>-<suffix>/state` paths before being copied again; without it, existing destinations are skipped. Project caches already on the volume are left in place. Quiesce agent activity first and redeploy immediately afterward: the snapshot does not include later writes. Existing source files in the home directory are retained.
+
 ## Environment variables
 
 | Variable | Default | Purpose |
@@ -191,7 +197,5 @@ candidate.
   (e.g. `-v ~/Projects:/home/openbase/Projects`). Node (with npm/corepack)
   and git are bundled for agent tooling; other toolchains must be installed
   into the container.
-- **Code-sync works**: syncthing is bundled (pinned to the version
-  `code_sync/install.py` would download). After enabling sync from the
-  console, restart the container so the entrypoint starts the code-sync
-  service.
+- **Openbase Sync**: configure it inside the container with
+  `openbase-coder sync-daemon configure` (see the sync docs).

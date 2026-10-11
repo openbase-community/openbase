@@ -1,0 +1,351 @@
+"""``openbase-coder sync status|conflicts|resolve`` delegate to the daemon."""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+from click.testing import CliRunner
+
+from openbase_coder_cli import sync_daemon
+from openbase_coder_cli.cli.sync import sync
+
+
+class FakeClient:
+    calls: list[tuple] = []
+    fail = False
+    held: list[str] = []
+    folders: list[dict] = []
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def _maybe_fail(self):
+        if FakeClient.fail:
+            raise sync_daemon.SyncDaemonError("sync daemon unreachable")
+
+    def status(self):
+        self._maybe_fail()
+        FakeClient.calls.append(("status",))
+        return {
+            "device": "laptop",
+            "role": "edge",
+            "roots": [
+                {
+                    "id": "projects",
+                    "path": "~/Projects",
+                    "entries": 1200,
+                    "pending_fetches": 3,
+                    "scanning": False,
+                }
+            ],
+            "peers": [{"device": "mini", "role": "hub", "rtt_ms": 4.2}],
+            "open_conflicts": 1,
+        }
+
+    def conflicts(self, root=None):
+        self._maybe_fail()
+        FakeClient.calls.append(("conflicts", root))
+        return [
+            {
+                "id": 7,
+                "root": "projects",
+                "path": "app/main.py",
+                "kind": "content",
+                "a_device": "mini",
+                "b_device": "laptop",
+                "created_ns": 1_760_000_000_000_000_000,
+            },
+            {
+                "id": 8,
+                "root": "projects",
+                "path": "app:refs/heads/main",
+                "kind": "git-branch",
+                "created_ns": 1_760_000_000_000_000_000,
+            },
+        ]
+
+    def resolve(self, conflict_id, choice):
+        self._maybe_fail()
+        FakeClient.calls.append(("resolve", conflict_id, choice))
+
+    def held_deletes(self, root, limit=None):
+        FakeClient.calls.append(("held_deletes", root))
+        return FakeClient.held if root == "projects" else []
+
+    def held_folders(self, root, folder=None, limit=None):
+        FakeClient.calls.append(("held_folders", root))
+        return FakeClient.folders if root == "projects" else []
+
+    def release_deletes(self, root, folder=None):
+        FakeClient.calls.append(("release_deletes", root, folder))
+        return len(FakeClient.held)
+
+    def discard_deletes(self, root, folder=None):
+        FakeClient.calls.append(("discard_deletes", root, folder))
+        return len(FakeClient.held)
+
+
+@pytest.fixture
+def client(monkeypatch):
+    FakeClient.calls = []
+    FakeClient.fail = False
+    FakeClient.held = []
+    FakeClient.folders = []
+    monkeypatch.setattr(sync_daemon, "SyncDaemonClient", FakeClient)
+    monkeypatch.setattr(sync_daemon, "is_configured", lambda config_path=None: True)
+    monkeypatch.setattr(
+        sync_daemon,
+        "read_config_summary",
+        lambda config_path=None: {"device_id": "laptop"},
+    )
+    return FakeClient
+
+
+def test_status_summarizes_daemon_status(client):
+    result = CliRunner().invoke(sync, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert "Role:      edge" in result.output
+    assert "~/Projects  (1200 entries, 3 transferring)" in result.output
+    assert "mini (hub, 4 ms)" in result.output
+    assert "Conflicts: 1" in result.output
+    assert client.calls == [("status",)]
+
+
+def test_status_shows_disk_budget_and_low_disk(client, monkeypatch):
+    payload = FakeClient.status(FakeClient())
+    payload["roots"][0]["bytes"] = 40_000_000
+    payload["roots"][0]["disk"] = {
+        "free_bytes": 400_000_000,
+        "total_bytes": 5_000_000_000,
+        "low_water_bytes": 500_000_000,
+        "low_water_auto": True,
+        "below_low_water": True,
+        "held_files": 3,
+        "held_bytes": 90_000,
+    }
+    payload["versions"] = {
+        "usage_bytes": 1_000_000,
+        "quota_bytes": 750_000_000,
+        "quota_auto": True,
+        "retention_days": 30,
+    }
+    payload["placement"] = {"thin": True}
+    monkeypatch.setattr(FakeClient, "status", lambda self: payload)
+
+    result = CliRunner().invoke(sync, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert "~/Projects  (1200 entries, 3 transferring, 40.0 MB)" in result.output
+    assert (
+        "disk: 400.0 MB free of 5.0 GB; sync keeps 500.0 MB free, from disk size"
+        in result.output
+    )
+    assert (
+        "low disk: sync writes here are paused until space returns (3 files, 90.0 KB waiting)"
+        in result.output
+    )
+    assert (
+        "Versions:  1.0 MB of 750.0 MB (from disk size), kept 30 days" in result.output
+    )
+    assert "large files stay on the other computer until used" in result.output
+
+
+def test_status_json_is_the_raw_payload(client):
+    result = CliRunner().invoke(sync, ["status", "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["open_conflicts"] == 1
+
+
+def test_status_unreachable_points_at_the_service(client):
+    client.fail = True
+
+    result = CliRunner().invoke(sync, ["status"])
+
+    assert result.exit_code != 0
+    assert "services start sync-daemon" in result.output
+
+
+def test_unconfigured_commands_explain_setup(monkeypatch):
+    monkeypatch.setattr(sync_daemon, "is_configured", lambda config_path=None: False)
+
+    for args in (["status"], ["conflicts"], ["resolve", "1", "--keep-local"]):
+        result = CliRunner().invoke(sync, args)
+        assert result.exit_code != 0
+        assert "sync-daemon configure" in result.output
+
+
+def test_conflicts_lists_records(client):
+    result = CliRunner().invoke(sync, ["conflicts"])
+
+    assert result.exit_code == 0, result.output
+    assert "7  content       projects:app/main.py  (2025-10-09T" in result.output
+    assert client.calls == [("conflicts", None)]
+
+    result = CliRunner().invoke(sync, ["conflicts", "--json"])
+    assert json.loads(result.output)[0]["id"] == 7
+
+
+@pytest.mark.parametrize(
+    ("flag", "choice"), [("--keep-local", "b"), ("--use-remote", "a")]
+)
+def test_resolve_maps_actions_to_daemon_choices(client, flag, choice):
+    result = CliRunner().invoke(sync, ["resolve", "7", flag])
+
+    assert result.exit_code == 0, result.output
+    assert client.calls == [("conflicts", None), ("resolve", 7, choice)]
+
+
+def test_resolve_refuses_diverged_branches(client):
+    result = CliRunner().invoke(sync, ["resolve", "8", "--keep-local"])
+
+    assert result.exit_code != 0
+    assert "neither" in result.output
+    assert ("resolve", 8, "a") not in client.calls
+
+
+def test_resolve_requires_an_action(client):
+    result = CliRunner().invoke(sync, ["resolve", "7"])
+
+    assert result.exit_code != 0
+    assert "--keep-local or --use-remote" in result.output
+    assert client.calls == []
+
+
+def test_removed_syncthing_commands_are_gone():
+    for name in ("enable", "disable", "add", "remove", "ignores", "reconcile"):
+        assert name not in sync.commands
+
+
+def test_status_shows_agent_configuration_sync(client, monkeypatch):
+    payload = FakeClient.status(FakeClient())
+    payload["agent_config"] = {
+        "enabled": True,
+        "root": "/home/u/.openbase/agent-config",
+        "entries": 7,
+        "secrets": 2,
+        "errors": ["claude/mcp-servers/x.json: a real directory is in the way"],
+    }
+    monkeypatch.setattr(FakeClient, "status", lambda self: payload)
+
+    result = CliRunner().invoke(sync, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "Agents:    skills, MCP servers and sign-in synced (7 entries, 2 sign-ins)"
+        in result.output
+    )
+    assert "could not sync claude/mcp-servers/x.json" in result.output
+
+
+def test_status_says_when_agent_configuration_is_not_synced(client):
+    result = CliRunner().invoke(sync, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert "Agents:    configuration not synced" in result.output
+
+
+def test_held_deletes_list_and_release(client, monkeypatch):
+    status = client.status
+
+    def held_status(self):
+        payload = status(self)
+        payload["roots"][0]["held_deletes"] = 2
+        return payload
+
+    monkeypatch.setattr(client, "status", held_status)
+    client.held = ["app/gone.py", "app"]
+
+    shown = CliRunner().invoke(sync, ["status"])
+    assert shown.exit_code == 0, shown.output
+    assert "2 deletions held by the mass-delete guard" in shown.output
+
+    listed = CliRunner().invoke(sync, ["held-deletes"])
+    assert listed.exit_code == 0, listed.output
+    assert "2 deletions held" in listed.output and "app/gone.py" in listed.output
+
+    released = CliRunner().invoke(sync, ["held-deletes", "--release"])
+    assert released.exit_code == 0, released.output
+    assert "Released 2 held deletions in ~/Projects." in released.output
+    assert ("release_deletes", "projects", None) in client.calls
+
+
+def test_held_deletes_by_folder(client, monkeypatch):
+    status = client.status
+
+    def held_status(self):
+        payload = status(self)
+        payload["roots"][0]["held_deletes"] = 3
+        payload["roots"][0]["held_folders"] = [
+            {"folder": "ws/mww/.local", "count": 2, "rule": "count"},
+            {"folder": "tmp", "count": 1, "rule": "count"},
+        ]
+        return payload
+
+    monkeypatch.setattr(client, "status", held_status)
+    client.held = ["tmp/x", "ws/mww/.local/a", "ws/mww/.local/b"]
+    client.folders = [
+        {"folder": "tmp", "count": 1, "rule": "count", "sample": ["tmp/x"]},
+        {
+            "folder": "ws/mww/.local",
+            "count": 2,
+            "rule": "count",
+            "sample": ["ws/mww/.local/a"],
+        },
+    ]
+
+    shown = CliRunner().invoke(sync, ["status"])
+    assert shown.exit_code == 0, shown.output
+    assert "2 under ws/mww/.local/" in shown.output and "1 under tmp/" in shown.output
+
+    listed = CliRunner().invoke(sync, ["held-deletes"])
+    assert listed.exit_code == 0, listed.output
+    assert "  2 under ws/mww/.local/\n    ws/mww/.local/a\n    … and 1 more" in (
+        listed.output
+    )
+    assert "  1 under tmp/\n    tmp/x\n" in listed.output
+
+    scoped = CliRunner().invoke(sync, ["held-deletes", "--folder", "ws/mww/", "--json"])
+    assert scoped.exit_code == 0, scoped.output
+    [entry] = json.loads(scoped.output)
+    assert entry["count"] == 2
+    assert entry["sample"] == ["ws/mww/.local/a"]
+    assert [hold["folder"] for hold in entry["folders"]] == ["ws/mww/.local"]
+    missing_root = CliRunner().invoke(
+        sync, ["held-deletes", "--root", "missing", "--json"]
+    )
+    assert missing_root.exit_code == 0, missing_root.output
+    assert json.loads(missing_root.output) == []
+
+    released = CliRunner().invoke(
+        sync, ["held-deletes", "--release", "--folder", "ws/mww/.local/"]
+    )
+    assert released.exit_code == 0, released.output
+    assert "in ~/Projects under ws/mww/.local/." in released.output
+    assert ("release_deletes", "projects", "ws/mww/.local") in client.calls
+
+
+def test_held_deletes_root_wide_from_older_daemon(client, monkeypatch):
+    status = client.status
+
+    def held_status(self):
+        payload = status(self)
+        payload["roots"][0]["held_deletes"] = 2
+        return payload
+
+    monkeypatch.setattr(client, "status", held_status)
+    client.held = ["app/gone.py", "app"]
+    listed = CliRunner().invoke(sync, ["held-deletes"])
+    assert listed.exit_code == 0, listed.output
+    assert "  2 under the whole folder\n    app/gone.py\n    app\n" in listed.output
+    assert not [c for c in client.calls if c[0] == "held_folders"]
+
+
+def test_held_deletes_none(client):
+    result = CliRunner().invoke(sync, ["held-deletes"])
+    assert result.exit_code == 0
+    assert "No deletions are held." in result.output
+    refused = CliRunner().invoke(sync, ["held-deletes", "--discard"])
+    assert refused.exit_code != 0 and "No deletions are held." in refused.output

@@ -227,7 +227,8 @@ def test_agent_auth_requires_claude_login_for_claude_backend(monkeypatch, tmp_pa
     ) in messages
 
 
-def test_doctor_allows_optional_stopped_services(monkeypatch, tmp_path):
+def _patch_doctor_runtime(monkeypatch, tmp_path, services, launchctl_status):
+    """A healthy codex-backend install whose service list is ``services``."""
     env_file = tmp_path / ".env"
     env_file.write_text("OPENBASE_CODER_CLI_SECRET_KEY=x\n", encoding="utf-8")
     monkeypatch.setattr(doctor_cli.InstallationConfig, "exists", lambda: True)
@@ -240,22 +241,8 @@ def test_doctor_allows_optional_stopped_services(monkeypatch, tmp_path):
         ),
     )
     monkeypatch.setattr(doctor_cli, "configured_coding_backends", lambda: ["codex"])
-    monkeypatch.setattr(
-        doctor_cli,
-        "SERVICES",
-        [
-            SimpleNamespace(
-                name="codex-thread-device-sync",
-                install_by_default=False,
-                supports_backend=lambda _backend: True,
-            )
-        ],
-    )
-    monkeypatch.setattr(
-        doctor_cli,
-        "launchctl_status",
-        lambda _svc: {"installed": True, "pid": None, "last_exit_code": None},
-    )
+    monkeypatch.setattr(doctor_cli, "SERVICES", services)
+    monkeypatch.setattr(doctor_cli, "launchctl_status", launchctl_status)
     monkeypatch.setattr(
         doctor_cli,
         "_get_listening_sockets",
@@ -291,8 +278,8 @@ def test_doctor_allows_optional_stopped_services(monkeypatch, tmp_path):
     monkeypatch.setattr(doctor_cli, "selected_stt_provider_id", lambda: "assemblyai")
     monkeypatch.setattr(
         doctor_cli,
-        "_check_code_sync",
-        lambda ok, _warn, _fail: ok("code sync: healthy"),
+        "_check_sync_daemon",
+        lambda ok, _warn, _fail: ok("Openbase Sync: healthy"),
     )
     codex_home = tmp_path / "codex_home"
     codex_home.mkdir()
@@ -305,10 +292,66 @@ def test_doctor_allows_optional_stopped_services(monkeypatch, tmp_path):
     monkeypatch.setattr(doctor_cli, "CODEX_HOME_DIR", codex_home)
     _patch_agent_home_paths(monkeypatch, tmp_path)
 
+
+def test_doctor_allows_optional_stopped_services(monkeypatch, tmp_path):
+    _patch_doctor_runtime(
+        monkeypatch,
+        tmp_path,
+        [
+            SimpleNamespace(
+                name="codex-thread-device-sync",
+                install_by_default=False,
+                supports_backend=lambda _backend: True,
+            )
+        ],
+        lambda _svc: {"installed": True, "pid": None, "last_exit_code": None},
+    )
+
     result = CliRunner().invoke(doctor_cli.doctor)
 
     assert result.exit_code == 0, result.output
     assert "codex-thread-device-sync: optional (not running" in result.output
+
+
+def test_doctor_reports_shared_daemon_and_cli_upgrade_over_idle_runner(
+    monkeypatch, tmp_path
+):
+    from openbase_coder_cli.services.codex_version_skew import CodexVersionSkew
+
+    _patch_doctor_runtime(
+        monkeypatch,
+        tmp_path,
+        [
+            SimpleNamespace(
+                name="codex-app-server",
+                install_by_default=True,
+                supports_backend=lambda _backend: True,
+            )
+        ],
+        # Openbase's runner idles behind the daemon and holds a pid.
+        lambda _svc: {"installed": True, "pid": 4242, "last_exit_code": 0},
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.codex_control_plane.shared_codex_daemon_ready",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.services.codex_version_skew.service_version_skew",
+        lambda name: CodexVersionSkew(
+            service=name,
+            running_version="0.161.0",
+            installed_version="0.160.1",
+            installed_path="/opt/codex",
+            shared_daemon=True,
+        ),
+    )
+
+    result = CliRunner().invoke(doctor_cli.doctor)
+
+    assert result.exit_code == 0, result.output
+    assert "codex-app-server: available through the shared Codex daemon" in result.output
+    assert "upgrade the Codex CLI to 0.161.0" in result.output
+    assert "pid 4242" not in result.output
 
 
 def test_doctor_skips_backend_scoped_services_on_other_backends(monkeypatch, tmp_path):
@@ -448,8 +491,8 @@ def test_doctor_reports_missing_tailscale_as_setup_action(monkeypatch, tmp_path)
     monkeypatch.setattr(doctor_cli, "selected_stt_provider_id", lambda: "assemblyai")
     monkeypatch.setattr(
         doctor_cli,
-        "_check_code_sync",
-        lambda ok, _warn, _fail: ok("code sync: healthy"),
+        "_check_sync_daemon",
+        lambda ok, _warn, _fail: ok("Openbase Sync: healthy"),
     )
     codex_home = tmp_path / "codex_home"
     codex_home.mkdir()
@@ -470,46 +513,75 @@ def test_doctor_reports_missing_tailscale_as_setup_action(monkeypatch, tmp_path)
     assert "FAIL" not in result.output
 
 
-def test_stignore_content_follows_includes(tmp_path):
-    (tmp_path / ".stglobalignore").write_text("// shared\n(?d).git\n", encoding="utf-8")
-    stignore = tmp_path / ".stignore"
-    stignore.write_text("#include .stglobalignore\n/foo/data\n", encoding="utf-8")
+def _collect_sync_daemon_check(monkeypatch, *, plan_has_legacy=False):
+    from openbase_coder_cli import sync_migration
 
-    content = doctor_cli._stignore_content_with_includes(stignore)
+    class _Plan:
+        has_legacy_state = plan_has_legacy
 
-    assert "(?d).git" in content
-    assert "/foo/data" in content
+    monkeypatch.setattr(sync_migration, "plan_migration", lambda **_: _Plan())
+    oks: list[str] = []
+    warns: list[str] = []
+    fails: list[str] = []
+    doctor_cli._check_sync_daemon(oks.append, warns.append, fails.append)
+    return oks, warns, fails
 
 
-def test_check_code_sync_fails_when_managed_stignore_lacks_git(monkeypatch, tmp_path):
-    from pathlib import Path
+def test_check_sync_daemon_unconfigured_is_ok(monkeypatch):
+    oks, warns, fails = _collect_sync_daemon_check(monkeypatch)
 
-    from openbase_coder_cli.sync_config import SyncFolder
+    assert oks == ["Openbase Sync: not configured"]
+    assert warns == [] and fails == []
 
-    folder = SyncFolder(relpath="Projects/demo")
-    folder_root = tmp_path / "Projects" / "demo"
-    folder_root.mkdir(parents=True)
-    (folder_root / ".stignore").write_text("node_modules\n", encoding="utf-8")
 
-    monkeypatch.setattr(doctor_cli, "_syncthing_process_running", lambda: False)
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+def test_check_sync_daemon_flags_leftover_previous_sync(monkeypatch):
+    _oks, warns, _fails = _collect_sync_daemon_check(monkeypatch, plan_has_legacy=True)
+
+    assert any("migrate-from-syncthing" in message for message in warns)
+
+
+def _write_daemon_config(tmp_path):
+    from openbase_coder_cli import sync_daemon
+
+    config = sync_daemon.SyncDaemonConfig(
+        device_id="laptop",
+        sync_group="default",
+        role="edge",
+        pair_secret="s",
+        roots=[{"id": "projects", "path": str(tmp_path / "Projects")}],
+        peer_hot="hub:22100",
+        peer_bulk="hub:22101",
+    )
+    sync_daemon.write_config(config)
+
+
+def test_check_sync_daemon_fails_when_service_missing(monkeypatch, tmp_path):
+    _write_daemon_config(tmp_path)
+    monkeypatch.setattr(doctor_cli, "launchctl_status", lambda svc: {"installed": False})
+
+    _oks, _warns, fails = _collect_sync_daemon_check(monkeypatch)
+
+    assert any("sync-daemon service: not installed" in message for message in fails)
+
+
+def test_check_sync_daemon_reports_peers_and_conflicts(monkeypatch, tmp_path):
+    from openbase_coder_cli import sync_daemon
+
+    _write_daemon_config(tmp_path)
     monkeypatch.setattr(
-        "openbase_coder_cli.sync_config.code_sync_enabled", lambda: True
+        doctor_cli, "launchctl_status", lambda svc: {"installed": True, "pid": "42"}
     )
     monkeypatch.setattr(
-        "openbase_coder_cli.sync_config.sync_folders", lambda: (folder,)
-    )
-    monkeypatch.setattr(
-        doctor_cli, "launchctl_status", lambda service: {"installed": True, "pid": 1}
-    )
-    monkeypatch.setattr(
-        "openbase_coder_cli.code_sync.manager.versions_usage_bytes", lambda: 0
+        sync_daemon.SyncDaemonClient,
+        "status",
+        lambda self: {"peers": [{"device": "mini"}], "open_conflicts": 2},
     )
 
-    failures: list[str] = []
-    doctor_cli._check_code_sync(lambda msg: None, lambda msg: None, failures.append)
+    oks, warns, fails = _collect_sync_daemon_check(monkeypatch)
 
-    assert any("no .git ignore" in message for message in failures)
+    assert fails == []
+    assert oks == ["Openbase Sync: edge, 1 root(s), 1 peer(s) connected"]
+    assert any("2 open conflict(s)" in message for message in warns)
 
 
 def _patch_agent_home_paths(monkeypatch, tmp_path):

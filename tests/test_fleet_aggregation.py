@@ -412,3 +412,49 @@ def test_fleet_feeds_without_token_stay_local(monkeypatch):
     assert fleet.fleet_notifications(payload, include_read=True, limit=5) == payload
     routines_payload = {"routines": [{"name": "r"}], "count": 1}
     assert fleet.fleet_routines(routines_payload) == routines_payload
+
+
+def test_fleet_page_fetches_the_local_window_on_the_calling_thread(monkeypatch):
+    """Regression for the 2026-10-08 thread-list stall.
+
+    The local source reads through ``async_to_sync``, which only reaches the
+    server's event loop from the request thread (asgiref keeps it in a
+    thread-local). Fetched from a pool thread it ran on a private loop and
+    never returned; every later request queued behind it.
+    """
+    import threading
+
+    _install_peer(monkeypatch, {"mini": [_thread("peer-1", "2026-10-08T00:00:01Z")]})
+    local_threads: list[int] = []
+    peer_threads: list[int] = []
+    fetch_peer = fleet._fetch_peer_thread_page
+
+    def fetch_peer_recording(peer, token, *, page, page_size, cursor):
+        peer_threads.append(threading.get_ident())
+        return fetch_peer(peer, token, page=page, page_size=page_size, cursor=cursor)
+
+    monkeypatch.setattr(fleet, "_fetch_peer_thread_page", fetch_peer_recording)
+
+    def fetch_local(page, cursor, size):
+        local_threads.append(threading.get_ident())
+        return SourcePage(items=[_thread("local-1", "2026-10-08T00:00:02Z")], next_cursor=None)
+
+    result = fleet_thread_page(page_size=10, cursor=None, fetch_local_page=fetch_local)
+
+    assert [t["thread_id"] for t in result.threads] == ["local-1", "peer-1"]
+    assert local_threads == [threading.get_ident()]
+    assert peer_threads and peer_threads != [threading.get_ident()]
+
+
+def test_fleet_page_still_raises_a_local_error_after_waiting_for_peers(monkeypatch):
+    _install_peer(monkeypatch, {"mini": [_thread("peer-1", "2026-10-08T00:00:01Z")]})
+
+    def fetch_local(page, cursor, size):
+        raise RuntimeError("local source failed")
+
+    try:
+        fleet_thread_page(page_size=10, cursor=None, fetch_local_page=fetch_local)
+    except RuntimeError as error:
+        assert "local source failed" in str(error)
+    else:
+        raise AssertionError("expected the local error to propagate")

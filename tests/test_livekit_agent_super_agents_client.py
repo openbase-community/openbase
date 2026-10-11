@@ -18,6 +18,9 @@ from openbase_coder_cli.livekit_agent.super_agents_client import (
     _response_is_queued,
     _speech_text_from_progress,
 )
+from openbase_coder_cli.livekit_agent.super_agents_client_turns import (
+    frame_steer,
+)
 
 
 class FakeSuperAgentsBackend:
@@ -171,6 +174,140 @@ def test_speech_text_from_progress_still_speaks_failed_turns_own_output() -> Non
     assert (
         _speech_text_from_progress(progress)
         == "I hit an error reading that repository."
+    )
+
+
+PREVIOUS_ANSWER = "Victoria already got back to you. She said two plus two is four."
+
+
+def _claude_running_turn_snapshot() -> dict[str, Any]:
+    # The Claude Code backend's progress for a just-started turn: the
+    # session-level lastUsefulMessage is still the PREVIOUS turn's answer and
+    # the running turn has no lastUsefulMessage of its own yet.
+    running = {
+        "turnId": "turn-2",
+        "promptPreview": "<voice>What files are on my desktop</voice>",
+        "status": "running",
+    }
+    return {
+        "status": "running",
+        "turnId": "turn-2",
+        "activeTurnId": "turn-2",
+        "lastUsefulMessage": PREVIOUS_ANSWER,
+        "turn": running,
+        "turns": [running],
+    }
+
+
+def test_turn_scoped_speech_ignores_the_previous_turns_session_message() -> None:
+    progress = _claude_running_turn_snapshot()
+
+    # The unscoped (final-result) extraction falls back to the cached
+    # session-level message; that fallback is what streamed the stale answer.
+    assert _speech_text_from_progress(progress) != ""
+    assert (
+        _speech_text_from_progress(progress, turn_scoped=True, turn_id="turn-2") == ""
+    )
+    assert _speech_text_from_progress(progress, turn_scoped=True) == ""
+
+
+def test_turn_scoped_speech_ignores_earlier_turns_in_turn_lists() -> None:
+    earlier = {
+        "turnId": "turn-1",
+        "status": "completed",
+        "lastUsefulMessage": PREVIOUS_ANSWER,
+    }
+    running = {"turnId": "turn-2", "status": "running"}
+    progress = {
+        "status": "running",
+        "turns": [earlier, running],
+        "recentTurns": [running, earlier],
+        "summary": {"lastUsefulMessage": PREVIOUS_ANSWER},
+        "turn": running,
+    }
+
+    assert _speech_text_from_progress(progress) != ""
+    assert (
+        _speech_text_from_progress(progress, turn_scoped=True, turn_id="turn-2") == ""
+    )
+
+
+def test_turn_scoped_speech_uses_the_current_turns_own_text() -> None:
+    progress = _claude_running_turn_snapshot()
+    progress["turn"] = {
+        **progress["turn"],
+        "lastUsefulMessage": "Checking your desktop now.",
+    }
+
+    assert (
+        _speech_text_from_progress(progress, turn_scoped=True, turn_id="turn-2")
+        == "Checking your desktop now."
+    )
+
+
+def test_turn_scoped_speech_uses_the_current_turns_summary_items() -> None:
+    progress = {
+        "status": "running",
+        "turnId": "turn-2",
+        "summary": {
+            "id": "turn-2",
+            "items": [
+                {
+                    "type": "agentMessage",
+                    "phase": "final_answer",
+                    "text": "Your desktop has two folders.",
+                }
+            ],
+        },
+    }
+
+    assert (
+        _speech_text_from_progress(progress, turn_scoped=True, turn_id="turn-2")
+        == "Your desktop has two folders."
+    )
+
+
+def test_turn_scoped_speech_ignores_a_turn_or_summary_naming_another_turn() -> None:
+    progress = {
+        "status": "running",
+        "turn": {"turnId": "turn-1", "lastUsefulMessage": PREVIOUS_ANSWER},
+        "summary": {"id": "turn-1", "lastUsefulMessage": PREVIOUS_ANSWER},
+    }
+    assert (
+        _speech_text_from_progress(progress, turn_scoped=True, turn_id="turn-2") == ""
+    )
+
+    # A summary positively naming the streamed turn is that turn's own preview.
+    progress["summary"] = {"id": "turn-2", "lastUsefulMessage": "Still looking."}
+    assert (
+        _speech_text_from_progress(progress, turn_scoped=True, turn_id="turn-2")
+        == "Still looking."
+    )
+
+
+def test_turn_scoped_speech_keeps_failed_turn_handling() -> None:
+    progress = {
+        "status": "failed",
+        "turn": {"turnId": "turn-2", "lastUsefulMessage": "Cached stale reply."},
+        "summary": {
+            "id": "turn-2",
+            "lastUsefulMessage": "Cached stale reply.",
+            "items": [
+                {
+                    "type": "agentMessage",
+                    "phase": "final_answer",
+                    "text": "I hit an error reading that repository.",
+                }
+            ],
+        },
+    }
+    assert (
+        _speech_text_from_progress(progress, turn_scoped=True, turn_id="turn-2")
+        == "I hit an error reading that repository."
+    )
+    del progress["summary"]["items"]
+    assert (
+        _speech_text_from_progress(progress, turn_scoped=True, turn_id="turn-2") == ""
     )
 
 
@@ -516,6 +653,12 @@ async def test_super_agents_livekit_client_creates_thread_and_turn_through_backe
     assert "voice instructions" in backend.started_turns[0][1]["developerInstructions"]
     assert result["_livekit_turn_id"] == "turn-1"
     assert result["_livekit_speech_text"] == "The dispatcher answer is ready."
+    # A completed turn is a success for turn recovery: VM2 04:14Z retried every
+    # finished turn as "unknown: Claude Code response completed" because the
+    # flag carried the imported helper (always truthy) instead of the status.
+    assert result["_livekit_turn_failed"] is False
+    assert result["_livekit_turn_error"] == ""
+    assert result["_livekit_turn_error_kind"] == ""
     assert "fresh" not in backend.started_threads[0]
 
 
@@ -608,7 +751,7 @@ async def test_super_agents_livekit_client_steers_backend_active_turn(
     assert len(backend.steered) == 1
     steer_input, prompt = backend.steered[0]
     assert steer_input.turn_id == "active-turn-1"
-    assert prompt == "please adjust that"
+    assert prompt == frame_steer("please adjust that")
     assert result["_livekit_turn_id"] == "active-turn-1"
     assert result["_livekit_speech_text"] == "The steered dispatcher answer is ready."
 
@@ -639,7 +782,7 @@ async def test_super_agents_livekit_client_preserves_started_turn_after_cancella
     assert len(backend.steered) == 1
     steer_input, prompt = backend.steered[0]
     assert steer_input.turn_id == "turn-1"
-    assert prompt == "change it to blueberries"
+    assert prompt == frame_steer("change it to blueberries")
     assert result["_livekit_turn_id"] == "turn-1"
     assert result["_livekit_speech_text"] == "The interrupted turn accepted steering."
 
@@ -1042,7 +1185,7 @@ async def test_super_agents_livekit_client_proactively_steers_active_turn(
     assert len(backend.steered) == 1
     steer_input, prompt = backend.steered[0]
     assert steer_input.turn_id == "turn-1"
-    assert prompt == "stop and write about blueberries"
+    assert prompt == frame_steer("stop and write about blueberries")
 
     backend.release_progress.set()
     first_result = await first
@@ -1052,6 +1195,235 @@ async def test_super_agents_livekit_client_proactively_steers_active_turn(
     assert len(backend.steered) == 1
     assert first_result["_livekit_turn_id"] == "turn-1"
     assert follow_up_result["_livekit_turn_id"] == "turn-1"
+
+
+@pytest.mark.asyncio
+async def test_replacing_a_fragment_turn_interrupts_it_on_a_non_steering_backend(
+    tmp_path: Path,
+) -> None:
+    """Claude Code cannot steer mid-turn: a plain steer becomes a queued
+    follow-up that runs the whole request again after the fragment turn.
+    The merged request interrupts the fragment turn and runs once."""
+    backend = FakeLongRunningSuperAgentsBackend()
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "livekit-voice-route.json"),
+        backend_client=backend,
+    )
+    first = asyncio.create_task(
+        client.run_turn("Subtract 38 from the result in this thread")
+    )
+    await backend.progress_called.wait()
+
+    merged = asyncio.create_task(
+        client.run_turn(
+            "Subtract 38 from the result in this thread and answer just the number",
+            replaces_active_turn=True,
+        )
+    )
+    await asyncio.sleep(0)
+    backend.release_progress.set()
+    first_result, merged_result = await asyncio.gather(first, merged)
+
+    assert len(backend.started_turns) == 1
+    assert len(backend.steered) == 1
+    steer_input, prompt = backend.steered[0]
+    assert steer_input.turn_id == "turn-1"
+    # The whole request, not the unsubmitted remainder: the interrupted
+    # work is discarded.
+    assert prompt == frame_steer(
+        "Subtract 38 from the result in this thread and answer just the number"
+    )
+    assert backend.steer_turn_inputs[0]["interruptCurrentWork"] is True
+    assert first_result["_livekit_turn_id"] == "turn-1"
+    assert merged_result["_livekit_turn_id"] == "turn-1"
+
+
+@pytest.mark.asyncio
+async def test_replacing_a_fragment_turn_steers_the_remainder_on_codex(
+    tmp_path: Path,
+) -> None:
+    class CodexLongRunningBackend(FakeLongRunningSuperAgentsBackend):
+        backend = "codex"
+
+    backend = CodexLongRunningBackend()
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "livekit-voice-route.json"),
+        backend_client=backend,
+    )
+    first = asyncio.create_task(
+        client.run_turn("Subtract 38 from the result in this thread")
+    )
+    await backend.progress_called.wait()
+
+    merged = asyncio.create_task(
+        client.run_turn(
+            "Subtract 38 from the result in this thread and answer just the number",
+            replaces_active_turn=True,
+        )
+    )
+    await asyncio.sleep(0)
+    backend.release_progress.set()
+    await asyncio.gather(first, merged)
+
+    assert len(backend.started_turns) == 1
+    assert len(backend.steered) == 1
+    _steer_input, prompt = backend.steered[0]
+    # Codex steers mid-turn natively: only the new words reach the turn and
+    # nothing is interrupted.
+    assert prompt == frame_steer("<voice>and answer just the number</voice>")
+    assert "interruptCurrentWork" not in backend.steer_turn_inputs[0]
+
+
+@pytest.mark.asyncio
+async def test_a_plain_follow_up_never_interrupts_the_active_turn(
+    tmp_path: Path,
+) -> None:
+    backend = FakeLongRunningSuperAgentsBackend()
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "livekit-voice-route.json"),
+        backend_client=backend,
+    )
+    first = asyncio.create_task(client.run_turn("Increment the counter"))
+    await backend.progress_called.wait()
+    follow_up = asyncio.create_task(client.run_turn("Run the linter"))
+    await asyncio.sleep(0)
+    backend.release_progress.set()
+    await asyncio.gather(first, follow_up)
+
+    assert len(backend.steered) == 1
+    assert "interruptCurrentWork" not in backend.steer_turn_inputs[0]
+
+
+class FakeSteerTimeoutSuperAgentsBackend(FakeLongRunningSuperAgentsBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.cancelled: list[Any] = []
+        self.queued: list[tuple[Any, dict[str, Any]]] = []
+
+    async def steer_by_label(self, input_data, prompt, turn_input=None):
+        self.steered.append((input_data, prompt))
+        self.steer_turn_inputs.append(turn_input)
+        raise TimeoutError("turn/steer timed out")
+
+    async def cancel_by_label(self, input_data) -> dict[str, Any]:
+        self.cancelled.append(input_data)
+        return {"cancelled": True}
+
+    async def queue_turn_by_label(self, input_data, turn_input) -> dict[str, Any]:
+        self.queued.append((input_data, turn_input))
+        return {"queued": True, "queuedId": "queued-1"}
+
+    async def progress_by_label(self, input_data) -> dict[str, Any]:
+        if not self.started_turns:
+            return {"status": "completed", "threadId": input_data.thread_id}
+        if input_data.turn_id == "turn-1":
+            self.progress_called.set()
+            await self.release_progress.wait()
+            return {"turnId": "turn-1", "status": "cancelled"}
+        assert self.queued
+        return {
+            "turnId": "turn-2",
+            "status": "completed",
+            "summary": {
+                "items": [{"type": "agentMessage", "text": "The merged answer."}]
+            },
+        }
+
+
+@pytest.mark.asyncio
+async def test_a_replacement_whose_steer_times_out_cancels_the_fragment_turn(
+    tmp_path: Path,
+) -> None:
+    backend = FakeSteerTimeoutSuperAgentsBackend()
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "livekit-voice-route.json"),
+        backend_client=backend,
+    )
+    first = asyncio.create_task(client.run_turn("Subtract 38 from the result"))
+    await backend.progress_called.wait()
+    merged = asyncio.create_task(
+        client.run_turn(
+            "Subtract 38 from the result and answer just the number",
+            replaces_active_turn=True,
+        )
+    )
+    await asyncio.sleep(0)
+    backend.release_progress.set()
+    first_result, merged_result = await asyncio.gather(first, merged)
+
+    # The queued follow-up re-runs the whole request, so the fragment turn
+    # it replaces is cancelled before it can finish its half.
+    assert [c.turn_id for c in backend.cancelled] == ["turn-1"]
+    assert len(backend.queued) == 1
+    assert backend.queued[0][1]["prompt"] == (
+        "Subtract 38 from the result and answer just the number"
+    )
+    assert first_result["_livekit_turn_id"] == "turn-1"
+    assert merged_result["_livekit_turn_id"] == "turn-2"
+    assert merged_result["_livekit_speech_text"] == "The merged answer."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("steer_failure", ["unavailable", "rejected"])
+async def test_queued_replacement_cancels_and_waits_for_its_own_answer(
+    tmp_path: Path, steer_failure: str
+) -> None:
+    class QueuedBackend(FakeSteerTimeoutSuperAgentsBackend):
+        async def steer_by_label(self, input_data, prompt, turn_input=None):
+            if steer_failure == "rejected":
+                raise RuntimeError("turn cannot accept steering")
+            queued = await self.queue_turn_by_label(input_data, {"prompt": prompt})
+            return {**queued, "interruptedCurrentWork": False}
+
+    backend = QueuedBackend()
+    client = SuperAgentsLiveKitClient(
+        cwd=str(tmp_path),
+        state_path=str(tmp_path / "voice-route.json"),
+        backend_client=backend,
+    )
+    first = asyncio.create_task(client.run_turn("Check the build"))
+    await backend.progress_called.wait()
+    merged = asyncio.create_task(
+        client.run_turn("Check the build and summarize it", replaces_active_turn=True)
+    )
+    await asyncio.sleep(0)
+    backend.release_progress.set()
+    _, merged_result = await asyncio.gather(first, merged)
+    assert [query.turn_id for query in backend.cancelled] == ["turn-1"]
+    assert len(backend.queued) == 1
+    assert merged_result["_livekit_turn_id"] == "turn-2"
+    assert merged_result["_livekit_speech_text"] == "The merged answer."
+
+
+@pytest.mark.asyncio
+async def test_replacement_does_not_queue_when_cancellation_fails(
+    tmp_path: Path,
+) -> None:
+    class FailedCancelBackend(FakeSteerTimeoutSuperAgentsBackend):
+        async def cancel_by_label(self, input_data):
+            raise RuntimeError("cancellation unavailable")
+
+    backend = FailedCancelBackend()
+    client = SuperAgentsLiveKitClient(
+        cwd=str(tmp_path),
+        state_path=str(tmp_path / "voice-route.json"),
+        backend_client=backend,
+    )
+    first = asyncio.create_task(client.run_turn("Check the build"))
+    await backend.progress_called.wait()
+    try:
+        with pytest.raises(RuntimeError, match="cancellation unavailable"):
+            await client.run_turn(
+                "Check the build and summarize it", replaces_active_turn=True
+            )
+        assert not backend.queued
+    finally:
+        backend.release_progress.set()
+        await first
 
 
 @pytest.mark.asyncio
@@ -1084,7 +1456,9 @@ async def test_super_agents_livekit_client_passes_dispatcher_reasoning_to_steer(
     await first
 
     assert turn_id == "turn-1"
-    assert backend.steer_turn_inputs[0]["reasoningEffort"] == "low"
+    assert (
+        backend.steer_turn_inputs[0]["reasoningEffort"] == "medium"
+    )  # spoken Dispatcher effort is chosen by model (medium unless Haiku)
     assert backend.started_turns[0][1]["serviceTier"] == "standard"
 
 
@@ -1120,8 +1494,11 @@ async def test_super_agents_livekit_client_forwards_reasoning_without_tier_on_cl
     await first
 
     assert turn_id == "turn-1"
-    assert backend.started_turns[0][1]["reasoningEffort"] == "low"
-    assert backend.steer_turn_inputs[0]["reasoningEffort"] == "low"
+    assert (
+        backend.started_turns[0][1]["reasoningEffort"] == "medium"
+    )  # spoken Dispatcher effort is chosen by model (medium unless Haiku)
+    # spoken Dispatcher effort is chosen by model (medium unless Haiku)
+    assert backend.steer_turn_inputs[0]["reasoningEffort"] == "medium"
     assert "serviceTier" not in backend.started_turns[0][1]
 
 
@@ -1187,8 +1564,8 @@ async def test_super_agents_livekit_client_resumes_codex_thread_by_id(
         {
             "thread_id": "canonical-dispatcher-thread",
             "label": "dispatcher",
-            "agent_name": None,
-            "developer_instructions": "Super Agent thread name: dispatcher",
+            "agent_name": "Jacqueline",
+            "developer_instructions": "Super Agent thread name: dispatcher\nYour name is Jacqueline.",
         }
     ]
     assert backend.started_threads == []
@@ -1517,23 +1894,19 @@ def test_backend_auth_failure_warning_debounced_and_backend_specific(
 
     assert (
         super_agents_client_module._flag_backend_auth_failure(
-            "Failed to authenticate: OAuth session expired and could not be refreshed",
-            backend="claude_code",
-            turn_id="t_1",
+            "claude_code", backend="claude_code", turn_id="t_1"
         )
         is True
     )
     # The human-readable WARNING fires once and names the Claude-specific fix.
-    assert caplog.text.count("surfaced in a spoken answer") == 1
+    assert caplog.text.count("could not authenticate") == 1
     assert "claude login" in caplog.text
 
     # Debounced: an immediate repeat must not emit a second WARNING.
     super_agents_client_module._flag_backend_auth_failure(
-        "Failed to authenticate: OAuth session expired and could not be refreshed",
-        backend="claude_code",
-        turn_id="t_2",
+        "claude_code", backend="claude_code", turn_id="t_2"
     )
-    assert caplog.text.count("surfaced in a spoken answer") == 1
+    assert caplog.text.count("could not authenticate") == 1
 
 
 def test_backend_auth_failure_always_emits_error_marker(monkeypatch, caplog) -> None:
@@ -1548,18 +1921,16 @@ def test_backend_auth_failure_always_emits_error_marker(monkeypatch, caplog) -> 
 
     for turn_id in ("t_1", "t_2"):
         super_agents_client_module._flag_backend_auth_failure(
-            "Not logged in · Please run /login.",
-            backend="openbase_cloud",
-            turn_id=turn_id,
+            "openbase_cloud", backend="openbase_cloud", turn_id=turn_id
         )
 
     assert caplog.text.count("stage=voice_turn_backend_auth_failure") == 2
-    # Codex/openbase_cloud remediation must NOT tell the user to run `claude login`.
+    # Openbase Cloud remediation must NOT tell the user to run `claude login`.
     assert "claude login" not in caplog.text
     assert "machine token" in caplog.text
 
 
-def test_backend_auth_failure_ignores_normal_speech(monkeypatch, caplog) -> None:
+def test_backend_auth_failure_ignores_turns_without_one(monkeypatch, caplog) -> None:
     import logging
 
     monkeypatch.setattr(
@@ -1567,25 +1938,44 @@ def test_backend_auth_failure_ignores_normal_speech(monkeypatch, caplog) -> None
     )
     caplog.set_level(logging.WARNING)
 
+    assert super_agents_client_module._flag_backend_auth_failure(None) is False
+    progress = {
+        "status": "completed",
+        "turnId": "t_1",
+        "turn": {"turnId": "t_1", "status": "completed"},
+    }
     assert (
-        super_agents_client_module._flag_backend_auth_failure(
-            "The build passed and I pushed the fix.", backend="codex"
-        )
+        super_agents_client_module._progress_auth_failed(progress, turn_id="t_1")
         is False
     )
-    assert super_agents_client_module._flag_backend_auth_failure("") is False
-
-    assert "auth failure" not in caplog.text
     assert "voice_turn_backend_auth_failure" not in caplog.text
 
 
-def test_safe_spoken_answer_replaces_auth_failure_with_graceful_line() -> None:
-    fallback = super_agents_client_module.BACKEND_ERROR_SPOKEN_FALLBACK
+def test_cloud_auth_failure_is_structured_and_speaks_the_fallback() -> None:
+    progress = {
+        "status": "failed",
+        "turnId": "t_1",
+        "turn": {
+            "turnId": "t_1",
+            "status": "failed",
+            "errorKind": "authentication_failed",
+        },
+    }
+    assert super_agents_client_module._progress_auth_failed(progress, turn_id="t_1")
+    # No CLI login to fix on an Openbase Cloud backend.
+    assert (
+        super_agents_client_module._progress_login_backend(
+            progress, backend="openbase_cloud", turn_id="t_1"
+        )
+        is None
+    )
     assert (
         super_agents_client_module._safe_spoken_answer(
-            "Not logged in · Please run /login.", auth_failed=True
+            "Failed to authenticate. API Error: 401",
+            auth_failed=True,
+            backend="openbase_cloud",
         )
-        == fallback
+        == super_agents_client_module.BACKEND_ERROR_SPOKEN_FALLBACK
     )
 
 
@@ -1605,7 +1995,9 @@ def test_safe_spoken_answer_suppresses_raw_proxy_error_body(caplog) -> None:
     assert "voice_turn_backend_error" in caplog.text
 
 
-def test_safe_spoken_answer_surfaces_spend_limit_distinctly(caplog) -> None:
+def test_safe_spoken_answer_surfaces_spend_limit_distinctly(
+    caplog, monkeypatch
+) -> None:
     import logging
 
     caplog.set_level(logging.ERROR)
@@ -1618,12 +2010,17 @@ def test_safe_spoken_answer_surfaces_spend_limit_distinctly(caplog) -> None:
         "model proxy spend limit reached. Model requests are blocked until next "
         'month. Subscribe at app.openbase.cloud to raise your monthly limits."}'
     )
+    monkeypatch.setenv(
+        "OPENBASE_CODER_CLI_WEB_BACKEND_URL", "https://app-staging.openbase.cloud"
+    )
     spoken = super_agents_client_module._safe_spoken_answer(
         raw, auth_failed=True, backend="openbase_cloud", turn_id="t_spend"
     )
-    assert spoken == super_agents_client_module.BACKEND_SPEND_LIMIT_SPOKEN
+    # One short sentence: the live speech gate may cut a long reply off.
+    assert spoken == "This account's monthly Openbase model allowance is used up."
+    assert "try again" not in spoken
     assert spoken != super_agents_client_module.BACKEND_ERROR_SPOKEN_FALLBACK
-    assert "monthly" in spoken.lower() and "subscrib" in spoken.lower()
+    assert "monthly" in spoken.lower() and "allowance" in spoken.lower()
     assert "voice_turn_backend_spend_limit" in caplog.text
     assert raw not in spoken
 
@@ -1838,7 +2235,7 @@ async def test_steer_active_turn_skips_transcript_covered_by_prior_fragments(
     assert await client.steer_active_turn(extended) == "turn-1"
     assert len(backend.steered) == 1
     _steer_input, steered_prompt = backend.steered[0]
-    assert steered_prompt == "<voice>Now do the fix.</voice>"
+    assert steered_prompt == frame_steer("<voice>Now do the fix.</voice>")
 
 
 @pytest.mark.asyncio
@@ -1863,3 +2260,403 @@ async def test_run_turn_joins_active_turn_when_transcript_already_covered(
     assert backend.steered == []
     assert result["_livekit_turn_id"] == "active-turn-1"
     assert result["_livekit_speech_text"] == "The steered dispatcher answer is ready."
+
+
+_ALLOWANCE_ERROR = 'Failed to authenticate. API Error: 403 {"detail":"Monthly Openbase model proxy spend limit reached. Model requests are blocked until next month. Subscribe at app.openbase.cloud to raise your monthly limits."}'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "url", ["https://app-staging.openbase.cloud", "https://app.openbase.cloud"]
+)
+async def test_failed_voice_turn_speaks_current_allowance_denial(
+    tmp_path, monkeypatch, url
+):
+    monkeypatch.setenv("OPENBASE_CODER_CLI_WEB_BACKEND_URL", url)
+
+    class AllowanceBackend(FakeSuperAgentsBackend):
+        async def progress_by_label(self, input_data):
+            turn = {
+                "turnId": input_data.turn_id,
+                "status": "failed",
+                "lastUsefulMessage": _ALLOWANCE_ERROR,
+            }
+            return {
+                "status": "failed",
+                "turnId": input_data.turn_id,
+                "lastUsefulMessage": "Cached earlier answer.",
+                "turn": turn,
+                "turns": [turn],
+            }
+
+    client = SuperAgentsLiveKitClient(
+        cwd=str(tmp_path),
+        state_path=str(tmp_path / "voice.json"),
+        backend_client=AllowanceBackend(),
+    )
+    result = await client.run_turn("What is seven times nine?")
+    speech = result["_livekit_speech_text"]
+    assert result["status"] == "failed"
+    assert not result["_livekit_backend_auth_failure"]
+    assert speech == "This account's monthly Openbase model allowance is used up."
+    assert "try again" not in speech
+    assert "authenticate" not in speech
+    assert "Cached" not in speech
+
+
+@pytest.mark.parametrize("turn_scoped", [False, True])
+@pytest.mark.parametrize("stale_id", [None, "earlier-turn"])
+def test_failed_voice_turn_never_replays_stale_allowance_denial(turn_scoped, stale_id):
+    stale = {"turnId": stale_id, "lastUsefulMessage": _ALLOWANCE_ERROR}
+    progress = {
+        "status": "failed",
+        "turnId": "current-turn",
+        "lastUsefulMessage": _ALLOWANCE_ERROR,
+        "turn": stale,
+        "summary": stale,
+        "turns": [stale],
+    }
+    assert (
+        _speech_text_from_progress(
+            progress, turn_scoped=turn_scoped, turn_id="current-turn"
+        )
+        == ""
+    )
+
+
+def test_failed_voice_turn_speaks_allowance_from_fresh_items(monkeypatch):
+    monkeypatch.setenv(
+        "OPENBASE_CODER_CLI_WEB_BACKEND_URL", "https://app-staging.openbase.cloud"
+    )
+    progress = {
+        "status": "failed",
+        "summary": {"items": [{"type": "agentMessage", "text": _ALLOWANCE_ERROR}]},
+    }
+    speech = _speech_text_from_progress(progress)
+    assert speech == "This account's monthly Openbase model allowance is used up."
+    assert "try again" not in speech
+
+
+# --- start-up latency: warm-up and the auth-check memo ------------------------------
+
+
+class FakeWarmableBackend(FakeSuperAgentsBackend):
+    backend = "claude_code"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.warm_calls: list[tuple[Any, dict[str, Any]]] = []
+
+    async def warm_session_by_label(self, input_data, turn_input):
+        self.warm_calls.append((input_data, turn_input))
+        return {"warmed": True, "threadId": input_data.thread_id, "connected": True}
+
+
+def _logged_in(monkeypatch, calls: list[int]):
+    def status():
+        calls.append(1)
+        return SimpleNamespace(
+            logged_in=True, raw_output='{"loggedIn": true}', returncode=0
+        )
+
+    monkeypatch.setattr(
+        super_agents_client_module, "verified_claude_auth_status", status
+    )
+
+
+@pytest.mark.asyncio
+async def test_warm_connects_the_dispatcher_session_with_the_turn_model(
+    monkeypatch, tmp_path: Path
+) -> None:
+    auth_calls: list[int] = []
+    _logged_in(monkeypatch, auth_calls)
+    backend = FakeWarmableBackend()
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "state.json"),
+        backend_client=backend,
+        model_name="claude-opus",
+    )
+    assert await client.warm() is True
+    ((query, turn_input),) = backend.warm_calls
+    assert query.thread_id == "dispatcher-thread"
+    assert turn_input["model"] == "claude-opus"
+    assert "serviceTier" not in turn_input  # Codex-only, never sent to Claude
+    assert "prompt" not in turn_input
+    # The warm-up's auth check is reused by the first turn.
+    assert auth_calls == [1]
+    result = await client.run_turn("hello dispatch")
+    assert result["_livekit_turn_id"] == "turn-1"
+    assert auth_calls == [1]
+    ((_, started),) = backend.started_turns
+    assert started["model"] == turn_input["model"]
+    assert started.get("reasoningEffort") == turn_input.get("reasoningEffort")
+
+
+@pytest.mark.asyncio
+async def test_warm_is_a_no_op_without_backend_support(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _logged_in(monkeypatch, [])
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "state.json"),
+        backend_client=FakeSuperAgentsBackend(),
+    )
+    assert await client.warm() is False
+    assert client._thread_id == "dispatcher-thread"
+
+
+@pytest.mark.asyncio
+async def test_warm_skips_codex_threads_which_prepare_already_loads(
+    tmp_path: Path,
+) -> None:
+    backend = FakeCodexSuperAgentsBackend()
+    backend.warm_session_by_label = None  # even if present, Codex is not warmed
+
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "state.json"),
+        backend_client=backend,
+    )
+    assert await client.warm() is False
+    assert client._thread_id == "dispatcher-thread"
+
+
+@pytest.mark.asyncio
+async def test_claude_auth_check_is_memoized_while_logged_in(
+    monkeypatch, tmp_path: Path
+) -> None:
+    auth_calls: list[int] = []
+    _logged_in(monkeypatch, auth_calls)
+    backend = FakeSuperAgentsBackend()
+    backend.backend = "claude_code"
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "state.json"),
+        backend_client=backend,
+    )
+    await client.run_turn("one")
+    await client.run_turn("two")
+    assert auth_calls == [1]
+    # Past the recheck window the CLI is asked again.
+    client._claude_auth_ok_at -= (
+        super_agents_client_module.CLAUDE_AUTH_RECHECK_SECONDS + 1
+    )
+    await client.run_turn("three")
+    assert auth_calls == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_claude_auth_check_never_memoizes_a_logged_out_answer(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[int] = []
+
+    def logged_out():
+        calls.append(1)
+        return SimpleNamespace(
+            logged_in=False,
+            raw_output="Not logged in · Please run /login",
+            returncode=0,
+        )
+
+    monkeypatch.setattr(
+        super_agents_client_module, "verified_claude_auth_status", logged_out
+    )
+    backend = FakeSuperAgentsBackend()
+    backend.backend = "claude_code"
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "state.json"),
+        backend_client=backend,
+    )
+    await client.run_turn("one")
+    await client.run_turn("two")
+    assert calls == [1, 1]
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_discovery_reuses_casefolded_name_and_persists_exact_id(
+    tmp_path,
+):
+    backend = FakeCodexSuperAgentsBackend()
+
+    async def sessions():
+        return [
+            {
+                "threadId": "older",
+                "name": "dispatcher",
+                "cwd": "/tmp/project",
+                "updatedAt": "2026-01-01",
+            },
+            {
+                "threadId": "canonical",
+                "name": "Dispatcher",
+                "cwd": "/tmp/project",
+                "updatedAt": "2026-02-01",
+            },
+            {
+                "threadId": "other-project",
+                "name": "Dispatcher",
+                "cwd": "/tmp/other",
+                "updatedAt": "2026-03-01",
+            },
+        ]
+
+    backend.sessions = sessions
+    state = tmp_path / "route.json"
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project", state_path=str(state), backend_client=backend
+    )
+    assert await client.prepare() == "canonical"
+    assert not backend.started_threads
+    assert json.loads(state.read_text())["dispatcher_thread_id"] == "canonical"
+
+    # A later, differently cased name cannot replace the persisted exact ID.
+    async def changed_sessions():
+        raise AssertionError("Persisted canonical ID must avoid discovery")
+
+    backend.sessions = changed_sessions
+    restarted = SuperAgentsLiveKitClient(
+        cwd="/tmp/project", state_path=str(state), backend_client=backend
+    )
+    assert await restarted.prepare() == "canonical"
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_explicit_recreation_skips_discovery(tmp_path):
+    backend = FakeCodexSuperAgentsBackend()
+
+    async def sessions():
+        raise AssertionError("Fresh recreation must not reuse history")
+
+    backend.sessions = sessions
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(tmp_path / "route.json"),
+        backend_client=backend,
+        fresh_thread=True,
+    )
+    assert await client.prepare() == "dispatcher-thread"
+    assert backend.started_threads[0]["fresh"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("persisted", [False, True])
+async def test_dispatcher_stale_discovery_does_not_prevent_recovery(
+    tmp_path, persisted
+):
+    backend = FakeCodexSuperAgentsBackend()
+
+    async def sessions():
+        return [{"threadId": "missing", "name": "Dispatcher", "cwd": "/tmp/project"}]
+
+    async def resume_thread(thread_id, **kwargs):
+        raise RuntimeError("thread not found")
+
+    backend.sessions = sessions
+    backend.resume_thread = resume_thread
+    state = tmp_path / "route.json"
+    if persisted:
+        state.write_text(json.dumps({"dispatcher_thread_id": "missing"}))
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project", state_path=str(state), backend_client=backend
+    )
+    assert await client.prepare() == "dispatcher-thread"
+    assert len(backend.started_threads) == 1
+    assert json.loads(state.read_text())["dispatcher_thread_id"] == "dispatcher-thread"
+
+
+@pytest.mark.asyncio
+async def test_default_dispatcher_state_uses_relocated_api_data_directory(
+    tmp_path, monkeypatch
+):
+    from openbase_coder_cli.livekit_voice_route import get_livekit_voice_route_state
+    from openbase_coder_cli.openbase_coder_cli_app.thread_metadata import (
+        annotate_thread_payload,
+    )
+
+    data_dir = tmp_path / "relocated"
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(data_dir))
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "unused-home"))
+    client = SuperAgentsLiveKitClient(
+        cwd=str(tmp_path), backend_client=FakeCodexSuperAgentsBackend()
+    )
+    assert client._state_path == data_dir / "livekit-voice-route.json"
+    thread_id = await client.prepare()
+    assert get_livekit_voice_route_state().dispatcher_thread_id == thread_id
+    payload = annotate_thread_payload({"thread_id": thread_id})
+    assert payload["conversation_role"] == "dispatcher"
+    assert payload["voice_route"]["role"] == "dispatcher"
+    assert not (
+        tmp_path / "unused-home" / ".openbase" / "livekit-voice-route.json"
+    ).exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("old_name", ["dispatcher", None, "Old character"])
+async def test_claude_dispatcher_resume_uses_configured_speaking_identity(
+    tmp_path, monkeypatch, old_name
+):
+    """Real SDK resume must not overwrite the call persona with the role label."""
+    from super_agents.agent_store import Store
+    from super_agents.claude_sdk import ClaudeAgentSdkClient
+
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    backend = ClaudeAgentSdkClient(store=Store(tmp_path / "sessions.sqlite3"))
+    started = await backend.start_thread(
+        {
+            "name": "Dispatcher",
+            "agentName": old_name,
+            "cwd": str(tmp_path),
+            "developerInstructions": "Retain the project context.",
+        }
+    )
+    thread_id = started["threadId"]
+    before = backend.store.get_session(thread_id)
+    client = SuperAgentsLiveKitClient(
+        cwd=str(tmp_path),
+        state_path=str(tmp_path / "route.json"),
+        backend_client=backend,
+        super_agent_agent_name="Jacqueline",
+        developer_instructions="Retain the project context.",
+    )
+    assert await client._resume_thread(thread_id) == thread_id
+    after = backend.store.get_session(thread_id)
+    assert after.agent_name == "Jacqueline"
+    assert after.name == before.name == "Dispatcher"
+    assert after.cwd == before.cwd
+    assert after.created_at == before.created_at
+    assert after.backend_session_id == before.backend_session_id
+    prompt = backend._prompt_for_session(
+        after, {"prompt": "Describe yourself and the project."}
+    )
+    assert "Your name is Jacqueline." in prompt
+    assert "Your name is dispatcher." not in prompt
+    assert "Retain the project context." in prompt
+    assert backend._session_view(after, None)["agentName"] == "Jacqueline"
+    await client.aclose()
+
+
+def test_reload_thread_on_next_use_forces_a_resume_before_the_next_turn():
+    from openbase_coder_cli.livekit_agent.super_agents_client import (
+        SuperAgentsLiveKitClient,
+    )
+
+    client = SuperAgentsLiveKitClient.__new__(SuperAgentsLiveKitClient)
+    client._thread_loaded = True
+    client.reload_thread_on_next_use()
+    assert client._thread_loaded is False
+
+
+def test_spoken_dispatcher_effort_is_chosen_by_model():
+    from openbase_coder_cli.livekit_agent.super_agents_client_threads import (
+        spoken_dispatcher_effort,
+    )
+
+    assert spoken_dispatcher_effort("haiku") == "high"
+    assert spoken_dispatcher_effort("claude-haiku-4-5") == "high"
+    assert spoken_dispatcher_effort("opus") == "medium"
+    assert spoken_dispatcher_effort("gpt-5.5") == "medium"
+    assert spoken_dispatcher_effort(None) == "medium"

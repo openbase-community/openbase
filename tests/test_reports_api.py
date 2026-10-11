@@ -518,19 +518,40 @@ def test_report_tags_endpoint_rejects_missing_report(
     assert response.data["error"] == "File not found: missing.md"
 
 
-def test_project_reports_action_reports_no_action_items(tmp_path: Path) -> None:
+def test_project_reports_action_hands_report_without_action_wording_to_agent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """No wording gate: the implementing agent decides what is actionable."""
     project = tmp_path / "project"
     reports = project / ".reports"
     reports.mkdir(parents=True)
     (reports / "summary.md").write_text(
-        "# Summary\n\nThis is a passive report.",
+        "Super Agent thread id: thread-123\n\n"
+        "# Proposed changes\n\nThe retry loop should back off exponentially.",
         encoding="utf-8",
+    )
+    calls: list[tuple[str, str]] = []
+
+    class FakeSessionManager:
+        async def start_turn(self, thread_id: str, prompt: str) -> str:
+            calls.append((thread_id, prompt))
+            return "turn-789"
+
+    monkeypatch.setattr(
+        report_views,
+        "get_session_manager",
+        lambda: FakeSessionManager(),
     )
 
     response = _start_report_action(project, "summary.md")
 
-    assert response.status_code == 400
-    assert response.data["reason"] == "no_action_items"
+    assert response.status_code == 201
+    _, prompt = calls[0]
+    assert "decide what in it is actionable" in prompt
+    assert "If the report contains nothing to implement" in prompt
+    assert "should back off exponentially" in prompt
+    assert "Detected action items" not in prompt
 
 
 def test_project_reports_action_reports_unknown_origin(
@@ -592,7 +613,7 @@ def test_project_reports_action_starts_originating_super_agent_turn(
     assert calls
     thread_id, prompt = calls[0]
     assert thread_id == "thread-123"
-    assert "Implement the action items from this report" in prompt
+    assert "Implement the actionable work in this report" in prompt
     assert "- [ ] Implement the report action." in prompt
 
 
