@@ -1447,7 +1447,9 @@ async def test_super_agents_livekit_client_passes_dispatcher_reasoning_to_steer(
     await first
 
     assert turn_id == "turn-1"
-    assert backend.steer_turn_inputs[0]["reasoningEffort"] == "low"
+    assert (
+        backend.steer_turn_inputs[0]["reasoningEffort"] == "medium"
+    )  # spoken Dispatcher effort is chosen by model (medium unless Haiku)
     assert backend.started_turns[0][1]["serviceTier"] == "standard"
 
 
@@ -1483,7 +1485,9 @@ async def test_super_agents_livekit_client_forwards_reasoning_without_tier_on_cl
     await first
 
     assert turn_id == "turn-1"
-    assert backend.started_turns[0][1]["reasoningEffort"] == "low"
+    assert (
+        backend.started_turns[0][1]["reasoningEffort"] == "medium"
+    )  # spoken Dispatcher effort is chosen by model (medium unless Haiku)
     assert backend.steer_turn_inputs[0]["reasoningEffort"] == "low"
     assert "serviceTier" not in backend.started_turns[0][1]
 
@@ -2621,3 +2625,15 @@ def test_reload_thread_on_next_use_forces_a_resume_before_the_next_turn():
     client._thread_loaded = True
     client.reload_thread_on_next_use()
     assert client._thread_loaded is False
+
+
+def test_spoken_dispatcher_effort_is_chosen_by_model():
+    from openbase_coder_cli.livekit_agent.super_agents_client_threads import (
+        spoken_dispatcher_effort,
+    )
+
+    assert spoken_dispatcher_effort("haiku") == "high"
+    assert spoken_dispatcher_effort("claude-haiku-4-5") == "high"
+    assert spoken_dispatcher_effort("opus") == "medium"
+    assert spoken_dispatcher_effort("gpt-5.5") == "medium"
+    assert spoken_dispatcher_effort(None) == "medium"
