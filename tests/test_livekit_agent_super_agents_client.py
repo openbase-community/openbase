@@ -653,6 +653,12 @@ async def test_super_agents_livekit_client_creates_thread_and_turn_through_backe
     assert "voice instructions" in backend.started_turns[0][1]["developerInstructions"]
     assert result["_livekit_turn_id"] == "turn-1"
     assert result["_livekit_speech_text"] == "The dispatcher answer is ready."
+    # A completed turn is a success for turn recovery: VM2 04:14Z retried every
+    # finished turn as "unknown: Claude Code response completed" because the
+    # flag carried the imported helper (always truthy) instead of the status.
+    assert result["_livekit_turn_failed"] is False
+    assert result["_livekit_turn_error"] == ""
+    assert result["_livekit_turn_error_kind"] == ""
     assert "fresh" not in backend.started_threads[0]
 
 
