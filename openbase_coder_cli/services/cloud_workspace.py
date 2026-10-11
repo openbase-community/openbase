@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -36,3 +37,30 @@ def cloud_workspace_id(
             return match.group(1)
 
     return None
+
+
+# Set in every Maritime workspace's service environment. Maritime workspaces
+# carry none of the DevSpace marker files above.
+MARITIME_ENV_MARKERS = ("MARITIME_AGENT_ID", "MARITIME_BACKEND_URL")
+
+
+def is_maritime_workspace() -> bool:
+    return any(os.environ.get(key) for key in MARITIME_ENV_MARKERS)
+
+
+def is_cloud_workspace() -> bool:
+    """Whether this computer is an Openbase Cloud workspace.
+
+    The one shared answer (host kind, sign-in wording, sync defaults): a
+    Maritime workspace by its environment, a DevSpace by its provisioning
+    markers, and the runtime flavor the device registry records
+    (``capabilities.runtime == "cloud"``) as the fallback.
+    """
+    try:
+        if is_maritime_workspace() or cloud_workspace_id():
+            return True
+        from openbase_coder_cli.services.cloud_registration import runtime_flavor
+
+        return runtime_flavor() == "cloud"
+    except Exception:  # noqa: BLE001 - detection only picks a default
+        return False

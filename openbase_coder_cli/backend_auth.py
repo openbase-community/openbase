@@ -24,7 +24,6 @@ from __future__ import annotations
 import contextlib
 import functools
 import json
-import os
 import socket
 import subprocess
 import sys
@@ -148,22 +147,14 @@ def _where(name: str | None) -> str:
     return f"on your computer ({name})" if name else "on your computer"
 
 
-# Set in every Maritime workspace's service environment.
-MARITIME_ENV_MARKERS = ("MARITIME_AGENT_ID", "MARITIME_BACKEND_URL")
-
-
 @functools.lru_cache(maxsize=1)
 def on_cloud_workspace() -> bool:
     """Whether this backend is an Openbase Cloud workspace (Maritime).
 
     There the user has no terminal: a linked Codex or Claude Code account is
     relinked from the phone (Settings → AI Account), not with a CLI command.
-    A Maritime workspace carries no DevSpace marker files; its runtime
-    environment names it instead.
     """
-    if any(os.environ.get(key) for key in MARITIME_ENV_MARKERS):
-        return True
-    from openbase_coder_cli.sync_pairing import is_cloud_workspace
+    from openbase_coder_cli.services.cloud_workspace import is_cloud_workspace
 
     return is_cloud_workspace()
 

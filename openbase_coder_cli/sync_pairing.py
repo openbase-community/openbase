@@ -39,6 +39,7 @@ from typing import Any
 
 import httpx
 
+from openbase_coder_cli.services.cloud_workspace import is_cloud_workspace
 from openbase_coder_cli import sync_daemon
 from openbase_coder_cli.paths import OPENBASE_BASE_DIR
 from openbase_coder_cli.services import fleet_aggregation as fleet
@@ -125,24 +126,6 @@ def daemon_binary_available() -> bool:
 
         return bool(_binary_resolvers(InstallationConfig.load())["openbase_syncd"]())
     except Exception:  # noqa: BLE001 - any failure means "not available"
-        return False
-
-
-def is_cloud_workspace() -> bool:
-    """Whether this computer is an Openbase Cloud workspace (a DevSpace).
-
-    The provisioning markers name it, and the runtime flavor the device
-    registry records (``capabilities.runtime == "cloud"``) is the fallback.
-    """
-    from openbase_coder_cli.services.cloud_workspace import cloud_workspace_id
-
-    try:
-        if cloud_workspace_id():
-            return True
-        from openbase_coder_cli.services.cloud_registration import runtime_flavor
-
-        return runtime_flavor() == "cloud"
-    except Exception:  # noqa: BLE001 - detection only picks a default
         return False
 
 

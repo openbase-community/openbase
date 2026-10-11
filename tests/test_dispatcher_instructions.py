@@ -112,6 +112,15 @@ def test_host_kind_detects_a_cloud_workspace_before_the_platform(monkeypatch):
     assert host_kind.host_kind() == host_kind.HOST_KIND_WINDOWS
 
 
+def test_host_kind_recognizes_a_maritime_workspace(monkeypatch):
+    import openbase_coder_cli.services.cloud_workspace as cloud_workspace
+
+    monkeypatch.setattr(cloud_workspace, 'cloud_workspace_id', lambda: None)
+    monkeypatch.setattr(host_kind.sys, 'platform', 'linux')
+    monkeypatch.setenv('MARITIME_AGENT_ID', 'agent-1')
+    assert host_kind.host_kind() == host_kind.HOST_KIND_CLOUD_WORKSPACE
+
+
 def test_host_section_precedes_existing_current_state_rules(monkeypatch):
     monkeypatch.setattr(instructions, 'canonical_dispatcher_skill', lambda: '')
     existing = 'Base.\n\n' + instructions.CURRENT_STATE_RULES
