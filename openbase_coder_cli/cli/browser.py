@@ -161,6 +161,12 @@ def _try_arrange_forward(port: int) -> LoopbackForward | None:
         bind_host = target
     if target is None:
         return None
+    if bind_host is not None:
+        from openbase_coder_cli.host_firewall import blocked_interpreter, unblock_hint
+
+        # The relay still starts: paste-back keeps working while blocked.
+        if blocked := blocked_interpreter():
+            click.echo(unblock_hint(blocked))
     forward = LoopbackForward.create(port, target)
     expires_at = int(time.time()) + DEFAULT_FORWARD_TTL_SECONDS
     relay_port = start_relay(

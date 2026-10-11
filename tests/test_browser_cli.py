@@ -578,6 +578,9 @@ def test_host_vpn_backend_relays_on_its_own_vpn_address(monkeypatch):
         return 49153
 
     monkeypatch.setattr(callback_relay, "start_relay", relay)
+    from openbase_coder_cli import host_firewall
+
+    monkeypatch.setattr(host_firewall, "blocked_interpreter", lambda: None)
     forward = browser_cli._try_arrange_forward(1455)
     assert started == [(1455, "100.64.0.33")]
     assert forward.target == "100.64.0.33"
@@ -587,3 +590,24 @@ def test_host_vpn_backend_relays_on_its_own_vpn_address(monkeypatch):
         tailscale_provider, "status_json", lambda: {"BackendState": "Stopped"}
     )
     assert browser_cli._try_arrange_forward(1455) is None
+
+
+def test_host_vpn_forward_says_how_to_unblock_a_firewalled_python(monkeypatch, capsys):
+    """The relay still starts (paste-back works) and the fix is printed."""
+    from openbase_coder_cli import callback_relay, host_firewall
+    from openbase_coder_cli.services import tailscale_provider
+
+    monkeypatch.setattr(
+        tailscale_provider,
+        "status_json",
+        lambda: {"BackendState": "Running", "Self": {"TailscaleIPs": ["100.64.0.33"]}},
+    )
+    monkeypatch.setattr(callback_relay, "start_relay", lambda *a, **k: 49153)
+    monkeypatch.setattr(
+        host_firewall, "blocked_interpreter", lambda: "/opt/py/bin/python3.12"
+    )
+    forward = browser_cli._try_arrange_forward(1455)
+    assert forward is not None and forward.relay_port == 49153
+    out = capsys.readouterr().out
+    assert "macOS Firewall blocks incoming connections" in out
+    assert "--unblockapp /opt/py/bin/python3.12" in out
