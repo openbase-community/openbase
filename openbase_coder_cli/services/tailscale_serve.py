@@ -264,7 +264,7 @@ def tailscale_serve_health() -> TailscaleServeHealth:
     )
     if tp.is_netmesh():
         openbase_reachable, reachability_error = _openbase_reachable(
-            f"http://127.0.0.1:{OPENBASE_CODER_LOCAL_PORT}", host_header
+            _local_openbase_url(), host_header
         )
     else:
         openbase_reachable, reachability_error = _openbase_reachable(
@@ -336,7 +336,7 @@ def _tunneld_serve_health(serve_status: TailscaleServeStatus) -> TailscaleServeH
             # Self-dial can lag right after startup; fall back to checking the
             # local backend directly so a healthy install isn't flagged.
             openbase_reachable, error = _openbase_reachable(
-                f"http://127.0.0.1:{OPENBASE_CODER_LOCAL_PORT}"
+                _local_openbase_url()
             )
 
     return _health_from_status(
@@ -512,7 +512,7 @@ def local_openbase_reachable(
             serve_status.get("error") or "Openbase Serve route is not configured."
         )
     return _openbase_reachable(
-        f"http://127.0.0.1:{OPENBASE_CODER_LOCAL_PORT}",
+        _local_openbase_url(),
         f"{host}:{OPENBASE_CODER_TAILNET_PORT}",
     )
 
@@ -546,6 +546,17 @@ def _openbase_reachable(
     if payload.get("status") != "ok":
         return False, f"Unexpected health response from {url}"
     return True, None
+
+
+def _local_openbase_url() -> str:
+    """The API's actual local listener, honoring container port overrides.
+
+    Maritime containers serve the API on 18789, not 7999, so a hard-coded
+    7999 fallback reported a healthy workspace as unhealthy (2026-10-11).
+    """
+    from openbase_coder_cli.cli.local_server import local_server_url
+
+    return local_server_url()
 
 
 def _url_host_literal(host: str) -> str:

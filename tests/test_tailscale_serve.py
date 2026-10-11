@@ -273,3 +273,46 @@ def test_local_readiness_checks_backend_health_and_advertised_host(
     healthy, error = tailscale_serve.local_openbase_reachable(host, config)
     assert healthy is expected
     assert (error is None) is expected
+
+
+@pytest.mark.parametrize(
+    ("port_env", "expected_url"),
+    [(None, "http://127.0.0.1:7999"), ("18789", "http://127.0.0.1:18789")],
+)
+def test_tunneld_self_dial_fallback_probes_the_api_port(
+    monkeypatch, port_env, expected_url
+):
+    # Maritime containers serve the API on 18789; the refused self-dial must
+    # fall back to that port, not the desktop default 7999.
+    from openbase_coder_cli.services import tunneld
+
+    monkeypatch.delenv("OPENBASE_CODER_CLI_SERVER_URL", raising=False)
+    monkeypatch.delenv("OPENBASE_CODER_CLI_LOCAL_SERVER_URL", raising=False)
+    monkeypatch.delenv("OPENBASE_CODER_CLI_HOST", raising=False)
+    if port_env:
+        monkeypatch.setenv("OPENBASE_CODER_CLI_PORT", port_env)
+    else:
+        monkeypatch.delenv("OPENBASE_CODER_CLI_PORT", raising=False)
+    monkeypatch.setattr(
+        tunneld,
+        "tunneld_probe",
+        lambda *args, **kwargs: {"ok": False, "error": "connection refused"},
+    )
+    monkeypatch.setattr(
+        tailscale_serve,
+        "_openbase_reachable",
+        lambda url, host_header=None: (url == expected_url, None),
+    )
+    status = tailscale_serve.TailscaleServeStatus(
+        tailscale_available=True,
+        tailscale_running=True,
+        host="ws.tailnet.ts.net",
+        openbase_url="http://ws.tailnet.ts.net:18080",
+        openbase_configured=True,
+        livekit_configured=True,
+        error=None,
+    )
+
+    health = tailscale_serve._tunneld_serve_health(status)
+
+    assert health.healthy is True
