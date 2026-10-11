@@ -23,6 +23,7 @@ import json
 import os
 import re
 import select
+import shutil
 import signal
 import subprocess
 import sys
@@ -306,6 +307,34 @@ def _remove(paths: SessionPaths) -> None:
         paths.root.rmdir()
 
 
+def phone_browser_command() -> str:
+    """An executable that opens its URL argument on the user's phone.
+
+    CLIs open their sign-in page through ``$BROWSER``. Cloud workspace images
+    ship ``openbase-browser``; on a desktop or VM it is not installed, so the
+    CLI would open the computer's own browser, which the user is not looking
+    at. Write a small shim that runs ``openbase-coder browser open`` with the
+    Python running now, and point ``$BROWSER`` at it.
+    """
+    import shlex
+
+    installed = shutil.which("openbase-browser")
+    if installed:
+        return installed
+    shim = STATE_DIR / "bin" / "openbase-browser"
+    script = (
+        "#!/bin/sh\n"
+        f'exec {shlex.quote(sys.executable)} -m openbase_coder_cli browser open "$@"\n'
+    )
+    shim.parent.mkdir(parents=True, exist_ok=True)
+    if not shim.exists() or shim.read_text(encoding="utf-8") != script:
+        tmp = shim.with_suffix(".tmp")
+        tmp.write_text(script, encoding="utf-8")
+        tmp.chmod(0o700)
+        os.replace(tmp, shim)
+    return str(shim)
+
+
 def _redact(text: bytes, secrets: list[bytes]) -> bytes:
     for secret in secrets:
         text = text.replace(secret, SECRET_MARK.encode())
@@ -321,7 +350,9 @@ def _hold(name: str) -> int:
     command = meta["command"]
     env = dict(os.environ)
     env.setdefault("TERM", "xterm-256color")
-    env.setdefault("BROWSER", "openbase-browser")
+    # Sign-in pages go to the user's phone, never this computer's browser.
+    env["BROWSER"] = phone_browser_command()
+    env.setdefault("GH_BROWSER", env["BROWSER"])
     env.pop("DJANGO_SETTINGS_MODULE", None)
     pid, master_fd = pty.fork()
     if pid == 0:

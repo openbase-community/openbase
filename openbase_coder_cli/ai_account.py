@@ -184,7 +184,9 @@ def _login_env() -> dict[str, str]:
     env = dict(os.environ)
     env["CODEX_HOME"] = str(CODEX_HOME_DIR)
     # The CLI's browser step goes to the phone, with the callback forwarded.
-    env.setdefault("BROWSER", "openbase-browser")
+    from openbase_coder_cli.pty_session import phone_browser_command
+
+    env["BROWSER"] = phone_browser_command()
     env.setdefault("GH_BROWSER", env["BROWSER"])
     env.setdefault("TERM", "xterm-256color")
     # Never let a Django settings module leak into the child CLIs.

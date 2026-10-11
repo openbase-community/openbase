@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 import socket
 import time
 
@@ -165,3 +166,16 @@ def test_start_notifies_the_agents_own_thread_by_default(monkeypatch):
     monkeypatch.delenv("CODEX_THREAD_ID")
     runner.invoke(pty_cli.pty, ["start", "d", "--", "true"])
     assert seen == ["s_abc", None, "019f-uuid", None]
+
+
+def test_logins_open_on_the_phone_on_any_host(monkeypatch):
+    import shutil as shutil_module
+
+    monkeypatch.setattr(shutil_module, "which", lambda name: None)
+    shim = pty_session.phone_browser_command()
+    text = open(shim).read()
+    assert "-m openbase_coder_cli browser open" in text
+    assert os.access(shim, os.X_OK)
+    pty_session.start("browser", ["sh", "-c", 'echo "BROWSER=$BROWSER"'])
+    output, _ = _read_until("browser", "BROWSER=")
+    assert f"BROWSER={shim}" in output
