@@ -258,3 +258,16 @@ def test_rendering_history_does_not_mark_relink() -> None:
 
     backend_auth.normalize_backend_error_text(CODEX_NOT_LOGGED_IN)
     assert backend_auth.relink_needed_backends() == set()
+
+
+def test_maritime_environment_counts_as_a_cloud_workspace(monkeypatch) -> None:
+    from openbase_coder_cli import backend_auth
+
+    # conftest replaces the detector; test the real one.
+    monkeypatch.undo()
+    backend_auth.on_cloud_workspace.cache_clear()
+    monkeypatch.setenv("MARITIME_AGENT_ID", "agent-1")
+    try:
+        assert backend_auth.on_cloud_workspace() is True
+    finally:
+        backend_auth.on_cloud_workspace.cache_clear()
