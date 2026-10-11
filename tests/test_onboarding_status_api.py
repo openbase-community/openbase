@@ -7,6 +7,7 @@ os.environ.setdefault("OPENBASE_CODER_CLI_SECRET_KEY", "test-secret")
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "openbase_coder_cli.config.settings")
 
 import django  # noqa: E402
+import pytest  # noqa: E402
 from rest_framework.test import APIRequestFactory, force_authenticate  # noqa: E402
 
 django.setup()
@@ -391,3 +392,67 @@ def test_selected_coding_backend_reads_installation_env_file(
     )
 
     assert onboarding.selected_coding_backend() == "claude_code"
+
+
+@pytest.mark.parametrize(
+    ("provider", "relay_required"),
+    [("netmesh-tsnet", True), ("netmesh", False)],
+)
+def test_onboarding_status_advertises_turn_for_both_relay_transports(
+    monkeypatch, tmp_path, provider, relay_required
+) -> None:
+    from openbase_coder_cli.services import tailscale_provider, tunneld
+
+    _isolate_audio_env(monkeypatch, tmp_path, "")
+    monkeypatch.setattr(onboarding, "configured_default_services", lambda: [])
+    monkeypatch.setattr(onboarding, "tailscale_self_identity", lambda: {})
+    monkeypatch.setattr(
+        onboarding, "tailscale_serve_health", lambda: SimpleNamespace(to_dict=dict)
+    )
+    monkeypatch.setattr(
+        onboarding, "cloud_login_status", lambda: {"status": "logged_out"}
+    )
+    monkeypatch.setattr(onboarding, "read_onboarding_cache", lambda: {})
+    monkeypatch.setattr(onboarding, "tailnet_experience_payload", lambda: {})
+    monkeypatch.setattr(onboarding, "backend_auth_status", lambda *, authenticated: {})
+    monkeypatch.setattr(onboarding, "runtime_readiness", lambda: {})
+    monkeypatch.setattr(tailscale_provider, "provider", lambda: provider)
+    monkeypatch.setattr(
+        tunneld,
+        "voice_turn_info",
+        lambda: {"username": "u", "password": "p", "port": 3478, "realm": "openbase"},
+    )
+
+    payload = onboarding.onboarding_status_payload()
+
+    assert payload["voice_turn"] == {
+        "username": "u",
+        "password": "p",
+        "port": 3478,
+        "realm": "openbase",
+        "relay_required": relay_required,
+    }
+
+
+def test_onboarding_status_has_no_turn_on_tailscale(monkeypatch, tmp_path) -> None:
+    from openbase_coder_cli.services import tailscale_provider, tunneld
+
+    _isolate_audio_env(monkeypatch, tmp_path, "")
+    monkeypatch.setattr(onboarding, "configured_default_services", lambda: [])
+    monkeypatch.setattr(onboarding, "tailscale_self_identity", lambda: {})
+    monkeypatch.setattr(
+        onboarding, "tailscale_serve_health", lambda: SimpleNamespace(to_dict=dict)
+    )
+    monkeypatch.setattr(
+        onboarding, "cloud_login_status", lambda: {"status": "logged_out"}
+    )
+    monkeypatch.setattr(onboarding, "read_onboarding_cache", lambda: {})
+    monkeypatch.setattr(onboarding, "tailnet_experience_payload", lambda: {})
+    monkeypatch.setattr(onboarding, "backend_auth_status", lambda *, authenticated: {})
+    monkeypatch.setattr(onboarding, "runtime_readiness", lambda: {})
+    monkeypatch.setattr(tailscale_provider, "provider", lambda: "tailscale")
+    monkeypatch.setattr(
+        tunneld, "voice_turn_info", lambda: pytest.fail("no relay runs on tailscale")
+    )
+
+    assert "voice_turn" not in onboarding.onboarding_status_payload()

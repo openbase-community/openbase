@@ -155,9 +155,25 @@ SERVICES: list[ServiceDefinition] = [
         cleanup_ports=(7998,),
         cleanup_command_substrings=("openbase-tunneld",),
     ),
+    ServiceDefinition(
+        name="openbase-voice-turn",
+        freshness_kind="build",
+        freshness_packages=(),
+        description="Openbase voice TURN relay (VPN transport)",
+        command_template="openbase-voice-turn",
+        workdir_template="{data_dir}",
+        # Installed with the `netmesh` (Openbase VPN) transport: the same
+        # tunneld executable serving only its TURN relay, bound to the VPN
+        # address, so a phone on the embedded transport (no VPN on the phone)
+        # still has a media route to this computer. Never installed alongside
+        # openbase-tunneld, whose embedded node runs the relay itself.
+        install_by_default=False,
+        cleanup_command_substrings=("openbase-tunneld", "turn"),
+    ),
 ]
 
 TUNNELD_SERVICE = next(s for s in SERVICES if s.name == "openbase-tunneld")
+VOICE_TURN_SERVICE = next(s for s in SERVICES if s.name == "openbase-voice-turn")
 
 
 def default_services(coding_backend: str | None = None) -> list[ServiceDefinition]:

@@ -1512,6 +1512,8 @@ def test_setup_configures_routes_and_defers_netmesh_until_login(
     assert calls == [
         "thread-sync",
         "sounds",
+        "tunneld-binary",
+        "service:openbase-voice-turn",
         "provision-netmesh",
         "configure",
     ]

@@ -16,6 +16,8 @@
 // Subcommands:
 //
 //	openbase-tunneld serve   run the desktop daemon (default)
+//	openbase-tunneld turn    run only the TURN relay on the computer's VPN
+//	                         address (device-wide tailnet transports)
 //	openbase-tunneld peer    join as a second node and fetch a URL over the
 //	                         tailnet (simulates the phone; used for e2e tests)
 package main
@@ -37,12 +39,14 @@ func main() {
 	switch cmd {
 	case "serve":
 		err = runServe(args)
+	case "turn":
+		err = runTurnRelay(args)
 	case "peer":
 		err = runPeer(args)
 	case "voicetest":
 		err = runVoiceTest(args)
 	default:
-		err = fmt.Errorf("unknown subcommand %q (expected \"serve\", \"peer\", or \"voicetest\")", cmd)
+		err = fmt.Errorf("unknown subcommand %q (expected \"serve\", \"turn\", \"peer\", or \"voicetest\")", cmd)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "openbase-tunneld:", err)
