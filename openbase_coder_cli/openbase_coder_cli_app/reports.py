@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import mimetypes
-import re
 from pathlib import Path
 
 from asgiref.sync import async_to_sync
@@ -43,52 +42,11 @@ from openbase_coder_cli.services.fleet_aggregation import (
 from openbase_coder_cli.thread_sync.session_manager import get_session_manager
 
 REPORT_ACTION_PROMPT_MAX_CHARS = 24000
-ACTION_HEADING_RE = re.compile(
-    r"(?i)^#{1,6}\s*(action items?|next steps?|follow[- ]?ups?|todo|to do|implementation|recommendations?)\b"
-)
-MARKDOWN_HEADING_RE = re.compile(r"^#{1,6}\s+")
-CHECKBOX_ACTION_RE = re.compile(r"(?im)^\s*(?:[-*]|\d+[.)])\s+\[\s\]\s+\S.*$")
-ACTION_LINE_RE = re.compile(
-    r"(?im)^\s*(?:[-*]|\d+[.)])\s+(?:\[[ xX]\]\s*)?"
-    r"(?:action item|todo|to do|implement|fix|start|add|update|remove|investigate|follow up|follow-up)\b.*$"
-)
-
-
-def _extract_report_action_items(content: str) -> list[str]:
-    action_items: list[str] = []
-    seen: set[str] = set()
-
-    def add(line: str) -> None:
-        normalized = line.strip()
-        if normalized and normalized not in seen:
-            seen.add(normalized)
-            action_items.append(normalized)
-
-    lines = content.splitlines()
-    in_action_section = False
-    for line in lines:
-        if MARKDOWN_HEADING_RE.match(line):
-            in_action_section = bool(ACTION_HEADING_RE.match(line))
-            if in_action_section:
-                add(line)
-            continue
-        if in_action_section:
-            if line.strip():
-                add(line)
-
-    for pattern in (CHECKBOX_ACTION_RE, ACTION_LINE_RE):
-        for match in pattern.finditer(content):
-            add(match.group(0))
-
-    return action_items[:80]
-
-
 def _report_action_prompt(
     *,
     project_path: Path,
     relative_path: str,
     content: str,
-    action_items: list[str],
 ) -> str:
     excerpt = content
     truncated = False
@@ -96,21 +54,20 @@ def _report_action_prompt(
         excerpt = excerpt[:REPORT_ACTION_PROMPT_MAX_CHARS].rstrip()
         truncated = True
 
-    action_text = "\n".join(action_items)
     truncation_note = (
         "\n\nThe report content below was truncated for prompt size."
         if truncated
         else ""
     )
     return (
-        "Implement the action items from this report in the same project.\n\n"
+        "Implement the actionable work in this report in the same project.\n\n"
         f"Project path: {project_path}\n"
         f"Report file: .reports/{relative_path}\n\n"
-        "Focus on the report's actionable implementation work. Inspect the code first, "
-        "keep the change scoped to the report, preserve existing behavior outside the "
-        "requested work, and run focused verification when practical.\n\n"
-        "Detected action items:\n"
-        f"{action_text}\n\n"
+        "Read the report and decide what in it is actionable implementation work. "
+        "Inspect the code first, keep the change scoped to the report, preserve "
+        "existing behavior outside the requested work, and run focused verification "
+        "when practical. If the report contains nothing to implement, change nothing "
+        "and say so briefly.\n\n"
         f"Report content:{truncation_note}\n\n"
         f"{excerpt}"
     )
@@ -199,23 +156,13 @@ def project_reports_action(request):
     if size > REPORTS_MAX_TEXT_BYTES:
         return Response(
             {
-                "error": "Report is too large to inspect for action items.",
+                "error": "Report is too large to start an implementation turn.",
                 "reason": "report_too_large",
             },
             status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
         )
 
     content = file_path.read_text(encoding="utf-8", errors="replace")
-    action_items = _extract_report_action_items(content)
-    if not action_items:
-        return Response(
-            {
-                "error": "No action items were found in this report.",
-                "reason": "no_action_items",
-            },
-            status=status.HTTP_400_BAD_REQUEST,
-        )
-
     origin, origin_error = _resolve_report_origin(
         content, resolved, file_path.stat().st_mtime
     )
@@ -233,7 +180,6 @@ def project_reports_action(request):
         project_path=resolved,
         relative_path=relative_path,
         content=content,
-        action_items=action_items,
     )
     try:
         turn_id = async_to_sync(get_session_manager().start_turn)(
