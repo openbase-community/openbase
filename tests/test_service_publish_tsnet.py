@@ -77,37 +77,44 @@ def test_embedded_node_capability_fails_closed_when_the_daemon_is_down(monkeypat
     assert provider.serve_capability() == {"supported": False, "error": "down"}
 
 
-def test_plan_and_snapshot_hash_the_registry_rules(tsnet, isolated_registry):
+def test_snapshot_is_what_was_last_applied(tsnet, isolated_registry):
     assert provider.plan_serve(CONSOLE_RULES) == provider.plan_serve(
         CONSOLE_RULES[::-1]
     )
     assert provider.plan_serve(CONSOLE_RULES) != provider.plan_serve(
         [*CONSOLE_RULES, HOSTNAME_RULE]
     )
+    # Fresh node: only the built-in rules are live.
     snapshot = provider.serve_snapshot()
     assert snapshot["etag"] == provider.TSNET_SERVE_ETAG
     assert snapshot["hash"] == provider.plan_serve(CONSOLE_RULES)["hash"]
 
-    save_registry(
-        ServiceRegistry(
-            (
-                PublishedService(
-                    "crm",
-                    3000,
-                    443,
-                    52808,
-                    mode=MODE_HOSTNAME,
-                    hostname=HOSTNAME_RULE["hostname"],
-                    node_id="7",
-                ),
-            ),
-            None,
-        )
+    # Publish saves the service before applying its route: the snapshot must
+    # still be the pre-apply state, not the registry's services.
+    service = PublishedService(
+        "crm",
+        3000,
+        443,
+        52808,
+        mode=MODE_HOSTNAME,
+        hostname=HOSTNAME_RULE["hostname"],
+        node_id="7",
+    )
+    save_registry(ServiceRegistry((service,), None))
+    assert (
+        provider.serve_snapshot()["hash"] == provider.plan_serve(CONSOLE_RULES)["hash"]
     )
     assert (
-        provider.serve_snapshot()["hash"]
-        == provider.plan_serve([*CONSOLE_RULES, HOSTNAME_RULE])["hash"]
+        routes.expected_serve_base_hash(
+            provider.serve_snapshot()["hash"], CONSOLE_RULES, None
+        )
+        == provider.serve_snapshot()["hash"]
     )
+
+    # After an apply, the recorded hash is the snapshot.
+    applied = provider.plan_serve([*CONSOLE_RULES, HOSTNAME_RULE])["hash"]
+    save_registry(ServiceRegistry((service,), applied))
+    assert provider.serve_snapshot()["hash"] == applied
 
 
 def test_apply_reconciles_the_service_forwards(tsnet, monkeypatch):
@@ -362,3 +369,39 @@ def test_restore_needs_the_embedded_node(monkeypatch):
     result = CliRunner().invoke(service_cli.service, ["restore"])
     assert result.exit_code != 0
     assert "service publish" in result.output
+
+
+def test_first_publish_route_applies_on_a_fresh_node(
+    tsnet, monkeypatch, isolated_registry
+):
+    """The end-to-end CAS: registry already holds the service, nothing applied yet."""
+    forwards = FakeForwards(monkeypatch)
+    monkeypatch.setattr(
+        provider,
+        "status_json",
+        lambda: {
+            "Self": {
+                "DNSName": "devspace-abc.net.obs.so.",
+                "TailscaleIPs": ["100.64.0.10"],
+            }
+        },
+    )
+    monkeypatch.setattr(tunneld, "tunneld_resolve", lambda name: ["100.64.0.10"])
+    service = PublishedService(
+        "crm",
+        3000,
+        443,
+        52808,
+        mode=MODE_HOSTNAME,
+        hostname=HOSTNAME_RULE["hostname"],
+        node_id="7",
+    )
+    save_registry(ServiceRegistry((service,), None))
+    applied = routes.apply_route(
+        service,
+        previous_services=[],
+        desired_services=[service],
+        last_applied_hash=None,
+    )
+    assert applied == provider.plan_serve([*CONSOLE_RULES, HOSTNAME_RULE])["hash"]
+    assert [port for port, _ in forwards.added] == [443, 80]
