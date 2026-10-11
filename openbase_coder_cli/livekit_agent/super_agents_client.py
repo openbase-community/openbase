@@ -705,14 +705,20 @@ class SuperAgentsLiveKitClient(
                 # ``status_failed`` is the boolean; ``turn_failed`` is the imported
                 # helper, and a function is always truthy (VM2 04:14Z: every
                 # completed turn was retried as "unknown: Claude Code response
-                # completed").
-                "_livekit_turn_failed": status_failed,
-                "_livekit_turn_error": _turn_error_text(result)
-                if status_failed
-                else "",
-                "_livekit_turn_error_kind": _turn_error_kind(result)
-                if status_failed
-                else "",
+                # completed"). A turn that produced answer text is an answer
+                # whatever the snapshot's status says; only a failed turn with
+                # no text is a recovery case.
+                "_livekit_turn_failed": status_failed and not speech_text,
+                "_livekit_turn_error": (
+                    _turn_error_text(result)
+                    if status_failed and not speech_text
+                    else ""
+                ),
+                "_livekit_turn_error_kind": (
+                    _turn_error_kind(result)
+                    if status_failed and not speech_text
+                    else ""
+                ),
                 "progress": result,
             }
             logger.info(

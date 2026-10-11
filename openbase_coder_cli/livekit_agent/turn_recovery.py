@@ -226,6 +226,10 @@ def failure_from_result(result: dict[str, Any]) -> TurnFailure | None:
         return None
     if result.get("_livekit_backend_auth_failure"):
         return None
+    speech = str(result.get("_livekit_speech_text") or "").strip()
+    if speech and not speech.startswith("Sorry — that request didn't reach"):
+        # Text came back: that is the answer, not a failure to retry.
+        return None
     detail = str(result.get("_livekit_turn_error") or "")
     turn_id = str(result.get("_livekit_turn_id") or "") or None
     error_kind = str(result.get("_livekit_turn_error_kind") or "")
@@ -291,6 +295,9 @@ async def run_with_recovery(
         reason = None
         if not failure.retryable:
             reason = "terminal"
+        elif failure.kind == KIND_UNKNOWN and attempt >= 2:
+            # An unnamed failure gets one retry, not the whole window.
+            reason = "unknown_failure"
         elif not should_continue():
             reason = "caller_moved_on"
         elif elapsed + delay > window_seconds:

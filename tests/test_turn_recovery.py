@@ -184,3 +184,32 @@ def test_spoken_lines_are_specific_and_mention_the_kept_request():
     assert "boom" not in unknown.spoken_line(
         "Cooper", elapsed_seconds=1, attempts=1, kept=False
     )
+
+
+def test_a_failed_status_with_answer_text_is_an_answer():
+    assert (
+        tr.failure_from_result(
+            {
+                "_livekit_turn_failed": True,
+                "_livekit_turn_error": "Claude Code response completed",
+                "_livekit_speech_text": "Done, six files written.",
+            }
+        )
+        is None
+    )
+
+
+async def test_unknown_failures_get_one_retry_only():
+    calls = 0
+
+    async def odd(attempt: int) -> dict:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("something odd")
+
+    with pytest.raises(tr.TurnRecoveryFailed) as unknown:
+        await tr.run_with_recovery(
+            odd, should_continue=lambda: True, window_seconds=600, backoff_seconds=(0,)
+        )
+    assert unknown.value.reason == "unknown_failure"
+    assert calls == 2
