@@ -1702,9 +1702,7 @@ def _live_route_announcer(voice_router) -> "RouteAnnouncer | None":
         # credentials configured for this install).
         logger.warning("dispatch_timing stage=live_route_announcer_unavailable", exc_info=True)
         return None
-    return RouteAnnouncer(
-        tts=tts, voice_router=voice_router, dispatcher_voice_id=_dispatcher_voice_id
-    )
+    return RouteAnnouncer(tts=tts)
 
 
 def _dispatcher_voice_id() -> str | None:

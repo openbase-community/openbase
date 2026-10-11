@@ -11,49 +11,30 @@ from openbase_coder_cli.livekit_agent import route_announcements
 from openbase_coder_cli.livekit_agent.live_characters import LiveCharacterController
 from openbase_coder_cli.livekit_agent.route_announcements import (
     BACK_TO_DISPATCH_TEXT,
+    TRANSFERRED_TEXT,
     RouteAnnouncer,
-    transfer_text,
 )
 
 
-def _announcer(
-    *, voice_name="Cooper", voice_id="cooper-voice", dispatcher_voice="marin-voice"
-):
-    router = SimpleNamespace(
-        active_target_voice_name=voice_name, active_target_voice_id=voice_id
-    )
+def _announcer():
     tts = Mock()
     tts.resolve_voice_id.side_effect = lambda voice: voice or "announcer-default"
-    return RouteAnnouncer(
-        tts=tts, voice_router=router, dispatcher_voice_id=lambda: dispatcher_voice
-    ), tts
+    return RouteAnnouncer(tts=tts), tts
 
 
-def test_return_always_speaks_as_the_dispatcher_and_a_transfer_only_when_asked():
-    # Mirrors Classic (voice_routing._transfer_voice_route and the exit packet
-    # handler): ``openbase-coder user transfer-to-agent`` sends announce=False
-    # because the dispatcher confirms the move in its own words.
+def test_every_transfer_and_return_is_announced_in_the_neutral_voice():
+    # Gabe, 2026-10-10: "Voice route transferred" on every transfer, spoken
+    # ones too, in one announcer voice rather than the agent's Cartesia voice.
     announcer, _ = _announcer()
     back = announcer.message_for("exit_to_dispatch")
-    assert (back.text, back.voice_id) == (BACK_TO_DISPATCH_TEXT, "marin-voice")
-    assert (
-        announcer.message_for("exit_to_dispatch", announce=False).text
-        == BACK_TO_DISPATCH_TEXT
-    )
-    moved = announcer.message_for("transfer_to_thread", agent_label="alpha-thread")
-    assert (moved.text, moved.voice_id) == (
-        "You're now talking with Cooper.",
-        "cooper-voice",
-    )
-    assert announcer.message_for("transfer_to_thread", announce=False) is None
+    assert (back.text, back.voice_id) == (BACK_TO_DISPATCH_TEXT, None)
+    for announce in (True, False):
+        moved = announcer.message_for(
+            "transfer_to_thread", announce=announce, agent_label="Cooper"
+        )
+        assert (moved.text, moved.voice_id) == (TRANSFERRED_TEXT, None)
+    assert TRANSFERRED_TEXT == "Voice route transferred."
     assert announcer.message_for(None) is None
-    # Without a voice name the thread label names the agent; with neither, Classic's "Transferred."
-    nameless, _ = _announcer(voice_name=None)
-    assert (
-        nameless.message_for("transfer_to_thread", agent_label="alpha").text
-        == "You're now talking with alpha."
-    )
-    assert transfer_text(None) == "Transferred."
 
 
 async def test_announce_synthesizes_with_the_announcer_tts_and_awaits_playout(
@@ -99,7 +80,7 @@ async def test_announce_synthesizes_with_the_announcer_tts_and_awaits_playout(
     assert seen == {
         "tts": tts,
         "text": BACK_TO_DISPATCH_TEXT,
-        "voice_id": "marin-voice",
+        "voice_id": None,
     }
     handle.wait_for_playout.assert_awaited_once()
     # A silent move does not touch the session.

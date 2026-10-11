@@ -1,22 +1,23 @@
-"""Spoken route announcements for GPT-Live calls, as the Classic pipeline says them.
+"""Spoken route announcements for GPT-Live calls.
 
-Classic speaks a transfer ("You're now talking with …", in the agent's voice)
-and a return ("Back to dispatch.", in the Dispatcher's voice) through its
-announcer TTS. A GPT-Live call's characters only greet on first contact, so
-a transfer or return was silent (Gabe, 2026-10-10). The same announcer TTS
-(Cartesia, through Openbase Cloud's audio proxy or a local key, never a
-bundled recording) now synthesizes the same words at the same moments, and
-the audio plays through the agent's own track right after the character
-handoff and before any greeting, so the phone's echo cancellation treats it
-like any other agent speech. No client setting gates this: Classic has none
-either (the apps' "verbose audio" switch only logs playback diagnostics).
+A GPT-Live call's characters only greet on first contact, so a transfer or a
+return was silent (Gabe, 2026-10-10). Every transfer now says "Voice route
+transferred." and every return "Back to dispatch.", in the one neutral
+Cartesia announcer voice Classic uses for its notices, synthesized at
+runtime through the same announcer TTS (Openbase Cloud's audio proxy or a
+local key, never a bundled recording). Gabe chose these words, a single
+voice (an agent's Cartesia voice is not the voice it speaks with on
+GPT-Live, so naming it in that voice sounded wrong) and an announcement on
+spoken transfers too. The audio plays through the agent's own track right
+after the character handoff and before any greeting, so the phone's echo
+cancellation treats it like any other agent speech. No client setting gates
+it: the apps' "verbose audio" switch only logs playback diagnostics.
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Callable
 
 from livekit.agents import AgentSession
 
@@ -30,26 +31,14 @@ from openbase_coder_cli.livekit_agent.tts_selection import VoiceSelectingTTS
 logger = logging.getLogger(__name__)
 
 BACK_TO_DISPATCH_TEXT = "Back to dispatch."
-
-
-def transfer_text(name: str | None) -> str:
-    """Classic's transfer confirmation (``voice_routing._transfer_voice_route``)."""
-    return f"You're now talking with {name}." if name else "Transferred."
+TRANSFERRED_TEXT = "Voice route transferred."
 
 
 class RouteAnnouncer:
     """Builds and speaks the announcement for a route move."""
 
-    def __init__(
-        self,
-        *,
-        tts: VoiceSelectingTTS,
-        voice_router,
-        dispatcher_voice_id: Callable[[], str | None],
-    ) -> None:
+    def __init__(self, *, tts: VoiceSelectingTTS) -> None:
         self._tts = tts
-        self._voice_router = voice_router
-        self._dispatcher_voice_id = dispatcher_voice_id
 
     def message_for(
         self,
@@ -58,32 +47,20 @@ class RouteAnnouncer:
         announce: bool = True,
         agent_label: str | None = None,
     ) -> AnnouncerMessage | None:
-        """The words and voice for a route move, or None when it is silent.
+        """The words for a route move, or None when it is not one.
 
-        Mirrors Classic: a return always says "Back to dispatch" as the
-        Dispatcher; a transfer is announced in the agent's voice only when
-        its command asks (``announce`` is False when the agent that requested
-        the transfer confirms it in its own words, as the
-        ``openbase-coder user transfer-to-agent`` command does).
+        ``announce`` and ``agent_label`` are accepted for the route command's
+        shape but do not change the words: every transfer is announced, in
+        the neutral announcer voice (``voice_id`` None resolves to it).
         """
-        message_id = f"voice-route-{uuid.uuid4().hex}"
+        del announce, agent_label
         if action == "exit_to_dispatch":
-            return AnnouncerMessage(
-                message_id=message_id,
-                text=BACK_TO_DISPATCH_TEXT,
-                voice_id=self._dispatcher_voice_id(),
-            )
-        if action == "transfer_to_thread" and announce:
-            name = (
-                getattr(self._voice_router, "active_target_voice_name", None)
-                or agent_label
-            )
-            return AnnouncerMessage(
-                message_id=message_id,
-                text=transfer_text(name),
-                voice_id=getattr(self._voice_router, "active_target_voice_id", None),
-            )
-        return None
+            text = BACK_TO_DISPATCH_TEXT
+        elif action == "transfer_to_thread":
+            text = TRANSFERRED_TEXT
+        else:
+            return None
+        return AnnouncerMessage(message_id=f"voice-route-{uuid.uuid4().hex}", text=text)
 
     async def announce(
         self,
