@@ -560,3 +560,59 @@ def test_phone_copy_reads_stdin_and_reports(monkeypatch):
     )
     assert result.exit_code != 0
     assert "tell the user the code" in result.output
+
+
+def test_show_text_reports_shown_or_notified(monkeypatch):
+    for ack, key in (
+        ({"shown": True}, "shown"),
+        ({"shown": False, "notified": True}, "notified"),
+    ):
+        layer = FakeChannelLayer(ack={"type": "ios_app_control_ack", **ack})
+        monkeypatch.setattr(views, "get_channel_layer", lambda layer=layer: layer)
+        response = views.ios_app_control(
+            _request({"action": "show_text", "text": "x" * 300, "label": "Code"})
+        )
+        assert response.status_code == 202
+        assert response.data[key] is True
+    monkeypatch.setattr(views, "get_channel_layer", lambda: FakeChannelLayer())
+    too_long = views.ios_app_control(
+        _request({"action": "show_text", "text": "x" * 513})
+    )
+    assert too_long.status_code == 400
+    copy_long = views.ios_app_control(
+        _request({"action": "copy_text", "text": "x" * 300})
+    )
+    assert copy_long.status_code == 400
+
+
+def test_phone_show_text_cli(monkeypatch):
+    import importlib
+
+    from click.testing import CliRunner
+
+    user_cli = importlib.import_module("openbase_coder_cli.cli.user")
+    sent = []
+    monkeypatch.setattr(
+        user_cli,
+        "_publish_ios_app_control",
+        lambda payload: (
+            sent.append(payload)
+            or {"delivered": True, "notified": True, "shown": False}
+        ),
+    )
+    result = CliRunner().invoke(
+        user_cli.user,
+        [
+            "phone",
+            "show-text",
+            "--text-stdin",
+            "--open",
+            "https://github.com/login/device",
+        ],
+        input="ABCD-1234\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "notification" in result.output and "ABCD-1234" not in result.output
+    assert sent[0]["action"] == "show_text" and sent[0]["url"].startswith(
+        "https://github.com"
+    )
