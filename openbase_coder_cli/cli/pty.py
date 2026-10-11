@@ -2,7 +2,7 @@
 
 An agent runs a login command in a session, reads what it prints, and types
 answers, deciding as it goes what the login needs (see the bundled
-openbase-cloud-workspace-logins skill).
+openbase-cli-logins skill).
 """
 
 from __future__ import annotations

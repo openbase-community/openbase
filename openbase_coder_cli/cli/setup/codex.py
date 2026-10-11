@@ -146,7 +146,7 @@ def relink_workspace_skills_from_installation(
 
 # Bundled skills that were renamed or removed. Their old links dangle once
 # the installation updates, so the linker drops them.
-RETIRED_BUNDLED_SKILLS = ("ios-app-control",)
+RETIRED_BUNDLED_SKILLS = ("ios-app-control", "openbase-cloud-workspace-logins")
 
 
 def _symlink_skills_to_root(
