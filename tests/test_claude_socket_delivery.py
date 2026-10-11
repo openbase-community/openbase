@@ -24,7 +24,6 @@ from openbase_coder_cli.thread_sync.session_manager import (  # noqa: E402
     CodexAppServerSessionManager,
 )
 
-
 # Generous enough for a loaded host: these bound a hang, not a latency target.
 SOCKET_EVENT_TIMEOUT_SECONDS = 5
 
