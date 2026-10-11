@@ -175,7 +175,12 @@ def status() -> None:
         backend_supported = supports is None or any(
             supports(backend) for backend in coding_backends
         )
-        required = getattr(svc, "install_by_default", True) and backend_supported
+        # Only the primary backend's services are required: a Claude Code
+        # workspace may keep Codex configured yet leave its servers stopped.
+        required = (
+            getattr(svc, "install_by_default", True)
+            and (supports is None or supports(coding_backends[0]))
+        )
         if svc.name == "codex-app-server":
             from openbase_coder_cli.codex_control_plane import shared_codex_daemon_ready
 
