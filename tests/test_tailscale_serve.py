@@ -94,6 +94,10 @@ def test_reset_tailscale_serve_recovers_from_drift_dead_end(monkeypatch, tmp_pat
     monkeypatch.setattr(
         tp, "serve_snapshot", lambda: {"etag": "live-etag", "hash": "live-drifted"}
     )
+    # Neither Openbase's own rules nor an empty config plan to the live hash.
+    monkeypatch.setattr(
+        tp, "plan_serve", lambda rules: {"hash": f"planned-{len(rules)}-rules"}
+    )
     applied: list = []
     monkeypatch.setattr(
         tp,
