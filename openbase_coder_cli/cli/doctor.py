@@ -669,10 +669,15 @@ def _check_sync_daemon(ok, warn, fail) -> None:
 
 def _check_login_relay_firewall(ok, warn) -> None:
     """Forwarded phone logins need this Python to accept VPN connections."""
-    from openbase_coder_cli.host_firewall import blocked_interpreter, unblock_hint
+    from openbase_coder_cli.host_firewall import blocked_interpreter
 
-    if blocked := blocked_interpreter():
-        warn(unblock_hint(blocked))
+    if blocked_interpreter():
+        # Current phone apps go through the local API instead; only older ones
+        # need the direct connection the firewall blocks.
+        ok(
+            "macOS Firewall blocks direct connections to this Python; current "
+            "phone apps deliver sign-ins through the Openbase API instead"
+        )
     elif sys.platform == "darwin":
         ok("macOS Firewall lets phone sign-ins reach this computer")
 
