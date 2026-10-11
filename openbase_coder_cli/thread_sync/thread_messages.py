@@ -5,7 +5,7 @@ from typing import Any
 
 def turn_messages(turn: dict[str, Any]) -> list[dict[str, str]]:
     """Expose item order instead of grouping all input ahead of all output."""
-    from openbase_coder_cli.cloud_model_errors import normalize_model_proxy_error
+    from openbase_coder_cli.backend_auth import normalize_backend_error_text
 
     items = turn.get("items", [])
     has_final = any(
@@ -27,7 +27,7 @@ def turn_messages(turn: dict[str, Any]) -> list[dict[str, str]]:
         elif item.get("type") == "agentMessage":
             if has_final and not str(item.get("phase", "")).startswith("final"):
                 continue
-            text = normalize_model_proxy_error(item.get("text", "").strip())
+            text = normalize_backend_error_text(item.get("text", "").strip())
             role = "assistant"
         else:
             continue

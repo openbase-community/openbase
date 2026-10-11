@@ -13,6 +13,7 @@ import hashlib
 import re
 from typing import Any
 
+from openbase_coder_cli.backend_auth import backend_auth_failure
 from openbase_coder_cli.cloud_model_errors import model_proxy_denial_spoken_message
 from openbase_coder_cli.livekit_agent.codex_turns import (
     _speech_excerpt,
@@ -73,6 +74,15 @@ def _speech_text_from_progress(
                     _own_last_useful_message(turn)
                 ):
                     return denial
+                # A dead Claude Code / Codex login is the turn's own answer
+                # (Claude) or error (Codex); keep it so the caller can
+                # classify it and say how to sign back in.
+                for own_text in (
+                    _own_last_useful_message(turn),
+                    _own_string(turn, "lastError"),
+                ):
+                    if backend_auth_failure(own_text):
+                        return own_text
 
     # Other lastUsefulMessage values on failed turns may be stale session
     # answers. Strip them recursively; fresh item-derived text remains usable.
@@ -204,7 +214,11 @@ def _belongs_to_turn(value: dict[str, Any], turn_id: str | None) -> bool:
 
 
 def _own_last_useful_message(value: dict[str, Any]) -> str | None:
-    text = value.get("lastUsefulMessage")
+    return _own_string(value, "lastUsefulMessage")
+
+
+def _own_string(value: dict[str, Any], key: str) -> str | None:
+    text = value.get(key)
     if isinstance(text, str) and text.strip():
         return text.strip()
     return None

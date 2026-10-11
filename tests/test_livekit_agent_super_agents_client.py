@@ -1948,12 +1948,22 @@ def test_backend_auth_failure_ignores_normal_speech(monkeypatch, caplog) -> None
 
 
 def test_safe_spoken_answer_replaces_auth_failure_with_graceful_line() -> None:
-    fallback = super_agents_client_module.BACKEND_ERROR_SPOKEN_FALLBACK
+    from openbase_coder_cli.backend_auth import backend_login_spoken_message
+
+    # A dead Claude Code login says how to sign back in on the computer.
+    assert super_agents_client_module._safe_spoken_answer(
+        "Not logged in · Please run /login.",
+        auth_failed=True,
+        backend="claude_code",
+    ) == backend_login_spoken_message("claude_code")
+    # A cloud backend's auth failure has no CLI login to fix.
     assert (
         super_agents_client_module._safe_spoken_answer(
-            "Not logged in · Please run /login.", auth_failed=True
+            "Failed to authenticate. API Error: 401",
+            auth_failed=True,
+            backend="openbase_cloud",
         )
-        == fallback
+        == super_agents_client_module.BACKEND_ERROR_SPOKEN_FALLBACK
     )
 
 

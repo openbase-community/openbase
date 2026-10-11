@@ -188,13 +188,15 @@ async def _notify_manual_thread_finished(
 
 
 def _turn_failure_message(params: dict[str, Any]) -> str:
+    from openbase_coder_cli.backend_auth import normalize_backend_error_text
+
     error = params.get("error")
     if isinstance(error, dict):
         message = error.get("message")
         if isinstance(message, str) and message.strip():
-            return message.strip()
+            return normalize_backend_error_text(message.strip())
     if isinstance(error, str) and error.strip():
-        return error.strip()
+        return normalize_backend_error_text(error.strip())
     return "The agent turn failed unexpectedly."
 
 
@@ -417,13 +419,13 @@ class CodexAppServerSessionManager(
         if method == "item/completed":
             item = params.get("item", {})
             if isinstance(item, dict) and item.get("type") == "agentMessage":
-                from openbase_coder_cli.cloud_model_errors import (
-                    normalize_model_proxy_error,
+                from openbase_coder_cli.backend_auth import (
+                    normalize_backend_error_text,
                 )
 
                 text = item.get("text", "")
                 if turn_id and isinstance(text, str) and text:
-                    text = normalize_model_proxy_error(text)
+                    text = normalize_backend_error_text(text)
                     item_id = _notification_item_id(params)
                     if item_id:
                         delivered = self._delivered_item_text.get(

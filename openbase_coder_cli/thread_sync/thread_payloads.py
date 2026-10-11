@@ -196,21 +196,21 @@ def _file_edit_paths(turn: dict[str, Any]) -> list[str]:
 
 
 def _extract_agent_output(turn: dict[str, Any]) -> str:
-    from openbase_coder_cli.cloud_model_errors import normalize_model_proxy_error
+    from openbase_coder_cli.backend_auth import normalize_backend_error_text
 
     final_parts: list[str] = []
     fallback_parts: list[str] = []
     for item in turn.get("items", []):
         if item.get("type") != "agentMessage":
             continue
-        text = normalize_model_proxy_error(item.get("text", "").strip())
+        text = normalize_backend_error_text(item.get("text", "").strip())
         if not text:
             continue
         fallback_parts.append(text)
         phase = item.get("phase")
         if isinstance(phase, str) and phase.startswith("final"):
             final_parts.append(text)
-    return normalize_model_proxy_error(
+    return normalize_backend_error_text(
         "\n\n".join(final_parts or fallback_parts)
         or _optional_turn_string(
             turn,

@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from .backend_auth import backend_login_message
+from .backend_config import CLAUDE_CODE_BACKEND, CODEX_BACKEND
 from .host_kind import HOST_KIND_HEADING, with_host_section
 from .paths import CLAUDE_CONFIG_DIR, CODEX_HOME_DIR
 from .runtime import packaged_skills_dir
@@ -9,6 +11,8 @@ from .runtime import packaged_skills_dir
 SKILL_NAME = "openbase-super-agent-dispatcher"
 PROCEDURE_HEADING = "## Loaded canonical Super Agent dispatch procedure"
 CURRENT_STATE_HEADING = "## Current state of the user's computer"
+_CLAUDE_LOGIN = backend_login_message(CLAUDE_CODE_BACKEND, name="")
+_CODEX_LOGIN = backend_login_message(CODEX_BACKEND, name="")
 # A persistent dispatcher once answered "your desktop is empty" from a listing
 # made 100 minutes earlier in the same thread, and refused to open a desktop
 # folder created since; the state had changed, the conversation had not.
@@ -46,6 +50,11 @@ CURRENT_STATE_RULES = f"""{CURRENT_STATE_HEADING}
   requirement: do not request introductions, completion speech or notification
   commands for such a task. Do not promise silence merely because no call is
   active: user say can send a phone notification without an active call.
+- A Super Agent turn that failed with "Not logged in · Please run /login"
+  (Claude Code) or "401 Unauthorized" from api.openai.com (Codex) means that
+  coding CLI isn't signed in on the user's computer. Never call it an
+  Openbase sign-in problem.
+  Tell the user: "{_CLAUDE_LOGIN}" For Codex: "{_CODEX_LOGIN}"
 - Never say that a file, folder or project does not exist, or that a location
   is empty, without checking in this turn.
 - When asked to work in a named folder or project, check it or start a Super

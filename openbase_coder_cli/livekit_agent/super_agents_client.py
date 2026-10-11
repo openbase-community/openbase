@@ -19,6 +19,11 @@ from super_agents.app_protocol import (
     response_is_queued as _response_is_queued,
 )
 
+from openbase_coder_cli.backend_auth import (
+    backend_auth_failure,
+    backend_login_missing,
+    backend_login_spoken_message,
+)
 from openbase_coder_cli.backend_config import (
     CLAUDE_CODE_BACKEND,
     CODEX_BACKEND,
@@ -165,7 +170,10 @@ def _flag_backend_auth_failure(
     backend-correct human-readable hint.
     """
     global _last_backend_auth_warn_monotonic
-    if not is_backend_auth_failure_text(speech_text):
+    if not (
+        is_backend_auth_failure_text(speech_text)
+        or backend_auth_failure(speech_text, backend)
+    ):
         return False
     remediation = _auth_failure_remediation(backend)
     # Never debounced: the structured marker must fire on every failed turn so
@@ -204,7 +212,7 @@ BACKEND_ERROR_SPOKEN_FALLBACK = (
 
 def _looks_like_raw_backend_error(text: str | None) -> bool:
     """Whether a turn answer is a raw backend/proxy error that must not be spoken."""
-    if is_backend_auth_failure_text(text):
+    if is_backend_auth_failure_text(text) or backend_auth_failure(text):
         return True
     if not text:
         return False
@@ -245,6 +253,8 @@ def _safe_spoken_answer(
         )
         return allowance_denial
     if auth_failed:
+        if failed_backend := backend_auth_failure(speech_text, backend):
+            return backend_login_spoken_message(failed_backend)
         return BACKEND_ERROR_SPOKEN_FALLBACK
     if not _looks_like_raw_backend_error(speech_text):
         return speech_text
@@ -578,12 +588,28 @@ class SuperAgentsLiveKitClient(
             turn_status = result.get("status") or result.get("summary", {}).get(
                 "status"
             )
+            turn_failed = (
+                isinstance(turn_status, str) and turn_status.lower() == "failed"
+            )
             if (
-                isinstance(turn_status, str)
-                and turn_status.lower() == "failed"
-                and not spoken_text
+                turn_failed
                 and not auth_failed
+                and backend in (CLAUDE_CODE_BACKEND, CODEX_BACKEND)
+                and await asyncio.to_thread(backend_login_missing, backend)
             ):
+                # The failed turn carried no recognizable login error text
+                # (or a wording we don't know yet), but the CLI itself says it
+                # is signed out: that is the cause, so say so.
+                auth_failed = True
+                spoken_text = backend_login_spoken_message(backend)
+                logger.error(
+                    "%s stage=voice_turn_backend_auth_failure backend=%s "
+                    "turn_id=%s source=login_check",
+                    DISPATCH_TIMING_LOG,
+                    backend,
+                    turn_id,
+                )
+            if turn_failed and not spoken_text and not auth_failed:
                 # Failed turns yield no fresh assistant text (cached
                 # lastUsefulMessage candidates are excluded upstream), and
                 # silence here historically fell through to stale speech or
@@ -870,7 +896,9 @@ class SuperAgentsLiveKitClient(
                 and isinstance(response_turn, dict)
                 and response_turn.get("turnId") == turn_id
                 and response_turn.get("responseFinishedAt")
-                and _speech_text_from_progress(progress, turn_scoped=True, turn_id=turn_id)
+                and _speech_text_from_progress(
+                    progress, turn_scoped=True, turn_id=turn_id
+                )
             ):
                 return progress
             if status == "waiting" and not has_pending_requests:
