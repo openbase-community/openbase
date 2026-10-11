@@ -321,3 +321,18 @@ async def run_with_recovery(
         if on_retry is not None:
             on_retry(failure, attempt, delay)
         await sleep(delay)
+        if not should_continue():
+            # A transfer or a newer utterance during the backoff: the request
+            # must not run again on the old route (review 2026-10-11).
+            logger.info(
+                "%s stage=live_turn_retry_abandoned label=%s attempt=%d reason=caller_moved_on",
+                DISPATCH_TIMING_LOG,
+                label,
+                attempt,
+            )
+            raise TurnRecoveryFailed(
+                failure,
+                attempts=attempt,
+                elapsed_seconds=clock() - started,
+                reason="caller_moved_on",
+            )

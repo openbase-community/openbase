@@ -626,6 +626,10 @@ class LiveDelegationEntry:
     # super-agents 6af0383: the start is held behind a macOS consent dialog.
     blocked_message: str | None = None
     unblocked_notified: bool = False
+    # Delivered to a new agent after a transfer; never carried again.
+    carried: bool = False
+    # Its route was left by an earlier transfer or return: never carried.
+    route_left: bool = False
     created_at: float = field(default_factory=time.monotonic)
     task: asyncio.Task[None] | None = None
     heartbeat: asyncio.Task[None] | None = None
@@ -1041,7 +1045,15 @@ class LiveDelegationBridge:
             self.speech_gate.authorize()
             self._log_forced(text, decision="skipped_trivial")
             return
-        if self._caller_spoke_over_agent and is_echo_fragment(text):
+        if (
+            self._caller_spoke_over_agent
+            and is_echo_fragment(text)
+            and self.speech_gate.is_clipped_echo_word(
+                _normalize_spoken_command(text).strip()
+            )
+        ):
+            # Only with evidence: the word is the agent's own (1068127 dropped
+            # every short word, so a spoken "Stop" never reached the agent).
             self._log_forced(text, decision="ignored_echo_fragment")
             return
         self._skipped = None
@@ -1889,6 +1901,7 @@ class LiveDelegationBridge:
             for entry in self._entries.values():
                 if not self._voice_router.can_deliver_for_snapshot(entry.route):
                     entry.superseded = True
+                    entry.route_left = True
             self.character_route_changed(action, announce=announce, agent_label=label)
             self._carry_requests(carried, label)
             return
@@ -1909,7 +1922,7 @@ class LiveDelegationBridge:
         else:
             self._append_commentary(f"You are now talking to {label}.", None)
 
-    def _requests_to_carry(self) -> list[str]:
+    def _requests_to_carry(self) -> list["LiveDelegationEntry"]:
         """Caller requests spoken into the old route's running turn after the
         request that performed the transfer: they belong to the new agent.
 
@@ -1918,20 +1931,30 @@ class LiveDelegationBridge:
         after it, which was steered into that turn, has no other way to reach
         the new agent.
         """
+        # Only the route just left: entries an earlier transfer already
+        # superseded or carried are never carried again (a second transfer
+        # replayed "Create the project file" to another agent, review
+        # 2026-10-11).
         running = sorted(
             (
                 entry
                 for entry in self._entries.values()
                 if not entry.completed
+                and not entry.route_left
+                and not entry.carried
+                and entry.source != "carried"
                 and not self._voice_router.can_deliver_for_snapshot(entry.route)
             ),
             key=lambda entry: entry.created_at,
         )
-        return [entry.prompt for entry in running[1:] if entry.prompt.strip()]
+        return [entry for entry in running[1:] if entry.prompt.strip()]
 
-    def _carry_requests(self, requests: list[str], label: str) -> None:
-        if not requests or self._closed:
+    def _carry_requests(self, entries: list["LiveDelegationEntry"], label: str) -> None:
+        if not entries or self._closed:
             return
+        for entry in entries:
+            entry.carried = True
+        requests = [entry.prompt for entry in entries]
         text = " ".join(request.strip() for request in requests)
         self._log.info(
             "%s stage=live_request_carried_to_new_route label=%s requests=%d text_len=%d",
@@ -2340,6 +2363,7 @@ class LiveDelegationBridge:
     def _exit_to_dispatch(self, *, delegation_id: str | None) -> None:
         changed = self._voice_router.exit_to_dispatch()
         for entry in self._entries.values():
+            entry.route_left = True
             if not entry.superseded:
                 entry.superseded = True
                 self._stats["superseded"] += 1

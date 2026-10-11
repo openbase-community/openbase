@@ -466,3 +466,12 @@ def test_the_agents_tail_is_stripped_from_a_caller_utterance_spoken_over_it():
     assert gate.strip_echo_prefix("Explain how a fridge works.") == (
         "Explain how a fridge works."
     )
+
+
+def test_a_lone_word_is_echo_only_when_the_agents_speech_explains_it():
+    gate = LiveSpeechGate(clock=lambda: 0.0)
+    gate.agent_said("Hi, I'm Cooper. The build is proceeding successfully.")
+    assert gate.is_clipped_echo_word("uper")
+    assert gate.is_clipped_echo_word("build")
+    for word in ("stop", "wait", "undo", "no"):
+        assert not gate.is_clipped_echo_word(word), word
