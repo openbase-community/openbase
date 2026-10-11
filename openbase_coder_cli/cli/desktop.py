@@ -85,6 +85,12 @@ def screen_share_status(no_launch: bool) -> None:
     click.echo(f"Desktop companion state: {state}")
     if state != "off" and (error := companion.get("error")):
         click.echo(f"Error: {error}")
+    for key, label in (
+        ("screenRecordingGranted", "Screen Recording permission"),
+        ("accessibilityGranted", "Accessibility permission"),
+    ):
+        if isinstance(companion.get(key), bool):
+            click.echo(f"{label}: {'granted' if companion[key] else 'not granted'}")
 
 
 def _require_macos() -> None:

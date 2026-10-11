@@ -278,15 +278,13 @@ concurrent-agent threshold), and diagnostics log upload.
 
 ## Screen Sharing (LiveKit Companion)
 
-The desktop app bundles a small companion app that can share your Mac's
-display into the active LiveKit voice room, so the agent (and your phone) can
-see your screen. Toggle it from **Settings → LiveKit Companion Screen
-Sharing → Test Share Screen**. The first run may prompt for macOS Screen
-Recording permission. When enabled, the companion can also accept remote
-mouse/keyboard input sent from the iOS app over LiveKit data messages.
+The desktop app bundles a small companion app that shares your Mac's display into the active voice call, so the agent, your phone and the console can see your screen. Start it from the phone or the console: during a call, tap **Share screen** under the orb (iPhone, Android) or on the console's Call page. An agent can also start it with `openbase-coder desktop screen-share start`. Settings → LiveKit Companion Screen Sharing keeps a **Test Share Screen** button for checking the companion on its own.
 
-**On iPhone:** the shared screen is visible in the call, and the phone can
-send remote-control input to the Mac.
+macOS asks for two permissions the first time, both for **OpenbaseScreenShareCompanion** under System Settings → Privacy & Security: **Screen & System Audio Recording** to share the display, and **Accessibility** to accept clicks and typing. If sharing fails, the phone or console shows which one to grant; grant it and tap Share screen again. The companion needs a fresh launch after a Screen Recording grant, which the next start does for you.
+
+**Stopping is real.** Stop on the phone or console, hanging up, the app going to the background, or a dropped connection all end the capture on the Mac: the companion stops recording, remote control is torn down, and the purple recording indicator in the menu bar goes away. The Mac also ends a share on its own about ten seconds after the last viewer leaves.
+
+**On iPhone and Android:** the shared screen appears as a card in the call; tap it for full screen, pinch to zoom, and tap **Remote** for a trackpad, keyboard and scroll strip that control the Mac. **In the console:** the Call page shows the screen; **Remote control** lets you click, type and scroll on the video directly.
 
 ## Auto-Update
 
