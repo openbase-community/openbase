@@ -143,8 +143,15 @@ class VoiceDeliveryLedger:
         vad_transcript_timeout_seconds: float = 15,
         vad_min_speech_seconds: float = VAD_ONLY_MIN_SPEECH_SECONDS,
         live_mode: bool = False,
+        mute_only_around_playback: bool = False,
     ) -> None:
         self._route_snapshot = route_snapshot
+        # Pipeline engine: the mic is shut only while the agent's own audio
+        # plays. The quiet-floor mute that used to follow every accepted
+        # utterance is not published (it was immediately undone by the
+        # backend-wait release and read as a mute/unmute flap on the phone,
+        # Gabe 2026-10-11); the user-turn closure itself is unchanged.
+        self._mute_only_around_playback = mute_only_around_playback
         # Live Voice engine: the microphone stays open for full duplex, so the
         # ledger never emits a mute or unmute release, whatever path asks for
         # one. Everything else (utterance_accepted, agent_audio_*) still flows.
@@ -1028,7 +1035,11 @@ class VoiceDeliveryLedger:
             voice_id=voice_id,
             voice_name=voice_name,
         )
-        if record.mic_released_for_backend and not self._lifecycle_mute_outstanding:
+        if (
+            not self._live_mode
+            and not self._lifecycle_mute_outstanding
+            and (record.mic_released_for_backend or self._mute_only_around_playback)
+        ):
             # The mic was open during the backend wait: close it for the
             # reply, and keep the mute keepalive running through a long one.
             self._emit_lifecycle("safe_to_mute_user", record, reason="agent_playback")
@@ -1500,6 +1511,11 @@ class VoiceDeliveryLedger:
             return
         if event == "safe_to_mute_user":
             self._mute_covers_current_quiet = True
+            if self._mute_only_around_playback and reason != "agent_playback":
+                # The closure is recorded (no second quiet-floor mute for this
+                # quiet), but the phone's mic stays open until agent audio.
+                self._log(record, "lifecycle_mute_deferred_to_playback", reason=reason)
+                return
             self._lifecycle_mute_outstanding = True
             self._ensure_mute_keepalive_task(record)
         elif event == "safe_to_unmute":

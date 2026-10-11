@@ -414,8 +414,12 @@ async def test_live_fallback_publishes_a_non_fatal_notice_and_keeps_auto_mute(
     assert packet["type"] == "agent_error"
     assert packet["code"] == LIVE_VOICE_UNAVAILABLE_CODE
     assert packet["severity"] == "warning"
-    assert "gateway_not_deployed" in packet["detail"]
-    assert "HTTP 404" in packet["detail"]
+    # Plain words for the phone; the reason and the HTTP detail stay in the log.
+    assert packet["detail"] == (
+        "Live voice isn't available right now; using standard voice for this call."
+    )
+    assert "gateway_not_deployed" not in packet["detail"]
+    assert "HTTP 404" not in packet["detail"]
 
 
 async def test_live_session_start_failure_falls_back_to_the_pipeline(
@@ -438,8 +442,10 @@ async def test_live_session_start_failure_falls_back_to_the_pipeline(
     (packet,) = _status_packets(ctx.room)
     assert packet["code"] == LIVE_VOICE_UNAVAILABLE_CODE
     assert packet["severity"] == "warning"
-    assert "live_session_start_failed" in packet["detail"]
-    assert "connection error" in packet["detail"]
+    assert packet["detail"] == (
+        "Live voice is temporarily unavailable; using standard voice for this call."
+    )
+    assert "connection error" not in packet["detail"]
 
 
 async def test_pipeline_failure_after_fallback_is_still_fatal(wiring, monkeypatch):
@@ -563,7 +569,9 @@ async def test_live_session_start_failure_closes_the_preconnected_session_and_cl
     )
     assert len(wiring.pipeline_calls) == 1
     (packet,) = _status_packets(ctx.room)
-    assert "live_session_start_failed" in packet["detail"]
+    assert packet["detail"] == (
+        "Live voice is temporarily unavailable; using standard voice for this call."
+    )
 
 
 @pytest.mark.parametrize("failure", ["error", "closed", "timeout"])
@@ -591,7 +599,9 @@ async def test_gateway_startup_failure_after_framework_start_falls_back(
         assert len(wiring.pipeline_calls) == 1
         assert not ended and not ctx.shutdowns
         (packet,) = _status_packets(ctx.room)
-        assert "live_session_start_failed" in packet["detail"]
+        assert packet["detail"] == (
+        "Live voice is temporarily unavailable; using standard voice for this call."
+    )
         assert packet["severity"] == "warning"
     finally:
         wiring.live._main_atask.cancel()
