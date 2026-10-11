@@ -145,6 +145,14 @@ def linked_account(provider: str) -> str | None:
     return None
 
 
+def is_available(provider: str) -> bool:
+    """Whether this computer has the provider's CLI to run the login with."""
+    if provider == OPENBASE_CLOUD:
+        return True
+    name = "codex" if provider == CODEX else "claude"
+    return bool(find_backend_binary(name) or shutil.which(name))
+
+
 def _command(provider: str) -> list[str]:
     if provider == CODEX:
         return [
@@ -176,7 +184,9 @@ def _login_env() -> dict[str, str]:
     env = dict(os.environ)
     env["CODEX_HOME"] = str(CODEX_HOME_DIR)
     # The CLI's browser step goes to the phone, with the callback forwarded.
-    env.setdefault("BROWSER", "openbase-browser")
+    from openbase_coder_cli.pty_session import phone_browser_command
+
+    env["BROWSER"] = phone_browser_command()
     env.setdefault("GH_BROWSER", env["BROWSER"])
     env.setdefault("TERM", "xterm-256color")
     # Never let a Django settings module leak into the child CLIs.
@@ -443,6 +453,7 @@ def status() -> dict:
             {
                 "id": choice,
                 "label": LABELS[choice],
+                "available": is_available(choice),
                 "linked": True if choice == OPENBASE_CLOUD else is_linked(choice),
                 "account": None
                 if choice == OPENBASE_CLOUD

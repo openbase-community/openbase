@@ -197,6 +197,50 @@ def test_mark_read_and_reopen_on_new_completion():
     assert notification_store.list_notifications()["unread_count"] == 1
 
 
+def test_later_turn_replaces_an_unread_thread_notification_with_a_new_revision(
+    _no_cloud_push,
+):
+    notification_producers.notify_thread_turn_finished("t-1", title="T", body="Hi")
+    notification_producers.notify_thread_turn_finished(
+        "t-1", title="T", body="Apple, banana"
+    )
+    first, second = _no_cloud_push
+    assert (first["id"], first["revision"]) == ("thread:t-1", 1)
+    assert (second["id"], second["revision"]) == ("thread:t-1", 2)
+    assert notification_producers._push_user_info(second) == {
+        "notification_id": "thread:t-1",
+        "notification_revision": "2",
+        "openbase_destination": "threads",
+        "thread_id": "t-1",
+    }
+    listed = notification_store.list_notifications()
+    assert listed["unread_count"] == 1
+    assert [(e["id"], e["body"]) for e in listed["notifications"]] == [
+        ("thread:t-1", "Apple, banana")
+    ]
+    assert notification_store.mark_read(kind="thread", entity_id="t-1") == 1
+    reopened = notification_store.upsert_notification("thread", "t-1", title="T")
+    assert (reopened["id"], reopened["revision"]) == ("thread:t-1", 3)
+
+
+def test_push_retries_without_revision_when_cloud_rejects_it(monkeypatch):
+    from openbase_coder_cli.config import cloud_notifications
+
+    sent: list[dict] = []
+
+    def send(*, title, body, user_info):
+        sent.append(dict(user_info))
+        if "notification_revision" in user_info:
+            raise cloud_notifications.NotificationPushError("status 400")
+        return 1
+
+    monkeypatch.setattr(cloud_notifications, "send_notification_push", send)
+    notification_producers._send_push(
+        {"id": "thread:t-1", "kind": "thread", "thread_id": "t-1", "revision": 2}
+    )
+    assert [info.get("notification_revision") for info in sent] == ["2", None]
+
+
 def test_reopen_if_read_false_stays_read():
     notification_store.upsert_notification(
         "approval", "a-1", title="A", reopen_if_read=False
@@ -567,9 +611,51 @@ def _session_state(**overrides):
         preview="All done.",
         status=SimpleNamespace(value="idle"),
         queued_turns=[],
+        agent_name=None,
+        current_run=None,
+        run_history=[_run("All done.")],
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
+
+
+def _run(*replies, output=""):
+    return SimpleNamespace(
+        messages=[
+            SimpleNamespace(role="user", text="Do the thing"),
+            *(SimpleNamespace(role="assistant", text=reply) for reply in replies),
+        ],
+        accumulated_output=output,
+    )
+
+
+def test_finished_alert_names_the_thread_and_quotes_the_latest_reply():
+    from openbase_coder_cli.thread_sync.session_manager import (
+        finished_notification_text,
+    )
+
+    state = _session_state(
+        name=None,
+        title=None,
+        preview="Log me in to Codex on this workspace.",
+        agent_name="Ada",
+        run_history=[
+            _run("Codex is signed in."),
+            _run("Checking Heroku…", "## Heroku\n\n**Logged in** as gabe."),
+        ],
+    )
+    assert finished_notification_text(state, failed=False) == (
+        "Ada: Log me in to Codex on this workspace.",
+        "Heroku",
+    )
+    assert finished_notification_text(
+        _session_state(run_history=[_run(output="Build passed.\nDetails")]),
+        failed=True,
+    ) == ("my-project", "The turn failed: Build passed.")
+    assert finished_notification_text(_session_state(run_history=[]), failed=False) == (
+        "my-project",
+        "The agent finished.",
+    )
 
 
 @pytest.mark.asyncio
@@ -586,7 +672,7 @@ async def test_turn_finished_notifies_only_manual_threads():
     await _notify_manual_thread_finished("manual-1", _session_state(), failed=False)
     payload = notification_store.list_notifications()
     assert [entry["id"] for entry in payload["notifications"]] == ["thread:manual-1"]
-    assert payload["notifications"][0]["title"] == "Fix the login flow"
+    assert payload["notifications"][0]["title"] == "my-project"
     assert payload["notifications"][0]["body"] == "All done."
 
 

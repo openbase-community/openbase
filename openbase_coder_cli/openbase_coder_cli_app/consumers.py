@@ -826,6 +826,18 @@ class IOSAppControlConsumer(AsyncJsonWebsocketConsumer):
             time.time() * 1000,
         )
         ack = {"type": "ios_app_control_ack", "command_id": command_id}
+        # copy_text / show_text outcomes (the text itself never comes back).
+        for key in ("copied", "shown"):
+            if type(content.get(key)) is bool:
+                ack[key] = content[key]
+        if ("copied" in ack or "shown" in ack) and type(
+            content.get("notified")
+        ) is bool:
+            ack["notified"] = content["notified"]
+        if ("copied" in ack or "shown" in ack) and isinstance(
+            content.get("error"), str
+        ):
+            ack["error"] = content["error"][:1024]
         if type(content.get("opened")) is bool:
             # open_url acks report whether the URL actually opened.
             ack["opened"] = content["opened"]

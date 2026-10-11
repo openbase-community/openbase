@@ -30,16 +30,22 @@ def pty() -> None:
 @click.option(
     "--notify-thread",
     default=None,
-    help="Queue a follow-up turn on this thread (your Super Agent thread id) "
-    "when the command ends, so you can confirm the result to the user.",
+    help="Queue a follow-up turn on this thread when the command ends, so you "
+    "can confirm the result to the user. Defaults to the agent's own thread "
+    "(SUPER_AGENTS_THREAD_ID or CODEX_THREAD_ID).",
 )
+@click.option("--no-notify", is_flag=True, help="Do not queue a follow-up turn.")
 def start_command(
-    name: str, command: tuple[str, ...], notify_thread: str | None
+    name: str, command: tuple[str, ...], notify_thread: str | None, no_notify: bool
 ) -> None:
     """Start COMMAND in session NAME (put the command after --).
 
     Example: openbase-coder pty start gcloud --notify-thread <id> -- gcloud auth login
     """
+    if no_notify:
+        notify_thread = None
+    elif notify_thread is None:
+        notify_thread = pty_session.own_thread_id()
     try:
         status = pty_session.start(name, list(command), notify_thread=notify_thread)
     except (pty_session.PtySessionError, OSError) as exc:
@@ -48,6 +54,8 @@ def start_command(
     click.echo(
         f"Session {name}: {state}. Read it with `openbase-coder pty read {name}`."
     )
+    if notify_thread:
+        click.echo("A follow-up turn will arrive on this thread when it ends.")
 
 
 @pty.command("read")

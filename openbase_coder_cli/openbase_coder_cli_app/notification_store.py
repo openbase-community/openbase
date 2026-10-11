@@ -74,14 +74,22 @@ def upsert_notification(
     thread_id: str | None = None,
     project_path: str | None = None,
     reopen_if_read: bool = True,
+    refresh_if_unread: bool = False,
     alert_after: str | None = None,
 ) -> dict[str, Any] | None:
     """Create a notification, or reopen the existing one for this entity.
 
-    Returns the entry when it was newly created or newly reopened (callers
-    use that as the "fire a push" signal); returns None when the entity
-    already has a live unread notification. ``alert_after`` (ISO UTC) asks
-    clients to hold the banner until then (see ``web_redirect_hold``).
+    Returns the entry when it was newly created, reopened or refreshed
+    (callers use that as the "fire a push" signal); returns None when the
+    entity already has a live unread notification, unless
+    ``refresh_if_unread`` replaces it with the new title and body (a
+    thread's later turn finishing). ``alert_after`` (ISO UTC) asks clients
+    to hold the banner until then (see ``web_redirect_hold``).
+
+    Every rewrite of an existing entity bumps its ``revision``. ``id``
+    stays ``kind:entity`` so tray entries (tagged by id) replace each other,
+    while clients dedupe alerts on id plus revision, so a newer revision
+    alerts once.
     """
     if kind not in VALID_KINDS:
         raise ValueError(f"invalid notification kind {kind!r}")
@@ -93,12 +101,17 @@ def upsert_notification(
     with _lock:
         state = _read_state_unlocked()
         existing = state["notifications"].get(note_id)
-        if existing and not existing.get("read_at") and not existing.get("resolved_at"):
+        unread = (
+            existing and not existing.get("read_at") and not existing.get("resolved_at")
+        )
+        if unread and not refresh_if_unread:
             return None
-        if existing and not reopen_if_read:
+        if existing and not unread and not reopen_if_read:
             return None
+        revision = int(existing.get("revision") or 1) + 1 if existing else 1
         entry = {
             "id": note_id,
+            "revision": revision,
             "kind": kind,
             "entity_id": entity,
             "thread_id": thread_id,
@@ -116,9 +129,11 @@ def upsert_notification(
         return dict(entry)
 
 
-def get_notification(note_id: str) -> dict[str, Any] | None:
+def get_notification(kind: str, entity_id: str) -> dict[str, Any] | None:
     with _lock:
-        entry = _read_state_unlocked()["notifications"].get(note_id)
+        entry = _read_state_unlocked()["notifications"].get(
+            notification_id(kind, entity_id.strip())
+        )
     return dict(entry) if entry else None
 
 
@@ -134,11 +149,13 @@ def mark_read(
         targets.add(notification_id(kind, entity_id.strip()))
     if not targets:
         return 0
-    return _set_read_unlocked_for(lambda entry: entry["id"] in targets)
+    return _set_read_unlocked_for(
+        lambda key, entry: key in targets or entry["id"] in targets
+    )
 
 
 def mark_all_read() -> int:
-    return _set_read_unlocked_for(lambda _entry: True)
+    return _set_read_unlocked_for(lambda _key, _entry: True)
 
 
 def resolve_notification(kind: str, entity_id: str) -> bool:
@@ -193,10 +210,10 @@ def _set_read_unlocked_for(matcher) -> int:
     changed = 0
     with _lock:
         state = _read_state_unlocked()
-        for entry in state["notifications"].values():
+        for key, entry in state["notifications"].items():
             if entry.get("read_at") or entry.get("resolved_at"):
                 continue
-            if matcher(entry):
+            if matcher(key, entry):
                 entry["read_at"] = now
                 changed += 1
         if changed:

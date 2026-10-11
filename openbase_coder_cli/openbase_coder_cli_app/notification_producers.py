@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 SWEEP_DEBOUNCE_SECONDS = 5.0
 MAX_PUSH_BODY_LENGTH = 140
+REVISION_USER_INFO_KEY = "notification_revision"
 
 _sweep_lock = threading.Lock()
 _last_sweep_monotonic: float | None = None
@@ -70,8 +71,9 @@ def notify_thread_turn_finished(
     """Record a thread-finished notification for a manual thread.
 
     Callers have already checked ``is_manual_thread``. A completion on an
-    already-read thread notification reopens it ("unread again"), which is
-    what makes the notification exist iff the latest result is unread.
+    already-read thread notification reopens it ("unread again"), and one on
+    a still-unread notification replaces it with the newer result, so the
+    notification always describes the latest unread turn and alerts for it.
     """
     entry = notification_store.upsert_notification(
         KIND_THREAD,
@@ -79,6 +81,7 @@ def notify_thread_turn_finished(
         title=title,
         body=_truncate(body),
         thread_id=thread_id,
+        refresh_if_unread=True,
         alert_after=_held_alert_after(),
     )
     if entry:
@@ -285,14 +288,16 @@ def _push_in_background(entry: dict[str, Any]) -> None:
 
 
 def _send_held_push(entry: dict[str, Any]) -> None:
-    current = notification_store.get_notification(str(entry.get("id") or ""))
+    current = notification_store.get_notification(
+        str(entry.get("kind") or ""), str(entry.get("entity_id") or "")
+    )
     if (
         current is None
         or current.get("read_at")
         or current.get("resolved_at")
-        or current.get("created_at") != entry.get("created_at")
+        or current.get("revision") != entry.get("revision")
     ):
-        # Read, resolved, or superseded by a newer upsert (which owns its
+        # Read, resolved, or superseded by a newer revision (which owns its
         # own push) while the hold was running.
         return
     _send_push(entry)
@@ -309,21 +314,40 @@ def _seconds_until(iso_value: Any) -> float:
 
 
 def _send_push(entry: dict[str, Any]) -> None:
-    from openbase_coder_cli.config.cloud_notifications import send_notification_push
+    from openbase_coder_cli.config.cloud_notifications import (
+        NotificationPushError,
+        send_notification_push,
+    )
 
+    user_info = _push_user_info(entry)
     try:
-        send_notification_push(
-            title=str(entry.get("title") or "Openbase"),
-            body=str(entry.get("body") or ""),
-            user_info=_push_user_info(entry),
-        )
+        try:
+            _send_push_once(send_notification_push, entry, user_info)
+        except NotificationPushError:
+            # A Cloud without notification_revision in its userInfo allowlist
+            # rejects the whole push; the apps fall back to the bare id.
+            user_info.pop(REVISION_USER_INFO_KEY)
+            _send_push_once(send_notification_push, entry, user_info)
     except Exception as exc:
         logger.info("Cloud notification push skipped: %s", exc)
 
 
+def _send_push_once(send, entry: dict[str, Any], user_info: dict[str, str]) -> None:
+    send(
+        title=str(entry.get("title") or "Openbase"),
+        body=str(entry.get("body") or ""),
+        user_info=user_info,
+    )
+
+
 def _push_user_info(entry: dict[str, Any]) -> dict[str, str]:
     kind = entry.get("kind")
-    user_info: dict[str, str] = {"notification_id": str(entry.get("id") or "")}
+    user_info: dict[str, str] = {
+        "notification_id": str(entry.get("id") or ""),
+        # Apps dedupe alerts on id plus revision; the id alone tags the
+        # tray entry, so a newer revision replaces the older alert.
+        REVISION_USER_INFO_KEY: str(entry.get("revision") or 1),
+    }
     if kind == KIND_THREAD:
         user_info["openbase_destination"] = "threads"
         user_info["thread_id"] = str(entry.get("thread_id") or "")

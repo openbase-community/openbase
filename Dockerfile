@@ -121,6 +121,18 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack \
     && node --version && npm --version
 
+# The coding-agent CLIs, so a workspace can run (and the phone can link) a
+# Codex or Claude Code account without a first-boot download. Pinned like
+# the other tools; bump deliberately. Setup's own installer only runs when
+# neither is found (backend_binaries.find_backend_binary falls back to PATH).
+ARG CODEX_VERSION=0.162.1
+ARG CLAUDE_CODE_VERSION=2.1.296
+RUN npm install -g --no-fund --no-audit \
+        "@openai/codex@${CODEX_VERSION}" \
+        "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+    && codex --version && claude --version \
+    && npm cache clean --force
+
 # Pinned (not :latest) so a bad or compromised uv release can't ride into the
 # next image build unreviewed; bump deliberately.
 COPY --from=ghcr.io/astral-sh/uv:0.12.14 /uv /usr/local/bin/uv

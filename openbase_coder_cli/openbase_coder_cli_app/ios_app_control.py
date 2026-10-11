@@ -39,7 +39,20 @@ FORWARD_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 FORWARD_TARGET_RE = re.compile(r"^[A-Za-z0-9.:\[\]-]{1,253}$")
 IOS_CALL_CONTROL_ACTIONS = {"set_speaker", "end_call", "start_call"}
 IOS_CALL_CONTROL_ACK_TIMEOUT_SECONDS = 45.0
+# A short code the user has to type on a sign-in page (device code), put on
+# the phone's clipboard. Never logged; the app keeps it local and expiring.
+COPY_TEXT_MAX_LENGTH = 256
+COPY_LABEL_MAX_LENGTH = 60
+# Text shown on the phone in a large, easily selectable sheet (a sign-in code
+# or a short instruction); same one-line rules as copy_text, a little longer.
+SHOW_TEXT_MAX_LENGTH = 512
+TEXT_ACTION_LIMITS = {
+    "copy_text": COPY_TEXT_MAX_LENGTH,
+    "show_text": SHOW_TEXT_MAX_LENGTH,
+}
 APP_CONTROL_ACTIONS = IOS_CALL_CONTROL_ACTIONS | {
+    "copy_text",
+    "show_text",
     "open_url",
     "set_call_muted",
     "start_developer_call",
@@ -85,9 +98,37 @@ class IOSAppControlSerializer(serializers.Serializer):
         required=False, max_length=256, trim_whitespace=True
     )
     limit = serializers.IntegerField(required=False, min_value=1, max_value=2000)
+    text = serializers.CharField(
+        required=False, max_length=SHOW_TEXT_MAX_LENGTH, trim_whitespace=False
+    )
+    label = serializers.CharField(
+        required=False, max_length=COPY_LABEL_MAX_LENGTH, trim_whitespace=True
+    )
 
     def validate(self, attrs):
         action = attrs["action"]
+        if action in TEXT_ACTION_LIMITS:
+            text = attrs.get("text", "")
+            if not text or any(ord(char) < 32 or ord(char) == 127 for char in text):
+                raise serializers.ValidationError(
+                    f"text is required for {action} and must be one line."
+                )
+            if len(text) > TEXT_ACTION_LIMITS[action]:
+                raise serializers.ValidationError(
+                    f"text for {action} is at most {TEXT_ACTION_LIMITS[action]} characters."
+                )
+            if attrs.get("url"):
+                _validate_url(attrs["url"])
+                attrs["url"] = normalize_open_url(attrs["url"])
+            if "loopback_forward" in attrs:
+                raise serializers.ValidationError(
+                    "loopback_forward only applies to open_url."
+                )
+            return attrs
+        if "text" in attrs or "label" in attrs:
+            raise serializers.ValidationError(
+                "text and label apply to copy_text and show_text only."
+            )
         if action == "open_url":
             url = attrs.get("url", "")
             if not url:
@@ -162,7 +203,15 @@ def publish_ios_app_control(payload: dict[str, Any]) -> dict[str, Any]:
     ack = async_to_sync(_publish_and_await_ack)(channel_layer, command, ack_timeout)
     delivered = ack is not None
     result = {}
-    if ack is not None and type(ack.get("opened")) is bool:
+    if ack is not None and type(ack.get("shown")) is bool:
+        result["shown"] = ack["shown"]
+        if type(ack.get("notified")) is bool:
+            result["notified"] = ack["notified"]
+    elif ack is not None and type(ack.get("copied")) is bool:
+        result["copied"] = ack["copied"]
+        if type(ack.get("opened")) is bool:
+            result["opened"] = ack["opened"]
+    elif ack is not None and type(ack.get("opened")) is bool:
         # Newer apps ack after the open attempt and report its outcome.
         result["opened"] = ack["opened"]
         if type(ack.get("notified")) is bool:
@@ -221,6 +270,8 @@ def ios_app_control(request):
                     "applied",
                     "call_state",
                     "error",
+                    "copied",
+                    "shown",
                     "opened",
                     "notified",
                     "forward",

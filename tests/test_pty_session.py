@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 import socket
 import time
 
@@ -141,3 +142,40 @@ def test_ended_session_queues_a_follow_up_turn(monkeypatch):
     pty_session._hold("inproc")
     assert queued and queued[0][0] == "s_123"
     assert "inproc ended: exited, exit 0" in queued[0][1]
+
+
+def test_start_notifies_the_agents_own_thread_by_default(monkeypatch):
+    runner = CliRunner()
+    seen = []
+    monkeypatch.setattr(
+        pty_session,
+        "start",
+        lambda name, command, notify_thread=None: (
+            seen.append(notify_thread) or {"running": True, "exit_code": None}
+        ),
+    )
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    monkeypatch.setenv("SUPER_AGENTS_THREAD_ID", "s_abc")
+    result = runner.invoke(pty_cli.pty, ["start", "a", "--", "true"])
+    assert result.exit_code == 0, result.output
+    assert "follow-up turn" in result.output
+    runner.invoke(pty_cli.pty, ["start", "b", "--no-notify", "--", "true"])
+    monkeypatch.delenv("SUPER_AGENTS_THREAD_ID")
+    monkeypatch.setenv("CODEX_THREAD_ID", "019f-uuid")
+    runner.invoke(pty_cli.pty, ["start", "c", "--", "true"])
+    monkeypatch.delenv("CODEX_THREAD_ID")
+    runner.invoke(pty_cli.pty, ["start", "d", "--", "true"])
+    assert seen == ["s_abc", None, "019f-uuid", None]
+
+
+def test_logins_open_on_the_phone_on_any_host(monkeypatch):
+    import shutil as shutil_module
+
+    monkeypatch.setattr(shutil_module, "which", lambda name: None)
+    shim = pty_session.phone_browser_command()
+    text = open(shim).read()
+    assert "-m openbase_coder_cli browser open" in text
+    assert os.access(shim, os.X_OK)
+    pty_session.start("browser", ["sh", "-c", 'echo "BROWSER=$BROWSER"'])
+    output, _ = _read_until("browser", "BROWSER=")
+    assert f"BROWSER={shim}" in output

@@ -51,6 +51,21 @@ def _is_super_agents_mcp_server(name: str) -> bool:
     return normalized in {"super-agents", "mcp-super-agents"}
 
 
+# Spoken Dispatcher turns run at a model-dependent effort (Gabe, 2026-10-11):
+# medium on capable models, to cut the backend share of a spoken answer
+# (+10.9 s, 9.1 s of it the backend); high on Haiku, which needs the reasoning.
+# Chosen by model, not backend. Typed Dispatcher turns do not use this client.
+SPOKEN_DISPATCHER_EFFORT = "medium"
+SPOKEN_DISPATCHER_SMALL_MODEL_EFFORT = "high"
+
+
+def spoken_dispatcher_effort(model: str | None) -> str:
+    """The reasoning effort a spoken Dispatcher turn runs at, by model."""
+    if model and "haiku" in model.lower():
+        return SPOKEN_DISPATCHER_SMALL_MODEL_EFFORT
+    return SPOKEN_DISPATCHER_EFFORT
+
+
 class SuperAgentsClientThreadsMixin:
     """Thread lifecycle, backend selection, config and persistence."""
 
@@ -471,7 +486,7 @@ class SuperAgentsClientThreadsMixin:
     def _configured_reasoning_effort(self) -> str | None:
         if self._use_super_agent_reasoning:
             return self._super_agents_reasoning_effort() or "high"
-        return self._dispatcher_reasoning_effort()
+        return spoken_dispatcher_effort(self._model_name)
 
     def _dispatcher_voice(self) -> dict[str, str]:
         return dispatcher_voice(self._dispatcher_config_path)

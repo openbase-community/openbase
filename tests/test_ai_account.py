@@ -217,3 +217,18 @@ def test_linked_account_reads_the_codex_id_token(monkeypatch, tmp_path):
     assert ai_account.linked_account(ai_account.CODEX) == "dev@example.com"
     (tmp_path / "auth.json").write_text("{}")
     assert ai_account.linked_account(ai_account.CODEX) is None
+
+
+def test_status_reports_whether_the_cli_is_available(monkeypatch):
+    monkeypatch.setattr(ai_account, "is_linked", lambda p: p == "openbase_cloud")
+    monkeypatch.setattr(ai_account, "selected_choice", lambda: "openbase_cloud")
+    monkeypatch.setattr(ai_account, "find_backend_binary", lambda name: None)
+    monkeypatch.setattr(
+        ai_account.shutil,
+        "which",
+        lambda name: "/usr/bin/claude" if name == "claude" else None,
+    )
+    options = {o["id"]: o for o in ai_account.status()["options"]}
+    assert options["openbase_cloud"]["available"] is True
+    assert options["codex"]["available"] is False
+    assert options["claude_code"]["available"] is True
