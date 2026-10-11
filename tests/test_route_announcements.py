@@ -83,10 +83,8 @@ async def test_announce_synthesizes_with_the_announcer_tts_and_awaits_playout(
         "voice_id": None,
     }
     handle.wait_for_playout.assert_awaited_once()
-    # A silent move does not touch the session.
-    assert (
-        await announcer.announce(session, "transfer_to_thread", announce=False) is False
-    )
+    # Something that is not a route move does not touch the session.
+    assert await announcer.announce(session, None) is False
     assert session.say.call_count == 1
 
 
