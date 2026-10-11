@@ -317,8 +317,12 @@ class OpenbaseCloudAudioAuthenticationError(RuntimeError):
     """Openbase Cloud audio requires a valid Openbase machine token."""
 
 
-def _livekit_agent_server_options() -> dict[str, float | int]:
-    options: dict[str, float | int] = {}
+def _single_user_worker_load(_server: LiveKitAgentServer) -> float:
+    return 0.0
+
+
+def _livekit_agent_server_options() -> dict[str, Any]:
+    options: dict[str, Any] = {}
 
     # This worker serves one user's calls on their own computer or workspace,
     # so it must take every call regardless of how busy the machine is.
@@ -331,6 +335,11 @@ def _livekit_agent_server_options() -> dict[str, float | int]:
     options["load_threshold"] = (
         load_threshold if load_threshold is not None else float("inf")
     )
+    if options["load_threshold"] == float("inf"):
+        # The server independently weights dispatch by target_load - load
+        # (default target 0.7), even when this worker reports AVAILABLE.
+        # An infinite local threshold alone still loses calls on a busy host.
+        options["load_fnc"] = _single_user_worker_load
 
     # livekit-agents defaults num_idle_processes to the CPU count, which on a
     # 16-core machine prewarms 16 job processes (each holding a VAD model,

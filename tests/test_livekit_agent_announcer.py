@@ -141,6 +141,7 @@ def test_livekit_agent_takes_every_call_however_busy_the_machine(monkeypatch):
 
     assert livekit._livekit_agent_server_options() == {
         "load_threshold": float("inf"),
+        "load_fnc": livekit._single_user_worker_load,
         "num_idle_processes": 1,
     }
 
@@ -161,6 +162,7 @@ def test_livekit_agent_capacity_ignores_invalid_env(monkeypatch):
 
     assert livekit._livekit_agent_server_options() == {
         "load_threshold": float("inf"),
+        "load_fnc": livekit._single_user_worker_load,
         "num_idle_processes": 1,
     }
 
