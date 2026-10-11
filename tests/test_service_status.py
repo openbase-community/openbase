@@ -669,3 +669,48 @@ def test_a_selected_codex_without_a_login_stays_required_and_says_why(monkeypatc
 
     assert services["codex_app_server"]["optional"] is False
     assert "isn't signed in" in services["codex_app_server"]["status_note"]
+
+
+def test_codex_services_on_a_claude_code_workspace_are_not_an_outage(monkeypatch) -> None:
+    """A Local install keeps Codex configured for mixed threads, but a
+    Claude-only Maritime workspace stops the Codex app servers to save memory;
+    they must not raise a services warning."""
+    from openbase_coder_cli.services import onboarding
+
+    monkeypatch.setattr(
+        services_views, "service_supports_configured_backends", lambda service: True
+    )
+    monkeypatch.setattr(services_views, "configured_coding_backend", lambda: "claude_code")
+    monkeypatch.setattr(onboarding, "codex_auth_present", lambda: True)
+    monkeypatch.setattr(services_views, "_check_port", lambda port: True)
+    monkeypatch.setattr(services_views, "_check_web_backend", lambda: True)
+    monkeypatch.setattr(services_views, "_check_codex_app_server", lambda: False)
+    monkeypatch.setattr(
+        services_views,
+        "launchctl_status",
+        lambda service: {"installed": True, "pid": None, "last_exit_code": 0},
+    )
+    monkeypatch.setattr(
+        services_views,
+        "tailscale_serve_status",
+        lambda: SimpleNamespace(
+            tailscale_running=True,
+            host="ws.tailnet.ts.net",
+            openbase_url="http://ws.tailnet.ts.net:18080",
+            openbase_configured=True,
+            livekit_configured=True,
+        ),
+    )
+    monkeypatch.setattr(
+        services_views,
+        "keep_awake_status_payload",
+        lambda: {"name": "Keep Awake", "running": True, "optional": False},
+    )
+
+    request = APIRequestFactory().get("/api/status/")
+    force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+    services = views.service_status(request).data["services"]
+
+    for key in ("codex_app_server", "codex_app_server_dispatcher"):
+        assert services[key]["optional"] is True
+        assert "Claude Code" in services[key]["status_note"]

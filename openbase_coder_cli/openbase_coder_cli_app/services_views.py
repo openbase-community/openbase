@@ -439,7 +439,10 @@ def _mark_secondary_backend_services(services: dict, definitions: dict) -> None:
     every app showed "services appear degraded" on a healthy Openbase Cloud
     workspace (Maritime 376). Such a service is optional and says why. A
     service of the selected backend stays required; when that backend's CLI
-    is not signed in, its note says how to fix it.
+    is not signed in, its note says how to fix it. The same holds for a local
+    Claude Code primary: Local installs keep Codex configured for mixed
+    threads, but a Claude-only Maritime workspace stops the Codex app servers
+    to save memory, and they must not count as down services.
     """
     from openbase_coder_cli.backend_auth import backend_login_message
     from openbase_coder_cli.services.onboarding import codex_auth_present
@@ -449,9 +452,7 @@ def _mark_secondary_backend_services(services: dict, definitions: dict) -> None:
         entry = services.get(key)
         if entry is None or definition is None:
             continue
-        # Only the Openbase Cloud primary leaves Codex display-only: with a
-        # local primary the model can still launch Codex threads.
-        if definition.supports_backend(primary) or primary != OPENBASE_CLOUD_BACKEND:
+        if definition.supports_backend(primary):
             if (
                 primary == CODEX_BACKEND
                 and not entry.get("running")
@@ -460,13 +461,21 @@ def _mark_secondary_backend_services(services: dict, definitions: dict) -> None:
                 entry["status_note"] = backend_login_message(CODEX_BACKEND)
             continue
         entry["optional"] = True
-        entry["status_note"] = (
-            "Not in use: your agents run on Openbase Cloud. Codex threads from "
-            "before stay visible."
-            if codex_auth_present()
-            else "Not in use: Codex isn't linked. Link it in Settings → AI "
-            "Account to run agents on it."
-        )
+        if primary != OPENBASE_CLOUD_BACKEND:
+            entry["status_note"] = (
+                "Not in use: your agents run on Claude Code. Start it to run "
+                "Codex threads."
+            )
+        elif codex_auth_present():
+            entry["status_note"] = (
+                "Not in use: your agents run on Openbase Cloud. Codex threads "
+                "from before stay visible."
+            )
+        else:
+            entry["status_note"] = (
+                "Not in use: Codex isn't linked. Link it in Settings → AI "
+                "Account to run agents on it."
+            )
 
 
 @api_view(["GET"])
