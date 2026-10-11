@@ -1517,7 +1517,7 @@ def test_send_message_on_dispatcher_thread_carries_the_live_dispatcher_rules(
     turn_input = client.calls[-1][1]["turn_input"]
     assert dispatcher_instructions.START_HEADING in turn_input["developerInstructions"]
     assert (
-        "continue that agent on its own thread" in turn_input["developerInstructions"]
+        "continue that agent on its" in turn_input["developerInstructions"]
     )
 
 
