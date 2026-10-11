@@ -128,6 +128,7 @@ def test_ended_session_queues_a_follow_up_turn(monkeypatch):
     assert "pty read gcloud" in prompt and "status command" in prompt
 
     queued = []
+    monkeypatch.setattr(pty_session, "NOTIFY_GRACE_SECONDS", 0.2)
     monkeypatch.setattr(
         pty_session, "_notify_thread", lambda t, p: queued.append((t, p))
     )
@@ -142,6 +143,28 @@ def test_ended_session_queues_a_follow_up_turn(monkeypatch):
     pty_session._hold("inproc")
     assert queued and queued[0][0] == "s_123"
     assert "inproc ended: exited, exit 0" in queued[0][1]
+
+
+def test_ended_session_skips_notice_once_a_read_saw_the_exit(monkeypatch):
+    import os
+
+    queued = []
+    monkeypatch.setattr(pty_session, "NOTIFY_GRACE_SECONDS", 0.2)
+    monkeypatch.setattr(
+        pty_session, "_notify_thread", lambda t, p: queued.append((t, p))
+    )
+    paths = pty_session.session_paths("seen")
+    paths.root.mkdir(parents=True, mode=0o700)
+    os.mkfifo(paths.input, 0o600)
+    paths.output.touch(mode=0o600)
+    pty_session._write_meta(
+        paths, {"command": ["true"], "exit_code": None, "notify_thread": "s_123"}
+    )
+    # The agent's own read observes the exit and all output.
+    paths.exit_seen.touch()
+    pty_session._hold("seen")
+    assert queued == []
+    assert pty_session.read("seen")["running"] is False
 
 
 def test_start_notifies_the_agents_own_thread_by_default(monkeypatch):

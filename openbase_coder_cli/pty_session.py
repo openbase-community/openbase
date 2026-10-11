@@ -58,6 +58,10 @@ class SessionPaths:
         return self.root / "output.log"
 
     @property
+    def exit_seen(self) -> Path:
+        return self.root / "exit-seen"
+
+    @property
     def input(self) -> Path:
         return self.root / "input"
 
@@ -144,6 +148,10 @@ def list_sessions() -> list[dict]:
 
 THREAD_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
+
+# How long the holder waits for an agent's own `pty read` to observe the exit
+# before queueing the end-of-session notice on its thread.
+NOTIFY_GRACE_SECONDS = 5.0
 
 THREAD_ID_ENV_KEYS = ("SUPER_AGENTS_THREAD_ID", "CODEX_THREAD_ID")
 # Credentials Openbase injects so agents reach their model through Openbase
@@ -271,6 +279,11 @@ def read(name: str, *, wait: float = 0.0, everything: bool = False) -> dict:
     cursor_tmp = paths.cursor.with_suffix(".tmp")
     cursor_tmp.write_text(str(new_offset), encoding="utf-8")
     os.replace(cursor_tmp, paths.cursor)
+    if not status["running"] and size <= new_offset:
+        # The caller has now seen the exit and all output; the holder skips
+        # its end-of-session notice instead of queueing a stale turn.
+        with contextlib.suppress(OSError):
+            paths.exit_seen.touch()
     return {
         **status,
         "output": clean_output(data.decode("utf-8", errors="replace")),
@@ -304,7 +317,7 @@ def stop(name: str) -> None:
 
 
 def _remove(paths: SessionPaths) -> None:
-    for child in (paths.output, paths.input, paths.meta, paths.cursor):
+    for child in (paths.output, paths.input, paths.meta, paths.cursor, paths.exit_seen):
         child.unlink(missing_ok=True)
     with contextlib.suppress(OSError):
         paths.root.rmdir()
@@ -511,6 +524,12 @@ def _hold(name: str) -> int:
     )
     _write_meta(paths, meta)
     if meta.get("notify_thread"):
+        # An agent already waiting on `pty read` sees the exit itself; give it
+        # a moment so the notice doesn't arrive later as a stale extra turn.
+        deadline = time.monotonic() + NOTIFY_GRACE_SECONDS
+        while time.monotonic() < deadline and not paths.exit_seen.exists():
+            time.sleep(0.1)
+    if meta.get("notify_thread") and not paths.exit_seen.exists():
         _notify_thread(
             meta["notify_thread"], notify_prompt(name, meta.get("exit_code"), reason)
         )
