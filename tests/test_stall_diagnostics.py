@@ -445,19 +445,40 @@ def test_package_work_in_protected_folder_is_not_permission_evidence(
     assert sd.scan_stalled_running_turns(now=now, state_db_path=db) == []
 
 
-def test_package_work_preserves_independent_dialog_evidence(tmp_path, monkeypatch):
+@pytest.mark.parametrize("command", ["sleep 5", "cd ~/Desktop/demo && pnpm build"])
+def test_dialog_presenter_alone_is_not_permission_evidence(
+    tmp_path, monkeypatch, command
+):
+    """VM2, 2026-10-11 04:40Z: a healthy turn pacing `sleep 5` between files
+    was announced as blocked on a permission dialog because some app's
+    dialog presenter had started after the turn. Gabe: "mistakenly thinks it
+    needs desktop permissions when I can see no indication of this"."""
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(
         sd, "dialog_presenter_started_after", lambda since: "SecurityAgent"
     )
     now = dt.datetime(2026, 9, 13, 4, 35, 0)
     created = (now - dt.timedelta(seconds=180)).strftime("%Y-%m-%d %H:%M:%S")
-    db = _running_turn_db(
-        tmp_path, created_at=created, command="cd ~/Desktop/demo && pnpm build"
-    )
-    blocked = sd.scan_stalled_running_turns(now=now, state_db_path=db)
-    assert len(blocked) == 1
-    assert blocked[0].diagnosis.likely_blocked_on_dialog
+    db = _running_turn_db(tmp_path, created_at=created, command=command)
+    assert sd.scan_stalled_running_turns(now=now, state_db_path=db) == []
+
+
+def test_turn_with_recent_output_is_never_announced(tmp_path, monkeypatch):
+    """Output streamed within the stall threshold means the agent is working,
+    even when its current command names a protected folder."""
+    import sqlite3
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(sd, "dialog_presenter_started_after", lambda since: None)
+    now = dt.datetime(2026, 9, 13, 4, 35, 0)
+    created = (now - dt.timedelta(seconds=180)).strftime("%Y-%m-%d %H:%M:%S")
+    db = _running_turn_db(tmp_path, created_at=created, command="ls ~/Desktop")
+    recent = (now - dt.timedelta(seconds=8)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE turns SET updated_at = ?", (recent,))
+    conn.commit()
+    conn.close()
+    assert sd.scan_stalled_running_turns(now=now, state_db_path=db) == []
 
 
 def test_scan_stalled_running_turns_ignores_young_turn(tmp_path, monkeypatch):

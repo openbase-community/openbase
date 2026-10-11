@@ -135,10 +135,15 @@ class StallDiagnosis:
 
     @property
     def likely_blocked(self) -> bool:
-        """Whether there is a concrete reason to believe the turn is stuck
-        (rather than merely slow): a mid-turn consent dialog, or an in-flight
-        command reaching into a TCC-protected folder."""
-        return self.likely_blocked_on_dialog or self.protected_folder is not None
+        """Only a command reaching into a protected folder is evidence.
+
+        A dialog presenter that started after the turn used to count on its
+        own, but any app's dialog spawns one (a reinstall, a notification
+        prompt): on 2026-10-11 a healthy turn pacing `sleep 5` between files
+        was announced as a permission problem on a call. The presenter now
+        only corroborates a protected-folder command.
+        """
+        return self.protected_folder is not None
 
     def spoken_hint(self) -> str:
         minutes = max(1, round(self.elapsed_seconds / 60))
@@ -583,7 +588,7 @@ def scan_stalled_running_turns(
     try:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT t.id AS turn_id, t.created_at, "
+            "SELECT t.id AS turn_id, t.created_at, t.updated_at, "
             "s.id AS session_id, s.name, s.agent_name "
             "FROM turns t JOIN sessions s ON s.id = t.session_id "
             "WHERE t.status = 'running'"
@@ -601,6 +606,11 @@ def scan_stalled_running_turns(
             continue
         elapsed = (now - started).total_seconds()
         if elapsed < min_elapsed_seconds:
+            continue
+        # A turn that streamed output recently is working, however long its
+        # current tool call: every stream message bumps updated_at.
+        last_output = _parse_sqlite_ts(row["updated_at"] or "") or started
+        if (now - last_output).total_seconds() < min_elapsed_seconds:
             continue
         diagnosis = diagnose(
             turn_started_at=started,
