@@ -199,3 +199,21 @@ def test_view_status_and_validation(monkeypatch):
     response = ai_account_views.ai_account_settings(request)
     assert response.status_code == 400
     assert "Link your" in response.data["error"]
+
+
+def test_linked_account_reads_the_codex_id_token(monkeypatch, tmp_path):
+    import base64
+    import json
+
+    claims = (
+        base64.urlsafe_b64encode(json.dumps({"email": "dev@example.com"}).encode())
+        .decode()
+        .rstrip("=")
+    )
+    (tmp_path / "auth.json").write_text(
+        json.dumps({"tokens": {"id_token": f"h.{claims}.s"}})
+    )
+    monkeypatch.setattr(ai_account, "CODEX_HOME_DIR", tmp_path)
+    assert ai_account.linked_account(ai_account.CODEX) == "dev@example.com"
+    (tmp_path / "auth.json").write_text("{}")
+    assert ai_account.linked_account(ai_account.CODEX) is None

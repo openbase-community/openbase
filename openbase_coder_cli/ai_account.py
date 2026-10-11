@@ -84,6 +84,46 @@ def is_linked(provider: str) -> bool:
     return provider == OPENBASE_CLOUD
 
 
+def linked_account(provider: str) -> str | None:
+    """The signed-in account's email (or name) for display, when known.
+
+    Codex keeps it in the ID token's claims (read without verification:
+    display only, never trusted); Claude Code reports it in `auth status`.
+    """
+    import base64
+    import json
+
+    if provider == CODEX:
+        try:
+            payload = json.loads(
+                (CODEX_HOME_DIR / "auth.json").read_text(encoding="utf-8")
+            )
+            token = payload["tokens"]["id_token"]
+            body = token.split(".")[1]
+            claims = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+        except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError):
+            return None
+        value = claims.get("email") or claims.get("name")
+        return str(value) if value else None
+    if provider == CLAUDE_CODE:
+        from openbase_coder_cli.claude_auth import claude_auth_status
+
+        status = claude_auth_status(timeout=15)
+        try:
+            payload = json.loads(status.raw_output)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        value = (
+            payload.get("email")
+            or payload.get("emailAddress")
+            or payload.get("account")
+        )
+        return str(value) if isinstance(value, str) and value else None
+    return None
+
+
 def _command(provider: str) -> list[str]:
     if provider == CODEX:
         return [
@@ -381,6 +421,9 @@ def status() -> dict:
                 "id": choice,
                 "label": LABELS[choice],
                 "linked": True if choice == OPENBASE_CLOUD else is_linked(choice),
+                "account": None
+                if choice == OPENBASE_CLOUD
+                else (linked_account(choice) if is_linked(choice) else None),
                 "selected": choice == selected,
             }
             for choice in CHOICES
