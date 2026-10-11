@@ -2280,7 +2280,7 @@ async def test_warm_connects_the_dispatcher_session_with_the_turn_model(
         backend_client=backend,
         model_name="claude-opus",
     )
-    assert await client.warm() is True
+    assert await client.warm("voice rules") is True
     ((query, turn_input),) = backend.warm_calls
     assert query.thread_id == "dispatcher-thread"
     assert turn_input["model"] == "claude-opus"
@@ -2288,12 +2288,19 @@ async def test_warm_connects_the_dispatcher_session_with_the_turn_model(
     assert "prompt" not in turn_input
     # The warm-up's auth check is reused by the first turn.
     assert auth_calls == [1]
-    result = await client.run_turn("hello dispatch")
+    result = await client.run_turn(
+        "hello dispatch", developer_instructions="voice rules"
+    )
     assert result["_livekit_turn_id"] == "turn-1"
     assert auth_calls == [1]
     ((_, started),) = backend.started_turns
     assert started["model"] == turn_input["model"]
     assert started.get("reasoningEffort") == turn_input.get("reasoningEffort")
+    # super-agents keys the connected client on the system prompt: a warm-up
+    # with other instructions is discarded and the first turn resumes cold
+    # (376, 2026-10-11 05:44Z), so both must carry the same text.
+    assert started["developerInstructions"] == turn_input["developerInstructions"]
+    assert "voice rules" in turn_input["developerInstructions"]
 
 
 @pytest.mark.asyncio

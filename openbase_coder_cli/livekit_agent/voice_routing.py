@@ -12,6 +12,7 @@ from openbase_coder_cli.livekit_agent.config import (
     LIVEKIT_CODEX_SANDBOX,
     LIVEKIT_DISPATCHER_CONFIG_PATH,
     PROACTIVE_STEER_PROMPT_CACHE_SECONDS,
+    load_direct_livekit_developer_instructions,
 )
 from openbase_coder_cli.livekit_agent.packets import (
     AnnouncerMessage,
@@ -291,14 +292,18 @@ class LiveKitVoiceRouter:
 
 
 def _warm_in_background(client) -> None:
-    """Connect the target's backend CLI now, off the route change's path."""
+    """Connect the target's backend CLI now, off the route change's path.
+
+    Passes the same per-turn instructions the first voice turn will use, so
+    the warmed client is the one that turn reuses instead of a cold resume.
+    """
     warm = getattr(client, "warm", None)
     if warm is None:
         return
 
     async def run() -> None:
         try:
-            await warm()
+            await warm(load_direct_livekit_developer_instructions())
         except Exception:  # noqa: BLE001 - warming is best effort
             logger.debug("target session warm-up failed", exc_info=True)
 

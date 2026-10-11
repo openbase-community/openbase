@@ -1661,8 +1661,8 @@ async def livekit_agent(ctx: JobContext):
         # in an announcement session (and has no voice for "Dispatcher").
         stall_hint_kwargs = {
             "speak": _live_stall_hint_speaker(live_bridge),
-            "should_announce": lambda turn: not live_bridge.handled_failed_turn(
-                turn.turn_id
+            "should_announce": lambda turn: (
+                not live_bridge.handled_failed_turn(turn.turn_id)
             ),
         }
     else:
@@ -1829,7 +1829,7 @@ async def _warm_voice_backend(
     if warm is None:
         return
     try:
-        warmed = await warm()
+        warmed = await warm(load_direct_livekit_developer_instructions())
     except asyncio.CancelledError:
         raise
     except Exception:
