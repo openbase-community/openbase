@@ -1517,8 +1517,55 @@ def test_send_message_on_dispatcher_thread_carries_the_live_dispatcher_rules(
     turn_input = client.calls[-1][1]["turn_input"]
     assert dispatcher_instructions.START_HEADING in turn_input["developerInstructions"]
     assert (
-        "continue that agent on its own thread" in turn_input["developerInstructions"]
+        "continue that agent on its" in turn_input["developerInstructions"]
     )
+
+
+def test_archive_thread_puts_the_backend_session_away(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """376, 2026-10-11 05:02Z: an archived worker stayed listed and steerable
+    in Super Agents, so the Dispatcher queued new work onto it."""
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+
+    class ArchivingClient(FakeBackendSessionClient):
+        async def archive_by_label(self, input_data):
+            self.calls.append(("archive_by_label", {"thread_id": input_data.thread_id}))
+            return {"archived": True, "threadId": input_data.thread_id}
+
+    client = ArchivingClient(
+        {
+            "read_by_label": [
+                {
+                    "threadId": "s_stray",
+                    "session": {
+                        "id": "s_stray",
+                        "name": "marian-step-files",
+                        "agentName": "Siobhan",
+                        "cwd": str(project_dir),
+                        "status": "completed",
+                        "createdAt": "2026-06-19T20:00:00.000Z",
+                        "updatedAt": "2026-06-19T21:00:00.000Z",
+                    },
+                }
+            ],
+            "cancel_by_label": [{"cancelled": False}],
+        }
+    )
+    archived: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "openbase_coder_cli.thread_sync.session_manager_threads.archive_backend_thread",
+        lambda backend, thread_id: archived.append((backend, thread_id)),
+    )
+    manager = CodexAppServerSessionManager(
+        client=client, model_for_role=lambda role: None
+    )
+
+    assert asyncio.run(manager.archive_thread("s_stray")) is True
+
+    assert archived and archived[0][1] == "s_stray"
+    assert ("archive_by_label", {"thread_id": "s_stray"}) in client.calls
 
 
 def test_list_threads_marks_waiting_on_user_input_as_waiting(tmp_path: Path) -> None:
@@ -3093,7 +3140,7 @@ def test_proxy_denial_live_event_is_normalized_before_broadcast(
     output = events[0]["data"]["line"]
     assert output.startswith(message)
     assert "try again" not in output
-    assert "https://app-staging.openbase.cloud" in output
+    assert "Subscribe to a Pro plan on app-staging.openbase.cloud for expanded access." in output
     assert "authenticate" not in output
 
 

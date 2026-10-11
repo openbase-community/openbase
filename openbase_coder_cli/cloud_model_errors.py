@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 from openbase_coder_cli.cloud_environment import configured_web_backend_url
+from openbase_coder_cli.plan_copy import subscribe_pro_line
 
 
 def _proxy_denial_payload(text: str | None) -> dict | None:
@@ -36,10 +37,7 @@ def model_plan_denial_message(text: str | None) -> str | None:
     )
     if payload.get("code") != "model_not_available_on_plan" and not legacy_denial:
         return None
-    return (
-        "This model is not available on your plan. Choose Claude Haiku, "
-        f"or upgrade at {configured_web_backend_url()}."
-    )
+    return f"This model is not available on your plan. {subscribe_pro_line(configured_web_backend_url())}"
 
 
 def model_allowance_exhausted_message(text: str | None) -> str | None:
@@ -54,18 +52,27 @@ def model_allowance_exhausted_message(text: str | None) -> str | None:
         )
     ):
         return None
+    return f"Your monthly Openbase model allowance is used up. {subscribe_pro_line(configured_web_backend_url())}"
+
+
+def model_request_budget_message(text: str | None) -> str | None:
+    payload = _proxy_denial_payload(text)
+    if payload is None or payload.get("code") != "model_request_exceeds_allowance":
+        return None
     return (
-        "Your monthly Openbase model allowance is used up. "
-        f"Upgrade your plan at {configured_web_backend_url()} to raise your monthly limit, "
-        "or wait until your allowance resets next month."
+        "This request may cost more than your remaining model credit. "
+        "Start a shorter conversation or ask for a shorter reply."
     )
 
 
 # One short, complete sentence for voice: a live call's speech gate cuts the
 # rest of a reply as soon as the caller is heard, so the spoken form must not
 # depend on a second clause to make sense. The thread keeps the full text.
+# The spoken form of plan_copy.SUBSCRIBE_PRO_LINE (Gabe's wording,
+# 2026-10-11), with the address spelled for speech.
+SUBSCRIBE_SPOKEN = "Subscribe to a Pro plan on app dot openbase dot cloud for expanded access."
 MODEL_ALLOWANCE_EXHAUSTED_SPOKEN = (
-    "This account's monthly Openbase model allowance is used up."
+    f"You're out of Openbase model credits. {SUBSCRIBE_SPOKEN}"
 )
 
 
@@ -97,7 +104,8 @@ def provider_credit_exhausted_message(text: str | None) -> str | None:
 
 def model_proxy_denial_message(text: str | None) -> str | None:
     return (
-        model_allowance_exhausted_message(text)
+        model_request_budget_message(text)
+        or model_allowance_exhausted_message(text)
         or model_plan_denial_message(text)
         or provider_credit_exhausted_message(text)
     )
@@ -106,7 +114,8 @@ def model_proxy_denial_message(text: str | None) -> str | None:
 def model_proxy_denial_spoken_message(text: str | None) -> str | None:
     """The denial as the voice agent should say it."""
     return (
-        model_allowance_exhausted_spoken_message(text)
+        model_request_budget_message(text)
+        or model_allowance_exhausted_spoken_message(text)
         or model_plan_denial_message(text)
         or provider_credit_exhausted_message(text)
     )

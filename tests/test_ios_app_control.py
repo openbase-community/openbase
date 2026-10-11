@@ -303,9 +303,31 @@ def test_ios_app_control_open_url_carries_loopback_forward(monkeypatch):
     assert channel_layer.sent[0][1]["data"]["loopback_forward"] == FORWARD
 
 
+def test_ios_app_control_passes_the_relay_device_name(monkeypatch):
+    channel_layer = FakeChannelLayer()
+    monkeypatch.setattr(views, "get_channel_layer", lambda: channel_layer)
+    forward = {**FORWARD, "relay_host": "gabes-mac.net.obs.so"}
+
+    response = views.ios_app_control(
+        _request(
+            {
+                "action": "open_url",
+                "url": "https://a.example/",
+                "loopback_forward": forward,
+            }
+        )
+    )
+
+    assert response.status_code == 202
+    assert channel_layer.sent[0][1]["data"]["loopback_forward"] == forward
+
+
 @pytest.mark.parametrize(
     "forward",
     [
+        {**FORWARD, "relay_host": "evil.example.com"},
+        {**FORWARD, "relay_host": "100.64.0.12"},
+        {**FORWARD, "relay_host": "a b.net.obs.so"},
         {**FORWARD, "port": 80},
         {**FORWARD, "port": 70000},
         {**FORWARD, "ttl_seconds": 0},

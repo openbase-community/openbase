@@ -801,3 +801,91 @@ async def test_announcement_echo_does_not_stop_it_but_a_confirmed_barge_in_does(
     assert not controller._announcement_stop.is_set()
     gate.caller_heard(" hold on, can you explain why it broke")  # real caller words
     assert controller._announcement_stop.is_set()
+
+
+async def test_queued_announcement_waits_while_the_gate_still_hears_the_agent():
+    """376, 2026-10-11 06:46Z: an announcement took the floor in the gap
+    between two sentences of the Dispatcher's answer and cut it at 8 s."""
+    session = SimpleNamespace(
+        current_agent=SimpleNamespace(chat_ctx=llm.ChatContext()),
+        agent_state="listening",
+        user_state="listening",
+        output=Mock(audio_enabled=True),
+        interrupt=Mock(side_effect=lambda **_: asyncio.sleep(0)),
+    )
+    gate = SimpleNamespace(
+        agent_audible=True, on_barge_in=None, barge_in_min_seconds=0.5
+    )
+    controller = LiveCharacterController(
+        session=session,
+        bridge=Mock(),
+        router=Mock(),
+        model_factory=Mock(),
+        instructions=Mock(),
+        on_error=AsyncMock(),
+        speech_gate=gate,
+    )
+    played = []
+
+    async def announcement(message):
+        played.append(message.message_id)
+
+    controller._announcement = announcement
+    import openbase_coder_cli.livekit_agent.live_characters as module
+
+    module.ANNOUNCEMENT_FLOOR_RECHECK_SECONDS = 0.02
+    controller.start()
+    controller.announce(AnnouncerMessage("a1", "Asher finished.", "asher", "Asher"))
+    await asyncio.sleep(0.1)
+    assert played == [], "the agent is still audible"
+    gate.agent_audible = False
+    await asyncio.sleep(0.1)
+    assert played == ["a1"]
+    controller._closed = True
+    controller._task.cancel()
+
+
+async def test_queued_announcement_waits_for_the_caller_to_be_quiet():
+    """iPhone 12, 2026-10-11 07:35Z: an announcement chosen as the caller began
+    "Transfer me to…" swapped sessions under them and the request was lost."""
+    import openbase_coder_cli.livekit_agent.live_characters as module
+
+    session = SimpleNamespace(
+        current_agent=SimpleNamespace(chat_ctx=llm.ChatContext()),
+        agent_state="listening",
+        user_state="listening",
+        output=Mock(audio_enabled=True),
+        interrupt=Mock(side_effect=lambda **_: asyncio.sleep(0)),
+    )
+    controller = LiveCharacterController(
+        session=session,
+        bridge=Mock(),
+        router=Mock(),
+        model_factory=Mock(),
+        instructions=Mock(),
+        on_error=AsyncMock(),
+    )
+    played = []
+
+    async def play(message):
+        played.append(message.message_id)
+
+    controller._play_announcement = play
+    module.ANNOUNCEMENT_FLOOR_RECHECK_SECONDS = 0.02
+    module.ANNOUNCEMENT_CALLER_QUIET_SECONDS = 0.15
+    controller.start()
+    controller.user_state_changed(
+        SimpleNamespace(old_state="listening", new_state="speaking")
+    )
+    controller.announce(AnnouncerMessage("a1", "Sarah finished.", "sarah", "Sarah"))
+    await asyncio.sleep(0.1)
+    assert played == [], "the caller is speaking"
+    controller.user_state_changed(
+        SimpleNamespace(old_state="speaking", new_state="listening")
+    )
+    await asyncio.sleep(0.08)
+    assert played == [], "within the quiet grace"
+    await asyncio.sleep(0.25)
+    assert played == ["a1"]
+    controller._closed = True
+    controller._task.cancel()

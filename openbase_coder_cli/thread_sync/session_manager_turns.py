@@ -132,7 +132,10 @@ class SessionManagerTurnsMixin:
             # Delivered into a terminal session's inbox socket. Tell the user
             # about the crossSessionInbound caveat once (see module docstring).
             notify_inbox_steer_hint(thread_id, project_path=thread.directory)
-        unconfirmed = result.get("confirmed") is False or result.get("delivery") in {"inbox", "unavailable"}
+        unconfirmed = result.get("confirmed") is False or result.get("delivery") in {
+            "inbox",
+            "unavailable",
+        }
         resolved_turn_id = None if unconfirmed else (extract_turn_id(result) or turn_id)
         # steer_by_label can fall back to starting or queueing a fresh turn
         # when the resolved turn is no longer steerable.

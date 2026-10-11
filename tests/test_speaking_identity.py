@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openbase_coder_cli.livekit_voice_route import super_agent_voice_for_context
+from openbase_coder_cli.thread_sync import speaking_identity
 from openbase_coder_cli.thread_sync.models import ThreadInfo
 from openbase_coder_cli.thread_sync.speaking_identity import ensure_speaking_identity
 
@@ -110,6 +111,8 @@ async def test_codex_identity_persists_and_preserves_existing_assignment(
     assert (await client.get_session("thread")).agent_name == expected
     await client.merge_session("thread", {"agentName": "Blake"})
     thread.agent_name = None
+    # Once the recheck window has passed, the stored assignment wins.
+    monkeypatch.setattr(speaking_identity, "IDENTITY_RECHECK_SECONDS", 0.0)
     await ensure_speaking_identity(client, thread)
     assert thread.agent_name == "Blake"
     await client.close()
@@ -159,8 +162,33 @@ async def test_a_retired_dispatcher_speaks_as_the_dispatcher(tmp_path, monkeypat
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     client = CodexAppServerClient(state_file=tmp_path / "state.json")
     thread = ThreadInfo(
-        session_id="old-dispatcher", directory=str(tmp_path), name="dispatcher (retired)"
+        session_id="old-dispatcher",
+        directory=str(tmp_path),
+        name="dispatcher (retired)",
     )
     await ensure_speaking_identity(client, thread)
     assert thread.agent_name == "dispatcher"
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_resolved_identity_is_not_re_read_on_later_polls(monkeypatch):
+    client = AsyncMock()
+    client.store = None
+    client.get_session.return_value = None
+    voice_lookups = []
+
+    def fake_voice(session_id, name, *args):
+        voice_lookups.append(session_id)
+        return super_agent_voice_for_context(session_id, name)
+
+    monkeypatch.setattr(speaking_identity, "super_agent_voice_for_context", fake_voice)
+    monkeypatch.setattr(speaking_identity, "get_voice_history_entry", lambda _: None)
+    for _ in range(5):
+        thread = ThreadInfo(session_id="poll-thread", directory="/tmp", name="p")
+        await ensure_speaking_identity(client, thread)
+        assert thread.agent_name
+    # One resolution, one persisted merge; later polls are served from memory.
+    assert voice_lookups == ["poll-thread"]
+    assert client.merge_session.await_count == 1
+    assert client.get_session.await_count == 1

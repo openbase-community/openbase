@@ -402,12 +402,21 @@ def test_load_env_without_env_file_returns_process_env(monkeypatch, tmp_path):
     monkeypatch.setattr(runners.os, "environ", {"PATH": "/bin"})
     config = InstallationConfig(env_file="")
 
+    from openbase_coder_cli.paths import (
+        CODEX_SUPER_AGENT_INSTRUCTIONS_PATH,
+        OPENBASE_AGENTS_MD_PATH,
+    )
+
     assert runners.load_service_env(config) == {
         **profile_environment(),
         "PATH": "/bin",
         "CODEX_APP_SERVER_URL": "unix://",
         "CODEX_HOME": str(codex_home),
         "SUPER_AGENTS_THREAD_INTRO_COMMAND": "",
+        # The in-process super_agents_start must find the worker policy
+        # wherever the data dir is (a Cloud workspace is not ~/.openbase).
+        "CODEX_SUPER_AGENT_INSTRUCTIONS_PATH": str(CODEX_SUPER_AGENT_INSTRUCTIONS_PATH),
+        "SUPER_AGENTS_BASE_INSTRUCTIONS_PATH": str(OPENBASE_AGENTS_MD_PATH),
     }
 
 
@@ -517,3 +526,14 @@ def test_service_log_cap_trims_only_oversized_logs(monkeypatch, tmp_path):
         launchd, "_truncate_log_file", lambda path, max_lines=5000: None
     )
     assert launchd.cap_service_log("codex-app-server", max_bytes=0) is True
+
+
+def test_voice_turn_runs_the_tunneld_relay_only():
+    argv, env = runners.build_openbase_voice_turn(
+        {"LIVEKIT_NETWORK_MODE": "tailscale"},
+        {"tunneld": "/opt/openbase/bin/openbase-tunneld"},
+    )
+
+    assert argv == ["/opt/openbase/bin/openbase-tunneld", "turn"]
+    assert env == {"LIVEKIT_NETWORK_MODE": "tailscale"}
+    assert runners.RUNNERS["openbase-voice-turn"][1] == ("tunneld",)

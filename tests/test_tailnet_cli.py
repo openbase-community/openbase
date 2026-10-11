@@ -398,3 +398,91 @@ def test_leaving_direct_removes_persistent_service(monkeypatch, capsys):
 
     assert removed == [TUNNELD_SERVICE]
     assert "Removed openbase-tunneld" in capsys.readouterr().out
+
+
+def test_bring_up_netmesh_installs_voice_turn_relay(monkeypatch):
+    from openbase_coder_cli.services import launchd, tailscale_provider, tunneld
+    from openbase_coder_cli.services.installation import InstallationConfig
+
+    config = InstallationConfig(workspace_path="workspace")
+    calls = []
+    monkeypatch.setattr(
+        tailscale_provider, "netmesh_uses_stock_tailscale", lambda: False
+    )
+    monkeypatch.setattr(tailscale_provider, "tailscale_bin", lambda: None)
+    monkeypatch.setattr(
+        tailnet_cli, "_provision_netmesh_companion", lambda: calls.append("companion")
+    )
+    monkeypatch.setattr(
+        tailnet_cli, "_apply_serve_best_effort", lambda: calls.append("serve")
+    )
+    monkeypatch.setattr(InstallationConfig, "load", lambda: config)
+    monkeypatch.setattr(
+        tunneld,
+        "install_tunneld_binary",
+        lambda received: calls.append(("binary", received)),
+    )
+    monkeypatch.setattr(
+        launchd,
+        "install_service",
+        lambda received, service: calls.append(("service", received, service.name)),
+    )
+    monkeypatch.setattr(
+        launchd,
+        "launchctl_kickstart",
+        lambda service: calls.append(("kickstart", service.name)),
+    )
+
+    tailnet_cli._bring_up_transport("netmesh")
+
+    assert calls == [
+        "companion",
+        "serve",
+        ("binary", config),
+        ("service", config, "openbase-voice-turn"),
+        ("kickstart", "openbase-voice-turn"),
+    ]
+
+
+def test_bring_up_netmesh_survives_voice_turn_build_failure(monkeypatch, capsys):
+    from openbase_coder_cli.services import tailscale_provider, tunneld
+    from openbase_coder_cli.services.installation import InstallationConfig
+
+    monkeypatch.setattr(
+        tailscale_provider, "netmesh_uses_stock_tailscale", lambda: False
+    )
+    monkeypatch.setattr(tailscale_provider, "tailscale_bin", lambda: None)
+    monkeypatch.setattr(tailnet_cli, "_provision_netmesh_companion", lambda: None)
+    monkeypatch.setattr(tailnet_cli, "_apply_serve_best_effort", lambda: None)
+    monkeypatch.setattr(
+        InstallationConfig, "load", lambda: InstallationConfig(workspace_path="w")
+    )
+
+    def fail_build(_config):
+        raise RuntimeError("go toolchain missing")
+
+    monkeypatch.setattr(tunneld, "install_tunneld_binary", fail_build)
+
+    tailnet_cli._bring_up_transport("netmesh")
+
+    out = capsys.readouterr().out
+    assert "could not install the openbase-voice-turn relay" in out
+    assert "go toolchain missing" in out
+
+
+def test_leaving_netmesh_removes_voice_turn_relay(monkeypatch, capsys):
+    from openbase_coder_cli.services import launchd, tailscale_provider
+    from openbase_coder_cli.services.definitions import VOICE_TURN_SERVICE
+
+    removed = []
+    monkeypatch.setattr(
+        tailscale_provider, "netmesh_uses_stock_tailscale", lambda: True
+    )
+    monkeypatch.setattr(
+        launchd, "remove_service", lambda svc: removed.append(svc) or True
+    )
+
+    tailnet_cli._teardown_transport("netmesh")
+
+    assert removed == [VOICE_TURN_SERVICE]
+    assert "Removed openbase-voice-turn" in capsys.readouterr().out

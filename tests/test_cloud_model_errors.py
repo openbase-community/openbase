@@ -32,7 +32,7 @@ def test_denial_is_presented_as_plan_error_in_thread_history_and_voice(
 
     monkeypatch.setenv("OPENBASE_CODER_CLI_WEB_BACKEND_URL", url)
     raw = "Failed to authenticate. API Error: 403 " + json.dumps(payload)
-    expected = f"This model is not available on your plan. Choose Claude Haiku, or upgrade at {url}."
+    expected = f"This model is not available on your plan. Subscribe to a Pro plan on {url.removeprefix('https://')} for expanded access."
     assert normalize_model_proxy_error(raw) == expected
     assert not is_backend_auth_failure_text(raw)
     run = _run_from_turn(
@@ -85,7 +85,7 @@ def test_allowance_denial_in_history_voice_and_auth_classification(
             "detail": "Monthly Openbase model proxy spend limit reached. Model requests are blocked until next month. Subscribe at app.openbase.cloud to raise your monthly limits."
         }
     )
-    expected = f"Your monthly Openbase model allowance is used up. Upgrade your plan at {url} to raise your monthly limit, or wait until your allowance resets next month."
+    expected = f"Your monthly Openbase model allowance is used up. Subscribe to a Pro plan on {url.removeprefix('https://')} for expanded access."
     assert normalize_model_proxy_error(raw) == expected
     assert not is_backend_auth_failure_text(raw)
     assert is_spend_limit_text(raw)
@@ -103,7 +103,7 @@ def test_allowance_denial_in_history_voice_and_auth_classification(
     # The voice agent says one short sentence; the thread keeps the full text.
     assert (
         _safe_spoken_answer(raw, auth_failed=False)
-        == "This account's monthly Openbase model allowance is used up."
+        == "You're out of Openbase model credits. Subscribe to a Pro plan on app dot openbase dot cloud for expanded access."
     )
     assert "try again" not in expected
 
@@ -143,3 +143,61 @@ def test_provider_credit_exhaustion_reads_as_a_temporary_outage(raw):
     assert normalize_model_proxy_error(raw) == PROVIDER_UNAVAILABLE_MESSAGE
     assert model_proxy_denial_spoken_message(raw) == PROVIDER_UNAVAILABLE_MESSAGE
     assert "credit" not in PROVIDER_UNAVAILABLE_MESSAGE.lower()
+
+
+@pytest.mark.parametrize(
+    "prefix", ["API Error: 403 ", "Failed to authenticate. API Error: 403 "]
+)
+def test_request_budget_error_does_not_claim_monthly_exhaustion(prefix):
+    from openbase_coder_cli.claude_auth import is_spend_limit_text
+    from openbase_coder_cli.cloud_model_errors import model_proxy_denial_spoken_message
+    from openbase_coder_cli.livekit_agent.super_agents_client import _safe_spoken_answer
+
+    raw = prefix + json.dumps(
+        {
+            "code": "model_request_exceeds_allowance",
+            "detail": "This model request's estimated cost exceeds the remaining allowance.",
+            "remaining_millicents": "83463",
+        }
+    )
+    expected = "This request may cost more than your remaining model credit. Start a shorter conversation or ask for a shorter reply."
+    assert normalize_model_proxy_error(raw) == expected
+    assert model_proxy_denial_spoken_message(raw) == expected
+    assert (
+        _safe_spoken_answer(raw, auth_failed=False, backend="openbase_cloud")
+        == expected
+    )
+    assert not is_backend_auth_failure_text(raw)
+    assert is_spend_limit_text(raw)
+    run = _run_from_turn({"id": "turn-1", "status": "failed", "lastUsefulMessage": raw})
+    assert run.accumulated_output == expected
+    assert "used up" not in expected
+    assert (
+        _safe_spoken_answer(raw, auth_failed=True, backend="openbase_cloud") == expected
+    )
+    from openbase_coder_cli.livekit_agent import turn_recovery
+
+    failure = turn_recovery.classify_error_text(raw)
+    assert failure.kind == turn_recovery.KIND_TERMINAL
+    assert not failure.retryable
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        'API Error: 401 {"code":"model_request_exceeds_allowance"}',
+        'API Error: 500 {"code":"model_request_exceeds_allowance"}',
+        'Yesterday I saw API Error: 403 {"code":"model_request_exceeds_allowance"}',
+    ],
+)
+def test_request_budget_marker_only_matches_proxy_denials(raw):
+    assert normalize_model_proxy_error(raw) == raw
+
+
+def test_production_line_is_gabes_exact_wording():
+    from openbase_coder_cli.plan_copy import SUBSCRIBE_PRO_LINE, subscribe_pro_line
+
+    assert SUBSCRIBE_PRO_LINE == (
+        "Subscribe to a Pro plan on app.openbase.cloud for expanded access."
+    )
+    assert subscribe_pro_line("https://app.openbase.cloud") == SUBSCRIBE_PRO_LINE

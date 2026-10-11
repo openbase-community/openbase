@@ -1,10 +1,11 @@
 import plistlib
 import subprocess
 
+import click
 import pytest
 
 from openbase_coder_cli.runtime import RuntimePackage
-from openbase_coder_cli.services import launchd, process_utils
+from openbase_coder_cli.services import launchd, process_utils, selection
 from openbase_coder_cli.services.definitions import ServiceDefinition
 from openbase_coder_cli.services.installation import InstallationConfig
 
@@ -225,6 +226,7 @@ def test_launchctl_restart_returns_false_when_job_not_loaded(monkeypatch):
 
 def test_install_service_restarts_in_place_when_plist_unchanged(monkeypatch):
     events = []
+    monkeypatch.setattr(launchd, "_wait_until_loaded", lambda _svc: True)
     monkeypatch.setattr(launchd, "_ensure_launchd_paths", lambda: None)
     monkeypatch.setattr(launchd, "_resolve_binaries", lambda _c, _s: {})
     monkeypatch.setattr(launchd, "_write_service_files", lambda *_a: False)
@@ -242,6 +244,7 @@ def test_install_service_restarts_in_place_when_plist_unchanged(monkeypatch):
 
 def test_install_service_bootstraps_when_plist_changed_or_job_unloaded(monkeypatch):
     events = []
+    monkeypatch.setattr(launchd, "_wait_until_loaded", lambda _svc: True)
     monkeypatch.setattr(launchd, "_ensure_launchd_paths", lambda: None)
     monkeypatch.setattr(launchd, "_resolve_binaries", lambda _c, _s: {})
     monkeypatch.setattr(
@@ -466,7 +469,12 @@ def test_install_refreshes_enabled_optional_daemons_not_disabled_or_oneshots(
     enabled = {"openbase-tunneld", "sync-daemon", "openbase-cloud-auth-rehydrate"}
     installed = []
     monkeypatch.setattr(launchd, "_ensure_launchd_paths", lambda: None)
-    monkeypatch.setattr(launchd, "_selected_backend", lambda _config: "openbase-cloud")
+    monkeypatch.setattr(
+        selection, "configured_coding_backends", lambda: ["openbase-cloud"]
+    )
+    monkeypatch.setattr(
+        launchd, "configured_coding_backends", lambda: ["openbase-cloud"]
+    )
     monkeypatch.setattr(
         launchd, "launchctl_status", lambda svc: {"installed": svc.name in enabled}
     )
@@ -746,7 +754,12 @@ def test_install_removes_inactive_direct_even_when_unloaded(
     installed = []
     monkeypatch.setattr(launchd.tp, "provider", lambda: provider)
     monkeypatch.setattr(launchd, "_ensure_launchd_paths", lambda: None)
-    monkeypatch.setattr(launchd, "_selected_backend", lambda _config: "openbase-cloud")
+    monkeypatch.setattr(
+        selection, "configured_coding_backends", lambda: ["openbase-cloud"]
+    )
+    monkeypatch.setattr(
+        launchd, "configured_coding_backends", lambda: ["openbase-cloud"]
+    )
     monkeypatch.setattr(
         launchd,
         "launchctl_status",
@@ -894,3 +907,87 @@ def test_adding_the_launcher_changes_the_plist_once_then_stays_stable(
     monkeypatch.setattr(launchd, "stable_runtime_package", lambda: package)
     assert launchd._write_service_files(_sample_service(), config, binaries) is True
     assert launchd._write_service_files(_sample_service(), config, binaries) is False
+
+
+@pytest.mark.parametrize(
+    ("provider", "removed_names"),
+    [
+        ("netmesh-tsnet", {"openbase-voice-turn"}),
+        ("netmesh", {"openbase-tunneld"}),
+        ("tailscale", {"openbase-tunneld", "openbase-voice-turn"}),
+    ],
+)
+def test_install_removes_the_other_transport_daemons(
+    monkeypatch, provider, removed_names
+):
+    monkeypatch.setattr(launchd.tp, "provider", lambda: provider)
+    removed = []
+    monkeypatch.setattr(launchd, "_ensure_launchd_paths", lambda: None)
+    monkeypatch.setattr(
+        selection, "configured_coding_backends", lambda: ["openbase-cloud"]
+    )
+    monkeypatch.setattr(
+        launchd, "configured_coding_backends", lambda: ["openbase-cloud"]
+    )
+    monkeypatch.setattr(launchd, "launchctl_status", lambda svc: {"installed": False})
+    monkeypatch.setattr(launchd, "_resolve_binaries", lambda _config, _services: {})
+    monkeypatch.setattr(
+        launchd, "remove_service", lambda svc: removed.append(svc.name) or False
+    )
+    monkeypatch.setattr(launchd, "_write_service_files", lambda *_args: False)
+    monkeypatch.setattr(launchd, "_activate_service", lambda _svc, _reload: "Restarted")
+    monkeypatch.setattr(launchd, "wait_for_provider", lambda _svc: None)
+    launchd.install_all_services(InstallationConfig(standalone=True))
+    transport_daemons = {"openbase-tunneld", "openbase-voice-turn"}
+    assert transport_daemons & set(removed) == removed_names
+
+
+def _activation_harness(monkeypatch, loaded_after):
+    """Fake launchd where the job is loaded only after ``loaded_after`` bootstraps."""
+    events = []
+    monkeypatch.setattr(launchd, "_is_macos", lambda: True)
+    monkeypatch.setattr(launchd, "LOAD_VERIFY_TIMEOUT_SECONDS", 0.0)
+    monkeypatch.setattr(launchd.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(
+        launchd, "launchctl_restart", lambda svc: events.append("restart") or True
+    )
+    monkeypatch.setattr(
+        launchd, "launchctl_bootstrap", lambda svc: events.append("bootstrap")
+    )
+
+    def status(_svc):
+        if events.count("bootstrap") >= loaded_after:
+            return {"installed": True, "pid": "123"}
+        return {"installed": False}
+
+    monkeypatch.setattr(launchd, "launchctl_status", status)
+    return events
+
+
+def test_activate_service_rebootstraps_when_restart_leaves_job_unloaded(monkeypatch):
+    # The in-place restart "succeeds" but the job vanished (bootout race).
+    events = _activation_harness(monkeypatch, loaded_after=1)
+
+    assert launchd._activate_service(_sample_service(), False) == "Loaded"
+    assert events == ["restart", "bootstrap"]
+
+
+def test_activate_service_fails_loudly_when_job_never_loads(monkeypatch, tmp_path):
+    _patch_launchd_dirs(tmp_path, monkeypatch)
+    events = _activation_harness(monkeypatch, loaded_after=99)
+
+    with pytest.raises(click.ClickException, match="launchd has no job for it"):
+        launchd._activate_service(_sample_service(), True)
+    assert events == ["bootstrap", "bootstrap"]
+
+
+def test_installed_or_enabled_status_counts_stopped_service(monkeypatch, tmp_path):
+    _patch_launchd_dirs(tmp_path, monkeypatch)
+    svc = _sample_service()
+    monkeypatch.setattr(launchd, "launchctl_status", lambda _s: {"installed": False})
+
+    assert launchd.installed_or_enabled_status(svc)["installed"] is False
+    wrapper = launchd._wrapper_path(svc)
+    wrapper.parent.mkdir(parents=True)
+    wrapper.write_text("#!/bin/bash\n")
+    assert launchd.installed_or_enabled_status(svc)["installed"] is True

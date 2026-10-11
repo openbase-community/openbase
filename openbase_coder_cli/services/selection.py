@@ -6,7 +6,10 @@ import json
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
-from openbase_coder_cli.env_file import selected_backend_from_env_file
+from openbase_coder_cli.env_file import (
+    env_file_values,
+    selected_backend_from_env_file,
+)
 from openbase_coder_cli.paths import DEFAULT_ENV_FILE_PATH
 from openbase_coder_cli.services.definitions import (
     SERVICES,
@@ -67,7 +70,9 @@ def configured_coding_backends() -> list[str]:
     """All configured coding backends, primary first.
 
     ``OPENBASE_CODING_BACKENDS`` (comma-separated) opts into mixed-backend
-    mode; unset, the single selected backend rules as before.
+    mode; unset, the single selected backend rules as before. The process
+    environment wins, else the installation's env file, so a shell-run
+    ``services install`` selects the same services as launchd's django-cli.
     """
     import os
 
@@ -78,6 +83,12 @@ def configured_coding_backends() -> list[str]:
 
     primary = configured_coding_backend()
     raw = os.environ.get(CODING_BACKENDS_ENV_KEY, "").strip()
+    if not raw:
+        raw = (
+            env_file_values(configured_env_file_path())
+            .get(CODING_BACKENDS_ENV_KEY, "")
+            .strip()
+        )
     if not raw:
         return [primary]
     backends: list[str] = []

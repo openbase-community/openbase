@@ -1871,3 +1871,28 @@ def test_pcm_to_frames_pads_the_tail():
     )
     assert [frame.samples_per_channel for frame in frames] == [480, 480]
     assert bytes(frames[1].data)[-4:] == b"\x00\x00\x00\x00"
+
+
+def test_agent_processes_blank_the_legacy_thread_intro(monkeypatch):
+    """376, 2026-10-11: LiveKit job processes inherited the old intro hook from
+    the env file and every agent introduced itself twice."""
+    monkeypatch.setenv(
+        "SUPER_AGENTS_THREAD_INTRO_COMMAND",
+        'openbase-coder user say {agent_name} "Hey there, I\'m {agent_name}."',
+    )
+    livekit._disable_legacy_thread_intro()
+    import os
+
+    assert os.environ["SUPER_AGENTS_THREAD_INTRO_COMMAND"] == ""
+
+
+def test_setup_drops_the_legacy_thread_intro_from_the_env_file(tmp_path):
+    from openbase_coder_cli.cli.setup.env import _drop_legacy_thread_intro_command
+
+    env = tmp_path / ".env"
+    env.write_text(
+        'KEEP=1\nSUPER_AGENTS_THREAD_INTRO_COMMAND="openbase-coder user say x"\nALSO=2\n',
+        encoding="utf-8",
+    )
+    _drop_legacy_thread_intro_command(env)
+    assert env.read_text(encoding="utf-8") == "KEEP=1\nALSO=2\n"

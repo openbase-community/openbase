@@ -19,7 +19,7 @@ restart_module = importlib.import_module("openbase_coder_cli.services.restart")
 @pytest.fixture(autouse=True)
 def isolate_restart_installation(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        restart_module, "launchctl_status", lambda _svc: {"installed": False}
+        restart_module, "installed_or_enabled_status", lambda _svc: {"installed": False}
     )
     monkeypatch.setattr(
         restart_module,
@@ -219,7 +219,7 @@ def test_full_restart_includes_enabled_optional_daemons_not_oneshots(monkeypatch
     }
     monkeypatch.setattr(
         restart_module,
-        "launchctl_status",
+        "installed_or_enabled_status",
         lambda svc: {"installed": svc.name in enabled, "pid": None},
     )
     plan = build_restart_plan(RestartRequest())
@@ -234,7 +234,10 @@ def test_full_restart_includes_enabled_optional_daemons_not_oneshots(monkeypatch
 
 
 @pytest.mark.parametrize("standalone", [False, True])
-def test_tunneld_restart_prepares_dev_build_before_scheduling(monkeypatch, standalone):
+@pytest.mark.parametrize("service", ["openbase-tunneld", "openbase-voice-turn"])
+def test_tunneld_restart_prepares_dev_build_before_scheduling(
+    monkeypatch, standalone, service
+):
     calls = []
     monkeypatch.setattr(
         restart_module,
@@ -249,7 +252,7 @@ def test_tunneld_restart_prepares_dev_build_before_scheduling(monkeypatch, stand
         "Popen",
         lambda *_args, **_kwargs: calls.append("schedule"),
     )
-    restart_module.schedule_restart(RestartRequest(services=("openbase-tunneld",)))
+    restart_module.schedule_restart(RestartRequest(services=(service,)))
     assert calls == (["schedule"] if standalone else ["build", "schedule"])
 
 
@@ -434,3 +437,35 @@ def test_dependency_diamond_and_cycles():
     assert [s.name for s in order_services(graph)] == ["a", "b", "consumer"]
     with pytest.raises(click.ClickException, match="cycle"):
         order_services([service("a", "b"), service("b", "a")])
+
+
+def test_recreation_that_keeps_the_old_dispatcher_fails_loudly(monkeypatch):
+    """A recreation that leaves the previous Dispatcher in place must raise
+    (into the restart log), never report success silently."""
+    import openbase_coder_cli.livekit_voice_route as route
+    from openbase_coder_cli.services import restart as restart_module
+
+    monkeypatch.setattr(restart_module, "require_installation", lambda: object())
+    monkeypatch.setattr(restart_module, "install_service", lambda config, service: None)
+    monkeypatch.setattr(restart_module, "order_services", lambda services: [])
+    monkeypatch.setattr(
+        route,
+        "prepare_livekit_dispatcher_recreation",
+        lambda: {"previous_dispatcher_thread_id": "s_old"},
+    )
+
+    async def same(**kwargs):
+        return "s_old"
+
+    monkeypatch.setattr(route, "warm_livekit_dispatcher_thread", same)
+    plan = restart_module.RestartPlan(
+        services=(), recreate_dispatcher=True, interrupts_voice=False, delay_seconds=0.0
+    )
+    with pytest.raises(RuntimeError, match="kept the previous Dispatcher"):
+        restart_module.execute_restart_plan(plan)
+
+    async def new(**kwargs):
+        return "s_new"
+
+    monkeypatch.setattr(route, "warm_livekit_dispatcher_thread", new)
+    restart_module.execute_restart_plan(plan)

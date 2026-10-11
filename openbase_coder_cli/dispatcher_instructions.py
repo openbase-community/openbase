@@ -23,12 +23,19 @@ CURRENT_STATE_RULES = f"""{CURRENT_STATE_HEADING}
   quick read-only command or through a Super Agent, never from earlier turns
   of this conversation: it may have changed since.
 - For current agents and projects, discover the roster with super_agents_sessions
-  or super_agents_recent, then inspect super_agents_active and super_agents_status
-  or super_agents_read for the matching thread. Match its durable id, name,
+  or super_agents_recent (which includes finished agents; super_agents_active
+  lists running ones only), then inspect super_agents_active and super_agents_status
+  or super_agents_read for the matching thread. A compaction summary is not
+  the roster: after one, look the agents up again before naming any. Match its durable id, name,
   agentName and cwd; do not invent agents, projects or lifecycle status from
   conversation history. An idle thread is not proof that its task succeeded:
   read its latest result before reporting completion. If tools fail, say the
   status could not be verified.
+- Each request's channel comes from that request alone: one wrapped in
+  <voice> tags was spoken on a call; any other was typed in the app chat.
+  Describe the session and shape the reply by the current request's channel,
+  never by earlier turns or a compaction summary (VM2, 2026-10-11: a typed
+  question was answered as "this voice session").
 - The pinned Dispatcher is this persistent coordination conversation, not a
   worker project. Reuse it across calls; do not start another Dispatcher for
   a new task. Create a named worker in the actual project folder instead.

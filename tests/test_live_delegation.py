@@ -2570,15 +2570,15 @@ async def test_complete_backend_answer_uses_one_explicit_speech_command():
 # --- speakerphone echo and starved answers -----------------------------------
 
 
-async def test_a_lone_short_word_over_the_agents_speech_is_dropped_as_echo():
-    """ "...Cooper" heard back as "uper" must not interrupt with a turn that
-    answers nothing (2026-10-10, Android speakerphone)."""
+async def test_a_recent_exact_short_word_over_the_agents_speech_is_echo():
+    """A whole word just spoken by the agent can explain a short echo."""
     bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
     try:
         bridge.on_agent_state_changed("listening", "speaking")
+        bridge.speech_gate.agent_said("Ready to run")
         bridge.on_user_state_changed("listening", "speaking")
         bridge.on_user_state_changed("speaking", "listening")
-        live.final("uper")
+        live.final("Run")
         await _settle()
         assert dispatcher.prompts == []
         assert bridge._stats["decision_ignored_echo_fragment"] == 1
@@ -2924,3 +2924,75 @@ async def test_a_turn_failed_by_an_unanswered_dialog_speaks_the_backend_message_
     assert live.speech("d1") == [message]
     assert len(dispatcher.prompts) == 1, "terminal until the user acts"
     await bridge.aclose()
+
+
+async def test_a_request_spoken_during_a_pending_transfer_is_carried_to_the_new_agent():
+    """376, 2026-10-11: "Connect me to Marian" started the Dispatcher's turn; the
+    caller's question for Marian, spoken while that turn was still transferring,
+    was steered into it and never reached Marian."""
+    from openbase_coder_cli.livekit_agent.live_delegation import (
+        LIVE_CARRIED_REQUEST_NOTE,
+    )
+
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    marian = FakeVoiceClient(thread_id="marian-thread")
+    marian.result_gate.set()
+    marian.result = {
+        "_livekit_speech_text": "It is a Python project.",
+        "_livekit_turn_id": "marian-turn-1",
+        "status": "completed",
+        "progress": {},
+    }
+    changes: list[tuple] = []
+    bridge.character_route_changed = lambda action, **kw: changes.append((action, kw))
+    try:
+        live.final("Connect me to Marian.")
+        await _settle()
+        live.final("Marian, in one sentence, what kind of project is in your folder?")
+        await _settle()
+        assert len(dispatcher.prompts) == 2, (
+            "the question was steered into the Dispatcher's turn"
+        )
+        router.transfer(marian)
+        bridge.notify_route_changed(action="transfer_to_thread", agent_label="Marian")
+        await _settle()
+        assert changes and changes[0][0] == "transfer_to_thread"
+        assert len(marian.prompts) == 1
+        carried = marian.prompts[0][0]
+        assert LIVE_CARRIED_REQUEST_NOTE in carried
+        assert "what kind of project is in your folder" in carried
+        assert "Connect me to Marian" not in carried
+        assert live.speech()[-1] == "It is a Python project."
+    finally:
+        await bridge.aclose()
+
+
+async def test_a_lone_transfer_request_is_not_carried():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    marian = FakeVoiceClient(thread_id="marian-thread")
+    bridge.character_route_changed = lambda action, **kw: None
+    try:
+        live.final("Connect me to Marian.")
+        await _settle()
+        router.transfer(marian)
+        bridge.notify_route_changed(action="transfer_to_thread", agent_label="Marian")
+        await _settle()
+        assert marian.prompts == []
+    finally:
+        await bridge.aclose()
+
+
+async def test_an_echoed_agent_tail_does_not_reach_the_agent_as_the_callers_words():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    try:
+        bridge.speech_gate.agent_said("Happy to help. You're")
+        bridge.speech_gate.playout_requested()
+        bridge.on_user_state_changed("listening", "speaking")
+        bridge.on_user_state_changed("speaking", "listening")
+        live.final("You're Explain in about five sentences how a refrigerator works.")
+        await _settle()
+        assert len(dispatcher.prompts) == 1
+        assert "You're" not in dispatcher.prompts[0][0]
+        assert "Explain in about five sentences" in dispatcher.prompts[0][0]
+    finally:
+        await bridge.aclose()

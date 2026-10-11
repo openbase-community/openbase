@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections import deque
 
 from livekit.agents import llm
@@ -26,6 +27,16 @@ from .live_preconnect import wait_live_session_started
 from .live_speech_gate import SpeechGatedAgent
 
 logger = logging.getLogger(__name__)
+
+# How often a queued announcement looks for the floor while agent audio is
+# still audible.
+ANNOUNCEMENT_FLOOR_RECHECK_SECONDS = 0.5
+# An announcement starts only after the caller has been quiet this long. The
+# session's user state lags speech by about half a second, so without a
+# grace an announcement chosen as the caller starts talking swaps sessions
+# under them and their words are lost (iPhone 12, 2026-10-11 07:35Z: a
+# "Transfer me to…" never reached the Dispatcher).
+ANNOUNCEMENT_CALLER_QUIET_SECONDS = 1.5
 
 
 def log_character_started(identity, live, router, *, announcement=False):
@@ -146,6 +157,8 @@ class LiveCharacterController:
         self._speech_changed = asyncio.Event()
         self._spoken = False
         self._announcing = False
+        self._caller_speaking = False
+        self._caller_active_at = float("-inf")
         self._model = initial_model
         self._muted_output = None
         self._speech_gate = speech_gate
@@ -229,7 +242,21 @@ class LiveCharacterController:
         self._speech_changed.set()
         self._wake.set()
 
+    def _caller_recently_active(self):
+        if self._caller_speaking or self.session.user_state == "speaking":
+            return True
+        return (
+            time.monotonic() - self._caller_active_at
+            < ANNOUNCEMENT_CALLER_QUIET_SECONDS
+        )
+
     def user_state_changed(self, event):
+        if (
+            event.new_state == "speaking"
+            or getattr(event, "old_state", None) == "speaking"
+        ):
+            self._caller_active_at = time.monotonic()
+        self._caller_speaking = event.new_state == "speaking"
         if self._announcing and event.new_state == "speaking":
             if self._speech_gate is None:
                 self._stop_announcement_for_barge_in()
@@ -383,6 +410,18 @@ class LiveCharacterController:
                     or self.session.user_state == "speaking"
                 ):
                     continue
+                # The session's state drops to quiet in the gaps between the
+                # model's sentences; the gate still counts the reply as
+                # audible there (open burst or its echo tail). Taking the
+                # floor in such a gap cut a 25 s Dispatcher answer at 8 s
+                # (376, 2026-10-11 06:46Z). Look again shortly.
+                if (
+                    self._speech_gate is not None and self._speech_gate.agent_audible
+                ) or self._caller_recently_active():
+                    asyncio.get_running_loop().call_later(
+                        ANNOUNCEMENT_FLOOR_RECHECK_SECONDS, self._wake.set
+                    )
+                    continue
                 message = self._queue.get_nowait()
                 await self._announcement(message)
                 if not self._queue.empty():
@@ -397,6 +436,17 @@ class LiveCharacterController:
         guard = await speech_guard(message.message_id)
         if guard and not await asyncio.to_thread(guard.current):
             logger.info("managed_announcement_stale message_id=%s", message.message_id)
+            return
+        if self._caller_recently_active():
+            # The caller started talking while the guard was checked: requeue
+            # rather than swap sessions under them.
+            if message.message_id in self._seen:
+                self._seen.remove(message.message_id)
+            self.announce(message)
+            logger.info(
+                "dispatch_timing stage=live_announcement_deferred_for_caller message_id=%s",
+                message.message_id,
+            )
             return
         async with monitor_speech(guard, self._cancel_managed_announcement):
             await self._play_announcement(message)
@@ -459,7 +509,11 @@ class LiveCharacterController:
                 return
             kind = event.get("type")
             if kind == "session.output_transcript.delta":
-                gate.agent_said(str(event.get("delta") or ""))
+                gate.agent_said(
+                    str(event.get("delta") or ""),
+                    start_ms=event.get("start_ms"),
+                    end_ms=event.get("end_ms"),
+                )
             elif kind == "session.input_transcript.delta":
                 gate.caller_heard(str(event.get("delta") or ""))
 
@@ -470,7 +524,7 @@ class LiveCharacterController:
             live.on("input_audio_transcription_completed", caller_input)
             live.on("openai_server_event_received", gateway_event)
             if self._speech_gate is not None:
-                self._speech_gate.agent_said(message.text)
+                self._speech_gate.agent_said(message.text, complete=True)
 
         try:
             assistant = await self._replace(

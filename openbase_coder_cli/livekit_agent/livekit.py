@@ -40,6 +40,7 @@ from openbase_coder_cli.brain_score import (  # noqa: F401
     brain_score_token_file,
     load_brain_score_token,
 )
+from openbase_coder_cli.cloud_model_errors import SUBSCRIBE_SPOKEN
 from openbase_coder_cli.config.cloud_audio import (
     OpenbaseCloudAudioSubscriptionError,
     ensure_openbase_cloud_audio_subscription,
@@ -260,6 +261,7 @@ from openbase_coder_cli.livekit_agent.voices import (  # noqa: F401
 from openbase_coder_cli.livekit_agent.worker_watchdog import (
     install_worker_failure_watchdog,
 )
+from openbase_coder_cli.plan_copy import SUBSCRIBE_PRO_LINE
 from openbase_coder_cli.stt_providers import (
     ASSEMBLYAI_STT_PROVIDER_ID,
     DEEPGRAM_STT_PROVIDER_ID,
@@ -359,7 +361,24 @@ server = LiveKitAgentServer(
 )
 
 
+def _disable_legacy_thread_intro() -> None:
+    """Blank super-agents' legacy intro hook in this process and its children.
+
+    Managed workers own their introduction. Job processes are forked from a
+    forkserver that can carry an older environment (an install's env file
+    still naming the hook), and every Dispatcher-started agent then also
+    said "Hey there, I'm <name>." (376, 2026-10-11: two intros per agent).
+    """
+    from openbase_coder_cli.backend_config import (
+        OPENBASE_THREAD_INTRO_COMMAND,
+        SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV,
+    )
+
+    os.environ[SUPER_AGENTS_THREAD_INTRO_COMMAND_ENV] = OPENBASE_THREAD_INTRO_COMMAND
+
+
 def prewarm(proc: JobProcess):
+    _disable_legacy_thread_intro()
     install_vad_backlog_patch()
     install_gpt_live_reconnect_patch()
     vad_model = silero.VAD.load()
@@ -535,8 +554,8 @@ def _agent_error_detail(exc: Exception) -> str:
         return (
             "Openbase Cloud refused the audio connection for this call. This "
             "usually means this account's monthly Openbase audio allowance is "
-            "used up; upgrade your plan at app.openbase.cloud or wait for it to "
-            "reset. If credit remains, sign in to Openbase Cloud again on your "
+            f"used up. {SUBSCRIBE_PRO_LINE} "
+            "If credit remains, sign in to Openbase Cloud again on your "
             "computer and restart the Openbase Coder services, or switch voice "
             "settings to direct provider keys or local audio."
         )
@@ -544,8 +563,8 @@ def _agent_error_detail(exc: Exception) -> str:
         return (
             "The call ended because Openbase Cloud audio was interrupted — "
             "usually a brief service update. Please call again in a minute. "
-            "If your audio credits are used up instead, subscribe or upgrade "
-            "at app.openbase.cloud."
+            "If your audio credits are used up instead: "
+            f"{SUBSCRIBE_PRO_LINE}"
         )
     summary = redact_exception_text(exc)
     return (
@@ -720,7 +739,13 @@ def _exception_mentions_openbase_cloud_audio(exc: BaseException) -> bool:
 # Spoken when the Openbase Cloud audio allowance is used up: short enough to
 # finish before anything can interrupt it.
 CLOUD_AUDIO_ALLOWANCE_SPOKEN = (
-    "This account's monthly Openbase audio allowance is used up."
+    f"You're out of Openbase voice credits. {SUBSCRIBE_SPOKEN}"
+)
+# Said once at the start of a call that fell back to standard voice because
+# the account's live voice credits are used up.
+LIVE_VOICE_CREDITS_SPOKEN = (
+    "You're out of live voice credits, so this call uses standard voice. "
+    f"{SUBSCRIBE_SPOKEN}"
 )
 
 
@@ -1170,7 +1195,7 @@ async def _start_live_voice_session(
     def say_and_note_words(text, *args, **kwargs):
         gate = bridge.speech_gate
         if isinstance(text, str):
-            gate.agent_said(text)
+            gate.agent_said(text, complete=True)
         gate.playout_requested()
         try:
             handle = session_say(text, *args, **kwargs)
@@ -1635,6 +1660,13 @@ async def livekit_agent(ctx: JobContext):
             raise
         if decision.fell_back:
             await _report_live_voice_fallback(ctx.room, decision)
+            if decision.fallback_reason == "subscription_required":
+                try:
+                    session.say(LIVE_VOICE_CREDITS_SPOKEN)
+                except Exception:
+                    logger.warning(
+                        "Unable to speak the live voice credits notice", exc_info=True
+                    )
         await _publish_voice_engine(ctx.room, VOICE_ENGINE_PIPELINE)
         _wire_pipeline_voice_call(
             ctx,
@@ -1661,8 +1693,8 @@ async def livekit_agent(ctx: JobContext):
         # in an announcement session (and has no voice for "Dispatcher").
         stall_hint_kwargs = {
             "speak": _live_stall_hint_speaker(live_bridge),
-            "should_announce": lambda turn: not live_bridge.handled_failed_turn(
-                turn.turn_id
+            "should_announce": lambda turn: (
+                not live_bridge.handled_failed_turn(turn.turn_id)
             ),
         }
     else:
@@ -1829,7 +1861,7 @@ async def _warm_voice_backend(
     if warm is None:
         return
     try:
-        warmed = await warm()
+        warmed = await warm(load_direct_livekit_developer_instructions())
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -2185,6 +2217,7 @@ def _wire_pipeline_voice_call(
 
 
 def main():
+    _disable_legacy_thread_intro()
     install_worker_failure_watchdog()
     install_proc_pool_liveness_patch()
     install_assemblyai_idle_noise_filter()

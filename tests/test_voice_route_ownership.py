@@ -304,8 +304,11 @@ async def test_transfer_warms_the_target_session_in_the_background(
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
     warmed = asyncio.Event()
 
+    seen: list = []
+
     class WarmingTarget(TargetClient):
-        async def warm(self):
+        async def warm(self, developer_instructions=None):
+            seen.append(developer_instructions)
             warmed.set()
             return True
 
@@ -317,6 +320,8 @@ async def test_transfer_warms_the_target_session_in_the_background(
         thread_id="s_marian", cwd=str(tmp_path), label="Marian", voice_name="Marian"
     )
     await asyncio.wait_for(warmed.wait(), 1)
+    # The first voice turn's instructions, so the warmed CLI is reused (700639e).
+    assert seen == [voice_routing.load_direct_livekit_developer_instructions()]
 
 
 async def test_a_failing_warm_up_never_breaks_the_transfer(monkeypatch, tmp_path):
@@ -325,7 +330,7 @@ async def test_a_failing_warm_up_never_breaks_the_transfer(monkeypatch, tmp_path
     monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
 
     class FailingTarget(TargetClient):
-        async def warm(self):
+        async def warm(self, developer_instructions=None):
             raise RuntimeError("cli not ready")
 
     monkeypatch.setattr(voice_routing, "SuperAgentsLiveKitClient", FailingTarget)
@@ -337,3 +342,64 @@ async def test_a_failing_warm_up_never_breaks_the_transfer(monkeypatch, tmp_path
     )
     for _ in range(3):
         await asyncio.sleep(0)
+
+
+async def test_close_cancels_and_awaits_transfer_warm_up_before_clients(
+    monkeypatch, tmp_path
+):
+    started, cancelling, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    events = []
+
+    class WarmingTarget(TargetClient):
+        async def warm(self, instructions):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelling.set()
+                await release.wait()
+                events.append("warm disconnected")
+
+        async def aclose(self):
+            events.append("target closed")
+
+    class Dispatcher(DispatcherClient):
+        async def aclose(self):
+            events.append("dispatcher closed")
+
+    monkeypatch.setattr(voice_routing, "SuperAgentsLiveKitClient", WarmingTarget)
+    router = voice_routing.LiveKitVoiceRouter(Dispatcher(tmp_path / "route.json"))
+    await router.transfer_to_thread(
+        thread_id="worker", cwd=str(tmp_path), label="Worker"
+    )
+    await asyncio.wait_for(started.wait(), 1)
+    closing = asyncio.create_task(router.close())
+    try:
+        await asyncio.wait_for(cancelling.wait(), 1)
+        assert not closing.done()
+        assert events == []
+        assert not await router.transfer_to_thread(
+            thread_id="late", cwd=".", label="Late"
+        )
+    finally:
+        release.set()
+        await asyncio.wait_for(closing, 1)
+    assert events == ["warm disconnected", "target closed", "dispatcher closed"]
+    assert not router._warm_tasks
+
+
+async def test_close_cancels_warm_up_before_it_starts(monkeypatch, tmp_path):
+    warmed = []
+
+    class WarmingTarget(TargetClient):
+        async def warm(self, instructions):
+            warmed.append(self._thread_id)
+
+    monkeypatch.setattr(voice_routing, "SuperAgentsLiveKitClient", WarmingTarget)
+    router = voice_routing.LiveKitVoiceRouter(DispatcherClient(tmp_path / "route.json"))
+    await router.transfer_to_thread(
+        thread_id="worker", cwd=str(tmp_path), label="Worker"
+    )
+    await router.close()
+    assert warmed == []
+    assert not router._warm_tasks

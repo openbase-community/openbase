@@ -290,6 +290,12 @@ class MultiBackendSessionManager:
         manager = await self._manager_for_thread(thread_id)
         return await manager.rename_thread(thread_id, name)
 
+    async def compact_thread(
+        self, thread_id: str, min_context_tokens: int
+    ) -> dict | None:
+        manager = await self._manager_for_thread(thread_id)
+        return await manager.compact_thread(thread_id, min_context_tokens)
+
     async def archive_thread(self, thread_id: str) -> bool:
         manager = await self._manager_for_thread(thread_id)
         result = await manager.archive_thread(thread_id)

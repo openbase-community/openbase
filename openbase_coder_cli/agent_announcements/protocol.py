@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from dataclasses import dataclass
 
 from openbase_coder_cli.livekit_announcer import resolve_announcer_room
 
 from .ledger import AnnouncementLedger, turn_revision
 from .speech import submit_speech
+
+logger = logging.getLogger(__name__)
 
 TOOL_NAME = "mcp__openbase_agent__task_announcement"
 MAX_CORRECTIONS = 3
@@ -140,8 +143,6 @@ class AnnouncementProtocol:
         room_name = await self.resolve_room() if delivery == "audible" else None
 
         def decide(state, task):
-            if task.get("fatal"):
-                raise RuntimeError(task["fatal"])
             if delivery == "quiet":
                 inherited = task.get("quiet_request") or state.get("last_quiet_request")
                 if not quiet or not (
@@ -171,9 +172,8 @@ class AnnouncementProtocol:
             if delivery == "quiet" or intro.get("status") == "submitted":
                 return False
             if intro.get("status") in {"submitting", "failed"}:
-                raise RuntimeError(
-                    "Earlier introduction submission is uncertain or failed; no automatic repeat."
-                )
+                # Never repeated, and never a reason to stop the work.
+                return False
             intro.update(
                 status="submitting", message_id=_message_id(context.session.id, "intro")
             )
@@ -206,19 +206,10 @@ class AnnouncementProtocol:
                 raise ValueError(
                     "Call begin first and honor any explicit quiet request."
                 )
-            if (
-                task.get("delivery") == "audible"
-                and state["intro"].get("status") != "submitted"
-            ):
-                raise RuntimeError(
-                    "The introduction has no submission receipt; completion cannot proceed."
-                )
             if task["pending"]:
                 raise ValueError(
                     "Work is still running. Wait for every tool result before finish."
                 )
-            if task.get("fatal"):
-                raise RuntimeError(task["fatal"])
             task["finish"] = {"summary": summary, "revision": context.revision}
 
         await self._edit(context, finish)
@@ -233,6 +224,11 @@ class AnnouncementProtocol:
             return {}
 
         def check(state, task):
+            # Every permitted tool changes the work, even if speech setup failed.
+            task.pop("finish", None)
+            tool_id = event["tool_use_id"]
+            if tool_id not in task["pending"]:
+                task["pending"].append(tool_id)
             if task.get("delivery") not in {"audible", "quiet", "direct"}:
                 return self._correction(
                     task,
@@ -246,15 +242,20 @@ class AnnouncementProtocol:
                     task,
                     "The introduction was not submitted. Do not claim it succeeded.",
                 )
-            task.pop("finish", None)
-            tool_id = event["tool_use_id"]
-            if tool_id not in task["pending"]:
-                task["pending"].append(tool_id)
             return None
 
+        # The announcement is never allowed to stand between the worker and
+        # its actual work (orchestrator, 2026-10-11: a worker on a desktop
+        # was denied its first tool calls twice, and on a cloud workspace a
+        # failing introduction failed the whole turn). A missing begin only
+        # earns a reminder, delivered with the tool's result, a bounded
+        # number of times.
         failure = await self._edit(context, check)
         if failure:
-            return self._hook_failure(failure, "PreToolUse")
+            reason, _ = failure
+            await self._edit(
+                context, lambda state, task: task.__setitem__("remind", reason)
+            )
         return {}
 
     async def after_tool(self, thread_id, event):
@@ -263,8 +264,16 @@ class AnnouncementProtocol:
         def settle(state, task):
             if event.get("tool_use_id") in task["pending"]:
                 task["pending"].remove(event["tool_use_id"])
+            return task.pop("remind", None)
 
-        await self._edit(context, settle)
+        reminder = await self._edit(context, settle)
+        if reminder:
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                    "additionalContext": reminder,
+                }
+            }
         return {}
 
     async def stop(self, thread_id):
@@ -285,64 +294,65 @@ class AnnouncementProtocol:
 
     @staticmethod
     def _correction(task, reason):
+        """Count a protocol correction; past the bound the protocol stops
+        insisting. A worker is never failed for its announcements."""
         task["corrections"] += 1
-        if task["corrections"] >= MAX_CORRECTIONS:
-            task["fatal"] = (
-                "Worker announcement protocol was not completed after bounded corrections."
-            )
-        return (reason, task.get("fatal"))
+        if task["corrections"] > MAX_CORRECTIONS:
+            return None
+        return (reason, None)
 
     @staticmethod
     def _hook_failure(failure, event):
-        reason, fatal = failure
-        if fatal:
-            return {"continue_": False, "stopReason": fatal}
+        reason, _ = failure
         if event == "Stop":
+            # Asking once more for the finish announcement keeps completions
+            # spoken; after the bound the worker simply stops.
             return {"decision": "block", "reason": reason}
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": event,
-                "permissionDecision": "deny",
-                "permissionDecisionReason": reason,
-            }
-        }
+        return {}
 
     async def validate_turn_result(self, session, turn, result):
+        """Announce a finished turn's completion when the worker prepared one.
+
+        Never fails the turn: the work is the result, the announcement is a
+        courtesy (2026-10-11: workers whose announcements could not be sent
+        or were skipped ended "failed" with their files written).
+        """
         async with self._locks.setdefault(session.id, asyncio.Lock()):
             context = await self.context(session.id)
-            if context.turn.id != turn.id:
-                raise RuntimeError(
-                    "Worker task was superseded; no completion submitted."
-                )
-            if context.direct:
+            if context.turn.id != turn.id or context.direct:
                 return
 
             def validate(state, task):
-                if task.get("fatal"):
-                    raise RuntimeError(task["fatal"])
                 if task["pending"] or not task.get("finish"):
-                    raise RuntimeError(
-                        "Work returned without a verified announcement protocol receipt."
-                    )
+                    return None
                 if task.get("delivery") == "quiet":
                     task["completion"] = {"status": "suppressed_quiet"}
                     return None
-                if task.get("completion", {}).get("status") == "submitted":
+                if task.get("completion", {}).get("status") in {
+                    "submitted",
+                    "submitting",
+                    "failed",
+                }:
                     return None
-                if task.get("completion", {}).get("status") in {"submitting", "failed"}:
-                    raise RuntimeError(
-                        "Completion submission is uncertain or failed; no automatic repeat."
-                    )
                 task["completion"] = {"status": "submitting"}
                 return task["finish"]["summary"]
 
-            summary = await self._edit(context, validate)
-            if summary is not None:
-                await self._submit(
-                    context,
-                    "completion",
-                    summary,
-                    _message_id(turn.id, context.revision),
+            try:
+                summary = await self._edit(context, validate)
+                if summary is not None:
+                    await self._submit(
+                        context,
+                        "completion",
+                        summary,
+                        _message_id(turn.id, context.revision),
+                    )
+            except Exception:  # noqa: BLE001 - an announcement never fails the work
+                logger.warning(
+                    "dispatch_timing stage=worker_completion_announcement_failed "
+                    "thread_id=%s turn_id=%s",
+                    session.id,
+                    turn.id,
+                    exc_info=True,
                 )
 
     async def _submit(self, context, phase, text, message_id):

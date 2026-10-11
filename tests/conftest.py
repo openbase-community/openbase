@@ -180,3 +180,19 @@ def volume(tmp_path, monkeypatch):
     data_dir = tmp_path / "data" / "openbase"
     data_dir.mkdir(parents=True)
     return data_dir
+
+
+@pytest.fixture(autouse=True)
+def _clear_process_read_caches():
+    """Per-process read caches must not carry state between tests."""
+    from openbase_coder_cli import livekit_voice_route
+    from openbase_coder_cli.thread_sync import speaking_identity
+
+    def clear() -> None:
+        livekit_voice_route._json_cache.clear()
+        speaking_identity._resolved_agent_names.clear()
+        speaking_identity._no_voice_checked_at.clear()
+
+    clear()
+    yield
+    clear()

@@ -1198,12 +1198,12 @@ async def test_super_agents_livekit_client_proactively_steers_active_turn(
 
 
 @pytest.mark.asyncio
-async def test_replacing_a_fragment_turn_interrupts_it_on_a_non_steering_backend(
+async def test_replacing_a_fragment_turn_steers_the_remainder_on_claude_too(
     tmp_path: Path,
 ) -> None:
-    """Claude Code cannot steer mid-turn: a plain steer becomes a queued
-    follow-up that runs the whole request again after the fragment turn.
-    The merged request interrupts the fragment turn and runs once."""
+    """Gabe 2026-10-11: a split sentence is not fought with endpointing; the
+    rest of it rides into the running turn as a framed steer on every backend,
+    with nothing interrupted, re-run or started as a new turn."""
     backend = FakeLongRunningSuperAgentsBackend()
     client = SuperAgentsLiveKitClient(
         cwd="/tmp/project",
@@ -1211,13 +1211,13 @@ async def test_replacing_a_fragment_turn_interrupts_it_on_a_non_steering_backend
         backend_client=backend,
     )
     first = asyncio.create_task(
-        client.run_turn("Subtract 38 from the result in this thread")
+        client.run_turn("<voice>Subtract 38 from the result in this thread</voice>")
     )
     await backend.progress_called.wait()
 
     merged = asyncio.create_task(
         client.run_turn(
-            "Subtract 38 from the result in this thread and answer just the number",
+            "<voice>Subtract 38 from the result in this thread and answer just the number</voice>",
             replaces_active_turn=True,
         )
     )
@@ -1229,12 +1229,8 @@ async def test_replacing_a_fragment_turn_interrupts_it_on_a_non_steering_backend
     assert len(backend.steered) == 1
     steer_input, prompt = backend.steered[0]
     assert steer_input.turn_id == "turn-1"
-    # The whole request, not the unsubmitted remainder: the interrupted
-    # work is discarded.
-    assert prompt == frame_steer(
-        "Subtract 38 from the result in this thread and answer just the number"
-    )
-    assert backend.steer_turn_inputs[0]["interruptCurrentWork"] is True
+    assert prompt == frame_steer("<voice>and answer just the number</voice>")
+    assert "interruptCurrentWork" not in backend.steer_turn_inputs[0]
     assert first_result["_livekit_turn_id"] == "turn-1"
     assert merged_result["_livekit_turn_id"] == "turn-1"
 
@@ -1331,99 +1327,6 @@ class FakeSteerTimeoutSuperAgentsBackend(FakeLongRunningSuperAgentsBackend):
                 "items": [{"type": "agentMessage", "text": "The merged answer."}]
             },
         }
-
-
-@pytest.mark.asyncio
-async def test_a_replacement_whose_steer_times_out_cancels_the_fragment_turn(
-    tmp_path: Path,
-) -> None:
-    backend = FakeSteerTimeoutSuperAgentsBackend()
-    client = SuperAgentsLiveKitClient(
-        cwd="/tmp/project",
-        state_path=str(tmp_path / "livekit-voice-route.json"),
-        backend_client=backend,
-    )
-    first = asyncio.create_task(client.run_turn("Subtract 38 from the result"))
-    await backend.progress_called.wait()
-    merged = asyncio.create_task(
-        client.run_turn(
-            "Subtract 38 from the result and answer just the number",
-            replaces_active_turn=True,
-        )
-    )
-    await asyncio.sleep(0)
-    backend.release_progress.set()
-    first_result, merged_result = await asyncio.gather(first, merged)
-
-    # The queued follow-up re-runs the whole request, so the fragment turn
-    # it replaces is cancelled before it can finish its half.
-    assert [c.turn_id for c in backend.cancelled] == ["turn-1"]
-    assert len(backend.queued) == 1
-    assert backend.queued[0][1]["prompt"] == (
-        "Subtract 38 from the result and answer just the number"
-    )
-    assert first_result["_livekit_turn_id"] == "turn-1"
-    assert merged_result["_livekit_turn_id"] == "turn-2"
-    assert merged_result["_livekit_speech_text"] == "The merged answer."
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("steer_failure", ["unavailable", "rejected"])
-async def test_queued_replacement_cancels_and_waits_for_its_own_answer(
-    tmp_path: Path, steer_failure: str
-) -> None:
-    class QueuedBackend(FakeSteerTimeoutSuperAgentsBackend):
-        async def steer_by_label(self, input_data, prompt, turn_input=None):
-            if steer_failure == "rejected":
-                raise RuntimeError("turn cannot accept steering")
-            queued = await self.queue_turn_by_label(input_data, {"prompt": prompt})
-            return {**queued, "interruptedCurrentWork": False}
-
-    backend = QueuedBackend()
-    client = SuperAgentsLiveKitClient(
-        cwd=str(tmp_path),
-        state_path=str(tmp_path / "voice-route.json"),
-        backend_client=backend,
-    )
-    first = asyncio.create_task(client.run_turn("Check the build"))
-    await backend.progress_called.wait()
-    merged = asyncio.create_task(
-        client.run_turn("Check the build and summarize it", replaces_active_turn=True)
-    )
-    await asyncio.sleep(0)
-    backend.release_progress.set()
-    _, merged_result = await asyncio.gather(first, merged)
-    assert [query.turn_id for query in backend.cancelled] == ["turn-1"]
-    assert len(backend.queued) == 1
-    assert merged_result["_livekit_turn_id"] == "turn-2"
-    assert merged_result["_livekit_speech_text"] == "The merged answer."
-
-
-@pytest.mark.asyncio
-async def test_replacement_does_not_queue_when_cancellation_fails(
-    tmp_path: Path,
-) -> None:
-    class FailedCancelBackend(FakeSteerTimeoutSuperAgentsBackend):
-        async def cancel_by_label(self, input_data):
-            raise RuntimeError("cancellation unavailable")
-
-    backend = FailedCancelBackend()
-    client = SuperAgentsLiveKitClient(
-        cwd=str(tmp_path),
-        state_path=str(tmp_path / "voice-route.json"),
-        backend_client=backend,
-    )
-    first = asyncio.create_task(client.run_turn("Check the build"))
-    await backend.progress_called.wait()
-    try:
-        with pytest.raises(RuntimeError, match="cancellation unavailable"):
-            await client.run_turn(
-                "Check the build and summarize it", replaces_active_turn=True
-            )
-        assert not backend.queued
-    finally:
-        backend.release_progress.set()
-        await first
 
 
 @pytest.mark.asyncio
@@ -2017,10 +1920,10 @@ def test_safe_spoken_answer_surfaces_spend_limit_distinctly(
         raw, auth_failed=True, backend="openbase_cloud", turn_id="t_spend"
     )
     # One short sentence: the live speech gate may cut a long reply off.
-    assert spoken == "This account's monthly Openbase model allowance is used up."
+    assert spoken == "You're out of Openbase model credits. Subscribe to a Pro plan on app dot openbase dot cloud for expanded access."
     assert "try again" not in spoken
     assert spoken != super_agents_client_module.BACKEND_ERROR_SPOKEN_FALLBACK
-    assert "monthly" in spoken.lower() and "allowance" in spoken.lower()
+    assert "out of openbase model credits" in spoken.lower() and "subscribe" in spoken.lower()
     assert "voice_turn_backend_spend_limit" in caplog.text
     assert raw not in spoken
 
@@ -2298,7 +2201,7 @@ async def test_failed_voice_turn_speaks_current_allowance_denial(
     speech = result["_livekit_speech_text"]
     assert result["status"] == "failed"
     assert not result["_livekit_backend_auth_failure"]
-    assert speech == "This account's monthly Openbase model allowance is used up."
+    assert speech == "You're out of Openbase model credits. Subscribe to a Pro plan on app dot openbase dot cloud for expanded access."
     assert "try again" not in speech
     assert "authenticate" not in speech
     assert "Cached" not in speech
@@ -2333,7 +2236,7 @@ def test_failed_voice_turn_speaks_allowance_from_fresh_items(monkeypatch):
         "summary": {"items": [{"type": "agentMessage", "text": _ALLOWANCE_ERROR}]},
     }
     speech = _speech_text_from_progress(progress)
-    assert speech == "This account's monthly Openbase model allowance is used up."
+    assert speech == "You're out of Openbase model credits. Subscribe to a Pro plan on app dot openbase dot cloud for expanded access."
     assert "try again" not in speech
 
 
@@ -2377,7 +2280,7 @@ async def test_warm_connects_the_dispatcher_session_with_the_turn_model(
         backend_client=backend,
         model_name="claude-opus",
     )
-    assert await client.warm() is True
+    assert await client.warm("voice rules") is True
     ((query, turn_input),) = backend.warm_calls
     assert query.thread_id == "dispatcher-thread"
     assert turn_input["model"] == "claude-opus"
@@ -2385,12 +2288,19 @@ async def test_warm_connects_the_dispatcher_session_with_the_turn_model(
     assert "prompt" not in turn_input
     # The warm-up's auth check is reused by the first turn.
     assert auth_calls == [1]
-    result = await client.run_turn("hello dispatch")
+    result = await client.run_turn(
+        "hello dispatch", developer_instructions="voice rules"
+    )
     assert result["_livekit_turn_id"] == "turn-1"
     assert auth_calls == [1]
     ((_, started),) = backend.started_turns
     assert started["model"] == turn_input["model"]
     assert started.get("reasoningEffort") == turn_input.get("reasoningEffort")
+    # super-agents keys the connected client on the system prompt: a warm-up
+    # with other instructions is discarded and the first turn resumes cold
+    # (376, 2026-10-11 05:44Z), so both must carry the same text.
+    assert started["developerInstructions"] == turn_input["developerInstructions"]
+    assert "voice rules" in turn_input["developerInstructions"]
 
 
 @pytest.mark.asyncio
@@ -2660,3 +2570,56 @@ def test_spoken_dispatcher_effort_is_chosen_by_model():
     assert spoken_dispatcher_effort("opus") == "medium"
     assert spoken_dispatcher_effort("gpt-5.5") == "medium"
     assert spoken_dispatcher_effort(None) == "medium"
+
+
+def test_spoken_answer_drops_an_echoed_voice_tag() -> None:
+    """Android 2026-10-11: a Dispatcher reply was captioned as "<voice>I don't
+    see an Apricot agent…" because the model echoed its prompt envelope."""
+    from openbase_coder_cli.livekit_agent.super_agents_speech import (
+        _speech_text_from_progress,
+    )
+
+    progress = {
+        "status": "completed",
+        "turnId": "t1",
+        "turn": {
+            "turnId": "t1",
+            "lastUsefulMessage": "<voice>I don't see an Apricot agent.</voice>",
+        },
+    }
+    assert _speech_text_from_progress(progress, turn_id="t1") == (
+        "I don't see an Apricot agent."
+    )
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_recreation_ignores_an_old_id_written_back_to_disk(tmp_path):
+    """Gabe's VM, 2026-10-11 07:24Z: between the route reset and the fresh
+    warm-up, the restarted services re-adopted the old Dispatcher and wrote its
+    id back; the fresh client adopted it from disk and no Dispatcher was
+    recreated."""
+    import json
+
+    backend = FakeCodexSuperAgentsBackend()
+    state = tmp_path / "route.json"
+    state.write_text(
+        json.dumps({"dispatcher_thread_id": "old-dispatcher", "updated_at": 1})
+    )
+    resumed: list = []
+
+    async def resume_thread(thread_id, **kwargs):
+        resumed.append(thread_id)
+        return {"thread": {"id": thread_id}}
+
+    backend.resume_thread = resume_thread
+    client = SuperAgentsLiveKitClient(
+        cwd="/tmp/project",
+        state_path=str(state),
+        backend_client=backend,
+        fresh_thread=True,
+    )
+    new_id = await client.prepare()
+
+    assert new_id != "old-dispatcher"
+    assert resumed == []
+    assert backend.started_threads[0]["fresh"] is True

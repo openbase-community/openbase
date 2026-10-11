@@ -19,9 +19,7 @@ from openbase_coder_cli.backend_binaries import (
     backend_binary_candidates,
     node_runtime_bin_dir,
 )
-from openbase_coder_cli.env_file import selected_backend_from_env_file
 from openbase_coder_cli.paths import (
-    DEFAULT_ENV_FILE_PATH,
     DEFAULT_LOG_DIR,
     LAUNCHD_DOMAIN,
     LAUNCHD_WRAPPER_DIR,
@@ -39,6 +37,7 @@ from openbase_coder_cli.services.definitions import (
     RETIRED_SERVICE_NAMES,
     SERVICES,
     TUNNELD_SERVICE,
+    VOICE_TURN_SERVICE,
     ServiceDefinition,
     default_services,
     retired_service_stub,
@@ -47,7 +46,12 @@ from openbase_coder_cli.services.dependencies import order_services
 from openbase_coder_cli.services.installation import InstallationConfig
 from openbase_coder_cli.services.mutation_lock import service_mutation
 from openbase_coder_cli.services.readiness import wait_for_provider
-from openbase_coder_cli.services.selection import include_installed_optional_services
+from openbase_coder_cli.services.selection import (
+    configured_coding_backends,
+    configured_default_services,
+    include_installed_optional_services,
+    service_supports_configured_backends,
+)
 
 
 def _is_macos() -> bool:
@@ -236,13 +240,6 @@ def _resolve_binaries(
     # through it, regardless of what workdir_template references.
     keys = _service_template_keys(services) | {"python"}
     return {key: resolvers[key]() for key in sorted(keys) if key in resolvers}
-
-
-def _selected_backend(config: InstallationConfig) -> str:
-    env_path = (
-        Path(config.env_file).expanduser() if config.env_file else DEFAULT_ENV_FILE_PATH
-    )
-    return selected_backend_from_env_file(env_path)
 
 
 def _uid() -> int:
@@ -920,14 +917,16 @@ def launchctl_status(svc: ServiceDefinition) -> dict:
 @service_mutation()
 def install_all_services(config: InstallationConfig) -> None:
     _ensure_launchd_paths()
-    coding_backend = _selected_backend(config)
+    coding_backends = "/".join(configured_coding_backends())
     # A stopped legacy Direct job can still have a login-time LaunchAgent.
     # Remove it before selecting optional daemons so an upgrade cannot revive
     # the outgoing transport alongside the selected VPN.
     if tp.provider() != tp.PROVIDER_NETMESH_TSNET and remove_service(TUNNELD_SERVICE):
         click.echo("  Removed openbase-tunneld (Openbase Direct is not selected).")
+    if tp.provider() != tp.PROVIDER_NETMESH and remove_service(VOICE_TURN_SERVICE):
+        click.echo("  Removed openbase-voice-turn (Openbase VPN is not selected).")
     services = include_installed_optional_services(
-        default_services(coding_backend), launchctl_status
+        configured_default_services(), installed_or_enabled_status
     )
     services = order_services(services)
     binaries = _resolve_binaries(config, services)
@@ -937,7 +936,7 @@ def install_all_services(config: InstallationConfig) -> None:
             continue
         if remove_service(svc):
             click.echo(
-                f"  Removed {svc.name} (not used by the {coding_backend} backend)."
+                f"  Removed {svc.name} (not used by the {coding_backends} backend)."
             )
 
     # Upgrades must not strand processes for services that no longer exist.
@@ -1007,9 +1006,66 @@ def _activate_service(svc: ServiceDefinition, reload_required: bool) -> str:
     the only way launchd re-reads the plist. Returns the verb for user output.
     """
     if not reload_required and launchctl_restart(svc):
-        return "Restarted"
-    launchctl_bootstrap(svc)
-    return "Loaded"
+        verb = "Restarted"
+    else:
+        launchctl_bootstrap(svc)
+        verb = "Loaded"
+    if not _wait_until_loaded(svc):
+        # launchctl can report success for a job that is gone moments later
+        # (2026-10-11: `services stop` then `start` printed success, yet
+        # `launchctl print` said not found). Bootstrap once more from the
+        # plist on disk, then refuse to claim a start that did not happen.
+        launchctl_bootstrap(svc)
+        verb = "Loaded"
+        if not _wait_until_loaded(svc):
+            status = launchctl_status(svc)
+            if not status.get("installed"):
+                detail = "launchd has no job for it"
+            else:
+                detail = (
+                    "it is loaded but not running "
+                    f"(last exit: {status.get('last_exit_code') or 'unknown'})"
+                )
+            raise click.ClickException(
+                f"{_service_label(svc)} did not start: {detail}. See {_log_path(svc)}."
+            )
+    return verb
+
+
+# How long activation waits for launchd to show the job loaded and running.
+LOAD_VERIFY_TIMEOUT_SECONDS = 10.0
+
+
+def _wait_until_loaded(svc: ServiceDefinition) -> bool:
+    """True once launchd shows ``svc`` loaded (and running, if KeepAlive)."""
+    if _external_supervisor() or not _is_macos():
+        return True
+    deadline = time.monotonic() + LOAD_VERIFY_TIMEOUT_SECONDS
+    while True:
+        status = launchctl_status(svc)
+        if status.get("installed") and (status.get("pid") or not svc.keep_alive):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.25)
+
+
+def service_files_present(svc: ServiceDefinition) -> bool:
+    """True when ``svc`` has generated files, i.e. was installed and not removed.
+
+    A stopped service is unloaded from launchd but keeps its wrapper, so this
+    (unlike ``launchctl_status``) still recognises an enabled optional service
+    after `services stop`.
+    """
+    return _wrapper_path(svc).is_file()
+
+
+def installed_or_enabled_status(svc: ServiceDefinition) -> dict:
+    """``launchctl_status`` that also counts a stopped-but-installed service."""
+    status = launchctl_status(svc)
+    if not status.get("installed") and service_files_present(svc):
+        return {**status, "installed": True}
+    return status
 
 
 @service_mutation()
@@ -1032,11 +1088,11 @@ def regenerate_service(config: InstallationConfig, svc: ServiceDefinition) -> No
 @service_mutation()
 def regenerate_all_services(config: InstallationConfig) -> None:
     _ensure_launchd_paths()
-    coding_backend = _selected_backend(config)
+    coding_backends = "/".join(configured_coding_backends())
 
     for svc in SERVICES:
-        if not svc.supports_backend(coding_backend):
-            click.echo(f"  Skipping {svc.name} (backend: {coding_backend}).")
+        if not service_supports_configured_backends(svc):
+            click.echo(f"  Skipping {svc.name} (backend: {coding_backends}).")
             continue
         try:
             binaries = _resolve_binaries(config, [svc])

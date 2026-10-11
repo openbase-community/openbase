@@ -20,14 +20,48 @@ _burst = ContextVar("live_speech_burst", default=None)
 ECHO_TAIL_SECONDS = 1.5
 # What the agent said in this window is what its echo can transcribe to.
 AGENT_WORDS_WINDOW_SECONDS = 20.0
-# A caller fragment heard over the agent is echo when at least this share of
-# its words are words the agent just said.
+# A caller fragment heard over the agent is echo when a run of its words, in
+# order, is a run the agent just said: at least this share of the fragment
+# and never fewer than ECHO_MIN_RUN_WORDS. Echo transcribes the agent's
+# speech in sequence; a caller who happens to reuse one common word ("Okay,
+# stop, that is enough" over an answer that began "Okay, ...") does not
+# (376, 2026-10-11: that stop was ignored as echo under a bag-of-words share).
 ECHO_WORD_SHARE = 0.5
+ECHO_MIN_RUN_WORDS = 2
+# A lone word needs recent, exact evidence; partial/fuzzy matches can swallow
+# commands ("stop" versus "store"). Prefer delivering a doubtful interruption.
+SINGLE_WORD_ECHO_WINDOW_SECONDS = ECHO_TAIL_SECONDS
+# When the caller starts talking over the agent, the model's transcript of
+# the caller can begin with the tail of the agent's own speech picked up by
+# the speakerphone ("You're Explain in about five sentences...", 376,
+# 2026-10-11). Only the last few agent words can be that tail.
+ECHO_PREFIX_AGENT_TAIL_WORDS = 8
 _WORD = re.compile(r"[a-z0-9']+")
 
 
 def _words(text):
     return _WORD.findall((text or "").lower())
+
+
+def _longest_common_run(fragment, said):
+    """Length of the longest run of ``fragment`` that appears, in order, in ``said``."""
+    best = 0
+    positions = {}
+    for index, word in enumerate(said):
+        positions.setdefault(word, []).append(index)
+    for start in range(len(fragment)):
+        for position in positions.get(fragment[start], ()):
+            length = 0
+            while (
+                start + length < len(fragment)
+                and position + length < len(said)
+                and fragment[start + length] == said[position + length]
+            ):
+                length += 1
+            best = max(best, length)
+            if best == len(fragment) - start:
+                break
+    return best
 
 
 class LiveSpeechGate:
@@ -77,6 +111,8 @@ class LiveSpeechGate:
         # queued playout (AgentSession.interrupt).
         self.on_barge_in = None
         self._agent_words = deque()
+        self._agent_open_word = False
+        self._agent_transcript_end_ms = None
         self._last_permitted_end = None
         self._agent_state_speaking = False
         self._pending_playouts = 0
@@ -84,6 +120,7 @@ class LiveSpeechGate:
         self._caller_heard = ""
 
     def revoke(self):
+        self.end_agent_utterance()
         self.epoch += 1
         self.authorized = False
         self._starved = None
@@ -115,6 +152,7 @@ class LiveSpeechGate:
         """
         speaking = state == "speaking"
         if self._agent_state_speaking and not speaking:
+            self.end_agent_utterance()
             self._last_permitted_end = self._clock()
         self._agent_state_speaking = speaking
 
@@ -142,23 +180,108 @@ class LiveSpeechGate:
         end = self._last_permitted_end
         return end is not None and self._clock() - end < ECHO_TAIL_SECONDS
 
-    def agent_said(self, text):
-        """Words of the agent's output transcript: what its echo sounds like."""
+    def end_agent_utterance(self):
+        """Keep recent echo evidence, but never join words across utterances."""
+        self._agent_open_word = False
+        self._agent_transcript_end_ms = None
+
+    def agent_said(self, text, *, complete=False, start_ms=None, end_ms=None):
+        """Record streamed transcript deltas, or an independent complete script.
+
+        A delta may split a word anywhere, including around an apostrophe.
+        Keep its trailing word available to echo checks while allowing the next
+        delta to extend it. Whole session.say scripts never join a stream.
+        """
         now = self._clock()
-        for word in _words(text):
-            self._agent_words.append((now, word))
+        if complete or (
+            start_ms is not None
+            and self._agent_transcript_end_ms is not None
+            and start_ms - self._agent_transcript_end_ms > 800
+        ):
+            # Match the provider adapter's 800 ms utterance gap, including
+            # buffered deltas delivered together after a pause on its clock.
+            self.end_agent_utterance()
+        if not text:
+            return
+        words = _words(text)
+        if (
+            self._agent_open_word
+            and self._agent_words
+            and now - self._agent_words[-1][0] <= ECHO_TAIL_SECONDS
+            and _WORD.match(text.lower())
+        ):
+            _, previous = self._agent_words.pop()
+            words[0] = previous + words[0]
+        self._agent_words.extend((now, word) for word in words)
+        self._agent_open_word = not complete and bool(
+            _WORD.fullmatch(text[-1:].lower())
+        )
+        self._agent_transcript_end_ms = None if complete else end_ms
         while self._agent_words and now - self._agent_words[0][0] > (
             AGENT_WORDS_WINDOW_SECONDS
         ):
             self._agent_words.popleft()
 
     def is_echo(self, text):
-        """True when most of ``text``'s words are words the agent just said."""
+        """True when a run of ``text``'s words, in order, is one the agent just said."""
         words = _words(text)
         if not words:
             return True
-        said = {word for _, word in self._agent_words}
-        return sum(word in said for word in words) / len(words) >= ECHO_WORD_SHARE
+        if len(words) == 1:
+            return self.is_clipped_echo_word(words[0])
+        now = self._clock()
+        said = [
+            word
+            for at, word in self._agent_words
+            if now - at <= AGENT_WORDS_WINDOW_SECONDS
+        ]
+        needed = max(ECHO_MIN_RUN_WORDS, math.ceil(len(words) * ECHO_WORD_SHARE))
+        return _longest_common_run(words, said) >= needed
+
+    def is_clipped_echo_word(self, word):
+        """A lone word is echo only with a recent whole-word transcript match.
+
+        Clipped and fuzzy matches are ambiguous for short caller commands, so
+        they must reach the agent even while its audio is playing.
+        """
+        word = (word or "").lower()
+        now = self._clock()
+        return bool(word) and any(
+            said == word and now - at <= SINGLE_WORD_ECHO_WINDOW_SECONDS
+            for at, said in self._agent_words
+        )
+
+    def strip_echo_prefix(self, text):
+        """``text`` without leading words that repeat, in order, the tail of
+        what the agent just said, when the caller began over the agent's
+        audio. An utterance that is entirely echo is left to :meth:`is_echo`.
+        """
+        if not self._caller_over_agent or not text:
+            return text
+        matches = list(_WORD.finditer(text.lower()))
+        words = [match.group(0) for match in matches]
+        if not words:
+            return text
+        tail = [word for _, word in self._agent_words][-ECHO_PREFIX_AGENT_TAIL_WORDS:]
+        best = 0
+        for start in range(len(tail)):
+            length = 0
+            while (
+                start + length < len(tail)
+                and length < len(words)
+                and tail[start + length] == words[length]
+            ):
+                length += 1
+            best = max(best, length)
+        if best == 0 or best >= len(words):
+            return text
+        remainder = text[matches[best].start() :].lstrip(" ,.;:!?-")
+        logger.info(
+            "dispatch_timing stage=live_echo_prefix_stripped words=%d dropped=%r",
+            best,
+            text[: matches[best].start()].strip()[-60:],
+        )
+        return remainder
 
     def caller_heard(self, text):
         """A caller transcript fragment from the model (input transcript delta).

@@ -8,6 +8,19 @@ VOICE_TAG_OPEN = "<voice>"
 VOICE_TAG_CLOSE = "</voice>"
 
 
+def strip_voice_tags(text: str) -> str:
+    """``text`` without ``<voice>`` envelope tags an agent echoed into its reply.
+
+    A spoken answer is read aloud and captioned under the call orb; a tag the
+    model copied from its prompt showed up raw there (Android, 2026-10-11).
+    """
+    if VOICE_TAG_OPEN not in text and VOICE_TAG_CLOSE not in text:
+        return text
+    return " ".join(
+        text.replace(VOICE_TAG_OPEN, " ").replace(VOICE_TAG_CLOSE, " ").split()
+    )
+
+
 def wrap_voice_prompt(prompt: str) -> str:
     """Wrap one speech transcript without allowing transcript-controlled tags."""
     return f"{VOICE_TAG_OPEN}{escape(prompt, quote=False)}{VOICE_TAG_CLOSE}"

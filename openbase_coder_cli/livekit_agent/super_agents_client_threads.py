@@ -101,7 +101,7 @@ class SuperAgentsClientThreadsMixin:
         """
         self._thread_loaded = False
 
-    async def warm(self) -> bool:
+    async def warm(self, developer_instructions: str | None = None) -> bool:
         """Get the thread's backend session ready for its first turn.
 
         Runs the Claude auth check (its result is reused by the first turn)
@@ -109,19 +109,42 @@ class SuperAgentsClientThreadsMixin:
         now; Codex threads are already loaded by ``prepare``. Returns whether
         a backend session was warmed. Meant to run concurrently with the call
         start-up, never on a turn's critical path.
+
+        ``developer_instructions`` must be what the first turn will pass
+        (``run_turn(..., developer_instructions=...)``): super-agents keys its
+        connected client on the resulting system prompt, so a warm-up with
+        different instructions is thrown away and the first turn resumes
+        cold anyway (376, 2026-10-11 05:44Z: 3.6 s to init after a 2.3 s
+        warm-up two minutes earlier).
         """
         thread_id = await self._ensure_thread()
         await self._ensure_claude_auth_ready()
         warm = getattr(self._backend_client, "warm_session_by_label", None)
         if warm is None or self._backend_is_codex():
             return False
-        result = await warm(self._query(thread_id=thread_id), self._turn_model_fields())
+        turn_input: dict[str, Any] = {**self._turn_model_fields()}
+        if effective := self._turn_developer_instructions(developer_instructions):
+            turn_input["developerInstructions"] = effective
+        result = await warm(self._query(thread_id=thread_id), turn_input)
         return bool(result.get("warmed")) if isinstance(result, dict) else False
 
     async def _ensure_thread(self) -> str:
         async with self._state_lock:
             if self._state_path is not None:
                 with self._thread_state_file_lock():
+                    if self._fresh_thread:
+                        # Recreation: never adopt or resume whatever Dispatcher
+                        # id is on disk. Between the route reset and this
+                        # warm-up, the restarted services (the phone's
+                        # Dispatcher lookup, the voice worker) can re-adopt and
+                        # write back the old Dispatcher; adopting it here
+                        # silently skipped the recreation ("Dispatcher thread
+                        # will be recreated", but the old id stayed: Gabe's VM,
+                        # 2026-10-11 07:24Z). The id the client loaded at
+                        # construction is the old one too.
+                        self._thread_id = None
+                        self._thread_loaded = False
+                        return await self._start_thread()
                     canonical_thread_id = self._load_thread_id()
                     if canonical_thread_id and canonical_thread_id != self._thread_id:
                         logger.info(

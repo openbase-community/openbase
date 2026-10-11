@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import os
@@ -293,7 +294,9 @@ def is_dispatcher_identity(
     route_state = route_state or get_livekit_voice_route_state()
     if thread_id and route_state.dispatcher_thread_id == thread_id:
         return True
-    return is_dispatcher_label(label) or _normalize_voice_name(agent_name) == "dispatcher"
+    return (
+        is_dispatcher_label(label) or _normalize_voice_name(agent_name) == "dispatcher"
+    )
 
 
 def load_direct_livekit_developer_instructions(
@@ -773,14 +776,27 @@ def _optional_str(value) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+# Route state is read for every thread on every thread-list poll; reparse it
+# only when the file changes.
+_json_cache: dict[Path, tuple[tuple[int, int], dict | None]] = {}
+
+
 def _read_json(path: Path) -> dict | None:
-    if not path.is_file():
+    try:
+        stat = path.stat()
+    except OSError:
         return None
+    key = (stat.st_mtime_ns, stat.st_size)
+    cached = _json_cache.get(path)
+    if cached is not None and cached[0] == key:
+        return copy.deepcopy(cached[1])
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    return payload if isinstance(payload, dict) else None
+    payload = payload if isinstance(payload, dict) else None
+    _json_cache[path] = (key, payload)
+    return copy.deepcopy(payload)
 
 
 def _read_instruction_file(path: Path) -> str | None:

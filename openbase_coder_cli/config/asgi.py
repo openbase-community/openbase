@@ -47,13 +47,43 @@ _inner = wrap_asgi_application(
 )
 
 
+_stack_sampler_installed = False
+
+
+def _install_stack_dump_signal() -> None:
+    """`kill -USR1 <pid>` samples every thread's Python stack for 15 s and
+    appends the hottest stacks to ~/.openbase/logs/django-cli-stacks.log: an
+    in-process profiler for a hot API where py-spy would need root (macOS).
+    faulthandler's all-thread dump is not used: it segfaulted the live server.
+    """
+    global _stack_sampler_installed
+    import signal
+
+    if _stack_sampler_installed or not hasattr(signal, "SIGUSR1"):
+        return
+    _stack_sampler_installed = True
+
+    def start_sampling(_signum, _frame) -> None:
+        import threading
+
+        from openbase_coder_cli.stack_sampler import sample_to_log
+
+        threading.Thread(
+            target=sample_to_log, name="stack-sampler", daemon=True
+        ).start()
+
+    signal.signal(signal.SIGUSR1, start_sampling)
+
+
 async def application(scope, receive, send):
     """ASGI application with lifespan passthrough."""
     if scope["type"] == "lifespan":
         notification_task = None
+        compaction_task = None
         while True:
             message = await receive()
             if message["type"] == "lifespan.startup":
+                _install_stack_dump_signal()
                 # Runs only in the server process (not management commands):
                 # keep recent-project metadata warm so the first Threads/
                 # Projects visit does not pay the cold git-status cost.
@@ -72,12 +102,24 @@ async def application(scope, receive, send):
                 notification_task = asyncio.create_task(
                     run_notification_sweeps(), name="notification-producers"
                 )
+                # Compact the Dispatcher between requests, not during one.
+                from openbase_coder_cli.dispatcher_compaction import (
+                    dispatcher_compaction_loop,
+                )
+
+                compaction_task = asyncio.create_task(
+                    dispatcher_compaction_loop(), name="dispatcher-compaction"
+                )
                 await send({"type": "lifespan.startup.complete"})
             elif message["type"] == "lifespan.shutdown":
                 if notification_task is not None:
                     notification_task.cancel()
                     with suppress(asyncio.CancelledError):
                         await notification_task
+                if compaction_task is not None:
+                    compaction_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await compaction_task
                 await send({"type": "lifespan.shutdown.complete"})
                 return
     else:

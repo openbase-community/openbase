@@ -13,6 +13,7 @@ from openbase_coder_cli.config.token_manager import (
     AuthTransientError,
     get_token_manager,
 )
+from openbase_coder_cli.plan_copy import SUBSCRIBE_PRO_LINE
 from openbase_coder_cli.stt_providers import OPENBASE_CLOUD_STT_PROVIDER_ID
 from openbase_coder_cli.tts_providers import OPENBASE_CLOUD_TTS_PROVIDER_ID
 
@@ -23,8 +24,7 @@ LIVE_VOICE_CLOUD_PROVIDER = "live_voice"
 
 OPENBASE_CLOUD_AUDIO_SUBSCRIBE_DETAIL = (
     "Openbase Cloud audio requires an active Openbase subscription with "
-    "available audio credits. Subscribe at app.openbase.cloud, or switch "
-    "voice settings to direct provider keys or local audio."
+    f"available audio credits. {SUBSCRIBE_PRO_LINE}"
 )
 OPENBASE_CLOUD_SUBSCRIBE_DETAIL = (
     "Apple Music playback requires an active Openbase Cloud subscription."
@@ -79,8 +79,7 @@ def ensure_openbase_cloud_audio_subscription(
         provider_names = _provider_names(exhausted)
         raise OpenbaseCloudAudioSubscriptionError(
             f"Openbase Cloud audio is out of {provider_names} credits for this "
-            "month. Subscribe or upgrade at app.openbase.cloud, or switch "
-            "voice settings to direct provider keys or local audio."
+            f"month. {SUBSCRIBE_PRO_LINE}"
         )
 
 

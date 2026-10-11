@@ -8,6 +8,7 @@ import json
 import os
 import shlex
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -666,6 +667,16 @@ def _check_sync_daemon(ok, warn, fail) -> None:
     _check_leftover_code_sync(warn)
 
 
+def _check_login_relay_firewall(ok, warn) -> None:
+    """Forwarded phone logins need this Python to accept VPN connections."""
+    from openbase_coder_cli.host_firewall import blocked_interpreter, unblock_hint
+
+    if blocked := blocked_interpreter():
+        warn(unblock_hint(blocked))
+    elif sys.platform == "darwin":
+        ok("macOS Firewall lets phone sign-ins reach this computer")
+
+
 def _check_leftover_code_sync(warn) -> None:
     from openbase_coder_cli import sync_migration
 
@@ -753,6 +764,7 @@ def doctor() -> None:
     # --- Bind address security ---
     click.echo()
     click.echo(click.style("Network Security", bold=True))
+    _check_login_relay_firewall(ok, warn)
     sockets = _get_listening_sockets()
     env = _parse_env_file()
 
@@ -782,8 +794,7 @@ def doctor() -> None:
         action(f"{provider_name}: control tool not found")
     elif not serve_health.tailscale_running:
         action(
-            f"{provider_name}: not running "
-            f"({serve_health.error or 'unknown error'})"
+            f"{provider_name}: not running ({serve_health.error or 'unknown error'})"
         )
     else:
         ok(f"{provider_name}: running for {serve_health.host or 'unknown host'}")

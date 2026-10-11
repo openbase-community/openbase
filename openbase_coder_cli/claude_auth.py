@@ -32,10 +32,15 @@ CLAUDE_AUTH_FAILURE_PREFIXES = BACKEND_AUTH_FAILURE_PREFIXES
 
 
 def is_spend_limit_text(text: str | None) -> bool:
-    """Whether a turn's error is an Openbase Cloud monthly allowance denial."""
-    from openbase_coder_cli.cloud_model_errors import model_allowance_exhausted_message
+    """Whether a turn's error is an Openbase Cloud model budget denial."""
+    from openbase_coder_cli.cloud_model_errors import (
+        model_allowance_exhausted_message,
+        model_request_budget_message,
+    )
 
-    return model_allowance_exhausted_message(text) is not None
+    return bool(
+        model_allowance_exhausted_message(text) or model_request_budget_message(text)
+    )
 
 
 CLAUDE_AUTH_PROBE_PROMPT = "Reply with the single word ok."

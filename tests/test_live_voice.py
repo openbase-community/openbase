@@ -573,7 +573,7 @@ def test_unavailable_detail_is_plain_words_for_the_phone():
     plan = live_voice_unavailable_detail(
         VoiceEngineDecision(engine="pipeline", fallback_reason="subscription_required")
     )
-    assert plan.startswith("Live voice needs an Openbase Cloud plan")
+    assert plan.startswith("You're out of live voice credits") and "app.openbase.cloud" in plan
 
 
 # --- the real plugin session against the fake gateway ------------------------------------

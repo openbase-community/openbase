@@ -6,6 +6,7 @@ This adapter lives in Openbase; standalone Super Agents has no voice policy.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from openbase_coder_cli.livekit_agent.codex_turns import (
@@ -19,13 +20,42 @@ from openbase_coder_cli.livekit_voice_route import (
 
 from .models import ThreadInfo
 
+# Thread lists call this for every thread on every poll. Resolving reads the
+# voice route and the whole Super Agents state file (megabytes of JSON), which
+# pinned the API's CPU under phone polling, so each thread's outcome is reused
+# for a short window. A name changed elsewhere shows up within that window.
+IDENTITY_RECHECK_SECONDS = 30.0
+_resolved_agent_names: dict[str, tuple[float, str]] = {}
+_no_voice_checked_at: dict[str, float] = {}
 
-async def ensure_speaking_identity(client: Any, thread: ThreadInfo) -> ThreadInfo:
+
+def _remember(session_id: str, name: str) -> None:
+    _resolved_agent_names[session_id] = (time.monotonic(), name)
+
+
+async def ensure_speaking_identity(
+    client: Any,
+    thread: ThreadInfo,
+    *,
+    session_records: dict[str, Any] | None = None,
+) -> ThreadInfo:
+    """`session_records` lets a caller resolving many threads read the backend
+    state once instead of once per thread."""
     if thread.agent_name:
+        return thread
+    now = time.monotonic()
+    cached = _resolved_agent_names.get(thread.session_id)
+    if cached is not None and now - cached[0] < IDENTITY_RECHECK_SECONDS:
+        thread.agent_name = cached[1]
+        return thread
+    checked_at = _no_voice_checked_at.get(thread.session_id)
+    if checked_at is not None and now - checked_at < IDENTITY_RECHECK_SECONDS:
         return thread
     voice = super_agent_voice_for_context(thread.session_id, thread.name)
     if voice is None:
+        _no_voice_checked_at[thread.session_id] = now
         return thread
+    _no_voice_checked_at.pop(thread.session_id, None)
     history = get_voice_history_entry(thread.session_id)
     # Older calls recorded their character before the backend carried an
     # agentName. Keep that assignment, just as the UI and transfer resolver do.
@@ -54,13 +84,20 @@ async def ensure_speaking_identity(client: Any, thread: ThreadInfo) -> ThreadInf
         merge = getattr(client, "merge_session", None)
         if not callable(merge):
             return thread
-        get_session = getattr(client, "get_session", None)
-        record = await get_session(thread.session_id) if callable(get_session) else None
+        if session_records is not None:
+            record = session_records.get(thread.session_id)
+        else:
+            get_session = getattr(client, "get_session", None)
+            record = (
+                await get_session(thread.session_id) if callable(get_session) else None
+            )
         if record is not None and record.agent_name:
             thread.agent_name = record.agent_name
+            _remember(thread.session_id, record.agent_name)
             return thread
         # Codex's generic turn adapter incorporates stored agentName into
         # developer instructions, including queued and resumed turns.
         await merge(thread.session_id, {"agentName": name})
     thread.agent_name = name
+    _remember(thread.session_id, name)
     return thread

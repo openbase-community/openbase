@@ -45,7 +45,6 @@ class ClaudeSessionSnapshot:
     fingerprint: dict[str, Any]
 
 
-
 @dataclass(frozen=True)
 class ClaudeThreadSnapshotResult:
     session_id: str

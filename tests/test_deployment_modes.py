@@ -53,14 +53,6 @@ def test_resolve_binaries_only_resolves_referenced_binaries(
     assert set(binaries) == {"python"}
 
 
-def test_selected_backend_reads_env_file(tmp_path) -> None:
-    env_file = tmp_path / ".env"
-    env_file.write_text("OPENBASE_CODING_BACKEND=claude_code\n", encoding="utf-8")
-    config = InstallationConfig(env_file=str(env_file))
-
-    assert launchd._selected_backend(config) == "claude_code"
-
-
 def test_install_cli_shim_replaces_uv_tool_script(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(workspace_phase.Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.setattr(workspace_phase, "current_runtime_package", lambda: None)

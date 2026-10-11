@@ -17,6 +17,7 @@ from rest_framework.response import Response
 
 from openbase_coder_cli.login_callback import (
     DEFAULT_FORWARD_TTL_SECONDS,
+    is_openbase_device_name,
     is_tailnet_forward_target,
 )
 from openbase_coder_cli.open_url_policy import normalize_open_url, open_url_error
@@ -77,6 +78,16 @@ class LoopbackForwardSerializer(serializers.Serializer):
         min_value=1, max_value=FORWARD_MAX_TTL_SECONDS
     )
     token = serializers.RegexField(FORWARD_TOKEN_RE, max_length=128)
+    # This computer's VPN device name: the phone may reach the relay as a
+    # WebSocket through the local API's VPN serve route there instead.
+    relay_host = serializers.CharField(required=False, max_length=253)
+
+    def validate_relay_host(self, value):
+        if not is_openbase_device_name(value):
+            raise serializers.ValidationError(
+                "relay_host must be an Openbase VPN device name."
+            )
+        return value
 
     def validate_target(self, value):
         if not is_tailnet_forward_target(value):

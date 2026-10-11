@@ -391,15 +391,9 @@ func TestForwardLocalAPI(t *testing.T) {
 
 func TestServiceForwardPipesToAnotherLoopbackPort(t *testing.T) {
 	tm := newTestForwardManager(t, 18080)
-	info, err := tm.Add(forwardRequest{Port: 443, LocalPort: 59443, Persistent: true})
-	if err != nil {
-		t.Fatalf("add service forward: %v", err)
-	}
-	if info.LocalPort != 59443 || info.Target != "127.0.0.1:59443" || !info.Persistent || !info.ExpiresAt.IsZero() {
-		t.Fatalf("service forward info = %+v", info)
-	}
 	// The test dial ignores the port, but the manager must hand it the local
-	// port, not the tailnet port: capture it.
+	// port, not the tailnet port: capture it. Install the wrapper before Add
+	// starts the serving goroutine, which reads m.dial without a lock.
 	var dialed []int
 	var mu sync.Mutex
 	inner := tm.forwardManager.dial
@@ -408,6 +402,13 @@ func TestServiceForwardPipesToAnotherLoopbackPort(t *testing.T) {
 		dialed = append(dialed, port)
 		mu.Unlock()
 		return inner(ctx, port)
+	}
+	info, err := tm.Add(forwardRequest{Port: 443, LocalPort: 59443, Persistent: true})
+	if err != nil {
+		t.Fatalf("add service forward: %v", err)
+	}
+	if info.LocalPort != 59443 || info.Target != "127.0.0.1:59443" || !info.Persistent || !info.ExpiresAt.IsZero() {
+		t.Fatalf("service forward info = %+v", info)
 	}
 	resp, err := http.Get("http://" + tm.addr(443) + "/svc")
 	if err != nil {

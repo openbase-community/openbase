@@ -46,6 +46,7 @@ from openbase_coder_cli.livekit_agent.config import (
     WEB_BACKEND_URL,
 )
 from openbase_coder_cli.livekit_agent.logging_utils import exception_chain_summary
+from openbase_coder_cli.plan_copy import SUBSCRIBE_PRO_LINE
 from openbase_coder_cli.voice_models import (
     VOICE_ENGINE_LIVE,
     VOICE_ENGINE_PIPELINE,
@@ -582,8 +583,8 @@ def live_voice_unavailable_detail(decision: VoiceEngineDecision) -> str:
         )
     if reason == "subscription_required":
         return (
-            "Live voice needs an Openbase Cloud plan that includes it; using "
-            "standard voice for this call."
+            "You're out of live voice credits; using standard voice for this "
+            f"call. {SUBSCRIBE_PRO_LINE}"
         )
     if reason == "live_session_start_failed" or any(
         marker in detail for marker in _PROVIDER_BILLING_MARKERS

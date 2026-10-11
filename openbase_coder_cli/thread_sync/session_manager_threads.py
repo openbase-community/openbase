@@ -174,6 +174,23 @@ class SessionManagerThreadsMixin:
         """Archive a Codex app-server thread."""
         return await self.close_session(thread_id)
 
+    async def compact_thread(
+        self, thread_id: str, min_context_tokens: int
+    ) -> dict | None:
+        """Compact the thread's backend session now if it is idle and large.
+
+        Only backends that offer it (Claude Code via super-agents) do anything;
+        Codex compacts its own threads. Returns the backend's result, or None.
+        """
+        compact = getattr(self._client, "compact_session_by_label", None)
+        if not callable(compact):
+            return None
+        return await compact(
+            LabelQueryInput(thread_id=thread_id),
+            None,
+            min_context_tokens=min_context_tokens,
+        )
+
     async def rename_thread(self, thread_id: str, name: str) -> SessionInfo | None:
         """Rename a thread on its backend and broadcast the new snapshot."""
         cleaned = " ".join(name.split())
@@ -324,8 +341,15 @@ class SessionManagerThreadsMixin:
         sessions = [
             _session_from_thread(thread, include_turns=False) for thread in raw_threads
         ]
+        session_records = None
+        read_state = getattr(self._client, "read_state", None)
+        if getattr(self._client, "store", None) is None and callable(read_state):
+            # One state parse for the whole list, not one per thread.
+            session_records = (await read_state()).sessions
         for session in sessions:
-            await ensure_speaking_identity(self._client, session)
+            await ensure_speaking_identity(
+                self._client, session, session_records=session_records
+            )
         return sorted(sessions, key=_session_sort_key, reverse=True)
 
     async def _backend_thread_page(
@@ -535,6 +559,13 @@ class SessionManagerThreadsMixin:
             await asyncio.to_thread(
                 archive_backend_thread, self._execution_backend, session_id
             )
+            # Also put the session away on the backend, so Super Agents
+            # listings and name lookups (the Dispatcher's tools) stop offering
+            # it: an archived worker kept receiving queued work on 376
+            # (2026-10-11 05:02Z) because only the cli knew it was archived.
+            archive_by_label = getattr(self._client, "archive_by_label", None)
+            if callable(archive_by_label):
+                await archive_by_label(LabelQueryInput(thread_id=session_id))
             return True
         try:
             await self._client.ensure_connected()
@@ -601,8 +632,15 @@ class SessionManagerThreadsMixin:
         sessions = [
             _session_from_thread(thread, include_turns=False) for thread in raw_threads
         ]
+        session_records = None
+        read_state = getattr(self._client, "read_state", None)
+        if getattr(self._client, "store", None) is None and callable(read_state):
+            # One state parse for the whole list, not one per thread.
+            session_records = (await read_state()).sessions
         for session in sessions:
-            await ensure_speaking_identity(self._client, session)
+            await ensure_speaking_identity(
+                self._client, session, session_records=session_records
+            )
         return sorted(sessions, key=_session_sort_key, reverse=True)
 
     async def _read_thread(
