@@ -1488,7 +1488,8 @@ async def test_super_agents_livekit_client_forwards_reasoning_without_tier_on_cl
     assert (
         backend.started_turns[0][1]["reasoningEffort"] == "medium"
     )  # spoken Dispatcher effort is chosen by model (medium unless Haiku)
-    assert backend.steer_turn_inputs[0]["reasoningEffort"] == "low"
+    # spoken Dispatcher effort is chosen by model (medium unless Haiku)
+    assert backend.steer_turn_inputs[0]["reasoningEffort"] == "medium"
     assert "serviceTier" not in backend.started_turns[0][1]
 
 
