@@ -2579,7 +2579,7 @@ async def test_a_lone_short_word_over_the_agents_speech_is_dropped_as_echo():
         bridge.speech_gate.agent_said("Hi, I'm Cooper")
         bridge.on_user_state_changed("listening", "speaking")
         bridge.on_user_state_changed("speaking", "listening")
-        live.final("uper")
+        live.final("Cooper")
         await _settle()
         assert dispatcher.prompts == []
         assert bridge._stats["decision_ignored_echo_fragment"] == 1

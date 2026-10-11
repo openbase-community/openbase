@@ -224,23 +224,19 @@ class AnnouncementProtocol:
             return {}
 
         def check(state, task):
+            # Bookkeeping first, whatever the announcements' state: more work
+            # invalidates a prepared summary and is waited for before finish
+            # (a failed introduction skipped this and let a stale "tests
+            # passed" completion through, voice review 2026-10-11).
+            task.pop("finish", None)
+            tool_id = event["tool_use_id"]
+            if tool_id not in task["pending"]:
+                task["pending"].append(tool_id)
             if task.get("delivery") not in {"audible", "quiet", "direct"}:
                 return self._correction(
                     task,
                     "Call task_announcement with phase=begin before work; choose quiet only for an explicit user request.",
                 )
-            if (
-                task["delivery"] == "audible"
-                and state["intro"].get("status") != "submitted"
-            ):
-                return self._correction(
-                    task,
-                    "The introduction was not submitted. Do not claim it succeeded.",
-                )
-            task.pop("finish", None)
-            tool_id = event["tool_use_id"]
-            if tool_id not in task["pending"]:
-                task["pending"].append(tool_id)
             return None
 
         # The announcement is never allowed to stand between the worker and

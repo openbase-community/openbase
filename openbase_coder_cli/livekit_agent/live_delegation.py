@@ -1048,7 +1048,7 @@ class LiveDelegationBridge:
         if (
             self._caller_spoke_over_agent
             and is_echo_fragment(text)
-            and self.speech_gate.is_clipped_echo_word(
+            and self.speech_gate.is_recent_agent_word(
                 _normalize_spoken_command(text).strip()
             )
         ):

@@ -6,7 +6,6 @@ import re
 import time
 from collections import deque
 from contextvars import ContextVar
-from difflib import SequenceMatcher
 
 from livekit import rtc
 from livekit.agents import Agent
@@ -29,9 +28,9 @@ AGENT_WORDS_WINDOW_SECONDS = 20.0
 # (376, 2026-10-11: that stop was ignored as echo under a bag-of-words share).
 ECHO_WORD_SHARE = 0.5
 ECHO_MIN_RUN_WORDS = 2
-# How close a lone heard word must be to the start or end of a word the agent
-# said to count as its clipped echo.
-ECHO_CLIP_SIMILARITY = 0.75
+# A lone heard word is echo only when the agent said exactly that word this
+# recently (speakerphone playout plus the transcription round trip).
+ECHO_SHORT_WORD_WINDOW_SECONDS = 4.0
 # When the caller starts talking over the agent, the model's transcript of
 # the caller can begin with the tail of the agent's own speech picked up by
 # the speakerphone ("You're Explain in about five sentences...", 376,
@@ -112,6 +111,7 @@ class LiveSpeechGate:
         # queued playout (AgentSession.interrupt).
         self.on_barge_in = None
         self._agent_words = deque()
+        self._agent_open_word = False
         self._last_permitted_end = None
         self._agent_state_speaking = False
         self._pending_playouts = 0
@@ -177,11 +177,30 @@ class LiveSpeechGate:
         end = self._last_permitted_end
         return end is not None and self._clock() - end < ECHO_TAIL_SECONDS
 
-    def agent_said(self, text):
-        """Words of the agent's output transcript: what its echo sounds like."""
+    def agent_said(self, text, *, complete=False):
+        """Words of the agent's output transcript: what its echo sounds like.
+
+        Output transcripts arrive as deltas that can split a word ("Pro" +
+        "ject ready"); a delta that continues the previous one's open word is
+        joined to it, so the echo "Project ready" matches (voice review
+        2026-10-11). ``complete`` marks a whole script (``session.say``) that
+        never continues an open word.
+        """
         now = self._clock()
-        for word in _words(text):
+        text = text or ""
+        words = _words(text)
+        if (
+            not complete
+            and self._agent_open_word
+            and words
+            and text[:1].isalnum()
+            and self._agent_words
+        ):
+            _, last = self._agent_words.pop()
+            words[0] = last + words[0]
+        for word in words:
             self._agent_words.append((now, word))
+        self._agent_open_word = bool(words) and not complete and text[-1:].isalnum()
         while self._agent_words and now - self._agent_words[0][0] > (
             AGENT_WORDS_WINDOW_SECONDS
         ):
@@ -198,25 +217,20 @@ class LiveSpeechGate:
         needed = max(ECHO_MIN_RUN_WORDS, math.ceil(len(words) * ECHO_WORD_SHARE))
         return _longest_common_run(words, said) >= needed
 
-    def is_clipped_echo_word(self, word):
-        """A lone word heard over the agent that its own speech explains: a
-        word it just said, or (three letters or more) a clipped start or end
-        of one ("uper" from "Cooper"). "Stop", "Wait" or "No" over an agent
-        that did not say them is the caller, not echo."""
+    def is_recent_agent_word(self, word):
+        """A lone word heard over the agent counts as echo only when the agent
+        said exactly that word in the last few seconds. Anything less certain
+        is the caller: a short command must reach the agent ("Stop" over "I
+        will store the file now" was dropped by a sound-alike match, voice
+        review 2026-10-11)."""
         word = (word or "").lower()
         if not word:
             return True
-        for _, said in self._agent_words:
-            if said == word:
-                return True
-            if len(word) < 3 or len(said) <= len(word):
-                continue
-            # Echo is heard, not copied: "Cooper" came back as "uper", so the
-            # clipped start or end only has to sound close.
-            for part in (said[: len(word)], said[-len(word) :]):
-                if SequenceMatcher(None, part, word).ratio() >= ECHO_CLIP_SIMILARITY:
-                    return True
-        return False
+        now = self._clock()
+        return any(
+            said == word and now - at <= ECHO_SHORT_WORD_WINDOW_SECONDS
+            for at, said in self._agent_words
+        )
 
     def strip_echo_prefix(self, text):
         """``text`` without leading words that repeat, in order, the tail of

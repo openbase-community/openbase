@@ -468,10 +468,22 @@ def test_the_agents_tail_is_stripped_from_a_caller_utterance_spoken_over_it():
     )
 
 
-def test_a_lone_word_is_echo_only_when_the_agents_speech_explains_it():
-    gate = LiveSpeechGate(clock=lambda: 0.0)
-    gate.agent_said("Hi, I'm Cooper. The build is proceeding successfully.")
-    assert gate.is_clipped_echo_word("uper")
-    assert gate.is_clipped_echo_word("build")
-    for word in ("stop", "wait", "undo", "no"):
-        assert not gate.is_clipped_echo_word(word), word
+def test_a_lone_word_is_echo_only_on_an_exact_recent_match():
+    clock = {"now": 0.0}
+    gate = LiveSpeechGate(clock=lambda: clock["now"])
+    gate.agent_said("Hi, I'm Cooper. I will store the file now.")
+    assert gate.is_recent_agent_word("store")
+    for word in ("stop", "wait", "undo", "no", "uper"):
+        assert not gate.is_recent_agent_word(word), word
+    clock["now"] = 10.0
+    assert not gate.is_recent_agent_word("store"), "too long ago to be echo"
+
+
+def test_echo_words_are_rebuilt_across_output_delta_boundaries():
+    gate = LiveSpeechGate(clock=lambda: 10.0)
+    gate.agent_said("Pro")
+    gate.agent_said("ject ready")
+    assert gate.is_echo("Project ready")
+    gate.agent_said("Hello there.", complete=True)
+    gate.agent_said("Next")
+    assert gate.is_recent_agent_word("next")

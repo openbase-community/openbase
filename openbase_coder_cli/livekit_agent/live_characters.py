@@ -470,7 +470,7 @@ class LiveCharacterController:
             live.on("input_audio_transcription_completed", caller_input)
             live.on("openai_server_event_received", gateway_event)
             if self._speech_gate is not None:
-                self._speech_gate.agent_said(message.text)
+                self._speech_gate.agent_said(message.text, complete=True)
 
         try:
             assistant = await self._replace(

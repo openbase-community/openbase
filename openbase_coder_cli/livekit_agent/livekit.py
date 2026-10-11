@@ -1170,7 +1170,7 @@ async def _start_live_voice_session(
     def say_and_note_words(text, *args, **kwargs):
         gate = bridge.speech_gate
         if isinstance(text, str):
-            gate.agent_said(text)
+            gate.agent_said(text, complete=True)
         gate.playout_requested()
         try:
             handle = session_say(text, *args, **kwargs)
