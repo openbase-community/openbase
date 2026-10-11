@@ -183,7 +183,7 @@ def test_notifications_fleet_scope_merges(monkeypatch):
         notifications as notification_views,
     )
 
-    monkeypatch.setattr(notification_views, "sync_notification_producers", lambda: None)
+    monkeypatch.setattr(notification_views, "sync_notification_producers", lambda **_kwargs: None)
     monkeypatch.setattr(
         notification_views.notification_store,
         "list_notifications",
