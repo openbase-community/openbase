@@ -738,7 +738,7 @@ async def test_real_announcement_stream_keeps_input_and_restores_after_pcm(
                 await value.aclose()
 
 
-async def test_a_return_after_a_route_change_does_not_greet_again(monkeypatch):
+async def test_returns_are_silent_and_every_transfer_greets(monkeypatch):
     """The route announcer says "Back to dispatch." in the Dispatcher's voice
     (Classic wording Gabe asked for); the character itself stays quiet."""
     import openbase_coder_cli.livekit_agent.live_characters as module
@@ -766,4 +766,8 @@ async def test_a_return_after_a_route_change_does_not_greet_again(monkeypatch):
     for route, changed in [("blake", True), ("dispatcher", True), ("blake", True)]:
         current["id"] = route
         await controller._conversation(history, route_changed=changed)
-    assert [call.args[0] for call in bridge.greet.call_args_list] == ["Hi, I'm Blake."]
+    # The Dispatcher return is silent; each transfer to Blake greets.
+    assert [call.args[0] for call in bridge.greet.call_args_list] == [
+        "Hi, I'm Blake.",
+        "Hi, I'm Blake.",
+    ]

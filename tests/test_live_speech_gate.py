@@ -385,3 +385,23 @@ def test_is_echo_compares_words_with_what_the_agent_just_said():
     clock.now += 60
     gate.agent_said("")
     assert not gate.is_echo("five is fourteen")
+
+
+async def test_announcer_playout_counts_as_agent_audio_for_barge_in():
+    """VM2 2026-10-11: the route announcer's echo counted as the caller, and
+    the greeting burst right after it opened muted and was discarded."""
+    clock = {"now": 10.0}
+    gate = LiveSpeechGate(barge_in_min_seconds=0.5, clock=lambda: clock["now"])
+    gate.external_playout_started("Voice route transferred.")
+    assert gate.agent_audible
+    gate.user_state_changed("speaking")  # the announcer's echo
+    clock["now"] += 1.0
+    assert not gate.speaking
+    gate.external_playout_ended()
+    gate.user_state_changed("listening")
+    gate.authorize()
+
+    async def greeting():
+        yield "Hi, I'm Cooper."
+
+    assert [f async for f in gate.filter_audio(greeting())] == ["Hi, I'm Cooper."]

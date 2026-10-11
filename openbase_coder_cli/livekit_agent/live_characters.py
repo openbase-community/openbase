@@ -297,13 +297,16 @@ class LiveCharacterController:
             self.bridge.on_character_session_started()
             self._resume_output()
             await self._announce_route()
-            if snapshot.active_thread_id not in self._introduced_routes:
+            label = self.bridge.starting_agent_label()
+            first_contact = snapshot.active_thread_id not in self._introduced_routes
+            # Every transfer to an agent greets, also back to one met earlier
+            # in the call (VM2, 2026-10-11: the second and third transfers to
+            # Cooper were silent after the announcer). A return to the
+            # Dispatcher (label None) says nothing here: the route announcer
+            # speaks the Classic "Back to dispatch." line.
+            if first_contact or (route_changed and label is not None):
                 self._introduced_routes.add(snapshot.active_thread_id)
-                self.bridge.greet(
-                    live_voice_greeting(self.bridge.starting_agent_label())
-                )
-            # A return says nothing here: the route announcer speaks the
-            # Classic "Back to dispatch." line in the Dispatcher's voice.
+                self.bridge.greet(live_voice_greeting(label))
             return assistant
 
     async def _announce_route(self):
@@ -313,6 +316,9 @@ class LiveCharacterController:
         if move is None or self.announce_route is None:
             return
         action, announce, agent_label = move
+        gate = self._speech_gate
+        if gate is not None:
+            gate.external_playout_started()
         try:
             await self.announce_route(
                 self.session, action, announce=announce, agent_label=agent_label
@@ -325,6 +331,9 @@ class LiveCharacterController:
                 action,
                 exc_info=True,
             )
+        finally:
+            if gate is not None:
+                gate.external_playout_ended()
 
     async def _run(self):
         try:

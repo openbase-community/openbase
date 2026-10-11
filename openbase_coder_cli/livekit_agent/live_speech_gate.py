@@ -78,6 +78,7 @@ class LiveSpeechGate:
         self.on_barge_in = None
         self._agent_words = deque()
         self._last_permitted_end = None
+        self._external_playouts = 0
         self._caller_over_agent = False
         self._caller_heard = ""
 
@@ -103,9 +104,26 @@ class LiveSpeechGate:
             if self.on_barge_in is not None:
                 self.on_barge_in()
 
+    def external_playout_started(self, text=""):
+        """Audio the session plays outside the model's bursts (session.say).
+
+        The route announcer speaks through the session, not the gate; its
+        speakerphone echo then counted as the caller and the character's
+        greeting right after it opened muted (VM2, 2026-10-11 01:18Z).
+        """
+        self._external_playouts += 1
+        if text:
+            self.agent_said(text)
+
+    def external_playout_ended(self):
+        self._external_playouts = max(0, self._external_playouts - 1)
+        self._last_permitted_end = self._clock()
+
     @property
     def agent_audible(self):
         """A permitted burst is streaming, or its sound is still playing out."""
+        if self._external_playouts:
+            return True
         if any(burst.permitted for burst in self._open.values()):
             return True
         end = self._last_permitted_end
