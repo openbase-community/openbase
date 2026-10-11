@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import re
 import secrets
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlsplit
@@ -82,6 +83,24 @@ def _loopback_port(redirect: str) -> int | None:
     return port
 
 
+# Openbase VPN device names; a computer's local API answers on these.
+OPENBASE_DEVICE_ZONES = (".net.obs.so", ".net-staging.obs.so")
+DEVICE_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9-]{1,63})+$")
+
+
+def is_openbase_device_name(value: str) -> bool:
+    """A VPN device name of the form ``<device>.net.obs.so`` (or staging)."""
+    return (
+        len(value) <= 253
+        and DEVICE_NAME_RE.fullmatch(value) is not None
+        and value.endswith(OPENBASE_DEVICE_ZONES)
+    )
+
+
+# Optional push key; an Openbase Cloud that predates it rejects the push.
+PUSH_RELAY_HOST_KEY = "forward_relay_host"
+
+
 @dataclass(frozen=True)
 class LoopbackForward:
     """A forward the phone should run: loopback ``port`` -> ``target:port``."""
@@ -92,6 +111,10 @@ class LoopbackForward:
     token: str = ""
     relay_port: int | None = None
     expires_at: int | None = None
+    # This host's Openbase VPN device name, where its local API's VPN serve
+    # route answers. A phone that cannot connect to ``target`` directly (a
+    # host firewall) reaches the relay as a WebSocket through that route.
+    relay_host: str | None = None
 
     @classmethod
     def create(
@@ -112,7 +135,8 @@ class LoopbackForward:
             "ttl_seconds": self.ttl_seconds,
             "token": self.token,
         }
-
+        if self.relay_host:
+            payload["relay_host"] = self.relay_host
         return payload
 
     def as_push_user_info(self) -> dict[str, str]:
@@ -123,7 +147,8 @@ class LoopbackForward:
             "forward_ttl_seconds": str(self.ttl_seconds),
             "forward_token": self.token,
         }
-
+        if self.relay_host:
+            payload[PUSH_RELAY_HOST_KEY] = self.relay_host
         return payload
 
 

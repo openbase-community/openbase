@@ -242,6 +242,32 @@ def test_push_sends_open_url_user_info(monkeypatch):
     assert browser_cli._push(LOGIN_URL, None) is False
 
 
+def test_push_retries_without_the_relay_host_for_an_older_cloud(monkeypatch):
+    from openbase_coder_cli.config import cloud_notifications
+    from openbase_coder_cli.login_callback import LoopbackForward
+
+    sent = []
+
+    def cloud(**kwargs):
+        sent.append(kwargs["user_info"])
+        if "forward_relay_host" in kwargs["user_info"]:
+            raise cloud_notifications.NotificationPushError("Unknown userInfo key.")
+        return 1
+
+    monkeypatch.setattr(cloud_notifications, "send_notification_push", cloud)
+    forward = LoopbackForward(
+        port=1455,
+        target="100.64.0.12",
+        ttl_seconds=600,
+        token="t" * 24,
+        relay_host="gabes-mac.net.obs.so",
+    )
+    assert browser_cli._push(LOGIN_URL, forward) is True
+    assert sent[0]["forward_relay_host"] == "gabes-mac.net.obs.so"
+    assert "forward_relay_host" not in sent[1]
+    assert sent[1]["forward_target"] == "100.64.0.12"
+
+
 def test_push_fails_when_no_phone_is_registered(monkeypatch):
     from openbase_coder_cli.config import cloud_notifications
 
@@ -581,10 +607,14 @@ def test_host_vpn_backend_relays_on_its_own_vpn_address(monkeypatch):
     from openbase_coder_cli import host_firewall
 
     monkeypatch.setattr(host_firewall, "blocked_interpreter", lambda: None)
+    monkeypatch.setattr(browser_cli, "self_vpn_hostname", lambda: "mac.net.obs.so")
     forward = browser_cli._try_arrange_forward(1455)
     assert started == [(1455, "100.64.0.33")]
     assert forward.target == "100.64.0.33"
     assert forward.relay_port == 49153
+    assert forward.relay_host == "mac.net.obs.so"
+    assert forward.as_app_control()["relay_host"] == "mac.net.obs.so"
+    assert forward.as_push_user_info()["forward_relay_host"] == "mac.net.obs.so"
 
     monkeypatch.setattr(
         tailscale_provider, "status_json", lambda: {"BackendState": "Stopped"}

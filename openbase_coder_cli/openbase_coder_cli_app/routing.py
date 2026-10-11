@@ -5,6 +5,9 @@ from __future__ import annotations
 from django.urls import re_path
 
 from openbase_coder_cli.mcp_gateway import NAME_PATTERN
+from openbase_coder_cli.openbase_coder_cli_app.login_relay_consumer import (
+    LoginRelayConsumer,
+)
 
 from . import consumers
 
@@ -23,6 +26,7 @@ websocket_urlpatterns = [
     re_path(r"ws/approval-requests/$", consumers.ApprovalRequestsConsumer.as_asgi()),
     re_path(r"ws/notifications/$", consumers.NotificationsConsumer.as_asgi()),
     re_path(r"ws/ios-app-control/$", consumers.IOSAppControlConsumer.as_asgi()),
+    re_path(r"ws/login-relay/$", LoginRelayConsumer.as_asgi()),
     re_path(
         rf"ws/mcp-gateway/(?P<name>{NAME_PATTERN})/$",
         consumers.McpGatewayConsumer.as_asgi(),

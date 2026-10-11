@@ -32,6 +32,7 @@ import click
 from openbase_coder_cli.cli.app_control import publish_open_url
 from openbase_coder_cli.login_callback import (
     DEFAULT_FORWARD_TTL_SECONDS,
+    OPENBASE_DEVICE_ZONES,
     LoopbackForward,
     is_tailnet_forward_target,
     loopback_callback_port,
@@ -181,11 +182,10 @@ def _try_arrange_forward(port: int) -> LoopbackForward | None:
         relay_port=relay_port,
         expires_at=expires_at,
         token=relay_capability(relay_port, expires_at, forward.token),
+        # Host VPN only: the relay also answers on loopback for the local
+        # API's WebSocket bridge, reached by this device name.
+        relay_host=self_vpn_hostname() if bind_host is not None else None,
     )
-
-
-# Openbase VPN device names; the computer's local API answers on these.
-OPENBASE_DEVICE_ZONES = (".net.obs.so", ".net-staging.obs.so")
 
 
 def self_vpn_hostname() -> str | None:
@@ -329,11 +329,27 @@ def _push(url: str, forward: LoopbackForward | None) -> bool:
     host = urlsplit(url).hostname or url
 
     def attempt() -> bool:
-        from openbase_coder_cli.config.cloud_notifications import send_notification_push
-
-        device_count = send_notification_push(
-            title=PUSH_TITLE, body=f"Tap to open {host}", user_info=user_info
+        from openbase_coder_cli.config.cloud_notifications import (
+            NotificationPushError,
+            send_notification_push,
         )
+        from openbase_coder_cli.login_callback import PUSH_RELAY_HOST_KEY
+
+        def send(info: dict) -> int | None:
+            return send_notification_push(
+                title=PUSH_TITLE, body=f"Tap to open {host}", user_info=info
+            )
+
+        try:
+            device_count = send(user_info)
+        except NotificationPushError:
+            if PUSH_RELAY_HOST_KEY not in user_info:
+                raise
+            # An Openbase Cloud that predates the key rejects the whole push;
+            # the phone then falls back to its direct relay connection.
+            device_count = send(
+                {k: v for k, v in user_info.items() if k != PUSH_RELAY_HOST_KEY}
+            )
         # No registered phone means nothing will arrive; an older cloud
         # (None) does not say, so its acceptance still counts.
         return device_count != 0

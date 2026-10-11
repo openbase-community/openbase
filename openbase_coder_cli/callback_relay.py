@@ -145,19 +145,42 @@ class CallbackRelay:
         self.active: set[asyncio.Task] = set()
         self.connected: set[asyncio.Task] = set()
         self.server: asyncio.Server | None = None
+        # On a host VPN the relay also answers on loopback, at the same port,
+        # for the local API's WebSocket bridge (a host firewall may drop the
+        # phone's direct connection to the VPN address).
+        self.loopback_server: asyncio.Server | None = None
 
     async def start(self) -> int:
-        self.server = await asyncio.start_server(
-            self.handle, self.bind_host, 0, limit=256
-        )
-        return self.server.sockets[0].getsockname()[1]
+        for _attempt in range(5):
+            self.server = await asyncio.start_server(
+                self.handle, self.bind_host, 0, limit=256
+            )
+            port = self.server.sockets[0].getsockname()[1]
+            if self.bind_host == "127.0.0.1":
+                return port
+            try:
+                self.loopback_server = await asyncio.start_server(
+                    self.handle, "127.0.0.1", port, limit=256
+                )
+            except OSError:
+                # That port number is taken on loopback; pick another.
+                self.server.close()
+                await self.server.wait_closed()
+                continue
+            return port
+        raise OSError("no port free on both the VPN address and loopback")
+
+    def _close_servers(self) -> None:
+        self.server.close()
+        if self.loopback_server is not None:
+            self.loopback_server.close()
 
     async def run(self) -> None:
         deadline = self.deadline
         try:
             while not self.done.is_set() and time.monotonic() < deadline:
                 if not await asyncio.to_thread(self.owner.alive):
-                    self.server.close()
+                    self._close_servers()
                     for task in self.active - self.connected:
                         task.cancel()
                     if not self.connected or not await asyncio.to_thread(
@@ -170,12 +193,14 @@ class CallbackRelay:
                         min(0.5, max(0.01, deadline - time.monotonic())),
                     )
         finally:
-            self.server.close()
+            self._close_servers()
             tasks = list(self.active)
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             await self.server.wait_closed()
+            if self.loopback_server is not None:
+                await self.loopback_server.wait_closed()
 
     async def handle(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -330,7 +355,13 @@ async def _main(config: dict) -> None:
 
     relay.token = relay_capability(port, config["expires_at"], config["token"])
     exposed = False
+    registered = False
     try:
+        if relay.loopback_server is not None:
+            from openbase_coder_cli import login_relay_registry
+
+            login_relay_registry.register(port, relay.token, config["expires_at"])
+            registered = True
         if bind_host is None:
             # The authentication handshake itself carries bytes both ways.
             # Only this relay can decide when the callback has completed.
@@ -345,6 +376,10 @@ async def _main(config: dict) -> None:
         sys.stdout.close()
         await relay.run()
     finally:
+        if registered:
+            from openbase_coder_cli import login_relay_registry
+
+            login_relay_registry.unregister(port)
         if exposed:
             await asyncio.to_thread(tunneld_remove_forward, port)
 
