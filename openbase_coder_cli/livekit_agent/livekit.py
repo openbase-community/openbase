@@ -1168,9 +1168,21 @@ async def _start_live_voice_session(
     session_say = getattr(session, "say", None)
 
     def say_and_note_words(text, *args, **kwargs):
+        gate = bridge.speech_gate
         if isinstance(text, str):
-            bridge.speech_gate.agent_said(text)
-        return session_say(text, *args, **kwargs)
+            gate.agent_said(text)
+        gate.playout_requested()
+        try:
+            handle = session_say(text, *args, **kwargs)
+        except BaseException:
+            gate.playout_finished()
+            raise
+        add_done = getattr(handle, "add_done_callback", None)
+        if callable(add_done):
+            add_done(lambda _handle: gate.playout_finished())
+        else:
+            gate.playout_finished()
+        return handle
 
     if session_say is not None:
         session.say = say_and_note_words

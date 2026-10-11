@@ -407,3 +407,22 @@ async def test_announcer_playout_counts_as_agent_audio_for_barge_in():
         yield "Hi, I'm Cooper."
 
     assert [f async for f in gate.filter_audio(greeting())] == ["Hi, I'm Cooper."]
+
+
+def test_a_requested_playout_is_audible_before_its_first_audio():
+    """Maritime 2026-10-11 02:37Z: VAD fired in the 1.3 s before the route
+    cue's first audio, counted as a caller barge-in, and cut the cue."""
+    clock = {"now": 10.0}
+    gate = LiveSpeechGate(barge_in_min_seconds=0.5, clock=lambda: clock["now"])
+    revoked = []
+    gate.on_barge_in = lambda: revoked.append(True)
+    gate.playout_requested()
+    gate.user_state_changed("speaking")
+    clock["now"] += 0.8
+    assert not gate.speaking
+    assert revoked == []
+    gate.playout_finished()
+    gate.user_state_changed("listening")
+    assert revoked == []
+    clock["now"] += 5.0
+    assert not gate.agent_audible
