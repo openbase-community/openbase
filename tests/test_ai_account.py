@@ -277,14 +277,18 @@ def test_linux_relies_on_the_browser_shim(manager, monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("outcome", ["cancel", "fail"])
-def test_an_unfinished_relink_keeps_the_existing_login(manager, monkeypatch, tmp_path, outcome):
+def test_an_unfinished_relink_keeps_the_existing_login(
+    manager, monkeypatch, tmp_path, outcome
+):
     auth = tmp_path / "codex-home" / "auth.json"
     auth.parent.mkdir()
     auth.write_text('{"tokens": "old"}')
     monkeypatch.setattr(ai_account, "_credential_paths", lambda provider: [auth])
     # Like `codex login`: drop the stored login first, then wait for the browser.
     exit_line = "sleep 30\n" if outcome == "cancel" else "exit 1\n"
-    cli = _fake_cli(tmp_path, f'rm -f "{auth}"\necho "Open https://auth.openai.com/x"\n{exit_line}')
+    cli = _fake_cli(
+        tmp_path, f'rm -f "{auth}"\necho "Open https://auth.openai.com/x"\n{exit_line}'
+    )
     monkeypatch.setattr(ai_account, "_command", lambda provider: [cli])
     monkeypatch.setattr(ai_account, "browser_env_ignored", lambda: False)
     manager.start(ai_account.CODEX)

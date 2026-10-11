@@ -544,12 +544,27 @@ def unlink(provider: str) -> None:
         )
 
 
+def login_homes() -> dict[str, str]:
+    """Where this computer's agents keep their Codex and Claude Code logins.
+
+    The API process is the source of truth: a login written anywhere else
+    (an agent shell with a different HOME or CODEX_HOME) links nothing.
+    """
+    from openbase_coder_cli.paths import CLAUDE_CONFIG_DIR
+
+    return {
+        "codex_home": str(CODEX_HOME_DIR),
+        "claude_config_dir": str(CLAUDE_CONFIG_DIR),
+    }
+
+
 def status() -> dict:
     from openbase_coder_cli.backend_auth import relink_needed_backends
 
     selected = selected_choice()
     failed_logins = relink_needed_backends()
     options = []
+    homes = login_homes()
     for choice in CHOICES:
         linked = True if choice == OPENBASE_CLOUD else is_linked(choice)
         options.append(
@@ -569,6 +584,7 @@ def status() -> dict:
             }
         )
     return {
+        "homes": homes,
         "selected": selected,
         "default": OPENBASE_CLOUD,
         "options": options,

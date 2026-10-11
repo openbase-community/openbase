@@ -199,8 +199,6 @@ def test_login_sessions_do_not_inherit_the_agents_gateway_credentials(monkeypatc
 
 
 def test_unfinished_ai_login_restores_the_previous_login(monkeypatch, tmp_path):
-    from openbase_coder_cli import ai_account
-
     assert pty_session.login_provider_for(["/usr/bin/codex", "login"]) == "codex"
     assert pty_session.login_provider_for(["codex", "login", "status"]) is None
     assert (
@@ -209,11 +207,23 @@ def test_unfinished_ai_login_restores_the_previous_login(monkeypatch, tmp_path):
     )
     assert pty_session.login_provider_for(["gcloud", "auth", "login"]) is None
 
-    auth = tmp_path / "auth.json"
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    auth = home / "auth.json"
     auth.write_text('{"tokens": "old"}')
-    monkeypatch.setattr(ai_account, "_credential_paths", lambda provider: [auth])
+    monkeypatch.setattr(
+        pty_session,
+        "login_homes",
+        lambda: {
+            "codex_home": str(home),
+            "claude_config_dir": str(tmp_path / "claude"),
+        },
+    )
     codex = tmp_path / "codex"
-    codex.write_text(f"#!/bin/sh\nrm -f {auth}\nexit 1\n")
+    # The CLI must see the API's CODEX_HOME, and its deletion must be undone.
+    codex.write_text(
+        f'#!/bin/sh\n[ "$CODEX_HOME" = "{home}" ] || exit 9\nrm -f "$CODEX_HOME/auth.json"\nexit 1\n'
+    )
     codex.chmod(0o755)
     paths = pty_session.session_paths("relink")
     paths.root.mkdir(parents=True, mode=0o700)
@@ -224,3 +234,40 @@ def test_unfinished_ai_login_restores_the_previous_login(monkeypatch, tmp_path):
     )
     pty_session._hold("relink")
     assert auth.read_text() == '{"tokens": "old"}'
+    assert pty_session._read_meta(paths)["exit_code"] == 1  # not 9: the home was set
+
+
+def test_login_homes_prefer_the_api_and_fall_back_locally(monkeypatch):
+    import importlib
+
+    local_server = importlib.import_module("openbase_coder_cli.cli.local_server")
+
+    class Response:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    monkeypatch.setattr(
+        local_server,
+        "local_server_request",
+        lambda *a, **k: Response(
+            {
+                "homes": {
+                    "codex_home": "/data/codex",
+                    "claude_config_dir": "/data/claude",
+                }
+            }
+        ),
+    )
+    assert pty_session.login_homes() == {
+        "codex_home": "/data/codex",
+        "claude_config_dir": "/data/claude",
+    }
+
+    def down(*a, **k):
+        raise OSError("api down")
+
+    monkeypatch.setattr(local_server, "local_server_request", down)
+    assert set(pty_session.login_homes()) == {"codex_home", "claude_config_dir"}

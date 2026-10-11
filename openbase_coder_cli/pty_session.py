@@ -327,6 +327,35 @@ def login_provider_for(command: list[str]) -> str | None:
     return None
 
 
+def login_homes() -> dict[str, str]:
+    """The API's Codex/Claude homes, so an agent-run login links the same
+    account the API and the dispatcher use; this process's own paths when
+    the API is unreachable."""
+    from openbase_coder_cli import ai_account
+    from openbase_coder_cli.cli.local_server import local_server_request
+
+    with contextlib.suppress(Exception):
+        payload = local_server_request(
+            "GET", "/api/settings/ai-account/", timeout=5
+        ).json()
+        homes = payload.get("homes") if isinstance(payload, dict) else None
+        if (
+            isinstance(homes, dict)
+            and homes.get("codex_home")
+            and homes.get("claude_config_dir")
+        ):
+            return {k: str(homes[k]) for k in ("codex_home", "claude_config_dir")}
+    return ai_account.login_homes()
+
+
+def _login_credential_paths(provider: str, homes: dict[str, str]) -> list[Path]:
+    if provider == "codex":
+        return [Path(homes["codex_home"]) / "auth.json"]
+    if provider == "claude_code":
+        return [Path(homes["claude_config_dir"]) / ".credentials.json"]
+    return []
+
+
 def phone_browser_command() -> str:
     """An executable that opens its URL argument on the user's phone.
 
@@ -381,9 +410,17 @@ def _hold(name: str) -> int:
     from openbase_coder_cli import ai_account
 
     login_provider = login_provider_for(command)
-    saved_login = (
-        ai_account._snapshot_credentials(login_provider) if login_provider else {}
-    )
+    saved_login: dict[Path, bytes | None] = {}
+    if login_provider:
+        homes = login_homes()
+        # Sign in where the API and the dispatcher look for the login.
+        env["CODEX_HOME"] = homes["codex_home"]
+        env["CLAUDE_CONFIG_DIR"] = homes["claude_config_dir"]
+        for path in _login_credential_paths(login_provider, homes):
+            try:
+                saved_login[path] = path.read_bytes()
+            except OSError:
+                saved_login[path] = None
     pid, master_fd = pty.fork()
     if pid == 0:
         try:
