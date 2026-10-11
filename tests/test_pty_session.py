@@ -179,3 +179,20 @@ def test_logins_open_on_the_phone_on_any_host(monkeypatch):
     pty_session.start("browser", ["sh", "-c", 'echo "BROWSER=$BROWSER"'])
     output, _ = _read_until("browser", "BROWSER=")
     assert f"BROWSER={shim}" in output
+
+
+def test_login_sessions_do_not_inherit_the_agents_gateway_credentials(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "obmt_gateway")
+    monkeypatch.setenv(
+        "ANTHROPIC_BASE_URL", "https://app.example/api/openbase/llm/anthropic"
+    )
+    pty_session.start(
+        "env",
+        [
+            "sh",
+            "-c",
+            'echo "token=${ANTHROPIC_AUTH_TOKEN:-none} base=${ANTHROPIC_BASE_URL:-none}"',
+        ],
+    )
+    output, _ = _read_until("env", "base=")
+    assert "token=none base=none" in output

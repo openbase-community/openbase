@@ -146,6 +146,9 @@ THREAD_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
 THREAD_ID_ENV_KEYS = ("SUPER_AGENTS_THREAD_ID", "CODEX_THREAD_ID")
+# Credentials Openbase injects so agents reach their model through Openbase
+# Cloud; stripped from login sessions so CLIs see the user's own state.
+GATEWAY_ENV_KEYS = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY")
 
 
 def own_thread_id() -> str | None:
@@ -350,6 +353,10 @@ def _hold(name: str) -> int:
     command = meta["command"]
     env = dict(os.environ)
     env.setdefault("TERM", "xterm-256color")
+    # The agent's own model-gateway credentials (Openbase Cloud) are not the
+    # user's login: a CLI that sees them would report "already signed in".
+    for key in GATEWAY_ENV_KEYS:
+        env.pop(key, None)
     # Sign-in pages go to the user's phone, never this computer's browser.
     env["BROWSER"] = phone_browser_command()
     env.setdefault("GH_BROWSER", env["BROWSER"])
