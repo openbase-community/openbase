@@ -42,15 +42,6 @@ DESKTOP_APP_UNAVAILABLE_DETAIL = (
     "The Openbase desktop app is not running on this computer. Open Openbase "
     "on the Mac, then try again."
 )
-# Desktop builds before the coded companion errors report the raw
-# ScreenCaptureKit text for a missing Screen Recording grant.
-# Desktop builds whose Electron drops the companion's ``code`` still pass its
-# message through, so match that too.
-_LEGACY_SCREEN_RECORDING_MARKERS = (
-    "declined TCC",
-    "Screen Recording permission",
-    "Allow Screen Recording",
-)
 
 
 def _companion_client_factory():
@@ -73,9 +64,7 @@ def _platform() -> str:
 
 def _desktop_error_response(exc: desktop_control.DesktopControlError) -> Response:
     message = str(exc)
-    if exc.code == SCREEN_RECORDING_PERMISSION_CODE or any(
-        marker in message for marker in _LEGACY_SCREEN_RECORDING_MARKERS
-    ):
+    if exc.code == SCREEN_RECORDING_PERMISSION_CODE:
         return Response(
             {
                 "detail": SCREEN_RECORDING_PERMISSION_DETAIL,

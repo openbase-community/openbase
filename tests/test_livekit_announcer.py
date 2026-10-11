@@ -1009,22 +1009,11 @@ def test_livekit_companion_start_api_starts_macos_share_via_desktop_app(monkeypa
     assert body["companionToken"]
 
 
-@pytest.mark.parametrize(
-    "error",
-    [
-        views._screen_share.desktop_control.DesktopControlError(
-            "Allow Screen Recording", code="screen_recording_permission_required"
-        ),
-        # Desktop builds before coded errors pass ScreenCaptureKit's raw text.
-        views._screen_share.desktop_control.DesktopControlError(
-            "The user declined TCCs for application, window, display capture"
-        ),
-    ],
-)
-def test_livekit_companion_start_api_reports_screen_recording_permission(
-    monkeypatch, error
-):
+def test_livekit_companion_start_api_reports_screen_recording_permission(monkeypatch):
     _macos_companion_env(monkeypatch)
+    error = views._screen_share.desktop_control.DesktopControlError(
+        "Allow Screen Recording", code="screen_recording_permission_required"
+    )
 
     def fake_request(*_args, **_kwargs):
         raise error
