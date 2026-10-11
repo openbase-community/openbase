@@ -561,3 +561,98 @@ def test_recent_project_availability_is_fresh_without_removing_registration(
     folder.rmdir()
     assert views._project_payload(registration)["available"] is False
     assert registration == {"path": str(folder)}
+
+
+def _project_views_module():
+    os.environ.setdefault("OPENBASE_CODER_CLI_SECRET_KEY", "test-secret")
+    os.environ.setdefault(
+        "DJANGO_SETTINGS_MODULE", "openbase_coder_cli.config.settings"
+    )
+    import django
+
+    django.setup()
+    from openbase_coder_cli.openbase_coder_cli_app import projects as project_views
+
+    return project_views
+
+
+def test_concurrent_status_polls_stay_bounded_and_deduped(monkeypatch) -> None:
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    project_views = _project_views_module()
+    monkeypatch.setattr(project_views, "_cached_project_metadata", {})
+    monkeypatch.setattr(project_views, "_inflight_project_refreshes", {})
+    executor = ThreadPoolExecutor(max_workers=project_views.PROJECT_STATUS_WORKERS)
+    monkeypatch.setattr(project_views, "_project_executor", executor)
+
+    lock = threading.Lock()
+    active = 0
+    peak = 0
+    calls: dict[str, int] = {}
+
+    def slow_metadata(path: str) -> dict:
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            calls[path] = calls.get(path, 0) + 1
+        time.sleep(0.02)
+        with lock:
+            active -= 1
+        return {"git_status": "clean", "stack": None}
+
+    monkeypatch.setattr(project_views, "_project_metadata", slow_metadata)
+    paths = [f"/tmp/repo-{index}" for index in range(60)]
+
+    with ThreadPoolExecutor(max_workers=10) as pollers:
+        results = list(
+            pollers.map(
+                lambda _: project_views._refresh_project_metadata_now(paths),
+                range(10),
+            )
+        )
+    executor.shutdown(wait=True)
+
+    assert peak <= project_views.PROJECT_STATUS_WORKERS
+    # Ten concurrent pollers share one refresh per repo.
+    assert calls == {path: 1 for path in paths}
+    assert all(len(result) == len(paths) for result in results)
+
+
+def test_slow_git_status_returns_promptly_with_cached_value(monkeypatch) -> None:
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    project_views = _project_views_module()
+    release = threading.Event()
+    monkeypatch.setattr(
+        project_views,
+        "_cached_project_metadata",
+        {"/tmp/slow": (time.monotonic() - 3600, {"git_status": "dirty"})},
+    )
+    monkeypatch.setattr(project_views, "_inflight_project_refreshes", {})
+    executor = ThreadPoolExecutor(max_workers=1)
+    monkeypatch.setattr(project_views, "_project_executor", executor)
+    monkeypatch.setattr(project_views, "PROJECT_STATUS_TIMEOUT_SECONDS", 0.1)
+
+    def hung_metadata(path: str) -> dict:
+        release.wait(5)
+        return {"git_status": "clean"}
+
+    monkeypatch.setattr(project_views, "_project_metadata", hung_metadata)
+
+    started = time.monotonic()
+    first = project_views._refresh_project_metadata_now(["/tmp/slow"])
+    second = project_views._refresh_project_metadata_now(["/tmp/slow"])
+    elapsed = time.monotonic() - started
+
+    # Stale value served; the second poll joined the same in-flight refresh.
+    assert first == second == [{"path": "/tmp/slow", "git_status": "dirty"}]
+    assert len(project_views._inflight_project_refreshes) == 1
+    assert elapsed < 1.0
+    release.set()
+    executor.shutdown(wait=True)
+    assert project_views._cached_metadata("/tmp/slow") == {"git_status": "clean"}

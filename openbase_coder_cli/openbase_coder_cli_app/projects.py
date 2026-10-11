@@ -6,7 +6,7 @@ import json
 import logging
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Any
 
@@ -33,9 +33,18 @@ logger = logging.getLogger(__name__)
 DEFAULT_PROJECT_PAGE_SIZE = 25
 MAX_PROJECT_PAGE_SIZE = 100
 PROJECT_LIST_CACHE_TTL_SECONDS = 15.0
-PROJECT_METADATA_CACHE_TTL_SECONDS = 10.0
-PROJECT_STATUS_WORKERS = 8
-PROJECT_STATUS_TIMEOUT_SECONDS = 12.0
+PROJECT_METADATA_CACHE_TTL_SECONDS = 30.0
+# Process-wide bound on concurrent project git-status work. Each multi
+# workspace runs one `git status` per sub-repo, and every subprocess fork from
+# this large process contends for the GIL with request threads and the event
+# loop, so keep this small: an unbounded storm wedged the API on 2026-10-11.
+PROJECT_STATUS_WORKERS = 3
+# Request threads come from a small shared pool; never park one for long.
+PROJECT_STATUS_TIMEOUT_SECONDS = 3.0
+MAX_PROJECT_STATUS_PATHS = 100
+# The warmer keeps only the most recent projects warm; older ones refresh
+# lazily when a client actually shows them.
+PROJECT_WARM_LIMIT = DEFAULT_PROJECT_PAGE_SIZE
 WORKTREE_SIBLING_SUFFIXES = ("worktrees", "work-trees")
 
 _project_cache_lock = threading.Lock()
@@ -46,7 +55,9 @@ _project_executor = ThreadPoolExecutor(
 _cached_projects: list[dict[str, Any]] | None = None
 _cached_projects_at = 0.0
 _cached_project_metadata: dict[str, tuple[float, dict[str, Any]]] = {}
-_refreshing_project_paths: set[str] = set()
+# One in-flight refresh per project, shared by every caller (warmer, list
+# polling, status polling), so repeated polls never queue duplicate git work.
+_inflight_project_refreshes: dict[str, Future[dict[str, Any]]] = {}
 
 
 def _parse_positive_int(
@@ -110,15 +121,19 @@ def _project_metadata(project_path: str) -> dict[str, Any]:
 
 
 def _cached_metadata(project_path: str) -> dict[str, Any] | None:
-    now = time.monotonic()
+    """Last known metadata for display, even when stale; a refresh replaces it."""
     with _project_cache_lock:
         cached = _cached_project_metadata.get(project_path)
-        if cached is None:
-            return None
-        cached_at, metadata = cached
-        if now - cached_at >= PROJECT_METADATA_CACHE_TTL_SECONDS:
-            return None
-        return dict(metadata)
+        return None if cached is None else dict(cached[1])
+
+
+def _fresh_cached_metadata_locked(
+    project_path: str, now: float
+) -> dict[str, Any] | None:
+    cached = _cached_project_metadata.get(project_path)
+    if cached is None or now - cached[0] >= PROJECT_METADATA_CACHE_TTL_SECONDS:
+        return None
+    return cached[1]
 
 
 def _project_payload(project: dict[str, Any]) -> dict[str, Any]:
@@ -187,47 +202,54 @@ def _worktree_children(project_path: str) -> list[dict[str, Any]]:
     return children
 
 
-def _refresh_project_metadata_task(project_path: str) -> None:
+def _refresh_project_metadata_task(project_path: str) -> dict[str, Any]:
     try:
         metadata = _project_metadata(project_path)
-        with _project_cache_lock:
-            _cached_project_metadata[project_path] = (time.monotonic(), metadata)
     except Exception:
         logger.exception("project_metadata refresh failed path=%s", project_path)
-    finally:
-        with _project_cache_lock:
-            _refreshing_project_paths.discard(project_path)
+        metadata = {"git_status": "unknown", "stack": None}
+    with _project_cache_lock:
+        _cached_project_metadata[project_path] = (time.monotonic(), metadata)
+        _inflight_project_refreshes.pop(project_path, None)
+    return metadata
+
+
+def _request_project_metadata(
+    project_paths: list[str],
+) -> tuple[dict[str, dict[str, Any]], dict[str, Future[dict[str, Any]]]]:
+    """Split paths into fresh cached metadata and (shared) pending refreshes."""
+    now = time.monotonic()
+    fresh: dict[str, dict[str, Any]] = {}
+    pending: dict[str, Future[dict[str, Any]]] = {}
+    with _project_cache_lock:
+        for project_path in dict.fromkeys(path for path in project_paths if path):
+            metadata = _fresh_cached_metadata_locked(project_path, now)
+            if metadata is not None:
+                fresh[project_path] = dict(metadata)
+                continue
+            future = _inflight_project_refreshes.get(project_path)
+            if future is None:
+                future = _project_executor.submit(
+                    _refresh_project_metadata_task, project_path
+                )
+                _inflight_project_refreshes[project_path] = future
+            pending[project_path] = future
+    return fresh, pending
 
 
 def _schedule_project_metadata_refresh(project_paths: list[str]) -> None:
-    now = time.monotonic()
-    scheduled: list[str] = []
-    with _project_cache_lock:
-        for project_path in project_paths:
-            cached = _cached_project_metadata.get(project_path)
-            if (
-                cached is not None
-                and now - cached[0] < PROJECT_METADATA_CACHE_TTL_SECONDS
-            ):
-                continue
-            if project_path in _refreshing_project_paths:
-                continue
-            _refreshing_project_paths.add(project_path)
-            scheduled.append(project_path)
-
-    for project_path in scheduled:
-        _project_executor.submit(_refresh_project_metadata_task, project_path)
+    _request_project_metadata(project_paths)
 
 
 # Kept just under PROJECT_METADATA_CACHE_TTL_SECONDS so each recent project's
 # metadata is refreshed shortly before it expires, keeping the cache warm.
-PROJECT_WARM_INTERVAL_SECONDS = 8.0
+PROJECT_WARM_INTERVAL_SECONDS = 25.0
 _warmer_started = False
 _warmer_start_lock = threading.Lock()
 
 
 def _warm_recent_project_metadata() -> None:
-    projects = _get_cached_recent_projects()
+    projects = _get_cached_recent_projects()[:PROJECT_WARM_LIMIT]
     paths = [
         str(project.get("path", "")) for project in projects if project.get("path")
     ]
@@ -264,31 +286,32 @@ def start_project_metadata_warmer() -> None:
 
 def _refresh_project_metadata_now(project_paths: list[str]) -> list[dict[str, Any]]:
     unique_paths = list(dict.fromkeys(path for path in project_paths if path))
-    futures = {
-        _project_executor.submit(_project_metadata, project_path): project_path
-        for project_path in unique_paths
-    }
-    refreshed: dict[str, dict[str, Any]] = {}
-    deadline = time.monotonic() + PROJECT_STATUS_TIMEOUT_SECONDS
-    try:
-        completed = as_completed(futures, timeout=PROJECT_STATUS_TIMEOUT_SECONDS)
-        for future in completed:
-            project_path = futures[future]
-            remaining = max(0.0, deadline - time.monotonic())
-            try:
-                metadata = future.result(timeout=remaining)
-            except Exception:
-                logger.exception("project_metadata status failed path=%s", project_path)
-                metadata = {"git_status": "unknown", "stack": None}
-            refreshed[project_path] = metadata
-            with _project_cache_lock:
-                _cached_project_metadata[project_path] = (time.monotonic(), metadata)
-    except TimeoutError:
-        timed_out = [path for future, path in futures.items() if not future.done()]
-        logger.warning("project_metadata status timed out paths=%s", timed_out)
+    refreshed, pending = _request_project_metadata(unique_paths)
+    if pending:
+        # Waiting never cancels the shared refresh: it finishes in the bounded
+        # pool (git calls carry their own kill timeout) and fills the cache for
+        # the next poll, while this request answers with what it has.
+        done, not_done = wait(pending.values(), timeout=PROJECT_STATUS_TIMEOUT_SECONDS)
+        for project_path, future in pending.items():
+            if future in done:
+                refreshed[project_path] = future.result()
+        if not_done:
+            timed_out = [path for path, future in pending.items() if future in not_done]
+            logger.warning(
+                "project_metadata status timed out count=%s paths=%s",
+                len(timed_out),
+                timed_out[:5],
+            )
 
     return [
-        {"path": path, **refreshed.get(path, {"git_status": "unknown"})}
+        {
+            "path": path,
+            **(
+                refreshed.get(path)
+                or _cached_metadata(path)
+                or {"git_status": "unknown"}
+            ),
+        }
         for path in unique_paths
     ]
 
@@ -390,9 +413,7 @@ def recent_projects(request):
         # Fleet picker: top-N recent projects across every device (first page
         # per device only — thread creation targets the project's origin
         # device, so deep cross-device paging isn't needed here).
-        project_payloads = fleet_recent_projects(
-            project_payloads, page_size=page_size
-        )
+        project_payloads = fleet_recent_projects(project_payloads, page_size=page_size)
     return Response(
         {
             "count": len(projects),
@@ -412,7 +433,9 @@ def project_status(request):
     csv_paths = request.query_params.get("paths", "")
     if csv_paths:
         paths.extend(path.strip() for path in csv_paths.split(","))
-    paths = [path for path in paths if path]
+    paths = list(dict.fromkeys(path for path in paths if path))[
+        :MAX_PROJECT_STATUS_PATHS
+    ]
     if not paths:
         return Response({"projects": []})
     return Response({"projects": _refresh_project_metadata_now(paths)})
