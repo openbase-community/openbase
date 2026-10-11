@@ -20,14 +20,40 @@ _burst = ContextVar("live_speech_burst", default=None)
 ECHO_TAIL_SECONDS = 1.5
 # What the agent said in this window is what its echo can transcribe to.
 AGENT_WORDS_WINDOW_SECONDS = 20.0
-# A caller fragment heard over the agent is echo when at least this share of
-# its words are words the agent just said.
+# A caller fragment heard over the agent is echo when a run of its words, in
+# order, is a run the agent just said: at least this share of the fragment
+# and never fewer than ECHO_MIN_RUN_WORDS. Echo transcribes the agent's
+# speech in sequence; a caller who happens to reuse one common word ("Okay,
+# stop, that is enough" over an answer that began "Okay, ...") does not
+# (376, 2026-10-11: that stop was ignored as echo under a bag-of-words share).
 ECHO_WORD_SHARE = 0.5
+ECHO_MIN_RUN_WORDS = 2
 _WORD = re.compile(r"[a-z0-9']+")
 
 
 def _words(text):
     return _WORD.findall((text or "").lower())
+
+
+def _longest_common_run(fragment, said):
+    """Length of the longest run of ``fragment`` that appears, in order, in ``said``."""
+    best = 0
+    positions = {}
+    for index, word in enumerate(said):
+        positions.setdefault(word, []).append(index)
+    for start in range(len(fragment)):
+        for position in positions.get(fragment[start], ()):
+            length = 0
+            while (
+                start + length < len(fragment)
+                and position + length < len(said)
+                and fragment[start + length] == said[position + length]
+            ):
+                length += 1
+            best = max(best, length)
+            if best == len(fragment) - start:
+                break
+    return best
 
 
 class LiveSpeechGate:
@@ -153,12 +179,15 @@ class LiveSpeechGate:
             self._agent_words.popleft()
 
     def is_echo(self, text):
-        """True when most of ``text``'s words are words the agent just said."""
+        """True when a run of ``text``'s words, in order, is one the agent just said."""
         words = _words(text)
         if not words:
             return True
-        said = {word for _, word in self._agent_words}
-        return sum(word in said for word in words) / len(words) >= ECHO_WORD_SHARE
+        said = [word for _, word in self._agent_words]
+        if len(words) == 1:
+            return words[0] in said
+        needed = max(ECHO_MIN_RUN_WORDS, math.ceil(len(words) * ECHO_WORD_SHARE))
+        return _longest_common_run(words, said) >= needed
 
     def caller_heard(self, text):
         """A caller transcript fragment from the model (input transcript delta).

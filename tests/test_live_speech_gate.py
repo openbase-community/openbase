@@ -426,3 +426,17 @@ def test_a_requested_playout_is_audible_before_its_first_audio():
     assert revoked == []
     clock["now"] += 5.0
     assert not gate.agent_audible
+
+
+def test_a_stop_that_reuses_one_of_the_agents_words_is_not_echo():
+    """376, 2026-10-11: "Okay, stop, that is enough" over an answer that began
+    "Okay, a refrigerator..." was ignored as echo because half its words (one)
+    were words the agent had said. Echo repeats the agent's words in order."""
+    gate = LiveSpeechGate(clock=lambda: 0.0)
+    gate.agent_said("Okay, a refrigerator uses a refrigerant that absorbs heat")
+    assert not gate.is_echo("okay stop")
+    assert not gate.is_echo("okay stop that is enough")
+    assert gate.is_echo("uses a refrigerant that")
+    assert gate.is_echo("a refrigerant absorbs heat")  # a dropped word still echoes
+    assert gate.is_echo("refrigerant")
+    assert not gate.is_echo("stop")
