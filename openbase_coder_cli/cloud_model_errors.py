@@ -56,7 +56,7 @@ def model_allowance_exhausted_message(text: str | None) -> str | None:
         return None
     return (
         "Your monthly Openbase model allowance is used up. "
-        f"Upgrade your plan at {configured_web_backend_url()} to raise your monthly limit, "
+        f"Subscribe at {configured_web_backend_url()} to keep going, "
         "or wait until your allowance resets next month."
     )
 
@@ -74,8 +74,11 @@ def model_request_budget_message(text: str | None) -> str | None:
 # One short, complete sentence for voice: a live call's speech gate cuts the
 # rest of a reply as soon as the caller is heard, so the spoken form must not
 # depend on a second clause to make sense. The thread keeps the full text.
+# Said aloud, so the address is spelled for speech (Gabe, 2026-10-11: tell
+# the user to subscribe whenever an allowance runs out).
+SUBSCRIBE_SPOKEN = "You can subscribe at app dot openbase dot cloud."
 MODEL_ALLOWANCE_EXHAUSTED_SPOKEN = (
-    "This account's monthly Openbase model allowance is used up."
+    f"You're out of Openbase model credits. {SUBSCRIBE_SPOKEN}"
 )
 
 

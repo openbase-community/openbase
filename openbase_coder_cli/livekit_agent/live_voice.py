@@ -582,8 +582,8 @@ def live_voice_unavailable_detail(decision: VoiceEngineDecision) -> str:
         )
     if reason == "subscription_required":
         return (
-            "Live voice needs an Openbase Cloud plan that includes it; using "
-            "standard voice for this call."
+            "You're out of live voice credits; using standard voice for this "
+            "call. Subscribe at app.openbase.cloud."
         )
     if reason == "live_session_start_failed" or any(
         marker in detail for marker in _PROVIDER_BILLING_MARKERS

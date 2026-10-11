@@ -85,7 +85,7 @@ def test_allowance_denial_in_history_voice_and_auth_classification(
             "detail": "Monthly Openbase model proxy spend limit reached. Model requests are blocked until next month. Subscribe at app.openbase.cloud to raise your monthly limits."
         }
     )
-    expected = f"Your monthly Openbase model allowance is used up. Upgrade your plan at {url} to raise your monthly limit, or wait until your allowance resets next month."
+    expected = f"Your monthly Openbase model allowance is used up. Subscribe at {url} to keep going, or wait until your allowance resets next month."
     assert normalize_model_proxy_error(raw) == expected
     assert not is_backend_auth_failure_text(raw)
     assert is_spend_limit_text(raw)
@@ -103,7 +103,7 @@ def test_allowance_denial_in_history_voice_and_auth_classification(
     # The voice agent says one short sentence; the thread keeps the full text.
     assert (
         _safe_spoken_answer(raw, auth_failed=False)
-        == "This account's monthly Openbase model allowance is used up."
+        == "You're out of Openbase model credits. You can subscribe at app dot openbase dot cloud."
     )
     assert "try again" not in expected
 

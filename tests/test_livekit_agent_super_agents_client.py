@@ -1920,10 +1920,10 @@ def test_safe_spoken_answer_surfaces_spend_limit_distinctly(
         raw, auth_failed=True, backend="openbase_cloud", turn_id="t_spend"
     )
     # One short sentence: the live speech gate may cut a long reply off.
-    assert spoken == "This account's monthly Openbase model allowance is used up."
+    assert spoken == "You're out of Openbase model credits. You can subscribe at app dot openbase dot cloud."
     assert "try again" not in spoken
     assert spoken != super_agents_client_module.BACKEND_ERROR_SPOKEN_FALLBACK
-    assert "monthly" in spoken.lower() and "allowance" in spoken.lower()
+    assert "out of openbase model credits" in spoken.lower() and "subscribe" in spoken.lower()
     assert "voice_turn_backend_spend_limit" in caplog.text
     assert raw not in spoken
 
@@ -2201,7 +2201,7 @@ async def test_failed_voice_turn_speaks_current_allowance_denial(
     speech = result["_livekit_speech_text"]
     assert result["status"] == "failed"
     assert not result["_livekit_backend_auth_failure"]
-    assert speech == "This account's monthly Openbase model allowance is used up."
+    assert speech == "You're out of Openbase model credits. You can subscribe at app dot openbase dot cloud."
     assert "try again" not in speech
     assert "authenticate" not in speech
     assert "Cached" not in speech
@@ -2236,7 +2236,7 @@ def test_failed_voice_turn_speaks_allowance_from_fresh_items(monkeypatch):
         "summary": {"items": [{"type": "agentMessage", "text": _ALLOWANCE_ERROR}]},
     }
     speech = _speech_text_from_progress(progress)
-    assert speech == "This account's monthly Openbase model allowance is used up."
+    assert speech == "You're out of Openbase model credits. You can subscribe at app dot openbase dot cloud."
     assert "try again" not in speech
 
 

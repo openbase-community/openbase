@@ -40,6 +40,7 @@ from openbase_coder_cli.brain_score import (  # noqa: F401
     brain_score_token_file,
     load_brain_score_token,
 )
+from openbase_coder_cli.cloud_model_errors import SUBSCRIBE_SPOKEN
 from openbase_coder_cli.config.cloud_audio import (
     OpenbaseCloudAudioSubscriptionError,
     ensure_openbase_cloud_audio_subscription,
@@ -737,7 +738,13 @@ def _exception_mentions_openbase_cloud_audio(exc: BaseException) -> bool:
 # Spoken when the Openbase Cloud audio allowance is used up: short enough to
 # finish before anything can interrupt it.
 CLOUD_AUDIO_ALLOWANCE_SPOKEN = (
-    "This account's monthly Openbase audio allowance is used up."
+    f"You're out of Openbase voice credits. {SUBSCRIBE_SPOKEN}"
+)
+# Said once at the start of a call that fell back to standard voice because
+# the account's live voice credits are used up.
+LIVE_VOICE_CREDITS_SPOKEN = (
+    "You're out of live voice credits, so this call uses standard voice. "
+    f"{SUBSCRIBE_SPOKEN}"
 )
 
 
@@ -1652,6 +1659,13 @@ async def livekit_agent(ctx: JobContext):
             raise
         if decision.fell_back:
             await _report_live_voice_fallback(ctx.room, decision)
+            if decision.fallback_reason == "subscription_required":
+                try:
+                    session.say(LIVE_VOICE_CREDITS_SPOKEN)
+                except Exception:
+                    logger.warning(
+                        "Unable to speak the live voice credits notice", exc_info=True
+                    )
         await _publish_voice_engine(ctx.room, VOICE_ENGINE_PIPELINE)
         _wire_pipeline_voice_call(
             ctx,
