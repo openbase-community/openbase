@@ -1340,6 +1340,7 @@ async def _transfer_live_voice_route(
     bridge.notify_route_changed(
         action="transfer_to_thread",
         agent_label=route_command.active_target_voice_name or route_command.label,
+        announce=route_command.announce,
     )
 
 

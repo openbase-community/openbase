@@ -24,6 +24,7 @@ from .live_announcement import (
 )
 from .live_preconnect import wait_live_session_started
 from .live_speech_gate import SpeechGatedAgent
+from .route_announcements import play_route_announcement, route_announcement_path
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,10 @@ class LiveCharacterController:
         self._task = None
         self._closed = False
         self._route_pending = False
+        # The clip the next handoff plays before any greeting (a transfer or a
+        # return); None when the move is silent, as Classic is for a transfer
+        # the requesting agent confirms itself.
+        self._route_announcement = None
         self._wake = asyncio.Event()
         self._announcement_stop = asyncio.Event()
         self._speech_changed = asyncio.Event()
@@ -161,12 +166,13 @@ class LiveCharacterController:
     def start(self):
         self._task = asyncio.create_task(self._run(), name="live-characters")
 
-    def route_changed(self):
+    def route_changed(self, action=None, *, announce=True):
         # Detach synchronously: no result can enter the old character while
         # the actor waits for the framework to finish its handoff.
         self.bridge.suspend_session()
         self._silence()
         self._route_pending = True
+        self._route_announcement = route_announcement_path(action, announce=announce)
         self._announcement_stop.set()
         self._speech_changed.set()
         self._wake.set()
@@ -287,6 +293,7 @@ class LiveCharacterController:
             self.bridge.attach(assistant.duplex_session)
             self.bridge.on_character_session_started()
             self._resume_output()
+            await self._announce_route()
             if snapshot.active_thread_id not in self._introduced_routes:
                 self._introduced_routes.add(snapshot.active_thread_id)
                 self.bridge.greet(
@@ -299,6 +306,29 @@ class LiveCharacterController:
                     live_voice_return_greeting(self.bridge.starting_agent_label())
                 )
             return assistant
+
+    async def _announce_route(self):
+        """Play the pending route clip through the new character's output."""
+        path = self._route_announcement
+        self._route_announcement = None
+        if path is None:
+            return
+        try:
+            played = await play_route_announcement(self.session, path)
+        except Exception:
+            # The call goes on without its chime; a failed clip must not end
+            # the call through the character loop's error path.
+            logger.warning(
+                "dispatch_timing stage=live_route_announcement_failed clip=%s",
+                path.name,
+                exc_info=True,
+            )
+            return
+        logger.info(
+            "dispatch_timing stage=live_route_announcement clip=%s played=%s",
+            path.name,
+            played,
+        )
 
     async def _run(self):
         try:

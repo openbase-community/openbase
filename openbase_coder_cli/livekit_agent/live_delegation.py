@@ -1775,8 +1775,14 @@ class LiveDelegationBridge:
             message = f"{agent_name}: {message}"
         self._append_commentary(message, None)
 
-    def notify_route_changed(self, *, action: str, agent_label: str | None) -> None:
-        """Invalidate old speech and hand the new route to the character owner."""
+    def notify_route_changed(
+        self, *, action: str, agent_label: str | None, announce: bool = True
+    ) -> None:
+        """Invalidate old speech and hand the new route to the character owner.
+
+        ``announce`` follows the route command: False when the agent that
+        asked for the transfer confirms it in its own words.
+        """
         label = (agent_label or "").strip() or DISPATCHER_AGENT_LABEL
         if action == "exit_to_dispatch":
             label = DISPATCHER_AGENT_LABEL
@@ -1787,7 +1793,7 @@ class LiveDelegationBridge:
             for entry in self._entries.values():
                 if not self._voice_router.can_deliver_for_snapshot(entry.route):
                     entry.superseded = True
-            self.character_route_changed()
+            self.character_route_changed(action, announce=announce)
             return
         instructions = ""
         try:
@@ -2079,7 +2085,7 @@ class LiveDelegationBridge:
         )
         self._reset_utterance_state()
         if changed and self.character_route_changed is not None:
-            self.character_route_changed()
+            self.character_route_changed("exit_to_dispatch")
         elif changed or delegation_id is not None:
             self._append_commentary(BACK_TO_DISPATCH_COMMENTARY, delegation_id)
 

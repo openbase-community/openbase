@@ -443,7 +443,7 @@ class AnnouncerSpeechQueue:
 
         handle = self._session.say(
             "",
-            audio=self._audio_file_frames(audio_path),
+            audio=audio_file_frames(self._session, audio_path),
             allow_interruptions=False,
             add_to_chat_ctx=False,
         )
@@ -461,23 +461,27 @@ class AnnouncerSpeechQueue:
             audio_path.name,
         )
 
-    async def _audio_file_frames(self, path: Path) -> AsyncIterator[rtc.AudioFrame]:
-        # Decode off the event loop (a multi-minute file is tens of MB of
-        # PCM) and hand the room output frames at its own sample rate in the
-        # same 20 ms shape the TTS plugins produce, so nothing downstream has
-        # to resample or re-chunk a long playout.
-        frames = await asyncio.to_thread(
-            _decode_audio_file, path, sample_rate=self._output_sample_rate()
-        )
-        for frame in frames:
-            yield frame
 
-    def _output_sample_rate(self) -> int:
-        output = getattr(getattr(self._session, "output", None), "audio", None)
-        rate = getattr(output, "sample_rate", None)
-        if isinstance(rate, int) and rate > 0:
-            return rate
-        return DEFAULT_FILE_PLAYBACK_SAMPLE_RATE
+
+async def audio_file_frames(session: AgentSession, path: Path) -> AsyncIterator[rtc.AudioFrame]:
+    """Frames of ``path`` for ``session.say(audio=...)``, at the room output rate."""
+    # Decode off the event loop (a multi-minute file is tens of MB of
+    # PCM) and hand the room output frames at its own sample rate in the
+    # same 20 ms shape the TTS plugins produce, so nothing downstream has
+    # to resample or re-chunk a long playout.
+    frames = await asyncio.to_thread(
+        _decode_audio_file, path, sample_rate=_output_sample_rate(session)
+    )
+    for frame in frames:
+        yield frame
+
+
+def _output_sample_rate(session: AgentSession) -> int:
+    output = getattr(getattr(session, "output", None), "audio", None)
+    rate = getattr(output, "sample_rate", None)
+    if isinstance(rate, int) and rate > 0:
+        return rate
+    return DEFAULT_FILE_PLAYBACK_SAMPLE_RATE
 
 
 DEFAULT_FILE_PLAYBACK_SAMPLE_RATE = 24000

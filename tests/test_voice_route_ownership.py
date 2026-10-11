@@ -122,6 +122,24 @@ async def test_superseded_transfer_does_not_announce_or_replace_character(live):
         sink.enqueue.assert_not_called()
 
 
+async def test_live_transfer_passes_the_announce_flag_to_the_character_owner():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    from openbase_coder_cli.livekit_agent.livekit import _transfer_live_voice_route
+    from openbase_coder_cli.livekit_agent.packets import VoiceRouteCommand
+
+    router = SimpleNamespace(transfer_to_thread=AsyncMock(return_value=True))
+    sink = Mock()
+    command = VoiceRouteCommand(
+        action="transfer_to_thread", thread_id="t", cwd=".", label="Cooper", announce=False
+    )
+    await _transfer_live_voice_route(router, command, sink)
+    sink.notify_route_changed.assert_called_once_with(
+        action="transfer_to_thread", agent_label="Cooper", announce=False
+    )
+
+
 @pytest.mark.parametrize("next_thread", ["first-thread", "second-thread"])
 async def test_old_call_shutdown_does_not_clear_new_call_route(
     monkeypatch, tmp_path, next_thread
