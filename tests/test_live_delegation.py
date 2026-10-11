@@ -2924,3 +2924,59 @@ async def test_a_turn_failed_by_an_unanswered_dialog_speaks_the_backend_message_
     assert live.speech("d1") == [message]
     assert len(dispatcher.prompts) == 1, "terminal until the user acts"
     await bridge.aclose()
+
+
+async def test_a_request_spoken_during_a_pending_transfer_is_carried_to_the_new_agent():
+    """376, 2026-10-11: "Connect me to Marian" started the Dispatcher's turn; the
+    caller's question for Marian, spoken while that turn was still transferring,
+    was steered into it and never reached Marian."""
+    from openbase_coder_cli.livekit_agent.live_delegation import (
+        LIVE_CARRIED_REQUEST_NOTE,
+    )
+
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    marian = FakeVoiceClient(thread_id="marian-thread")
+    marian.result_gate.set()
+    marian.result = {
+        "_livekit_speech_text": "It is a Python project.",
+        "_livekit_turn_id": "marian-turn-1",
+        "status": "completed",
+        "progress": {},
+    }
+    changes: list[tuple] = []
+    bridge.character_route_changed = lambda action, **kw: changes.append((action, kw))
+    try:
+        live.final("Connect me to Marian.")
+        await _settle()
+        live.final("Marian, in one sentence, what kind of project is in your folder?")
+        await _settle()
+        assert len(dispatcher.prompts) == 2, (
+            "the question was steered into the Dispatcher's turn"
+        )
+        router.transfer(marian)
+        bridge.notify_route_changed(action="transfer_to_thread", agent_label="Marian")
+        await _settle()
+        assert changes and changes[0][0] == "transfer_to_thread"
+        assert len(marian.prompts) == 1
+        carried = marian.prompts[0][0]
+        assert LIVE_CARRIED_REQUEST_NOTE in carried
+        assert "what kind of project is in your folder" in carried
+        assert "Connect me to Marian" not in carried
+        assert live.speech()[-1] == "It is a Python project."
+    finally:
+        await bridge.aclose()
+
+
+async def test_a_lone_transfer_request_is_not_carried():
+    bridge, live, router, dispatcher, ledger, lifecycle = _make_bridge()
+    marian = FakeVoiceClient(thread_id="marian-thread")
+    bridge.character_route_changed = lambda action, **kw: None
+    try:
+        live.final("Connect me to Marian.")
+        await _settle()
+        router.transfer(marian)
+        bridge.notify_route_changed(action="transfer_to_thread", agent_label="Marian")
+        await _settle()
+        assert marian.prompts == []
+    finally:
+        await bridge.aclose()

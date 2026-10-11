@@ -237,6 +237,15 @@ LIVE_CHARACTER_REDELIVERY = (
 # turn that failed on allowance, for instance). A spoken turn answers what
 # was just said, not that backlog (2026-10-10: a voice question was answered
 # with an eight-item roster from a failed text turn first).
+# A caller request spoken while the Dispatcher was still carrying out a
+# transfer went into the Dispatcher's running turn and died with the route
+# change (376, 2026-10-11 05:12Z: "Marian, in one sentence, what kind of
+# project is in your folder?" was never put to Marian). It is carried to the
+# new agent as its first request instead.
+LIVE_CARRIED_REQUEST_NOTE = (
+    "[Openbase system note: the caller said this while the call was being "
+    "transferred to you; it is for you.]"
+)
 LIVE_TURN_SCOPE_NOTE = (
     "[Openbase system note: answer only what the caller just said in this "
     "spoken request. Do not resume, retry or restate earlier requests in this "
@@ -1868,6 +1877,7 @@ class LiveDelegationBridge:
         label = (agent_label or "").strip() or DISPATCHER_AGENT_LABEL
         if action == "exit_to_dispatch":
             label = DISPATCHER_AGENT_LABEL
+        carried = self._requests_to_carry() if action != "exit_to_dispatch" else []
         self._active_agent_label = label
         self._call_context.observe_route(self._voice_router.route_snapshot(), label)
         self._reset_utterance_state()
@@ -1876,6 +1886,7 @@ class LiveDelegationBridge:
                 if not self._voice_router.can_deliver_for_snapshot(entry.route):
                     entry.superseded = True
             self.character_route_changed(action, announce=announce, agent_label=label)
+            self._carry_requests(carried, label)
             return
         instructions = ""
         try:
@@ -1893,6 +1904,39 @@ class LiveDelegationBridge:
             self._append_commentary(BACK_TO_DISPATCH_COMMENTARY, None)
         else:
             self._append_commentary(f"You are now talking to {label}.", None)
+
+    def _requests_to_carry(self) -> list[str]:
+        """Caller requests spoken into the old route's running turn after the
+        request that performed the transfer: they belong to the new agent.
+
+        The oldest unfinished request on the old route is the one the agent
+        was carrying out (the transfer itself); everything the caller added
+        after it, which was steered into that turn, has no other way to reach
+        the new agent.
+        """
+        running = sorted(
+            (
+                entry
+                for entry in self._entries.values()
+                if not entry.completed
+                and not self._voice_router.can_deliver_for_snapshot(entry.route)
+            ),
+            key=lambda entry: entry.created_at,
+        )
+        return [entry.prompt for entry in running[1:] if entry.prompt.strip()]
+
+    def _carry_requests(self, requests: list[str], label: str) -> None:
+        if not requests or self._closed:
+            return
+        text = " ".join(request.strip() for request in requests)
+        self._log.info(
+            "%s stage=live_request_carried_to_new_route label=%s requests=%d text_len=%d",
+            DISPATCH_TIMING_LOG,
+            label,
+            len(requests),
+            len(text),
+        )
+        self._start_turn(text, source="carried")
 
     def deliver_orphaned_result(self, client, turn_id: str, speech_text: str) -> None:
         """Speak a completed turn answer no delegation consumed."""
@@ -1942,6 +1986,8 @@ class LiveDelegationBridge:
         # read a skill while the caller waits (typed turns still carry it).
         prompt = wrap_voice_prompt(entry.prompt)
         prompt = f"{LIVE_TURN_SCOPE_NOTE}\n\n{prompt}"
+        if entry.source == "carried":
+            prompt = f"{LIVE_CARRIED_REQUEST_NOTE}\n\n{prompt}"
         prompt = apply_screen_context(self._voice_router, prompt)
         prompt = self._call_context.apply(prompt)
         entry.heartbeat = asyncio.create_task(
