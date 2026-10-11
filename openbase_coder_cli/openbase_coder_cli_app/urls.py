@@ -21,6 +21,7 @@ from openbase_coder_cli.openbase_coder_cli_app.notifications import (
 from openbase_coder_cli.openbase_coder_cli_app.oauth_callback_replay import (
     oauth_callback_replay,
 )
+from openbase_coder_cli.openbase_coder_cli_app.shown_text import shown_text_fetch
 from openbase_coder_cli.openbase_coder_cli_app.skill_settings import (
     skill_sharing_settings,
 )
@@ -181,7 +182,11 @@ from openbase_coder_cli.openbase_coder_cli_app.voice_model_settings import (
 router = DefaultRouter()
 
 urlpatterns = [
-    path("dictation/session/", offloaded_view(dictation_session), name="dictation-session"),
+    path(
+        "dictation/session/",
+        offloaded_view(dictation_session),
+        name="dictation-session",
+    ),
     path("auth/session/", auth_session, name="auth-session"),
     path(
         "auth/refresh-jwt/",
@@ -205,6 +210,7 @@ urlpatterns = [
     path("diagnostics/ios-logs/", ios_logs_upload, name="ios-logs-upload"),
     path("user/ios-app-control/", ios_app_control, name="ios-app-control"),
     path("settings/ai-account/", ai_account_settings, name="ai-account-settings"),
+    path("user/shown-text/<str:text_id>/", shown_text_fetch, name="shown-text-fetch"),
     path(
         "user/oauth-callback-replay/",
         oauth_callback_replay,

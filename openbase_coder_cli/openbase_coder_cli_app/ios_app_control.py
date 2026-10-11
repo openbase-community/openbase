@@ -203,6 +203,16 @@ def publish_ios_app_control(payload: dict[str, Any]) -> dict[str, Any]:
     ack = async_to_sync(_publish_and_await_ack)(channel_layer, command, ack_timeout)
     delivered = ack is not None
     result = {}
+    if command["action"] == "show_text" and ack is None:
+        # No app connected: push a tap-to-show link instead (text stays here).
+        from openbase_coder_cli.openbase_coder_cli_app.shown_text import (
+            push_parked_text,
+        )
+
+        result["shown"] = False
+        result["notified"] = push_parked_text(
+            command["text"], command.get("label"), command.get("url")
+        )
     if ack is not None and type(ack.get("shown")) is bool:
         result["shown"] = ack["shown"]
         if type(ack.get("notified")) is bool:

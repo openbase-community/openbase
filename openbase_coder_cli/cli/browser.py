@@ -178,6 +178,17 @@ def _try_arrange_forward(port: int) -> LoopbackForward | None:
     )
 
 
+def self_vpn_address() -> str | None:
+    """This computer's own Openbase VPN address (cloud workspace or host VPN)."""
+    from openbase_coder_cli.services import tailscale_provider
+
+    if tailscale_provider.is_netmesh_tsnet():
+        from openbase_coder_cli.services.tunneld import tunneld_status
+
+        return _self_tailnet_target(tunneld_status)
+    return _self_tailnet_target(_host_vpn_status)
+
+
 def _host_vpn_status() -> tuple[bool, dict | None, str | None]:
     """The host VPN's status in tunneld_status's (available, payload, error) shape."""
     from openbase_coder_cli.services import tailscale_provider

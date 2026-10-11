@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import os
 from types import SimpleNamespace
 
@@ -651,3 +652,48 @@ def test_consumer_forwards_copy_and_show_outcomes(content, expected):
         **expected,
     }
     assert "text" not in forwarded
+
+
+def test_show_text_without_a_connected_app_pushes_a_link_not_the_text(monkeypatch):
+    from openbase_coder_cli.config import cloud_notifications
+    from openbase_coder_cli.openbase_coder_cli_app import shown_text
+
+    browser_mod = importlib.import_module("openbase_coder_cli.cli.browser")
+    monkeypatch.setattr(browser_mod, "self_vpn_address", lambda: "100.64.0.33")
+    pushed = []
+    monkeypatch.setattr(
+        cloud_notifications,
+        "send_notification_push",
+        lambda **kwargs: pushed.append(kwargs) or 1,
+    )
+    monkeypatch.setattr(views, "get_channel_layer", lambda: FakeChannelLayer())
+    monkeypatch.setattr(views, "IOS_APP_CONTROL_ACK_TIMEOUT_SECONDS", 0.05)
+
+    response = views.ios_app_control(
+        _request({"action": "show_text", "text": "WXYZ-5678", "label": "GitHub code"})
+    )
+    assert response.status_code == 202
+    assert response.data["shown"] is False and response.data["notified"] is True
+    push = pushed[0]
+    assert push["title"] == "Your GitHub code"
+    assert "WXYZ-5678" not in str(push)
+    link = push["user_info"]["url"]
+    assert link.startswith("openbase-app://show-text?") and "host=100.64.0.33" in link
+    text_id = link.split("id=")[1].split("&")[0]
+
+    fetch = APIRequestFactory().get(f"/api/user/shown-text/{text_id}/")
+    force_authenticate(fetch, user=SimpleNamespace(is_authenticated=True))
+    first = shown_text.shown_text_fetch(fetch, text_id=text_id)
+    assert first.status_code == 200 and first.data["text"] == "WXYZ-5678"
+    again = APIRequestFactory().get(f"/api/user/shown-text/{text_id}/")
+    force_authenticate(again, user=SimpleNamespace(is_authenticated=True))
+    assert shown_text.shown_text_fetch(again, text_id=text_id).status_code == 404
+
+
+def test_show_text_push_failure_reports_not_notified(monkeypatch):
+    browser_mod = importlib.import_module("openbase_coder_cli.cli.browser")
+    monkeypatch.setattr(browser_mod, "self_vpn_address", lambda: None)
+    monkeypatch.setattr(views, "get_channel_layer", lambda: FakeChannelLayer())
+    monkeypatch.setattr(views, "IOS_APP_CONTROL_ACK_TIMEOUT_SECONDS", 0.05)
+    response = views.ios_app_control(_request({"action": "show_text", "text": "X"}))
+    assert response.data["notified"] is False
