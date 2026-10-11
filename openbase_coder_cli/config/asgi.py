@@ -47,6 +47,26 @@ _inner = wrap_asgi_application(
 )
 
 
+_stack_dump_file = None
+
+
+def _install_stack_dump_signal() -> None:
+    """`kill -USR1 <pid>` appends every thread's Python stack to
+    ~/.openbase/logs/django-cli-stacks.log: an in-process profiler for a hot or
+    wedged API where py-spy would need root (macOS)."""
+    global _stack_dump_file
+    import faulthandler
+    import signal
+    from pathlib import Path
+
+    if _stack_dump_file is not None or not hasattr(signal, "SIGUSR1"):
+        return
+    log_dir = Path.home() / ".openbase" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    _stack_dump_file = open(log_dir / "django-cli-stacks.log", "a")  # noqa: SIM115
+    faulthandler.register(signal.SIGUSR1, file=_stack_dump_file, all_threads=True)
+
+
 async def application(scope, receive, send):
     """ASGI application with lifespan passthrough."""
     if scope["type"] == "lifespan":
@@ -55,6 +75,7 @@ async def application(scope, receive, send):
         while True:
             message = await receive()
             if message["type"] == "lifespan.startup":
+                _install_stack_dump_signal()
                 # Runs only in the server process (not management commands):
                 # keep recent-project metadata warm so the first Threads/
                 # Projects visit does not pay the cold git-status cost.
