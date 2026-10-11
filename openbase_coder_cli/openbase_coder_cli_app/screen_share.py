@@ -23,6 +23,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from openbase_coder_cli import desktop_control
+from openbase_coder_cli.linux_computer_use import LinuxComputerUseError
 from openbase_coder_cli.livekit_announcer import (
     AnnouncerValidationError,
     NoActiveLiveKitRoomError,
@@ -103,7 +104,18 @@ def _start_macos(payload: dict[str, str]) -> dict[str, Any]:
     )
 
 
+LINUX_DESKTOP_UNAVAILABLE_CODE = "linux_desktop_unavailable"
+
+
+def _linux_desktop_check() -> None:
+    """Raise LinuxComputerUseError when this Linux host has no shareable desktop."""
+    from openbase_coder_cli.linux_computer_use import LinuxDesktop
+
+    LinuxDesktop().require_ready()
+
+
 def _start_linux(payload: dict[str, str]) -> dict[str, Any]:
+    _linux_desktop_check()
     client = _companion_client_factory()
     client.ensure_running()
     return client.start_screen_share(
@@ -154,6 +166,18 @@ def livekit_companion_start(request):
     except desktop_control.DesktopControlError as exc:
         logger.warning("Desktop screen share start failed: %s (code=%s)", exc, exc.code)
         return _desktop_error_response(exc)
+    except LinuxComputerUseError as exc:
+        # A cloud workspace without a desktop (no X display or tools): not an
+        # error, just not shareable. Say so plainly.
+        return Response(
+            {
+                "supported": False,
+                "started": False,
+                "platform": host,
+                "code": LINUX_DESKTOP_UNAVAILABLE_CODE,
+                "detail": f"This computer has no desktop to share. {exc}",
+            }
+        )
     except Exception as exc:
         logger.exception("Unable to start LiveKit companion")
         return Response(
