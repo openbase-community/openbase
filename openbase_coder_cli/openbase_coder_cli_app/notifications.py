@@ -40,7 +40,7 @@ def notification_list(request):
     materialize report/approval/conflict notifications without any
     WebSocket client connected.
     """
-    sync_notification_producers()
+    sync_notification_producers(from_request=True)
     include_read = request.query_params.get("include_read") != "false"
     try:
         limit = int(request.query_params.get("limit") or "")

@@ -714,7 +714,9 @@ def _post(path: str, data: dict):
 def test_notification_list_view_runs_sweep(monkeypatch):
     swept = []
     monkeypatch.setattr(
-        notifications, "sync_notification_producers", lambda: swept.append(True)
+        notifications,
+        "sync_notification_producers",
+        lambda **kwargs: swept.append(kwargs),
     )
     notification_store.upsert_notification("thread", "t-1", title="T")
     notification_store.upsert_notification("thread", "t-2", title="T2")
@@ -722,7 +724,7 @@ def test_notification_list_view_runs_sweep(monkeypatch):
 
     response = notifications.notification_list(_get("/api/notifications/"))
     assert response.status_code == 200
-    assert swept == [True]
+    assert swept == [{"from_request": True}]
     assert response.data["unread_count"] == 1
     assert len(response.data["notifications"]) == 2
 
@@ -759,3 +761,33 @@ def test_mark_all_read_view():
     )
     assert response.status_code == 200
     assert response.data["marked"] == 1
+
+
+def test_request_sweep_never_waits_behind_a_running_sweep(monkeypatch):
+    calls = []
+    monkeypatch.setattr(notification_producers, "_last_sweep_monotonic", None)
+    for name in ("_sweep_reports", "_sweep_approvals", "_sweep_sync_conflicts"):
+        monkeypatch.setattr(notification_producers, name, lambda: calls.append(1))
+    assert notification_producers._sweep_lock.acquire()
+    try:
+        started = time.monotonic()
+        notification_producers.sync_notification_producers(from_request=True)
+        assert time.monotonic() - started < 0.5
+    finally:
+        notification_producers._sweep_lock.release()
+    assert calls == []
+
+
+def test_request_sweeps_are_debounced(monkeypatch):
+    calls = []
+    monkeypatch.setattr(notification_producers, "_last_sweep_monotonic", None)
+    monkeypatch.setattr(
+        notification_producers.sharing_service,
+        "sync_shared_reports_in_background",
+        lambda: None,
+    )
+    for name in ("_sweep_reports", "_sweep_approvals", "_sweep_sync_conflicts"):
+        monkeypatch.setattr(notification_producers, name, lambda: calls.append(1))
+    for _ in range(5):
+        notification_producers.sync_notification_producers(from_request=True)
+    assert len(calls) == 3

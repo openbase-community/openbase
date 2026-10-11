@@ -28,6 +28,10 @@ from openbase_coder_cli.openbase_coder_cli_app.notification_store import (
 logger = logging.getLogger(__name__)
 
 SWEEP_DEBOUNCE_SECONDS = 5.0
+# Request-path sweeps only shorten discovery latency for polling clients; the
+# server's background loop owns discovery, and each sweep walks every
+# project's report files, so polls sweep rarely and never queue behind one.
+REQUEST_SWEEP_DEBOUNCE_SECONDS = 15.0
 MAX_PUSH_BODY_LENGTH = 140
 REVISION_USER_INFO_KEY = "notification_revision"
 
@@ -35,15 +39,26 @@ _sweep_lock = threading.Lock()
 _last_sweep_monotonic: float | None = None
 
 
-def sync_notification_producers(*, force: bool = False) -> None:
-    """Materialize notifications for new reports, approvals, and conflicts."""
+def sync_notification_producers(
+    *, force: bool = False, from_request: bool = False
+) -> None:
+    """Materialize notifications for new reports, approvals, and conflicts.
+
+    `from_request` sweeps skip when another sweep is running instead of
+    parking a request thread behind it.
+    """
     global _last_sweep_monotonic
-    with _sweep_lock:
+    if not _sweep_lock.acquire(blocking=not from_request):
+        return
+    try:
         now = time.monotonic()
+        debounce = (
+            REQUEST_SWEEP_DEBOUNCE_SECONDS if from_request else SWEEP_DEBOUNCE_SECONDS
+        )
         if (
             not force
             and _last_sweep_monotonic is not None
-            and now - _last_sweep_monotonic < SWEEP_DEBOUNCE_SECONDS
+            and now - _last_sweep_monotonic < debounce
         ):
             return
         _last_sweep_monotonic = now
@@ -55,6 +70,8 @@ def sync_notification_producers(*, force: bool = False) -> None:
                 producer()
             except Exception:
                 logger.exception("Notification producer %s failed", producer.__name__)
+    finally:
+        _sweep_lock.release()
 
     # Piggyback on the same sweep to keep cloud shares fresh when
     # agents rewrite shared report files directly on disk. Runs on its own
