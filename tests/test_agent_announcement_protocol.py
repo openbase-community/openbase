@@ -151,8 +151,8 @@ async def test_new_steer_invalidates_completion_and_can_explicitly_resume_speech
     await begin(w, delivery="quiet", quiet_request="silently")
     await finish(w)
     w.store.append_turn_steer(w.turn.id, "You may speak now. Check the result again.")
-    with pytest.raises(RuntimeError, match="without a verified"):
-        await terminal(w)
+    await terminal(w)  # the stale quiet summary is not announced; the turn stands
+    assert not w.receipts
     await begin(w, resume_request="You may speak now.")
     await finish(w, "Rowan: the second check passed.")
     await terminal(w)
@@ -168,8 +168,8 @@ async def test_parallel_work_after_finish_invalidates_old_summary(worker):
     await w.protocol.before_tool(w.session.id, event("Bash", "shell-2"))
     assert (await w.protocol.stop(w.session.id))["decision"] == "block"
     await w.protocol.after_tool(w.session.id, event("Bash", "shell-2"))
-    with pytest.raises(RuntimeError, match="without a verified"):
-        await terminal(w)
+    await terminal(w)  # no stale summary is spoken, and the turn is not failed
+    assert all(text != "Old result." for _, text, _, _ in w.receipts)
     await finish(w, "Rowan: the verified new result.")
     await terminal(w)
     assert all(text != "Old result." for _, text, _, _ in w.receipts)
@@ -245,8 +245,8 @@ async def test_ambiguous_failed_intro_is_not_repeated_or_claimed(worker):
     w.protocol.publish = failure
     with pytest.raises(TimeoutError):
         await begin(w)
-    with pytest.raises(RuntimeError, match="no automatic repeat"):
-        await begin(w)
+    # Never repeated, and never a reason to stop the work.
+    assert (await begin(w))["status"] == "ready"
     assert len(attempts) == 1
 
 
@@ -458,7 +458,10 @@ async def test_managed_playback_monitor_interrupts_and_cleans_up(worker):
     assert interrupted.is_set()
 
 
-async def test_failed_introduction_cannot_be_hidden_by_finish(worker):
+async def test_a_failed_introduction_never_fails_the_work(worker):
+    """376, 2026-10-11: a worker whose introduction could not be sent ended
+    "failed" with its file written. The work stands; the completion is still
+    attempted."""
     w = worker
 
     async def failed(*args):
@@ -467,10 +470,8 @@ async def test_failed_introduction_cannot_be_hidden_by_finish(worker):
     w.protocol.publish = failed
     with pytest.raises(TimeoutError):
         await begin(w)
-    with pytest.raises(RuntimeError, match="no submission receipt"):
-        await finish(w)
-    with pytest.raises(RuntimeError, match="without a verified"):
-        await terminal(w)
+    await finish(w)
+    await terminal(w)  # raises nothing
 
 
 async def test_quiet_task_can_complete_without_any_work_tools(worker):
@@ -628,3 +629,35 @@ async def test_reused_worker_gets_authoritative_protocol_and_actual_request_orig
         "recorded origin is direct conversation"
         in output["hookSpecificOutput"]["additionalContext"]
     )
+
+
+def test_no_call_announcement_uses_the_notify_endpoint_without_an_owner_login(
+    monkeypatch,
+):
+    """A Cloud workspace has no owner login, only a machine token, which the
+    user-say endpoint refuses (376, 2026-10-11); the generic notify endpoint
+    takes it."""
+    from openbase_coder_cli.agent_announcements import speech
+    from openbase_coder_cli.config.token_manager import AuthLoginRequiredError
+
+    pushed = []
+
+    def refuse(**kwargs):
+        raise AuthLoginRequiredError(
+            "Openbase Cloud login is required to notify your phone."
+        )
+
+    monkeypatch.setattr(speech, "send_user_say_fallback", refuse)
+    monkeypatch.setattr(
+        speech, "send_notification_push", lambda **kw: pushed.append(kw)
+    )
+    session = SimpleNamespace(id="s_lauren", agent_name="Lauren")
+    result = speech._submit(session, "Lauren finished.", "m1", None)
+    assert result["status"] == "notification_submitted"
+    assert pushed == [
+        {
+            "title": "Lauren",
+            "body": "Lauren finished.",
+            "user_info": {"thread_id": "s_lauren"},
+        }
+    ]

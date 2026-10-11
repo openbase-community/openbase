@@ -5,16 +5,37 @@ from __future__ import annotations
 import asyncio
 
 from openbase_coder_cli.cli.local_server import local_server_request
-from openbase_coder_cli.config.cloud_notifications import send_user_say_fallback
+from openbase_coder_cli.config.cloud_notifications import (
+    send_notification_push,
+    send_user_say_fallback,
+)
+from openbase_coder_cli.config.token_manager import AuthLoginRequiredError
 from openbase_coder_cli.livekit_voice_history import record_voice_assignment
 from openbase_coder_cli.livekit_voice_route import super_agent_voice_for_context
 
 
-def _submit(session, text: str, message_id: str, room_name: str | None) -> dict:
-    if room_name is None:
+def _notify_devices(session, text: str) -> None:
+    """Push the announcement to the owner's phones when no call can play it.
+
+    The user-say endpoint takes only the owner's login; a Cloud workspace has
+    none, only a machine token that the generic notify endpoint accepts (376,
+    2026-10-11: "Openbase Cloud login is required to notify your phone").
+    """
+    try:
         send_user_say_fallback(
             agent_name=session.agent_name, message=text, thread_id=session.id
         )
+    except AuthLoginRequiredError:
+        send_notification_push(
+            title=session.agent_name or "Openbase",
+            body=text,
+            user_info={"thread_id": session.id},
+        )
+
+
+def _submit(session, text: str, message_id: str, room_name: str | None) -> dict:
+    if room_name is None:
+        _notify_devices(session, text)
         return {"status": "notification_submitted", "message_id": message_id}
     voice = super_agent_voice_for_context(session.id, session.name, session.agent_name)
     if voice is None or not session.agent_name:
@@ -44,9 +65,7 @@ def _submit(session, text: str, message_id: str, room_name: str | None) -> dict:
         return result
     if result.get("status") == "no_active_room":
         # Never retarget a completion to a new call after its original room closed.
-        send_user_say_fallback(
-            agent_name=session.agent_name, message=text, thread_id=session.id
-        )
+        _notify_devices(session, text)
         return {"status": "notification_submitted", "message_id": message_id}
     raise RuntimeError(result.get("detail") or "Announcement submission failed.")
 
