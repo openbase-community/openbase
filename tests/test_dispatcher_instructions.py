@@ -243,5 +243,8 @@ def test_dispatcher_rules_continue_a_named_agent_instead_of_starting_a_new_one()
     Marian's thread."""
     rules = instructions.with_dispatcher_rules("base")
     assert "continue that agent on its own thread" in rules
-    assert "super_agents_steer with `name` set to the agent's name" in rules
+    assert 'e.g. `name="Marian"`' in rules
+    # 376, 04:51Z: with the earlier wording the Dispatcher continued the
+    # thread labelled "marian-step-files" (agent Siobhan) instead of Marian's.
+    assert "never by a thread label that happens to contain the" in rules
     assert "Never\n  super_agents_start a second thread" in rules
