@@ -48,9 +48,22 @@ class ManagedAnnouncements:
         )
 
     def eligible(self, session):
-        return (
-            WORKER_POLICY_MARKER in (session.developer_instructions or "")
-            and session.id != get_livekit_voice_route_state().dispatcher_thread_id
+        """Managed workers only: never the Dispatcher, current or retired.
+
+        Exempting the Dispatcher by thread id alone named a recreated
+        Dispatcher with its voice ("Jacqueline") before the route state
+        carried the new id, and the retired one once the id moved on (376,
+        2026-10-11); the identity check covers the label too.
+        """
+        from openbase_coder_cli.livekit_voice_route import is_dispatcher_identity
+
+        return WORKER_POLICY_MARKER in (
+            session.developer_instructions or ""
+        ) and not is_dispatcher_identity(
+            session.id,
+            getattr(session, "name", None),
+            getattr(session, "agent_name", None),
+            route_state=get_livekit_voice_route_state(),
         )
 
     def configure_session(self, session, options, sdk):
