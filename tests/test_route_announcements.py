@@ -73,10 +73,9 @@ async def test_announce_synthesizes_with_the_announcer_tts_and_awaits_playout(
 
     assert await announcer.announce(session, "exit_to_dispatch") is True
     assert captured["text"] == BACK_TO_DISPATCH_TEXT
-    assert (
-        captured["allow_interruptions"] is False
-        and captured["add_to_chat_ctx"] is False
-    )
+    # GPT-Live rejects allow_interruptions=False; the speech gate handles echo.
+    assert "allow_interruptions" not in captured
+    assert captured["add_to_chat_ctx"] is False
     assert seen == {
         "tts": tts,
         "text": BACK_TO_DISPATCH_TEXT,
