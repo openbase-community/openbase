@@ -14,6 +14,7 @@ from openbase_coder_cli.livekit_voice_history import (
 )
 from openbase_coder_cli.livekit_voice_route import (
     get_livekit_voice_route_state,
+    is_dispatcher_label,
     super_agent_voice_for_context,
 )
 from openbase_coder_cli.openbase_coder_cli_app.item_tags import thread_tags
@@ -70,14 +71,17 @@ def annotate_thread_payload(
     )
     assignment = None
 
-    if is_dispatcher:
+    if is_dispatcher or is_dispatcher_label(display_name):
+        # The pinned Dispatcher, or a Dispatcher the account switch retired:
+        # both keep the Dispatcher's name and voice; neither is a Super Agent
+        # with a derived human character.
         agent_name = "dispatcher"
         assignment = _voice_assignment_payload(
             thread_id=resolved_thread_id,
             agent_name=agent_name,
             voice_id=route_state.dispatcher_voice_id,
             voice_name=route_state.dispatcher_voice_name,
-            source="route_state",
+            source="route_state" if is_dispatcher else "retired_dispatcher",
         )
     elif is_active_target:
         active_agent_name = route_state.active_target_voice_name or agent_name

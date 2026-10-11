@@ -150,3 +150,17 @@ async def test_codex_existing_session_identity_migration(
     assert thread.agent_name == expected
     assert (await client.get_session("existing")).agent_name == expected
     await client.close()
+
+
+@pytest.mark.asyncio
+async def test_a_retired_dispatcher_speaks_as_the_dispatcher(tmp_path, monkeypatch):
+    from super_agents.app_server_client import CodexAppServerClient
+
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    client = CodexAppServerClient(state_file=tmp_path / "state.json")
+    thread = ThreadInfo(
+        session_id="old-dispatcher", directory=str(tmp_path), name="dispatcher (retired)"
+    )
+    await ensure_speaking_identity(client, thread)
+    assert thread.agent_name == "dispatcher"
+    await client.close()
