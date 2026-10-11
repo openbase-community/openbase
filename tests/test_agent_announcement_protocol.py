@@ -661,3 +661,64 @@ def test_no_call_announcement_uses_the_notify_endpoint_without_an_owner_login(
             "user_info": {"thread_id": "s_lauren"},
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_failed_intro_does_not_skip_tool_tracking_or_reuse_stale_finish(worker):
+    w = worker
+
+    async def unavailable(*args):
+        raise TimeoutError("announcement endpoint temporarily unavailable")
+
+    w.protocol.publish = unavailable
+    with pytest.raises(TimeoutError):
+        await begin(w)
+    await finish(w, "Rowan: the tests passed.")
+    assert (
+        await w.protocol.before_tool(w.session.id, event("Bash", "rerun-tests")) == {}
+    )
+    await w.protocol.after_tool(w.session.id, event("Bash", "rerun-tests"))
+    # The additional work invalidates the previously prepared summary.
+    w.protocol.publish = w.publish
+    await terminal(w)
+    assert not w.receipts, "announced old success after untracked subsequent work"
+
+
+async def test_failed_intro_tracks_tools_after_reminders_are_exhausted(worker):
+    w = worker
+
+    async def unavailable(*args):
+        raise TimeoutError("announcement endpoint unavailable")
+
+    w.protocol.publish = unavailable
+    with pytest.raises(TimeoutError):
+        await begin(w)
+    for index in range(MAX_CORRECTIONS + 2):
+        await finish(w, "Old success.")
+        tool = event("Bash", f"tests-{index}")
+        assert await w.protocol.before_tool(w.session.id, tool) == {}
+        state = w.ledger.read(w.session.id)["turn"]
+        assert "finish" not in state
+        assert state["pending"] == [tool["tool_use_id"]]
+        with pytest.raises(ValueError, match="still running"):
+            await finish(w)
+        await w.protocol.after_tool(w.session.id, tool)
+    w.protocol.publish = w.publish
+    await finish(w, "Rowan: the new tests failed.")
+    await terminal(w)
+    await terminal(w)
+    assert len(w.receipts) == 1
+    assert w.receipts[0][1] == "Rowan: the new tests failed."
+
+
+async def test_tool_before_begin_is_tracked_until_result(worker):
+    w = worker
+    tool = event("Bash", "started-before-begin")
+    await w.protocol.before_tool(w.session.id, tool)
+    await begin(w)
+    with pytest.raises(ValueError, match="still running"):
+        await finish(w)
+    await w.protocol.after_tool(w.session.id, tool)
+    await finish(w)
+    await terminal(w)
+    assert len(w.receipts) == 2

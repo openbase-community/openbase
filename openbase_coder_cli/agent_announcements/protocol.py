@@ -224,6 +224,11 @@ class AnnouncementProtocol:
             return {}
 
         def check(state, task):
+            # Every permitted tool changes the work, even if speech setup failed.
+            task.pop("finish", None)
+            tool_id = event["tool_use_id"]
+            if tool_id not in task["pending"]:
+                task["pending"].append(tool_id)
             if task.get("delivery") not in {"audible", "quiet", "direct"}:
                 return self._correction(
                     task,
@@ -237,10 +242,6 @@ class AnnouncementProtocol:
                     task,
                     "The introduction was not submitted. Do not claim it succeeded.",
                 )
-            task.pop("finish", None)
-            tool_id = event["tool_use_id"]
-            if tool_id not in task["pending"]:
-                task["pending"].append(tool_id)
             return None
 
         # The announcement is never allowed to stand between the worker and
