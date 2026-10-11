@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import click
 import pytest
 
-from openbase_coder_cli.services import launchd, readiness
+from openbase_coder_cli.services import launchd, readiness, selection
 from openbase_coder_cli.services.definitions import ServiceDefinition
 from openbase_coder_cli.services.installation import InstallationConfig
 
@@ -35,10 +35,14 @@ def test_failed_provider_stops_install_batch_before_consumers(monkeypatch):
     provider, consumer = definition("provider", "consumer"), definition("consumer")
     monkeypatch.setattr(launchd, "default_services", lambda *_: [consumer, provider])
     monkeypatch.setattr(
+        launchd, "configured_default_services", lambda: [consumer, provider]
+    )
+    monkeypatch.setattr(
         launchd, "include_installed_optional_services", lambda services, _: services
     )
     monkeypatch.setattr(launchd, "_ensure_launchd_paths", lambda: None)
-    monkeypatch.setattr(launchd, "_selected_backend", lambda _: "codex")
+    monkeypatch.setattr(selection, "configured_coding_backends", lambda: ["codex"])
+    monkeypatch.setattr(launchd, "configured_coding_backends", lambda: ["codex"])
     monkeypatch.setattr(launchd.tp, "provider", lambda: "netmesh-tsnet")
     monkeypatch.setattr(launchd, "_resolve_binaries", lambda *a: {})
     monkeypatch.setattr(launchd, "remove_service", lambda _: False)
@@ -69,10 +73,16 @@ def test_failed_provider_still_installs_services_that_do_not_need_it(monkeypatch
         launchd, "default_services", lambda *_: [provider, consumer, independent]
     )
     monkeypatch.setattr(
+        launchd,
+        "configured_default_services",
+        lambda: [provider, consumer, independent],
+    )
+    monkeypatch.setattr(
         launchd, "include_installed_optional_services", lambda services, _: services
     )
     monkeypatch.setattr(launchd, "_ensure_launchd_paths", lambda: None)
-    monkeypatch.setattr(launchd, "_selected_backend", lambda _: "codex")
+    monkeypatch.setattr(selection, "configured_coding_backends", lambda: ["codex"])
+    monkeypatch.setattr(launchd, "configured_coding_backends", lambda: ["codex"])
     monkeypatch.setattr(launchd.tp, "provider", lambda: "netmesh")
     monkeypatch.setattr(launchd, "_resolve_binaries", lambda *a: {})
     monkeypatch.setattr(launchd, "remove_service", lambda _: False)
@@ -116,9 +126,7 @@ def test_codex_provider_is_ready_when_newer_than_installed_cli(monkeypatch):
     )
     monkeypatch.setattr(skew_module, "service_endpoint", lambda name: f"ep:{name}")
     versions = {"ep:codex-app-server": "0.161.0"}
-    monkeypatch.setattr(
-        skew_module, "running_codex_app_server_version", versions.get
-    )
+    monkeypatch.setattr(skew_module, "running_codex_app_server_version", versions.get)
     assert readiness.provider_ready(definition("codex-app-server")) is True
 
     versions["ep:codex-app-server"] = "0.160.0"  # the stale pre-restart instance

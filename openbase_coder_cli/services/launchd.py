@@ -19,9 +19,7 @@ from openbase_coder_cli.backend_binaries import (
     backend_binary_candidates,
     node_runtime_bin_dir,
 )
-from openbase_coder_cli.env_file import selected_backend_from_env_file
 from openbase_coder_cli.paths import (
-    DEFAULT_ENV_FILE_PATH,
     DEFAULT_LOG_DIR,
     LAUNCHD_DOMAIN,
     LAUNCHD_WRAPPER_DIR,
@@ -48,7 +46,12 @@ from openbase_coder_cli.services.dependencies import order_services
 from openbase_coder_cli.services.installation import InstallationConfig
 from openbase_coder_cli.services.mutation_lock import service_mutation
 from openbase_coder_cli.services.readiness import wait_for_provider
-from openbase_coder_cli.services.selection import include_installed_optional_services
+from openbase_coder_cli.services.selection import (
+    configured_coding_backends,
+    configured_default_services,
+    include_installed_optional_services,
+    service_supports_configured_backends,
+)
 
 
 def _is_macos() -> bool:
@@ -237,13 +240,6 @@ def _resolve_binaries(
     # through it, regardless of what workdir_template references.
     keys = _service_template_keys(services) | {"python"}
     return {key: resolvers[key]() for key in sorted(keys) if key in resolvers}
-
-
-def _selected_backend(config: InstallationConfig) -> str:
-    env_path = (
-        Path(config.env_file).expanduser() if config.env_file else DEFAULT_ENV_FILE_PATH
-    )
-    return selected_backend_from_env_file(env_path)
 
 
 def _uid() -> int:
@@ -921,7 +917,7 @@ def launchctl_status(svc: ServiceDefinition) -> dict:
 @service_mutation()
 def install_all_services(config: InstallationConfig) -> None:
     _ensure_launchd_paths()
-    coding_backend = _selected_backend(config)
+    coding_backends = "/".join(configured_coding_backends())
     # A stopped legacy Direct job can still have a login-time LaunchAgent.
     # Remove it before selecting optional daemons so an upgrade cannot revive
     # the outgoing transport alongside the selected VPN.
@@ -930,7 +926,7 @@ def install_all_services(config: InstallationConfig) -> None:
     if tp.provider() != tp.PROVIDER_NETMESH and remove_service(VOICE_TURN_SERVICE):
         click.echo("  Removed openbase-voice-turn (Openbase VPN is not selected).")
     services = include_installed_optional_services(
-        default_services(coding_backend), launchctl_status
+        configured_default_services(), launchctl_status
     )
     services = order_services(services)
     binaries = _resolve_binaries(config, services)
@@ -940,7 +936,7 @@ def install_all_services(config: InstallationConfig) -> None:
             continue
         if remove_service(svc):
             click.echo(
-                f"  Removed {svc.name} (not used by the {coding_backend} backend)."
+                f"  Removed {svc.name} (not used by the {coding_backends} backend)."
             )
 
     # Upgrades must not strand processes for services that no longer exist.
@@ -1035,11 +1031,11 @@ def regenerate_service(config: InstallationConfig, svc: ServiceDefinition) -> No
 @service_mutation()
 def regenerate_all_services(config: InstallationConfig) -> None:
     _ensure_launchd_paths()
-    coding_backend = _selected_backend(config)
+    coding_backends = "/".join(configured_coding_backends())
 
     for svc in SERVICES:
-        if not svc.supports_backend(coding_backend):
-            click.echo(f"  Skipping {svc.name} (backend: {coding_backend}).")
+        if not service_supports_configured_backends(svc):
+            click.echo(f"  Skipping {svc.name} (backend: {coding_backends}).")
             continue
         try:
             binaries = _resolve_binaries(config, [svc])

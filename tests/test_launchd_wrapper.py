@@ -4,7 +4,7 @@ import subprocess
 import pytest
 
 from openbase_coder_cli.runtime import RuntimePackage
-from openbase_coder_cli.services import launchd, process_utils
+from openbase_coder_cli.services import launchd, process_utils, selection
 from openbase_coder_cli.services.definitions import ServiceDefinition
 from openbase_coder_cli.services.installation import InstallationConfig
 
@@ -466,7 +466,8 @@ def test_install_refreshes_enabled_optional_daemons_not_disabled_or_oneshots(
     enabled = {"openbase-tunneld", "sync-daemon", "openbase-cloud-auth-rehydrate"}
     installed = []
     monkeypatch.setattr(launchd, "_ensure_launchd_paths", lambda: None)
-    monkeypatch.setattr(launchd, "_selected_backend", lambda _config: "openbase-cloud")
+    monkeypatch.setattr(selection, "configured_coding_backends", lambda: ["openbase-cloud"])
+    monkeypatch.setattr(launchd, "configured_coding_backends", lambda: ["openbase-cloud"])
     monkeypatch.setattr(
         launchd, "launchctl_status", lambda svc: {"installed": svc.name in enabled}
     )
@@ -746,7 +747,8 @@ def test_install_removes_inactive_direct_even_when_unloaded(
     installed = []
     monkeypatch.setattr(launchd.tp, "provider", lambda: provider)
     monkeypatch.setattr(launchd, "_ensure_launchd_paths", lambda: None)
-    monkeypatch.setattr(launchd, "_selected_backend", lambda _config: "openbase-cloud")
+    monkeypatch.setattr(selection, "configured_coding_backends", lambda: ["openbase-cloud"])
+    monkeypatch.setattr(launchd, "configured_coding_backends", lambda: ["openbase-cloud"])
     monkeypatch.setattr(
         launchd,
         "launchctl_status",
@@ -910,7 +912,8 @@ def test_install_removes_the_other_transport_daemons(
     monkeypatch.setattr(launchd.tp, "provider", lambda: provider)
     removed = []
     monkeypatch.setattr(launchd, "_ensure_launchd_paths", lambda: None)
-    monkeypatch.setattr(launchd, "_selected_backend", lambda _config: "openbase-cloud")
+    monkeypatch.setattr(selection, "configured_coding_backends", lambda: ["openbase-cloud"])
+    monkeypatch.setattr(launchd, "configured_coding_backends", lambda: ["openbase-cloud"])
     monkeypatch.setattr(launchd, "launchctl_status", lambda svc: {"installed": False})
     monkeypatch.setattr(launchd, "_resolve_binaries", lambda _config, _services: {})
     monkeypatch.setattr(
