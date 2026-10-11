@@ -535,6 +535,13 @@ class SessionManagerThreadsMixin:
             await asyncio.to_thread(
                 archive_backend_thread, self._execution_backend, session_id
             )
+            # Also put the session away on the backend, so Super Agents
+            # listings and name lookups (the Dispatcher's tools) stop offering
+            # it: an archived worker kept receiving queued work on 376
+            # (2026-10-11 05:02Z) because only the cli knew it was archived.
+            archive_by_label = getattr(self._client, "archive_by_label", None)
+            if callable(archive_by_label):
+                await archive_by_label(LabelQueryInput(thread_id=session_id))
             return True
         try:
             await self._client.ensure_connected()
