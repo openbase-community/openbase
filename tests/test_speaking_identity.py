@@ -8,15 +8,6 @@ from openbase_coder_cli.thread_sync.models import ThreadInfo
 from openbase_coder_cli.thread_sync.speaking_identity import ensure_speaking_identity
 
 
-@pytest.fixture(autouse=True)
-def _clear_identity_caches():
-    speaking_identity._resolved_agent_names.clear()
-    speaking_identity._no_voice_checked_at.clear()
-    yield
-    speaking_identity._resolved_agent_names.clear()
-    speaking_identity._no_voice_checked_at.clear()
-
-
 @pytest.mark.asyncio
 async def test_migration_keeps_recorded_voice_character_without_backend_name(
     tmp_path, monkeypatch

@@ -33,7 +33,14 @@ def _remember(session_id: str, name: str) -> None:
     _resolved_agent_names[session_id] = (time.monotonic(), name)
 
 
-async def ensure_speaking_identity(client: Any, thread: ThreadInfo) -> ThreadInfo:
+async def ensure_speaking_identity(
+    client: Any,
+    thread: ThreadInfo,
+    *,
+    session_records: dict[str, Any] | None = None,
+) -> ThreadInfo:
+    """`session_records` lets a caller resolving many threads read the backend
+    state once instead of once per thread."""
     if thread.agent_name:
         return thread
     now = time.monotonic()
@@ -77,8 +84,13 @@ async def ensure_speaking_identity(client: Any, thread: ThreadInfo) -> ThreadInf
         merge = getattr(client, "merge_session", None)
         if not callable(merge):
             return thread
-        get_session = getattr(client, "get_session", None)
-        record = await get_session(thread.session_id) if callable(get_session) else None
+        if session_records is not None:
+            record = session_records.get(thread.session_id)
+        else:
+            get_session = getattr(client, "get_session", None)
+            record = (
+                await get_session(thread.session_id) if callable(get_session) else None
+            )
         if record is not None and record.agent_name:
             thread.agent_name = record.agent_name
             _remember(thread.session_id, record.agent_name)

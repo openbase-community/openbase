@@ -291,6 +291,7 @@ def _default_client_for_execution_backend(
         identity = backend_identity_for_execution_backend(
             configured_backend_from_environment(), execution_backend
         )
+
         class OpenbaseClaudeClient(ClaudeAgentSdkClient):
             def handle_notification(self, method: str, params: dict[str, Any]) -> None:
                 super().handle_notification(method, params)

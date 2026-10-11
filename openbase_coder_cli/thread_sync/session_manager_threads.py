@@ -341,8 +341,15 @@ class SessionManagerThreadsMixin:
         sessions = [
             _session_from_thread(thread, include_turns=False) for thread in raw_threads
         ]
+        session_records = None
+        read_state = getattr(self._client, "read_state", None)
+        if getattr(self._client, "store", None) is None and callable(read_state):
+            # One state parse for the whole list, not one per thread.
+            session_records = (await read_state()).sessions
         for session in sessions:
-            await ensure_speaking_identity(self._client, session)
+            await ensure_speaking_identity(
+                self._client, session, session_records=session_records
+            )
         return sorted(sessions, key=_session_sort_key, reverse=True)
 
     async def _backend_thread_page(
@@ -625,8 +632,15 @@ class SessionManagerThreadsMixin:
         sessions = [
             _session_from_thread(thread, include_turns=False) for thread in raw_threads
         ]
+        session_records = None
+        read_state = getattr(self._client, "read_state", None)
+        if getattr(self._client, "store", None) is None and callable(read_state):
+            # One state parse for the whole list, not one per thread.
+            session_records = (await read_state()).sessions
         for session in sessions:
-            await ensure_speaking_identity(self._client, session)
+            await ensure_speaking_identity(
+                self._client, session, session_records=session_records
+            )
         return sorted(sessions, key=_session_sort_key, reverse=True)
 
     async def _read_thread(
