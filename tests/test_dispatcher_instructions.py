@@ -248,3 +248,13 @@ def test_dispatcher_rules_continue_a_named_agent_instead_of_starting_a_new_one()
     # thread labelled "marian-step-files" (agent Siobhan) instead of Marian's.
     assert "never by a thread label that happens to contain the" in rules
     assert "Never super_agents_start a second thread" in rules
+
+
+def test_dispatcher_rules_take_the_roster_and_channel_from_live_state():
+    """VM2, 2026-10-11 08:41Z: after a compaction the Dispatcher said no other
+    Super Agents existed and called a typed chat "this voice session"."""
+    rules = instructions.with_dispatcher_rules("base")
+    assert "super_agents_recent (which includes finished agents" in rules
+    assert "A compaction summary is not" in rules
+    assert "Each request's channel comes from that request alone" in rules
+    assert "never by earlier turns or a compaction summary" in rules
