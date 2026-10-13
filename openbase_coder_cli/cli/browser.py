@@ -272,6 +272,13 @@ def _forward_note(receipt: dict) -> str:
     status = receipt.get("forward")
     if status == "started":
         return "Your phone is forwarding the login callback to this workspace."
+    if status in {"vpn_down", "failed", "unsupported"} and _uses_official_tailscale():
+        # The phone reaches this computer through the Tailscale app, which
+        # cannot forward a login callback; the Openbase VPN would fight it.
+        return (
+            "This computer uses Tailscale, so the phone cannot forward the sign-in; "
+            "paste the final localhost address back here."
+        )
     if status == "vpn_down":
         return (
             "Your phone's Openbase VPN is off (or the app runs without the VPN), so "
@@ -297,6 +304,12 @@ def _forward_note(receipt: dict) -> str:
         + "; paste the final localhost address back here if the login ends on a "
         "localhost page."
     )
+
+
+def _uses_official_tailscale() -> bool:
+    from openbase_coder_cli.services import tailscale_provider
+
+    return tailscale_provider.provider() == tailscale_provider.PROVIDER_TAILSCALE
 
 
 def _bounded_attempt[Result](
