@@ -15,6 +15,9 @@ from openbase_coder_cli.livekit_agent.config import (
     LIVE_TURN_RECOVERY_WINDOW_SECONDS,
     load_direct_livekit_developer_instructions,
 )
+from openbase_coder_cli.livekit_agent.heard_announcements import (
+    apply_heard_announcements,
+)
 from openbase_coder_cli.livekit_agent.screen_context import apply_screen_context
 from openbase_coder_cli.livekit_agent.spoken_commands import (
     _is_exit_to_dispatch_command,
@@ -251,6 +254,9 @@ class CodexLLMStream(llm.LLMStream):
             release_mic = getattr(delivery_ledger, "release_mic_for_backend_wait", None)
             if callable(release_mic):
                 release_mic(delivery_record)
+        # Added last, once the request is really going out: an abandoned
+        # fragment must not count as having told the target.
+        prompt = apply_heard_announcements(self._voice_router, prompt)
         self._backend_voice_client = voice_client
         self._backend_committed = True
         developer_instructions = load_direct_livekit_developer_instructions()

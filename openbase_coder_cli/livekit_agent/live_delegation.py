@@ -74,6 +74,9 @@ from openbase_coder_cli.livekit_agent.config import (
     LIVE_VOICE_ACK_TEXT,
     load_direct_livekit_developer_instructions,
 )
+from openbase_coder_cli.livekit_agent.heard_announcements import (
+    apply_heard_announcements,
+)
 from openbase_coder_cli.livekit_agent.live_call_context import LiveCallContext
 from openbase_coder_cli.livekit_agent.live_gateway_events import (
     OutputTranscriptLog,
@@ -2028,6 +2031,7 @@ class LiveDelegationBridge:
             prompt = f"{LIVE_CARRIED_REQUEST_NOTE}\n\n{prompt}"
         prompt = apply_screen_context(self._voice_router, prompt)
         prompt = self._call_context.apply(prompt)
+        prompt = apply_heard_announcements(self._voice_router, prompt)
         entry.heartbeat = asyncio.create_task(
             self._progress_heartbeat(entry),
             name=f"openbase-live-heartbeat-{entry.key}",

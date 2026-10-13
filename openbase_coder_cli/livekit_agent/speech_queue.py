@@ -46,9 +46,13 @@ class AnnouncerSpeechQueue:
         max_queue_size: int = ANNOUNCER_MAX_QUEUE_SIZE,
         silence_grace_seconds: float = ANNOUNCER_SILENCE_GRACE_SECONDS,
         delivery_ledger=None,
+        heard_sink=None,
     ) -> None:
         self._session = session
         self._announcer_tts = announcer_tts
+        # Told what played, so the call target gets it as text
+        # (``HeardAnnouncements.record``); None drops that relay.
+        self._heard_sink = heard_sink
         self._queue: asyncio.Queue[QueuedAnnouncerItem | None] = asyncio.Queue(
             maxsize=max_queue_size
         )
@@ -227,6 +231,7 @@ class AnnouncerSpeechQueue:
                 voice_name=self._announcer_tts.resolve_voice_name(message.voice_id),
                 synthesis_outcome=outcome,
             )
+        self._report_heard(message, completed=not getattr(handle, "interrupted", False))
         logger.info(
             "dispatch_timing stage=announcer_playout_end message_id=%s elapsed_ms=%d "
             "synthesis_completed=%s audio_events=%d",
@@ -235,6 +240,23 @@ class AnnouncerSpeechQueue:
             outcome.completed,
             outcome.audio_events,
         )
+
+    def _report_heard(self, message: AnnouncerMessage, *, completed: bool) -> None:
+        if self._heard_sink is None:
+            return
+        try:
+            self._heard_sink(
+                message_id=message.message_id,
+                text=message.text,
+                agent_name=message.agent_name,
+                completed=completed,
+            )
+        except Exception:  # noqa: BLE001 - the relay never breaks playout
+            logger.warning(
+                "dispatch_timing stage=announcement_heard_sink_failed message_id=%s",
+                message.message_id,
+                exc_info=True,
+            )
 
     async def _bracketed_playout(
         self,

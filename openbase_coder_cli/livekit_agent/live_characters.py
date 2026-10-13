@@ -599,6 +599,7 @@ class LiveCharacterController:
                         self._record, reason="announcement_interrupted_or_timed_out"
                     )
             self._record = None
+            self._report_heard(message, completed=completed)
             self._announcing = False
             # Only caller text joins the conversation history; the announcement
             # model's temporary persona and output must never leak into it.
@@ -608,6 +609,18 @@ class LiveCharacterController:
                         history.add_message(role="user", content=transcript)
             if not self._closed and assistant is not None:
                 await self._conversation(bounded_history(history))
+
+    def _report_heard(self, message, *, completed):
+        """Tell the router's ledger what played, for the call target's context."""
+        heard = getattr(self.router, "heard_announcements", None)
+        if heard is None:
+            return
+        heard.record(
+            message_id=message.message_id,
+            text=message.text,
+            agent_name=message.agent_name,
+            completed=completed,
+        )
 
     async def _wait_announcement_speech(self):
         while not self._announcement_stop.is_set():

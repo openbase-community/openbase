@@ -14,6 +14,7 @@ from openbase_coder_cli.livekit_agent.config import (
     PROACTIVE_STEER_PROMPT_CACHE_SECONDS,
     load_direct_livekit_developer_instructions,
 )
+from openbase_coder_cli.livekit_agent.heard_announcements import HeardAnnouncements
 from openbase_coder_cli.livekit_agent.packets import (
     AnnouncerMessage,
     VoiceRouteCommand,
@@ -62,6 +63,9 @@ class LiveKitVoiceRouter:
         # What the caller has open in the phone app (screen_context); set per
         # call by the entrypoint once the room is connected.
         self.focused_thread_tracker = None
+        # Background announcements the caller heard on this call, relayed as
+        # text to whichever target the next turn goes to.
+        self.heard_announcements = HeardAnnouncements()
 
     def set_orphaned_result_handler(self, handler) -> None:
         """Deliver completed turn answers that no voice dispatch consumed."""

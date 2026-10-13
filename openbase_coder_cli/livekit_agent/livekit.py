@@ -2106,6 +2106,7 @@ def _wire_pipeline_voice_call(
         session=session,
         announcer_tts=announcer_tts,
         delivery_ledger=delivery_ledger,
+        heard_sink=voice_router.heard_announcements.record,
     )
     from .transcription_notice import TranscriptionTimeoutNotice
 
