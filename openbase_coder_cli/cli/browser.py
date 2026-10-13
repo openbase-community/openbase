@@ -272,10 +272,18 @@ def _forward_note(receipt: dict) -> str:
     status = receipt.get("forward")
     if status == "started":
         return "Your phone is forwarding the login callback to this workspace."
+    if status in {"vpn_down", "failed", "unsupported"} and _uses_official_tailscale():
+        # The phone reaches this computer through the Tailscale app, which
+        # cannot forward a login callback; the Openbase VPN would fight it.
+        return (
+            "This computer uses Tailscale, so the phone cannot forward the sign-in; "
+            "paste the final localhost address back here."
+        )
     if status == "vpn_down":
         return (
-            "Your phone's Openbase VPN is off, so it cannot forward the callback; "
-            "turn it on and retry, or paste the final localhost address back here."
+            "Your phone's Openbase VPN is off (or the app runs without the VPN), so "
+            "it cannot forward the callback; turn the Openbase VPN on and retry, or "
+            "paste the final localhost address back here."
         )
     if status in {"failed", "unsupported"}:
         reason = receipt.get("forward_error") or status
@@ -283,10 +291,25 @@ def _forward_note(receipt: dict) -> str:
             f"Your phone could not forward the callback ({reason}); paste the "
             "final localhost address back here instead."
         )
+    if receipt.get("notified") is True:
+        return (
+            "Your phone showed a notification instead of opening the page; once the "
+            "user taps it, the phone sets up forwarding. If the login ends on a "
+            "localhost page, paste that address back here."
+        )
+    reason = receipt.get("forward_error") or receipt.get("error")
     return (
-        "Your phone did not confirm callback forwarding; paste the final localhost "
-        "address back here if the login ends on a localhost page."
+        "Your phone did not confirm callback forwarding"
+        + (f" ({reason})" if reason else "")
+        + "; paste the final localhost address back here if the login ends on a "
+        "localhost page."
     )
+
+
+def _uses_official_tailscale() -> bool:
+    from openbase_coder_cli.services import tailscale_provider
+
+    return tailscale_provider.provider() == tailscale_provider.PROVIDER_TAILSCALE
 
 
 def _bounded_attempt[Result](

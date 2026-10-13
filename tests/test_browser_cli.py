@@ -507,6 +507,7 @@ def test_forward_target_never_falls_back_to_dns_or_a_non_vpn_address():
 
 
 def test_browser_open_reports_the_phone_forward_outcome(monkeypatch):
+    monkeypatch.setattr(browser_cli, "_uses_official_tailscale", lambda: False)
     _patch_tunneld(monkeypatch)
     for forward_status, expected in [
         ("started", "is forwarding the login callback"),
@@ -650,3 +651,32 @@ def test_firewall_hint_appears_only_when_the_phone_could_not_forward(
         assert result.exit_code == 0, result.output
         assert ("macOS Firewall blocks" in result.output) is shown, status
         assert "sudo" not in result.output and "socketfilterfw" not in result.output
+
+
+def test_forward_note_names_what_the_phone_said(monkeypatch):
+    monkeypatch.setattr(browser_cli, "_uses_official_tailscale", lambda: False)
+    note = browser_cli._forward_note
+    assert "VPN is off" in note({"forward": "vpn_down"})
+    assert "notification" in note({"opened": False, "notified": True})
+    assert "(app not active)" in note({"opened": True, "error": "app not active"})
+    assert "(unreachable)" in note(
+        {"forward": "failed", "forward_error": "unreachable"}
+    )
+
+
+def test_tailscale_computers_get_paste_back_advice_not_the_openbase_vpn(monkeypatch):
+    monkeypatch.setattr(browser_cli, "_uses_official_tailscale", lambda: True)
+    for receipt in (
+        {"forward": "vpn_down"},
+        {
+            "forward": "failed",
+            "forward_error": "this phone connects through the Tailscale app",
+        },
+        {"forward": "unsupported"},
+    ):
+        note = browser_cli._forward_note(receipt)
+        assert note.startswith("This computer uses Tailscale")
+        assert "Openbase VPN" not in note
+    assert browser_cli._forward_note({"forward": "started"}).startswith(
+        "Your phone is forwarding"
+    )
