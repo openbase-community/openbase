@@ -650,3 +650,13 @@ def test_firewall_hint_appears_only_when_the_phone_could_not_forward(
         assert result.exit_code == 0, result.output
         assert ("macOS Firewall blocks" in result.output) is shown, status
         assert "sudo" not in result.output and "socketfilterfw" not in result.output
+
+
+def test_forward_note_names_what_the_phone_said():
+    note = browser_cli._forward_note
+    assert "VPN is off" in note({"forward": "vpn_down"})
+    assert "notification" in note({"opened": False, "notified": True})
+    assert "(app not active)" in note({"opened": True, "error": "app not active"})
+    assert "(unreachable)" in note(
+        {"forward": "failed", "forward_error": "unreachable"}
+    )
