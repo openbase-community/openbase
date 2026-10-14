@@ -343,3 +343,37 @@ def test_services_start_all_includes_stopped_optional_services(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert calls == ["django-cli", "openbase-voice-turn"]
+
+
+def test_stop_all_includes_unselected_services_and_stops_reconciler_first(monkeypatch):
+    calls = []
+    services = [SimpleNamespace(name=n) for n in ["django-cli", "sync-workers", "optional-agent"]]
+    monkeypatch.setattr(services_cli, "SERVICES", services)
+    monkeypatch.setattr(services_cli, "require_installation", lambda: object())
+    monkeypatch.setattr(services_cli, "warn_before_voice_interruption", lambda **_: None)
+    monkeypatch.setattr(services_cli, "launchctl_bootout", lambda svc: calls.append(svc.name) or True)
+    result = CliRunner().invoke(services_cli.services, ["stop"])
+    assert result.exit_code == 0, result.output
+    assert calls == ["sync-workers", "django-cli", "optional-agent"]
+
+
+def test_stop_reports_job_still_loaded_and_attempts_remaining_services(monkeypatch):
+    calls = []
+    monkeypatch.setattr(services_cli, "SERVICES", [SimpleNamespace(name=n) for n in ["failed", "stopped"]])
+    monkeypatch.setattr(services_cli, "require_installation", lambda: object())
+    monkeypatch.setattr(services_cli, "launchctl_bootout", lambda svc: calls.append(svc.name) or False)
+    monkeypatch.setattr(services_cli, "launchctl_status", lambda svc: {"installed": svc.name == "failed", "pid": "123" if svc.name == "failed" else None})
+    result = CliRunner().invoke(services_cli.services, ["stop"])
+    assert result.exit_code != 0
+    assert "Failed to stop: failed" in result.output
+    assert calls == ["failed", "stopped"]
+
+
+def test_stop_named_service_does_not_stop_other_services(monkeypatch):
+    calls = []
+    monkeypatch.setattr(services_cli, "require_installation", lambda: object())
+    monkeypatch.setattr(services_cli, "target_services", lambda name: [SimpleNamespace(name=name)])
+    monkeypatch.setattr(services_cli, "launchctl_bootout", lambda svc: calls.append(svc.name) or True)
+    result = CliRunner().invoke(services_cli.services, ["stop", "django-cli"])
+    assert result.exit_code == 0, result.output
+    assert calls == ["django-cli"]

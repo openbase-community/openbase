@@ -44,7 +44,12 @@ from openbase_coder_cli.web_redirect_hold import record_web_redirect
 logger = logging.getLogger(__name__)
 
 OPENED_MESSAGE = "Sent to the Openbase app on your phone."
-PUSHED_MESSAGE = "Sent a notification to your phone; tap it to open the page."
+PUSHED_MESSAGE = (
+    "Sent a notification to your phone; tap it to open the page. This counts as "
+    "delivered: do not run browser open again. If nothing arrives, the user opens "
+    "the Openbase app once (Android delivers nothing to a force-stopped app, and a "
+    "Focus or Do Not Disturb mode can hide it)."
+)
 BROWSER_DELIVERY_TIMEOUT_SECONDS = 6.0
 NOT_DELIVERED_HINT = (
     "Could not reach the Openbase app on your phone. Open this URL on any "

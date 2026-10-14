@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 
 import click
 
@@ -129,14 +130,25 @@ def start(name: str | None) -> None:
 def stop(name: str | None) -> None:
     """Stop all or one service and keep it stopped (unload launchd job)."""
     require_installation()
-    targets = target_services(name)
+    # Stop every known service, including installed optional/backends that are
+    # no longer selected. Quit Completely must not leave those agents running.
+    targets = target_services(name) if name else list(SERVICES)
     if any_service_action_interrupts_voice(targets, "stop"):
         warn_before_voice_interruption(reason="services stop")
+    # Stop the reconciler before the services it can restart.
+    targets = sorted(targets, key=lambda svc: svc.name != "sync-workers")
+    failed = []
     for svc in targets:
         if launchctl_bootout(svc):
             click.echo(f"  Stopped {svc.name}")
         else:
-            click.echo(f"  {svc.name} not loaded")
+            status = launchctl_status(svc)
+            if status.get("pid") or (sys.platform == "darwin" and status.get("installed")):
+                failed.append(svc.name)
+            else:
+                click.echo(f"  {svc.name} not loaded")
+    if failed:
+        raise click.ClickException(f"Failed to stop: {', '.join(failed)}")
 
 
 @services.command()
