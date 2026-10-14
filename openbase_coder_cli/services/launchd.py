@@ -451,6 +451,14 @@ def render_wrapper(
 
         export PATH="{_wrapper_path_prefix()}:$PATH"
 
+        if [ "${{OPENBASE_CODER_SERVICE_SUPERVISOR:-}}" = "external" ] \\
+            && [ -e "{EXTERNAL_SUPERVISOR_RUN_DIR}/{svc.name}.stopped" ]; then
+            # Stopped on purpose (services stop). The container entrypoint
+            # cannot drop a service from its restart loop, so idle instead.
+            sleep 60
+            exit 0
+        fi
+
         {cmd}
     """)
 
@@ -693,8 +701,7 @@ def launchctl_bootstrap(svc: ServiceDefinition) -> None:
 @service_mutation()
 def launchctl_bootout(svc: ServiceDefinition) -> bool:
     if _external_supervisor():
-        # The supervisor relaunches the wrapper; a stop is only ever a bounce.
-        return _external_supervisor_restart(svc)
+        return _external_supervisor_stop(svc)
     if not _is_macos():
         if _is_windows():
             from openbase_coder_cli.services.windows import windows_bootout
@@ -817,25 +824,47 @@ def launchctl_kill(svc: ServiceDefinition) -> bool:
 # <data_dir>/run/<name>.pid files: written on service start, removed on exit.
 EXTERNAL_SUPERVISOR_ENV = "OPENBASE_CODER_SERVICE_SUPERVISOR"
 EXTERNAL_SUPERVISOR_RUN_DIR = OPENBASE_BASE_DIR / "run"
+# The entrypoint relaunches an exited wrapper after 5 s; a start waits a
+# little longer than that before concluding that nothing supervises the
+# service and adopting it.
+EXTERNAL_SUPERVISOR_RELAUNCH_GRACE_SECONDS = 6.0
 
 
 def _external_supervisor() -> bool:
     return os.environ.get(EXTERNAL_SUPERVISOR_ENV, "").lower() == "external"
 
 
-def _external_supervisor_status(svc: ServiceDefinition) -> dict:
-    if not _wrapper_path(svc).is_file():
-        return {"installed": False}
-    pid: int | None = None
+def external_supervisor_stop_marker(svc: ServiceDefinition) -> Path:
+    """The file that keeps ``svc`` stopped under an external supervisor.
+
+    The entrypoint cannot drop a service from its restart loop, so a stopped
+    service's wrapper idles instead of serving while this file exists (see
+    ``render_wrapper``), the fallback supervisor exits on it, and status
+    reports the service as not running. A start removes it.
+    """
+    return EXTERNAL_SUPERVISOR_RUN_DIR / f"{svc.name}.stopped"
+
+
+def _external_supervisor_raw_pid(svc: ServiceDefinition) -> int | None:
+    """The live pid in the service's pidfile, stop marker or not."""
     try:
         pid = int((EXTERNAL_SUPERVISOR_RUN_DIR / f"{svc.name}.pid").read_text().strip())
     except (OSError, ValueError):
+        return None
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return None
+    return pid
+
+
+def _external_supervisor_status(svc: ServiceDefinition) -> dict:
+    if not _wrapper_path(svc).is_file():
+        return {"installed": False}
+    pid = _external_supervisor_raw_pid(svc)
+    if external_supervisor_stop_marker(svc).exists():
+        # The pid, if any, is the wrapper idling on the marker, not a server.
         pid = None
-    if pid is not None:
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            pid = None
     if not svc.install_by_default and pid is None:
         # Wrapper regeneration writes files for optional services (sync-daemon,
         # cloud heartbeat) regardless of whether their feature is on; under
@@ -854,7 +883,7 @@ def _external_supervisor_pid(svc: ServiceDefinition) -> int | None:
 
 
 def _external_supervisor_restart(svc: ServiceDefinition) -> bool:
-    """Restart ``svc`` under an external supervisor (the container entrypoint).
+    """Restart, or start, ``svc`` under an external supervisor.
 
     There is no launchd or systemd job to kick: the only primitive is making
     the current process exit, after which the supervisor relaunches the
@@ -863,20 +892,75 @@ def _external_supervisor_restart(svc: ServiceDefinition) -> bool:
     service's ports so the relaunch can bind them (2026-10-07: a Maritime
     workspace fell through to ``systemctl`` here, which does not exist in the
     container, so every watchdog bounce killed the agent and then raised).
+
+    A service nothing runs is started: the entrypoint only supervises the
+    wrappers present at boot, never the dispatcher app server, so a service
+    first wanted while the workspace runs (a switch to Codex) is adopted by
+    the fallback supervisor. The stop marker is cleared either way.
     """
-    old_pid = _external_supervisor_pid(svc)
+    external_supervisor_stop_marker(svc).unlink(missing_ok=True)
+    old_pid = _external_supervisor_raw_pid(svc)
     if old_pid is not None:
         process_utils.terminate(old_pid)
         pid = process_utils.wait_for_pid_change(
-            lambda: _external_supervisor_pid(svc),
+            lambda: _external_supervisor_raw_pid(svc),
             old_pid,
             timeout=RESTART_EXIT_TIMEOUT_SECONDS,
         )
         if pid == old_pid:
             process_utils.terminate(old_pid, force=True)
-    new_pid = _external_supervisor_pid(svc)
-    keep = process_utils.process_tree_pids(new_pid) if new_pid else set()
-    _cleanup_lingering_processes(svc, keep=frozenset(keep))
+        new_pid = _external_supervisor_raw_pid(svc)
+        keep = process_utils.process_tree_pids(new_pid) if new_pid else set()
+        _cleanup_lingering_processes(svc, keep=frozenset(keep))
+        return True
+    _external_supervisor_launch(svc)
+    return True
+
+
+def _external_supervisor_launch(svc: ServiceDefinition) -> None:
+    from openbase_coder_cli.services import external_supervisor
+
+    # An existing loop (the entrypoint's, or an earlier fallback supervisor
+    # between two relaunches) brings the service back within one relaunch
+    # interval; only when none does is a supervisor of our own needed.
+    pid = process_utils.wait_for_pid_change(
+        lambda: _external_supervisor_raw_pid(svc),
+        None,
+        timeout=EXTERNAL_SUPERVISOR_RELAUNCH_GRACE_SECONDS,
+    )
+    if pid is not None or external_supervisor.supervisor_pid(svc.name) is not None:
+        return
+    _prepare_service_start(svc)
+    external_supervisor.spawn_supervisor(svc.name)
+
+
+def _external_supervisor_stop(svc: ServiceDefinition) -> bool:
+    """Stop ``svc`` and keep it stopped under an external supervisor.
+
+    Leaves the stop marker, then ends the running process and whatever it
+    spawned (the Codex launcher runs the server as a child). Returns whether
+    a process was running.
+    """
+    marker = external_supervisor_stop_marker(svc)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.touch()
+    old_pid = _external_supervisor_raw_pid(svc)
+    if old_pid is None:
+        _cleanup_service_endpoint(svc)
+        return False
+    tree = process_utils.process_tree_pids(old_pid)
+    process_utils.terminate(old_pid)
+    pid = process_utils.wait_for_pid_change(
+        lambda: _external_supervisor_raw_pid(svc),
+        old_pid,
+        timeout=RESTART_EXIT_TIMEOUT_SECONDS,
+    )
+    if pid == old_pid:
+        process_utils.terminate(old_pid, force=True)
+    for leftover in tree - {old_pid}:
+        process_utils.terminate(leftover)
+    _cleanup_lingering_processes(svc)
+    _cleanup_service_endpoint(svc)
     return True
 
 

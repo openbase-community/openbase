@@ -1005,3 +1005,118 @@ def test_coding_backend_location_cloud_sets_openbase_cloud_primary(
     assert "OPENBASE_CODING_BACKEND=openbase_cloud" in content
     assert "OPENBASE_CODING_BACKENDS=openbase_cloud,codex" in content
     assert response.data["location"] == "cloud"
+
+
+def test_super_agents_model_switch_to_codex_brings_its_services_up(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Picking a Codex model on a Claude-primary install starts the Codex app
+    servers (on a cloud workspace nothing else would), without blocking."""
+    from openbase_coder_cli.services import backend_services
+
+    env_file = tmp_path / ".env"
+    config_path = tmp_path / "dispatcher-config.json"
+    env_file.write_text(
+        "OPENBASE_CODING_BACKEND=claude_code\nOPENBASE_CODING_BACKENDS=claude_code,codex\n",
+        encoding="utf-8",
+    )
+    _install_with(monkeypatch, backends=("claude_code", "codex"), claude_logged_in=True)
+    monkeypatch.setattr(model_settings, "DEFAULT_ENV_FILE_PATH", env_file)
+    monkeypatch.setattr(
+        model_settings.dispatcher_config, "DEFAULT_ENV_FILE_PATH", env_file
+    )
+    monkeypatch.setattr(
+        model_settings.dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path
+    )
+    reconciles: list[int] = []
+    monkeypatch.setattr(
+        backend_services,
+        "reconcile_backend_services_in_background",
+        lambda: reconciles.append(1),
+    )
+
+    response = model_settings.backend_model_settings(
+        _authenticated_request(
+            "PUT",
+            "/api/settings/backend-model/",
+            {"role": "super_agents", "model": "gpt-6.1-sol"},
+        )
+    )
+    assert response.status_code == 200
+    assert "OPENBASE_CODING_BACKEND=codex" in env_file.read_text(encoding="utf-8")
+    assert reconciles == [1]
+
+    # Same engine again: nothing to reconcile.
+    response = model_settings.backend_model_settings(
+        _authenticated_request(
+            "PUT",
+            "/api/settings/backend-model/",
+            {"role": "super_agents", "model": "gpt-6.1-sol"},
+        )
+    )
+    assert response.status_code == 200
+    assert reconciles == [1]
+
+
+def test_coding_backend_change_brings_its_services_up(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from openbase_coder_cli.services import backend_services
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENBASE_CODING_BACKEND=claude_code\n", encoding="utf-8")
+    monkeypatch.setattr(backend_settings, "DEFAULT_ENV_FILE_PATH", env_file)
+    _install_with(monkeypatch, backends=("claude_code", "codex"), claude_logged_in=True)
+    reconciles: list[int] = []
+    monkeypatch.setattr(
+        backend_services,
+        "reconcile_backend_services_in_background",
+        lambda: reconciles.append(1),
+    )
+
+    response = backend_settings.coding_backend_settings(
+        _authenticated_request(
+            "PUT", "/api/settings/coding-backend/", {"backend": "codex"}
+        )
+    )
+    assert response.status_code == 200
+    assert response.data["changed"] is True
+    assert reconciles == [1]
+
+
+def test_container_can_choose_codex_dispatcher_from_claude_only_install(
+    monkeypatch, tmp_path
+):
+    from openbase_coder_cli.services import backend_services, launchd
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENBASE_CODING_BACKEND=claude_code\n")
+    monkeypatch.setattr(model_settings, "DEFAULT_ENV_FILE_PATH", env_file)
+    monkeypatch.setattr(dispatcher_config, "DEFAULT_ENV_FILE_PATH", env_file)
+    monkeypatch.setattr(
+        dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", tmp_path / "dispatcher.json"
+    )
+    _install_with(monkeypatch, backends=("claude_code",), claude_logged_in=True)
+    monkeypatch.setattr(launchd, "_external_supervisor", lambda: True)
+    monkeypatch.setattr(
+        "openbase_coder_cli.backend_binaries.find_backend_binary",
+        lambda _name: Path("/usr/bin/codex"),
+    )
+    reconciles = []
+    monkeypatch.setattr(
+        backend_services,
+        "reconcile_backend_services_in_background",
+        lambda: reconciles.append(1),
+    )
+    response = model_settings.backend_model_settings(
+        _authenticated_request(
+            "PUT",
+            "/api/settings/backend-model/",
+            {"role": "dispatcher", "model": "gpt-6.1-sol"},
+        )
+    )
+    assert response.status_code == 200
+    assert reconciles == [1]
+    assert "OPENBASE_CODING_BACKEND=claude_code" in env_file.read_text()

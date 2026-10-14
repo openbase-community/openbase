@@ -163,6 +163,13 @@ def engine_unavailable_reason(engine: str, location: str) -> str | None:
         if codex_app_server is not None and not service_supports_configured_backends(
             codex_app_server
         ):
+            from openbase_coder_cli.backend_binaries import find_backend_binary
+            from openbase_coder_cli.services.launchd import _external_supervisor
+
+            # Container images include Codex even on Claude-only installs.
+            # Selecting its model now installs/starts the missing services.
+            if _external_supervisor() and find_backend_binary("codex"):
+                return None
             return CODEX_NOT_INSTALLED_REASON
         return None
     if engine == CLAUDE_ENGINE:

@@ -117,4 +117,11 @@ def backend_model_settings(request):
             DEFAULT_ENV_FILE_PATH,
             dispatcher_config.identity_for_model(model, location),
         )
+    if previous != " ".join(model.split()):
+        from openbase_coder_cli.services.backend_services import (
+            reconcile_backend_services_in_background,
+        )
+
+        # Both roles can select a different engine independently.
+        reconcile_backend_services_in_background()
     return Response(_backend_model_payload(changed=previous != " ".join(model.split())))

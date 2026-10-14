@@ -157,6 +157,15 @@ def server(
         if reload_:
             cmd.extend(["--reload"])
 
+    # A container entrypoint only supervises the wrappers it found at boot;
+    # bring the selected backend's remaining services up, and the other
+    # backend's down, alongside the API (a no-op under launchd/systemd).
+    from openbase_coder_cli.services.backend_services import (
+        reconcile_backend_services_in_background,
+    )
+
+    reconcile_backend_services_in_background()
+
     # Run the server
     with keep_system_awake(warn=lambda message: click.echo(message, err=True)):
         try:
