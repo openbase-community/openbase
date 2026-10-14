@@ -199,13 +199,17 @@ async def _close(communicator) -> None:
     await communicator.wait(timeout=5)
 
 
-async def test_start_launches_a_session_and_a_client_can_reattach_by_id():
+@pytest.mark.parametrize("replay", [False, True])
+async def test_start_launches_a_session_and_a_client_can_reattach_by_id(replay):
     registry = TerminalRegistry()
     requests: list = []
 
     def fake_resolve(**kwargs):
         requests.append(kwargs)
-        return _shell_launch("stty size; cat"), ("hub notice",)
+        # Disable terminal input echo before announcing readiness. Otherwise
+        # the first ping can be the kernel's echo, with cat's actual response
+        # arriving after reattachment and being mistaken for buffered replay.
+        return _shell_launch("stty -echo; stty size; cat"), ("hub notice",)
 
     with (
         patch.object(consumers, "get_terminal_registry", return_value=registry),
@@ -228,21 +232,24 @@ async def test_start_launches_a_session_and_a_client_can_reattach_by_id():
             assert ready["data"]["reattached"] is False
             assert requests == [{"agent": "codex", "cwd": "~", "args": ["fix"]}]
             # The start message's size wins over the query string.
-            await _read_bytes_until(first, b"30 100")
+            await _read_bytes_until(first, b"30 100\r\n")
 
             await first.send_input({"type": "websocket.receive", "bytes": b"ping\r"})
-            await _read_bytes_until(first, b"ping")
+            await _read_bytes_until(first, b"ping\r\n")
             await _close(first)
             assert registry.get(session_id).running
 
-            second = await _connect(session_id, b"cols=90&rows=20&replay=0")
+            second = await _connect(
+                session_id, f"cols=90&rows=20&replay={int(replay)}".encode()
+            )
             ready = await _next_control(second)
             assert ready["data"]["reattached"] is True
             assert ready["data"]["id"] == session_id
-            # replay=0: no buffered output, only what happens next.
+            # The complete prior response was consumed before detaching;
+            # it only appears again when buffered replay was requested.
             await second.send_input({"type": "websocket.receive", "bytes": b"pong\r"})
-            seen = await _read_bytes_until(second, b"pong")
-            assert b"ping" not in seen
+            seen = await _read_bytes_until(second, b"pong\r\n")
+            assert (b"ping" in seen) is replay
             assert len(requests) == 1
             await _close(second)
         finally:
