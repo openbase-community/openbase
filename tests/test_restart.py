@@ -499,3 +499,95 @@ def test_recreation_that_keeps_the_old_dispatcher_fails_loudly(monkeypatch):
 
     monkeypatch.setattr(route, "warm_livekit_dispatcher_thread", new)
     restart_module.execute_restart_plan(plan)
+
+
+def test_execute_restart_plan_reconciles_backend_services_first(monkeypatch):
+    """A backend switch ends in a Dispatcher restart; the switched-to engine's
+    services come up first and are not bounced again by the plan."""
+    from openbase_coder_cli.services import backend_services
+
+    calls = []
+    monkeypatch.setattr(
+        restart_module,
+        "require_installation",
+        lambda: InstallationConfig(workspace_path="workspace", env_file=".env"),
+    )
+    monkeypatch.setattr(
+        restart_module,
+        "install_service",
+        lambda _config, svc: calls.append(f"start:{svc.name}"),
+    )
+
+    def reconcile(_config):
+        calls.append("reconcile")
+        return {"started": ["codex-app-server-dispatcher"], "stopped": []}
+
+    monkeypatch.setattr(backend_services, "reconcile_backend_services", reconcile)
+    monkeypatch.setattr(restart_module.time, "sleep", lambda _seconds: None)
+
+    execute_restart_plan(
+        RestartPlan(
+            services=("codex-app-server-dispatcher", "livekit-agent"),
+            recreate_dispatcher=False,
+            interrupts_voice=False,
+            delay_seconds=0,
+        )
+    )
+
+    assert calls == ["reconcile", "start:livekit-agent"]
+
+
+def test_default_restart_plan_skips_unwanted_backend_services_on_containers(
+    monkeypatch,
+):
+    from openbase_coder_cli.services import backend_services, launchd
+
+    monkeypatch.setattr(launchd, "_external_supervisor", lambda: True)
+    monkeypatch.setattr(
+        backend_services, "configured_coding_backend", lambda: "claude_code"
+    )
+    monkeypatch.setattr(
+        restart_module,
+        "configured_default_services",
+        lambda: default_services(),
+    )
+    monkeypatch.setattr(
+        restart_module, "installed_or_enabled_status", lambda _svc: {"installed": False}
+    )
+
+    plan = restart_module.build_restart_plan(restart_module.RestartRequest())
+
+    assert "codex-app-server" not in plan.services
+    assert "codex-app-server-dispatcher" not in plan.services
+    assert "django-cli" in plan.services
+
+
+def test_explicit_dispatcher_restart_does_not_revive_codex_on_claude(monkeypatch):
+    from openbase_coder_cli.services import backend_services, launchd
+
+    calls = []
+    monkeypatch.setattr(launchd, "_external_supervisor", lambda: True)
+    monkeypatch.setattr(
+        backend_services, "configured_coding_backend", lambda: "claude_code"
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.dispatcher_config.backend_model", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        backend_services,
+        "reconcile_backend_services",
+        lambda _c: {"started": [], "stopped": []},
+    )
+    monkeypatch.setattr(restart_module, "require_installation", InstallationConfig)
+    monkeypatch.setattr(
+        restart_module, "install_service", lambda _c, svc: calls.append(svc.name)
+    )
+    execute_restart_plan(
+        RestartPlan(
+            services=("codex-app-server-dispatcher", "livekit-agent"),
+            recreate_dispatcher=False,
+            interrupts_voice=False,
+            delay_seconds=0,
+        )
+    )
+    assert calls == ["livekit-agent"]

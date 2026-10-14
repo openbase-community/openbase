@@ -318,6 +318,12 @@ def coding_backend_settings(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
     next_backend = read_backend(DEFAULT_ENV_FILE_PATH)
+    if next_backend != previous_backend:
+        from openbase_coder_cli.services.backend_services import (
+            reconcile_backend_services_in_background,
+        )
+
+        reconcile_backend_services_in_background()
     return Response(
         _backend_payload(
             changed=previous_backend != next_backend,

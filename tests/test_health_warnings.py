@@ -129,9 +129,7 @@ def test_collect_skips_sync_checks_when_unconfigured(monkeypatch) -> None:
     monkeypatch.setattr(hw, "_sync_daemon_expected", lambda: False)
     called = []
     monkeypatch.setattr(hw, "_sync_daemon_warnings", lambda: called.append(1) or [])
-    monkeypatch.setattr(
-        hw, "_thread_exchange_warnings", lambda: called.append(2) or []
-    )
+    monkeypatch.setattr(hw, "_thread_exchange_warnings", lambda: called.append(2) or [])
 
     assert hw.collect_warnings() == []
     assert called == []
@@ -419,3 +417,45 @@ def test_older_shared_daemon_warning_does_not_tell_user_to_downgrade(
     assert len(warnings) == 1
     assert "upgrade the Codex CLI to 0.160.1" not in warnings[0]["action"]
     assert "Wait for Codex's managed daemon" in warnings[0]["action"]
+
+
+def test_secondary_backend_services_are_not_expected(monkeypatch) -> None:
+    """A Claude Code primary keeps Codex configured for earlier threads, but
+    its stopped app servers are not an outage (Maritime, 2026-10-13)."""
+    from openbase_coder_cli import codex_control_plane
+
+    monkeypatch.setattr(codex_control_plane, "shared_codex_daemon_ready", lambda: False)
+    services = [
+        FakeService("django-cli"),
+        FakeService("codex-app-server", backends=("codex", "openbase_cloud_codex")),
+    ]
+    monkeypatch.setattr("openbase_coder_cli.services.definitions.SERVICES", services)
+    monkeypatch.setattr(
+        "openbase_coder_cli.services.launchd.launchctl_status",
+        lambda svc: {
+            "installed": True,
+            "pid": 123 if svc.name == "django-cli" else None,
+        },
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.services.selection.configured_coding_backends",
+        lambda: ["claude_code", "codex"],
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.services.selection.configured_coding_backend",
+        lambda: "claude_code",
+    )
+
+    assert hw._service_warnings() == []
+
+    monkeypatch.setattr(
+        "openbase_coder_cli.services.selection.configured_coding_backends",
+        lambda: ["codex", "claude_code"],
+    )
+    monkeypatch.setattr(
+        "openbase_coder_cli.services.selection.configured_coding_backend",
+        lambda: "codex",
+    )
+    assert [warning["id"] for warning in hw._service_warnings()] == [
+        "service-stopped:codex-app-server"
+    ]

@@ -61,11 +61,14 @@ def build_restart_plan(request: RestartRequest) -> RestartPlan:
 
     requested_targets = list(request.services)
     if not requested_targets:
+        from openbase_coder_cli.services.backend_services import restart_plan_includes
+
         requested_targets = [
             service.name
             for service in include_installed_optional_services(
                 configured_default_services(), installed_or_enabled_status
             )
+            if restart_plan_includes(service)
         ]
     unknown = [target for target in requested_targets if target not in valid_targets]
     if unknown:
@@ -169,6 +172,15 @@ def execute_restart_plan(plan: RestartPlan) -> None:
         time.sleep(plan.delay_seconds)
     with service_mutation():
         config = require_installation()
+        from openbase_coder_cli.services.backend_services import (
+            reconcile_backend_services,
+            restart_plan_includes,
+        )
+
+        # A backend switch ends in this restart: bring the selected backend's
+        # services up (and the other's down) first, so recreating the
+        # Dispatcher finds its app server running.
+        reconciled = reconcile_backend_services(config)
 
         previous_dispatcher_id = None
         if plan.recreate_dispatcher:
@@ -187,6 +199,10 @@ def execute_restart_plan(plan: RestartPlan) -> None:
         # (no bootout/bootstrap) so macOS does not re-announce the background
         # items on every restart.
         for service in services:
+            if not restart_plan_includes(service):
+                continue
+            if service.name in reconciled["started"]:
+                continue  # just started; it is already fresh
             install_service(config, service)
 
         if plan.recreate_dispatcher:

@@ -991,3 +991,23 @@ def test_installed_or_enabled_status_counts_stopped_service(monkeypatch, tmp_pat
     wrapper.parent.mkdir(parents=True)
     wrapper.write_text("#!/bin/bash\n")
     assert launchd.installed_or_enabled_status(svc)["installed"] is True
+
+
+def test_wrapper_idles_on_the_container_stop_marker(tmp_path, monkeypatch):
+    """Under the container entrypoint a stopped service's wrapper idles instead
+    of serving, since the entrypoint relaunches it regardless."""
+    from openbase_coder_cli.services.installation import InstallationConfig
+
+    monkeypatch.setattr(launchd, "EXTERNAL_SUPERVISOR_RUN_DIR", tmp_path / "run")
+    config = InstallationConfig(
+        workspace_path=str(tmp_path), env_file=str(tmp_path / ".env")
+    )
+    from openbase_coder_cli.services.registry import find_service
+
+    service = find_service("codex-app-server-dispatcher")
+
+    wrapper = launchd.render_wrapper(service, config, {"python": "/opt/py"})
+
+    assert '"${OPENBASE_CODER_SERVICE_SUPERVISOR:-}" = "external"' in wrapper
+    assert f'"{tmp_path / "run"}/codex-app-server-dispatcher.stopped"' in wrapper
+    assert wrapper.index("sleep 60") < wrapper.index("exec /opt/py")
