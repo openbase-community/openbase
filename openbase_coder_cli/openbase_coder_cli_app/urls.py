@@ -25,6 +25,9 @@ from openbase_coder_cli.openbase_coder_cli_app.shown_text import shown_text_fetc
 from openbase_coder_cli.openbase_coder_cli_app.skill_settings import (
     skill_sharing_settings,
 )
+from openbase_coder_cli.openbase_coder_cli_app.super_agents_invoke import (
+    super_agents_invoke,
+)
 from openbase_coder_cli.openbase_coder_cli_app.sync_daemon_api import (
     sync_conflicts,
     sync_daemon_barrier,
@@ -306,6 +309,9 @@ urlpatterns = [
         name="thread-model-settings",
     ),
     path("threads/<str:thread_id>/turns/", thread_start_turn, name="thread-start-turn"),
+    # The voice job forwards its Dispatcher's Super Agents operations here so
+    # agent turns started during a call outlive the call (super_agents_remote).
+    path("super-agents/invoke/", super_agents_invoke, name="super-agents-invoke"),
     path(
         "threads/<str:thread_id>/turns/queue/",
         thread_queue_turn,

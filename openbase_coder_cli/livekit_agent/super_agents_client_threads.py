@@ -45,6 +45,34 @@ from openbase_coder_cli.livekit_agent.super_agents_client_common import (
     logger,
 )
 
+# Set to 1 to run the voice Dispatcher's delegated Super Agent turns inside the
+# LiveKit job process again (they then die when the call's room closes).
+VOICE_DELEGATION_IN_PROCESS_ENV = "OPENBASE_VOICE_DELEGATION_IN_PROCESS"
+
+
+def voice_delegation_client_factory():
+    """How a voice session's super_agents MCP server reaches Super Agents.
+
+    The job process ends when the room closes, so turns it owns die at
+    hangup (Maritime 28, 2026-10-16). Delegated operations are forwarded to
+    django-cli, which owns them like typed turns; the Dispatcher's own spoken
+    turns stay in-process. Returns None for the in-process escape hatch.
+    """
+    if os.getenv(VOICE_DELEGATION_IN_PROCESS_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        logger.warning(
+            "Voice delegated Super Agent turns run in the job process (%s set)",
+            VOICE_DELEGATION_IN_PROCESS_ENV,
+        )
+        return None
+    from openbase_coder_cli.super_agents_remote import RemoteSuperAgentsClient
+
+    return RemoteSuperAgentsClient
+
 
 def _is_super_agents_mcp_server(name: str) -> bool:
     normalized = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
@@ -346,6 +374,7 @@ class SuperAgentsClientThreadsMixin:
             return managed_claude_client(
                 backend_identity=identity,
                 disallowed_tools_for_session=dispatcher_disallowed_tools,
+                delegation_client_factory=voice_delegation_client_factory(),
             )
         endpoint = self._dispatcher_dedicated_endpoint()
         if endpoint is not None:

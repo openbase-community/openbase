@@ -269,6 +269,24 @@ class CodexAppServerSessionManager(
         self._state_lock = asyncio.Lock()
         self._claude_watchers: dict[str, asyncio.Task[None]] = {}
 
+    def super_agents_client_for_backend(
+        self, backend: str | None
+    ) -> _SuperAgentsClient:
+        """This process's Super Agents client, for callers that forward work here.
+
+        A forwarded operation must run on a client of the backend the caller
+        meant; this manager has exactly one, for its execution backend.
+        """
+        local_backend = (
+            getattr(self._client, "backend", None) or self._execution_backend
+        )
+        if backend and local_backend and backend != local_backend:
+            raise ValueError(
+                f"This server's Super Agents client runs backend {local_backend!r}, "
+                f"not {backend!r}."
+            )
+        return self._client
+
     def _default_client(self, execution_backend: str) -> _SuperAgentsClient:
         return _default_client_for_execution_backend(
             manager=self,

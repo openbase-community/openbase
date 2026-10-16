@@ -41,8 +41,14 @@ TOOL_SCHEMA = {
 
 
 class ManagedAnnouncements:
-    def __init__(self, store, *, protocol=None):
+    def __init__(self, store, *, protocol=None, delegation_client=None):
         self.client = None
+        # The client a session's in-process super_agents MCP server is bound
+        # to. By default the managed client itself (so delegated turns run in
+        # this process); the voice job substitutes a forwarding client, so the
+        # turns its Dispatcher starts are owned by django-cli and survive the
+        # call ending.
+        self.delegation_client = delegation_client
         self.protocol = protocol or AnnouncementProtocol(
             store, AnnouncementLedger(get_data_dir() / "agent-announcements.sqlite3")
         )
@@ -67,8 +73,11 @@ class ManagedAnnouncements:
         )
 
     def configure_session(self, session, options, sdk):
-        if self.client is not None:
-            configure_delegation(options, self.client, self.protocol.ledger, session.id)
+        delegation_client = self.delegation_client or self.client
+        if delegation_client is not None:
+            configure_delegation(
+                options, delegation_client, self.protocol.ledger, session.id
+            )
         if not self.eligible(session):
             return
         if not session.agent_name:
@@ -152,7 +161,16 @@ class ManagedAnnouncements:
             await self.protocol.validate_turn_result(session, turn, result)
 
 
-def managed_claude_client(client_type=None, **kwargs):
+def managed_claude_client(
+    client_type=None, *, delegation_client_factory=None, **kwargs
+):
+    """Build the managed Claude client.
+
+    ``delegation_client_factory(client)`` returns the client that the
+    sessions' in-process super_agents MCP server is bound to, when delegated
+    turns must run somewhere other than this process (the voice job forwards
+    them to django-cli; see ``openbase_coder_cli.super_agents_remote``).
+    """
     if client_type is None:
         from super_agents.claude_sdk import ClaudeAgentSdkClient
 
@@ -177,4 +195,6 @@ def managed_claude_client(client_type=None, **kwargs):
         **kwargs,
     )
     announcements.client = client
+    if delegation_client_factory is not None:
+        announcements.delegation_client = delegation_client_factory(client)
     return client
