@@ -147,3 +147,37 @@ def test_locks_are_shared_with_other_processes(container, tmp_path):
         assert b"BlockingIOError" in result.stderr
     finally:
         lease.close()
+
+
+@pytest.mark.asyncio
+async def test_container_warmup_does_not_spawn_or_claim_slot(container):
+    class Client:
+        def _resolve_session(self, query):
+            return query
+
+        def _warm_result(self, session, **kwargs):
+            return kwargs
+
+    client = container_client_type(Client)()
+    assert await client.warm_session_by_label("a") == {
+        "warmed": False,
+        "reason": "container_on_demand",
+    }
+    assert not client._memory_leases()
+
+
+def test_launch_failure_releases_claim(container, monkeypatch, tmp_path):
+    import openbase_coder_cli.container_turns as turns
+
+    monkeypatch.setattr(
+        turns, "acquire_turn_slot", lambda: memory.acquire_turn_slot(tmp_path)
+    )
+
+    class Client:
+        def _launch_turn(self, session):
+            raise ValueError("invalid input")
+
+    client = container_client_type(Client)()
+    with pytest.raises(ValueError, match="invalid input"):
+        client._launch_turn(SimpleNamespace(id="a"))
+    assert not client._memory_leases()

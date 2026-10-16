@@ -118,6 +118,7 @@ class _SingleFlightCache:
 
         try:
             value = compute()
+            size = cache_size(value) if is_container() else 0
         except BaseException as error:  # noqa: BLE001 - re-raised to all waiters
             inflight.error = error
             with self._lock:
@@ -125,7 +126,6 @@ class _SingleFlightCache:
                     self._inflight.pop(key, None)
             inflight.event.set()
             raise
-        size = cache_size(value) if is_container() else 0
         with self._lock:
             if self._inflight.get(key) is inflight:
                 if size <= MAX_ENTRY_BYTES:

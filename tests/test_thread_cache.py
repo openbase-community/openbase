@@ -335,3 +335,18 @@ def test_cache_size_handles_shared_and_cyclic_objects():
     value = []
     value.append(value)
     assert 0 < cache_size(value) < 1024
+
+
+def test_size_error_releases_single_flight_waiters(monkeypatch):
+    monkeypatch.setenv("OPENBASE_CODER_SERVICE_SUPERVISOR", "external")
+    cache = thread_cache._SingleFlightCache(8)
+
+    def fail(_value):
+        raise ValueError("bad size")
+
+    monkeypatch.setattr(thread_cache, "cache_size", fail)
+    import pytest
+
+    with pytest.raises(ValueError, match="bad size"):
+        cache.get("a", lambda: {})
+    assert not cache._inflight
