@@ -285,3 +285,25 @@ def test_hard_clear_detaches_inflight_read_and_prevents_stale_republication() ->
     assert not reader.is_alive()
     assert results == [["archived-thread", "retained-thread"]]
     assert cache.get("list", lambda: ["unexpected recompute"]) == ["retained-thread"]
+
+
+def test_container_cache_releases_expired_and_excess_pages(monkeypatch):
+    import weakref
+
+    monkeypatch.setenv("OPENBASE_CODER_SERVICE_SUPERVISOR", "external")
+    now = 100.0
+    monkeypatch.setattr(thread_cache.time, "monotonic", lambda: now)
+    cache = thread_cache._SingleFlightCache(8)
+    class Page:
+        pass
+    page = Page()
+    ref = weakref.ref(page)
+    cache.get("old", lambda: page)
+    del page
+    for key in range(40):
+        cache.get(key, Page)
+    assert ref() is None
+    assert len(cache._entries) <= 32
+    now += 9
+    cache.get("new", Page)
+    assert list(cache._entries) == ["new"]

@@ -8,6 +8,12 @@ from openbase_coder_cli.workspace_memory import acquire_turn_slot, is_container
 
 
 class ContainerClaudeTurns:
+    async def warm_session_by_label(self, input_data, turn_input=None):
+        # No speculative CLI at call setup. The first real turn owns its
+        # memory reservation and starts the process on demand.
+        session = self._resolve_session(input_data)
+        return self._warm_result(session, warmed=False, reason="container_on_demand")
+
     def _memory_leases(self):
         if not hasattr(self, "_workspace_memory_leases"):
             self._workspace_memory_leases = {}
