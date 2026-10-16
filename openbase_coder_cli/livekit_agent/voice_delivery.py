@@ -1,8 +1,10 @@
 """Voice delivery state and diagnostics for LiveKit spoken turns.
 
 Mute semantics (Classic pipeline): once the user goes quiet and their
-utterance is accepted, ``safe_to_mute_user`` tells the client to mute its
-microphone, and that single mute is held, refreshed by ``mute_keepalive``,
+utterance is accepted, and a short grace (``USER_TURN_CLOSE_MUTE_GRACE_SECONDS``)
+has passed in silence, ``safe_to_mute_user`` tells the client to mute its
+microphone; speech resumed inside that grace cancels the pending mute and
+continues the turn. That single mute is held, refreshed by ``mute_keepalive``,
 through the backend wait and the agent's spoken reply until ``safe_to_unmute``
 after playout. The mic is never reopened mid-turn by the server (Gabe,
 2026-10-16: a release during the backend wait, and a mute deferred to the
@@ -37,6 +39,7 @@ from typing import Any
 
 from openbase_coder_cli.livekit_agent.turn_detection import (
     MAX_PRE_ACCEPT_QUIET_CREDIT_SECONDS,
+    USER_TURN_CLOSE_MUTE_GRACE_SECONDS,
     VAD_ONLY_MIN_SPEECH_SECONDS,
     VAD_ONLY_USER_TURN_QUIET_GRACE_SECONDS,
     UserTurnClosureDecision,
@@ -140,6 +143,7 @@ class VoiceDeliveryLedger:
         vad_quiet_grace_seconds: float = VAD_ONLY_USER_TURN_QUIET_GRACE_SECONDS,
         vad_transcript_timeout_seconds: float = 15,
         vad_min_speech_seconds: float = VAD_ONLY_MIN_SPEECH_SECONDS,
+        mute_grace_seconds: float = USER_TURN_CLOSE_MUTE_GRACE_SECONDS,
         live_mode: bool = False,
     ) -> None:
         self._route_snapshot = route_snapshot
@@ -152,6 +156,9 @@ class VoiceDeliveryLedger:
         self._user_speaking_poll_seconds = user_speaking_poll_seconds
         self._vad_quiet_grace_seconds = vad_quiet_grace_seconds
         self._vad_min_speech_seconds = vad_min_speech_seconds
+        # Minimum open-mic time after an accepted utterance, whatever the
+        # quiet floor and its pre-accept credit say (never summed with them).
+        self._mute_grace_seconds = mute_grace_seconds
         self._vad_speech_started_at: float | None = None
         self._vad_last_speech_seconds = 0.0
         self._vad_quiet_task: asyncio.Task[None] | None = None
@@ -467,8 +474,13 @@ class VoiceDeliveryLedger:
         *,
         signals: UserTurnClosureSignals | None = None,
     ) -> None:
-        """Emit ``safe_to_mute_user`` once the user stays quiet for the floor."""
+        """Emit ``safe_to_mute_user`` once the user stays quiet for the floor.
+
+        The mute never lands before ``mute_grace_seconds`` after this call,
+        even when pre-accept silence already satisfies the whole floor.
+        """
         self._cancel_user_turn_closure_task(record.delivery_id)
+        scheduled_at = time.monotonic()
         record.user_turn_closure_confidence = decision.confidence
         record.user_turn_closure_source = decision.source
         record.user_turn_closure_delay_ms = decision.quiet_grace_ms
@@ -520,6 +532,7 @@ class VoiceDeliveryLedger:
                     record,
                     decision=decision,
                     initial_quiet_credit_seconds=quiet_credit_seconds,
+                    scheduled_at=scheduled_at,
                 )
                 self.mark_user_turn_closed(record, decision=decision)
             except asyncio.CancelledError:
@@ -543,6 +556,8 @@ class VoiceDeliveryLedger:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
+            # No loop, so neither the floor nor the post-accept grace can be
+            # timed: a zero floor closes now (tests), anything else is logged.
             if decision.quiet_grace_seconds <= 0:
                 self.mark_user_turn_closed(record, decision=decision)
             else:
@@ -657,18 +672,28 @@ class VoiceDeliveryLedger:
         *,
         decision: UserTurnClosureDecision,
         initial_quiet_credit_seconds: float = 0.0,
+        scheduled_at: float | None = None,
     ) -> None:
         """Wait for the user to stay quiet for the decision's full floor.
 
         Quiet time counts from utterance acceptance, backdated by any silence
         LiveKit endpointing already verified; resumed speech resets the
-        clock. Without a speaking provider (tests, degraded sessions) the
+        clock. On top of that the mic stays open for at least the post-accept
+        grace, so a fully credited floor still leaves the caller a moment to
+        carry on. Without a speaking provider (tests, degraded sessions) the
         floor degrades to a plain sleep.
         """
         required_quiet_seconds = decision.quiet_grace_seconds
+        if scheduled_at is None:
+            scheduled_at = time.monotonic()
+        grace_deadline = scheduled_at + self._mute_grace_seconds
         if self._user_speaking_provider is None:
             await asyncio.sleep(
-                max(0.0, required_quiet_seconds - initial_quiet_credit_seconds)
+                max(
+                    0.0,
+                    required_quiet_seconds - initial_quiet_credit_seconds,
+                    grace_deadline - time.monotonic(),
+                )
             )
             return
         quiet_started_at: float | None = time.monotonic() - initial_quiet_credit_seconds
@@ -683,7 +708,11 @@ class VoiceDeliveryLedger:
                 # A VAD backlog gap invalidates quiet observed before it
                 # (including pre-accept credit); restart the floor there.
                 quiet_started_at = max(quiet_started_at, self._last_vad_gap_at)
-                if time.monotonic() - quiet_started_at >= required_quiet_seconds:
+                now = time.monotonic()
+                if (
+                    now - quiet_started_at >= required_quiet_seconds
+                    and now >= grace_deadline
+                ):
                     if wait_logged:
                         logger.info(
                             "dispatch_timing stage=voice_delivery_user_speech_wait_done "

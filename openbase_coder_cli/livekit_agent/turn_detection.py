@@ -53,6 +53,15 @@ TRANSCRIPTION_NOTICE_MIN_SPEECH_SECONDS = 2.0
 # utterance is even accepted; credit it (bounded, in case the metric is
 # unreliable) so the floor counts from when the user actually stopped.
 MAX_PRE_ACCEPT_QUIET_CREDIT_SECONDS = 2.0
+# Minimum open-mic time after LiveKit closes the user's turn (the utterance
+# is accepted). The quiet floor above is measured from end of speech, and
+# since the pre-accept credit grew to the size of that floor (2026-10-10) it
+# can be fully satisfied at acceptance, which muted the phone the instant the
+# turn closed. Gabe wants a small buffer there, always: speech resumed inside
+# it cancels the pending mute and continues the same turn. This is a floor on
+# the post-accept wait, never added to the quiet floor: the mute lands at
+# max(end of speech + quiet floor, acceptance + this grace).
+USER_TURN_CLOSE_MUTE_GRACE_SECONDS = 1.5
 
 
 @dataclass(frozen=True)
