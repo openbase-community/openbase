@@ -246,11 +246,17 @@ class SafeMultilingualModel(MultilingualModel):
         try:
             from openbase_coder_cli.workspace_memory import is_container
 
-            # The first container inference also loads the local model.
-            if is_container() and not getattr(self, "_inference_warmed", False):
-                timeout = max(timeout or 0, 30)
+            # Cold container inference also loads the local model.
+            if is_container():
+                from .lazy_inference import MODEL_IDLE_SECONDS
+
+                last = getattr(self, "_last_inference_at", None)
+                if timeout is not None and (
+                    last is None or time.monotonic() - last >= MODEL_IDLE_SECONDS
+                ):
+                    timeout = max(timeout, 30)
             probability = await super().predict_end_of_turn(chat_ctx, timeout=timeout)
-            self._inference_warmed = True
+            self._last_inference_at = time.monotonic()
             if self._turn_signal_tracker is not None:
                 message = latest_user_message(chat_ctx)
                 if message is not None:

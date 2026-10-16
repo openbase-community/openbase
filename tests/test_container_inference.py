@@ -1,4 +1,5 @@
-from unittest.mock import Mock
+import asyncio
+from unittest.mock import AsyncMock, Mock
 
 from livekit.agents.inference_runner import _InferenceRunner
 from livekit.plugins.turn_detector.english import _EUORunnerEn
@@ -46,6 +47,15 @@ def test_weights_load_once_on_first_inference(monkeypatch):
     assert runner.run(b"two") == b"prediction"
     initialize.assert_called_once()
     assert run.call_count == 2
+    old_generation = runner._generation
+    runner.run(b"three")
+    runner._release_if_idle(old_generation)
+    assert runner._runner is not None
+    runner._release_if_idle(runner._generation)
+    assert runner._runner is None
+    runner.run(b"after idle")
+    assert initialize.call_count == 2
+    runner._release_if_idle(runner._generation)
 
 
 def test_container_caps_stale_pool_override(monkeypatch):
@@ -54,3 +64,43 @@ def test_container_caps_stale_pool_override(monkeypatch):
     monkeypatch.setenv("OPENBASE_CODER_SERVICE_SUPERVISOR", "external")
     monkeypatch.setenv(livekit.LIVEKIT_AGENT_NUM_IDLE_PROCESSES_ENV, "16")
     assert livekit._livekit_agent_server_options()["num_idle_processes"] == 1
+
+
+def test_container_allows_model_rewarm_after_idle(monkeypatch):
+    from openbase_coder_cli.livekit_agent import turn_detection
+
+    monkeypatch.setenv("OPENBASE_CODER_SERVICE_SUPERVISOR", "external")
+    prediction = AsyncMock(return_value=0.5)
+    monkeypatch.setattr(
+        turn_detection.MultilingualModel, "predict_end_of_turn", prediction
+    )
+    now = [0.0]
+    monkeypatch.setattr(turn_detection.time, "monotonic", lambda: now[0])
+    model = object.__new__(turn_detection.SafeMultilingualModel)
+    model._turn_signal_tracker = None
+    context = object()
+    asyncio.run(model.predict_end_of_turn(context))
+    assert prediction.call_args.kwargs["timeout"] == 30
+    now[0] = 1.0
+    asyncio.run(model.predict_end_of_turn(context))
+    assert prediction.call_args.kwargs["timeout"] == 3
+    now[0] += lazy_inference.MODEL_IDLE_SECONDS
+    asyncio.run(model.predict_end_of_turn(context))
+    assert prediction.call_args.kwargs["timeout"] == 30
+    now[0] += lazy_inference.MODEL_IDLE_SECONDS
+    asyncio.run(model.predict_end_of_turn(context, timeout=None))
+    assert prediction.call_args.kwargs["timeout"] is None
+
+
+def test_desktop_keeps_inference_timeout(monkeypatch):
+    from openbase_coder_cli.livekit_agent import turn_detection
+
+    monkeypatch.delenv("OPENBASE_CODER_SERVICE_SUPERVISOR", raising=False)
+    prediction = AsyncMock(return_value=0.5)
+    monkeypatch.setattr(
+        turn_detection.MultilingualModel, "predict_end_of_turn", prediction
+    )
+    model = object.__new__(turn_detection.SafeMultilingualModel)
+    model._turn_signal_tracker = None
+    asyncio.run(model.predict_end_of_turn(object()))
+    assert prediction.call_args.kwargs["timeout"] == 3

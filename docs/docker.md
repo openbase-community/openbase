@@ -155,7 +155,7 @@ launchd/systemd, which the container does not run.)
 
 Containers reserve memory for the runtime and voice calls before starting managed Openbase Cloud or Claude Code turns. A 4 GiB workspace admits up to two simultaneous turns, and may admit fewer when memory is already low. Extra requests receive “Workspace busy” and can be retried after existing work finishes. A queued turn that reaches execution without enough memory reports the same failure. This admission control does not limit arbitrary shell commands, unmanaged clients, or native Codex turns; a single unusually large build can still exhaust available memory.
 
-Idle containers keep one prewarmed voice job. The multilingual turn detector loads on its first inference, and managed Claude processes start on demand and exit after their turns; the next turn resumes the saved conversation. This trades some first-use latency for memory headroom. Container thread caches have a 16 MiB estimated budget. When memory use exceeds 80%, `sync-workers.log` records the ten largest processes by RSS once a minute, including their process and parent IDs. Desktop behavior is unchanged.
+Idle containers keep one prewarmed voice job. The multilingual turn detector loads on its first inference and releases its weights after five minutes without inference. Managed Claude processes start on demand and exit after their turns; the next turn resumes the saved conversation. This trades some first-use latency for memory headroom. Container thread caches have a 16 MiB estimated budget. When memory use exceeds 80%, `sync-workers.log` records the ten largest processes by RSS once a minute, including their process and parent IDs. Desktop behavior is unchanged.
 
 ## Notes and limits
 
