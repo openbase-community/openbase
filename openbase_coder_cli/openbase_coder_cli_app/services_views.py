@@ -621,4 +621,6 @@ def service_status(request):
         serve_status.host,
     )
     logger.info("service_status complete")
-    return Response({"services": services})
+    from openbase_coder_cli.memory_status import memory_status_payload
+
+    return Response({"services": services, "memory": memory_status_payload()})

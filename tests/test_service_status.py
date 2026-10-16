@@ -85,6 +85,8 @@ def test_service_status_caches_tailnet_probe_across_polls(monkeypatch) -> None:
     for _ in range(3):
         response = views.service_status(request)
         assert response.status_code == 200
+        assert 0 <= response.data["memory"]["percent"] <= 100
+        assert response.data["memory"]["total_bytes"] > 0
         assert response.data["services"]["tailscale"]["running"] is True
         assert response.data["services"]["openbase_api_serve_route"]["running"] is True
         assert response.data["services"]["livekit_serve_route"]["running"] is True
