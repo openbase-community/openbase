@@ -505,13 +505,45 @@ def _rejoin_embedded_node_for_account(
 
 
 def reconcile_after_login() -> None:
-    """Publish the selected transport and finish deferred managed enrollment."""
+    """Converge this machine on the account's transport, then finish deferred
+    managed enrollment.
+
+    The account-level transport is the source of truth every device follows,
+    so a login never publishes this machine's local choice: a developer
+    signing into another person's account from a classic-Tailscale Mac must
+    not rewrite that account (production, 2026-10-11: one such login flipped a
+    phone-only account to Tailscale; the phone adopted it, revoked its Openbase
+    VPN node and lost its cloud workspace). Publishing stays with an explicit
+    ``tailnet set-provider`` and with first-time ``setup``. When the account
+    says something else and this machine can run it, the machine switches
+    (what ``tailnet sync --apply`` does); otherwise it keeps its transport and
+    says so.
+    """
+    from openbase_coder_cli.services.cloud_registration import fetch_tailnet_provider
     from openbase_coder_cli.services.installation import InstallationConfig
 
     if not InstallationConfig.exists():
         return
     provider = _configured_provider()
-    record_account_provider(provider)
+    account = fetch_tailnet_provider()
+    if account in tp.PROVIDER_VALUES and account != provider:
+        blocked = _capability_error(account)
+        if blocked is None:
+            click.echo(
+                f"Your account uses the '{account}' transport; switching this "
+                f"machine from '{provider}' to match."
+            )
+            _apply_provider(account, push_cloud=False)
+            return
+        click.echo(
+            click.style(
+                f"Note: your account uses the '{account}' transport, but this "
+                f"machine cannot run it ({blocked}). Keeping '{provider}' here; "
+                f"run 'openbase-coder tailnet set-provider {provider}' to make "
+                "it the account-level choice.",
+                fg="yellow",
+            )
+        )
     if provider not in (tp.PROVIDER_NETMESH, tp.PROVIDER_NETMESH_TSNET):
         return
     label = "Openbase VPN" if provider == tp.PROVIDER_NETMESH else "Openbase Direct"
