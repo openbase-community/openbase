@@ -319,10 +319,14 @@ def _codex_version_skew_tick() -> None:
 
 def build_jobs() -> list[SyncJob]:
     """The full job set; gating happens inside each tick, not here."""
-    from openbase_coder_cli.workspace_memory import log_memory_pressure
+    from openbase_coder_cli.workspace_memory import is_container, log_memory_pressure
 
-    return [
-        SyncJob(name="workspace_memory", interval=60.0, tick=log_memory_pressure),
+    memory_jobs = (
+        [SyncJob(name="workspace_memory", interval=60.0, tick=log_memory_pressure)]
+        if is_container()
+        else []
+    )
+    return memory_jobs + [
         SyncJob(
             name="codex_thread_device_sync",
             interval=_env_float(

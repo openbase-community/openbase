@@ -181,3 +181,13 @@ def test_launch_failure_releases_claim(container, monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="invalid input"):
         client._launch_turn(SimpleNamespace(id="a"))
     assert not client._memory_leases()
+
+
+def test_watchdog_thread_only_exists_in_containers(monkeypatch):
+    from openbase_coder_cli.cli.sync_workers import build_jobs
+
+    monkeypatch.delenv("OPENBASE_CODER_SERVICE_SUPERVISOR", raising=False)
+    assert "workspace_memory" not in [job.name for job in build_jobs()]
+    monkeypatch.setenv("OPENBASE_CODER_SERVICE_SUPERVISOR", "external")
+    jobs = [job for job in build_jobs() if job.name == "workspace_memory"]
+    assert len(jobs) == 1 and jobs[0].interval == 60
