@@ -10,6 +10,9 @@ from asgiref.sync import async_to_sync
 
 from openbase_coder_cli.thread_sync.models import ThreadInfo
 from openbase_coder_cli.thread_sync.session_manager import ThreadListPage
+from openbase_coder_cli.workspace_memory import is_container
+
+from .cache_size import MAX_CACHE_BYTES, MAX_ENTRY_BYTES, cache_size
 
 THREAD_LIST_CACHE_TTL_SECONDS = 8.0
 # During an active voice session, turn starts and steers invalidate this
@@ -31,6 +34,7 @@ THREAD_LIST_INFLIGHT_WAIT_SECONDS = 30.0
 
 class ThreadCacheWaitTimeout(TimeoutError):
     """The shared in-flight computation did not finish within the bound."""
+
 
 _T = TypeVar("_T")
 
@@ -69,25 +73,25 @@ class _SingleFlightCache:
         self._stale_serve = stale_serve_seconds
         self._inflight_wait = inflight_wait_seconds
         self._lock = threading.Lock()
-        # key -> (computed_at, value, stale). Invalidation flips stale rather
+        # key -> (computed_at, value, stale, estimated_bytes). Invalidation flips stale rather
         # than dropping the entry so mutation churn cannot force a recompute
         # on every read (see THREAD_LIST_STALE_SERVE_SECONDS).
-        self._entries: dict[Hashable, tuple[float, Any, bool]] = {}
+        self._entries: dict[Hashable, tuple[float, Any, bool, int]] = {}
         self._inflight: dict[Hashable, _InFlight] = {}
 
     def get(self, key: Hashable, compute: Callable[[], _T]) -> _T:
         with self._lock:
-            from openbase_coder_cli.workspace_memory import is_container
-
             if is_container():
                 cutoff = time.monotonic() - max(self._ttl, self._stale_serve)
-                self._entries = {k: v for k, v in self._entries.items() if v[0] > cutoff}
+                self._entries = {
+                    k: v for k, v in self._entries.items() if v[0] > cutoff
+                }
                 # Distinct filters/pages must not retain an unbounded history.
                 while len(self._entries) >= 32 and key not in self._entries:
                     self._entries.pop(next(iter(self._entries)))
             entry = self._entries.get(key)
             if entry is not None:
-                computed_at, value, stale = entry
+                computed_at, value, stale, _size = entry
                 age = time.monotonic() - computed_at
                 if not stale and age < self._ttl:
                     return value
@@ -121,9 +125,18 @@ class _SingleFlightCache:
                     self._inflight.pop(key, None)
             inflight.event.set()
             raise
+        size = cache_size(value) if is_container() else 0
         with self._lock:
             if self._inflight.get(key) is inflight:
-                self._entries[key] = (time.monotonic(), value, False)
+                if size <= MAX_ENTRY_BYTES:
+                    if is_container():
+                        while self._entries and (
+                            len(self._entries) >= 32
+                            or sum(entry[3] for entry in self._entries.values()) + size
+                            > MAX_CACHE_BYTES
+                        ):
+                            self._entries.pop(next(iter(self._entries)))
+                    self._entries[key] = (time.monotonic(), value, False, size)
                 self._inflight.pop(key, None)
         inflight.value = value
         inflight.event.set()
@@ -132,8 +145,8 @@ class _SingleFlightCache:
     def invalidate(self) -> None:
         with self._lock:
             self._entries = {
-                key: (computed_at, value, True)
-                for key, (computed_at, value, _stale) in self._entries.items()
+                key: (computed_at, value, True, size)
+                for key, (computed_at, value, _stale, size) in self._entries.items()
             }
 
     def clear(self) -> None:

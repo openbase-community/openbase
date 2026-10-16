@@ -12,7 +12,7 @@ import psutil
 
 MIB = 1024 * 1024
 TURN_BUDGET = 768 * MIB
-VOICE_RESERVE = 1536 * MIB
+VOICE_RESERVE = 2048 * MIB
 logger = logging.getLogger(__name__)
 
 

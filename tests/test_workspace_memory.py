@@ -35,7 +35,7 @@ def test_cgroup_accounting(monkeypatch, tmp_path):
 
 
 def test_slots_release_and_busy(container, tmp_path):
-    leases = [memory.acquire_turn_slot(tmp_path) for _ in range(3)]
+    leases = [memory.acquire_turn_slot(tmp_path) for _ in range(2)]
     try:
         with pytest.raises(memory.WorkspaceBusy, match="Workspace busy"):
             memory.acquire_turn_slot(tmp_path)
@@ -123,7 +123,7 @@ async def test_turn_releases_memory_and_idle_cli(
         await client._run_turn("a")
     assert not client._memory_leases()
     client._disconnect_sdk_client.assert_awaited_with("a")
-    leases = [memory.acquire_turn_slot(tmp_path) for _ in range(3)]
+    leases = [memory.acquire_turn_slot(tmp_path) for _ in range(2)]
     for lease in leases:
         lease.close()
 
