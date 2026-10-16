@@ -274,9 +274,8 @@ class KokoroTTSProvider(BaseTTSProvider):
 
     def readiness(self) -> TTSDownloadStatus:
         files = _kokoro_required_files()
-        cached = 0
         try:
-            from huggingface_hub import hf_hub_download
+            from huggingface_hub import try_to_load_from_cache
         except ImportError:
             return TTSDownloadStatus(
                 provider=self.provider_id,
@@ -286,16 +285,16 @@ class KokoroTTSProvider(BaseTTSProvider):
                 detail="Kokoro dependencies are not installed.",
             )
 
-        for filename in files:
-            try:
-                hf_hub_download(
-                    repo_id=KOKORO_REPO_ID,
-                    filename=filename,
-                    local_files_only=True,
-                )
-            except Exception:
-                continue
-            cached += 1
+        # A pure cache lookup. hf_hub_download(local_files_only=True) still
+        # builds request headers first, and huggingface_hub 1.22 fetches its
+        # agent-harness registry from the Hub while doing so, which put a
+        # network round trip (and a blocked socket under the unit-test guard)
+        # into every TTS settings read.
+        cached = sum(
+            1
+            for filename in files
+            if isinstance(try_to_load_from_cache(KOKORO_REPO_ID, filename), str)
+        )
 
         return TTSDownloadStatus(
             provider=self.provider_id,

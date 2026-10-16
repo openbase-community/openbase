@@ -272,7 +272,9 @@ def test_hard_clear_detaches_inflight_read_and_prevents_stale_republication() ->
         assert release.wait(2.0)
         return ["archived-thread", "retained-thread"]
 
-    reader = threading.Thread(target=lambda: results.append(cache.get("list", before_archive)))
+    reader = threading.Thread(
+        target=lambda: results.append(cache.get("list", before_archive))
+    )
     reader.start()
     try:
         assert started.wait(1.0)
@@ -285,3 +287,66 @@ def test_hard_clear_detaches_inflight_read_and_prevents_stale_republication() ->
     assert not reader.is_alive()
     assert results == [["archived-thread", "retained-thread"]]
     assert cache.get("list", lambda: ["unexpected recompute"]) == ["retained-thread"]
+
+
+def test_container_cache_releases_expired_and_excess_pages(monkeypatch):
+    import weakref
+
+    monkeypatch.setenv("OPENBASE_CODER_SERVICE_SUPERVISOR", "external")
+    now = 100.0
+    monkeypatch.setattr(thread_cache.time, "monotonic", lambda: now)
+    cache = thread_cache._SingleFlightCache(8)
+
+    class Page:
+        pass
+
+    page = Page()
+    ref = weakref.ref(page)
+    cache.get("old", lambda: page)
+    del page
+    for key in range(40):
+        cache.get(key, Page)
+    assert ref() is None
+    assert len(cache._entries) <= 32
+    now += 9
+    cache.get("new", Page)
+    assert list(cache._entries) == ["new"]
+
+
+def test_oversized_container_thread_is_returned_but_not_retained(monkeypatch):
+    monkeypatch.setenv("OPENBASE_CODER_SERVICE_SUPERVISOR", "external")
+    cache = thread_cache._SingleFlightCache(8)
+    page = {"transcript": "x" * (3 * 1024 * 1024)}
+    assert cache.get("large", lambda: page) is page
+    assert "large" not in cache._entries
+
+
+def test_container_cache_has_total_byte_budget(monkeypatch):
+    monkeypatch.setenv("OPENBASE_CODER_SERVICE_SUPERVISOR", "external")
+    cache = thread_cache._SingleFlightCache(8)
+    for key in range(30):
+        cache.get(key, lambda: {"transcript": "x" * (1024 * 1024)})
+    assert sum(entry[3] for entry in cache._entries.values()) <= 16 * 1024 * 1024
+
+
+def test_cache_size_handles_shared_and_cyclic_objects():
+    from openbase_coder_cli.openbase_coder_cli_app.cache_size import cache_size
+
+    value = []
+    value.append(value)
+    assert 0 < cache_size(value) < 1024
+
+
+def test_size_error_releases_single_flight_waiters(monkeypatch):
+    monkeypatch.setenv("OPENBASE_CODER_SERVICE_SUPERVISOR", "external")
+    cache = thread_cache._SingleFlightCache(8)
+
+    def fail(_value):
+        raise ValueError("bad size")
+
+    monkeypatch.setattr(thread_cache, "cache_size", fail)
+    import pytest
+
+    with pytest.raises(ValueError, match="bad size"):
+        cache.get("a", lambda: {})
+    assert not cache._inflight

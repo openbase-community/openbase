@@ -368,6 +368,10 @@ def test_install_rejects_existing_symlink_without_following_it(
             ),
         ),
     ],
+    # Explicit ids: the default ids are the gzip bytes, whose header carries
+    # the build time, so xdist workers collecting across a second boundary
+    # disagreed on the test ids and the whole run errored.
+    ids=["path-escape", "symlink", "dotenv", "private-key"],
 )
 def test_archive_or_content_validation_rejects_unsafe_skills(archive: bytes):
     source = marketplace_install._catalog_source(_source())

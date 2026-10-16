@@ -168,7 +168,9 @@ def managed_claude_client(client_type=None, **kwargs):
 
     store = kwargs.pop("store", None) or Store(backend=kwargs.get("backend_identity"))
     announcements = ManagedAnnouncements(store)
-    client = client_type(
+    from openbase_coder_cli.container_turns import container_client_type
+
+    client = container_client_type(client_type)(
         store=store,
         configure_session=announcements.configure_session,
         validate_turn_result=announcements.validate_turn_result,
