@@ -7,6 +7,8 @@ from openbase_coder_cli.livekit_agent.tts_selection import (
     text_for_tts,
 )
 from openbase_coder_cli.livekit_agent.turn_detection import (
+    MIN_USER_TURN_QUIET_GRACE_SECONDS,
+    USER_TURN_CLOSE_MUTE_GRACE_SECONDS,
     UserTurnClosureDecision,
     UserTurnClosureSignals,
 )
@@ -159,6 +161,9 @@ def test_lifecycle_events_follow_delivery_ledger_transitions():
 
     assert events == [
         ("utterance_accepted", record.delivery_id, ""),
+        # No quiet-floor closure ran here, so the reply's audio brings its
+        # own mute; the release after playout is the same either way.
+        ("safe_to_mute_user", record.delivery_id, "agent_playback"),
         ("agent_audio_started", record.delivery_id, ""),
         ("agent_audio_finished", record.delivery_id, ""),
         ("safe_to_unmute", record.delivery_id, ""),
@@ -237,6 +242,7 @@ def test_safe_to_mute_user_waits_while_user_is_still_speaking():
         ledger = VoiceDeliveryLedger(
             route_snapshot=_snapshot,
             user_speaking_poll_seconds=0.005,
+            mute_grace_seconds=0,
         )
         ledger.set_lifecycle_sink(
             lambda event, record, _reason: events.append((event, record.delivery_id))
@@ -274,6 +280,7 @@ def test_tts_waits_for_user_turn_closure():
         ledger = VoiceDeliveryLedger(
             route_snapshot=_snapshot,
             user_speaking_poll_seconds=0.005,
+            mute_grace_seconds=0,
         )
         is_speaking = True
         ledger.set_user_speaking_provider(lambda: is_speaking)
@@ -792,7 +799,7 @@ def test_tts_flush_fallback_rejects_incompatible_single_candidate():
 
 
 def test_unmatched_direct_tts_emits_lifecycle_audio_events():
-    """Speech with no accepted-utterance record still gates client unmute.
+    """Speech with no accepted-utterance record still mutes and gates unmute.
 
     Regression: a late steer response reached TTS unmatched, produced no
     lifecycle packets, and iOS unmuted mid-speech on the prior response's
@@ -824,6 +831,7 @@ def test_unmatched_direct_tts_emits_lifecycle_audio_events():
     )
 
     assert [event[0] for event in events] == [
+        "safe_to_mute_user",
         "agent_audio_started",
         "agent_audio_finished",
         "safe_to_unmute",
@@ -867,6 +875,7 @@ def test_user_turn_closure_credits_pre_accept_silence():
         ledger = VoiceDeliveryLedger(
             route_snapshot=_snapshot,
             user_speaking_poll_seconds=0.005,
+            mute_grace_seconds=0,
         )
         ledger.set_user_speaking_provider(lambda: False)
 
@@ -999,6 +1008,7 @@ def test_transcript_closure_supersedes_pending_vad_timer():
         ledger = VoiceDeliveryLedger(
             route_snapshot=_snapshot,
             user_speaking_poll_seconds=0.005,
+            mute_grace_seconds=0,
             vad_min_speech_seconds=0,  # This test isolates the quiet floor.
             vad_quiet_grace_seconds=0.05,
         )
@@ -1105,6 +1115,7 @@ def test_vad_gap_restarts_transcript_quiet_floor():
         ledger = VoiceDeliveryLedger(
             route_snapshot=_snapshot,
             user_speaking_poll_seconds=0.005,
+            mute_grace_seconds=0,
         )
         ledger.set_user_speaking_provider(lambda: False)
         record = ledger.accept_utterance(message_id="m1", prompt="hello")
@@ -1556,6 +1567,7 @@ def test_brief_vad_noise_does_not_mute_but_recognized_short_request_does():
             route_snapshot=_snapshot,
             vad_quiet_grace_seconds=0.01,
             user_speaking_poll_seconds=0.005,
+            mute_grace_seconds=0,
         )
         ledger.set_lifecycle_sink(lambda event, record, reason: events.append(event))
         ledger.set_user_speaking_provider(lambda: False)
@@ -1605,84 +1617,262 @@ def test_sustained_vad_speech_keeps_provisional_mute_and_duration():
     asyncio.run(run())
 
 
-def test_mic_reopens_while_the_backend_works_and_closes_for_the_reply():
-    """Gabe 2026-10-11: a voice steer must reach STT during a Classic turn.
-    The mute covers only the agent's own audio, not the backend wait."""
-    events: list[tuple[str, str, str]] = []
+def _quiet_floor_decision(quiet_grace_seconds: float = 0) -> UserTurnClosureDecision:
+    return UserTurnClosureDecision(
+        confidence=0.8,
+        source="turn_detector",
+        quiet_grace_seconds=quiet_grace_seconds,
+        completion_reason="quiet_floor",
+    )
+
+
+def _drive_classic_reply(ledger: VoiceDeliveryLedger, record) -> None:
+    """Backend answer -> TTS -> first audio frame, the way codex_llm drives it."""
+    ledger.mark_answer_owed(record, turn_id="t1", client=None)
+    ledger.mark_text_generated(record, speech_text="Done.", tts_text="Done.")
+    ledger.reserve_for_tts(record)
+    ledger.mark_audio_started(
+        record, latency_ms=10, role="agent", voice_id="v", voice_name="Marian"
+    )
+
+
+def test_classic_mute_lands_at_the_quiet_floor_and_holds_through_the_reply():
+    """Gabe 2026-10-16: on Classic the phone must mute as soon as the caller's
+    utterance is accepted and stay muted, with no flap, until playback ends.
+    No backend-wait release, no mute deferred to the reply's audio."""
+    events: list[tuple[str, str]] = []
     ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
     ledger.set_lifecycle_sink(
-        lambda event, record, reason: events.append((event, record.delivery_id, reason))
+        lambda event, _record, reason: events.append((event, reason))
     )
     record = ledger.accept_utterance(message_id="m1", prompt="Write six files")
-    assert not ledger.release_mic_for_backend_wait(record), "nothing to release yet"
-    ledger.schedule_user_turn_closure(
+    ledger.schedule_user_turn_closure(record, _quiet_floor_decision())
+    assert record.user_turn_closed
+    assert events == [("utterance_accepted", ""), ("safe_to_mute_user", "quiet_floor")]
+    assert not hasattr(ledger, "release_mic_for_backend_wait")
+
+    _drive_classic_reply(ledger, record)
+    # The quiet-floor mute already covers the reply: no second mute, and
+    # nothing reopened the mic in between.
+    assert events[2:] == [("agent_audio_started", "")]
+
+    ledger.mark_tts_completed(
         record,
-        UserTurnClosureDecision(
-            confidence=0.8,
-            source="turn_detector",
-            quiet_grace_seconds=0,
-            completion_reason="quiet_floor",
-        ),
+        audio_events=3,
+        audio_seconds=0.0,
+        role="agent",
+        voice_id="v",
+        voice_name="Marian",
     )
-    assert ledger.release_mic_for_backend_wait(record)
-    assert record.mic_released_for_backend
-    assert not ledger.release_mic_for_backend_wait(record), "already open"
-    ledger.mark_answer_owed(record, turn_id="t1", client=None)
-    ledger.mark_text_generated(record, speech_text="Done.", tts_text="Done.")
-    ledger.reserve_for_tts(record)
-    ledger.mark_audio_started(
-        record, latency_ms=10, role="agent", voice_id="v", voice_name="Marian"
+    assert events[3:] == [("agent_audio_finished", ""), ("safe_to_unmute", "")]
+    assert [event for event, _ in events].count("safe_to_unmute") == 1
+
+
+def test_reply_audio_mutes_on_its_own_when_no_quiet_floor_mute_is_outstanding():
+    """If the floor never closed (cancelled turn, user kept talking), the
+    agent's audio still closes the mic, and the keepalive covers the reply."""
+    events: list[tuple[str, str]] = []
+    ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
+    ledger.set_lifecycle_sink(
+        lambda event, _record, reason: events.append((event, reason))
     )
-    assert [(event, reason) for event, _, reason in events] == [
+    record = ledger.accept_utterance(message_id="m1", prompt="Write six files")
+    _drive_classic_reply(ledger, record)
+    assert events == [
         ("utterance_accepted", ""),
-        ("safe_to_mute_user", "quiet_floor"),
-        ("safe_to_unmute", "backend_working"),
         ("safe_to_mute_user", "agent_playback"),
         ("agent_audio_started", ""),
     ]
 
 
-def test_mic_release_is_a_no_op_in_live_mode():
-    events: list[tuple[str, str, str]] = []
+def test_live_mode_never_mutes_around_the_reply():
+    events: list[tuple[str, str]] = []
     ledger = VoiceDeliveryLedger(route_snapshot=_snapshot, live_mode=True)
     ledger.set_lifecycle_sink(
-        lambda event, record, reason: events.append((event, record.delivery_id, reason))
+        lambda event, _record, reason: events.append((event, reason))
     )
     record = ledger.accept_utterance(message_id="m1", prompt="Write six files")
-    assert not ledger.release_mic_for_backend_wait(record)
-    assert all(event != "safe_to_unmute" for event, _, _ in events)
-
-
-def test_playback_only_muting_sends_no_quiet_floor_mute():
-    """Gabe 2026-10-11: on Classic the phone muted and unmuted 120 ms apart at
-    every turn start. The pipeline ledger now mutes only around agent audio."""
-    events: list[tuple[str, str, str]] = []
-    ledger = VoiceDeliveryLedger(
-        route_snapshot=_snapshot, mute_only_around_playback=True
-    )
-    ledger.set_lifecycle_sink(
-        lambda event, record, reason: events.append((event, record.delivery_id, reason))
-    )
-    record = ledger.accept_utterance(message_id="m1", prompt="Write six files")
-    ledger.schedule_user_turn_closure(
-        record,
-        UserTurnClosureDecision(
-            confidence=0.8,
-            source="turn_detector",
-            quiet_grace_seconds=0,
-            completion_reason="quiet_floor",
-        ),
-    )
-    assert record.user_turn_closed, "the closure itself still happens"
-    assert not ledger.release_mic_for_backend_wait(record), "nothing was muted"
-    ledger.mark_answer_owed(record, turn_id="t1", client=None)
-    ledger.mark_text_generated(record, speech_text="Done.", tts_text="Done.")
-    ledger.reserve_for_tts(record)
-    ledger.mark_audio_started(
-        record, latency_ms=10, role="agent", voice_id="v", voice_name="Marian"
-    )
-    assert [(event, reason) for event, _, reason in events] == [
-        ("utterance_accepted", ""),
-        ("safe_to_mute_user", "agent_playback"),
-        ("agent_audio_started", ""),
+    ledger.schedule_user_turn_closure(record, _quiet_floor_decision())
+    _drive_classic_reply(ledger, record)
+    assert [event for event, _ in events] == [
+        "utterance_accepted",
+        "agent_audio_started",
     ]
+
+
+def test_classic_turn_event_sequence_harness(monkeypatch):
+    """Harness check of the whole Classic turn on a live event loop: accept,
+    quiet floor, a long backend wait held by keepalives, the reply, playout,
+    release. The exact order the phone sees is pinned, keepalives aside."""
+    from openbase_coder_cli.livekit_agent import voice_delivery as vd
+
+    monkeypatch.setattr(vd, "MUTE_KEEPALIVE_INTERVAL_SECONDS", 0.02)
+
+    async def run() -> list[tuple[str, str]]:
+        events: list[tuple[str, str]] = []
+        ledger = VoiceDeliveryLedger(
+            route_snapshot=_snapshot,
+            user_speaking_poll_seconds=0.005,
+            mute_grace_seconds=0.02,
+        )
+        ledger.set_lifecycle_sink(
+            lambda event, _record, reason: events.append((event, reason))
+        )
+        ledger.set_user_speaking_provider(lambda: False)
+        record = ledger.accept_utterance(message_id="m1", prompt="Write six files")
+        ledger.schedule_user_turn_closure(
+            record,
+            _quiet_floor_decision(quiet_grace_seconds=0.01),
+            signals=UserTurnClosureSignals(end_of_turn_delay=0.0),
+        )
+        assert events == [("utterance_accepted", "")], "mute waits for the floor"
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 2.0
+        while not record.user_turn_closed and loop.time() < deadline:
+            await asyncio.sleep(0.005)
+        assert events[-1] == ("safe_to_mute_user", "quiet_floor")
+        # Long backend wait: the mic stays shut and the hold is refreshed.
+        while (
+            events.count(("mute_keepalive", "mute_keepalive")) < 2
+            and loop.time() < deadline
+        ):
+            await asyncio.sleep(0.005)
+        assert ("safe_to_unmute", "backend_working") not in events
+        assert await ledger.wait_for_user_turn_closed_before_tts(record)
+        _drive_classic_reply(ledger, record)
+        ledger.mark_audio_frame_queued(
+            record, audio_seconds=0.03, queued_at=loop.time()
+        )
+        ledger.mark_tts_completed(
+            record,
+            audio_events=1,
+            audio_seconds=0.03,
+            role="agent",
+            voice_id="v",
+            voice_name="Marian",
+        )
+        deadline = loop.time() + 2.0
+        while events[-1] != ("safe_to_unmute", "") and loop.time() < deadline:
+            await asyncio.sleep(0.005)
+        await asyncio.sleep(0.05)
+        return events
+
+    events = asyncio.run(run())
+    without_keepalives = [e for e in events if e[0] != "mute_keepalive"]
+    assert without_keepalives == [
+        ("utterance_accepted", ""),
+        ("safe_to_mute_user", "quiet_floor"),
+        ("agent_audio_started", ""),
+        ("agent_audio_finished", ""),
+        ("safe_to_unmute", ""),
+    ]
+    keepalive_positions = [i for i, e in enumerate(events) if e[0] == "mute_keepalive"]
+    unmute_at = events.index(("safe_to_unmute", ""))
+    assert keepalive_positions and all(i < unmute_at for i in keepalive_positions)
+
+
+def test_mute_grace_is_a_named_buffer_below_the_quiet_floor():
+    """Gabe (many times, restated 2026-10-16): never mute the instant the
+    caller's turn closes. The buffer is one named constant, it is the ledger
+    default, and it is shorter than the quiet floor so the two are max'd,
+    never summed (the floor already measures from end of speech)."""
+    assert USER_TURN_CLOSE_MUTE_GRACE_SECONDS == 1.5
+    assert 0 < USER_TURN_CLOSE_MUTE_GRACE_SECONDS < MIN_USER_TURN_QUIET_GRACE_SECONDS
+    ledger = VoiceDeliveryLedger(route_snapshot=_snapshot)
+    assert ledger._mute_grace_seconds == USER_TURN_CLOSE_MUTE_GRACE_SECONDS
+
+
+def _fully_credited_floor() -> tuple[UserTurnClosureDecision, UserTurnClosureSignals]:
+    """A floor that pre-accept silence already satisfies: without the grace
+    the mute would land the instant the utterance is accepted."""
+    return (
+        _quiet_floor_decision(quiet_grace_seconds=0.02),
+        UserTurnClosureSignals(end_of_turn_delay=0.02),
+    )
+
+
+def test_mute_grace_harness_silence_past_the_grace_mutes_never_at_acceptance():
+    grace = 0.12
+
+    async def run() -> tuple[list[tuple[str, str]], bool, float]:
+        events: list[tuple[str, str]] = []
+        ledger = VoiceDeliveryLedger(
+            route_snapshot=_snapshot,
+            user_speaking_poll_seconds=0.005,
+            mute_grace_seconds=grace,
+        )
+        ledger.set_lifecycle_sink(
+            lambda event, _record, reason: events.append((event, reason))
+        )
+        ledger.set_user_speaking_provider(lambda: False)
+        loop = asyncio.get_running_loop()
+        record = ledger.accept_utterance(message_id="m1", prompt="Write six files")
+        accepted_at = loop.time()
+        decision, signals = _fully_credited_floor()
+        ledger.schedule_user_turn_closure(record, decision, signals=signals)
+        await asyncio.sleep(grace / 2)
+        muted_mid_grace = record.user_turn_closed
+        while not record.user_turn_closed and loop.time() - accepted_at < 2.0:
+            await asyncio.sleep(0.005)
+        muted_after = loop.time() - accepted_at
+        ledger.mark_cancelled(record, reason="test_finished")
+        return events, muted_mid_grace, muted_after
+
+    events, muted_mid_grace, muted_after = asyncio.run(run())
+    assert not muted_mid_grace, "the mic stays open through the grace"
+    assert muted_after >= grace
+    assert events[:2] == [
+        ("utterance_accepted", ""),
+        ("safe_to_mute_user", "quiet_floor"),
+    ]
+
+
+def test_mute_grace_harness_resumed_speech_cancels_the_mute_and_continues_the_turn():
+    grace = 0.12
+
+    async def run() -> tuple[
+        list[tuple[str, str]], VoiceDeliveryRecord, VoiceDeliveryRecord
+    ]:
+        events: list[tuple[str, str]] = []
+        is_speaking = False
+        ledger = VoiceDeliveryLedger(
+            route_snapshot=_snapshot,
+            user_speaking_poll_seconds=0.005,
+            mute_grace_seconds=grace,
+        )
+        ledger.set_lifecycle_sink(
+            lambda event, record, _reason: events.append((event, record.delivery_id))
+        )
+        ledger.set_user_speaking_provider(lambda: is_speaking)
+        first = ledger.accept_utterance(message_id="m1", prompt="Write six")
+        decision, signals = _fully_credited_floor()
+        ledger.schedule_user_turn_closure(first, decision, signals=signals)
+
+        # The caller carries on inside the grace: no mute, and the fragment
+        # that follows supersedes the first one as the same turn.
+        await asyncio.sleep(grace / 3)
+        is_speaking = True
+        ledger.notify_user_state(new_state="speaking")
+        await asyncio.sleep(grace)
+        assert not first.user_turn_closed
+        assert all(event != "safe_to_mute_user" for event, _ in events)
+        is_speaking = False
+        ledger.notify_user_state(new_state="listening", old_state="speaking")
+        second = ledger.accept_utterance(message_id="m2", prompt="files please")
+        ledger.schedule_user_turn_closure(second, decision, signals=signals)
+        assert first.status == "cancelled"
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 2.0
+        while not second.user_turn_closed and loop.time() < deadline:
+            await asyncio.sleep(0.005)
+        ledger.mark_cancelled(second, reason="test_finished")
+        return events, first, second
+
+    events, first, second = asyncio.run(run())
+    mutes = [
+        delivery_id for event, delivery_id in events if event == "safe_to_mute_user"
+    ]
+    assert mutes == [second.delivery_id]
+    assert not first.user_turn_closed
+    assert second.user_turn_closed

@@ -1611,7 +1611,9 @@ def test_verify_cloud_audio_subscription_skips_transient_errors(monkeypatch):
 @pytest.mark.asyncio
 async def test_announcer_playout_brackets_voice_lifecycle_events():
     """Announcements must be bracketed by lifecycle events so the client mic
-    does not reopen exactly as a Super Agent intro starts playing."""
+    does not reopen exactly as a Super Agent intro starts playing. On Classic
+    the intro's audio also carries its own mute when no quiet-floor mute is
+    outstanding, so the release after playout is a real one."""
     from openbase_coder_cli.livekit_agent.voice_delivery import (
         VoiceDeliveryLedger,
         VoiceRouteSnapshot,
@@ -1684,6 +1686,7 @@ async def test_announcer_playout_brackets_voice_lifecycle_events():
     assert session.say_handle.waited is True
     event_names = [event for event, _delivery_id in events]
     assert event_names == [
+        "safe_to_mute_user",
         "agent_audio_started",
         "agent_audio_finished",
         "safe_to_unmute",

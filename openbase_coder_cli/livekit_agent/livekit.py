@@ -1324,9 +1324,6 @@ def _build_delivery_ledger(
         room_name=ctx.room.name,
         room_id=room_id,
         live_mode=live_mode,
-        # Classic: the mic is shut only around the agent's own audio, so the
-        # caller can steer the running turn by voice (see voice_delivery).
-        mute_only_around_playback=not live_mode,
     )
     delivery_ledger.set_lifecycle_sink(
         lambda event, record, reason: _schedule_voice_lifecycle_packet(

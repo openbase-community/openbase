@@ -1,16 +1,19 @@
 """Voice delivery state and diagnostics for LiveKit spoken turns.
 
-Mute semantics: once the user goes quiet and their utterance is accepted,
-``safe_to_mute_user`` tells the client to mute its microphone. As soon as
-the request is committed to the coding backend the mic is released again
-(``safe_to_unmute`` with reason ``backend_working``,
-:meth:`VoiceDeliveryLedger.release_mic_for_backend_wait`): the caller must be
-able to steer the running turn by voice (Gabe, 2026-10-11; before, the mute
-lasted the whole backend turn and a mid-turn "also add a NOTES file" never
-reached STT). The mute returns with the reply's ``agent_audio_started`` (a
-``safe_to_mute_user`` is sent alongside it so the keepalive covers long
-replies) and the mic reopens on ``safe_to_unmute`` after the agent's spoken
-reply. So the mic is closed only around the agent's own audio.
+Mute semantics (Classic pipeline): once the user goes quiet and their
+utterance is accepted, and a short grace (``USER_TURN_CLOSE_MUTE_GRACE_SECONDS``)
+has passed in silence, ``safe_to_mute_user`` tells the client to mute its
+microphone; speech resumed inside that grace cancels the pending mute and
+continues the turn. That single mute is held, refreshed by ``mute_keepalive``,
+through the backend wait and the agent's spoken reply until ``safe_to_unmute``
+after playout. The mic is never reopened mid-turn by the server (Gabe,
+2026-10-16: a release during the backend wait, and a mute deferred to the
+reply's audio, both read as "no mute, then mute/unmute/mute" on the phone).
+A caller who wants to steer the running turn unmutes by hand; the clients
+keep a manual unmute sacrosanct and the keepalive never re-applies a mute.
+If the reply's audio starts with no lifecycle mute outstanding (the quiet
+floor never closed, or the user turn was cancelled) ``agent_audio_started``
+carries its own ``safe_to_mute_user`` so the agent's audio is still covered.
 
 ``safe_to_unmute`` is a mic-release, not a status update: it is only sent
 when a lifecycle mute is actually outstanding (or after real agent audio),
@@ -36,6 +39,7 @@ from typing import Any
 
 from openbase_coder_cli.livekit_agent.turn_detection import (
     MAX_PRE_ACCEPT_QUIET_CREDIT_SECONDS,
+    USER_TURN_CLOSE_MUTE_GRACE_SECONDS,
     VAD_ONLY_MIN_SPEECH_SECONDS,
     VAD_ONLY_USER_TURN_QUIET_GRACE_SECONDS,
     UserTurnClosureDecision,
@@ -113,9 +117,6 @@ class VoiceDeliveryRecord:
     audio_seconds: float = 0.0
     reserved_for_tts: bool = False
     delivered: bool = False
-    # The mic was reopened while the backend worked on this request; the
-    # reply's audio start must close it again.
-    mic_released_for_backend: bool = False
     terminal_reason: str | None = None
     user_turn_closed: bool = False
     user_turn_closure_confidence: float | None = None
@@ -142,16 +143,10 @@ class VoiceDeliveryLedger:
         vad_quiet_grace_seconds: float = VAD_ONLY_USER_TURN_QUIET_GRACE_SECONDS,
         vad_transcript_timeout_seconds: float = 15,
         vad_min_speech_seconds: float = VAD_ONLY_MIN_SPEECH_SECONDS,
+        mute_grace_seconds: float = USER_TURN_CLOSE_MUTE_GRACE_SECONDS,
         live_mode: bool = False,
-        mute_only_around_playback: bool = False,
     ) -> None:
         self._route_snapshot = route_snapshot
-        # Pipeline engine: the mic is shut only while the agent's own audio
-        # plays. The quiet-floor mute that used to follow every accepted
-        # utterance is not published (it was immediately undone by the
-        # backend-wait release and read as a mute/unmute flap on the phone,
-        # Gabe 2026-10-11); the user-turn closure itself is unchanged.
-        self._mute_only_around_playback = mute_only_around_playback
         # Live Voice engine: the microphone stays open for full duplex, so the
         # ledger never emits a mute or unmute release, whatever path asks for
         # one. Everything else (utterance_accepted, agent_audio_*) still flows.
@@ -161,6 +156,9 @@ class VoiceDeliveryLedger:
         self._user_speaking_poll_seconds = user_speaking_poll_seconds
         self._vad_quiet_grace_seconds = vad_quiet_grace_seconds
         self._vad_min_speech_seconds = vad_min_speech_seconds
+        # Minimum open-mic time after an accepted utterance, whatever the
+        # quiet floor and its pre-accept credit say (never summed with them).
+        self._mute_grace_seconds = mute_grace_seconds
         self._vad_speech_started_at: float | None = None
         self._vad_last_speech_seconds = 0.0
         self._vad_quiet_task: asyncio.Task[None] | None = None
@@ -476,8 +474,13 @@ class VoiceDeliveryLedger:
         *,
         signals: UserTurnClosureSignals | None = None,
     ) -> None:
-        """Emit ``safe_to_mute_user`` once the user stays quiet for the floor."""
+        """Emit ``safe_to_mute_user`` once the user stays quiet for the floor.
+
+        The mute never lands before ``mute_grace_seconds`` after this call,
+        even when pre-accept silence already satisfies the whole floor.
+        """
         self._cancel_user_turn_closure_task(record.delivery_id)
+        scheduled_at = time.monotonic()
         record.user_turn_closure_confidence = decision.confidence
         record.user_turn_closure_source = decision.source
         record.user_turn_closure_delay_ms = decision.quiet_grace_ms
@@ -529,6 +532,7 @@ class VoiceDeliveryLedger:
                     record,
                     decision=decision,
                     initial_quiet_credit_seconds=quiet_credit_seconds,
+                    scheduled_at=scheduled_at,
                 )
                 self.mark_user_turn_closed(record, decision=decision)
             except asyncio.CancelledError:
@@ -552,6 +556,8 @@ class VoiceDeliveryLedger:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
+            # No loop, so neither the floor nor the post-accept grace can be
+            # timed: a zero floor closes now (tests), anything else is logged.
             if decision.quiet_grace_seconds <= 0:
                 self.mark_user_turn_closed(record, decision=decision)
             else:
@@ -666,18 +672,28 @@ class VoiceDeliveryLedger:
         *,
         decision: UserTurnClosureDecision,
         initial_quiet_credit_seconds: float = 0.0,
+        scheduled_at: float | None = None,
     ) -> None:
         """Wait for the user to stay quiet for the decision's full floor.
 
         Quiet time counts from utterance acceptance, backdated by any silence
         LiveKit endpointing already verified; resumed speech resets the
-        clock. Without a speaking provider (tests, degraded sessions) the
+        clock. On top of that the mic stays open for at least the post-accept
+        grace, so a fully credited floor still leaves the caller a moment to
+        carry on. Without a speaking provider (tests, degraded sessions) the
         floor degrades to a plain sleep.
         """
         required_quiet_seconds = decision.quiet_grace_seconds
+        if scheduled_at is None:
+            scheduled_at = time.monotonic()
+        grace_deadline = scheduled_at + self._mute_grace_seconds
         if self._user_speaking_provider is None:
             await asyncio.sleep(
-                max(0.0, required_quiet_seconds - initial_quiet_credit_seconds)
+                max(
+                    0.0,
+                    required_quiet_seconds - initial_quiet_credit_seconds,
+                    grace_deadline - time.monotonic(),
+                )
             )
             return
         quiet_started_at: float | None = time.monotonic() - initial_quiet_credit_seconds
@@ -692,7 +708,11 @@ class VoiceDeliveryLedger:
                 # A VAD backlog gap invalidates quiet observed before it
                 # (including pre-accept credit); restart the floor there.
                 quiet_started_at = max(quiet_started_at, self._last_vad_gap_at)
-                if time.monotonic() - quiet_started_at >= required_quiet_seconds:
+                now = time.monotonic()
+                if (
+                    now - quiet_started_at >= required_quiet_seconds
+                    and now >= grace_deadline
+                ):
                     if wait_logged:
                         logger.info(
                             "dispatch_timing stage=voice_delivery_user_speech_wait_done "
@@ -740,29 +760,6 @@ class VoiceDeliveryLedger:
         record.status = "answer_owed"
         self._records_by_turn_id[turn_id] = record
         self._log(record, "answer_owed")
-        return True
-
-    def release_mic_for_backend_wait(self, record: VoiceDeliveryRecord) -> bool:
-        """Reopen the caller's mic while the backend works on ``record``.
-
-        The lifecycle mute closed the mic for the quiet floor; the request is
-        now with the coding backend, and what the caller says next must be
-        transcribed and steered into that turn. Nothing happens in live mode,
-        when no lifecycle mute is outstanding, or while agent audio is still
-        pending or playing (an announcement keeps the mic shut until it ends).
-        """
-        if self._live_mode or not self._lifecycle_mute_outstanding:
-            return False
-        if self._announcement_pending() or any(
-            self._remaining_playout_seconds(other) > MIN_PLAYOUT_DEFER_SECONDS
-            for other in self._records.values()
-            if other.delivery_id in self._playout_release_tasks
-        ):
-            self._log(record, "mic_release_deferred", reason="agent_audio_pending")
-            return False
-        record.mic_released_for_backend = True
-        self._log(record, "mic_released_for_backend")
-        self._emit_lifecycle("safe_to_unmute", record, reason="backend_working")
         return True
 
     def mark_text_generated(
@@ -1035,13 +1032,10 @@ class VoiceDeliveryLedger:
             voice_id=voice_id,
             voice_name=voice_name,
         )
-        if (
-            not self._live_mode
-            and not self._lifecycle_mute_outstanding
-            and (record.mic_released_for_backend or self._mute_only_around_playback)
-        ):
-            # The mic was open during the backend wait: close it for the
-            # reply, and keep the mute keepalive running through a long one.
+        if not self._live_mode and not self._lifecycle_mute_outstanding:
+            # No quiet-floor mute covers this reply (the floor never closed,
+            # or an earlier record released it): close the mic for the agent's
+            # audio and keep the keepalive running through a long reply.
             self._emit_lifecycle("safe_to_mute_user", record, reason="agent_playback")
         self._emit_lifecycle("agent_audio_started", record)
 
@@ -1511,11 +1505,6 @@ class VoiceDeliveryLedger:
             return
         if event == "safe_to_mute_user":
             self._mute_covers_current_quiet = True
-            if self._mute_only_around_playback and reason != "agent_playback":
-                # The closure is recorded (no second quiet-floor mute for this
-                # quiet), but the phone's mic stays open until agent audio.
-                self._log(record, "lifecycle_mute_deferred_to_playback", reason=reason)
-                return
             self._lifecycle_mute_outstanding = True
             self._ensure_mute_keepalive_task(record)
         elif event == "safe_to_unmute":
