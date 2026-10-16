@@ -14,7 +14,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from openbase_coder_cli import dispatcher_config
 from openbase_coder_cli.livekit_agent import config, livekit
+from openbase_coder_cli.livekit_agent.live_gateway_stop import LiveGatewayStop
 from openbase_coder_cli.livekit_agent.live_voice import (
     LIVE_VOICE_PROVIDER_FAILED_CODE,
     LIVE_VOICE_UNAVAILABLE_CODE,
@@ -422,6 +424,98 @@ async def test_live_fallback_publishes_a_non_fatal_notice_and_keeps_auto_mute(
     )
     assert "gateway_not_deployed" not in packet["detail"]
     assert "HTTP 404" not in packet["detail"]
+
+
+@pytest.fixture
+def voice_config(monkeypatch, tmp_path):
+    path = tmp_path / "dispatcher-config.json"
+    monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", path)
+    monkeypatch.delenv("LIVEKIT_VOICE_MODEL", raising=False)
+    return path
+
+
+async def test_out_of_live_credits_warns_once_and_switches_the_install_to_classic(
+    wiring, monkeypatch, voice_config
+):
+    """Gabe, 2026-10-16: the out-of-credits notice is heard once; the voice
+    model then becomes Classic so later calls are quiet about it."""
+    ctx = _fake_ctx()
+    said: list[str] = []
+    _FakeAgentSession.say = lambda self, text: said.append(text)
+    try:
+        decision = VoiceEngineDecision(
+            engine="pipeline",
+            fallback_reason="subscription_required",
+            fallback_detail="Openbase Cloud audio is out of live voice credits.",
+        )
+        await _run_entrypoint(ctx, decision, monkeypatch)
+    finally:
+        del _FakeAgentSession.say
+
+    assert len(wiring.pipeline_calls) == 1
+    (packet,) = _status_packets(ctx.room)
+    assert packet["code"] == LIVE_VOICE_UNAVAILABLE_CODE
+    assert packet["severity"] == "warning"
+    assert packet["detail"].startswith("You're out of live voice credits")
+    assert "Classic" in packet["detail"] and "app.openbase.cloud" in packet["detail"]
+    assert said == [livekit.LIVE_VOICE_CREDITS_SPOKEN]
+    assert "switch back to GPT-Live" in livekit.LIVE_VOICE_CREDITS_SPOKEN
+    assert dispatcher_config.selected_voice_engine() == "pipeline"
+    switch = dispatcher_config.voice_model_auto_switch()
+    assert switch is not None and switch["reason"] == "live_credits_exhausted"
+    # The next call starts on the pipeline by setting: no fallback, no notice.
+    assert livekit.selected_voice_engine() == "pipeline"
+
+
+async def test_other_fallbacks_leave_the_voice_model_alone(
+    wiring, monkeypatch, voice_config
+):
+    ctx = _fake_ctx()
+    decision = VoiceEngineDecision(
+        engine="pipeline", fallback_reason="login_required", fallback_detail="no login"
+    )
+    await _run_entrypoint(ctx, decision, monkeypatch)
+    assert dispatcher_config.selected_voice_engine() == "live"
+    assert dispatcher_config.voice_model_auto_switch() is None
+
+
+async def test_mid_call_billing_stop_switches_to_classic_and_says_so(
+    monkeypatch, voice_config
+):
+    ctx = _fake_ctx()
+    deleted: list[str] = []
+
+    async def delete_room(name):
+        deleted.append(name)
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(livekit, "_delete_room", delete_room)
+    monkeypatch.setattr(livekit.asyncio, "sleep", no_sleep)
+    stop = LiveGatewayStop(
+        "subscription_required", "You're out of live voice credits for this month."
+    )
+
+    await livekit._end_call_after_agent_error(ctx, stop)
+
+    (packet,) = _status_packets(ctx.room)
+    assert packet["code"] == "subscription_required"
+    assert packet["detail"].startswith(
+        "You're out of live voice credits for this month."
+    )
+    assert packet["detail"].endswith(livekit.LIVE_VOICE_CREDITS_SWITCHED_SUFFIX)
+    assert deleted == ["room-1"] and ctx.shutdowns == ["agent-error"]
+    assert dispatcher_config.selected_voice_engine() == "pipeline"
+    assert dispatcher_config.voice_model_auto_switch()["reason"] == (
+        "live_credits_exhausted"
+    )
+
+    # Already on Classic (an explicit choice, say): the detail is untouched.
+    ctx = _fake_ctx()
+    await livekit._end_call_after_agent_error(ctx, stop)
+    (packet,) = _status_packets(ctx.room)
+    assert packet["detail"] == "You're out of live voice credits for this month."
 
 
 async def test_live_session_start_failure_falls_back_to_the_pipeline(

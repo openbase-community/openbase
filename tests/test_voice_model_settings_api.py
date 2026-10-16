@@ -101,7 +101,7 @@ def test_pipeline_usage_does_not_contact_cloud(monkeypatch):
         pytest.fail("Classic voice should not poll Cloud usage")
 
     monkeypatch.setattr(voice_model_settings, "audio_usage_summary", unexpected)
-    assert _usage().data == {"model": "pipeline", "budget": None}
+    assert _usage().data == {"model": "pipeline", "budget": None, "live_voice": None}
 
 
 @pytest.mark.parametrize(
@@ -146,6 +146,7 @@ def test_voice_model_settings_defaults_to_gpt_live(
         "The new voice model applies to the next voice call."
     )
     assert response.data["config_path"] == str(_isolated_voice_config)
+    assert response.data["auto_switch"] is None
     # GPT-Live always runs through Openbase Cloud: there is no provider choice.
     assert "live_voice_provider" not in response.data
     assert "live_voice_provider_options" not in response.data
@@ -218,3 +219,73 @@ def test_voice_model_settings_rejects_missing_model(
     assert response.status_code == 400
     assert "model" in response.data
     assert not _isolated_voice_config.exists()
+
+
+def test_usage_reports_live_voice_availability_next_to_the_budget(monkeypatch):
+    monkeypatch.setattr(
+        voice_model_settings,
+        "audio_usage_summary",
+        lambda url: {
+            "monthly_limit_cents": 500,
+            "live_voice_remaining_cents": 0,
+            "live_voice_budget": {
+                "warning_id": "p",
+                "low": True,
+                "shared": False,
+                "remaining_percent": 0,
+            },
+        },
+    )
+    response = _usage().data
+    assert response["budget"]["low"] is True
+    assert response["live_voice"]["available"] is False
+    assert response["live_voice"]["reason"] == "credits_exhausted"
+    assert "out of live voice credits" in response["live_voice"]["hint"]
+
+
+def test_usage_tells_a_signed_out_install_to_sign_in(monkeypatch):
+    def unavailable(url):
+        raise voice_model_settings.AuthLoginRequiredError("no login")
+
+    monkeypatch.setattr(voice_model_settings, "audio_usage_summary", unavailable)
+    response = _usage().data
+    assert response["budget"] is None
+    assert response["live_voice"]["available"] is False
+    assert response["live_voice"]["reason"] == "login_required"
+
+
+def test_automatic_switch_shows_in_settings_and_keeps_polling_availability(
+    _isolated_voice_config: Path, monkeypatch
+):
+    """After the runtime moved the install to Classic, the settings carry the
+    reason and the usage endpoint keeps asking Cloud whether GPT-Live is back,
+    so the call settings can say so (Gabe, 2026-10-16)."""
+    assert dispatcher_config.switch_voice_model_for_exhausted_live_credits()
+    settings = _get().data
+    assert settings["model"] == PIPELINE_VOICE_MODEL_ID
+    assert settings["auto_switch"]["reason"] == "live_credits_exhausted"
+    assert settings["auto_switch"]["from_model"] == GPT_LIVE_VOICE_MODEL_ID
+    assert "GPT-Live credits ran out" in settings["auto_switch"]["note"]
+
+    polled = []
+
+    def fetch(url):
+        polled.append(url)
+        return {"monthly_limit_cents": 500, "live_voice_remaining_cents": 300}
+
+    monkeypatch.setattr(voice_model_settings, "audio_usage_summary", fetch)
+    usage = _usage().data
+    assert polled
+    assert usage["model"] == PIPELINE_VOICE_MODEL_ID
+    assert usage["budget"] is None
+    assert usage["live_voice"] == {"available": True, "reason": None, "hint": None}
+
+    # The user picks GPT-Live again by hand: the automatic switch is over.
+    switched_back = _put({"model": GPT_LIVE_VOICE_MODEL_ID}).data
+    assert switched_back["model"] == GPT_LIVE_VOICE_MODEL_ID
+    assert switched_back["auto_switch"] is None
+    # Choosing Classic by hand is an explicit choice: no reason, no polling.
+    assert _put({"model": "classic"}).data["auto_switch"] is None
+    polled.clear()
+    assert _usage().data["live_voice"] is None
+    assert polled == []

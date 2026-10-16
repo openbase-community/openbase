@@ -91,3 +91,19 @@ def voice_model_option(model_id: str | None) -> VoiceModelOption:
 
 def voice_model_options_payload() -> list[dict[str, str | bool]]:
     return [option.payload() for option in VOICE_MODEL_OPTIONS]
+
+
+# Why the runtime moved a GPT-Live install to the classic pipeline on its own.
+# The marker is stored next to the voice model and shown in call settings, so
+# the user learns once why calls changed and can switch back when they like.
+LIVE_CREDITS_EXHAUSTED_REASON = "live_credits_exhausted"
+LIVE_CREDITS_EXHAUSTED_NOTE = (
+    "Switched to Classic because GPT-Live credits ran out. Switch back to "
+    "GPT-Live here when credits return."
+)
+
+
+def voice_model_auto_switch_note(reason: str | None) -> str:
+    if reason == LIVE_CREDITS_EXHAUSTED_REASON:
+        return LIVE_CREDITS_EXHAUSTED_NOTE
+    return "Switched to Classic automatically."

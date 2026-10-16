@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -35,9 +36,13 @@ from openbase_coder_cli.tts_providers import (
 )
 from openbase_coder_cli.voice_models import (
     DEFAULT_VOICE_MODEL_ID,
+    LIVE_CREDITS_EXHAUSTED_REASON,
+    PIPELINE_VOICE_MODEL_ID,
+    VOICE_ENGINE_LIVE,
     VOICE_MODEL_ENV_KEY,
     normalize_voice_model_id,
     voice_engine_for_model,
+    voice_model_auto_switch_note,
 )
 
 # Bump alongside a forward-only migration; see the workspace AUTO_UPDATE.md.
@@ -249,6 +254,9 @@ STT_PROVIDER_KEY = "stt_provider"
 # Which model renders the voice side of a call (see voice_models.py). The
 # default is GPT-Live; "pipeline" keeps the STT/TTS provider settings in play.
 VOICE_MODEL_KEY = "voice_model"
+# Set when the runtime itself moved the voice model to the classic pipeline
+# (GPT-Live credits ran out). Cleared by any explicit voice model choice.
+VOICE_MODEL_AUTO_SWITCH_KEY = "voice_model_auto_switch"
 DISPATCHER_VOICE_ID_KEY = "dispatcher_voice_id"
 DISPATCHER_VOICE_NAME_KEY = "dispatcher_voice_name"
 DEFAULT_DISPATCHER_VOICE_ID = DEFAULT_CARTESIA_VOICE_ID
@@ -518,18 +526,80 @@ def selected_voice_engine(path: Path | None = None) -> str:
 
 
 def set_voice_model(model_id: str, path: Path | None = None) -> dict[str, str]:
+    """An explicit voice model choice; it also retires any automatic switch."""
     normalized_model_id = normalize_voice_model_id(model_id)
     config_path = path or CODEX_DISPATCHER_CONFIG_PATH
-    _write_dispatcher_config(
-        {
-            **read_dispatcher_config(config_path),
-            VOICE_MODEL_KEY: normalized_model_id,
-        },
-        config_path,
-    )
+    payload = {
+        **read_dispatcher_config(config_path),
+        VOICE_MODEL_KEY: normalized_model_id,
+    }
+    payload.pop(VOICE_MODEL_AUTO_SWITCH_KEY, None)
+    _write_dispatcher_config(payload, config_path)
     return {
         "model": normalized_model_id,
         "engine": voice_engine_for_model(normalized_model_id),
+    }
+
+
+def switch_voice_model_to_pipeline(
+    reason: str, path: Path | None = None
+) -> dict[str, Any] | None:
+    """Move a GPT-Live install to the classic pipeline on the runtime's behalf.
+
+    Called once the user has had the warning (GPT-Live credits ran out), so
+    later calls go straight to Classic with no warning. The marker records
+    why, for the settings surfaces; it is cleared by ``set_voice_model``. A
+    no-op when the pipeline is already selected: nothing changed, and an
+    older marker (or an explicit choice) stays as it is.
+    """
+    config_path = path or CODEX_DISPATCHER_CONFIG_PATH
+    if selected_voice_engine(config_path) != VOICE_ENGINE_LIVE:
+        return None
+    payload = read_dispatcher_config(config_path)
+    auto_switch = {
+        "reason": reason,
+        "from_model": selected_voice_model_id(config_path),
+        "at": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+    _write_dispatcher_config(
+        {
+            **payload,
+            VOICE_MODEL_KEY: PIPELINE_VOICE_MODEL_ID,
+            VOICE_MODEL_AUTO_SWITCH_KEY: auto_switch,
+        },
+        config_path,
+    )
+    return _auto_switch_payload(auto_switch)
+
+
+def switch_voice_model_for_exhausted_live_credits(
+    path: Path | None = None,
+) -> dict[str, Any] | None:
+    return switch_voice_model_to_pipeline(LIVE_CREDITS_EXHAUSTED_REASON, path)
+
+
+def voice_model_auto_switch(path: Path | None = None) -> dict[str, Any] | None:
+    """The automatic switch still in force, or None.
+
+    Only meaningful while the pipeline is selected: an env override or a
+    hand-edited config that selects GPT-Live again makes the marker moot.
+    """
+    config_path = path or CODEX_DISPATCHER_CONFIG_PATH
+    marker = read_dispatcher_config(config_path).get(VOICE_MODEL_AUTO_SWITCH_KEY)
+    if not isinstance(marker, dict):
+        return None
+    if selected_voice_engine(config_path) == VOICE_ENGINE_LIVE:
+        return None
+    return _auto_switch_payload(marker)
+
+
+def _auto_switch_payload(marker: dict[str, Any]) -> dict[str, Any]:
+    reason = _optional_str(marker.get("reason")) or LIVE_CREDITS_EXHAUSTED_REASON
+    return {
+        "reason": reason,
+        "from_model": _optional_str(marker.get("from_model")) or DEFAULT_VOICE_MODEL_ID,
+        "at": _optional_str(marker.get("at")),
+        "note": voice_model_auto_switch_note(reason),
     }
 
 

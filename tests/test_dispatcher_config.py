@@ -299,3 +299,79 @@ def test_default_setup_config_uses_haiku_for_openbase_cloud(
     # Personal claude_code login keeps opus (its own plan allows it).
     monkeypatch.setenv("OPENBASE_CODING_BACKEND", "claude_code")
     assert dispatcher_config.dispatcher_model(config_path) == "opus"
+
+
+def test_voice_model_switch_for_exhausted_live_credits_records_why(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "dispatcher-config.json"
+    monkeypatch.delenv("LIVEKIT_VOICE_MODEL", raising=False)
+    assert dispatcher_config.voice_model_auto_switch(config_path) is None
+
+    switched = dispatcher_config.switch_voice_model_for_exhausted_live_credits(
+        config_path
+    )
+
+    assert switched is not None
+    assert switched["reason"] == "live_credits_exhausted"
+    assert switched["from_model"] == "gpt-live-1"
+    assert switched["at"]
+    assert "GPT-Live credits ran out" in switched["note"]
+    assert dispatcher_config.selected_voice_engine(config_path) == "pipeline"
+    marker = dispatcher_config.voice_model_auto_switch(config_path)
+    assert marker == switched
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    assert payload["voice_model"] == "pipeline"
+    assert payload["voice_model_auto_switch"]["reason"] == "live_credits_exhausted"
+
+
+def test_voice_model_switch_is_a_no_op_once_on_the_pipeline(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "dispatcher-config.json"
+    monkeypatch.delenv("LIVEKIT_VOICE_MODEL", raising=False)
+    dispatcher_config.set_voice_model("pipeline", config_path)
+
+    assert (
+        dispatcher_config.switch_voice_model_for_exhausted_live_credits(config_path)
+        is None
+    )
+    # An explicit Classic choice is not an automatic switch.
+    assert dispatcher_config.voice_model_auto_switch(config_path) is None
+
+
+def test_explicit_voice_model_choice_clears_the_automatic_switch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "dispatcher-config.json"
+    monkeypatch.delenv("LIVEKIT_VOICE_MODEL", raising=False)
+    dispatcher_config.switch_voice_model_for_exhausted_live_credits(config_path)
+
+    dispatcher_config.set_voice_model("gpt-live-1", config_path)
+
+    assert dispatcher_config.voice_model_auto_switch(config_path) is None
+    assert "voice_model_auto_switch" not in json.loads(
+        config_path.read_text(encoding="utf-8")
+    )
+    # Choosing Classic by hand after the switch keeps it an explicit choice.
+    dispatcher_config.switch_voice_model_for_exhausted_live_credits(config_path)
+    dispatcher_config.set_voice_model("pipeline", config_path)
+    assert dispatcher_config.voice_model_auto_switch(config_path) is None
+
+
+def test_voice_model_auto_switch_is_moot_when_live_is_selected_again(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "dispatcher-config.json"
+    monkeypatch.delenv("LIVEKIT_VOICE_MODEL", raising=False)
+    config_path.write_text(
+        json.dumps(
+            {
+                "voice_model": "gpt-live-1",
+                "voice_model_auto_switch": {"reason": "live_credits_exhausted"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert dispatcher_config.voice_model_auto_switch(config_path) is None

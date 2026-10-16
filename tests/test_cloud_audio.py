@@ -277,3 +277,35 @@ def test_openbase_cloud_audio_check_still_requires_login_without_machine_token(
             stt_provider_id="openbase_cloud",
             web_backend_url="https://backend.example",
         )
+
+
+@pytest.mark.parametrize(
+    ("usage", "available", "reason"),
+    [
+        ({"monthly_limit_cents": 500, "live_voice_remaining_cents": 120}, True, None),
+        (
+            {"monthly_limit_cents": 500, "live_voice_remaining_cents": 0},
+            False,
+            "credits_exhausted",
+        ),
+        (
+            {"monthly_limit_cents": 0, "live_voice_remaining_cents": 0},
+            False,
+            "subscription_required",
+        ),
+        ({"monthly_limit_cents": 500}, False, "gateway_unavailable"),
+    ],
+)
+def test_live_voice_availability_follows_the_usage_summary(usage, available, reason):
+    availability = cloud_audio.live_voice_availability_from_usage(usage)
+
+    assert availability.available is available
+    assert availability.reason == reason
+    payload = availability.payload()
+    assert set(payload) == {"available", "reason", "hint"}
+    if available:
+        assert payload["hint"] is None
+    else:
+        assert payload["hint"]
+    if reason in {"credits_exhausted", "subscription_required"}:
+        assert "app.openbase.cloud" in payload["hint"]
