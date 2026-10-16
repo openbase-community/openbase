@@ -62,6 +62,16 @@ def test_cartesia_voice_settings_returns_catalog_and_dispatcher_default(
     config_path = tmp_path / "dispatcher-config.json"
     monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
     monkeypatch.setattr(views, "dispatcher_voice", dispatcher_config.dispatcher_voice)
+    monkeypatch.setattr(
+        get_tts_provider(KOKORO_PROVIDER_ID),
+        "readiness",
+        lambda: TTSDownloadStatus(
+            provider=KOKORO_PROVIDER_ID,
+            ready=False,
+            required_files=30,
+            cached_files=0,
+        ),
+    )
 
     response = views.cartesia_voice_settings(
         _authenticated_request("GET", "/api/settings/cartesia-voices/")
@@ -207,6 +217,16 @@ def test_tts_settings_persists_openbase_cloud(monkeypatch, tmp_path: Path) -> No
         views,
         "set_tts_provider_and_dispatcher_voice",
         dispatcher_config.set_tts_provider_and_dispatcher_voice,
+    )
+    monkeypatch.setattr(
+        get_tts_provider(KOKORO_PROVIDER_ID),
+        "readiness",
+        lambda: TTSDownloadStatus(
+            provider=KOKORO_PROVIDER_ID,
+            ready=False,
+            required_files=30,
+            cached_files=0,
+        ),
     )
 
     response = views.tts_settings(
