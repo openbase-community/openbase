@@ -150,6 +150,9 @@ from openbase_coder_cli.livekit_agent.config import (  # noqa: F401
 from openbase_coder_cli.livekit_agent.gpt_live_reconnect_patch import (
     install_gpt_live_reconnect_patch,
 )
+from openbase_coder_cli.livekit_agent.lazy_inference import (
+    configure_container_inference,
+)
 from openbase_coder_cli.livekit_agent.live_delegation import LiveDelegationBridge
 from openbase_coder_cli.livekit_agent.live_gateway_stop import LiveGatewayStop
 from openbase_coder_cli.livekit_agent.live_preconnect import (
@@ -347,7 +350,11 @@ def _livekit_agent_server_options() -> dict[str, Any]:
     # or two calls at a time. Always keep the pool at one idle process unless
     # the env override asks for more.
     num_idle_processes = _optional_int_env(LIVEKIT_AGENT_NUM_IDLE_PROCESSES_ENV)
-    if num_idle_processes is not None:
+    from openbase_coder_cli.workspace_memory import is_container
+
+    if is_container():
+        options["num_idle_processes"] = 1
+    elif num_idle_processes is not None:
         options["num_idle_processes"] = num_idle_processes
     else:
         options["num_idle_processes"] = 1
@@ -363,6 +370,8 @@ class Assistant(Agent):
             instructions="",  # Instructions are not used due to LastMessageOnlyStream.
         )
 
+
+configure_container_inference()
 
 server = LiveKitAgentServer(
     host=LIVEKIT_AGENT_HOST,

@@ -77,6 +77,14 @@ class _SingleFlightCache:
 
     def get(self, key: Hashable, compute: Callable[[], _T]) -> _T:
         with self._lock:
+            from openbase_coder_cli.workspace_memory import is_container
+
+            if is_container():
+                cutoff = time.monotonic() - max(self._ttl, self._stale_serve)
+                self._entries = {k: v for k, v in self._entries.items() if v[0] > cutoff}
+                # Distinct filters/pages must not retain an unbounded history.
+                while len(self._entries) >= 32 and key not in self._entries:
+                    self._entries.pop(next(iter(self._entries)))
             entry = self._entries.get(key)
             if entry is not None:
                 computed_at, value, stale = entry

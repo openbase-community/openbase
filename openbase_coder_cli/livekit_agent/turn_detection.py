@@ -244,7 +244,13 @@ class SafeMultilingualModel(MultilingualModel):
         timeout: float | None = 3,
     ) -> float:
         try:
+            from openbase_coder_cli.workspace_memory import is_container
+
+            # The first container inference also loads the local model.
+            if is_container() and not getattr(self, "_inference_warmed", False):
+                timeout = max(timeout or 0, 30)
             probability = await super().predict_end_of_turn(chat_ctx, timeout=timeout)
+            self._inference_warmed = True
             if self._turn_signal_tracker is not None:
                 message = latest_user_message(chat_ctx)
                 if message is not None:
