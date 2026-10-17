@@ -11,7 +11,10 @@ from typing import Any
 from super_agents.app_endpoint import parse_app_server_endpoint
 from super_agents.backend_config import configured_backend_from_environment
 from super_agents.config_profiles import codex_profile_config
-from super_agents.defaults import codex_model_for_account
+from super_agents.defaults import (
+    account_default_model,
+    codex_model_rejected_by_account,
+)
 
 from openbase_coder_cli.codex_session_defaults import (
     DEFAULT_CODEX_APPROVAL_POLICY,
@@ -120,13 +123,9 @@ class CodexAppServerClient(CodexTransportMixin):
             or os.getenv("LIVEKIT_DISPATCHER_CONFIG_PATH")
             or CODEX_DISPATCHER_CONFIG_PATH
         )
-        self._model_name = codex_model_for_account(
-            model_name
-            or _model_name_for_role(
-                self._dispatcher_config_path,
-                use_super_agent_model=self._use_super_agent_reasoning,
-            ),
-            backend=configured_backend_from_environment(),
+        self._model_name = model_name or _model_name_for_role(
+            self._dispatcher_config_path,
+            use_super_agent_model=self._use_super_agent_reasoning,
         )
 
         self._ws: Any | None = None
@@ -494,9 +493,32 @@ class CodexAppServerClient(CodexTransportMixin):
         """Open the Codex websocket and ensure the shared thread is ready."""
         return await self._ensure_thread()
 
+    async def _resolve_model_for_account_locked(self) -> None:
+        """Swap a role model the signed-in Codex account rejects for the app-server's default."""
+        if not codex_model_rejected_by_account(
+            self._model_name, backend=configured_backend_from_environment()
+        ):
+            return
+        replacement = account_default_model(
+            await self._send_request_locked("model/list", {})
+        )
+        if replacement is None:
+            logger.warning(
+                "Codex model/list offered no replacement for %s; sending it unchanged",
+                self._model_name,
+            )
+            return
+        logger.info(
+            "Codex is signed in with a ChatGPT account; using %s instead of %s",
+            replacement,
+            self._model_name,
+        )
+        self._model_name = replacement
+
     async def _ensure_thread(self) -> str:
         async with self._state_lock:
             await self._ensure_connected_locked()
+            await self._resolve_model_for_account_locked()
 
             if self._state_path is None:
                 return await self._ensure_thread_without_persistence_locked()

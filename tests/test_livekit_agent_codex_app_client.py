@@ -98,35 +98,52 @@ def test_chatgpt_codex_sign_in_swaps_the_rejected_role_model(
     monkeypatch.setenv("OPENBASE_CODING_BACKEND", "codex")
     config_path = tmp_path / "dispatcher-config.json"
     config_path.write_text(
-        json.dumps(
-            {
-                "backend_models": {
-                    "codex": {"dispatcher": "gpt-5.5", "super_agents": "gpt-5.5"}
-                }
-            }
-        ),
+        json.dumps({"backend_models": {"codex": {"dispatcher": "gpt-5.5"}}}),
         encoding="utf-8",
     )
+    sent: list[tuple[str, dict]] = []
 
-    client = CodexAppServerClient(
-        ws_url="ws://example.invalid",
-        cwd=str(tmp_path),
-        dispatcher_config_path=str(config_path),
-    )
-    assert client.model_name == "gpt-6.1-sol"
-    assert client._thread_params()["model"] == "gpt-6.1-sol"
+    async def fake_send(method, params):
+        sent.append((method, params))
+        if method == "model/list":
+            return {
+                "data": [
+                    {"id": "gpt-6-luna", "isDefault": True},
+                    {"id": "gpt-5.6-terra"},
+                ]
+            }
+        return {"thread": {"id": "thread-1"}}
+
+    async def connected():
+        return None
+
+    def make_client():
+        client = CodexAppServerClient(
+            ws_url="ws://example.invalid",
+            cwd=str(tmp_path),
+            dispatcher_config_path=str(config_path),
+            persist_thread=False,
+        )
+        monkeypatch.setattr(client, "_ensure_connected_locked", connected)
+        monkeypatch.setattr(client, "_send_request_locked", fake_send)
+        return client
+
+    client = make_client()
+    assert client.model_name == "gpt-5.5"
+    assert asyncio.run(client._ensure_thread()) == "thread-1"
+    assert client.model_name == "gpt-6-luna"
+    assert [method for method, _ in sent] == ["model/list", "thread/start"]
+    assert sent[1][1]["model"] == "gpt-6-luna"
+    assert client._thread_params()["model"] == "gpt-6-luna"
 
     (codex_home / "auth.json").write_text(
         json.dumps({"auth_mode": "apikey"}), encoding="utf-8"
     )
-    assert (
-        CodexAppServerClient(
-            ws_url="ws://example.invalid",
-            cwd=str(tmp_path),
-            dispatcher_config_path=str(config_path),
-        ).model_name
-        == "gpt-5.5"
-    )
+    sent.clear()
+    client = make_client()
+    asyncio.run(client._ensure_thread())
+    assert client.model_name == "gpt-5.5"
+    assert [method for method, _ in sent] == ["thread/start"]
 
 
 def test_returns_only_new_suffix_when_final_text_extends_streamed_text():
