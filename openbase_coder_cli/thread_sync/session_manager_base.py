@@ -35,8 +35,7 @@ from openbase_coder_cli.backend_config import backend_identity_for_execution_bac
 from openbase_coder_cli.dispatcher_config import (
     DISPATCHER_MODEL_ROLE,
     SUPER_AGENTS_MODEL_ROLE,
-    dispatcher_model,
-    super_agents_model,
+    backend_model,
 )
 from openbase_coder_cli.livekit_voice_route import (
     get_livekit_voice_route_state,
@@ -336,12 +335,25 @@ def _find_shared_permission_request(request_id: str | int) -> dict[str, Any] | N
     return None
 
 
-def _configured_model_for_role(role: str) -> str | None:
-    if role == DISPATCHER_MODEL_ROLE:
-        return dispatcher_model()
-    if role == SUPER_AGENTS_MODEL_ROLE:
-        return super_agents_model()
-    raise ValueError(f"Unsupported model role: {role}")
+def _configured_model_for_role(
+    role: str, execution_backend: str | None = None
+) -> str | None:
+    """The role's configured model; a per-backend manager reads its own entry.
+
+    A backend switch only rewrites the env file, so this process's
+    ``OPENBASE_CODING_BACKEND`` can lag behind it. Resolving by the engine the
+    manager actually runs keeps a claude_code thread from inheriting the codex
+    role model (gpt-5.5) and failing. A configured provider identity that uses
+    the same engine (``openbase_cloud``) keeps its own defaults.
+    """
+    backend = None
+    if execution_backend:
+        backend = backend_identity_for_execution_backend(
+            configured_backend_from_environment(), execution_backend
+        )
+    if role not in (DISPATCHER_MODEL_ROLE, SUPER_AGENTS_MODEL_ROLE):
+        raise ValueError(f"Unsupported model role: {role}")
+    return backend_model(role, backend=backend)
 
 
 def _with_dispatcher_onboarding_reminder(thread_id: str, prompt: str) -> str:

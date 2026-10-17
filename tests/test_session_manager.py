@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -1619,6 +1620,47 @@ def test_read_thread_treats_in_progress_turn_as_current_run(tmp_path: Path) -> N
     assert thread.current_run is not None
     assert thread.current_run.run_id == "turn-1"
     assert thread.current_run.status == "running"
+
+
+def test_role_model_follows_the_manager_backend_not_a_stale_env(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A backend switch rewrites only the env file; the process env lags.
+
+    Each per-backend manager must read its own backend_models entry, so a
+    claude_code thread never inherits the codex role model (gpt-5.5).
+    """
+    from openbase_coder_cli import dispatcher_config
+
+    config_path = tmp_path / "dispatcher-config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "backend_models": {
+                    "codex": {"dispatcher": "gpt-5.5", "super_agents": "gpt-5.5"},
+                    "claude_code": {"dispatcher": "opus", "super_agents": "sonnet"},
+                    "openbase_cloud": {"dispatcher": "haiku", "super_agents": "haiku"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", config_path)
+    monkeypatch.setenv("OPENBASE_CODING_BACKEND", "codex")
+    client = FakeSuperAgentsClient({})
+
+    claude = CodexAppServerSessionManager(
+        client=client, execution_backend="claude_code"
+    )
+    assert claude._model_for_role("dispatcher") == "opus"
+    assert claude._model_for_role("super_agents") == "sonnet"
+    codex = CodexAppServerSessionManager(client=client, execution_backend="codex")
+    assert codex._model_for_role("dispatcher") == "gpt-5.5"
+
+    # A configured provider identity on the same engine keeps its own defaults.
+    monkeypatch.setenv("OPENBASE_CODING_BACKEND", "openbase_cloud")
+    cloud = CodexAppServerSessionManager(client=client, execution_backend="claude_code")
+    assert cloud._model_for_role("dispatcher") == "haiku"
 
 
 def test_read_thread_falls_back_when_new_thread_is_not_materialized(
