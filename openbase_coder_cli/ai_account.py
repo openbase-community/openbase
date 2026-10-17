@@ -54,7 +54,7 @@ LOGIN_TIMEOUT_SECONDS = 15 * 60
 MAX_OUTPUT_CHARS = 20_000
 MAX_CODE_LENGTH = 512
 
-_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)")
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 _URL = re.compile(r"https://[^\s\"'<>\x1b]+")
 
 

@@ -41,7 +41,7 @@ NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 SECRET_MARK = "[secret]"
 
 _ANSI = re.compile(
-    r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[=>]"
+    r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[=>]"
 )
 
 
