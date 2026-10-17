@@ -582,9 +582,11 @@ def live_voice_unavailable_detail(decision: VoiceEngineDecision) -> str:
             "(run openbase-coder login); using standard voice for this call."
         )
     if reason == "subscription_required":
+        # The runtime switches the voice model to Classic at this point, so
+        # this is the only time the user reads it (Gabe, 2026-10-16).
         return (
-            "You're out of live voice credits; using standard voice for this "
-            f"call. {SUBSCRIBE_PRO_LINE}"
+            "You're out of live voice credits; calls now use Classic voice until "
+            f"you switch back in call settings. {SUBSCRIBE_PRO_LINE}"
         )
     if reason == "live_session_start_failed" or any(
         marker in detail for marker in _PROVIDER_BILLING_MARKERS

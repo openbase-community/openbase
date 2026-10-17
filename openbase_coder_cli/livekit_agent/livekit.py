@@ -59,6 +59,7 @@ from openbase_coder_cli.dispatcher_config import (
     selected_stt_provider_id,
     selected_tts_provider_id,
     selected_voice_engine,
+    switch_voice_model_for_exhausted_live_credits,
 )
 from openbase_coder_cli.livekit_agent.audio_diagnostics import (  # noqa: F401
     LoggingRecognizeStream,
@@ -661,6 +662,13 @@ async def _end_call_after_agent_error(ctx: JobContext, exc: Exception) -> None:
     and plays its call-ended sound), give the reliable data channel a moment
     to flush, then delete the room so every participant is disconnected
     instead of sitting in a silent, half-dead call."""
+    if isinstance(exc, LiveGatewayStop) and exc.code == "subscription_required":
+        # The gateway ended a live call for billing: this is the one warning,
+        # so the next call goes straight to Classic.
+        if await _switch_to_classic_for_exhausted_live_credits():
+            exc = LiveGatewayStop(
+                exc.code, f"{exc} {LIVE_VOICE_CREDITS_SWITCHED_SUFFIX}"
+            )
     await _report_agent_error(ctx.room, exc)
     await asyncio.sleep(0.75)
     await _delete_room(str(getattr(ctx.room, "name", "") or ""))
@@ -766,12 +774,49 @@ def _exception_mentions_openbase_cloud_audio(exc: BaseException) -> bool:
 CLOUD_AUDIO_ALLOWANCE_SPOKEN = (
     f"You're out of Openbase voice credits. {SUBSCRIBE_SPOKEN}"
 )
-# Said once at the start of a call that fell back to standard voice because
-# the account's live voice credits are used up.
+# Said once, at the start of the call that fell back to standard voice because
+# the account's live voice credits are used up. The runtime then switches the
+# voice model to the classic pipeline, so later calls are quiet about it.
 LIVE_VOICE_CREDITS_SPOKEN = (
-    "You're out of live voice credits, so this call uses standard voice. "
+    "You're out of live voice credits, so your calls now use standard voice. "
+    "You can switch back to GPT-Live in call settings when credits return. "
     f"{SUBSCRIBE_SPOKEN}"
 )
+# Appended to a mid-call billing stop so the caller knows the next call is
+# Classic by choice of the runtime, not another failure.
+LIVE_VOICE_CREDITS_SWITCHED_SUFFIX = (
+    "Your next calls use Classic voice; switch back to GPT-Live in call "
+    "settings when credits return."
+)
+
+
+async def _switch_to_classic_for_exhausted_live_credits() -> bool:
+    """Persist the one-time move to the classic pipeline (Gabe, 2026-10-16).
+
+    The user hears or reads the out-of-credits warning once; from then on the
+    install's voice model is Classic, so the next call neither probes GPT-Live
+    nor repeats the warning. Best effort: a config write that fails only
+    means the warning repeats on the next call.
+    """
+    try:
+        switched = await asyncio.to_thread(
+            switch_voice_model_for_exhausted_live_credits
+        )
+    except Exception:
+        logger.warning(
+            "Unable to switch the voice model to the classic pipeline after the "
+            "live voice credits ran out",
+            exc_info=True,
+        )
+        return False
+    if switched is None:
+        return False
+    logger.info(
+        "Voice model switched to the classic pipeline: live voice credits ran out "
+        "(from %s)",
+        switched.get("from_model"),
+    )
+    return True
 
 
 def _uses_openbase_cloud_audio() -> bool:
@@ -1683,6 +1728,10 @@ async def livekit_agent(ctx: JobContext):
             await _end_call_after_agent_error(ctx, exc)
             raise
         if decision.fell_back:
+            if decision.fallback_reason == "subscription_required":
+                # Warn once, then make Classic the setting: the notice and
+                # the spoken line both say the switch happened.
+                await _switch_to_classic_for_exhausted_live_credits()
             await _report_live_voice_fallback(ctx.room, decision)
             if decision.fallback_reason == "subscription_required":
                 try:

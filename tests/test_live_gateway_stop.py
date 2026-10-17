@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from openbase_coder_cli import dispatcher_config
 from openbase_coder_cli.livekit_agent import livekit
 from openbase_coder_cli.livekit_agent.live_gateway_stop import gateway_stop_from_error
 from openbase_coder_cli.plan_copy import SUBSCRIBE_PRO_LINE
@@ -32,8 +33,12 @@ from openbase_coder_cli.plan_copy import SUBSCRIBE_PRO_LINE
 )
 @pytest.mark.parametrize("legacy", [False, True])
 async def test_gateway_reason_reaches_phone_before_room_shutdown(
-    monkeypatch, reason, message, legacy
+    monkeypatch, tmp_path, reason, message, legacy
 ):
+    monkeypatch.setattr(
+        dispatcher_config, "CODEX_DISPATCHER_CONFIG_PATH", tmp_path / "dispatcher.json"
+    )
+    monkeypatch.delenv("LIVEKIT_VOICE_MODEL", raising=False)
     error = {"code": "billing_hard_limit_reached", "message": message}
     if not legacy:
         error["type"] = reason
@@ -64,7 +69,15 @@ async def test_gateway_reason_reaches_phone_before_room_shutdown(
     )
     await livekit._end_call_after_agent_error(ctx, stop)
     assert events[0]["code"] == reason
-    assert events[0]["detail"] == message
+    if reason == "subscription_required":
+        # The one warning: the install moves to Classic and the detail says so.
+        assert events[0]["detail"] == (
+            f"{message} {livekit.LIVE_VOICE_CREDITS_SWITCHED_SUFFIX}"
+        )
+        assert dispatcher_config.selected_voice_engine() == "pipeline"
+    else:
+        assert events[0]["detail"] == message
+        assert dispatcher_config.selected_voice_engine() == "live"
     assert events[1:] == [("deleted", "test-room"), {"reason": "agent-error"}]
 
 

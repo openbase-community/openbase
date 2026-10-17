@@ -16,8 +16,11 @@ from rest_framework.response import Response
 
 from openbase_coder_cli import dispatcher_config
 from openbase_coder_cli.config.cloud_audio import (
+    LIVE_VOICE_LOGIN_REQUIRED_HINT,
+    LiveVoiceAvailability,
     OpenbaseCloudAudioSubscriptionError,
     audio_usage_summary,
+    live_voice_availability_from_usage,
 )
 from openbase_coder_cli.config.token_manager import (
     AuthLoginRequiredError,
@@ -35,19 +38,37 @@ APPLIES_HINT = "The new voice model applies to the next voice call."
 
 @api_view(["GET"])
 def voice_model_usage(request):
-    """An unavailable budget must never prevent changing the voice model."""
+    """The GPT-Live budget and whether GPT-Live can be used right now.
+
+    An unavailable budget must never prevent changing the voice model. Cloud
+    is polled only while GPT-Live is selected, or while the runtime switched
+    the install to Classic on its own: then the user is waiting to hear that
+    GPT-Live is available again. An install that chose Classic itself is left
+    alone.
+    """
     model = dispatcher_config.selected_voice_model_id()
-    if dispatcher_config.selected_voice_engine() == VOICE_ENGINE_PIPELINE:
-        return Response({"model": model, "budget": None})
+    auto_switch = dispatcher_config.voice_model_auto_switch()
+    if (
+        dispatcher_config.selected_voice_engine() == VOICE_ENGINE_PIPELINE
+        and auto_switch is None
+    ):
+        return Response({"model": model, "budget": None, "live_voice": None})
     cloud_url = web_backend_url().rstrip("/")
     try:
         usage = audio_usage_summary(cloud_url)
-    except (
-        AuthLoginRequiredError,
-        AuthTransientError,
-        OpenbaseCloudAudioSubscriptionError,
-    ):
-        return Response({"model": model, "budget": None})
+    except AuthLoginRequiredError:
+        return Response(
+            {
+                "model": model,
+                "budget": None,
+                "live_voice": LiveVoiceAvailability(
+                    False, "login_required", LIVE_VOICE_LOGIN_REQUIRED_HINT
+                ).payload(),
+            }
+        )
+    except (AuthTransientError, OpenbaseCloudAudioSubscriptionError):
+        return Response({"model": model, "budget": None, "live_voice": None})
+    live_voice = live_voice_availability_from_usage(usage).payload()
     # Older Cloud versions do not report the enforced shared/lifetime budget.
     # Do not guess from provider-only spend: it can understate actual usage.
     budget = usage.get("live_voice_budget")
@@ -60,7 +81,7 @@ def voice_model_usage(request):
         }
     else:
         budget = None
-    return Response({"model": model, "budget": budget})
+    return Response({"model": model, "budget": budget, "live_voice": live_voice})
 
 
 class VoiceModelSettingsSerializer(serializers.Serializer):
@@ -76,6 +97,9 @@ def _voice_model_payload(*, changed: bool = False) -> dict:
         "default": DEFAULT_VOICE_MODEL_ID,
         "options": voice_model_options_payload(),
         "pipeline_settings_relevant": engine == VOICE_ENGINE_PIPELINE,
+        # Set while the runtime moved this install to Classic on its own
+        # (GPT-Live credits ran out); an explicit choice clears it.
+        "auto_switch": dispatcher_config.voice_model_auto_switch(),
         "config_path": str(dispatcher_config.CODEX_DISPATCHER_CONFIG_PATH),
         "changed": changed,
         "restart_required": False,

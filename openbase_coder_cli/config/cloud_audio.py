@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 import httpx
 
@@ -61,6 +62,12 @@ def ensure_openbase_cloud_audio_subscription(
         return
 
     usage = _audio_usage_summary(web_backend_url.rstrip("/"))
+    check_audio_usage_for_providers(usage, providers)
+
+
+def check_audio_usage_for_providers(usage: dict, providers: Iterable[str]) -> None:
+    """Raise when the usage summary says ``providers`` cannot be used now."""
+    providers = set(providers)
     if LIVE_VOICE_CLOUD_PROVIDER in providers and not _usage_knows_live_voice(usage):
         raise OpenbaseCloudLiveVoiceUnavailableError(
             "Openbase Cloud does not offer live voice on this backend yet "
@@ -81,6 +88,56 @@ def ensure_openbase_cloud_audio_subscription(
             f"Openbase Cloud audio is out of {provider_names} credits for this "
             f"month. {SUBSCRIBE_PRO_LINE}"
         )
+
+
+@dataclass(frozen=True)
+class LiveVoiceAvailability:
+    """Whether the account could start a GPT-Live call right now.
+
+    Read from the same usage summary that gates calls, so the call settings
+    screen and the voice agent agree. ``hint`` is the plain line the phone
+    shows next to the engine switch when GPT-Live cannot be used.
+    """
+
+    available: bool
+    reason: str | None = None
+    hint: str | None = None
+
+    def payload(self) -> dict[str, object]:
+        return {"available": self.available, "reason": self.reason, "hint": self.hint}
+
+
+LIVE_VOICE_CREDITS_EXHAUSTED_HINT = (
+    f"GPT-Live is out of live voice credits for this month. {SUBSCRIBE_PRO_LINE}"
+)
+LIVE_VOICE_SUBSCRIPTION_REQUIRED_HINT = (
+    f"GPT-Live needs an Openbase Cloud subscription with audio credits. "
+    f"{SUBSCRIBE_PRO_LINE}"
+)
+LIVE_VOICE_GATEWAY_UNAVAILABLE_HINT = (
+    "GPT-Live isn't offered by this Openbase Cloud backend yet."
+)
+LIVE_VOICE_LOGIN_REQUIRED_HINT = (
+    "Sign in to Openbase Cloud on your computer to use GPT-Live."
+)
+
+
+def live_voice_availability_from_usage(usage: dict) -> LiveVoiceAvailability:
+    try:
+        check_audio_usage_for_providers(usage, {LIVE_VOICE_CLOUD_PROVIDER})
+    except OpenbaseCloudLiveVoiceUnavailableError:
+        return LiveVoiceAvailability(
+            False, "gateway_unavailable", LIVE_VOICE_GATEWAY_UNAVAILABLE_HINT
+        )
+    except OpenbaseCloudAudioSubscriptionError:
+        if _numeric_usage_value(usage, "monthly_limit_cents") <= 0:
+            return LiveVoiceAvailability(
+                False, "subscription_required", LIVE_VOICE_SUBSCRIPTION_REQUIRED_HINT
+            )
+        return LiveVoiceAvailability(
+            False, "credits_exhausted", LIVE_VOICE_CREDITS_EXHAUSTED_HINT
+        )
+    return LiveVoiceAvailability(True)
 
 
 def openbase_cloud_subscription_entitlement(

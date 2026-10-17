@@ -123,35 +123,99 @@ def test_record_account_provider_uses_shared_cloud_path(quiet_orchestration):
     assert quiet_orchestration["push"] == ["netmesh-tsnet"]
 
 
-@pytest.mark.parametrize("provider", ["netmesh", "netmesh-tsnet"])
-def test_reconcile_after_login_connects_managed_transport(
-    provider, quiet_orchestration, monkeypatch
-):
+@pytest.fixture
+def installed(monkeypatch):
     from openbase_coder_cli.services.installation import InstallationConfig
 
     monkeypatch.setattr(InstallationConfig, "exists", lambda: True)
+
+
+@pytest.mark.parametrize("provider", ["netmesh", "netmesh-tsnet"])
+def test_reconcile_after_login_connects_managed_transport(
+    provider, installed, quiet_orchestration, monkeypatch
+):
     monkeypatch.setattr(tailnet_cli, "_configured_provider", lambda: provider)
+    monkeypatch.setattr(cloud_registration, "fetch_tailnet_provider", lambda: provider)
 
     tailnet_cli.reconcile_after_login()
 
-    assert quiet_orchestration["push"] == [provider]
+    # Login never publishes the local transport; the account already agrees.
+    assert quiet_orchestration["push"] == []
     assert quiet_orchestration["bring_up"] == [provider]
     assert quiet_orchestration["restart"] == 1
 
 
 def test_reconcile_after_login_does_not_restart_expert_tailscale(
-    quiet_orchestration, monkeypatch
+    installed, quiet_orchestration, monkeypatch
 ):
-    from openbase_coder_cli.services.installation import InstallationConfig
-
-    monkeypatch.setattr(InstallationConfig, "exists", lambda: True)
     monkeypatch.setattr(tailnet_cli, "_configured_provider", lambda: "tailscale")
+    monkeypatch.setattr(
+        cloud_registration, "fetch_tailnet_provider", lambda: "tailscale"
+    )
 
     tailnet_cli.reconcile_after_login()
 
-    assert quiet_orchestration["push"] == ["tailscale"]
+    assert quiet_orchestration["push"] == []
     assert quiet_orchestration["bring_up"] == []
     assert quiet_orchestration["restart"] == 0
+
+
+def test_reconcile_after_login_never_publishes_local_transport_over_account(
+    env_path, installed, quiet_orchestration, monkeypatch
+):
+    # A developer's Mac on classic Tailscale signs into another person's
+    # account that lives on the Openbase VPN (production, 2026-10-11): the
+    # account must stay as it is, and the Mac follows it when it can.
+    env_path.write_text(
+        env_path.read_text() + "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER=tailscale\n"
+    )
+    monkeypatch.setattr(cloud_registration, "fetch_tailnet_provider", lambda: "netmesh")
+    monkeypatch.setattr(tailnet_cli, "_capability_error", lambda name: None)
+    monkeypatch.setattr(tailnet_cli, "_old_transport_node_identity", lambda prev: None)
+    monkeypatch.setattr(tailnet_cli, "_revoke_old_node", lambda prev, node: None)
+
+    tailnet_cli.reconcile_after_login()
+
+    assert quiet_orchestration["push"] == []
+    values = env_file_values(Path(env_path))
+    assert values["OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"] == "netmesh"
+    assert quiet_orchestration["teardown"] == ["tailscale"]
+    assert quiet_orchestration["bring_up"] == ["netmesh"]
+    assert quiet_orchestration["reregister"] == 1
+
+
+def test_reconcile_after_login_keeps_local_transport_when_account_one_unsupported(
+    env_path, installed, quiet_orchestration, monkeypatch, capsys
+):
+    env_path.write_text(
+        env_path.read_text() + "OPENBASE_CODER_CLI_TAILSCALE_PROVIDER=tailscale\n"
+    )
+    monkeypatch.setattr(cloud_registration, "fetch_tailnet_provider", lambda: "netmesh")
+    monkeypatch.setattr(
+        tailnet_cli, "_capability_error", lambda name: "the companion is not installed"
+    )
+
+    tailnet_cli.reconcile_after_login()
+
+    assert quiet_orchestration["push"] == []
+    assert quiet_orchestration["bring_up"] == []
+    values = env_file_values(Path(env_path))
+    assert values["OPENBASE_CODER_CLI_TAILSCALE_PROVIDER"] == "tailscale"
+    out = capsys.readouterr().out
+    assert "cannot run it" in out
+    assert "tailnet set-provider tailscale" in out
+
+
+def test_reconcile_after_login_without_cloud_value_keeps_local_and_stays_quiet(
+    installed, quiet_orchestration, monkeypatch
+):
+    monkeypatch.setattr(tailnet_cli, "_configured_provider", lambda: "netmesh")
+    monkeypatch.setattr(cloud_registration, "fetch_tailnet_provider", lambda: None)
+
+    tailnet_cli.reconcile_after_login()
+
+    assert quiet_orchestration["push"] == []
+    assert quiet_orchestration["bring_up"] == ["netmesh"]
 
 
 def test_set_provider_same_value_skips_teardown_but_cleans_legacy(
