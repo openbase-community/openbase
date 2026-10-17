@@ -27,11 +27,13 @@ from super_agents.app_server_client import (
 )
 from super_agents.backend_clients import CLAUDE_CODE_BACKEND
 from super_agents.backend_config import (
-    configured_backend_from_environment,
     execution_backend,
 )
 
-from openbase_coder_cli.backend_config import backend_identity_for_execution_backend
+from openbase_coder_cli.backend_config import (
+    backend_identity_for_execution_backend,
+    configured_backend_identity,
+)
 from openbase_coder_cli.dispatcher_config import (
     DISPATCHER_MODEL_ROLE,
     SUPER_AGENTS_MODEL_ROLE,
@@ -252,7 +254,7 @@ class _OpenbaseSuperAgentsClient(CodexAppServerClient):
     def __init__(
         self, manager: "CodexAppServerSessionManager", ws_url: str | None
     ) -> None:
-        configured = configured_backend_from_environment()
+        configured = configured_backend_identity()
         identity = configured if execution_backend(configured) == "codex" else "codex"
         super().__init__(ws_url=ws_url, backend_identity=identity)
         self._manager = manager
@@ -288,7 +290,7 @@ def _default_client_for_execution_backend(
         from super_agents.claude_sdk import ClaudeAgentSdkClient
 
         identity = backend_identity_for_execution_backend(
-            configured_backend_from_environment(), execution_backend
+            configured_backend_identity(), execution_backend
         )
 
         class OpenbaseClaudeClient(ClaudeAgentSdkClient):
@@ -349,7 +351,7 @@ def _configured_model_for_role(
     backend = None
     if execution_backend:
         backend = backend_identity_for_execution_backend(
-            configured_backend_from_environment(), execution_backend
+            configured_backend_identity(), execution_backend
         )
     if role not in (DISPATCHER_MODEL_ROLE, SUPER_AGENTS_MODEL_ROLE):
         raise ValueError(f"Unsupported model role: {role}")

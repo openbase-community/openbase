@@ -228,6 +228,40 @@ def test_backend_model_uses_env_file_backend(tmp_path: Path, monkeypatch) -> Non
     assert dispatcher_config.super_agents_model(config_path) == "openbase-claude"
 
 
+def test_backend_model_prefers_env_file_over_stale_process_env(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A backend switch rewrites the env file; a running process's env lags.
+
+    The Dispatcher recreated by that switch is built by a process started
+    before it (django-cli, or the detached restart it spawned), so the role
+    model must follow the file, or a Claude Code workspace comes up on the
+    Openbase Cloud default (haiku instead of opus).
+    """
+    env_file = tmp_path / ".env"
+    config_path = tmp_path / "dispatcher-config.json"
+    env_file.write_text("OPENBASE_CODING_BACKEND=claude_code\n", encoding="utf-8")
+    config_path.write_text(
+        json.dumps(
+            {
+                "backend_models": {
+                    "claude_code": {"dispatcher": "opus"},
+                    "openbase_cloud": {"dispatcher": "haiku"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENBASE_CODING_BACKEND", "openbase_cloud")
+    monkeypatch.setattr(dispatcher_config, "DEFAULT_ENV_FILE_PATH", env_file)
+
+    assert dispatcher_config.dispatcher_model(config_path) == "opus"
+
+    # Without the key in the file, the process env still decides.
+    env_file.write_text("KEEP_ME=1\n", encoding="utf-8")
+    assert dispatcher_config.dispatcher_model(config_path) == "haiku"
+
+
 def test_super_agents_model_ignores_legacy_key(tmp_path: Path, monkeypatch) -> None:
     config_path = tmp_path / "dispatcher-config.json"
     config_path.write_text(

@@ -725,9 +725,12 @@ def _optional_str(value: Any) -> str | None:
 
 
 def _configured_backend_from_environment() -> str:
+    # The installed env file wins over this process's environment: a backend
+    # switch rewrites the file, and a process started before the switch must
+    # not keep resolving the previous backend's role models.
     return (
-        os.getenv(CODING_BACKEND_ENV_KEY)
-        or _env_file_values(DEFAULT_ENV_FILE_PATH).get(CODING_BACKEND_ENV_KEY)
+        _env_file_values(DEFAULT_ENV_FILE_PATH).get(CODING_BACKEND_ENV_KEY)
+        or os.getenv(CODING_BACKEND_ENV_KEY)
         or CODEX_BACKEND
     )
 

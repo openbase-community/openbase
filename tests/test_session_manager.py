@@ -32,7 +32,7 @@ def test_claude_client_retains_cloud_profile_identity(monkeypatch, tmp_path):
     monkeypatch.setenv("SUPER_AGENTS_CLAUDE_CODE_HOME", str(tmp_path))
     monkeypatch.setattr(
         session_manager_base,
-        "configured_backend_from_environment",
+        "configured_backend_identity",
         lambda: "openbase_cloud",
     )
 
@@ -1661,6 +1661,18 @@ def test_role_model_follows_the_manager_backend_not_a_stale_env(
     monkeypatch.setenv("OPENBASE_CODING_BACKEND", "openbase_cloud")
     cloud = CodexAppServerSessionManager(client=client, execution_backend="claude_code")
     assert cloud._model_for_role("dispatcher") == "haiku"
+
+    # The identity follows the env file, not a process env that predates a
+    # switch: a workspace moved from Openbase Cloud to Claude Code must not
+    # recreate its Dispatcher on the openbase_cloud role model (Maritime pk 54,
+    # 2026-10-17: a claude_code Dispatcher came up on haiku).
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENBASE_CODING_BACKEND=claude_code\n", encoding="utf-8")
+    monkeypatch.setattr("openbase_coder_cli.paths.DEFAULT_ENV_FILE_PATH", env_file)
+    switched = CodexAppServerSessionManager(
+        client=client, execution_backend="claude_code"
+    )
+    assert switched._model_for_role("dispatcher") == "opus"
 
 
 def test_read_thread_falls_back_when_new_thread_is_not_materialized(

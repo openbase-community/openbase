@@ -52,11 +52,15 @@ local `codex-app-server` service. Openbase Cloud and direct Claude Code use
 Claude Code for Super Agents UI-driver sessions and bypass `codex-app-server`.
 In the apps, saving a changed backend first asks for confirmation, then automatically restarts Openbase
 services and recreates the dispatcher thread. `backend use` does the
-equivalent on the CLI: it restarts the dispatcher services and recreates the
-dispatcher thread on the new backend while the rest of the Openbase services
-keep running (use `--no-restart` to only persist the setting). The restart
-interrupts active voice calls and clears the current dispatcher
-conversation context; it does not delete Super Agent threads or project files.
+equivalent on the CLI: it restarts the dispatcher services and `django-cli`
+and recreates the dispatcher thread on the new backend while the rest of the
+Openbase services keep running (use `--no-restart` to only persist the
+setting). `django-cli` restarts because it runs typed turns and the voice
+dispatcher's Super Agent operations through a client built for the backend it
+started with; left running, it would keep serving the previous backend. The
+restart interrupts active voice calls, ends running turns and clears the
+current dispatcher conversation context; it does not delete Super Agent
+threads or project files.
 Separately running Codex or Claude clients may still need to be reopened so
 their MCP process reloads the backend.
 
