@@ -290,3 +290,51 @@ def test_clean_output_keeps_text_between_terminal_queries():
     assert "\x1b" not in cleaned
     # A BEL-terminated title and a bare query still vanish.
     assert clean_output("\x1b]0;title\x07hello" + query) == "hello"
+
+
+def test_terminal_query_replies_answer_only_known_queries():
+    from openbase_coder_cli.pty_session import TERMINAL_SIZE, terminal_query_replies
+
+    rows, cols = TERMINAL_SIZE
+    chunk = b"\x1b[999;999f\x1b[6n? Continue? (Y/n) \x1b]11;?\x1b\\\x1b]10;?\x07"
+    replies = terminal_query_replies(chunk)
+    assert replies[0] == b"\x1b[%d;%dR" % (rows, cols)
+    assert any(r.startswith(b"\x1b]11;rgb:") for r in replies)
+    assert any(r.startswith(b"\x1b]10;rgb:") for r in replies)
+    assert terminal_query_replies(b"plain text \x1b[31mred\x1b[0m") == []
+
+
+def test_held_session_has_a_size_and_answers_the_cursor_query(tmp_path, monkeypatch):
+    """A prompt library that probes the screen must get a terminal's answers."""
+    import subprocess
+    import sys
+    import time
+
+    monkeypatch.setenv("OPENBASE_CODER_CLI_DATA_DIR", str(tmp_path))
+    cli = [sys.executable, "-m", "openbase_coder_cli", "pty"]
+    script = (
+        'stty size; printf "\\033[999;999f\\033[6n"; IFS= read -r -d R reply; '
+        'echo; echo "cursor:${reply#*[}"'
+    )
+    subprocess.run(
+        [*cli, "start", "probe", "--", "bash", "-c", script],
+        check=True,
+        capture_output=True,
+    )
+    deadline = time.time() + 15
+    out = ""
+    while time.time() < deadline and "cursor:" not in out:
+        time.sleep(0.5)
+        out += subprocess.run(
+            [*cli, "read", "probe"], capture_output=True, text=True
+        ).stdout
+    subprocess.run([*cli, "stop", "probe"], capture_output=True)
+    assert "40 120" in out, out
+    assert "cursor:40;120" in out, out
+
+
+def test_echoed_terminal_replies_are_not_shown():
+    from openbase_coder_cli.pty_session import clean_output
+
+    raw = "Press Enter to open the page... ^[]11;rgb:0000/0000/0000^[\\^[[40;120R\n"
+    assert clean_output(raw) == "Press Enter to open the page... \n"
