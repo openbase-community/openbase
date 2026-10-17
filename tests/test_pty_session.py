@@ -271,3 +271,22 @@ def test_login_homes_prefer_the_api_and_fall_back_locally(monkeypatch):
 
     monkeypatch.setattr(local_server, "local_server_request", down)
     assert set(pty_session.login_homes()) == {"codex_home", "claude_config_dir"}
+
+
+def test_clean_output_keeps_text_between_terminal_queries():
+    """gh queries the terminal (OSC 11, CSI 6n) before and after its prompt;
+    the one-time code printed between the queries must survive cleaning."""
+    from openbase_coder_cli.pty_session import clean_output
+
+    query = "\x1b]11;?\x1b\\\x1b[6n"
+    code = (
+        "\n\x1b[0;33m!\x1b[0m First copy your one-time code: "
+        "\x1b[0;1;39mXXXX-XXXX\x1b[0m\n\x1b[0;1;39mPress Enter\x1b[0m to open "
+        "https://github.com/login/device in your browser... "
+    )
+    cleaned = clean_output(query + code + query)
+    assert "First copy your one-time code: XXXX-XXXX" in cleaned
+    assert "Press Enter to open https://github.com/login/device" in cleaned
+    assert "\x1b" not in cleaned
+    # A BEL-terminated title and a bare query still vanish.
+    assert clean_output("\x1b]0;title\x07hello" + query) == "hello"
