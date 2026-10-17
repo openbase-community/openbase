@@ -77,6 +77,33 @@ def backend_identity_for_execution_backend(
     return execution_backend
 
 
+def configured_backend_identity() -> str:
+    """The configured backend identity, preferring the installed env file.
+
+    A backend switch rewrites the env file and restarts services, but a
+    process that was already running (django-cli serving the switch itself,
+    or a detached restart it spawned) still carries the previous
+    ``OPENBASE_CODING_BACKEND`` in its environment. Role models and client
+    identities resolved from that stale value picked the old provider's
+    defaults (Maritime pk 54, 2026-10-17: a claude_code Dispatcher recreated
+    on the openbase_cloud role model, haiku). The env file is the source of
+    truth whenever it exists; the environment only decides without one.
+    """
+    from openbase_coder_cli.cli.backend import read_env_values
+    from openbase_coder_cli.paths import DEFAULT_ENV_FILE_PATH
+
+    if DEFAULT_ENV_FILE_PATH.is_file():
+        raw_value = read_env_values(DEFAULT_ENV_FILE_PATH).get(CODING_BACKEND_ENV_KEY)
+        if raw_value:
+            try:
+                return normalize_backend(raw_value)
+            except ValueError:
+                pass
+    from super_agents.backend_config import configured_backend_from_environment
+
+    return configured_backend_from_environment()
+
+
 def configured_execution_backend(
     environment_backend: Callable[[], str] | None = None,
 ) -> str:

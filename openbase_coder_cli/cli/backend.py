@@ -93,8 +93,9 @@ def use_backend(
     click.echo(f"Backend set to {normalized} in {env_file}.")
     if no_restart:
         click.echo(
-            "Restart skipped; the running dispatcher keeps the previous backend "
-            "until 'openbase-coder restart --service codex-app-server-dispatcher "
+            "Restart skipped; the running dispatcher and django-cli keep the "
+            "previous backend until 'openbase-coder restart --service "
+            "codex-app-server-dispatcher --service django-cli "
             "--recreate-dispatcher' runs."
         )
         return
@@ -103,8 +104,9 @@ def use_backend(
         click.echo("Openbase services are not installed; nothing to restart.")
     else:
         click.echo(
-            "Dispatcher restart scheduled; a fresh dispatcher thread will come up "
-            f"on {normalized}. Other Openbase services keep running."
+            "Dispatcher and django-cli restart scheduled; a fresh dispatcher "
+            f"thread will come up on {normalized} and running threads end. "
+            "Other Openbase services keep running."
         )
 
 
@@ -142,13 +144,25 @@ def backend_login_problem(backend_name: str) -> str | None:
     return "Not logged in to Openbase Cloud: run 'openbase-coder login' first."
 
 
+# Services a backend switch must restart besides the dispatcher stack:
+# django-cli owns typed turns and every Super Agents operation the voice
+# Dispatcher forwards to it (super_agents_remote), through a client built for
+# the backend in its environment at start. Left running, it keeps the previous
+# backend and refuses the Dispatcher's calls ("This server's Super Agents
+# client runs backend 'openbase_cloud', not 'claude_code'", Maritime pk 54,
+# 2026-10-17). A switch therefore ends its threads; Gabe accepted that.
+BACKEND_SWITCH_RESTART_SERVICES = ("django-cli",)
+
+
 def schedule_backend_restart():
-    """Restart the dispatcher stack so it serves the newly selected backend.
+    """Restart the services that serve the newly selected backend.
 
     Restarting the dispatcher app-server cascades to livekit-agent
     (restart_dependents) and recreates the dispatcher thread, so the next
-    voice turn starts a fresh conversation on the new backend. Returns the
-    scheduled RestartPlan, or None when there is nothing running to restart.
+    voice turn starts a fresh conversation on the new backend; django-cli
+    restarts with it so typed turns and forwarded Super Agents operations
+    run on that backend too. Returns the scheduled RestartPlan, or None when
+    there is nothing running to restart.
     """
     from openbase_coder_cli.services.installation import InstallationConfig
 
@@ -158,12 +172,22 @@ def schedule_backend_restart():
     from openbase_coder_cli.services.registry import find_service
     from openbase_coder_cli.services.restart import RestartRequest, schedule_restart
 
+    def installed(name: str) -> bool:
+        return bool(launchctl_status(find_service(name)).get("installed"))
+
+    services: list[str] = []
     for name in ("codex-app-server-dispatcher", "livekit-agent"):
-        if launchctl_status(find_service(name)).get("installed"):
-            return schedule_restart(
-                RestartRequest(services=(name,), recreate_dispatcher=True)
-            )
-    return None
+        if installed(name):
+            services.append(name)
+            break
+    services.extend(name for name in BACKEND_SWITCH_RESTART_SERVICES if installed(name))
+    if not services:
+        return None
+    return schedule_restart(
+        # The default restart delay keeps django-cli alive until the response
+        # of the request that scheduled this switch has left.
+        RestartRequest(services=tuple(services), recreate_dispatcher=True)
+    )
 
 
 def read_backend(env_file: Path) -> str:

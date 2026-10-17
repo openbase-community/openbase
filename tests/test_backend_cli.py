@@ -169,7 +169,9 @@ def test_backend_use_fails_when_target_login_missing(tmp_path, monkeypatch) -> N
     monkeypatch.setattr(
         backend_cli,
         "backend_login_problem",
-        lambda name: "Not logged in to Claude Code: run 'openbase-coder claude login' first.",
+        lambda name: (
+            "Not logged in to Claude Code: run 'openbase-coder claude login' first."
+        ),
     )
 
     result = CliRunner().invoke(
@@ -223,7 +225,7 @@ def test_backend_use_schedules_dispatcher_restart(tmp_path, monkeypatch) -> None
 
     assert result.exit_code == 0
     assert restarts == [True]
-    assert "Dispatcher restart scheduled" in result.output
+    assert "Dispatcher and django-cli restart scheduled" in result.output
 
 
 def test_backend_use_no_restart_skips_restart(tmp_path, monkeypatch) -> None:
@@ -242,6 +244,72 @@ def test_backend_use_no_restart_skips_restart(tmp_path, monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert "Restart skipped" in result.output
+
+
+def _installed_services(monkeypatch, installed: set[str]) -> list:
+    from openbase_coder_cli.services import launchd, restart
+    from openbase_coder_cli.services.installation import InstallationConfig
+
+    monkeypatch.setattr(InstallationConfig, "exists", classmethod(lambda cls: True))
+    monkeypatch.setattr(
+        launchd,
+        "launchctl_status",
+        lambda svc: {"installed": svc.name in installed},
+    )
+    requests: list = []
+    monkeypatch.setattr(
+        restart,
+        "schedule_restart",
+        lambda request: requests.append(request) or object(),
+    )
+    return requests
+
+
+def test_schedule_backend_restart_restarts_django_cli_with_the_dispatcher(
+    monkeypatch,
+) -> None:
+    """django-cli serves typed turns and the voice Dispatcher's forwarded
+    Super Agents operations through a client built for the backend in its
+    environment at start. A switch that left it running kept refusing the
+    Dispatcher ("runs backend 'openbase_cloud', not 'claude_code'")."""
+    requests = _installed_services(
+        monkeypatch, {"livekit-agent", "django-cli", "sync-workers"}
+    )
+
+    assert backend_cli.schedule_backend_restart() is not None
+
+    (request,) = requests
+    assert request.services == ("livekit-agent", "django-cli")
+    assert request.recreate_dispatcher is True
+
+
+def test_schedule_backend_restart_prefers_the_dispatcher_app_server(
+    monkeypatch,
+) -> None:
+    requests = _installed_services(
+        monkeypatch, {"codex-app-server-dispatcher", "livekit-agent", "django-cli"}
+    )
+
+    backend_cli.schedule_backend_restart()
+
+    (request,) = requests
+    assert request.services == ("codex-app-server-dispatcher", "django-cli")
+
+
+def test_schedule_backend_restart_skips_services_that_are_not_installed(
+    monkeypatch,
+) -> None:
+    requests = _installed_services(monkeypatch, {"livekit-agent"})
+
+    backend_cli.schedule_backend_restart()
+
+    (request,) = requests
+    assert request.services == ("livekit-agent",)
+
+    requests.clear()
+    _installed_services(monkeypatch, set())
+    assert backend_cli.schedule_backend_restart() is None
+    assert requests == []
 
 
 def test_schedule_backend_restart_without_installation(monkeypatch) -> None:
