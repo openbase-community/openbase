@@ -9,9 +9,13 @@ from openbase_coder_cli.services.console_settings import (
 
 DANGEROUS_CONFIRMATION_PHRASE_TOKEN = "${dangerous_confirmation_phrase}"
 USER_ADDRESS_NAME_TOKEN = "${user_address_name}"
+# Renders to the cloud-workspace persistence bullet (host_kind) on a cloud
+# workspace and to nothing on a user's own computer.
+CLOUD_WORKSPACE_NOTE_TOKEN = "${cloud_workspace_note}"
 INSTRUCTION_TEMPLATE_TOKENS = (
     DANGEROUS_CONFIRMATION_PHRASE_TOKEN,
     USER_ADDRESS_NAME_TOKEN,
+    CLOUD_WORKSPACE_NOTE_TOKEN,
 )
 
 
@@ -20,9 +24,12 @@ def has_instruction_template_tokens(text: str) -> bool:
 
 
 def render_instruction_template(text: str) -> str:
+    from openbase_coder_cli.host_kind import cloud_workspace_note
+
     replacements = (
         (DANGEROUS_CONFIRMATION_PHRASE_TOKEN, get_dangerous_confirmation_phrase()),
         (USER_ADDRESS_NAME_TOKEN, get_user_address_name()),
+        (CLOUD_WORKSPACE_NOTE_TOKEN, cloud_workspace_note()),
     )
     rendered = text
     for token, value in replacements:

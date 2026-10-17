@@ -19,6 +19,20 @@ HOST_KIND_WINDOWS = "windows"
 
 HOST_KIND_HEADING = "## Where this agent runs"
 
+# What a cloud workspace keeps across an in-place image upgrade. Only the data
+# volume survives one: the projects folder, Openbase's own state and the
+# linked sign-in directories. The rest of the home folder is image-layer and
+# came back empty after the 2026-10-16 production upgrades (a user's API key
+# saved under ~ was gone). Agents are told so they keep work where it lasts.
+CLOUD_WORKSPACE_PERSISTENCE_NOTE = (
+    "Keep the user's work, config files and anything worth keeping under the "
+    "projects folder (the OPENBASE_CODER_PROJECTS_DIR, /data/workspace by "
+    "default): it is on the persistent volume. The rest of the home folder, "
+    "apart from the linked ~/.codex, ~/.claude, ~/.config/gh and "
+    "~/.super-agents, and everything outside /data can be reset when the "
+    "workspace is upgraded."
+)
+
 _HOST_NOTES = {
     HOST_KIND_CLOUD_WORKSPACE: (
         "This agent runs on the user's Openbase Cloud workspace: a Linux "
@@ -32,7 +46,7 @@ _HOST_NOTES = {
         "say plainly that this is their cloud workspace, offer its folders "
         "and projects, and suggest connecting to Openbase on their personal "
         "computer. Never infer that another device's desktop is empty from "
-        "a workspace listing."
+        "a workspace listing. " + CLOUD_WORKSPACE_PERSISTENCE_NOTE
     ),
     HOST_KIND_MAC: (
         "This agent runs on the user's own Mac. It can see the user's files, "
@@ -91,6 +105,14 @@ def with_host_section(instructions: str, kind: str | None = None) -> str:
     if HOST_KIND_HEADING in instructions:
         return instructions
     return f"{instructions}\n\n{host_section(kind)}"
+
+
+def cloud_workspace_note(kind: str | None = None) -> str:
+    """One bullet for the rendered agent instructions: the persistence note
+    on a cloud workspace, nothing anywhere else."""
+    if (kind or host_kind()) != HOST_KIND_CLOUD_WORKSPACE:
+        return ""
+    return f"- {CLOUD_WORKSPACE_PERSISTENCE_NOTE}"
 
 
 def live_voice_host_note(kind: str | None = None) -> str:

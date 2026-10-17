@@ -170,6 +170,13 @@ if [ "${OPENBASE_CODER_RUNTIME:-}" = "maritime" ]; then
             ;;
     esac
     export OPENBASE_CODER_PROJECTS_DIR="$PROJECTS_DIR"
+    # A Super Agent started with no project (the Dispatcher picked none, a
+    # routine without a cwd) landed in $HOME on Codex or the hosting service's
+    # directory on Claude Code: both image-layer paths, replaced by the next
+    # in-place image upgrade, and the work created there went with them
+    # (production, 2026-10-16). Point Super Agents at the durable projects
+    # dir instead; the setting is read by super_agents.agent_store.default_cwd.
+    export SUPER_AGENTS_DEFAULT_CWD="${SUPER_AGENTS_DEFAULT_CWD:-$PROJECTS_DIR}"
 fi
 # "netmesh" is the canonical env-contract value; "netmesh-tsnet" is the
 # internal tailnet-provider id. Accept both spellings.
