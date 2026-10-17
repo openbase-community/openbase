@@ -43,6 +43,10 @@ If your projects look like the last two, start with a computer, or launch a larg
 
 The exact figures can change as the service evolves; the workspace screen in the app shows the current allowance for your account.
 
+### What the workspace keeps
+
+Your projects live in the workspace's projects folder (`/data/workspace`), which sits on a persistent disk together with Openbase's own state and the sign-ins of the GitHub, Codex and Claude CLIs. Those survive sleeping, waking, restarts and Openbase upgrades of the workspace. The rest of the file system, including other files in the home folder, is part of the workspace image and is reset when Openbase upgrades the workspace to a new release. Keep anything you want to keep under the projects folder; agents in a Cloud Workspace are told the same.
+
 ### Free trial hours
 
 New accounts get a free trial allowance for Cloud Workspace time: about 80 hours a month, renewed monthly for the first four months. Time only counts while the workspace is awake, and it sleeps on its own after about an hour without a call or an agent working, so a trial covers a lot of normal use. When the allowance runs out, the workspace pauses until you subscribe; your projects stay where they are.
