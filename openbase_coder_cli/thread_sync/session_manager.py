@@ -254,7 +254,9 @@ class CodexAppServerSessionManager(
             self._execution_backend
         )
         self._routine_client: _RoutineClient | None = routine_client
-        self._model_for_role = model_for_role or _configured_model_for_role
+        self._model_for_role = model_for_role or (
+            lambda role: _configured_model_for_role(role, self._execution_backend)
+        )
         self._turn_to_session: dict[str, str] = {}
         self._delivered_text: dict[str, str] = {}
         self._turn_current_item: dict[str, str] = {}
