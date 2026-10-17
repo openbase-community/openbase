@@ -86,6 +86,49 @@ def test_model_name_for_role_uses_backend_and_role(tmp_path: Path, monkeypatch):
     )
 
 
+def test_chatgpt_codex_sign_in_swaps_the_rejected_role_model(
+    tmp_path: Path, monkeypatch
+):
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "auth.json").write_text(
+        json.dumps({"auth_mode": "chatgpt"}), encoding="utf-8"
+    )
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("OPENBASE_CODING_BACKEND", "codex")
+    config_path = tmp_path / "dispatcher-config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "backend_models": {
+                    "codex": {"dispatcher": "gpt-5.5", "super_agents": "gpt-5.5"}
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    client = CodexAppServerClient(
+        ws_url="ws://example.invalid",
+        cwd=str(tmp_path),
+        dispatcher_config_path=str(config_path),
+    )
+    assert client.model_name == "gpt-6.1-sol"
+    assert client._thread_params()["model"] == "gpt-6.1-sol"
+
+    (codex_home / "auth.json").write_text(
+        json.dumps({"auth_mode": "apikey"}), encoding="utf-8"
+    )
+    assert (
+        CodexAppServerClient(
+            ws_url="ws://example.invalid",
+            cwd=str(tmp_path),
+            dispatcher_config_path=str(config_path),
+        ).model_name
+        == "gpt-5.5"
+    )
+
+
 def test_returns_only_new_suffix_when_final_text_extends_streamed_text():
     assert _undelivered_suffix("hello", "hello world") == " world"
 

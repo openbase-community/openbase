@@ -11,6 +11,7 @@ from typing import Any
 from super_agents.app_endpoint import parse_app_server_endpoint
 from super_agents.backend_config import configured_backend_from_environment
 from super_agents.config_profiles import codex_profile_config
+from super_agents.defaults import codex_model_for_account
 
 from openbase_coder_cli.codex_session_defaults import (
     DEFAULT_CODEX_APPROVAL_POLICY,
@@ -119,9 +120,13 @@ class CodexAppServerClient(CodexTransportMixin):
             or os.getenv("LIVEKIT_DISPATCHER_CONFIG_PATH")
             or CODEX_DISPATCHER_CONFIG_PATH
         )
-        self._model_name = model_name or _model_name_for_role(
-            self._dispatcher_config_path,
-            use_super_agent_model=self._use_super_agent_reasoning,
+        self._model_name = codex_model_for_account(
+            model_name
+            or _model_name_for_role(
+                self._dispatcher_config_path,
+                use_super_agent_model=self._use_super_agent_reasoning,
+            ),
+            backend=configured_backend_from_environment(),
         )
 
         self._ws: Any | None = None
