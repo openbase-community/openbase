@@ -19,14 +19,17 @@ Secrets are kept only in the holder's memory, never written to disk.
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import json
 import os
 import re
 import select
 import shutil
 import signal
+import struct
 import subprocess
 import sys
+import termios
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -78,9 +81,39 @@ def session_paths(name: str) -> SessionPaths:
     return SessionPaths(STATE_DIR / name)
 
 
+# Rows and columns the held terminal reports.
+TERMINAL_SIZE = (40, 120)
+# What a terminal answers to the queries CLIs send before a prompt: the cursor
+# position (CSI 6 n, used to measure the screen) and the default colours
+# (OSC 10 / 11 ?, used to pick a colour scheme). Nothing else is answered.
+_TERMINAL_QUERIES = (
+    (b"\x1b[6n", b"\x1b[%d;%dR" % TERMINAL_SIZE),
+    (b"\x1b]10;?", b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\"),
+    (b"\x1b]11;?", b"\x1b]11;rgb:0000/0000/0000\x1b\\"),
+)
+
+
+def terminal_query_replies(chunk: bytes) -> list[bytes]:
+    """The replies a terminal would send for the queries in ``chunk``.
+
+    A held session has no terminal behind it, so the holder answers these
+    itself; otherwise a CLI such as gh waits for the answer forever and never
+    reaches its prompt or its one-time code.
+    """
+    return [
+        reply for query, reply in _TERMINAL_QUERIES for _ in range(chunk.count(query))
+    ]
+
+
+# The terminal echoes the holder's query replies back in caret notation
+# (ECHOCTL), e.g. "^[[40;120R" or "^[]11;rgb:0000/0000/0000^[\\"; they are
+# not the command's output.
+_ECHOED_REPLIES = re.compile(r"\^\[\[\d+;\d+R|\^\[\]1[01];rgb:[0-9a-f/]+\^\[\\")
+
+
 def clean_output(raw: str) -> str:
     """Terminal output as plain text: no escapes, carriage returns folded."""
-    text = _ANSI.sub("", raw).replace("\r\n", "\n")
+    text = _ECHOED_REPLIES.sub("", _ANSI.sub("", raw)).replace("\r\n", "\n")
     lines = []
     for line in text.split("\n"):
         # A bare \r redraws the line; keep what was drawn last.
@@ -428,6 +461,12 @@ def _hold(name: str) -> int:
         except OSError as exc:
             os.write(2, f"cannot run {command[0]}: {exc}\n".encode())
             os._exit(127)
+    # A terminal has a size. Without one, prompt libraries (gh's survey) fall
+    # back to asking the cursor's position and block until a terminal answers.
+    with contextlib.suppress(OSError):
+        fcntl.ioctl(
+            master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", *TERMINAL_SIZE, 0, 0)
+        )
     meta.update(holder_pid=os.getpid(), child_pid=pid)
     _write_meta(paths, meta)
     input_fd = os.open(paths.input, os.O_RDWR | os.O_NONBLOCK)
@@ -463,6 +502,9 @@ def _hold(name: str) -> int:
                 if not chunk:
                     break
                 last_activity = time.monotonic()
+                for reply in terminal_query_replies(chunk):
+                    with contextlib.suppress(OSError):
+                        os.write(master_fd, reply)
                 # Redact across chunk boundaries: hold back a secret's length.
                 data = _redact(tail + chunk, secrets)
                 hold = max((len(s) for s in secrets), default=0) - 1
