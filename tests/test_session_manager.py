@@ -1516,9 +1516,7 @@ def test_send_message_on_dispatcher_thread_carries_the_live_dispatcher_rules(
 
     turn_input = client.calls[-1][1]["turn_input"]
     assert dispatcher_instructions.START_HEADING in turn_input["developerInstructions"]
-    assert (
-        "continue that agent on its" in turn_input["developerInstructions"]
-    )
+    assert "continue that agent on its" in turn_input["developerInstructions"]
 
 
 def test_archive_thread_puts_the_backend_session_away(
@@ -1621,6 +1619,36 @@ def test_read_thread_treats_in_progress_turn_as_current_run(tmp_path: Path) -> N
     assert thread.current_run is not None
     assert thread.current_run.run_id == "turn-1"
     assert thread.current_run.status == "running"
+
+
+def test_read_thread_falls_back_when_new_thread_is_not_materialized(
+    tmp_path: Path,
+) -> None:
+    """codex-cli 0.162 refuses thread/turns/list before the first user message.
+
+    A freshly created Codex thread must still resolve (so its first turn can
+    start and thread detail answers 200) instead of surfacing the -32600 error.
+    """
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    client = PaginatedFakeSuperAgentsClient(
+        {
+            "read_thread_page": [
+                RuntimeError(
+                    '{"code": -32600, "message": "thread thr-1 is not materialized '
+                    'yet; thread/turns/list is unavailable before first user message"}'
+                )
+            ],
+            "read_thread": [{"thread": _thread("thr-1", str(project_dir))}],
+        }
+    )
+
+    thread = asyncio.run(_manager(client).get_thread_state("thr-1"))
+
+    assert thread is not None
+    assert thread.session_id == "thr-1"
+    assert thread.run_history == []
+    assert [name for name, _ in client.calls[:2]] == ["read_thread_page", "read_thread"]
 
 
 def test_read_thread_uses_bounded_codex_turn_page(
@@ -3140,7 +3168,10 @@ def test_proxy_denial_live_event_is_normalized_before_broadcast(
     output = events[0]["data"]["line"]
     assert output.startswith(message)
     assert "try again" not in output
-    assert "Subscribe to a Pro plan on app-staging.openbase.cloud for expanded access." in output
+    assert (
+        "Subscribe to a Pro plan on app-staging.openbase.cloud for expanded access."
+        in output
+    )
     assert "authenticate" not in output
 
 

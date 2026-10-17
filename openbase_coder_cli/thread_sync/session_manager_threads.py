@@ -692,6 +692,10 @@ class SessionManagerThreadsMixin:
                     "method not found" in message
                     or "not supported" in message
                     or "-32601" in message
+                    # codex-cli 0.162: a brand-new thread has no turn list
+                    # until its first user message (-32600 "not materialized
+                    # yet"); the legacy read below still returns the thread.
+                    or "not materialized" in message
                 ):
                     raise
                 logger.info(
