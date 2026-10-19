@@ -46,6 +46,10 @@ class RestartRequest:
     services: tuple[str, ...] = ()
     recreate_dispatcher: bool = False
     delay_seconds: float = DEFAULT_RESTART_DELAY_SECONDS
+    # A backend switch: only the listed services restart (an empty list is
+    # not "everything"), the selected engine's app-servers are reconciled
+    # and the Dispatcher is recreated; nothing else is touched.
+    backend_switch: bool = False
 
 
 @dataclass(frozen=True)
@@ -65,7 +69,7 @@ def build_restart_plan(request: RestartRequest) -> RestartPlan:
     valid_targets = set(service_names)
 
     requested_targets = list(request.services)
-    if not requested_targets:
+    if not requested_targets and not request.backend_switch:
         from openbase_coder_cli.services.backend_services import restart_plan_includes
 
         requested_targets = [
@@ -84,7 +88,10 @@ def build_restart_plan(request: RestartRequest) -> RestartPlan:
 
     services = _expand_restart_targets(requested_targets)
 
-    if request.recreate_dispatcher:
+    if request.recreate_dispatcher and not request.backend_switch:
+        # The voice worker binds its backend client per call since the
+        # in-process switch; it only restarts when a switch explicitly
+        # lists it (a call in progress).
         _append_unique(services, "livekit-agent")
 
     service_defs = [find_service(name) for name in services]
@@ -175,6 +182,12 @@ def restart_log_path():
 def execute_restart_plan(plan: RestartPlan) -> None:
     if plan.delay_seconds > 0:
         time.sleep(plan.delay_seconds)
+    # This runner inherited the environment of the process that scheduled it
+    # (django-cli serving the switch), which may still name the previous
+    # backend; the env file is the source of truth.
+    from openbase_coder_cli.backend_config import sync_process_env_from_env_file
+
+    sync_process_env_from_env_file(force=True)
     with service_mutation():
         config = require_installation()
         from openbase_coder_cli.services.backend_services import (

@@ -27,7 +27,7 @@ openbase-coder backend use codex
 | Option | Description |
 |---|---|
 | `--skip-login-check` | Switch even if the target backend has no usable login |
-| `--no-restart` | Persist the choice without restarting the dispatcher services |
+| `--no-restart` | Persist the choice without applying it to the running services |
 
 ## Supported Backends
 
@@ -41,8 +41,7 @@ login for `openbase_cloud`) and fails without changing anything when it is
 missing; pass `--skip-login-check` to switch anyway. It then persists the
 selection into `~/.openbase/.env` as `OPENBASE_CODING_BACKEND=<backend>` —
 the same setting written by `openbase-coder setup --backend ...` and read by
-the local console — and schedules a dispatcher restart so the change takes
-effect. Backend model/provider configuration is applied by the service as
+the local console — and applies the change to the running services (see below). Backend model/provider configuration is applied by the service as
 `codex app-server -c` launch overrides; it is never written into your
 `~/.codex/config.toml`.
 
@@ -50,17 +49,17 @@ effect. Backend model/provider configuration is applied by the service as
 The backend setting controls `super-agents-mcp` coding sessions. Codex uses the
 local `codex-app-server` service. Openbase Cloud and direct Claude Code use
 Claude Code for Super Agents UI-driver sessions and bypass `codex-app-server`.
-In the apps, saving a changed backend first asks for confirmation, then automatically restarts Openbase
-services and recreates the dispatcher thread. `backend use` does the
-equivalent on the CLI: it restarts the dispatcher services and `django-cli`
-and recreates the dispatcher thread on the new backend while the rest of the
-Openbase services keep running (use `--no-restart` to only persist the
-setting). `django-cli` restarts because it runs typed turns and the voice
-dispatcher's Super Agent operations through a client built for the backend it
-started with; left running, it would keep serving the previous backend. The
-restart interrupts active voice calls, ends running turns and clears the
-current dispatcher conversation context; it does not delete Super Agent
-threads or project files.
+In the apps, saving a changed backend first asks for confirmation, then applies
+the switch in place: the selected engine's app-servers come up (and the other
+engine's go down), and the dispatcher thread is recreated on the new backend.
+`backend use` does the equivalent on the CLI (use `--no-restart` to only persist
+the setting). No Openbase service restarts for the switch: `django-cli` and the
+voice worker read the backend from `~/.openbase/.env` and rebuild their backend
+clients for the next turn or call, so the switch takes effect within a few
+seconds; turns still running on the previous backend lose their live output. Only a voice call in progress is ended,
+by restarting the voice worker, because that call is bound to the previous
+backend. The switch clears the current dispatcher conversation context; it does
+not delete Super Agent threads or project files.
 Separately running Codex or Claude clients may still need to be reopened so
 their MCP process reloads the backend.
 

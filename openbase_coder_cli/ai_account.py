@@ -484,6 +484,8 @@ def select(choice: str) -> bool:
         )
     if choice != OPENBASE_CLOUD:
         _align_role_models(choice)
+    # Applies the switch to this process (django-cli) at once and schedules
+    # the app-server reconcile plus Dispatcher recreation; no service restarts.
     schedule_backend_restart()
     return True
 

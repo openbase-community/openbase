@@ -349,6 +349,23 @@ def test_recreate_dispatcher_adds_livekit_agent():
     assert plan.recreate_dispatcher is True
 
 
+def test_backend_switch_plan_restarts_only_listed_services():
+    from openbase_coder_cli.services.restart import RestartRequest, build_restart_plan
+
+    plan = build_restart_plan(
+        RestartRequest(services=(), recreate_dispatcher=True, backend_switch=True)
+    )
+    assert plan.services == ()
+    assert plan.recreate_dispatcher is True
+
+    with_call = build_restart_plan(
+        RestartRequest(
+            services=("livekit-agent",), recreate_dispatcher=True, backend_switch=True
+        )
+    )
+    assert with_call.services == ("livekit-agent",)
+
+
 def test_execute_recreate_dispatcher_warms_thread_after_services_start(monkeypatch):
     calls = []
 

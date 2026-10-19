@@ -126,6 +126,49 @@ def configured_execution_backend(
     return backend_from_environment()
 
 
+_SYNCED_ENV_FILE_STAMP: tuple[int, int] | None = None
+_ENV_FILE_SYNCED_KEYS = (CODING_BACKEND_ENV_KEY, CODING_BACKENDS_ENV_KEY)
+
+
+def sync_process_env_from_env_file(*, force: bool = False) -> bool:
+    """Copy the backend keys of the installed env file into ``os.environ``.
+
+    A backend switch rewrites the env file while django-cli, the voice
+    worker and the detached restart runner keep running with the environment
+    they started with; the super-agents helpers (default backend, client
+    identity, Claude session store) read ``os.environ``. Keeping the process
+    environment in step with the file lets a switch take effect in place,
+    without the service restarts that made it take 20 to 30 s (switch-speed,
+    2026-10-18). Only keys present in the file are copied, so a test's empty
+    env file leaves a monkeypatched environment alone. Returns whether the
+    environment changed. The file's mtime and size gate the read so callers
+    can invoke this on every lookup.
+    """
+    global _SYNCED_ENV_FILE_STAMP
+    import os
+
+    from openbase_coder_cli.env_file import env_file_values
+    from openbase_coder_cli.paths import DEFAULT_ENV_FILE_PATH
+
+    try:
+        stat = DEFAULT_ENV_FILE_PATH.stat()
+    except OSError:
+        return False
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    if not force and stamp == _SYNCED_ENV_FILE_STAMP:
+        return False
+    _SYNCED_ENV_FILE_STAMP = stamp
+    values = env_file_values(DEFAULT_ENV_FILE_PATH)
+    changed = False
+    for key in _ENV_FILE_SYNCED_KEYS:
+        value = values.get(key)
+        if value is None or os.environ.get(key) == value:
+            continue
+        os.environ[key] = value
+        changed = True
+    return changed
+
+
 def configured_execution_backends(
     environment_backend: Callable[[], str] | None = None,
 ) -> list[str]:
@@ -139,6 +182,7 @@ def configured_execution_backends(
     """
     import os
 
+    sync_process_env_from_env_file()
     primary = configured_execution_backend(environment_backend)
     raw = os.environ.get(CODING_BACKENDS_ENV_KEY, "").strip()
     if not raw:
