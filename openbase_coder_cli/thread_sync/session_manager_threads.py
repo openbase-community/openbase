@@ -196,12 +196,11 @@ class SessionManagerThreadsMixin:
         cleaned = " ".join(name.split())
         if not cleaned:
             raise ValueError("Thread name cannot be empty")
+        client = self._client_for_thread(thread_id)
         if self._uses_backend_session_api():
-            await self._client.rename_by_label(
-                LabelQueryInput(thread_id=thread_id), cleaned
-            )
+            await client.rename_by_label(LabelQueryInput(thread_id=thread_id), cleaned)
         else:
-            await self._client.set_thread_name(thread_id, cleaned)
+            await client.set_thread_name(thread_id, cleaned)
         await self._broadcast_thread_state(thread_id)
         return await self.get_thread_state(thread_id)
 
@@ -258,16 +257,17 @@ class SessionManagerThreadsMixin:
         else:
             effective_developer_instructions = None
 
+        client = self._client_for_thread(thread_id)
         if self._uses_backend_session_api():
             if effective_developer_instructions is not None:
-                resume_by_label = getattr(self._client, "resume_by_label", None)
+                resume_by_label = getattr(client, "resume_by_label", None)
                 if callable(resume_by_label):
                     await resume_by_label(
                         LabelQueryInput(thread_id=thread_id, cwd=directory),
                         developer_instructions=effective_developer_instructions,
                     )
                     return
-            read_by_label = getattr(self._client, "read_by_label", None)
+            read_by_label = getattr(client, "read_by_label", None)
             if callable(read_by_label):
                 await read_by_label(
                     LabelQueryInput(thread_id=thread_id, cwd=directory),
@@ -275,7 +275,7 @@ class SessionManagerThreadsMixin:
                 )
             return
 
-        await self._client.ensure_connected()
+        await client.ensure_connected()
         params: dict[str, Any] = {
             "threadId": thread_id,
             "cwd": directory,
@@ -283,12 +283,12 @@ class SessionManagerThreadsMixin:
         if effective_developer_instructions is not None:
             params.update(self._codex_permission_defaults())
             params["config"] = merge_config(
-                codex_profile_config(getattr(self._client, "backend", "codex")),
+                codex_profile_config(getattr(client, "backend", "codex")),
                 await login_shell_config_override(),
             )
             params["developerInstructions"] = effective_developer_instructions
-        await self._client.request("thread/resume", params)
-        await self._client.merge_session(
+        await client.request("thread/resume", params)
+        await client.merge_session(
             thread_id,
             {
                 "threadId": thread_id,
@@ -563,13 +563,16 @@ class SessionManagerThreadsMixin:
             # listings and name lookups (the Dispatcher's tools) stop offering
             # it: an archived worker kept receiving queued work on 376
             # (2026-10-11 05:02Z) because only the cli knew it was archived.
-            archive_by_label = getattr(self._client, "archive_by_label", None)
+            archive_by_label = getattr(
+                self._client_for_thread(session_id), "archive_by_label", None
+            )
             if callable(archive_by_label):
                 await archive_by_label(LabelQueryInput(thread_id=session_id))
             return True
         try:
-            await self._client.ensure_connected()
-            await self._client.request("thread/archive", {"threadId": session_id})
+            client = self._client_for_thread(session_id)
+            await client.ensure_connected()
+            await client.request("thread/archive", {"threadId": session_id})
         except RuntimeError as exc:
             if _is_thread_unavailable_error(exc):
                 return False

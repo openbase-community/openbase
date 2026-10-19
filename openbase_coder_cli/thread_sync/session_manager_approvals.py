@@ -35,14 +35,17 @@ class SessionManagerApprovalsMixin:
             for request in shared_permission_requests()
             if request.get("id") is not None
         }
-        try:
-            await _ensure_client_connected(self._client)
-            for request in self._client.pending_permission_requests():
-                payload = _approval_request_payload(request)
-                if payload.get("id") is not None:
-                    requests_by_id[str(payload["id"])] = payload
-        except Exception:
-            logger.debug("Unable to merge in-process approval requests", exc_info=True)
+        for client in self._codex_clients():
+            try:
+                await _ensure_client_connected(client)
+                for request in client.pending_permission_requests():
+                    payload = _approval_request_payload(request)
+                    if payload.get("id") is not None:
+                        requests_by_id[str(payload["id"])] = payload
+            except Exception:
+                logger.debug(
+                    "Unable to merge in-process approval requests", exc_info=True
+                )
         return [
             _approval_request_payload(request) for request in requests_by_id.values()
         ]
@@ -53,8 +56,9 @@ class SessionManagerApprovalsMixin:
         decision: Literal["accept", "decline", "cancel"],
     ) -> dict[str, Any]:
         """Answer one pending app-server approval request."""
-        await _ensure_client_connected(self._client)
-        request = self._find_pending_approval_request(request_id)
+        for client in self._codex_clients():
+            await _ensure_client_connected(client)
+        client, request = self._find_pending_approval_request(request_id)
         if request is None:
             shared_request = _find_shared_permission_request(request_id)
             if write_shared_permission_decision(request_id, decision):
@@ -68,17 +72,21 @@ class SessionManagerApprovalsMixin:
                     ),
                 }
             raise ValueError(f"No pending approval request found for id {request_id}.")
-        return await self._client.answer_request(
+        return await client.answer_request(
             request.id,
             permission_response_for_request(request, decision),
         )
 
-    def _find_pending_approval_request(self, request_id: str | int) -> Any | None:
+    def _find_pending_approval_request(
+        self, request_id: str | int
+    ) -> tuple[Any, Any | None]:
+        """The client holding the pending request and the request, if any."""
         candidates: list[str | int] = [request_id]
         if isinstance(request_id, str) and request_id.isdigit():
             candidates.append(int(request_id))
         candidate_strings = {str(item) for item in candidates}
-        for request in self._client.pending_permission_requests():
-            if request.id in candidates or str(request.id) in candidate_strings:
-                return request
-        return None
+        for client in self._codex_clients():
+            for request in client.pending_permission_requests():
+                if request.id in candidates or str(request.id) in candidate_strings:
+                    return client, request
+        return self._client, None

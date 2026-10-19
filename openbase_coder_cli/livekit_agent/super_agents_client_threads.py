@@ -393,38 +393,22 @@ class SuperAgentsClientThreadsMixin:
         shared endpoint when the dedicated instance isn't up yet."""
         if self._state_path is None:
             return None
-        if os.getenv(
-            "OPENBASE_DISPATCHER_DEDICATED_APP_SERVER", ""
-        ).strip().lower() in {
-            "0",
-            "false",
-            "no",
-            "off",
-        }:
-            return None
         try:
             from openbase_coder_cli.codex_control_plane import (
-                dispatcher_codex_app_server_endpoint,
+                usable_dispatcher_codex_app_server_endpoint,
             )
 
-            endpoint = dispatcher_codex_app_server_endpoint()
+            endpoint = usable_dispatcher_codex_app_server_endpoint()
         except Exception:
             logger.warning(
                 "Could not resolve the dispatcher app-server endpoint", exc_info=True
             )
             return None
-        if endpoint.source == "dispatcher-explicit":
-            return endpoint.value
-        if (
-            endpoint.is_unix
-            and endpoint.socket_path is not None
-            and endpoint.socket_path.exists()
-        ):
-            return f"unix://{endpoint.socket_path}"
-        logger.info(
-            "Dispatcher dedicated app-server socket absent; using shared endpoint"
-        )
-        return None
+        if endpoint is None:
+            logger.info(
+                "Dispatcher dedicated app-server socket absent; using shared endpoint"
+            )
+        return endpoint
 
     def _dispatcher_execution_backend(self) -> str | None:
         """The engine the dispatcher's configured MODEL requires, if any.

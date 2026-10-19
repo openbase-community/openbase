@@ -21,6 +21,7 @@ from openbase_coder_cli.backend_config import (
 )
 from openbase_coder_cli.livekit_voice_history import record_voice_assignment
 from openbase_coder_cli.livekit_voice_route import (
+    is_dispatcher_thread,
     super_agent_voice_for_context,
 )
 
@@ -34,6 +35,7 @@ from .session_manager_base import (
     _default_client_for_execution_backend,
     _has_livekit_voice_route,
     _is_thread_unavailable_error,
+    _OpenbaseSuperAgentsClient,
     _RoutineClient,
     _SuperAgentsClient,
     _with_dispatcher_onboarding_reminder,
@@ -244,6 +246,7 @@ class CodexAppServerSessionManager(
         routine_client: _RoutineClient | None = None,
         model_for_role: Callable[[str], str | None] | None = None,
         execution_backend: str | None = None,
+        dispatcher_client: _SuperAgentsClient | None = None,
     ) -> None:
         self._ws_url = ws_url or os.environ.get(
             "CODEX_APP_SERVER_URL", default_app_server_endpoint()
@@ -254,6 +257,9 @@ class CodexAppServerSessionManager(
             self._execution_backend
         )
         self._routine_client: _RoutineClient | None = routine_client
+        # The Dispatcher thread's own client, bound to the dedicated
+        # app-server (see _client_for_thread); built on first use.
+        self._dispatcher_client: _SuperAgentsClient | None = dispatcher_client
         self._model_for_role = model_for_role or (
             lambda role: _configured_model_for_role(role, self._execution_backend)
         )
@@ -296,6 +302,47 @@ class CodexAppServerSessionManager(
             execution_backend=execution_backend,
         )
 
+    def _client_for_thread(self, thread_id: str) -> _SuperAgentsClient:
+        """The client that owns ``thread_id``'s app-server session.
+
+        Codex keeps a per-thread writer lock in the app-server process that
+        has the thread loaded. The Dispatcher thread lives on the dedicated
+        dispatcher app-server (the voice worker and the restart runner use
+        it), so a typed Dispatcher turn sent through the shared instance was
+        refused with "already has an active writer" for 60 s after every
+        call, and the next call then failed to resume the thread and created
+        a new Dispatcher (Maritime pk 55, 2026-10-17). Every writer-taking
+        operation on the Dispatcher thread goes through this accessor so the
+        thread has exactly one owning app-server; every other thread keeps
+        the shared client.
+        """
+        if not is_dispatcher_thread(thread_id):
+            return self._client
+        return self._dispatcher_codex_client() or self._client
+
+    def _dispatcher_codex_client(self) -> _SuperAgentsClient | None:
+        if self._dispatcher_client is not None:
+            return self._dispatcher_client
+        if not isinstance(self._client, _OpenbaseSuperAgentsClient):
+            return None  # Claude threads have no app-server; injected fakes
+        from openbase_coder_cli.codex_control_plane import (
+            usable_dispatcher_codex_app_server_endpoint,
+        )
+
+        endpoint = usable_dispatcher_codex_app_server_endpoint()
+        if endpoint is None:
+            return None  # not installed or not up yet: the shared instance owns it
+        logger.info("Dispatcher thread routed to dedicated app-server %s", endpoint)
+        self._dispatcher_client = _OpenbaseSuperAgentsClient(self, endpoint)
+        return self._dispatcher_client
+
+    def _codex_clients(self) -> list[_SuperAgentsClient]:
+        """Every app-server client this manager holds, shared first."""
+        clients: list[_SuperAgentsClient] = [self._client]
+        if self._dispatcher_client is not None:
+            clients.append(self._dispatcher_client)
+        return clients
+
     async def send_message(
         self, session_id: str, message: str, model: str | None = None
     ) -> str:
@@ -327,10 +374,11 @@ class CodexAppServerSessionManager(
             role_turn_input["model"] = model
 
         ensure_thread_writable(session_id)
+        client = self._client_for_thread(session_id)
         if self._uses_backend_session_api():
             if dispatcher_rules := dispatcher_turn_instructions(session_id):
                 role_turn_input["developerInstructions"] = dispatcher_rules
-            started = await self._client.start_turn_by_label(
+            started = await client.start_turn_by_label(
                 LabelQueryInput(thread_id=session_id, cwd=thread.directory),
                 role_turn_input,
             )
@@ -348,13 +396,13 @@ class CodexAppServerSessionManager(
         }
         try:
             ensure_thread_writable(session_id)
-            started = await self._client.start_turn(turn_input)
+            started = await client.start_turn(turn_input)
         except RuntimeError as exc:
             if not _is_thread_unavailable_error(exc):
                 raise
             await self._resume_thread(session_id, thread.directory)
             ensure_thread_writable(session_id)
-            started = await self._client.start_turn(turn_input)
+            started = await client.start_turn(turn_input)
         turn_id = extract_turn_id(started)
         if not turn_id:
             raise RuntimeError("Super Agents did not return a turn id")
