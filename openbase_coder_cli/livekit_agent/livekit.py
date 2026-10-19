@@ -456,7 +456,18 @@ def _build_voice_backend_client(*, persist_thread: bool) -> SuperAgentsLiveKitCl
     )
 
 
-_shared_voice_backend_client = _build_voice_backend_client(persist_thread=True)
+# Tests inject a client here; otherwise every job builds its own, so a call
+# started after a backend switch runs on the newly selected engine without
+# the worker restarting (the client re-reads the env file as it is built).
+_shared_voice_backend_client: SuperAgentsLiveKitClient | None = None
+
+
+def _voice_backend_client_for_job() -> SuperAgentsLiveKitClient:
+    if LIVEKIT_CODEX_FRESH_THREAD_PER_SESSION:
+        return _build_voice_backend_client(persist_thread=False)
+    if _shared_voice_backend_client is not None:
+        return _shared_voice_backend_client
+    return _build_voice_backend_client(persist_thread=True)
 
 
 def _build_stt(vad_model=None):
@@ -1589,11 +1600,7 @@ async def livekit_agent(ctx: JobContext):
         "Connecting LiveKit voice session to Super Agents backend with cwd=%s",
         LIVEKIT_CODEX_THREAD_CWD,
     )
-    voice_backend_client = (
-        _build_voice_backend_client(persist_thread=False)
-        if LIVEKIT_CODEX_FRESH_THREAD_PER_SESSION
-        else _shared_voice_backend_client
-    )
+    voice_backend_client = _voice_backend_client_for_job()
     prepare_task = asyncio.create_task(voice_backend_client.prepare())
     prepare_task.add_done_callback(_log_prepare_result)
     # Warm the dispatcher's backend session (Claude CLI resume, auth check)

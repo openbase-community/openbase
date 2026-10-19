@@ -703,6 +703,7 @@ def get_session_manager() -> CodexAppServerSessionManager:
             and _session_manager.execution_backends == backends
         ):
             return _session_manager
+        _release_session_manager(_session_manager)
         _session_manager = MultiBackendSessionManager(
             {
                 backend: CodexAppServerSessionManager(execution_backend=backend)
@@ -716,5 +717,40 @@ def get_session_manager() -> CodexAppServerSessionManager:
         not _session_manager._uses_external_client
         and _session_manager._execution_backend != execution_backend
     ):
+        _release_session_manager(_session_manager)
         _session_manager = CodexAppServerSessionManager()
     return _session_manager
+
+
+def reset_session_manager() -> None:
+    """Drop the cached manager so the next lookup rebuilds it from the env file.
+
+    Called when this process applies a backend switch itself (the apps'
+    Settings -> AI Account request runs inside django-cli).
+    """
+    global _session_manager
+    _release_session_manager(_session_manager)
+    _session_manager = None
+
+
+def _release_session_manager(manager: Any) -> None:
+    """Close a replaced manager's backend clients on the running loop.
+
+    The clients hold app-server websockets and reader tasks (or a Claude CLI);
+    a rebuilt manager must not leave them open on the previous backend. The
+    close runs as a task when a loop is running; a synchronous caller without
+    one (the CLI process, tests) has nothing live to close.
+    """
+    if manager is None:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    managers = getattr(manager, "_managers", None)
+    for item in managers.values() if isinstance(managers, dict) else [manager]:
+        clients = getattr(item, "_codex_clients", None)
+        for client in clients() if callable(clients) else []:
+            close = getattr(client, "close", None)
+            if callable(close):
+                loop.create_task(close())

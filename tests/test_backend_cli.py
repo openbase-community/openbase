@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
@@ -216,7 +217,7 @@ def test_backend_use_schedules_dispatcher_restart(tmp_path, monkeypatch) -> None
     monkeypatch.setattr(
         backend_cli,
         "schedule_backend_restart",
-        lambda: restarts.append(True) or object(),
+        lambda: restarts.append(True) or SimpleNamespace(services=()),
     )
 
     result = CliRunner().invoke(
@@ -225,7 +226,8 @@ def test_backend_use_schedules_dispatcher_restart(tmp_path, monkeypatch) -> None
 
     assert result.exit_code == 0
     assert restarts == [True]
-    assert "Dispatcher and django-cli restart scheduled" in result.output
+    assert "Switch to claude_code scheduled" in result.output
+    assert "No Openbase service restarts" in result.output
 
 
 def test_backend_use_no_restart_skips_restart(tmp_path, monkeypatch) -> None:
@@ -243,7 +245,7 @@ def test_backend_use_no_restart_skips_restart(tmp_path, monkeypatch) -> None:
     )
 
     assert result.exit_code == 0
-    assert "Restart skipped" in result.output
+    assert "Switch not applied" in result.output
 
 
 def _installed_services(monkeypatch, installed: set[str]) -> list:
@@ -265,51 +267,56 @@ def _installed_services(monkeypatch, installed: set[str]) -> list:
     return requests
 
 
-def test_schedule_backend_restart_restarts_django_cli_with_the_dispatcher(
+def test_schedule_backend_restart_applies_the_switch_without_restarting(
     monkeypatch,
 ) -> None:
-    """django-cli serves typed turns and the voice Dispatcher's forwarded
-    Super Agents operations through a client built for the backend in its
-    environment at start. A switch that left it running kept refusing the
-    Dispatcher ("runs backend 'openbase_cloud', not 'claude_code'")."""
+    """A switch reconciles the engines' app-servers and recreates the
+    Dispatcher; django-cli and the voice worker follow the env file in place
+    (switch-speed, 2026-10-18), so nothing restarts when no call is up."""
     requests = _installed_services(
-        monkeypatch, {"livekit-agent", "django-cli", "sync-workers"}
+        monkeypatch, {"codex-app-server-dispatcher", "livekit-agent", "django-cli"}
+    )
+    monkeypatch.setattr(backend_cli, "voice_call_in_progress", lambda: False)
+    applied: list[int] = []
+    monkeypatch.setattr(
+        backend_cli, "apply_backend_switch_in_process", lambda: applied.append(1)
     )
 
     assert backend_cli.schedule_backend_restart() is not None
 
     (request,) = requests
-    assert request.services == ("livekit-agent", "django-cli")
+    assert request.services == ()
     assert request.recreate_dispatcher is True
+    assert request.backend_switch is True
+    assert request.delay_seconds == 0.0
+    assert applied == [1]
 
 
-def test_schedule_backend_restart_prefers_the_dispatcher_app_server(
-    monkeypatch,
-) -> None:
-    requests = _installed_services(
-        monkeypatch, {"codex-app-server-dispatcher", "livekit-agent", "django-cli"}
-    )
-
-    backend_cli.schedule_backend_restart()
-
-    (request,) = requests
-    assert request.services == ("codex-app-server-dispatcher", "django-cli")
-
-
-def test_schedule_backend_restart_skips_services_that_are_not_installed(
-    monkeypatch,
-) -> None:
-    requests = _installed_services(monkeypatch, {"livekit-agent"})
+def test_schedule_backend_restart_ends_a_call_in_progress(monkeypatch) -> None:
+    """A running voice job is bound to the previous backend and must not
+    adopt the recreated Dispatcher: only then does the voice worker restart."""
+    requests = _installed_services(monkeypatch, {"livekit-agent", "django-cli"})
+    monkeypatch.setattr(backend_cli, "voice_call_in_progress", lambda: True)
+    monkeypatch.setattr(backend_cli, "apply_backend_switch_in_process", lambda: None)
 
     backend_cli.schedule_backend_restart()
 
     (request,) = requests
     assert request.services == ("livekit-agent",)
+    assert request.backend_switch is True
 
-    requests.clear()
-    _installed_services(monkeypatch, set())
-    assert backend_cli.schedule_backend_restart() is None
-    assert requests == []
+
+def test_schedule_backend_restart_skips_an_uninstalled_voice_worker(
+    monkeypatch,
+) -> None:
+    requests = _installed_services(monkeypatch, {"django-cli"})
+    monkeypatch.setattr(backend_cli, "voice_call_in_progress", lambda: True)
+    monkeypatch.setattr(backend_cli, "apply_backend_switch_in_process", lambda: None)
+
+    backend_cli.schedule_backend_restart()
+
+    (request,) = requests
+    assert request.services == ()
 
 
 def test_schedule_backend_restart_without_installation(monkeypatch) -> None:
