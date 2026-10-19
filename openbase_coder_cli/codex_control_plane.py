@@ -86,6 +86,47 @@ def dispatcher_codex_app_server_endpoint(
     )
 
 
+def usable_dispatcher_codex_app_server_endpoint(
+    env: dict[str, str] | None = None,
+) -> str | None:
+    """The dispatcher app-server endpoint to use, or None for the shared one.
+
+    The Dispatcher thread must have exactly one owning app-server process:
+    Codex keeps a per-thread writer lock while a process has the thread
+    loaded, so a second process (django-cli's shared instance serving a typed
+    Dispatcher turn while the voice worker holds the thread on the dedicated
+    instance) gets "already has an active writer" until the first unloads it,
+    60 s after disconnect on codex-cli 0.162 and 30 min on 0.163 (switch-speed,
+    2026-10-18). Every process therefore routes the Dispatcher thread here.
+
+    An explicitly configured endpoint is always used; the default Unix socket
+    only once it exists, so an install without the dedicated service (or one
+    whose socket is not up yet) falls back to the shared endpoint.
+    ``OPENBASE_DISPATCHER_DEDICATED_APP_SERVER`` set to a false value turns
+    the dedicated route off.
+    """
+    values = env if env is not None else os.environ
+    if str(
+        values.get("OPENBASE_DISPATCHER_DEDICATED_APP_SERVER", "")
+    ).strip().lower() in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }:
+        return None
+    endpoint = dispatcher_codex_app_server_endpoint(env)
+    if endpoint.source == "dispatcher-explicit":
+        return endpoint.value
+    if (
+        endpoint.is_unix
+        and endpoint.socket_path is not None
+        and endpoint.socket_path.exists()
+    ):
+        return f"unix://{endpoint.socket_path}"
+    return None
+
+
 def apply_managed_codex_app_server_endpoint(
     env: dict[str, str],
     *,

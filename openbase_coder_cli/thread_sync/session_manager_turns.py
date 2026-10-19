@@ -85,7 +85,7 @@ class SessionManagerTurnsMixin:
             turn_input["model"] = model
 
         ensure_thread_writable(thread_id)
-        result = await self._client.queue_turn_by_label(
+        result = await self._client_for_thread(thread_id).queue_turn_by_label(
             LabelQueryInput(thread_id=thread_id, cwd=thread.directory),
             turn_input,
         )
@@ -118,7 +118,7 @@ class SessionManagerTurnsMixin:
             raise ValueError(f"Thread {thread_id} has no active turn to steer")
 
         ensure_thread_writable(thread_id)
-        result = await self._client.steer_by_label(
+        result = await self._client_for_thread(thread_id).steer_by_label(
             LabelQueryInput(
                 thread_id=thread_id,
                 cwd=thread.directory,
@@ -164,7 +164,7 @@ class SessionManagerTurnsMixin:
         """Interrupt the current turn in a thread."""
         if self._uses_backend_session_api():
             try:
-                result = await self._client.cancel_by_label(
+                result = await self._client_for_thread(session_id).cancel_by_label(
                     LabelQueryInput(thread_id=session_id)
                 )
             except RuntimeError as exc:
@@ -178,7 +178,7 @@ class SessionManagerTurnsMixin:
         if turn_id is None:
             return False
         try:
-            await self._client.cancel_turn(session_id, turn_id)
+            await self._client_for_thread(session_id).cancel_turn(session_id, turn_id)
         except RuntimeError as exc:
             message = _runtime_error_message(exc).lower()
             if _is_thread_unavailable_error(exc) or "no active" in message:
