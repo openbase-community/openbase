@@ -30,7 +30,12 @@ from openbase_coder_cli.services.voice_warning import (
     warn_before_voice_interruption,
 )
 
-DEFAULT_RESTART_DELAY_SECONDS = 8.0
+# A scheduled restart runs detached after this delay, so the request that
+# scheduled it (a backend switch from the apps, `openbase-coder restart`) gets
+# its response out before django-cli goes down. That response leaves in well
+# under a second; the earlier 8 s were the single largest fixed cost of a
+# backend switch (switch-speed, 2026-10-18).
+DEFAULT_RESTART_DELAY_SECONDS = 1.0
 API_RESTART_DELAY_SECONDS = 0.5
 # Services whose executable is the openbase-tunneld build.
 TUNNELD_BINARY_SERVICES = frozenset({"openbase-tunneld", "openbase-voice-turn"})
