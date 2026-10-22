@@ -16,6 +16,7 @@ nav = [
     { "Sync Between Your Computers" = "code-sync.md" },
     { "Push a Thread to Your Durable Machine" = "push-to-durable.md" },
     { "Laptop Tools for Remote Agents" = "laptop-tools.md" },
+    { "Databases & Object Storage" = "databases-and-storage.md" },
     { "Codex & Claude Code from the Terminal" = "agent-launchers.md" }
   ]},
   { "Getting Started" = [
@@ -39,6 +40,7 @@ nav = [
     { "claude-sync" = "commands/claude-sync.md" },
     { "codex" = "commands/codex.md" },
     { "codex-sync" = "commands/codex-sync.md" },
+    { "db" = "commands/db.md" },
     { "defaults" = "commands/defaults.md" },
     { "doctor" = "commands/doctor.md" },
     { "login" = "commands/login.md" },
@@ -56,6 +58,7 @@ nav = [
     { "services logs" = "commands/services-logs.md" },
     { "services regenerate" = "commands/services-regenerate.md" },
     { "setup" = "commands/setup.md" },
+    { "storage" = "commands/storage.md" },
     { "sync" = "commands/sync.md" },
     { "sync-daemon" = "commands/sync-daemon.md" }
   ]},

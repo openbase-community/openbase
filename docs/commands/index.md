@@ -33,6 +33,8 @@ openbase-coder [OPTIONS] COMMAND [ARGS]
 | [`setup`](setup.md) | Full local bootstrap flow |
 | [`server`](server.md) | Run local Django/ASGI server |
 | [`service`](service.md) | Publish a local HTTP service privately over the Openbase VPN |
+| [`db`](db.md) | Use Postgres databases through Openbase without seeing their passwords |
+| [`storage`](storage.md) | Use S3-compatible object storage through Openbase without seeing the keys |
 | [`restart`](restart.md) | Restart Openbase-managed services |
 | [`sync`](sync.md) | Inspect Openbase Sync, resolve conflicts, and migrate from the previous sync |
 | [`sync-daemon`](sync-daemon.md) | Configure and manage Openbase Sync between two of your computers |
@@ -64,6 +66,10 @@ openbase-coder services status
 
 # Share a local development site with other tailnet devices
 openbase-coder service publish docs-preview 3000
+
+# Proxy a vaulted database or bucket on loopback for an app or agent
+openbase-coder db proxy shop --port 5433 --background
+openbase-coder storage proxy uploads --port 9000 --background
 
 # Switch coding backend
 openbase-coder backend use codex
