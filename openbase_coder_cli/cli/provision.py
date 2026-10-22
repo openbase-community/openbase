@@ -40,18 +40,30 @@ from .setup import setup
 WEB_BACKEND_ENV_KEY = "OPENBASE_CODER_CLI_WEB_BACKEND_URL"
 BOOTSTRAP_TOKEN_ENV_KEY = "OPENBASE_CODER_BOOTSTRAP_TOKEN"
 BOOTSTRAP_EXCHANGE_PATH = "/api/openbase/devspaces/bootstrap/exchange/"
-REQUESTED_OPTIONAL_SCOPES = ("notify", "netmesh_publish")
+REQUESTED_OPTIONAL_SCOPES = ("notify", "netmesh_publish", "connections")
 # What Cloud may hand back: the base pair plus any subset of the optional
 # scopes, in Cloud's canonical order.
-ACCEPTED_BOOTSTRAP_SCOPES = (
-    ["llm_proxy", "audio_proxy"],
-    ["llm_proxy", "audio_proxy", "notify"],
-    ["llm_proxy", "audio_proxy", "netmesh_publish"],
-    ["llm_proxy", "audio_proxy", "notify", "netmesh_publish"],
+ACCEPTED_BOOTSTRAP_SCOPES = tuple(
+    ["llm_proxy", "audio_proxy", *optional]
+    for optional in (
+        [],
+        ["notify"],
+        ["netmesh_publish"],
+        ["notify", "netmesh_publish"],
+        ["connections"],
+        ["notify", "connections"],
+        ["netmesh_publish", "connections"],
+        ["notify", "netmesh_publish", "connections"],
+    )
 )
 # A Cloud that predates a scope rejects the whole request; retry with the
 # scopes it knows, newest first dropped.
-_SCOPE_REQUEST_FALLBACKS = (REQUESTED_OPTIONAL_SCOPES, ("notify",), ())
+_SCOPE_REQUEST_FALLBACKS = (
+    REQUESTED_OPTIONAL_SCOPES,
+    ("notify", "netmesh_publish"),
+    ("notify",),
+    (),
+)
 UNKNOWN_SCOPES_MARKER = "Unknown machine token scopes"
 NETMESH_AUTHKEY_FILE = DEFAULT_ENV_FILE_PATH.parent / "bootstrap-netmesh-authkey"
 

@@ -81,7 +81,9 @@ def test_exchange_requests_and_accepts_the_notify_scope(bootstrap_paths):
         )
 
     # The exchange opts in to the optional scopes; an older Cloud ignores the body.
-    assert post.call_args.kwargs["json"] == {"scopes": ["notify", "netmesh_publish"]}
+    assert post.call_args.kwargs["json"] == {
+        "scopes": ["notify", "netmesh_publish", "connections"]
+    }
     saved = json.loads(machine_token.read_text())
     assert saved["scopes"] == ["llm_proxy", "audio_proxy", "notify"]
 
@@ -307,11 +309,30 @@ def test_exchange_requests_the_publish_scope_and_retries_on_an_older_cloud(
 
     requested = [call.kwargs["json"] for call in post.call_args_list]
     assert requested == [
+        {"scopes": ["notify", "netmesh_publish", "connections"]},
         {"scopes": ["notify", "netmesh_publish"]},
-        {"scopes": ["notify"]},
     ]
     saved = json.loads(machine_token.read_text())
     assert saved["scopes"] == ["llm_proxy", "audio_proxy", "notify"]
+
+
+def test_exchange_accepts_the_connections_scope(bootstrap_paths):
+    machine_token, _owner_identity, _netmesh_key = bootstrap_paths
+    granted = bootstrap_response(
+        scopes=["llm_proxy", "audio_proxy", "notify", "netmesh_publish", "connections"]
+    )
+    with mock.patch.object(httpx, "post", return_value=granted):
+        provision_module._exchange_bootstrap(
+            "obmb_one-time", "https://backend.example.com"
+        )
+    saved = json.loads(machine_token.read_text())
+    assert saved["scopes"] == [
+        "llm_proxy",
+        "audio_proxy",
+        "notify",
+        "netmesh_publish",
+        "connections",
+    ]
 
 
 def test_exchange_accepts_the_publish_scope(bootstrap_paths):

@@ -23,8 +23,10 @@ DEFAULT_MACHINE_TOKEN_SCOPES = ("llm_proxy", "audio_proxy")
 # Extra scopes a cloud workspace may request at bootstrap (see provision):
 # notify = push "open this URL" notifications to the owner's own phones;
 # netmesh_publish = private service hostnames and certificate DNS challenges
-# for the workspace's own mesh node (`service publish`).
-OPTIONAL_BOOTSTRAP_SCOPES = ("notify", "netmesh_publish")
+# for the workspace's own mesh node (`service publish`);
+# connections = lease the owner's managed database / object storage
+# credentials for the local proxies (`openbase-coder db`, `storage`).
+OPTIONAL_BOOTSTRAP_SCOPES = ("notify", "netmesh_publish", "connections")
 
 
 class MachineTokenError(RuntimeError):

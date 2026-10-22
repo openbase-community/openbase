@@ -27,6 +27,7 @@ from .cloud import cloud
 from .codex_sync import codex_sync
 from .computer_use import computer_use
 from .contacts import contacts
+from .db import db
 from .defaults import defaults
 from .desktop import desktop
 from .doctor import doctor
@@ -47,6 +48,7 @@ from .server import server
 from .service import service
 from .services import services
 from .setup import app_download_qr, setup
+from .storage import storage
 from .super_agent_name import super_agent_name
 from .sync import sync
 from .sync_daemon import sync_daemon_cli
@@ -119,6 +121,8 @@ main.add_command(pty)
 main.add_command(ports)
 main.add_command(ai_account_group)
 main.add_command(service)
+main.add_command(db)
+main.add_command(storage)
 main.add_command(setup)
 main.add_command(app_download_qr)
 main.add_command(backend)
