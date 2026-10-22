@@ -13,6 +13,15 @@ from openbase_coder_cli.openbase_coder_cli_app.ai_account_views import (
 from openbase_coder_cli.openbase_coder_cli_app.common import offloaded_view
 from openbase_coder_cli.openbase_coder_cli_app.dictation import dictation_session
 from openbase_coder_cli.openbase_coder_cli_app.health_warnings import health_warnings
+from openbase_coder_cli.openbase_coder_cli_app.messaging_contacts_api import (
+    messaging_contact_categories,
+    messaging_contact_category_detail,
+    messaging_contact_lookup,
+    messaging_contacts,
+    messaging_contacts_assign,
+    messaging_contacts_skip,
+    messaging_contacts_summary,
+)
 from openbase_coder_cli.openbase_coder_cli_app.notifications import (
     notification_list,
     notification_mark_all_read,
@@ -433,6 +442,41 @@ urlpatterns = [
         "projects/reports/share/grants/revoke/",
         report_share_revoke_grant,
         name="project-reports-share-revoke-grant",
+    ),
+    path(
+        "messaging-contacts/",
+        offloaded_view(messaging_contacts),
+        name="messaging-contacts",
+    ),
+    path(
+        "messaging-contacts/summary/",
+        messaging_contacts_summary,
+        name="messaging-contacts-summary",
+    ),
+    path(
+        "messaging-contacts/assign/",
+        messaging_contacts_assign,
+        name="messaging-contacts-assign",
+    ),
+    path(
+        "messaging-contacts/skip/",
+        messaging_contacts_skip,
+        name="messaging-contacts-skip",
+    ),
+    path(
+        "messaging-contacts/lookup/",
+        messaging_contact_lookup,
+        name="messaging-contact-lookup",
+    ),
+    path(
+        "messaging-contacts/categories/",
+        messaging_contact_categories,
+        name="messaging-contact-categories",
+    ),
+    path(
+        "messaging-contacts/categories/<str:category_id>/",
+        messaging_contact_category_detail,
+        name="messaging-contact-category-detail",
     ),
     path("memories/", memories_list, name="memories-list"),
     path("memories/<path:memory_name>/", memory_detail, name="memory-detail"),

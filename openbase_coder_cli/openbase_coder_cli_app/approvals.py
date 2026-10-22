@@ -7,6 +7,7 @@ from rest_framework import serializers, status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+from openbase_coder_cli.messaging_contacts import service as messaging_contacts
 from openbase_coder_cli.services.fleet_aggregation import (
     FLEET_SCOPE_PARAM,
     FLEET_SCOPE_VALUE,
@@ -100,9 +101,15 @@ def skill_approval_requests(request):
             {"error": "details must be an object"},
             status=status.HTTP_400_BAD_REQUEST,
         )
+    skill = serializer.validated_data["skill"]
+    # Messaging skills name the contact they act on; show its category to the
+    # reviewer and decline outright when the category blocks agent access.
+    gate = messaging_contacts.approval_gate(skill, details)
+    if gate is not None:
+        details = {**details, "contact_category": gate["category"]}
     try:
         approval_request = create_skill_approval_request(
-            skill=serializer.validated_data["skill"],
+            skill=skill,
             action=serializer.validated_data["action"],
             description=serializer.validated_data["description"],
             details=details,
@@ -111,6 +118,9 @@ def skill_approval_requests(request):
         )
     except ValueError as exc:
         return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    if gate is not None and gate["policy"] == "block":
+        answer_skill_approval_request(approval_request["id"], "decline")
+        approval_request = {**approval_request, "auto_declined": True}
     return Response({"request": approval_request}, status=status.HTTP_201_CREATED)
 
 

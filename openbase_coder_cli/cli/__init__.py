@@ -26,6 +26,7 @@ from .claude_sync import claude_sync
 from .cloud import cloud
 from .codex_sync import codex_sync
 from .computer_use import computer_use
+from .contacts import contacts
 from .defaults import defaults
 from .desktop import desktop
 from .doctor import doctor
@@ -140,6 +141,7 @@ main.add_command(browser)
 main.add_command(restart)
 main.add_command(self_restart)
 main.add_command(user)
+main.add_command(contacts)
 main.add_command(boilersync)
 main.add_command(cloud)
 main.add_command(codex_sync)
