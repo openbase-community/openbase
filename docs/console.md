@@ -38,6 +38,14 @@ Templates, Diff, Status, Devices, Instructions, Tools, Launchctl, and
 Settings. See [Desktop App](desktop-app.md#the-dashboard) for the full tour,
 including what each page can do on iPhone.
 
+### Contacts
+
+**Configure → Contacts** lists everyone you have exchanged messages with in the last year through the personal-messaging skills (WhatsApp and iMessage, see [onboarding](commands/onboarding.md)), merged into one entry per person when the same phone number or email appears on both services. The page asks you to put each contact into a category, one at a time or in bulk, and shows how many are done. "Skip for now" defers a contact for a day; new contacts you message later join the queue automatically, and a banner keeps reminding you while anyone is still uncategorized.
+
+Categories are yours to rename, add or delete. Each category sets what agents may do with its contacts: *Agents ask for approval* keeps the normal approval flow for reading and sending, while *Agents are blocked* declines every agent request about those contacts automatically. Approval requests from the messaging skills show the contact's category so you can decide with that context. Contact names, numbers and messages never leave the computer that runs the skill.
+
+The scan reads the skills' metadata catalogs, locally or over SSH on the always-on host that runs the WhatsApp archive. Sources are detected automatically when `whatsapp-local` or `imessage-local` is on `PATH` or `WHATSAPP_CLI_SSH_TARGET` / `IMESSAGE_CLI_SSH_TARGET` names the host; a `sources` list in `~/.openbase/messaging-contacts.json` overrides the detection, with `command`, optional `ssh_target`, and `merge: false` for an account whose contacts must never be merged with the others.
+
 Differences in a browser:
 
 - Electron-only features are absent: the guided onboarding flow, app

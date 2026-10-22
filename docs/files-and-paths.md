@@ -142,6 +142,7 @@ is not running, the dispatcher falls back to the shared socket; setting
 | `~/.openbase/staticfiles/` | `collectstatic` | Served static assets |
 | `~/.openbase/coder-projects.json` | Session/project APIs | Recent project tracking |
 | `~/.openbase/auth.json` | `openbase-coder login` | Access/refresh tokens |
+| `~/.openbase/messaging-contacts.json` | Contacts page / messaging-contacts API | Contact categories, skip state, cached contact index and optional `sources` override |
 
 ## Plugin Data
 

@@ -450,7 +450,7 @@ urlpatterns = [
     ),
     path(
         "messaging-contacts/summary/",
-        messaging_contacts_summary,
+        offloaded_view(messaging_contacts_summary),
         name="messaging-contacts-summary",
     ),
     path(

@@ -103,8 +103,11 @@ def snapshot(
 
 
 def summary() -> dict[str, Any]:
-    """Counts only, for badges; never triggers a scan."""
-    snap = snapshot(cache_only=True)
+    """Counts only, for badges. Serves the cache, except that the very first
+    call builds the index so the review prompt can appear before anyone has
+    opened the Contacts page."""
+    never_scanned = not state.index(state.read_store())
+    snap = snapshot(refresh=never_scanned, cache_only=not never_scanned)
     return {
         "progress": snap["progress"],
         "sources": snap["sources"],
