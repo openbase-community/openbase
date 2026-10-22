@@ -497,8 +497,14 @@ def readonly_rotate(name: str) -> None:
 
 @readonly.command("drop")
 @click.argument("name")
+@click.option(
+    "--schema",
+    default=DEFAULT_SCHEMA,
+    show_default=True,
+    help="Schema the role was granted SELECT on.",
+)
 @click.option("--yes", is_flag=True, help="Do not ask for confirmation.")
-def readonly_drop(name: str, yes: bool) -> None:
+def readonly_drop(name: str, schema: str, yes: bool) -> None:
     """Drop NAME's read-only role from the database and forget its credentials."""
     connection = commands.resolve(KIND, name)
     _connection, leased = commands.lease(
@@ -507,8 +513,22 @@ def readonly_drop(name: str, yes: bool) -> None:
     role_name = leased["credentials"]["user"]
     commands.confirm_or_yes(f"Drop Postgres role {role_name}?", yes)
     role = quote_identifier(role_name)
+    database = quote_identifier(connection["target"]["database"])
+    schema_identifier = quote_identifier(schema)
+    # The read-write role revokes its own grants; it need not be a member of
+    # the read-only role (which DROP OWNED would require).
     _run_admin_sql(
-        name, [f"DROP OWNED BY {role};", f"DROP ROLE {role};"], "db readonly drop"
+        name,
+        [
+            f"ALTER DEFAULT PRIVILEGES IN SCHEMA {schema_identifier} REVOKE SELECT ON TABLES FROM {role};",
+            f"ALTER DEFAULT PRIVILEGES IN SCHEMA {schema_identifier} REVOKE SELECT ON SEQUENCES FROM {role};",
+            f"REVOKE SELECT ON ALL TABLES IN SCHEMA {schema_identifier} FROM {role};",
+            f"REVOKE SELECT ON ALL SEQUENCES IN SCHEMA {schema_identifier} FROM {role};",
+            f"REVOKE USAGE ON SCHEMA {schema_identifier} FROM {role};",
+            f"REVOKE CONNECT ON DATABASE {database} FROM {role};",
+            f"DROP ROLE {role};",
+        ],
+        "db readonly drop",
     )
     try:
         cloud.set_role_credentials(connection["id"], cloud.ROLE_READONLY, None)

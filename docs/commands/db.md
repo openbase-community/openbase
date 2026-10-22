@@ -12,7 +12,7 @@ openbase-coder db query NAME [SQL] [--file PATH] [--read-only] [--json]
 openbase-coder db connect NAME [--read-only] [-- PSQL_ARGS...]
 openbase-coder db readonly create NAME [--role-name ROLE] [--schema SCHEMA]
 openbase-coder db readonly rotate NAME
-openbase-coder db readonly drop NAME [--yes]
+openbase-coder db readonly drop NAME [--schema SCHEMA] [--yes]
 openbase-coder db audit NAME [--json]
 openbase-coder db revoke NAME
 openbase-coder db restore NAME
