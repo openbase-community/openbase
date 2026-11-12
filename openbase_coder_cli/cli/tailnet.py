@@ -648,7 +648,7 @@ def _dev_workspace_dir_or_none() -> str | None:
 
 
 def _netmesh_hostname() -> str:
-    """Sanitized ``<host>-openbase`` tailnet name for this machine."""
+    """Sanitized tailnet name for this machine (the bare host name)."""
     from openbase_coder_cli.services.tailnet_hostname import netmesh_hostname
 
     return netmesh_hostname()

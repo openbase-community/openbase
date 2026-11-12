@@ -224,8 +224,8 @@ func defaultStateDir(name string) string {
 }
 
 // defaultHostname mirrors the CLI's netmesh_hostname() (services/
-// tailnet_hostname.py): strip the DNS suffix, reduce to lowercase
-// alphanumerics and dashes, append "-openbase". Peers store this node's
+// tailnet_hostname.py): strip the DNS suffix and reduce to lowercase
+// alphanumerics and dashes; no product suffix. Peers store this node's
 // MagicDNS name, so every netmesh transport must derive the identical name.
 func defaultHostname() string {
 	raw, _ := os.Hostname()
@@ -249,7 +249,7 @@ func defaultHostname() string {
 	if len(parts) == 0 {
 		return "openbase-mac"
 	}
-	return strings.Join(parts, "-") + "-openbase"
+	return strings.Join(parts, "-")
 }
 
 func envOr(key, fallback string) string {

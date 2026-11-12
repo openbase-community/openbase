@@ -16,14 +16,21 @@ TSNET_HOSTNAME_ENV_KEY = "OPENBASE_TSNET_HOSTNAME"
 
 
 def netmesh_hostname() -> str:
-    """Sanitized ``<host>-openbase`` tailnet name for this machine.
+    """Sanitized tailnet name for this machine: the bare host name.
 
     Strips the DNS suffix (``Gabes-MacBook-Pro.local`` → ``gabes-macbook-pro``)
     and reduces to lowercase alphanumerics and dashes, matching what headscale
     would make of the name anyway — so the name we compute is the name peers
-    actually see.
+    actually see. The network already belongs to the account, so no product
+    suffix is appended (older builds enrolled as ``<host>-openbase``; headscale
+    keeps a node's DNS name until it is renamed server-side).
     """
-    raw = socket.gethostname().split(".")[0]
-    sanitized = "".join(c if c.isalnum() else "-" for c in raw.lower())
+    return sanitize_hostname(socket.gethostname())
+
+
+def sanitize_hostname(raw: str) -> str:
+    """The sanitisation behind :func:`netmesh_hostname`."""
+    short = raw.split(".")[0]
+    sanitized = "".join(c if c.isalnum() else "-" for c in short.lower())
     collapsed = "-".join(part for part in sanitized.split("-") if part)
-    return f"{collapsed}-openbase" if collapsed else "openbase-mac"
+    return collapsed or "openbase-mac"
